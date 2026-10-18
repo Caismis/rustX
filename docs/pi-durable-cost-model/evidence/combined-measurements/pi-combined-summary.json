@@ -1,0 +1,2932 @@
+{
+  "append_mode": null,
+  "append_counter_scope": null,
+  "memory_scope": "all observed lifecycle and operation counters; sampled maxima, not peaks",
+  "scope": "See baseline.md: CPU self plus driver; process-attributed writes, not device writes; sampled memory, not peak; same-pair ratios; no unrelated median subtraction",
+  "samples": {
+    "cancel": [
+      {
+        "pair": 0,
+        "before": {
+          "file": "/workspace/issue-481-evidence/pi-combined-matrix/0-cancel-before.json",
+          "mean_turn_ms": 43.169,
+          "turn_cpu_ms_per_turn": 60.0,
+          "turn_write_mib_per_turn": 1.71484375,
+          "lifecycle_cpu_ms": 200.0,
+          "lifecycle_write_mib": 4.16015625,
+          "lifecycle_ms": 259.284,
+          "max_sampled_rss_mib": 154.01953125,
+          "max_sampled_pss_mib": 153.25390625,
+          "max_sampled_anon_pss_mib": 100.3203125,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 70.096,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 122.533,
+              "cpu_ms": 120.0,
+              "write_bytes": 1650688
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 46.166,
+              "cpu_ms": 60.0,
+              "write_bytes": 1798144
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 3.559,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 1.723,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.089,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 8.447,
+              "cpu_ms": 0.0,
+              "write_bytes": 876544
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 4.832,
+              "cpu_ms": 0.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 0.839,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after": {
+          "file": "/workspace/issue-481-evidence/pi-combined-matrix/0-cancel-after.json",
+          "mean_turn_ms": 44.13,
+          "turn_cpu_ms_per_turn": 60.0,
+          "turn_write_mib_per_turn": 1.45703125,
+          "lifecycle_cpu_ms": 200.0,
+          "lifecycle_write_mib": 3.8359375,
+          "lifecycle_ms": 258.61,
+          "max_sampled_rss_mib": 157.12109375,
+          "max_sampled_pss_mib": 156.357421875,
+          "max_sampled_anon_pss_mib": 100.19921875,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 68.854,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 122.116,
+              "cpu_ms": 120.0,
+              "write_bytes": 1638400
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 47.567,
+              "cpu_ms": 60.0,
+              "write_bytes": 1527808
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 3.557,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 1.775,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.036,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 7.964,
+              "cpu_ms": 0.0,
+              "write_bytes": 819200
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 4.876,
+              "cpu_ms": 10.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 0.865,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after_over_before": {
+          "mean_turn_ms": 1.0222613449466054,
+          "turn_cpu_ms_per_turn": 1.0,
+          "turn_write_mib_per_turn": 0.8496583143507973,
+          "lifecycle_cpu_ms": 1.0,
+          "lifecycle_write_mib": 0.9220657276995305,
+          "lifecycle_ms": 0.9974005337776338,
+          "max_sampled_rss_mib": 1.0201374622739607,
+          "max_sampled_pss_mib": 1.0202508092677083,
+          "max_sampled_anon_pss_mib": 0.9987929288996185
+        }
+      },
+      {
+        "pair": 1,
+        "before": {
+          "file": "/workspace/issue-481-evidence/pi-combined-matrix/1-cancel-before.json",
+          "mean_turn_ms": 47.179,
+          "turn_cpu_ms_per_turn": 60.0,
+          "turn_write_mib_per_turn": 1.71484375,
+          "lifecycle_cpu_ms": 210.0,
+          "lifecycle_write_mib": 4.3046875,
+          "lifecycle_ms": 271.793,
+          "max_sampled_rss_mib": 153.49609375,
+          "max_sampled_pss_mib": 152.73046875,
+          "max_sampled_anon_pss_mib": 100.23046875,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 70.632,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 128.272,
+              "cpu_ms": 120.0,
+              "write_bytes": 1794048
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 51.018,
+              "cpu_ms": 60.0,
+              "write_bytes": 1798144
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 4.202,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 2.794,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.245,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 7.902,
+              "cpu_ms": 20.0,
+              "write_bytes": 876544
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 4.871,
+              "cpu_ms": 0.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 0.857,
+              "cpu_ms": 0.0,
+              "write_bytes": 8192
+            }
+          ]
+        },
+        "after": {
+          "file": "/workspace/issue-481-evidence/pi-combined-matrix/1-cancel-after.json",
+          "mean_turn_ms": 44.118,
+          "turn_cpu_ms_per_turn": 60.0,
+          "turn_write_mib_per_turn": 1.45703125,
+          "lifecycle_cpu_ms": 200.0,
+          "lifecycle_write_mib": 3.8359375,
+          "lifecycle_ms": 267.97,
+          "max_sampled_rss_mib": 157.30078125,
+          "max_sampled_pss_mib": 156.537109375,
+          "max_sampled_anon_pss_mib": 100.05859375,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 73.036,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 125.916,
+              "cpu_ms": 120.0,
+              "write_bytes": 1638400
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 47.573,
+              "cpu_ms": 60.0,
+              "write_bytes": 1527808
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 4.935,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 1.833,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.064,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 7.83,
+              "cpu_ms": 10.0,
+              "write_bytes": 819200
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 4.89,
+              "cpu_ms": 0.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 0.893,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after_over_before": {
+          "mean_turn_ms": 0.9351194387333347,
+          "turn_cpu_ms_per_turn": 1.0,
+          "turn_write_mib_per_turn": 0.8496583143507973,
+          "lifecycle_cpu_ms": 0.9523809523809523,
+          "lifecycle_write_mib": 0.8911070780399274,
+          "lifecycle_ms": 0.9859341484144184,
+          "max_sampled_rss_mib": 1.0247868685583408,
+          "max_sampled_pss_mib": 1.0249239110974706,
+          "max_sampled_anon_pss_mib": 0.9982852020733466
+        }
+      },
+      {
+        "pair": 2,
+        "before": {
+          "file": "/workspace/issue-481-evidence/pi-combined-matrix/2-cancel-before.json",
+          "mean_turn_ms": 49.912,
+          "turn_cpu_ms_per_turn": 70.0,
+          "turn_write_mib_per_turn": 1.71484375,
+          "lifecycle_cpu_ms": 220.0,
+          "lifecycle_write_mib": 4.16015625,
+          "lifecycle_ms": 281.476,
+          "max_sampled_rss_mib": 154.18359375,
+          "max_sampled_pss_mib": 153.41796875,
+          "max_sampled_anon_pss_mib": 100.42578125,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 74.797,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 131.758,
+              "cpu_ms": 130.0,
+              "write_bytes": 1650688
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 54.469,
+              "cpu_ms": 70.0,
+              "write_bytes": 1798144
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 3.518,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 1.821,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.059,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 8.269,
+              "cpu_ms": 10.0,
+              "write_bytes": 876544
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 4.896,
+              "cpu_ms": 0.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 0.889,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after": {
+          "file": "/workspace/issue-481-evidence/pi-combined-matrix/2-cancel-after.json",
+          "mean_turn_ms": 42.94,
+          "turn_cpu_ms_per_turn": 60.0,
+          "turn_write_mib_per_turn": 1.45703125,
+          "lifecycle_cpu_ms": 210.0,
+          "lifecycle_write_mib": 3.83203125,
+          "lifecycle_ms": 272.494,
+          "max_sampled_rss_mib": 157.08203125,
+          "max_sampled_pss_mib": 156.318359375,
+          "max_sampled_anon_pss_mib": 99.87890625,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 72.891,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 130.396,
+              "cpu_ms": 120.0,
+              "write_bytes": 1634304
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 46.64,
+              "cpu_ms": 60.0,
+              "write_bytes": 1527808
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 3.518,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 1.796,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.117,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 10.327,
+              "cpu_ms": 0.0,
+              "write_bytes": 819200
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 4.936,
+              "cpu_ms": 10.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 0.873,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after_over_before": {
+          "mean_turn_ms": 0.8603141529091201,
+          "turn_cpu_ms_per_turn": 0.8571428571428571,
+          "turn_write_mib_per_turn": 0.8496583143507973,
+          "lifecycle_cpu_ms": 0.9545454545454546,
+          "lifecycle_write_mib": 0.9211267605633803,
+          "lifecycle_ms": 0.9680896417456551,
+          "max_sampled_rss_mib": 1.0187986116389247,
+          "max_sampled_pss_mib": 1.0189051559516231,
+          "max_sampled_anon_pss_mib": 0.9945544361896612
+        }
+      }
+    ],
+    "large": [
+      {
+        "pair": 0,
+        "before": {
+          "file": "/workspace/issue-481-evidence/pi-combined-matrix/0-large-before.json",
+          "mean_turn_ms": 181.862,
+          "turn_cpu_ms_per_turn": 220.0,
+          "turn_write_mib_per_turn": 10.921875,
+          "lifecycle_cpu_ms": 370.0,
+          "lifecycle_write_mib": 13.16796875,
+          "lifecycle_ms": 399.884,
+          "max_sampled_rss_mib": 156.24609375,
+          "max_sampled_pss_mib": 155.48046875,
+          "max_sampled_anon_pss_mib": 102.609375,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 69.782,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 122.691,
+              "cpu_ms": 120.0,
+              "write_bytes": 1650688
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 185.694,
+              "cpu_ms": 230.0,
+              "write_bytes": 11452416
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 4.353,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 2.284,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.091,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 7.878,
+              "cpu_ms": 0.0,
+              "write_bytes": 667648
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 5.257,
+              "cpu_ms": 10.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 0.854,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after": {
+          "file": "/workspace/issue-481-evidence/pi-combined-matrix/0-large-after.json",
+          "mean_turn_ms": 50.749,
+          "turn_cpu_ms_per_turn": 80.0,
+          "turn_write_mib_per_turn": 1.60546875,
+          "lifecycle_cpu_ms": 220.0,
+          "lifecycle_write_mib": 4.12109375,
+          "lifecycle_ms": 277.023,
+          "max_sampled_rss_mib": 156.24609375,
+          "max_sampled_pss_mib": 155.482421875,
+          "max_sampled_anon_pss_mib": 99.015625,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 69.328,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 128.88,
+              "cpu_ms": 120.0,
+              "write_bytes": 1634304
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 54.755,
+              "cpu_ms": 80.0,
+              "write_bytes": 1683456
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 4.969,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 3.813,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.14,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 8.136,
+              "cpu_ms": 0.0,
+              "write_bytes": 966656
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 5.002,
+              "cpu_ms": 10.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 1.0,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after_over_before": {
+          "mean_turn_ms": 0.27905224840813364,
+          "turn_cpu_ms_per_turn": 0.36363636363636365,
+          "turn_write_mib_per_turn": 0.14699570815450644,
+          "lifecycle_cpu_ms": 0.5945945945945946,
+          "lifecycle_write_mib": 0.312963512310887,
+          "lifecycle_ms": 0.6927583999359814,
+          "max_sampled_rss_mib": 1.0,
+          "max_sampled_pss_mib": 1.000012561867196,
+          "max_sampled_anon_pss_mib": 0.9649763971372012
+        }
+      },
+      {
+        "pair": 1,
+        "before": {
+          "file": "/workspace/issue-481-evidence/pi-combined-matrix/1-large-before.json",
+          "mean_turn_ms": 210.509,
+          "turn_cpu_ms_per_turn": 220.0,
+          "turn_write_mib_per_turn": 10.921875,
+          "lifecycle_cpu_ms": 380.0,
+          "lifecycle_write_mib": 13.171875,
+          "lifecycle_ms": 442.216,
+          "max_sampled_rss_mib": 155.40625,
+          "max_sampled_pss_mib": 154.640625,
+          "max_sampled_anon_pss_mib": 101.703125,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 73.427,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 127.574,
+              "cpu_ms": 120.0,
+              "write_bytes": 1654784
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 215.323,
+              "cpu_ms": 230.0,
+              "write_bytes": 11452416
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 5.278,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 4.973,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.412,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 8.244,
+              "cpu_ms": 10.0,
+              "write_bytes": 667648
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 5.099,
+              "cpu_ms": 0.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 0.886,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after": {
+          "file": "/workspace/issue-481-evidence/pi-combined-matrix/1-large-after.json",
+          "mean_turn_ms": 51.093,
+          "turn_cpu_ms_per_turn": 70.0,
+          "turn_write_mib_per_turn": 1.60546875,
+          "lifecycle_cpu_ms": 220.0,
+          "lifecycle_write_mib": 4.12109375,
+          "lifecycle_ms": 274.603,
+          "max_sampled_rss_mib": 157.0859375,
+          "max_sampled_pss_mib": 156.322265625,
+          "max_sampled_anon_pss_mib": 100.04296875,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 70.431,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 128.283,
+              "cpu_ms": 130.0,
+              "write_bytes": 1634304
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 54.473,
+              "cpu_ms": 70.0,
+              "write_bytes": 1683456
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 3.984,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 1.863,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.033,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 8.16,
+              "cpu_ms": 0.0,
+              "write_bytes": 966656
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 5.42,
+              "cpu_ms": 0.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 0.956,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after_over_before": {
+          "mean_turn_ms": 0.24271171303839745,
+          "turn_cpu_ms_per_turn": 0.3181818181818182,
+          "turn_write_mib_per_turn": 0.14699570815450644,
+          "lifecycle_cpu_ms": 0.5789473684210527,
+          "lifecycle_write_mib": 0.31287069988137606,
+          "lifecycle_ms": 0.620970295059428,
+          "max_sampled_rss_mib": 1.0108083651719284,
+          "max_sampled_pss_mib": 1.0108745074264929,
+          "max_sampled_anon_pss_mib": 0.9836764479950837
+        }
+      },
+      {
+        "pair": 2,
+        "before": {
+          "file": "/workspace/issue-481-evidence/pi-combined-matrix/2-large-before.json",
+          "mean_turn_ms": 224.347,
+          "turn_cpu_ms_per_turn": 240.0,
+          "turn_write_mib_per_turn": 10.921875,
+          "lifecycle_cpu_ms": 400.0,
+          "lifecycle_write_mib": 13.171875,
+          "lifecycle_ms": 462.653,
+          "max_sampled_rss_mib": 155.5859375,
+          "max_sampled_pss_mib": 154.8203125,
+          "max_sampled_anon_pss_mib": 101.82421875,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 73.291,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 130.117,
+              "cpu_ms": 120.0,
+              "write_bytes": 1654784
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 230.319,
+              "cpu_ms": 250.0,
+              "write_bytes": 11452416
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 6.001,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 3.583,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.496,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 9.451,
+              "cpu_ms": 10.0,
+              "write_bytes": 667648
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 7.299,
+              "cpu_ms": 0.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 1.096,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after": {
+          "file": "/workspace/issue-481-evidence/pi-combined-matrix/2-large-after.json",
+          "mean_turn_ms": 66.304,
+          "turn_cpu_ms_per_turn": 90.0,
+          "turn_write_mib_per_turn": 1.60546875,
+          "lifecycle_cpu_ms": 300.0,
+          "lifecycle_write_mib": 4.12109375,
+          "lifecycle_ms": 369.981,
+          "max_sampled_rss_mib": 157.11328125,
+          "max_sampled_pss_mib": 156.349609375,
+          "max_sampled_anon_pss_mib": 100.07421875,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 96.875,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 175.087,
+              "cpu_ms": 170.0,
+              "write_bytes": 1634304
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 71.47,
+              "cpu_ms": 90.0,
+              "write_bytes": 1683456
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 5.528,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 3.088,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.963,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 9.554,
+              "cpu_ms": 10.0,
+              "write_bytes": 966656
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 5.214,
+              "cpu_ms": 10.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 1.202,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after_over_before": {
+          "mean_turn_ms": 0.2955421735080032,
+          "turn_cpu_ms_per_turn": 0.375,
+          "turn_write_mib_per_turn": 0.14699570815450644,
+          "lifecycle_cpu_ms": 0.75,
+          "lifecycle_write_mib": 0.31287069988137606,
+          "lifecycle_ms": 0.7996943713755232,
+          "max_sampled_rss_mib": 1.0098167210645241,
+          "max_sampled_pss_mib": 1.0098778826260282,
+          "max_sampled_anon_pss_mib": 0.9828135190087083
+        }
+      }
+    ],
+    "short-large": [
+      {
+        "pair": 0,
+        "before": {
+          "file": "/workspace/issue-481-evidence/pi-combined-matrix/0-short-large-before.json",
+          "mean_turn_ms": 67.70865625,
+          "turn_cpu_ms_per_turn": 98.4375,
+          "turn_write_mib_per_turn": 3.4488525390625,
+          "lifecycle_cpu_ms": 14080.0,
+          "lifecycle_write_mib": 314.90625,
+          "lifecycle_ms": 11541.778,
+          "max_sampled_rss_mib": 285.5078125,
+          "max_sampled_pss_mib": 284.7421875,
+          "max_sampled_anon_pss_mib": 231.6796875,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 71.447,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 123.829,
+              "cpu_ms": 120.0,
+              "write_bytes": 1654784
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 6691.622,
+              "cpu_ms": 9310.0,
+              "write_bytes": 327753728
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 2271.094,
+              "cpu_ms": 2270.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 21.45,
+              "cpu_ms": 20.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 2.554,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 12.396,
+              "cpu_ms": 10.0,
+              "write_bytes": 757760
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 2343.882,
+              "cpu_ms": 2340.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 3.504,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after": {
+          "file": "/workspace/issue-481-evidence/pi-combined-matrix/0-short-large-after.json",
+          "mean_turn_ms": 63.21928125,
+          "turn_cpu_ms_per_turn": 95.0,
+          "turn_write_mib_per_turn": 2.2779541015625,
+          "lifecycle_cpu_ms": 13280.0,
+          "lifecycle_write_mib": 204.58203125,
+          "lifecycle_ms": 10858.115,
+          "max_sampled_rss_mib": 289.3046875,
+          "max_sampled_pss_mib": 288.541015625,
+          "max_sampled_anon_pss_mib": 232.25390625,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 75.735,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 152.468,
+              "cpu_ms": 140.0,
+              "write_bytes": 1638400
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 6049.269,
+              "cpu_ms": 8560.0,
+              "write_bytes": 212799488
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 2274.726,
+              "cpu_ms": 2270.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 22.063,
+              "cpu_ms": 30.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 2.645,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 7.299,
+              "cpu_ms": 0.0,
+              "write_bytes": 45056
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 2270.971,
+              "cpu_ms": 2270.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 2.939,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after_over_before": {
+          "mean_turn_ms": 0.9336957008358883,
+          "turn_cpu_ms_per_turn": 0.9650793650793651,
+          "turn_write_mib_per_turn": 0.6604962304887977,
+          "lifecycle_cpu_ms": 0.9431818181818182,
+          "lifecycle_write_mib": 0.6496601170983428,
+          "lifecycle_ms": 0.9407662320311481,
+          "max_sampled_rss_mib": 1.0132986728690656,
+          "max_sampled_pss_mib": 1.013341290092463,
+          "max_sampled_anon_pss_mib": 1.002478502781993
+        }
+      },
+      {
+        "pair": 1,
+        "before": {
+          "file": "/workspace/issue-481-evidence/pi-combined-matrix/1-short-large-before.json",
+          "mean_turn_ms": 70.749375,
+          "turn_cpu_ms_per_turn": 102.5,
+          "turn_write_mib_per_turn": 3.447998046875,
+          "lifecycle_cpu_ms": 14100.0,
+          "lifecycle_write_mib": 314.6484375,
+          "lifecycle_ms": 11543.22,
+          "max_sampled_rss_mib": 285.97265625,
+          "max_sampled_pss_mib": 285.20703125,
+          "max_sampled_anon_pss_mib": 232.20703125,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 72.94,
+              "cpu_ms": 0.0,
+              "write_bytes": 16384
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 129.127,
+              "cpu_ms": 120.0,
+              "write_bytes": 1703936
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 6666.98,
+              "cpu_ms": 9300.0,
+              "write_bytes": 327827456
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 2276.661,
+              "cpu_ms": 2270.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 23.332,
+              "cpu_ms": 30.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 4.619,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 11.713,
+              "cpu_ms": 10.0,
+              "write_bytes": 352256
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 2354.899,
+              "cpu_ms": 2350.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 2.949,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after": {
+          "file": "/workspace/issue-481-evidence/pi-combined-matrix/1-short-large-after.json",
+          "mean_turn_ms": 65.737625,
+          "turn_cpu_ms_per_turn": 99.0625,
+          "turn_write_mib_per_turn": 2.281005859375,
+          "lifecycle_cpu_ms": 13700.0,
+          "lifecycle_write_mib": 205.0234375,
+          "lifecycle_ms": 11103.534,
+          "max_sampled_rss_mib": 289.16796875,
+          "max_sampled_pss_mib": 288.404296875,
+          "max_sampled_anon_pss_mib": 232.23828125,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 72.715,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 126.758,
+              "cpu_ms": 130.0,
+              "write_bytes": 1638400
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 6162.83,
+              "cpu_ms": 8840.0,
+              "write_bytes": 212701184
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 2354.858,
+              "cpu_ms": 2350.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 25.84,
+              "cpu_ms": 20.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 4.868,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 12.678,
+              "cpu_ms": 20.0,
+              "write_bytes": 606208
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 2337.783,
+              "cpu_ms": 2340.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 5.204,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after_over_before": {
+          "mean_turn_ms": 0.9291619183915051,
+          "turn_cpu_ms_per_turn": 0.9664634146341463,
+          "turn_write_mib_per_turn": 0.661544997521773,
+          "lifecycle_cpu_ms": 0.9716312056737588,
+          "lifecycle_write_mib": 0.6515952824332713,
+          "lifecycle_ms": 0.9619095884857085,
+          "max_sampled_rss_mib": 1.0111734895982734,
+          "max_sampled_pss_mib": 1.0112103324065578,
+          "max_sampled_anon_pss_mib": 1.0001345781815123
+        }
+      },
+      {
+        "pair": 2,
+        "before": {
+          "file": "/workspace/issue-481-evidence/pi-combined-matrix/2-short-large-before.json",
+          "mean_turn_ms": 71.95175,
+          "turn_cpu_ms_per_turn": 104.375,
+          "turn_write_mib_per_turn": 3.4451904296875,
+          "lifecycle_cpu_ms": 14680.0,
+          "lifecycle_write_mib": 314.640625,
+          "lifecycle_ms": 11982.827,
+          "max_sampled_rss_mib": 286.33203125,
+          "max_sampled_pss_mib": 285.56640625,
+          "max_sampled_anon_pss_mib": 232.69140625,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 71.878,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 131.092,
+              "cpu_ms": 130.0,
+              "write_bytes": 1654784
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 7032.583,
+              "cpu_ms": 9810.0,
+              "write_bytes": 327475200
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 2343.018,
+              "cpu_ms": 2340.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 22.302,
+              "cpu_ms": 20.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 4.189,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 11.626,
+              "cpu_ms": 10.0,
+              "write_bytes": 757760
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 2361.23,
+              "cpu_ms": 2360.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 4.909,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after": {
+          "file": "/workspace/issue-481-evidence/pi-combined-matrix/2-short-large-after.json",
+          "mean_turn_ms": 62.10753125,
+          "turn_cpu_ms_per_turn": 94.6875,
+          "turn_write_mib_per_turn": 2.2808837890625,
+          "lifecycle_cpu_ms": 13420.0,
+          "lifecycle_write_mib": 205.046875,
+          "lifecycle_ms": 10890.844,
+          "max_sampled_rss_mib": 287.3984375,
+          "max_sampled_pss_mib": 286.634765625,
+          "max_sampled_anon_pss_mib": 230.21484375,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 72.284,
+              "cpu_ms": 0.0,
+              "write_bytes": 16384
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 135.901,
+              "cpu_ms": 130.0,
+              "write_bytes": 1675264
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 6051.938,
+              "cpu_ms": 8660.0,
+              "write_bytes": 212676608
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 2268.171,
+              "cpu_ms": 2270.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 21.68,
+              "cpu_ms": 20.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 2.766,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 9.297,
+              "cpu_ms": 0.0,
+              "write_bytes": 606208
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 2325.197,
+              "cpu_ms": 2330.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 3.61,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after_over_before": {
+          "mean_turn_ms": 0.8631830532266415,
+          "turn_cpu_ms_per_turn": 0.907185628742515,
+          "turn_write_mib_per_turn": 0.6620486836976933,
+          "lifecycle_cpu_ms": 0.9141689373297003,
+          "lifecycle_write_mib": 0.6516859512340468,
+          "lifecycle_ms": 0.9088710034785614,
+          "max_sampled_rss_mib": 1.0037243693810454,
+          "max_sampled_pss_mib": 1.0037411941727652,
+          "max_sampled_anon_pss_mib": 0.9893568802565093
+        }
+      }
+    ],
+    "short-small": [
+      {
+        "pair": 0,
+        "before": {
+          "file": "/workspace/issue-481-evidence/pi-combined-matrix/0-short-small-before.json",
+          "mean_turn_ms": 65.5585625,
+          "turn_cpu_ms_per_turn": 96.5625,
+          "turn_write_mib_per_turn": 3.098876953125,
+          "lifecycle_cpu_ms": 4760.0,
+          "lifecycle_write_mib": 123.6953125,
+          "lifecycle_ms": 3769.245,
+          "max_sampled_rss_mib": 201.57421875,
+          "max_sampled_pss_mib": 200.80859375,
+          "max_sampled_anon_pss_mib": 147.43359375,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 72.314,
+              "cpu_ms": 0.0,
+              "write_bytes": 24576
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 128.785,
+              "cpu_ms": 120.0,
+              "write_bytes": 1728512
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 2666.117,
+              "cpu_ms": 3730.0,
+              "write_bytes": 126742528
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 433.668,
+              "cpu_ms": 440.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 13.834,
+              "cpu_ms": 20.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 2.01,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 10.586,
+              "cpu_ms": 10.0,
+              "write_bytes": 1175552
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 440.066,
+              "cpu_ms": 440.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 1.865,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after": {
+          "file": "/workspace/issue-481-evidence/pi-combined-matrix/0-short-small-after.json",
+          "mean_turn_ms": 59.62671875,
+          "turn_cpu_ms_per_turn": 90.0,
+          "turn_write_mib_per_turn": 2.0340576171875,
+          "lifecycle_cpu_ms": 4460.0,
+          "lifecycle_write_mib": 80.796875,
+          "lifecycle_ms": 3517.536,
+          "max_sampled_rss_mib": 203.546875,
+          "max_sampled_pss_mib": 202.783203125,
+          "max_sampled_anon_pss_mib": 146.49609375,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 74.012,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 131.971,
+              "cpu_ms": 130.0,
+              "write_bytes": 1634304
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 2426.532,
+              "cpu_ms": 3450.0,
+              "write_bytes": 82518016
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 425.033,
+              "cpu_ms": 430.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 14.964,
+              "cpu_ms": 9.999999999999545,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.941,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 8.135,
+              "cpu_ms": 20.000000000000455,
+              "write_bytes": 532480
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 433.058,
+              "cpu_ms": 420.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 1.89,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after_over_before": {
+          "mean_turn_ms": 0.909518398149746,
+          "turn_cpu_ms_per_turn": 0.9320388349514563,
+          "turn_write_mib_per_turn": 0.6563854092807059,
+          "lifecycle_cpu_ms": 0.9369747899159664,
+          "lifecycle_write_mib": 0.6531926987936588,
+          "lifecycle_ms": 0.9332203133518782,
+          "max_sampled_rss_mib": 1.0097862527372439,
+          "max_sampled_pss_mib": 1.0098332911860253,
+          "max_sampled_anon_pss_mib": 0.9936412049916541
+        }
+      },
+      {
+        "pair": 1,
+        "before": {
+          "file": "/workspace/issue-481-evidence/pi-combined-matrix/1-short-small-before.json",
+          "mean_turn_ms": 61.0664375,
+          "turn_cpu_ms_per_turn": 89.6875,
+          "turn_write_mib_per_turn": 3.0992431640625,
+          "lifecycle_cpu_ms": 4550.0,
+          "lifecycle_write_mib": 123.60546875,
+          "lifecycle_ms": 3631.491,
+          "max_sampled_rss_mib": 200.56640625,
+          "max_sampled_pss_mib": 199.80078125,
+          "max_sampled_anon_pss_mib": 146.5625,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 72.115,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 123.562,
+              "cpu_ms": 120.0,
+              "write_bytes": 1650688
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 2504.052,
+              "cpu_ms": 3500.0,
+              "write_bytes": 126746624
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 447.477,
+              "cpu_ms": 439.99999999999955,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 14.705,
+              "cpu_ms": 20.000000000000455,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.708,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 11.087,
+              "cpu_ms": 10.0,
+              "write_bytes": 1175552
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 454.994,
+              "cpu_ms": 450.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 1.791,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after": {
+          "file": "/workspace/issue-481-evidence/pi-combined-matrix/1-short-small-after.json",
+          "mean_turn_ms": 56.4209375,
+          "turn_cpu_ms_per_turn": 85.3125,
+          "turn_write_mib_per_turn": 2.0374755859375,
+          "lifecycle_cpu_ms": 4350.0,
+          "lifecycle_write_mib": 80.9140625,
+          "lifecycle_ms": 3421.845,
+          "max_sampled_rss_mib": 206.94140625,
+          "max_sampled_pss_mib": 206.177734375,
+          "max_sampled_anon_pss_mib": 149.8046875,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 70.11,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 126.117,
+              "cpu_ms": 130.0,
+              "write_bytes": 1638400
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 2325.584,
+              "cpu_ms": 3310.0,
+              "write_bytes": 82636800
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 434.767,
+              "cpu_ms": 440.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 13.035,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 2.949,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 9.278,
+              "cpu_ms": 20.0,
+              "write_bytes": 532480
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 436.775,
+              "cpu_ms": 430.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 3.23,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after_over_before": {
+          "mean_turn_ms": 0.9239271162657884,
+          "turn_cpu_ms_per_turn": 0.9512195121951219,
+          "turn_write_mib_per_turn": 0.6574106896687542,
+          "lifecycle_cpu_ms": 0.9560439560439561,
+          "lifecycle_write_mib": 0.6546155547830483,
+          "lifecycle_ms": 0.9422699932341839,
+          "max_sampled_rss_mib": 1.0317849839322233,
+          "max_sampled_pss_mib": 1.0319165575084557,
+          "max_sampled_anon_pss_mib": 1.0221215351812367
+        }
+      },
+      {
+        "pair": 2,
+        "before": {
+          "file": "/workspace/issue-481-evidence/pi-combined-matrix/2-short-small-before.json",
+          "mean_turn_ms": 65.22053125,
+          "turn_cpu_ms_per_turn": 95.625,
+          "turn_write_mib_per_turn": 3.1009521484375,
+          "lifecycle_cpu_ms": 4710.0,
+          "lifecycle_write_mib": 123.703125,
+          "lifecycle_ms": 3723.597,
+          "max_sampled_rss_mib": 202.296875,
+          "max_sampled_pss_mib": 201.53125,
+          "max_sampled_anon_pss_mib": 148.46875,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 70.019,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 123.763,
+              "cpu_ms": 120.0,
+              "write_bytes": 1662976
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 2642.672,
+              "cpu_ms": 3700.0,
+              "write_bytes": 126832640
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 426.491,
+              "cpu_ms": 430.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 13.315,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.962,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 11.634,
+              "cpu_ms": 20.0,
+              "write_bytes": 1179648
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 431.784,
+              "cpu_ms": 420.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 1.957,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after": {
+          "file": "/workspace/issue-481-evidence/pi-combined-matrix/2-short-small-after.json",
+          "mean_turn_ms": 56.48653125,
+          "turn_cpu_ms_per_turn": 85.625,
+          "turn_write_mib_per_turn": 2.0364990234375,
+          "lifecycle_cpu_ms": 4340.0,
+          "lifecycle_write_mib": 80.88671875,
+          "lifecycle_ms": 3416.095,
+          "max_sampled_rss_mib": 202.93359375,
+          "max_sampled_pss_mib": 202.169921875,
+          "max_sampled_anon_pss_mib": 145.9140625,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 70.372,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 125.217,
+              "cpu_ms": 120.0,
+              "write_bytes": 1634304
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 2318.854,
+              "cpu_ms": 3330.0,
+              "write_bytes": 82612224
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 432.96,
+              "cpu_ms": 420.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 13.01,
+              "cpu_ms": 20.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 2.794,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 10.116,
+              "cpu_ms": 20.0,
+              "write_bytes": 532480
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 441.002,
+              "cpu_ms": 430.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 1.77,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after_over_before": {
+          "mean_turn_ms": 0.8660851141104436,
+          "turn_cpu_ms_per_turn": 0.8954248366013072,
+          "turn_write_mib_per_turn": 0.656733456678345,
+          "lifecycle_cpu_ms": 0.921443736730361,
+          "lifecycle_write_mib": 0.6538777314639383,
+          "lifecycle_ms": 0.9174180234864299,
+          "max_sampled_rss_mib": 1.0031474472850854,
+          "max_sampled_pss_mib": 1.0031690959838735,
+          "max_sampled_anon_pss_mib": 0.9827930961902758
+        }
+      }
+    ],
+    "stream": [
+      {
+        "pair": 0,
+        "before": {
+          "file": "/workspace/issue-481-evidence/pi-combined-matrix/0-stream-before.json",
+          "mean_turn_ms": 1578.855,
+          "turn_cpu_ms_per_turn": 210.0,
+          "turn_write_mib_per_turn": 3.19921875,
+          "lifecycle_cpu_ms": 350.0,
+          "lifecycle_write_mib": 5.69140625,
+          "lifecycle_ms": 1807.315,
+          "max_sampled_rss_mib": 154.4609375,
+          "max_sampled_pss_mib": 153.6953125,
+          "max_sampled_anon_pss_mib": 101.21875,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 71.766,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 126.985,
+              "cpu_ms": 120.0,
+              "write_bytes": 1654784
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 1582.556,
+              "cpu_ms": 210.0,
+              "write_bytes": 3354624
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 6.184,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 2.168,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.13,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 10.049,
+              "cpu_ms": 20.0,
+              "write_bytes": 921600
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 5.394,
+              "cpu_ms": 0.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 1.083,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after": {
+          "file": "/workspace/issue-481-evidence/pi-combined-matrix/0-stream-after.json",
+          "mean_turn_ms": 1594.729,
+          "turn_cpu_ms_per_turn": 170.0,
+          "turn_write_mib_per_turn": 2.0078125,
+          "lifecycle_cpu_ms": 330.0,
+          "lifecycle_write_mib": 4.421875,
+          "lifecycle_ms": 1828.039,
+          "max_sampled_rss_mib": 156.9453125,
+          "max_sampled_pss_mib": 156.181640625,
+          "max_sampled_anon_pss_mib": 100.203125,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 72.914,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 131.735,
+              "cpu_ms": 120.0,
+              "write_bytes": 1634304
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 1598.423,
+              "cpu_ms": 180.0,
+              "write_bytes": 2105344
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 4.852,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 2.816,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.21,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 9.571,
+              "cpu_ms": 10.0,
+              "write_bytes": 860160
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 5.54,
+              "cpu_ms": 0.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 0.978,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after_over_before": {
+          "mean_turn_ms": 1.010054121499441,
+          "turn_cpu_ms_per_turn": 0.8095238095238095,
+          "turn_write_mib_per_turn": 0.6275946275946276,
+          "lifecycle_cpu_ms": 0.9428571428571428,
+          "lifecycle_write_mib": 0.7769389155799589,
+          "lifecycle_ms": 1.0114667338012466,
+          "max_sampled_rss_mib": 1.016084163674068,
+          "max_sampled_pss_mib": 1.0161769938494383,
+          "max_sampled_anon_pss_mib": 0.9899660389008953
+        }
+      },
+      {
+        "pair": 1,
+        "before": {
+          "file": "/workspace/issue-481-evidence/pi-combined-matrix/1-stream-before.json",
+          "mean_turn_ms": 1579.57,
+          "turn_cpu_ms_per_turn": 200.0,
+          "turn_write_mib_per_turn": 3.19921875,
+          "lifecycle_cpu_ms": 360.0,
+          "lifecycle_write_mib": 5.6875,
+          "lifecycle_ms": 1808.723,
+          "max_sampled_rss_mib": 153.2109375,
+          "max_sampled_pss_mib": 152.4453125,
+          "max_sampled_anon_pss_mib": 99.82421875,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 72.291,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 131.912,
+              "cpu_ms": 130.0,
+              "write_bytes": 1650688
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 1582.837,
+              "cpu_ms": 210.0,
+              "write_bytes": 3354624
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 3.665,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 2.133,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.089,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 9.171,
+              "cpu_ms": 10.0,
+              "write_bytes": 921600
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 4.763,
+              "cpu_ms": 0.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 0.862,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after": {
+          "file": "/workspace/issue-481-evidence/pi-combined-matrix/1-stream-after.json",
+          "mean_turn_ms": 1574.228,
+          "turn_cpu_ms_per_turn": 170.0,
+          "turn_write_mib_per_turn": 2.0078125,
+          "lifecycle_cpu_ms": 340.0,
+          "lifecycle_write_mib": 4.43359375,
+          "lifecycle_ms": 1810.953,
+          "max_sampled_rss_mib": 156.921875,
+          "max_sampled_pss_mib": 156.158203125,
+          "max_sampled_anon_pss_mib": 100.1015625,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 70.828,
+              "cpu_ms": 0.0,
+              "write_bytes": 8192
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 125.6,
+              "cpu_ms": 120.0,
+              "write_bytes": 1642496
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 1579.566,
+              "cpu_ms": 180.0,
+              "write_bytes": 2105344
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 6.274,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 6.37,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 2.887,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 11.019,
+              "cpu_ms": 10.0,
+              "write_bytes": 860160
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 6.782,
+              "cpu_ms": 10.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 1.627,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after_over_before": {
+          "mean_turn_ms": 0.9966180669422692,
+          "turn_cpu_ms_per_turn": 0.85,
+          "turn_write_mib_per_turn": 0.6275946275946276,
+          "lifecycle_cpu_ms": 0.9444444444444444,
+          "lifecycle_write_mib": 0.779532967032967,
+          "lifecycle_ms": 1.0012329140504101,
+          "max_sampled_rss_mib": 1.0242211004028352,
+          "max_sampled_pss_mib": 1.0243555578332393,
+          "max_sampled_anon_pss_mib": 1.0027783212678536
+        }
+      },
+      {
+        "pair": 2,
+        "before": {
+          "file": "/workspace/issue-481-evidence/pi-combined-matrix/2-stream-before.json",
+          "mean_turn_ms": 1594.684,
+          "turn_cpu_ms_per_turn": 210.0,
+          "turn_write_mib_per_turn": 3.19921875,
+          "lifecycle_cpu_ms": 370.0,
+          "lifecycle_write_mib": 5.703125,
+          "lifecycle_ms": 1822.175,
+          "max_sampled_rss_mib": 156.64453125,
+          "max_sampled_pss_mib": 155.87890625,
+          "max_sampled_anon_pss_mib": 102.94140625,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 72.955,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 125.359,
+              "cpu_ms": 130.0,
+              "write_bytes": 1667072
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 1599.177,
+              "cpu_ms": 220.0,
+              "write_bytes": 3354624
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 5.085,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 2.664,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.2,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 9.774,
+              "cpu_ms": 10.0,
+              "write_bytes": 921600
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 5.083,
+              "cpu_ms": 0.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 0.878,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after": {
+          "file": "/workspace/issue-481-evidence/pi-combined-matrix/2-stream-after.json",
+          "mean_turn_ms": 1585.795,
+          "turn_cpu_ms_per_turn": 180.0,
+          "turn_write_mib_per_turn": 2.00390625,
+          "lifecycle_cpu_ms": 360.0,
+          "lifecycle_write_mib": 4.41796875,
+          "lifecycle_ms": 1834.901,
+          "max_sampled_rss_mib": 156.56640625,
+          "max_sampled_pss_mib": 155.802734375,
+          "max_sampled_anon_pss_mib": 99.31640625,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 69.579,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 141.792,
+              "cpu_ms": 140.0,
+              "write_bytes": 1634304
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 1592.468,
+              "cpu_ms": 180.0,
+              "write_bytes": 2101248
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 6.741,
+              "cpu_ms": 20.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 3.765,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 2.379,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 10.492,
+              "cpu_ms": 10.0,
+              "write_bytes": 860160
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 6.196,
+              "cpu_ms": 10.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 1.489,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after_over_before": {
+          "mean_turn_ms": 0.994425854902915,
+          "turn_cpu_ms_per_turn": 0.8571428571428571,
+          "turn_write_mib_per_turn": 0.6263736263736264,
+          "lifecycle_cpu_ms": 0.972972972972973,
+          "lifecycle_write_mib": 0.7746575342465754,
+          "lifecycle_ms": 1.0069839614746114,
+          "max_sampled_rss_mib": 0.9995012593202165,
+          "max_sampled_pss_mib": 0.999511339431149,
+          "max_sampled_anon_pss_mib": 0.9647857928888551
+        }
+      }
+    ],
+    "tool": [
+      {
+        "pair": 0,
+        "before": {
+          "file": "/workspace/issue-481-evidence/pi-combined-matrix/0-tool-before.json",
+          "mean_turn_ms": 96.184,
+          "turn_cpu_ms_per_turn": 130.0,
+          "turn_write_mib_per_turn": 5.75390625,
+          "lifecycle_cpu_ms": 290.0,
+          "lifecycle_write_mib": 7.6171875,
+          "lifecycle_ms": 334.758,
+          "max_sampled_rss_mib": 156.46875,
+          "max_sampled_pss_mib": 155.703125,
+          "max_sampled_anon_pss_mib": 102.14453125,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 70.987,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 134.682,
+              "cpu_ms": 130.0,
+              "write_bytes": 1654784
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 99.795,
+              "cpu_ms": 140.0,
+              "write_bytes": 6033408
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 10.022,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 3.765,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.056,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 6.477,
+              "cpu_ms": 0.0,
+              "write_bytes": 262144
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 7.086,
+              "cpu_ms": 10.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 0.888,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after": {
+          "file": "/workspace/issue-481-evidence/pi-combined-matrix/0-tool-after.json",
+          "mean_turn_ms": 90.643,
+          "turn_cpu_ms_per_turn": 120.0,
+          "turn_write_mib_per_turn": 3.08203125,
+          "lifecycle_cpu_ms": 290.0,
+          "lifecycle_write_mib": 5.88671875,
+          "lifecycle_ms": 325.748,
+          "max_sampled_rss_mib": 156.05859375,
+          "max_sampled_pss_mib": 155.294921875,
+          "max_sampled_anon_pss_mib": 101.73046875,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 69.123,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 128.567,
+              "cpu_ms": 120.0,
+              "write_bytes": 1634304
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 95.161,
+              "cpu_ms": 130.0,
+              "write_bytes": 3231744
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 8.502,
+              "cpu_ms": 20.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 4.929,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.385,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 9.878,
+              "cpu_ms": 0.0,
+              "write_bytes": 1269760
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 7.293,
+              "cpu_ms": 20.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 0.91,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after_over_before": {
+          "mean_turn_ms": 0.9423916659735507,
+          "turn_cpu_ms_per_turn": 0.9230769230769231,
+          "turn_write_mib_per_turn": 0.5356415478615071,
+          "lifecycle_cpu_ms": 1.0,
+          "lifecycle_write_mib": 0.7728205128205128,
+          "lifecycle_ms": 0.9730850345622808,
+          "max_sampled_rss_mib": 0.9973786698621929,
+          "max_sampled_pss_mib": 0.9973783241344707,
+          "max_sampled_anon_pss_mib": 0.9959463076981911
+        }
+      },
+      {
+        "pair": 1,
+        "before": {
+          "file": "/workspace/issue-481-evidence/pi-combined-matrix/1-tool-before.json",
+          "mean_turn_ms": 98.772,
+          "turn_cpu_ms_per_turn": 140.0,
+          "turn_write_mib_per_turn": 5.75390625,
+          "lifecycle_cpu_ms": 300.0,
+          "lifecycle_write_mib": 7.6171875,
+          "lifecycle_ms": 351.849,
+          "max_sampled_rss_mib": 155.58203125,
+          "max_sampled_pss_mib": 154.81640625,
+          "max_sampled_anon_pss_mib": 101.3203125,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 78.505,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 129.436,
+              "cpu_ms": 120.0,
+              "write_bytes": 1654784
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 104.907,
+              "cpu_ms": 140.0,
+              "write_bytes": 6033408
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 12.529,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 3.1,
+              "cpu_ms": 20.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 2.425,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 6.986,
+              "cpu_ms": 0.0,
+              "write_bytes": 262144
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 12.98,
+              "cpu_ms": 10.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 0.981,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after": {
+          "file": "/workspace/issue-481-evidence/pi-combined-matrix/1-tool-after.json",
+          "mean_turn_ms": 86.681,
+          "turn_cpu_ms_per_turn": 120.0,
+          "turn_write_mib_per_turn": 3.0859375,
+          "lifecycle_cpu_ms": 300.0,
+          "lifecycle_write_mib": 5.89453125,
+          "lifecycle_ms": 334.602,
+          "max_sampled_rss_mib": 159.1328125,
+          "max_sampled_pss_mib": 158.369140625,
+          "max_sampled_anon_pss_mib": 101.4921875,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 73.876,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 134.27,
+              "cpu_ms": 130.0,
+              "write_bytes": 1638400
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 91.232,
+              "cpu_ms": 120.0,
+              "write_bytes": 3235840
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 10.601,
+              "cpu_ms": 20.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 3.033,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.327,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 11.154,
+              "cpu_ms": 0.0,
+              "write_bytes": 1269760
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 8.114,
+              "cpu_ms": 10.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 0.995,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after_over_before": {
+          "mean_turn_ms": 0.8775867654800955,
+          "turn_cpu_ms_per_turn": 0.8571428571428571,
+          "turn_write_mib_per_turn": 0.5363204344874406,
+          "lifecycle_cpu_ms": 1.0,
+          "lifecycle_write_mib": 0.7738461538461539,
+          "lifecycle_ms": 0.9509818132210124,
+          "max_sampled_rss_mib": 1.0228225664716664,
+          "max_sampled_pss_mib": 1.022948048343552,
+          "max_sampled_anon_pss_mib": 1.001696352841391
+        }
+      },
+      {
+        "pair": 2,
+        "before": {
+          "file": "/workspace/issue-481-evidence/pi-combined-matrix/2-tool-before.json",
+          "mean_turn_ms": 109.32,
+          "turn_cpu_ms_per_turn": 150.0,
+          "turn_write_mib_per_turn": 5.75390625,
+          "lifecycle_cpu_ms": 320.0,
+          "lifecycle_write_mib": 7.61328125,
+          "lifecycle_ms": 354.148,
+          "max_sampled_rss_mib": 154.0390625,
+          "max_sampled_pss_mib": 153.2734375,
+          "max_sampled_anon_pss_mib": 99.77734375,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 76.073,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 132.887,
+              "cpu_ms": 130.0,
+              "write_bytes": 1650688
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 117.029,
+              "cpu_ms": 160.0,
+              "write_bytes": 6033408
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 7.869,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 2.106,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.054,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 6.287,
+              "cpu_ms": 0.0,
+              "write_bytes": 262144
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 9.052,
+              "cpu_ms": 20.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 1.791,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after": {
+          "file": "/workspace/issue-481-evidence/pi-combined-matrix/2-tool-after.json",
+          "mean_turn_ms": 88.305,
+          "turn_cpu_ms_per_turn": 120.0,
+          "turn_write_mib_per_turn": 3.08203125,
+          "lifecycle_cpu_ms": 280.0,
+          "lifecycle_write_mib": 5.88671875,
+          "lifecycle_ms": 338.295,
+          "max_sampled_rss_mib": 159.7890625,
+          "max_sampled_pss_mib": 159.025390625,
+          "max_sampled_anon_pss_mib": 102.46484375,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 77.448,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 136.639,
+              "cpu_ms": 130.0,
+              "write_bytes": 1634304
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 93.013,
+              "cpu_ms": 120.0,
+              "write_bytes": 3231744
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 9.093,
+              "cpu_ms": 20.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 3.051,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.324,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 9.394,
+              "cpu_ms": 10.0,
+              "write_bytes": 1269760
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 7.4,
+              "cpu_ms": 0.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 0.933,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after_over_before": {
+          "mean_turn_ms": 0.8077661909989025,
+          "turn_cpu_ms_per_turn": 0.8,
+          "turn_write_mib_per_turn": 0.5356415478615071,
+          "lifecycle_cpu_ms": 0.875,
+          "lifecycle_write_mib": 0.7732170343766034,
+          "lifecycle_ms": 0.9552362289212419,
+          "max_sampled_rss_mib": 1.037328193944312,
+          "max_sampled_pss_mib": 1.0375273969111576,
+          "max_sampled_anon_pss_mib": 1.0269349723994832
+        }
+      }
+    ]
+  },
+  "medians": {
+    "cancel": {
+      "before": {
+        "lifecycle_cpu_ms": 210.0,
+        "lifecycle_ms": 271.793,
+        "lifecycle_write_mib": 4.16015625,
+        "max_sampled_anon_pss_mib": 100.3203125,
+        "max_sampled_pss_mib": 153.25390625,
+        "max_sampled_rss_mib": 154.01953125,
+        "mean_turn_ms": 47.179,
+        "turn_cpu_ms_per_turn": 60.0,
+        "turn_write_mib_per_turn": 1.71484375
+      },
+      "after": {
+        "lifecycle_cpu_ms": 200.0,
+        "lifecycle_ms": 267.97,
+        "lifecycle_write_mib": 3.8359375,
+        "max_sampled_anon_pss_mib": 100.05859375,
+        "max_sampled_pss_mib": 156.357421875,
+        "max_sampled_rss_mib": 157.12109375,
+        "mean_turn_ms": 44.118,
+        "turn_cpu_ms_per_turn": 60.0,
+        "turn_write_mib_per_turn": 1.45703125
+      },
+      "after_over_before": {
+        "lifecycle_cpu_ms": 0.9545454545454546,
+        "lifecycle_ms": 0.9859341484144184,
+        "lifecycle_write_mib": 0.9211267605633803,
+        "max_sampled_anon_pss_mib": 0.9982852020733466,
+        "max_sampled_pss_mib": 1.0202508092677083,
+        "max_sampled_rss_mib": 1.0201374622739607,
+        "mean_turn_ms": 0.9351194387333347,
+        "turn_cpu_ms_per_turn": 1.0,
+        "turn_write_mib_per_turn": 0.8496583143507973
+      }
+    },
+    "large": {
+      "before": {
+        "lifecycle_cpu_ms": 380.0,
+        "lifecycle_ms": 442.216,
+        "lifecycle_write_mib": 13.171875,
+        "max_sampled_anon_pss_mib": 101.82421875,
+        "max_sampled_pss_mib": 154.8203125,
+        "max_sampled_rss_mib": 155.5859375,
+        "mean_turn_ms": 210.509,
+        "turn_cpu_ms_per_turn": 220.0,
+        "turn_write_mib_per_turn": 10.921875
+      },
+      "after": {
+        "lifecycle_cpu_ms": 220.0,
+        "lifecycle_ms": 277.023,
+        "lifecycle_write_mib": 4.12109375,
+        "max_sampled_anon_pss_mib": 100.04296875,
+        "max_sampled_pss_mib": 156.322265625,
+        "max_sampled_rss_mib": 157.0859375,
+        "mean_turn_ms": 51.093,
+        "turn_cpu_ms_per_turn": 80.0,
+        "turn_write_mib_per_turn": 1.60546875
+      },
+      "after_over_before": {
+        "lifecycle_cpu_ms": 0.5945945945945946,
+        "lifecycle_ms": 0.6927583999359814,
+        "lifecycle_write_mib": 0.31287069988137606,
+        "max_sampled_anon_pss_mib": 0.9828135190087083,
+        "max_sampled_pss_mib": 1.0098778826260282,
+        "max_sampled_rss_mib": 1.0098167210645241,
+        "mean_turn_ms": 0.27905224840813364,
+        "turn_cpu_ms_per_turn": 0.36363636363636365,
+        "turn_write_mib_per_turn": 0.14699570815450644
+      }
+    },
+    "short-large": {
+      "before": {
+        "lifecycle_cpu_ms": 14100.0,
+        "lifecycle_ms": 11543.22,
+        "lifecycle_write_mib": 314.6484375,
+        "max_sampled_anon_pss_mib": 232.20703125,
+        "max_sampled_pss_mib": 285.20703125,
+        "max_sampled_rss_mib": 285.97265625,
+        "mean_turn_ms": 70.749375,
+        "turn_cpu_ms_per_turn": 102.5,
+        "turn_write_mib_per_turn": 3.447998046875
+      },
+      "after": {
+        "lifecycle_cpu_ms": 13420.0,
+        "lifecycle_ms": 10890.844,
+        "lifecycle_write_mib": 205.0234375,
+        "max_sampled_anon_pss_mib": 232.23828125,
+        "max_sampled_pss_mib": 288.404296875,
+        "max_sampled_rss_mib": 289.16796875,
+        "mean_turn_ms": 63.21928125,
+        "turn_cpu_ms_per_turn": 95.0,
+        "turn_write_mib_per_turn": 2.2808837890625
+      },
+      "after_over_before": {
+        "lifecycle_cpu_ms": 0.9431818181818182,
+        "lifecycle_ms": 0.9407662320311481,
+        "lifecycle_write_mib": 0.6515952824332713,
+        "max_sampled_anon_pss_mib": 1.0001345781815123,
+        "max_sampled_pss_mib": 1.0112103324065578,
+        "max_sampled_rss_mib": 1.0111734895982734,
+        "mean_turn_ms": 0.9291619183915051,
+        "turn_cpu_ms_per_turn": 0.9650793650793651,
+        "turn_write_mib_per_turn": 0.661544997521773
+      }
+    },
+    "short-small": {
+      "before": {
+        "lifecycle_cpu_ms": 4710.0,
+        "lifecycle_ms": 3723.597,
+        "lifecycle_write_mib": 123.6953125,
+        "max_sampled_anon_pss_mib": 147.43359375,
+        "max_sampled_pss_mib": 200.80859375,
+        "max_sampled_rss_mib": 201.57421875,
+        "mean_turn_ms": 65.22053125,
+        "turn_cpu_ms_per_turn": 95.625,
+        "turn_write_mib_per_turn": 3.0992431640625
+      },
+      "after": {
+        "lifecycle_cpu_ms": 4350.0,
+        "lifecycle_ms": 3421.845,
+        "lifecycle_write_mib": 80.88671875,
+        "max_sampled_anon_pss_mib": 146.49609375,
+        "max_sampled_pss_mib": 202.783203125,
+        "max_sampled_rss_mib": 203.546875,
+        "mean_turn_ms": 56.48653125,
+        "turn_cpu_ms_per_turn": 85.625,
+        "turn_write_mib_per_turn": 2.0364990234375
+      },
+      "after_over_before": {
+        "lifecycle_cpu_ms": 0.9369747899159664,
+        "lifecycle_ms": 0.9332203133518782,
+        "lifecycle_write_mib": 0.6538777314639383,
+        "max_sampled_anon_pss_mib": 0.9936412049916541,
+        "max_sampled_pss_mib": 1.0098332911860253,
+        "max_sampled_rss_mib": 1.0097862527372439,
+        "mean_turn_ms": 0.909518398149746,
+        "turn_cpu_ms_per_turn": 0.9320388349514563,
+        "turn_write_mib_per_turn": 0.656733456678345
+      }
+    },
+    "stream": {
+      "before": {
+        "lifecycle_cpu_ms": 360.0,
+        "lifecycle_ms": 1808.723,
+        "lifecycle_write_mib": 5.69140625,
+        "max_sampled_anon_pss_mib": 101.21875,
+        "max_sampled_pss_mib": 153.6953125,
+        "max_sampled_rss_mib": 154.4609375,
+        "mean_turn_ms": 1579.57,
+        "turn_cpu_ms_per_turn": 210.0,
+        "turn_write_mib_per_turn": 3.19921875
+      },
+      "after": {
+        "lifecycle_cpu_ms": 340.0,
+        "lifecycle_ms": 1828.039,
+        "lifecycle_write_mib": 4.421875,
+        "max_sampled_anon_pss_mib": 100.1015625,
+        "max_sampled_pss_mib": 156.158203125,
+        "max_sampled_rss_mib": 156.921875,
+        "mean_turn_ms": 1585.795,
+        "turn_cpu_ms_per_turn": 170.0,
+        "turn_write_mib_per_turn": 2.0078125
+      },
+      "after_over_before": {
+        "lifecycle_cpu_ms": 0.9444444444444444,
+        "lifecycle_ms": 1.0069839614746114,
+        "lifecycle_write_mib": 0.7769389155799589,
+        "max_sampled_anon_pss_mib": 0.9899660389008953,
+        "max_sampled_pss_mib": 1.0161769938494383,
+        "max_sampled_rss_mib": 1.016084163674068,
+        "mean_turn_ms": 0.9966180669422692,
+        "turn_cpu_ms_per_turn": 0.85,
+        "turn_write_mib_per_turn": 0.6275946275946276
+      }
+    },
+    "tool": {
+      "before": {
+        "lifecycle_cpu_ms": 300.0,
+        "lifecycle_ms": 351.849,
+        "lifecycle_write_mib": 7.6171875,
+        "max_sampled_anon_pss_mib": 101.3203125,
+        "max_sampled_pss_mib": 154.81640625,
+        "max_sampled_rss_mib": 155.58203125,
+        "mean_turn_ms": 98.772,
+        "turn_cpu_ms_per_turn": 140.0,
+        "turn_write_mib_per_turn": 5.75390625
+      },
+      "after": {
+        "lifecycle_cpu_ms": 290.0,
+        "lifecycle_ms": 334.602,
+        "lifecycle_write_mib": 5.88671875,
+        "max_sampled_anon_pss_mib": 101.73046875,
+        "max_sampled_pss_mib": 158.369140625,
+        "max_sampled_rss_mib": 159.1328125,
+        "mean_turn_ms": 88.305,
+        "turn_cpu_ms_per_turn": 120.0,
+        "turn_write_mib_per_turn": 3.08203125
+      },
+      "after_over_before": {
+        "lifecycle_cpu_ms": 1.0,
+        "lifecycle_ms": 0.9552362289212419,
+        "lifecycle_write_mib": 0.7732170343766034,
+        "max_sampled_anon_pss_mib": 1.001696352841391,
+        "max_sampled_pss_mib": 1.022948048343552,
+        "max_sampled_rss_mib": 1.0228225664716664,
+        "mean_turn_ms": 0.8775867654800955,
+        "turn_cpu_ms_per_turn": 0.8571428571428571,
+        "turn_write_mib_per_turn": 0.5356415478615071
+      }
+    }
+  }
+}
