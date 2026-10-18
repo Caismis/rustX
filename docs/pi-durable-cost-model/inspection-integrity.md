@@ -126,3 +126,11 @@ whitespace parser repair and RawValue/duplicate-key differential fixtures from
 integrity schema and gate changes. This preserves an independent repair artifact
 without rewriting reviewed history; final authentication-restored variants must
 retain and validate it. It is not a separately measured executable.
+
+Independent review P2 identified a missing generic helper in the original artifact.
+The corrected patch includes that helper and historical-source assertion, applies
+to `b5840bd9`, and was compiled/tested on the actual resulting baseline tree
+`ac9042ea2b72c73c2ea7b27f16e590d8eb8d8b18`: **6 preview and 26 read-layout
+tests pass**, with schema gate 73 unchanged. Full compiler/command identity and
+readable logs are in the linked manifest. The original incomplete artifact is
+preserved in history and the validation archive; this does not alter production.

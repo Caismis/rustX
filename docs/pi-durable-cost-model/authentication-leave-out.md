@@ -58,15 +58,17 @@ Provider start/control and complete controller wall remain in raw records.
 ## Correctness-patch review follow-up
 
 Independent review P2 found the separately extracted RawValue patch omitted its
-generic test helper. The measured diagnostic's production parser was present and
-correct; its library build was non-test (`profile.test=false`), so that missing
+generic test helper. The measured diagnostic's production parser repair was present; its library build was non-test (`profile.test=false`), so that missing
 `cfg(test)` helper did not affect the production executable or the formal full
 request oracles. The original measured identity remains explicit above.
 
 Diagnostic follow-up `8a24bc99a173ca14899c2721094e683c6e6acca1` completes only that test helper. The source
 diff/commit remains separate; it is not represented as a newly measured build.
-The standalone corrected patch is being compiled/tested independently on its
-documented `b5840bd9` baseline; final proof is linked from its manifest. Diagnostic
+The standalone corrected patch was applied to its documented `b5840bd9`
+baseline and compiled as the complete real library test harness: all 6 preview
+and 26 read-layout tests passed on `ac9042ea`, retaining gate 73.
+[Commands, identity and readable logs](evidence/rawvalue-correctness/manifest.json)
+provide the baseline proof. Diagnostic
 variants are not merge candidates and have no claim of complete variant FULL CI.
 
 [Archive](evidence/auth-leaveout/measurements.tar.xz),

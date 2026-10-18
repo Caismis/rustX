@@ -1,103 +1,34 @@
-diff --git a/src/runtime/read_layout.rs b/src/runtime/read_layout.rs
-index 27e120c9..27ede718 100644
---- a/src/runtime/read_layout.rs
-+++ b/src/runtime/read_layout.rs
-@@ -1165,6 +1165,26 @@ impl LayoutParser<'_> {
-         self.reader.consume(count);
-         self.position += count as u64;
-     }
-+    fn whitespace(&mut self) -> Result<(), &'static str> {
-+        use std::io::BufRead as _;
-+        loop {
-+            if self.layout.expired() {
-+                return Err("native source indexing deadline reached");
-+            }
-+            let buffer = self
-+                .reader
-+                .fill_buf()
-+                .map_err(|_| "native source parser unavailable")?;
-+            let count = buffer
-+                .iter()
-+                .take_while(|byte| matches!(byte, b' ' | b'\n' | b'\r' | b'\t'))
-+                .count();
-+            if count == 0 {
-+                return Ok(());
-+            }
-+            self.consume(count);
-+        }
-+    }
-     fn expect(&mut self, byte: u8) -> Result<(), &'static str> {
-         if self.peek()? != Some(byte) {
-             return Err("native source JSON invalid");
-@@ -1223,6 +1243,7 @@ impl LayoutParser<'_> {
-             None
-         };
-         let complete = name.is_some();
-+        self.whitespace()?;
-         self.expect(b':')?;
-         Ok((name.unwrap_or_default(), complete, (begin, end)))
-     }
-@@ -1269,7 +1290,13 @@ impl LayoutParser<'_> {
-             .checked_add(1)
-             .filter(|next| *next <= SAFE)
-             .ok_or("native source nodes exhausted")?;
--        let start = self.position;
-+        let root_start = self.position;
-+        self.whitespace()?;
-+        let start = if parent.is_none() {
-+            root_start
-+        } else {
-+            self.position
-+        };
-         let byte = self.peek()?.ok_or("native source JSON truncated")?;
-         let container = matches!(byte, b'{' | b'[');
-         let object = byte == b'{';
-@@ -1279,10 +1306,12 @@ impl LayoutParser<'_> {
-         let (mut children, mut recursive) = (0_u64, 1_u64);
-         if container {
-             self.consume(1);
-+            self.whitespace()?;
-             let close = if object { b'}' } else { b']' };
-             while self.peek()? != Some(close) {
-                 if children > 0 {
-                     self.expect(b',')?;
-+                    self.whitespace()?;
-                 }
-                 let child_key = if object {
-                     Some(self.child_key()?)
-@@ -1292,18 +1321,21 @@ impl LayoutParser<'_> {
-                 let (_, count) = self.value(Some(id), children, child_key, depth + 1)?;
-                 recursive = (recursive + count).min(33);
-                 children += 1;
-+                self.whitespace()?;
-             }
-             self.expect(close)?;
-         } else if byte == b'"' {
-             self.string()?;
-         } else {
--            while self
--                .peek()?
--                .is_some_and(|byte| !matches!(byte, b',' | b'}' | b']'))
--            {
-+            while self.peek()?.is_some_and(|byte| {
-+                !matches!(byte, b',' | b'}' | b']' | b' ' | b'\n' | b'\r' | b'\t')
-+            }) {
-                 self.consume(1);
-             }
-         }
-+        if parent.is_none() {
-+            self.whitespace()?;
-+        }
-         let end = self.position;
-         // IDs remain preorder; completed rows need no placeholder update.
-         if let Some(index) = &mut self.layout.small_index {
 diff --git a/src/durable/sqlite/observation_request/state_preview_tests.rs b/src/durable/sqlite/observation_request/state_preview_tests.rs
-index 008c9955..42058944 100644
+index 008c9955..b3c65c4c 100644
 --- a/src/durable/sqlite/observation_request/state_preview_tests.rs
 +++ b/src/durable/sqlite/observation_request/state_preview_tests.rs
-@@ -274,3 +285,103 @@ fn previous_eager_state_layout_is_rejected_without_migration() {
-         72
-     );
+@@ -28,4 +28,7 @@ fn connection() -> Connection {
+ fn state_preview_capture_skips_unused_previews_and_lazy_reads_match_eager_oracle() {
+-    let value = fixture();
+-    let original = SeekableObservationSource::new(&value).unwrap();
++    assert_lazy_matches_eager(&fixture());
++}
++
++fn assert_lazy_matches_eager<T: serde::Serialize + schemars::JsonSchema>(value: &T) {
++    let original = SeekableObservationSource::new(value).unwrap();
+     let mut expected = Vec::new();
+@@ -45,3 +48,3 @@ fn state_preview_capture_skips_unused_previews_and_lazy_reads_match_eager_oracle
+     crate::runtime::read_layout::take_field_preview_work();
+-    index_state(&connection, "preview_test", "source", &value).unwrap();
++    index_state(&connection, "preview_test", "source", value).unwrap();
+     let (computed, skipped) = crate::runtime::read_layout::take_field_preview_work();
+@@ -49,2 +52,10 @@ fn state_preview_capture_skips_unused_previews_and_lazy_reads_match_eager_oracle
+     assert_eq!(skipped, expected.len());
++    // A later immutable source cannot replace the selected historical source.
++    index_state(
++        &connection,
++        "preview_test",
++        "later",
++        &serde_json::json!({"later":true}),
++    )
++    .unwrap();
+     let changes = connection.total_changes();
+@@ -276 +287,101 @@ fn previous_eager_state_layout_is_rejected_without_migration() {
  }
 +
 +#[derive(serde::Serialize, schemars::JsonSchema)]
@@ -199,3 +130,73 @@ index 008c9955..42058944 100644
 +        raw.get().as_bytes()
 +    );
 +}
+diff --git a/src/runtime/read_layout.rs b/src/runtime/read_layout.rs
+index 27e120c9..27ede718 100644
+--- a/src/runtime/read_layout.rs
++++ b/src/runtime/read_layout.rs
+@@ -1167,2 +1167,22 @@ impl LayoutParser<'_> {
+     }
++    fn whitespace(&mut self) -> Result<(), &'static str> {
++        use std::io::BufRead as _;
++        loop {
++            if self.layout.expired() {
++                return Err("native source indexing deadline reached");
++            }
++            let buffer = self
++                .reader
++                .fill_buf()
++                .map_err(|_| "native source parser unavailable")?;
++            let count = buffer
++                .iter()
++                .take_while(|byte| matches!(byte, b' ' | b'\n' | b'\r' | b'\t'))
++                .count();
++            if count == 0 {
++                return Ok(());
++            }
++            self.consume(count);
++        }
++    }
+     fn expect(&mut self, byte: u8) -> Result<(), &'static str> {
+@@ -1225,2 +1245,3 @@ impl LayoutParser<'_> {
+         let complete = name.is_some();
++        self.whitespace()?;
+         self.expect(b':')?;
+@@ -1271,3 +1292,9 @@ impl LayoutParser<'_> {
+             .ok_or("native source nodes exhausted")?;
+-        let start = self.position;
++        let root_start = self.position;
++        self.whitespace()?;
++        let start = if parent.is_none() {
++            root_start
++        } else {
++            self.position
++        };
+         let byte = self.peek()?.ok_or("native source JSON truncated")?;
+@@ -1281,2 +1308,3 @@ impl LayoutParser<'_> {
+             self.consume(1);
++            self.whitespace()?;
+             let close = if object { b'}' } else { b']' };
+@@ -1285,2 +1313,3 @@ impl LayoutParser<'_> {
+                     self.expect(b',')?;
++                    self.whitespace()?;
+                 }
+@@ -1294,2 +1323,3 @@ impl LayoutParser<'_> {
+                 children += 1;
++                self.whitespace()?;
+             }
+@@ -1299,6 +1329,5 @@ impl LayoutParser<'_> {
+         } else {
+-            while self
+-                .peek()?
+-                .is_some_and(|byte| !matches!(byte, b',' | b'}' | b']'))
+-            {
++            while self.peek()?.is_some_and(|byte| {
++                !matches!(byte, b',' | b'}' | b']' | b' ' | b'\n' | b'\r' | b'\t')
++            }) {
+                 self.consume(1);
+@@ -1306,2 +1335,5 @@ impl LayoutParser<'_> {
+         }
++        if parent.is_none() {
++            self.whitespace()?;
++        }
+         let end = self.position;

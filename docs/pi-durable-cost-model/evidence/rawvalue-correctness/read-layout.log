@@ -1,0 +1,36 @@
+    Finished `test` profile [unoptimized] target(s) in 0.43s
+     Running unittests src/lib.rs (/workspace/issue-481-target-debug/debug/deps/rustx-460b6025aaec8ce9)
+
+running 26 tests
+test runtime::read_layout::byte_reader_tests::t08_t12_t20_scoped_byte_reader_checks_bounds_and_keeps_physical_errors_and_source_lifetime ... ok
+test runtime::read_layout::path_tests::t08_t19_t20_incremental_field_path_encoding_keeps_the_exact_3600_byte_boundary ... ok
+test runtime::read_layout::resident_byte_tests::failed_spill_does_not_replace_existing_bytes_or_lose_resident_prefix ... ok
+test runtime::read_layout::resident_byte_tests::resident_navigation_copy_and_reader_pins_keep_lexical_json ... ok
+test runtime::read_layout::resident_byte_tests::sealed_resident_storage_rejects_writes_and_out_of_range_reads ... ok
+test runtime::read_layout::small::tests::seal_rejects_incomplete_duplicate_or_unbounded_geometry ... ok
+test runtime::read_layout::byte_reader_tests::t08_t15_t20_scoped_byte_reader_preserves_every_probe_with_one_file_and_no_index_opens ... ok
+field-path components_encoded=315 prefix_components_reused=5402 legacy_components=5717
+test runtime::read_layout::path_tests::t08_t14_t19_t20_mutable_field_paths_reuse_prefixes_with_exact_legacy_evidence ... ok
+test runtime::read_layout::resident_byte_tests::resident_threshold_and_split_writes_preserve_exact_source_bytes ... ok
+test runtime::read_layout::source_copy_tests::original_source_copy_preserves_destination_error_and_stops_without_flushing ... ok
+test runtime::read_layout::tests::small_index_admission_uses_exact_encoded_bytes_and_retains_navigation ... ok
+test runtime::read_layout::source_copy_tests::original_source_copy_preserves_exact_bytes_and_extent_without_index_reopens ... ok
+test runtime::read_layout::tests::small_index_dense_input_is_bounded_and_pagination_is_exact ... ok
+test runtime::read_layout::tests::small_index_preserves_lexical_bytes_keys_and_u64_evidence ... ok
+test runtime::read_layout::source_copy_tests::original_source_copy_rejects_premature_eof_without_shortening_the_extent ... ok
+test runtime::read_layout::tests::t08_t12_source_read_errors_distinguish_invalid_selection_from_layout_failure ... ok
+test runtime::read_layout::source_copy_tests::original_source_copy_stops_at_original_extent_and_releases_its_file_owner ... ok
+test runtime::read_layout::tests::t08_t15_t20_captured_field_preview_selection_preserves_original_traversal_and_bytes ... ok
+test runtime::read_layout::tests::small_index_matches_disk_fields_and_allows_reentrant_reads ... ok
+buffered source bytes=43214 file_writes=1; traversal_reader_opens=1 plus300 explicit span reads
+test runtime::read_layout::tests::t08_t15_t20_layout_construction_buffers_tokens_and_scopes_preview_reader ... ok
+test runtime::read_layout::tests::t08_t15_t20_layout_inserts_complete_nodes_once_before_sealing_required_indexes ... ok
+test runtime::read_layout::tests::t08_t19_t20_native_text_ranges_need_no_index_or_utf8_boundary_alignment ... ok
+test runtime::read_layout::tests::t10_t19_layout_cannot_escape_before_required_ordinal_uniqueness_is_validated ... ok
+300 request message previews: named=200.198837ms, indexed_span=3.342588ms, index_opens=1500->0
+test runtime::read_layout::tests::t08_t15_t20_trusted_message_spans_avoid_index_reopens_and_preserve_exact_bytes ... ok
+test runtime::read_layout::tests::t08_t15_t20_layout_traversal_reuses_rows_without_changing_original_field_evidence ... ok
+test runtime::read_layout::tests::t08_t12_t15_t20_native_collection_source_indexes_once_and_seeks_each_chunk ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 4243 filtered out; finished in 1.04s
+
