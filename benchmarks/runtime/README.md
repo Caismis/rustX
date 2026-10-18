@@ -1,3 +1,39 @@
+# Fair local-provider benchmark (issue 481)
+
+For current source, use the external sibling-process controller:
+
+```sh
+cargo test --release --locked --test conformance --no-run --message-format=json > build.jsonl
+python3 benchmarks/runtime/controller.py --rust /absolute/preserved-conformance \
+  --pi /absolute/pinned-pi --output /absolute/new-evidence --pairs 3
+node --test benchmarks/runtime/pi-oracle.test.mjs
+```
+
+See [the issue 481 checkpoint](../../docs/issue-481/progress.md) for the exact Pi
+revision, offline build commands, ownership, oracle and measurement scopes.
+Never run formal samples concurrently with a build. Preserve the executable,
+its hash, and the exact source commit before rebuilding. Profile in separate runs.
+
+The provider is the same Python HTTP/SSE implementation and scenario for both
+engines. Pi uses its production `openAICompletionsApi()` with actual Durable
+SQLite, not its faux provider. Each paired run compares complete core requests
+and separately records the intentionally different native tool schemas.
+Neither full request equality nor product/durability equivalence is claimed.
+
+`measure_canonical_append` separately measures 32 canonical acceptances after
+0, 64, 512 or 2,048 retained messages, using `RUSTX_BENCH_HISTORY` and
+`RUSTX_BENCH_OUTPUT`. Run each size in a fresh process, interleave preserved
+checkpoint executables at least three times, and retain failures. It performs
+no request/context construction. Seed, append, close, reopened validation and
+cleanup counters are separate; evidence output follows the cleanup endpoint.
+
+The remaining documentation describes the **historical issue 480 harness**.
+Its `run.py` expects the old measurement executable and must not be used with
+the new controller-handshake executable. Old Pi in-process timings are not an
+equivalent HTTP comparison and must never be reused as issue 481 baselines.
+
+---
+
 # Offline runtime durability measurements
 
 The ignored `conformance` measurement reuses its real Session/App Server driver,

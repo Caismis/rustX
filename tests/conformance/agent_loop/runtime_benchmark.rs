@@ -135,9 +135,19 @@ async fn measure_runtime() {
     std::fs::create_dir(&workspace).unwrap();
     std::fs::write(workspace.join(NOTE_PATH), NOTE_MARKER).unwrap();
     let scenario = format!("runtime_benchmark_{case}");
-    let emulator = ProviderEmulator::start_with_workspace(&scenario, Some(&workspace))
-        .await
-        .expect("offline emulator required");
+    // The external controller owns both siblings. Provider reaping can never
+    // enter the product's /proc/self/io counters, even on failure paths.
+    println!(
+        "RUSTX_BENCH_READY {}",
+        json!({"workspace":workspace,"scenario":scenario})
+    );
+    let mut ready = String::new();
+    std::io::stdin().read_line(&mut ready).unwrap();
+    let emulator = ProviderEmulator::externally_owned(
+        &serde_json::from_str(&ready).expect("controller provider readiness"),
+        &scenario,
+    );
+    lifecycle_sample(&mut lifecycle, "after_provider_start", lifecycle_began);
     let began = Instant::now();
     let mut driver = Driver::start_in(root, &emulator, &Setup::new("emulator/chat-model")).await;
     let open_us = began.elapsed().as_micros();
@@ -267,27 +277,22 @@ async fn measure_runtime() {
     let reopen_us = began.elapsed().as_micros();
     let verified_live_requests = verified_requests.len();
     let verified_reopened_requests = reopened_requests.len();
-    drop((
-        reopened,
-        verified_requests,
-        reopened_requests,
-        requests,
-        history_messages,
-    ));
+    drop(reopened);
     lifecycle_sample(&mut lifecycle, "after_reopen_verification", lifecycle_began);
     let began = Instant::now();
     std::fs::remove_dir_all(&root_path).unwrap();
     let cleanup_us = began.elapsed().as_micros();
     lifecycle_sample(&mut lifecycle, "after_cleanup", lifecycle_began);
-    emulator.finish().await;
-    lifecycle_sample(&mut lifecycle, "after_provider_teardown", lifecycle_began);
+    drop(emulator);
     std::fs::write(
         output,
         serde_json::to_vec_pretty(&json!({
             "case":case,"schema":rustx::durable::sqlite::SQLITE_SCHEMA_VERSION,
             "protocol":APP_SERVER_PROTOCOL_VERSION,"history":history,"measured":measured,
             "requests":expected_requests,"open_us":open_us,"samples":samples,
-            "initial_process":initial,"lifecycle":lifecycle,"measurement_version":2,
+            "initial_process":initial,"lifecycle":lifecycle,"measurement_version":3,
+            "wire_requests":requests,"live_requests":verified_requests,
+            "reopened_requests":reopened_requests,"canonical":history_messages,
             "oracle_version":2,"verified_live_requests":verified_live_requests,
             "verified_reopened_requests":verified_reopened_requests,
             "shutdown_us":shutdown_us,"reopen_us":reopen_us,
@@ -295,6 +300,73 @@ async fn measure_runtime() {
             "before_close":before_close,"closed_footprint":closed_footprint,"close_us":close_us,"cleanup_us":cleanup_us,
             "oracle":"passed","sql_statements":null,"allocations":null
         }))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
+/// Marginal native canonical acceptance, without provider/context construction.
+/// A fresh process/store is required for each history size and repetition.
+#[test]
+#[ignore = "offline canonical append measurement; no timing gate"]
+fn measure_canonical_append() {
+    use rustx::message::types::{InboundKind, UserMessageBlock, UserSource};
+    use rustx::runtime::identity::{ConversationId, MessageId};
+    let history: usize = std::env::var("RUSTX_BENCH_HISTORY")
+        .expect("history size")
+        .parse()
+        .unwrap();
+    assert!([0, 64, 512, 2048].contains(&history));
+    let output = PathBuf::from(std::env::var_os("RUSTX_BENCH_OUTPUT").expect("output"));
+    let root = tempfile::tempdir_in(output.parent().unwrap()).unwrap();
+    let database = root.path().join("conversation.sqlite");
+    let cid = ConversationId::new("append-measurement");
+    let began = Instant::now();
+    let mut lifecycle = Vec::new();
+    lifecycle_sample(&mut lifecycle, "before_initialization", began);
+    let store = SqliteConversationStore::open(cid.clone(), &database).unwrap();
+    let message = |index: usize| {
+        MessageBlock::User(UserMessageBlock {
+            id: MessageId::new(format!("message-{index:05}")),
+            content: vec![UserContentBlock::Text(TextBlock {
+                text: format!("canonical input {index:05}"),
+            })],
+            source: UserSource::Human,
+            kind: InboundKind::Message,
+            timestamp: None,
+        })
+    };
+    for index in 0..history {
+        store.append_canonical(&message(index)).unwrap();
+    }
+    lifecycle_sample(&mut lifecycle, "after_seed", began);
+    let mut samples = Vec::new();
+    for index in history..history + 32 {
+        let message = message(index);
+        let start = Instant::now();
+        store.append_canonical(&message).unwrap();
+        samples.push(start.elapsed().as_nanos());
+    }
+    lifecycle_sample(&mut lifecycle, "after_appends", began);
+    let before_close = footprint(root.path());
+    drop(store);
+    lifecycle_sample(&mut lifecycle, "after_close", began);
+    let closed_footprint = footprint(root.path());
+    let reopened = SqliteConversationStore::open_existing(cid, &database).unwrap();
+    assert_eq!(
+        reopened.load_canonical().unwrap(),
+        (0..history + 32).map(message).collect::<Vec<_>>()
+    );
+    drop(reopened);
+    lifecycle_sample(&mut lifecycle, "after_reopen_verification", began);
+    root.close().unwrap();
+    lifecycle_sample(&mut lifecycle, "after_cleanup", began);
+    std::fs::write(
+        output,
+        serde_json::to_vec_pretty(&json!({"history":history,"measured":32,
+            "append_ns":samples,"lifecycle":lifecycle,"before_close":before_close,
+            "closed_footprint":closed_footprint,"oracle":"passed",
+            "schema":rustx::durable::sqlite::SQLITE_SCHEMA_VERSION}))
         .unwrap(),
     )
     .unwrap();
