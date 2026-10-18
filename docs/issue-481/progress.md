@@ -91,3 +91,9 @@ and all-target/all-feature Clippy pass. Draft PR #484 retains explicit RSS and
 runtime-wall regressions. Exact-head FULL/independent review remain required;
 the authoritative current status and head/base/main identities are in the PR.
 No merge or auto-merge is authorized.
+
+Review follow-up: 14 new current-controller/summary tests plus nine historical
+v2 tests pass; 59 CI-script tests pass. CI runs both Python suites. All 252 runtime
+samples / 5,922 requests revalidate with stricter lifecycle checks, with unchanged
+headline medians. See `review.md` and `evidence/pair-inputs` for reviewable inputs
+and controlled diagnostic findings. Original wall and memory limitations remain.

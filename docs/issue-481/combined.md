@@ -89,3 +89,13 @@ Local passes: 20 Source tests, 20 focused append tests, 367 durable SQLite tests
 Commands are in [the benchmark README](../../benchmarks/runtime/README.md). `--pair-offset 3 --pairs 3` supplied the balanced confirmation pairs in separate directories. `confirmation-harness-identity.json` records exact controller blobs and the invocation/commit timing; original manifest heads are not rewritten. `pack-evidence.py` verifies every archived member against its length/SHA-256 and leaves raw originals intact.
 
 Final exact-head FULL and Merge verification are required and linked in [draft PR #484](https://github.com/Caismis/rustX/pull/484), together with actual final head/main/base SHAs. This report does not assert CI success before that verdict. No merge or auto-merge is authorized.
+
+## Independent-review follow-up
+
+[The follow-up report](review.md) adds 14 tests of the current HTTP controller
+and pair summaries (23 Python tests including nine legacy tests), text-readable
+paired inputs with verified hashes, and controlled wall/memory diagnostics.
+All 252 runtime samples revalidate and original headline medians are unchanged.
+The original canonical wall-regression cause remains unresolved; diagnostic
+runs do not replace the six-pair result. Source-only anonymous memory increases,
+while most canonical RSS growth is file-backed and precedes measured turns.
