@@ -3,7 +3,8 @@
 For current source, use the external sibling-process controller:
 
 ```sh
-cargo test --release --locked --test conformance --no-run --message-format=json > build.jsonl
+python3 benchmarks/runtime/build-revision.py --repo /absolute/checkout \
+  --target /absolute/shared-target --output /absolute/new-build-evidence
 python3 benchmarks/runtime/controller.py --rust /absolute/preserved-conformance \
   --pi /absolute/pinned-pi --output /absolute/new-evidence --pairs 3
 node --test benchmarks/runtime/pi-oracle.test.mjs
@@ -13,6 +14,16 @@ See [the issue 481 checkpoint](../../docs/issue-481/progress.md) for the exact P
 revision, offline build commands, ownership, oracle and measurement scopes.
 Never run formal samples concurrently with a build. Preserve the executable,
 its hash, and the exact source commit before rebuilding. Profile in separate runs.
+
+`build-revision.py` cleans the root crate release artifacts before building and
+requires `fresh:false` for both the product library and conformance target.
+A shared Cargo target can otherwise return a newer checkout's cached executable
+when an older checkout has older source mtimes. Source paths and Git labels alone
+do not prove binary identity. The builder records all benchmark fixture hashes,
+commands, root artifacts and executable/library SHA-256 values; originals remain
+in the new evidence directory. Set the same Cargo/Rust environment for every
+revision. The revision controllers reject identical executable hashes before
+starting either product or provider.
 
 The provider is the same Python HTTP/SSE implementation and scenario for both
 engines. Pi uses its production `openAICompletionsApi()` with actual Durable
