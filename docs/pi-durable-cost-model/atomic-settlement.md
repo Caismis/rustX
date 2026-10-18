@@ -66,7 +66,7 @@ and incremental compilation disabled:
 - `git diff --check` passed.
 
 Unit filters were `durable::sqlite::final_settlement_tests`, `agent::execution::`,
-`durable::sqlite::`, `source::`, and
+`durable::sqlite::`, `runtime::read_layout::`, and
 `boundary_suites::durable::process_death::conformance::` on the all-features library
 test executable. These overlapping suites are not additive coverage counts.
 
