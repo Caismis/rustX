@@ -198,7 +198,7 @@ fn persist_part(
     let (max_path, max_key_path) = capture_facts(connection, source, reader, start, end)?;
     let mut builder = index::Builder::new(connection);
     let mut statement = connection
-        .prepare_cached("SELECT key,value FROM request_source_fact_spool ORDER BY key")
+        .prepare("SELECT key,value FROM request_source_fact_spool ORDER BY key")
         .map_err(|error| storage(error.to_string()))?;
     let mut rows = statement
         .query([])
@@ -215,9 +215,7 @@ fn persist_part(
     drop(rows);
     drop(statement);
     connection
-        .prepare_cached("DELETE FROM request_source_fact_spool")
-        .map_err(|error| storage(error.to_string()))?
-        .execute([])
+        .execute("DELETE FROM request_source_fact_spool", [])
         .map_err(|error| storage(error.to_string()))?;
     let mut builder = index::Builder::new(connection);
     let mut offset = start;

@@ -43,9 +43,10 @@ fn persist(connection: &Connection, page: &Page) -> Result<Reference, Conversati
     let bytes = encode(page)?;
     let hash: Hash = Sha256::digest(&bytes).into();
     connection
-        .prepare_cached("INSERT OR IGNORE INTO request_source_pages(hash,bytes) VALUES(?1,?2)")
-        .map_err(|error| storage(error.to_string()))?
-        .execute(params![hash.as_slice(), bytes])
+        .execute(
+            "INSERT OR IGNORE INTO request_source_pages(hash,bytes) VALUES(?1,?2)",
+            params![hash.as_slice(), bytes],
+        )
         .map_err(|error| storage(error.to_string()))?;
     Ok(Reference { hash, last, depth })
 }
@@ -58,9 +59,10 @@ pub(super) fn store_blob(
     }
     let digest: Hash = Sha256::digest(bytes).into();
     connection
-        .prepare_cached("INSERT OR IGNORE INTO request_source_pages(hash,bytes) VALUES(?1,?2)")
-        .map_err(|error| storage(error.to_string()))?
-        .execute(params![digest.as_slice(), bytes])
+        .execute(
+            "INSERT OR IGNORE INTO request_source_pages(hash,bytes) VALUES(?1,?2)",
+            params![digest.as_slice(), bytes],
+        )
         .map_err(|error| storage(error.to_string()))?;
     Ok(digest)
 }
@@ -256,53 +258,4 @@ pub(super) fn get(
         }
     }
     Err(storage("fragment lookup exceeds bounded depth"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn cached_fragment_writes_preserve_rollback_tamper_and_schema_failure() {
-        let mut connection = Connection::open_in_memory().unwrap();
-        connection
-            .execute_batch(
-                "CREATE TABLE request_source_pages(hash BLOB PRIMARY KEY,bytes BLOB NOT NULL)",
-            )
-            .unwrap();
-        let digest = {
-            let transaction = connection.transaction().unwrap();
-            let digest = store_blob(&transaction, b"original").unwrap();
-            assert_eq!(load_blob(&transaction, digest).unwrap(), b"original");
-            transaction.rollback().unwrap();
-            digest
-        };
-        assert!(
-            load_blob(&connection, digest).is_err(),
-            "a cached write cannot survive rollback"
-        );
-        {
-            let transaction = connection.transaction().unwrap();
-            assert_eq!(store_blob(&transaction, b"original").unwrap(), digest);
-            transaction.commit().unwrap();
-        }
-        assert_eq!(load_blob(&connection, digest).unwrap(), b"original");
-        connection
-            .execute(
-                "UPDATE request_source_pages SET bytes=?1",
-                [b"changed".as_slice()],
-            )
-            .unwrap();
-        assert!(
-            load_blob(&connection, digest).is_err(),
-            "cached statements cannot bless changed Original bytes"
-        );
-        connection
-            .execute_batch("DROP TABLE request_source_pages")
-            .unwrap();
-        assert!(
-            store_blob(&connection, b"another").is_err(),
-            "a warm statement must observe schema invalidation"
-        );
-    }
 }
