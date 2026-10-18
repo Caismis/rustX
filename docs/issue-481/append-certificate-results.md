@@ -81,14 +81,17 @@ summary, build identity and development-check failure. Its
 [SHA-256 manifest](evidence/certificate-stage.tar.manifest.json) is checked against
 the archive; original evidence remains in the cloud workspace.
 
-## Build identity review in progress
+## Build identity review resolved for this stage
 
 Independent review found that the earlier stage-1 cold baseline was mislabeled:
 a shared Cargo target returned the metadata executable for both inputs. That
-cold comparison is withdrawn. Here, the `ab315719…14e5c` baseline follows the
-fresh metadata library build and a fresh conformance-fixture build; the
-certificate candidate rebuilt its library and conformance target. A fresh clean
-metadata build is being used to independently confirm the baseline binary, so
-these stage-2 attribution claims remain provisional until that check completes.
-The original records remain unchanged. [Plain pair inputs](evidence/pair-inputs)
-permit recomputation without extracting an archive.
+cold comparison is withdrawn. An independent metadata rebuild at 08:27 UTC on
+2026-10-18 first cleaned the root crate, then freshly compiled both its library
+and conformance target. Its SHA-256 is byte-identical to this stage's baseline,
+`ab315719267cecb3c4f74527349c6f972fd4dbea839dbdb00585b2643f714e5c`.
+The certificate candidate also freshly compiled its library and conformance
+target. This confirms the distinct production identities for all stage-2 pairs.
+The [identity audit](evidence/build-identity-audit.json) retains both the invalid
+stage-1 records and clean confirmation. Original evidence is unchanged.
+[Plain pair inputs](evidence/pair-inputs) expose executable hashes and every
+numeric pair input; independent recomputation matches all published paired medians.

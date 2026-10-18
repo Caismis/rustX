@@ -11,7 +11,7 @@
       "sha256": "ab315719267cecb3c4f74527349c6f972fd4dbea839dbdb00585b2643f714e5c"
     }
   },
-  "identity_review": "metadata baseline clean rebuild confirmation pending",
+  "identity_review": "metadata baseline independently clean-rebuilt byte-identical; candidate root freshly compiled",
   "memory_scope": "all observed lifecycle and operation counters; sampled maxima, not peaks",
   "method": "For each case/metric, compute after/before within each pair, then median across all pairs. Null or zero denominators are unavailable, not zero ratios. No slow samples removed.",
   "pairs": [
@@ -629,5 +629,5 @@
     }
   ],
   "scope": "See baseline.md: CPU self plus driver; process-attributed writes, not device writes; sampled memory, not peak; same-pair ratios; no unrelated median subtraction",
-  "valid_revision_comparison": null
+  "valid_revision_comparison": true
 }

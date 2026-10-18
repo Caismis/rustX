@@ -152,7 +152,7 @@
           "source_path": "/workspace/rustX-481-metadata/tests/conformance/main.rs"
         }
       ],
-      "verdict": "metadata library cache chain; independent clean rebuild pending"
+      "verdict": "metadata library cache chain independently confirmed by byte-identical clean rebuild"
     },
     {
       "name": "structural-baseline-cold-fixed",
@@ -255,5 +255,62 @@
       ],
       "verdict": "root library and conformance freshly compiled"
     }
-  ]
+  ],
+  "clean_metadata_confirmation": {
+    "head": "76ecc9d765e5c63080950e7dc5710a32b0b1caa7",
+    "production_tree": "4f63493659971e27e8cbe8fc9833feadf6ebc03c",
+    "fixture_sha256": "0c9b61828fe19270f32308eb382cc2dbe3f0dbb45abceff3790f1cf98e056f16",
+    "start_utc": "2026-10-18T08:17:26.702540+00:00",
+    "clean_command": [
+      "cargo",
+      "clean",
+      "--release",
+      "--package",
+      "rustx"
+    ],
+    "clean_exit": 0,
+    "command": [
+      "cargo",
+      "test",
+      "--release",
+      "--locked",
+      "--test",
+      "conformance",
+      "--no-run",
+      "--message-format=json"
+    ],
+    "exit": 0,
+    "end_utc": "2026-10-18T08:27:06.805515+00:00",
+    "root_artifacts": [
+      {
+        "name": "rustx",
+        "kind": [
+          "lib"
+        ],
+        "fresh": false,
+        "source_path": "/workspace/rustX-481-metadata/src/lib.rs"
+      },
+      {
+        "name": "rustx",
+        "kind": [
+          "bin"
+        ],
+        "fresh": false,
+        "source_path": "/workspace/rustX-481-metadata/src/main.rs"
+      },
+      {
+        "name": "conformance",
+        "kind": [
+          "test"
+        ],
+        "fresh": false,
+        "source_path": "/workspace/rustX-481-metadata/tests/conformance/main.rs"
+      }
+    ],
+    "binary": "/workspace/issue-481-evidence/metadata-verified-conformance",
+    "sha256": "ab315719267cecb3c4f74527349c6f972fd4dbea839dbdb00585b2643f714e5c",
+    "library_sha256": "2e6bf97c4d496702430816cb02e2248434b7c6883b58ec1c48021328f7d64591",
+    "previous_metadata_sha256": "ab315719267cecb3c4f74527349c6f972fd4dbea839dbdb00585b2643f714e5c",
+    "matches_previous_metadata_binary": true
+  }
 }
