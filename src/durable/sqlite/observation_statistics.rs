@@ -460,11 +460,11 @@ pub(super) fn trace_total(
     connection: &Connection,
     through: u64,
 ) -> Result<u64, ConversationStoreError> {
-    let missing:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_trace_holes_idx WHERE observation_trace_required=1 AND observation_trace_total IS NULL AND sequence<=?1)",[through],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let missing:bool=connection.prepare_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_trace_holes_idx WHERE observation_trace_required=1 AND observation_trace_total IS NULL AND sequence<=?1)").map_err(|error| storage(error.to_string()))?.query_row([through],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
     if missing {
         return Err(storage("native trace count source unavailable"));
     }
-    connection.query_row("SELECT observation_trace_total FROM events INDEXED BY events_observation_trace_total_idx WHERE observation_trace_total IS NOT NULL AND sequence<=?1 ORDER BY sequence DESC LIMIT 1",[through],|row|row.get(0)).optional().map(|value|value.unwrap_or(0)).map_err(|error|storage(error.to_string()))
+    connection.prepare_cached("SELECT observation_trace_total FROM events INDEXED BY events_observation_trace_total_idx WHERE observation_trace_total IS NOT NULL AND sequence<=?1 ORDER BY sequence DESC LIMIT 1").map_err(|error| storage(error.to_string()))?.query_row([through],|row|row.get(0)).optional().map(|value|value.unwrap_or(0)).map_err(|error|storage(error.to_string()))
 }
 
 #[cfg(test)]

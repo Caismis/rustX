@@ -9,16 +9,14 @@ pub(super) fn insert(
 ) -> Result<(), ConversationStoreError> {
     let ready = !crate::runtime::observation::trace_fact_requires_publication(&event.event);
     connection
-        .execute(
-            "INSERT INTO event_observation_readiness(sequence,ready) VALUES(?1,?2)",
-            params![event.sequence, ready],
-        )
+        .prepare_cached("INSERT INTO event_observation_readiness(sequence,ready) VALUES(?1,?2)")
+        .map_err(|error| storage(error.to_string()))?
+        .execute(params![event.sequence, ready])
         .map_err(|error| storage(error.to_string()))?;
     connection
-        .execute(
-            "UPDATE events SET observation_readiness_missing=0 WHERE sequence=?1",
-            [event.sequence],
-        )
+        .prepare_cached("UPDATE events SET observation_readiness_missing=0 WHERE sequence=?1")
+        .map_err(|error| storage(error.to_string()))?
+        .execute([event.sequence])
         .map_err(|error| storage(error.to_string()))?;
     Ok(())
 }
@@ -26,8 +24,8 @@ pub(super) fn insert(
 pub(super) fn recover_journal(connection: &Connection) -> Result<(), ConversationStoreError> {
     // Only a newly installed native Runtime may recover previously committed
     // durable history. Read-only inspection and unrelated live owners cannot.
-    connection.execute("INSERT OR IGNORE INTO event_observation_readiness(sequence,ready,direct) SELECT sequence,1,0 FROM events INDEXED BY events_observation_readiness_missing_idx WHERE observation_readiness_missing=1",[]).map_err(|error|storage(error.to_string()))?;
-    connection.execute("UPDATE events SET observation_readiness_missing=0 WHERE observation_readiness_missing=1",[]).map_err(|error|storage(error.to_string()))?;
+    connection.prepare_cached("INSERT OR IGNORE INTO event_observation_readiness(sequence,ready,direct) SELECT sequence,1,0 FROM events INDEXED BY events_observation_readiness_missing_idx WHERE observation_readiness_missing=1").map_err(|error| storage(error.to_string()))?.execute([]).map_err(|error|storage(error.to_string()))?;
+    connection.prepare_cached("UPDATE events SET observation_readiness_missing=0 WHERE observation_readiness_missing=1").map_err(|error| storage(error.to_string()))?.execute([]).map_err(|error|storage(error.to_string()))?;
     Ok(())
 }
 
@@ -44,12 +42,12 @@ pub(super) fn mark(
             "observation readiness range exceeds native Journal".into(),
         ));
     }
-    let missing:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_readiness_missing_idx WHERE observation_readiness_missing=1 AND sequence>=?1 AND sequence<=?2)",params![first,last],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let missing:bool=connection.prepare_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_readiness_missing_idx WHERE observation_readiness_missing=1 AND sequence>=?1 AND sequence<=?2)").map_err(|error| storage(error.to_string()))?.query_row(params![first,last],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
     if missing {
         return Err(storage("native observation readiness evidence unavailable"));
     }
     // The partial index visits only unpublished owner holes, never full events.
-    connection.execute("UPDATE event_observation_readiness SET ready=1 WHERE ready=0 AND sequence>=?1 AND sequence<=?2",params![first,last]).map_err(|error|storage(error.to_string()))?;
+    connection.prepare_cached("UPDATE event_observation_readiness SET ready=1 WHERE ready=0 AND sequence>=?1 AND sequence<=?2").map_err(|error| storage(error.to_string()))?.execute(params![first,last]).map_err(|error|storage(error.to_string()))?;
     Ok(())
 }
 
@@ -60,10 +58,11 @@ pub(super) fn mark_direct(
 ) -> Result<(), ConversationStoreError> {
     mark(connection, first, last)?;
     connection
-        .execute(
+        .prepare_cached(
             "UPDATE event_observation_readiness SET direct=1 WHERE sequence>=?1 AND sequence<=?2",
-            params![first, last],
         )
+        .map_err(|error| storage(error.to_string()))?
+        .execute(params![first, last])
         .map_err(|error| storage(error.to_string()))?;
     Ok(())
 }
@@ -78,8 +77,8 @@ pub(super) fn frontier(
             "invalid observation readiness cut".into(),
         ));
     }
-    let hole: Option<u64> = connection.query_row("SELECT MIN(sequence) FROM event_observation_readiness WHERE ready=0 AND sequence>?1 AND sequence<=?2",params![after,through],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
-    let missing:Option<u64>=connection.query_row("SELECT MIN(sequence) FROM events INDEXED BY events_observation_readiness_missing_idx WHERE observation_readiness_missing=1 AND sequence>?1 AND sequence<=?2",params![after,through],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let hole: Option<u64> = connection.prepare_cached("SELECT MIN(sequence) FROM event_observation_readiness WHERE ready=0 AND sequence>?1 AND sequence<=?2").map_err(|error| storage(error.to_string()))?.query_row(params![after,through],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let missing:Option<u64>=connection.prepare_cached("SELECT MIN(sequence) FROM events INDEXED BY events_observation_readiness_missing_idx WHERE observation_readiness_missing=1 AND sequence>?1 AND sequence<=?2").map_err(|error| storage(error.to_string()))?.query_row(params![after,through],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
     Ok(hole
         .into_iter()
         .chain(missing)
@@ -89,21 +88,18 @@ pub(super) fn frontier(
 
 fn transcript_head(connection: &Connection) -> Result<u64, ConversationStoreError> {
     connection
-        .query_row(
-            "SELECT next_transcript_position FROM rustx_store WHERE id=1",
-            [],
-            |row| row.get(0),
-        )
+        .prepare_cached("SELECT next_transcript_position FROM rustx_store WHERE id=1")
+        .map_err(|error| storage(error.to_string()))?
+        .query_row([], |row| row.get(0))
         .map_err(|error| storage(error.to_string()))
 }
 pub(super) fn recover_transcript(connection: &Connection) -> Result<(), ConversationStoreError> {
-    connection.execute("INSERT OR IGNORE INTO transcript_observation_readiness(position,ready) SELECT position,1 FROM transcript_order INDEXED BY transcript_observation_readiness_missing_idx WHERE observation_readiness_missing=1", []).map_err(|error| storage(error.to_string()))?;
-    connection.execute("UPDATE transcript_order SET observation_readiness_missing=0 WHERE observation_readiness_missing=1", []).map_err(|error| storage(error.to_string()))?;
+    connection.prepare_cached("INSERT OR IGNORE INTO transcript_observation_readiness(position,ready) SELECT position,1 FROM transcript_order INDEXED BY transcript_observation_readiness_missing_idx WHERE observation_readiness_missing=1").map_err(|error| storage(error.to_string()))?.execute([]).map_err(|error| storage(error.to_string()))?;
+    connection.prepare_cached("UPDATE transcript_order SET observation_readiness_missing=0 WHERE observation_readiness_missing=1").map_err(|error| storage(error.to_string()))?.execute([]).map_err(|error| storage(error.to_string()))?;
     connection
-        .execute(
-            "UPDATE transcript_observation_readiness SET ready=1 WHERE ready=0",
-            [],
-        )
+        .prepare_cached("UPDATE transcript_observation_readiness SET ready=1 WHERE ready=0")
+        .map_err(|error| storage(error.to_string()))?
+        .execute([])
         .map_err(|error| storage(error.to_string()))?;
     Ok(())
 }
@@ -116,16 +112,17 @@ pub(super) fn mark_transcript(
             "invalid native transcript publication position".into(),
         ));
     }
-    let missing: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM transcript_order WHERE position=?1 AND observation_readiness_missing=1)", [cursor], |row| row.get(0)).map_err(|error| storage(error.to_string()))?;
+    let missing: bool = connection.prepare_cached("SELECT EXISTS(SELECT 1 FROM transcript_order WHERE position=?1 AND observation_readiness_missing=1)").map_err(|error| storage(error.to_string()))?.query_row([cursor], |row| row.get(0)).map_err(|error| storage(error.to_string()))?;
     if missing {
         return Err(storage("native transcript readiness evidence unavailable"));
     }
     // Missing positions were removed by their existing Pending Inbound owner.
     connection
-        .execute(
+        .prepare_cached(
             "UPDATE transcript_observation_readiness SET ready=1 WHERE position=?1 AND ready=0",
-            [cursor],
         )
+        .map_err(|error| storage(error.to_string()))?
+        .execute([cursor])
         .map_err(|error| storage(error.to_string()))?;
     Ok(())
 }
@@ -135,11 +132,9 @@ pub(super) fn mark_canonical(
     last: u64,
 ) -> Result<(), ConversationStoreError> {
     let ledger: u64 = connection
-        .query_row(
-            "SELECT COALESCE(MAX(position),0) FROM message_ledger",
-            [],
-            |row| row.get(0),
-        )
+        .prepare_cached("SELECT COALESCE(MAX(position),0) FROM message_ledger")
+        .map_err(|error| storage(error.to_string()))?
+        .query_row([], |row| row.get(0))
         .map_err(|error| storage(error.to_string()))?;
     if first == 0 || first > last || last > ledger {
         return Err(ConversationStoreError::InvalidReference(
@@ -148,13 +143,13 @@ pub(super) fn mark_canonical(
     }
     // Numeric L selects only this C batch, excluding unrelated Audit or
     // interaction T positions allocated between its canonical messages.
-    let missing: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM message_ledger m JOIN transcript_order t ON t.position=m.native_transcript WHERE m.position>=?1 AND m.position<=?2 AND t.observation_readiness_missing=1)", params![first,last], |row| row.get(0)).map_err(|error| storage(error.to_string()))?;
+    let missing: bool = connection.prepare_cached("SELECT EXISTS(SELECT 1 FROM message_ledger m JOIN transcript_order t ON t.position=m.native_transcript WHERE m.position>=?1 AND m.position<=?2 AND t.observation_readiness_missing=1)").map_err(|error| storage(error.to_string()))?.query_row(params![first,last], |row| row.get(0)).map_err(|error| storage(error.to_string()))?;
     if missing {
         return Err(storage(
             "native canonical transcript readiness evidence unavailable",
         ));
     }
-    connection.execute("UPDATE transcript_observation_readiness SET ready=1 WHERE ready=0 AND position IN(SELECT native_transcript FROM message_ledger WHERE position>=?1 AND position<=?2)",params![first,last]).map_err(|error|storage(error.to_string()))?;
+    connection.prepare_cached("UPDATE transcript_observation_readiness SET ready=1 WHERE ready=0 AND position IN(SELECT native_transcript FROM message_ledger WHERE position>=?1 AND position<=?2)").map_err(|error| storage(error.to_string()))?.execute(params![first,last]).map_err(|error|storage(error.to_string()))?;
     Ok(())
 }
 pub(super) fn transcript_frontier(
@@ -167,8 +162,8 @@ pub(super) fn transcript_frontier(
             "invalid native transcript publication cut".into(),
         ));
     }
-    let hole:Option<u64>=connection.query_row("SELECT MIN(position) FROM transcript_observation_readiness WHERE ready=0 AND position>?1 AND position<=?2",params![after,through],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
-    let missing: Option<u64> = connection.query_row("SELECT MIN(position) FROM transcript_order INDEXED BY transcript_observation_readiness_missing_idx WHERE observation_readiness_missing=1 AND position>?1 AND position<=?2", params![after,through], |row| row.get(0)).map_err(|error| storage(error.to_string()))?;
+    let hole:Option<u64>=connection.prepare_cached("SELECT MIN(position) FROM transcript_observation_readiness WHERE ready=0 AND position>?1 AND position<=?2").map_err(|error| storage(error.to_string()))?.query_row(params![after,through],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let missing: Option<u64> = connection.prepare_cached("SELECT MIN(position) FROM transcript_order INDEXED BY transcript_observation_readiness_missing_idx WHERE observation_readiness_missing=1 AND position>?1 AND position<=?2").map_err(|error| storage(error.to_string()))?.query_row(params![after,through], |row| row.get(0)).map_err(|error| storage(error.to_string()))?;
     Ok(hole
         .into_iter()
         .chain(missing)

@@ -104,12 +104,11 @@ fn header(connection: &Connection, id: u64) -> Result<NodeRef, ConversationStore
             },
         );
     });
-    let row: (Vec<u8>, u64, u8) = connection
-        .query_row(
-            "SELECT CASE WHEN typeof(digest)='blob' AND length(digest)=32 THEN digest END,count,height FROM native_input_nodes WHERE id=?1",
-            [seq_to_i64(id)?],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        )
+    let mut statement = connection
+        .prepare_cached("SELECT CASE WHEN typeof(digest)='blob' AND length(digest)=32 THEN digest END,count,height FROM native_input_nodes WHERE id=?1")
+        .map_err(|error| storage(error.to_string()))?;
+    let row: (Vec<u8>, u64, u8) = statement
+        .query_row([seq_to_i64(id)?], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
         .map_err(|e| storage(e.to_string()))?;
     if row.1 == 0 || row.1 > MAX_ITEMS || row.2 == 0 || row.2 > MAX_HEIGHT {
         return Err(invalid("native selected input header bounds"));
