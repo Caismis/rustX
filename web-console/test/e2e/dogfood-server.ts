@@ -144,12 +144,12 @@ timezone = "UTC"
       writeFileSync(join(workspaceA, '.agents/agents/reviewer.toml'), 'description = "Continuable reviewer"\ninstructions = "Review requests carefully."\n' + (scenario === 'web_child_capabilities' ? '[tools]\nbuiltin = ["read", "write", "present"]\n[tools.sources]\nimage_fixture = ["render_image"]\n' : ''));
       writeFileSync(join(workspaceA, 'rustx.toml'), '[agent]\nagents = ["reviewer"]\n');
     }
-    if (scenario === 'web_workflow_conformance') {
+    if (['web_workflow_conformance', 'web_workflow_review'].includes(scenario)) {
       mkdirSync(join(workspaceA, '.agents/agents'), { recursive: true });
       mkdirSync(join(workspaceA, '.agents/workflows'), { recursive: true });
       mkdirSync(join(workspaceA, '.agents/skills/acceptance'), { recursive: true });
       writeFileSync(join(workspaceA, '.agents/agents/reviewer.toml'), 'description = "Workflow-only reviewer"\ninstructions = "Review requests carefully."\n');
-      writeFileSync(join(workspaceA, '.agents/workflows/review_pr.yaml'), readFileSync(resolve(root, 'web-console/test/e2e/review_pr.yaml')));
+      writeFileSync(join(workspaceA, '.agents/workflows/review_pr.yaml'), readFileSync(resolve(root, scenario === 'web_workflow_review' ? 'web-console/test/e2e/workflow_review.yaml' : 'web-console/test/e2e/review_pr.yaml')));
       writeFileSync(join(workspaceA, '.agents/skills/acceptance/SKILL.md'), '---\nname: acceptance\ndescription: Inspect the native acceptance fixture.\n---\nUse native authority.\n');
       writeFileSync(join(workspaceA, 'rustx.toml'), '[agent]\nworkflows = ["review_pr"]\n');
     }

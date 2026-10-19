@@ -3306,7 +3306,7 @@
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
       "upstream_sha256": "664def8bce9e753c3a670f9e9f01fe2280227a0921021e3a08b496f8c5d6effe",
-      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v27 imports; upstream reference unchanged. Connection UX: allow local submission during attachment and show generic connecting status; native readiness and admission remain authoritative. Issue #467: bounded native observation, deferred source reads and exact view ownership; original presentation and license attribution retained. Issue #467: deferred Goal content and finite ToolGroup progress copy; native status and execution authority unchanged. Issue #467: translated deferred-content, bounded catalog choices, model availability and canonical result status copy; native facts remain independent of execution settlement. Background task header, grouping, clearing and native-duration copy in English and Chinese. Background task alignment: native dispatch acceptance, task settlement and historical observations retain independent ownership; header grouping, native timing and output formatting are presentation only. DSH task menu UI/UX parity: compact native task rows, translucent material, command-copy output, exclusive expansion and two-press stopping replace generic task controls; native observation ownership is retained. Native Tool detail alignment: shared compact result presentation and one Inspect path; duplicate execution JSON disclosures removed; native lifecycle and original Trace Result remain authoritative.",
+      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v27 imports; upstream reference unchanged. Connection UX: allow local submission during attachment and show generic connecting status; native readiness and admission remain authoritative. Issue #467: bounded native observation, deferred source reads and exact view ownership; original presentation and license attribution retained. Issue #467: deferred Goal content and finite ToolGroup progress copy; native status and execution authority unchanged. Issue #467: translated deferred-content, bounded catalog choices, model availability and canonical result status copy; native facts remain independent of execution settlement. Background task header, grouping, clearing and native-duration copy in English and Chinese. Background task alignment: native dispatch acceptance, task settlement and historical observations retain independent ownership; header grouping, native timing and output formatting are presentation only. DSH task menu UI/UX parity: compact native task rows, translucent material, command-copy output, exclusive expansion and two-press stopping replace generic task controls; native observation ownership is retained. Native Tool detail alignment: shared compact result presentation and one Inspect path; duplicate execution JSON disclosures removed; native lifecycle and original Trace Result remain authoritative. Workflow alignment: compact native node activity in Chat, readable review decisions and receipts, explicit execution budget labels; upstream authority remains excluded.",
       "destination": "web-console/src/locale/dictionaries/common.ts",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -3330,13 +3330,13 @@
           "treatment": "Task count, stop confirmation, duration and output disclosure wording follows the Harness job menu."
         }
       ],
-      "local_sha256": "399bd48d24da9147d54f8d695bdfdc3fe8065f0bd4918d650066b5d222b6ac27"
+      "local_sha256": "de08fa814116635c7a53ea49e1ca34b392762a48faaf1ab16288616f86ddb219"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
       "upstream_sha256": "664def8bce9e753c3a670f9e9f01fe2280227a0921021e3a08b496f8c5d6effe",
-      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Repair: localized incomplete historical process outcome. #439: bilingual Busy Enter preference, complementary modifier help and double-Escape Stop wording. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. UI repair: Web last-request context occupancy disclosure removed for Harness parity; its wording is deleted. UI repair: busy-Enter Queue/Steer preference moved from below the Composer card to the General Settings row, matching Harness composer-enter. UI repair: turn-rail wording follows Harness (turn fallback, load-and-jump); paging and ordinal strings removed. UI/UX alignment: Harness step-process done titles and joining wording. UI/UX alignment: Harness usage, session statistics and context meter wording. UI/UX alignment: Harness single branch label and Regenerate wording. Header/Trajectory chrome alignment: Harness title crumb, compact header controls, toolbar, role tags, turn label and detail header. Main integration #456: general Model Profiles and JSON-object request parameter authoring; existing upstream baseline unchanged. PR #458 Shell navigation: one XState route owner, independent native lifecycle settlement and read-only Fork history; upstream reference unchanged. Remove rustX-only historical-window explanation copy to follow Harness Chat reading presentation; native history navigation is unchanged. Align the Chat history control with Harness: compact centered Load earlier, matching Chinese copy, and no visible Load later action; native bounded continuation remains separate. Native Tool detail alignment: shared compact result presentation and one Inspect path; duplicate execution JSON disclosures removed; native lifecycle and original Trace Result remain authoritative. Compaction alignment: DSH command/checkpoint marker in the Chat reading flow; summary-only disclosure and Between Turns presentation, with native retention and execution ownership unchanged. Canonical Tool source failures and retry use localized unavailable-details copy; assembling remains reserved for streaming proposals.",
+      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Repair: localized incomplete historical process outcome. #439: bilingual Busy Enter preference, complementary modifier help and double-Escape Stop wording. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. UI repair: Web last-request context occupancy disclosure removed for Harness parity; its wording is deleted. UI repair: busy-Enter Queue/Steer preference moved from below the Composer card to the General Settings row, matching Harness composer-enter. UI repair: turn-rail wording follows Harness (turn fallback, load-and-jump); paging and ordinal strings removed. UI/UX alignment: Harness step-process done titles and joining wording. UI/UX alignment: Harness usage, session statistics and context meter wording. UI/UX alignment: Harness single branch label and Regenerate wording. Header/Trajectory chrome alignment: Harness title crumb, compact header controls, toolbar, role tags, turn label and detail header. Main integration #456: general Model Profiles and JSON-object request parameter authoring; existing upstream baseline unchanged. PR #458 Shell navigation: one XState route owner, independent native lifecycle settlement and read-only Fork history; upstream reference unchanged. Remove rustX-only historical-window explanation copy to follow Harness Chat reading presentation; native history navigation is unchanged. Align the Chat history control with Harness: compact centered Load earlier, matching Chinese copy, and no visible Load later action; native bounded continuation remains separate. Native Tool detail alignment: shared compact result presentation and one Inspect path; duplicate execution JSON disclosures removed; native lifecycle and original Trace Result remain authoritative. Compaction alignment: DSH command/checkpoint marker in the Chat reading flow; summary-only disclosure and Between Turns presentation, with native retention and execution ownership unchanged. Canonical Tool source failures and retry use localized unavailable-details copy; assembling remains reserved for streaming proposals. Workflow alignment: compact native node activity in Chat, readable review decisions and receipts, explicit execution budget labels; upstream authority remains excluded.",
       "destination": "web-console/src/locale/dictionaries/agent.ts",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -3354,7 +3354,7 @@
           "treatment": "Compaction checkpoint disclosure and bilingual summary wording adapted to native Ledger messages; no Harness runtime or command authority."
         }
       ],
-      "local_sha256": "4c301bfd414fbc355897486d3fc87c715867d170b406587f48c2c177c5bf9228"
+      "local_sha256": "1b1c759e960a1a12b72cdb6287d41b2611ca05a90415ae42b3750106bef708a6"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",
@@ -3385,7 +3385,7 @@
       "upstream": "packages/client/ui-workspace/src/client/locales.ts",
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
       "upstream_sha256": "448cea752f9daa196284e6a8da59c7acd944b3ad05590df5bddc6e153e43c113",
-      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #410 review: layout-only Questionnaire mirror kept out of the locale; one typed context-kind/facet label owner with locale-independent search. UI/UX alignment: Harness question takeover wording (placeholder, skip/next/submit, minimize/dismiss, feedback).",
+      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #410 review: layout-only Questionnaire mirror kept out of the locale; one typed context-kind/facet label owner with locale-independent search. UI/UX alignment: Harness question takeover wording (placeholder, skip/next/submit, minimize/dismiss, feedback). Workflow alignment: compact native node activity in Chat, readable review decisions and receipts, explicit execution budget labels; upstream authority remains excluded.",
       "destination": "web-console/src/locale/dictionaries/interactions.ts",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -3396,7 +3396,7 @@
         "dynamic language registration"
       ],
       "additional_sources": [],
-      "local_sha256": "422d94af1e818d14fc0007f7f0d58d2cdb364330b6ee78f5554e5fd166ff9b83"
+      "local_sha256": "d21f269c4ffce6bc0e3fc34bc268d41eacf77604832de090aba718a874a09fd6"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -6098,6 +6098,71 @@
         "File navigation and recursive detail grouping"
       ],
       "local_sha256": "a47d3505ff142ff2a2c1eccb1ac65e7b51af2a412dbaaa754f5b9d485befb948"
+    },
+    {
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream": "packages/client/ui-workflow-run/src/client/WorkflowRunPanel.tsx",
+      "destination": "web-console/src/app/agent/WorkflowRunPanel.tsx",
+      "upstream_sha256": "7d51903eb8b76579565fdb858271bbd6443e5db49c6c4d92d0b0c337fde78439",
+      "classification": "B",
+      "treatment": "Workflow alignment: DSH compact run/block disclosure and QuestionComposer takeover adapted to native rustX block/node identities, states, budget counters and in-workflow Review decisions. No DSH session/controller/runtime semantics retained. Workflow alignment: compact native node activity in Chat, readable review decisions and receipts, explicit execution budget labels; upstream authority remains excluded.",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "../../../../protocol/app-server/v50",
+        "../../locale/react",
+        "../../presentation/agent/WorkflowRunPanel.module.css",
+        "../../presentation/primitives/DisclosureRow",
+        "../../presentation/primitives/StateDot",
+        "../../presentation/primitives/icons",
+        "react"
+      ],
+      "excluded_dependencies": [
+        "DSH workflow event assembler and phase/member lifecycle",
+        "DSH child Session navigation and controller",
+        "DSH Remote interaction settlement"
+      ],
+      "local_sha256": "5767ebfa15e71346b44196a68e7882939a30c33e7f1a451c98c487d065545c8e"
+    },
+    {
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream": "packages/client/ui-workflow-run/src/client/WorkflowRunPanel.module.css",
+      "destination": "web-console/src/presentation/agent/WorkflowRunPanel.module.css",
+      "upstream_sha256": "aa60a5b61a67cca064ec18cc7a9414816308546ad4b74d10630a8a4c8baf949c",
+      "classification": "B",
+      "treatment": "Workflow alignment: DSH compact run/block disclosure and QuestionComposer takeover adapted to native rustX block/node identities, states, budget counters and in-workflow Review decisions. No DSH session/controller/runtime semantics retained. Workflow alignment: compact native node activity in Chat, readable review decisions and receipts, explicit execution budget labels; upstream authority remains excluded.",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [
+        "DSH workflow event assembler and phase/member lifecycle",
+        "DSH child Session navigation and controller",
+        "DSH Remote interaction settlement"
+      ],
+      "local_sha256": "5857aebebee178591efc809a494de7c3d424b8f49e4bf2597aa2283b988d7fd2"
+    },
+    {
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream": "packages/client/ui-user-questions/src/client/QuestionComposer.tsx",
+      "destination": "web-console/src/app/agent/Review.tsx",
+      "upstream_sha256": "e6a763552a3ebb3dcc18f1043f5437e7c4a32b5c796128ee284a5cf21108df20",
+      "classification": "B",
+      "treatment": "Workflow alignment: DSH compact run/block disclosure and QuestionComposer takeover adapted to native rustX block/node identities, states, budget counters and in-workflow Review decisions. No DSH session/controller/runtime semantics retained. Workflow alignment: compact native node activity in Chat, readable review decisions and receipts, explicit execution budget labels; upstream authority remains excluded.",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "../../../../protocol/app-server/v50",
+        "../../locale/react",
+        "../../presentation/agent/Question.module.css",
+        "../../presentation/agent/ReviewContent",
+        "../../presentation/agent/ReviewContent.module.css",
+        "../../presentation/primitives/Button",
+        "../../presentation/primitives/icons",
+        "react"
+      ],
+      "excluded_dependencies": [
+        "DSH workflow event assembler and phase/member lifecycle",
+        "DSH child Session navigation and controller",
+        "DSH Remote interaction settlement"
+      ],
+      "local_sha256": "646c3c860d1423688ac044866b2a2d00445394ed9ab0303dc0f58e317997c3d5"
     }
   ],
   "inspected_only": [

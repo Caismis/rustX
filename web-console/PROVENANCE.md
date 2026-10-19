@@ -2590,3 +2590,32 @@ inline budget read their native descriptor in place; only an actual streaming
 proposal uses assembling copy. Optional display IDs do not replace the native
 block occurrence. Unknown/unavailable sources remain explicit, with late reads
 fenced by the original Conversation/attachment or frozen history cut.
+
+## Workflow run and in-workflow review alignment
+
+Reference: DeepSeek Harness `687f282e8625c6b8d11ff58211a90524be2e4317`,
+`ui-workflow-run/WorkflowRunPanel` and `ui-user-questions/QuestionComposer`.
+The compact module header, nested disclosure rows, status dots, clean-completion
+collapse, abnormal-state expansion and focus-preserving transitions are adapted
+from those surfaces. Review reuses the existing derived Question card styles,
+numbered choices, explicit Submit, minimize and dismissal actions.
+
+| Evidence mismatch | rustX presentation and native boundary |
+| --- | --- |
+| Full-width Current activity cards outside the reading column; no node visibility | One run panel inside the transcript column, beside its exact native Tool call when Attempt/call ownership is present; otherwise an independent native activity seat. Root and continuable Child transcripts share the renderer. |
+| `Steps 9 / 10` reads as unfinished progress | Counts say **Steps used / Limit / Agent calls**. Only the native run state determines completion. A native pending Review annotates only its exact run/block/node/visit with an attention label; the underlying running execution state is unchanged. All native node kinds are shown within their exact block definition/invocation groups. A pending node in a settled run says **Not run**, without inventing a skipped/successful state. |
+| Native finite headers hide nodes after the first 32 | The existing immutable Workflow source restores retained nodes at the same checkpoint cut; the browser fences replacement views. Runtime retention omissions are explicitly labeled. |
+| Review subject and historical interaction envelopes shown as raw JSON | Workflow-authored values render as Markdown, fields and lists. Review submits the original instance and subject digest through `interaction/respond`; rejection requires feedback. Durable receipt rows match request/settlement only by native Attempt and interaction identity. Inspect in Trajectory retains native details. |
+
+DSH's phases and navigable member Sessions are deliberately not imported:
+rustX owns block/branch/parallel/loop/return nodes, finite Workflow activations and
+reviews that pause **inside** a run. Finite activations gain no message, resume
+or invented Session navigation controls. No workflow events, timestamps,
+completion state or graph order are reconstructed from neighboring messages.
+No workflow-definition authoring or protocol changes are introduced.
+
+Validation flow: native Workflow Tool -> finite Agent analysis -> native Review
+wait -> reload -> Accept/Reject with feedback -> native branch/return -> settled
+run disclosure. Browser plugin not available; the repository's pinned Docker
+Playwright runner validates desktop light English and narrow dark Chinese,
+with screenshots outside the repository under `/tmp/rustx-workflow-*.png`.

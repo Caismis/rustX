@@ -16,9 +16,9 @@ const empty: AgentReadingState = {};
 const noopSubscribe = () => () => {};
 
 /** A child owns its reading window; the watch remains a separate live tail. */
-export function SubagentChat({ client, sessionId, admission, agent, snapshot, visible, children }: {
+export function SubagentChat({ client, sessionId, admission, agent, snapshot, workflows, visible, children }: {
   client?: AppServerClient; sessionId?: string; admission?: Observation; agent: RuntimeClientAgent;
-  snapshot?: RuntimeClientSnapshot; visible: boolean; children?: ReactNode;
+  snapshot?: RuntimeClientSnapshot; workflows?: RuntimeClientSnapshot['workflows']; visible: boolean; children?: ReactNode;
 }) {
   const tx = useTranslation(), viewport = useRef<ChatViewport>(null);
   const [active, setActive] = useState<string | null>();
@@ -50,7 +50,7 @@ export function SubagentChat({ client, sessionId, admission, agent, snapshot, vi
         if (intent) void reader.navigate(selection, intent.current).then(turn => { if (turn) intent.commit(turnAnchor(turn.id), intent.current); });
       }}/>}
   >
-    {snapshot && <JournalSourceProvider historical={!!reading.history?.window} source={source} content={transcriptContent(reading.history, source?.content ?? [])} messages={snapshot.messages} transcript={snapshot.transcript} history={reading.history?.page}><AgentTranscript snapshot={snapshot} history={reading.history} loadEarlier={() => { viewport.current?.beginNavigation(); void reader?.loadEarlier(); }} loadLater={() => reader?.loadLater()} historicalDisabled/></JournalSourceProvider>}
+    {snapshot && <JournalSourceProvider historical={!!reading.history?.window} source={source} content={transcriptContent(reading.history, source?.content ?? [])} messages={snapshot.messages} transcript={snapshot.transcript} history={reading.history?.page}><AgentTranscript snapshot={snapshot} workflows={!reading.history?.window ? workflows ?? snapshot.workflows : undefined} history={reading.history} loadEarlier={() => { viewport.current?.beginNavigation(); void reader?.loadEarlier(); }} loadLater={() => reader?.loadLater()} historicalDisabled/></JournalSourceProvider>}
     <div className={chatCss.column}>{children}</div>
   </ChatViewport>;
 }

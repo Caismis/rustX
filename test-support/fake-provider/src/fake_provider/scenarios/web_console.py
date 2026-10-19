@@ -455,3 +455,17 @@ def web_large_write() -> Scenario:
 
 
 SCENARIOS["web_large_write"] = web_large_write
+
+
+def web_workflow_review() -> Scenario:
+    from dataclasses import replace
+    original = web_workflow_conformance()
+    steps = list(original.steps)
+    report = {"overview": "## Review report\n\nThe workflow read the request and completed its analysis.",
+              "issues": ["Check the release version before publishing."], "candidate": None}
+    steps[0] = replace(steps[0], respond=Stream(ToolCall("call-review-pr", "review_pr", json.dumps({"task": "workflow conformance request", "report": report})), Finish("tool_calls")))
+    steps[-1] = replace(steps[-1], expect=replace(steps[-1].expect, body_contains=("workflow conformance request",)))
+    return Scenario("web_workflow_review", *steps)
+
+
+SCENARIOS["web_workflow_review"] = web_workflow_review

@@ -1,3 +1,5 @@
+import { WorkflowRunPanel, workflowKey } from './WorkflowRunPanel';
+import { InteractionAudit } from './InteractionAudit';
 import { TurnUsage } from './UsageStats';
 import { attemptOwnerKey } from '../../../../protocol/app-server/attempt-identity';
 import { sameToolOccurrence } from '../../../../protocol/app-server/projection';
@@ -15,7 +17,7 @@ import { TurnError } from '../../presentation/agent/TurnError';
 import { RunningStatus } from '../../presentation/agent/RunningStatus';
 import { TurnProcess } from '../../presentation/agent/TurnProcess';
 import type { RuntimeClientSnapshot, RuntimeClientMessageDescriptor, CompletedResponseView, RuntimeClientTranscriptEntry, MessageBlock, InFlightBlock, ForegroundToolExecution } from '../../../../protocol/app-server/v50';
-import { conversation, json } from '../../bindings/projection';
+import { conversation } from '../../bindings/projection';
 import { agentStatusPlacement, isAgentStatusContext, statusesAt } from '../../bindings/agent-status';
 import { TranscriptContinuation } from './TranscriptContinuation';
 import { Feedback } from '../components/ConversationFeedback';
@@ -63,7 +65,7 @@ export interface RequestFeedback {
   messages: ReadonlyMap<string, ReactNode>;
   attempts: ReadonlyMap<string, ReactNode>;
 }
-export function AgentTranscript({ snapshot, history, loadEarlier, loadLater, onHistorical, historicalDisabled, lineageSwitchSafe = false, forkPoint, onOpenSource, sourceDisabled, requestFeedback, compaction }: { snapshot: Pick<RuntimeClientSnapshot, 'messages' | 'attempt' | 'transcript' | 'statuses' | 'conversation_id'> & Partial<Pick<RuntimeClientSnapshot,'message_descriptors'|'publication_settlements'>>; history?: TranscriptCache; loadEarlier?: () => void; loadLater?: () => void | Promise<void>; onHistorical?: (action: ResponseAction, response: CompletedResponseView) => void; historicalDisabled?: boolean; lineageSwitchSafe?: boolean; forkPoint?: ForkPointInfo; onOpenSource?: (origin: ForkOrigin) => void; sourceDisabled?: boolean; requestFeedback?: RequestFeedback; compaction?: ReactNode }) {
+export function AgentTranscript({ snapshot, history, loadEarlier, loadLater, onHistorical, historicalDisabled, lineageSwitchSafe = false, forkPoint, onOpenSource, sourceDisabled, requestFeedback, compaction, workflows }: { snapshot: Pick<RuntimeClientSnapshot, 'messages' | 'attempt' | 'transcript' | 'statuses' | 'conversation_id'> & Partial<Pick<RuntimeClientSnapshot,'message_descriptors'|'publication_settlements'|'pending_interactions'>>; history?: TranscriptCache; loadEarlier?: () => void; loadLater?: () => void | Promise<void>; onHistorical?: (action: ResponseAction, response: CompletedResponseView) => void; historicalDisabled?: boolean; lineageSwitchSafe?: boolean; forkPoint?: ForkPointInfo; onOpenSource?: (origin: ForkOrigin) => void; sourceDisabled?: boolean; requestFeedback?: RequestFeedback; compaction?: ReactNode; workflows?: RuntimeClientSnapshot['workflows'] }) {
   const tx = useTranslation();
   const [{ transcriptMode }] = useConversationPreferences();
   const verbose = transcriptMode === 'verbose';
@@ -90,7 +92,20 @@ export function AgentTranscript({ snapshot, history, loadEarlier, loadLater, onH
   // anchor outside the loaded transcript simply draws nothing until it is paged in.
   const placement = agentStatusPlacement(snapshot.statuses);
   const process = turnProcesses(entries, placement, snapshot.conversation_id);
-  const toldByCall = askUserAudits(entries);
+  const isAskAudit = askUserAudits(entries);
+  const settledRequest = (entry: RuntimeClientTranscriptEntry) => {
+    const item = entry.item;
+    return item.type === 'interaction_settled' && entries.some(request => request.item.type === 'interaction_requested' && request.item.attempt_id === item.attempt_id && request.item.interaction_id === item.interaction_id);
+  };
+  const toldByCall = (entry: RuntimeClientTranscriptEntry) => isAskAudit(entry) || settledRequest(entry);
+  const runs = workflows?.runs.filter(run => run.id.conversation_id === snapshot.conversation_id) ?? [];
+  const workflowSeats = new Map<string, typeof runs>();
+  const unseated = runs.filter(run => {
+    const entry = entries.find(entry => entry.turn_process?.conversation_id === run.id.conversation_id && entry.turn_process.attempt_id === run.id.attempt_id && entry.tool_calls?.some(tool => tool.call_id === run.tool_call_id));
+    if (!entry) return true;
+    const list = workflowSeats.get(entry.cursor) ?? []; list.push(run); workflowSeats.set(entry.cursor, list); return false;
+  });
+  const workflowPanels = (runs: typeof unseated) => runs.map(run => <WorkflowRunPanel key={workflowKey(run.id)} run={run} pending={snapshot.pending_interactions}/>);
   const steps = stepGroups(entries, entry => hasBody(entry) && !toldByCall(entry),
     entry => entry.item.type === 'message' && !!requestFeedback?.messages.has(entry.item.message.id));
   const toolsOf = (entry: RuntimeClientTranscriptEntry) => (entry.tool_calls ?? []).map(tool => history?.window || tool.state.type === 'settled' ? tool : snapshot.attempt?.foreground?.find(live => sameToolOccurrence(live, tool) && (tool.metadata_ref == null || live.metadata_ref == null || live.metadata_ref.conversation_id === tool.metadata_ref.conversation_id)) ?? tool);
@@ -112,7 +127,12 @@ export function AgentTranscript({ snapshot, history, loadEarlier, loadLater, onH
         {text.trim() && <div className={tailCss.actions}><CopyMessage text={text}/><MessageTime time={partial.settled_at}/></div>}
       </AssistantMessage>;
     }
-    return <details><summary>{tx('agent:agent-transcript.historical-interaction-details')}</summary><pre>{json(entry.item)}</pre></details>;
+    if (entry.item.type === 'interaction_requested' || entry.item.type === 'interaction_settled') {
+      const item = entry.item;
+      const settlement = entries.find(candidate => candidate.item.type === 'interaction_settled' && candidate.item.attempt_id === item.attempt_id && candidate.item.interaction_id === item.interaction_id)?.item;
+      return <InteractionAudit item={item} settlement={settlement?.type === 'interaction_settled' ? settlement : undefined}/>;
+    }
+    return null;
   };
   // A settled Attempt's steps render in place: replies stand alone, and each
   // process group renders whole in the entry where it starts.
@@ -181,7 +201,7 @@ export function AgentTranscript({ snapshot, history, loadEarlier, loadLater, onH
   return <div className={css.column} aria-label={tx('agent:agent-transcript.canonical-conversation')}>
     {history?.page.next_cursor != null && <div className={css.older}><button type="button" disabled={history.loading || !loadEarlier} onClick={loadEarlier}>{history.loading ? tx('agent:agent-transcript.loading-earlier') : tx('agent:agent-transcript.load-earlier')}</button></div>}
     {history?.error && <p role="alert">{history.error}</p>}
-    {!messages.length && !entries.length && <Feedback kind="empty" title={tx('agent:agent-transcript.ready-for-a-task')}><p>{tx('agent:agent-transcript.what-would-you-like-to-work-on')}</p></Feedback>}
+    {!messages.length && !entries.length && !runs.length && <Feedback kind="empty" title={tx('agent:agent-transcript.ready-for-a-task')}><p>{tx('agent:agent-transcript.what-would-you-like-to-work-on')}</p></Feedback>}
     {nodes.map(node => {
       if (node.kind === 'continuation') return <TranscriptContinuation key="history-continuation" cursor={continuation!} loading={!!history?.loading} load={loadLater!}/>;
       if (node.kind === 'fork-point') return <ForkPoint key="fork-point" point={forkPoint!} disabled={sourceDisabled ?? historicalDisabled} onOpen={onOpenSource}/>;
@@ -232,13 +252,14 @@ export function AgentTranscript({ snapshot, history, loadEarlier, loadLater, onH
       const entrySeat = group?.seat?.kind === 'entry' && group.seat.cursor === entry.cursor;
       const statusSeat = statuses.some(status => { const owner = statusOwner(status); const seat = owner ? process.groups.get(owner)?.seat : undefined; return seat?.kind === 'status' && seat.statusId === statusIdentity(status); });
       const delivery = entry.item.type === 'message' && entry.item.message.role === 'tool' && entry.item.message.result.status.type === 'success' && !!entry.item.message.result.deliveries?.length;
+      const runPanels = workflowPanels(workflowSeats.get(entry.cursor) ?? []);
       const feedback = entry.item.type === 'message' ? requestFeedback?.messages.get(entry.item.message.id)
         : entry.item.type === 'publication_audit' ? requestFeedback?.messages.get(entry.item.audit.message_id) : undefined;
       // An entry whose rows all render in an earlier step group keeps no seat of its own.
-      if ((!body || stepped?.length === 0) && !statuses.length && !entrySeat && !delivery && !feedback) return null;
+      if ((!body || stepped?.length === 0) && !statuses.length && !entrySeat && !delivery && !feedback && !runPanels.length) return null;
       const seatHidden = (!body || stepped?.length === 0 || !!group && !processOpen && !final) && !entrySeat && !statusSeat && !visibleStatus;
       const response = entry.item.type === 'message' && entry.item.message.role === 'assistant' && (stepped ? stepped.some(piece => piece.kind === 'reply') : entry.item.message.content.some(block => block.type === 'text' || block.type === 'refusal'));
-      return <div className={css.flowItem} hidden={seatHidden && !delivery && !feedback} data-chat-group-part={response ? 'response' : undefined} data-chat-flow-kind={entry.item.type === 'message' && isHumanMessage(entry.item.message) ? 'user' : undefined} key={entryIdentity(entry)} data-chat-anchor-key={entry.turn_process?.outcome==='completed' && entry.turn_process.control_cursor===entry.cursor ? turnAnchor(entry.turn_process) : undefined}>{delivery && entry.item.type === 'message' && entry.item.message.role === 'tool' && <ToolDeliveries conversationId={history?.page.source_cut?.read.conversation_id??snapshot.conversation_id} locator={{type:'by_message_id',message_id:entry.item.message.id}} result={entry.item.message.result}/>}<MessageSeat key="seat" id={entryIdentity(entry)} turnOwner={entry.turn_process ? turnAnchor(entry.turn_process) : undefined} hidden={seatHidden && !feedback} owner={key} reveal={entry === latestResponse || entry === latestUser ? 'always' : 'hover'}
+      return <div className={css.flowItem} hidden={seatHidden && !delivery && !feedback && !runPanels.length} data-chat-group-part={response ? 'response' : undefined} data-chat-flow-kind={entry.item.type === 'message' && isHumanMessage(entry.item.message) ? 'user' : undefined} key={entryIdentity(entry)} data-chat-anchor-key={entry.turn_process?.outcome==='completed' && entry.turn_process.control_cursor===entry.cursor ? turnAnchor(entry.turn_process) : undefined}>{delivery && entry.item.type === 'message' && entry.item.message.role === 'tool' && <ToolDeliveries conversationId={history?.page.source_cut?.read.conversation_id??snapshot.conversation_id} locator={{type:'by_message_id',message_id:entry.item.message.id}} result={entry.item.message.result}/>}<MessageSeat key="seat" id={entryIdentity(entry)} turnOwner={entry.turn_process ? turnAnchor(entry.turn_process) : undefined} hidden={seatHidden && !feedback} owner={key} reveal={entry === latestResponse || entry === latestUser ? 'always' : 'hover'}
         prefix={<>
         {entrySeat && disclosure(key!)}
         {entry.completed_response && !process.groups.has(process.attempts.get(attemptOwnerKey(entry.completed_response.origin)) ?? '') && <><TurnProcess id={attemptOwnerKey(entry.completed_response.origin)} open tools={entry.turn_process?.tool_call_count ?? 0} messages={entry.turn_process?.message_count ?? 0} durationMs={entry.completed_response.timing?.total_duration_ms ?? undefined}/>{requestFeedback?.attempts.get(attemptOwnerKey(entry.completed_response.origin))}</>}
@@ -254,7 +275,7 @@ export function AgentTranscript({ snapshot, history, loadEarlier, loadLater, onH
           const owner = statusOwner(status);
           const seat = owner ? process.groups.get(owner)?.seat : undefined;
           return <div className={css.flow} hidden={!verbose && !!owner && process.groups.get(owner)?.owner.outcome === 'completed' && !expanded.has(owner) && !(seat?.kind === 'status' && seat.statusId === statusIdentity(status))} key={statusIdentity(status)}>{seat?.kind === 'status' && seat.statusId === statusIdentity(status) && disclosure(owner!)}<div hidden={!verbose && !!owner && process.groups.get(owner)?.owner.outcome === 'completed' && !expanded.has(owner)}><AgentStatusAnnotation status={status}/></div></div>;
-        })}</>}/></div>;
+        })}</>}/>{runPanels}</div>;
     })}
     {(snapshot.publication_settlements ?? []).filter(record => !entries.some(entry => entry.cursor === record.transcript_cursor)).map(record => <p role="status" key={`publication:${record.transcript_cursor}`} data-publication-settlement={record.settlement.kind}>{tx('agent:message.incomplete-response')} <MessageTime time={record.settlement.settled_at}/></p>)}
     {descriptors.filter(descriptor=>descriptor.deliveries && (descriptor.identity==null||!durableIds.has(descriptor.identity))).map(descriptor=><DeliveryHead key={`deliveries:${canonicalLocatorKey(descriptor.locator)}`} head={descriptor.deliveries!}/>)}
@@ -267,6 +288,8 @@ export function AgentTranscript({ snapshot, history, loadEarlier, loadLater, onH
     {!!currentContext.length && <details><summary>{tx('agent:agent-transcript.current-context')}</summary>{currentContext.map(message => <Message key={message.id} message={message} />)}</details>}
     {runningAttempt && requestFeedback?.attempts.get(attemptOwnerKey({conversation_id:snapshot.conversation_id,...runningAttempt}))}
     {runningAttempt && <RunningStatus key={attemptOwnerKey({conversation_id:snapshot.conversation_id,...runningAttempt})} startTime={startTime !== undefined && Number.isFinite(startTime) ? startTime : undefined}/>}
+    {workflowPanels(unseated)}
+    {!!workflows?.omitted_runs && <p>{tx('common:workflow.omitted-runs', { count: workflows.omitted_runs })}</p>}
     {compaction}
   </div>;
 }

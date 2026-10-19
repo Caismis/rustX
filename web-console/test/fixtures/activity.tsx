@@ -7,7 +7,7 @@ import { Tool } from '../../src/app/agent/Tool';
 import { ArtifactContext } from '../../src/app/components/Artifact';
 import { ArtifactResources } from '../../src/client/artifacts';
 import { AgentCard } from '../../src/app/components/ActivityCards';
-import { RuntimeFacts } from '../../src/app/agent/Activity';
+import { RuntimeFacts } from '../runtime-facts';
 import { BackgroundJobs } from '../../src/app/agent/BackgroundJobs';
 import { InboundMessage } from '../../src/app/agent/InboundMessage';
 import type { RuntimeClientAgent, RuntimeClientJob } from '../../../protocol/app-server/v50';

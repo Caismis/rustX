@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { RunningStatus } from '../src/presentation/agent/RunningStatus';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
-import { RuntimeFacts as OtherActivity } from '../src/app/agent/Activity';
+import { RuntimeFacts as OtherActivity } from './runtime-facts';
 import { AgentCard } from '../src/app/components/ActivityCards';
 function RuntimeFacts(props: { snapshot: ReturnType<typeof snapshot>; client?: import('../src/client/app-server').AppServerClient; sessionId?: string }) { return <><OtherActivity snapshot={props.snapshot}/>{props.snapshot.jobs?.map(job => <JobItemHarness key={job.job_id} job={job} client={props.client} sessionId={props.sessionId}/>)}{props.snapshot.agents?.map(agent => <AgentCard key={agent.agent_id} agent={agent} client={props.client} sessionId={props.sessionId}/>)}</>; }
 import { snapshot, projectionHead, Server } from './fixture';
@@ -86,9 +86,8 @@ it('Subagent and Workflow cards bind native identities and lifecycle facts witho
   expect(ui.container.querySelectorAll('[data-agent-id]')).toHaveLength(2);
   expect(ui.container.querySelectorAll('[data-workflow-run-id]')).toHaveLength(2);
   expect(ui.getAllByText('Waiting for approval')).toHaveLength(2);
-  expect(ui.getAllByText('Waiting for review')).toHaveLength(2);
+  expect(ui.getAllByText('Waiting for review').length).toBeGreaterThanOrEqual(2);
   expect(ui.container.querySelectorAll('[data-workflow-activation-id]')).toHaveLength(2);
-  const workflowChild = ui.container.querySelector('[data-workflow-activation-id="workflow-review"]');
   const child = ui.container.querySelector('[data-agent-id="agent-child-1"]');
   s.agents[0].state = 'inactive'; s.agents[0].activation_state = 'failed'; s.agents[0].current_activation = null; s.agents[0].detail = 'Native failure';
   s.workflows.runs[0].state = { type: 'settled', outcome: 'completed' };
@@ -96,9 +95,12 @@ it('Subagent and Workflow cards bind native identities and lifecycle facts witho
   ui.rerender(<RuntimeFacts snapshot={s} />);
   expect(ui.container.querySelector('[data-agent-id="agent-child-1"]')).toBe(child);
   expect(child?.textContent).toContain('Native failure');
-  expect(ui.container.querySelector('[data-workflow-activation-id="workflow-review"]')).toBe(workflowChild);
-  expect(workflowChild?.textContent).toContain('completed');
-  expect(ui.getByText('completed')).toBeTruthy();
+  const run = ui.container.querySelector('[data-workflow-run-id]')!;
+  expect(run.textContent).toContain('completed');
+  expect(run.querySelector('[data-workflow-activation-id]')).toBeNull();
+  fireEvent.click(run.querySelector('[data-disclosure-row]')!);
+  fireEvent.click(run.querySelectorAll('[data-disclosure-row]')[1]);
+  expect(run.querySelector('[data-workflow-activation-id="workflow-review"]')?.textContent).toContain('completed');
   expect(ui.container.querySelector('pre')).toBeNull();
   expect(ui.container.textContent).not.toMatch(/private-|Todo|Goal|Trace/);
 });

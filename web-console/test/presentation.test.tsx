@@ -78,10 +78,10 @@ it('native Review preserves instance and subject digest and waits for authoritat
   server.snapshots.get('A')!.pending_interactions = [review]; await server.attached('A');
   localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
   render(<App client={server.client} workspaceHost={server.workspaceHost} />);
-  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Accept review' })); await server.waitFor('interaction/respond', 1); await server.client.refresh('A'); });
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Submit' })); await server.waitFor('interaction/respond', 1); await server.client.refresh('A'); });
   const request = server.requests.find(item => item.request.method === 'interaction/respond')!.request;
   expect(request.params).toMatchObject({ interaction: review.interaction, response: { type: 'review', response: { instance, subject_digest: 'native-subject-digest', decision: { type: 'accepted' } } } });
-  expect(screen.queryByRole('button', { name: 'Accept review' })).toBeNull();
+  expect(screen.queryByRole('region', { name: 'Review' })).toBeNull();
 });
 
 it('closing A immediately emits exactly its detach, preserving B, runtime work and pending facts', async () => {

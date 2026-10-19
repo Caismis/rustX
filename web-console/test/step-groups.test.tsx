@@ -82,7 +82,7 @@ it('the expanded settled turn shows Harness group titles that open their members
   fireEvent.click(process);
   expect(process.getAttribute('aria-expanded')).toBe('true');
   expect(screen.getByText('Tool details unavailable: ask_user').closest('[hidden]')).toBeNull();
-  expect(screen.getByText('Historical interaction details').closest('[hidden]')).toBeNull();
+  expect(screen.getByText('Approval · bash').closest('[hidden]')).toBeNull();
   // Canonical order survives grouping: opening reply, its process, then the final reply.
   const text = document.body.textContent!;
   expect(text.indexOf('Let me look first.')).toBeLessThan(text.indexOf('Tool details unavailable: read'));

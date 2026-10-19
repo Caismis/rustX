@@ -1,3 +1,4 @@
+import { useWorkflowContent } from '../agent/useWorkflowContent';
 import { JournalSourceProvider } from '../agent/ObservationSource';
 import { ChildObservation } from '../../../../protocol/app-server/child-observation';
 import { ToolInspectionContext, useToolTraceNavigation } from '../agent/tool-inspection';
@@ -7,10 +8,9 @@ import { displayText } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
 import { createPortal } from 'react-dom';
 import { useEffect, useLayoutEffect, useContext, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import type { AgentStatistics, RuntimeClientAgent, MethodResult, WorkflowRunView, WorkflowRunId } from '../../../../protocol/app-server/v50';
+import type { AgentStatistics, RuntimeClientAgent, MethodResult } from '../../../../protocol/app-server/v50';
 import type { Observation } from '../../client/session-lifecycle/port';
 import { AppServerClient } from '../../client/app-server';
-import { Badge, SettingsCard } from '../../presentation/settings/SettingsContent';
 import { ArtifactContext } from './Artifact';
 import { PreviewContext } from './ArtifactPreview';
 import css from './ActivityCards.module.css';
@@ -26,7 +26,6 @@ import { IconRefreshOutline14, IconClockOutline16, IconCloseOutline16 } from '..
 import { useActivityRequest } from './useActivityRequest';
 
 const detail = (value: string) => value.length > 1024 ? `${value.slice(0, 1024)}…` : value;
-export const workflowKey = (id: WorkflowRunId) => JSON.stringify([id.conversation_id, id.attempt_id, id.invocation]);
 type AgentWait = Extract<MethodResult, { type: 'agent_wait' }>;
 type Controls = { client?: AppServerClient; sessionId?: string };
 const noSubscription = () => () => {};
@@ -92,13 +91,15 @@ export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible
     openPreview: (artifact: Parameters<typeof preview.openPreview>[0]) => {if(artifact.source.kind==='session_file'&&artifact.source.conversationId!==agent.child_conversation_id)throw new Error('Obsolete Child delivery source');return preview.openPreview({ ...artifact, source: { ...artifact.source,agentId:agent.agent_id,...(artifact.source.kind==='session_file'?{owned:ownsContent}:{} ) } });},
     download: (artifact: Parameters<typeof preview.download>[0]) => {if(artifact.source.kind==='session_file'&&artifact.source.conversationId!==agent.child_conversation_id)throw new Error('Obsolete Child delivery source');return preview.download({ ...artifact, source: { ...artifact.source,agentId:agent.agent_id,...(artifact.source.kind==='session_file'?{owned:ownsContent}:{} ) } });},
   } : undefined, [preview,agent.agent_id,agent.child_conversation_id,ownsContent]);
+  const workflows = useWorkflowContent(client, admission && sessionId && conversation?.checkpoint ? { id: sessionId, target: admission.target, attachmentObservation: admission, snapshot: conversation.snapshot, checkpoint: conversation.checkpoint } : undefined, visible && mode === 'chat' && conversation?.activationId === agent.activation_id, agent.agent_id);
   const unavailable = agent.state === 'unavailable';
   const acceptsMessage = agent.state === 'active' || agent.state === 'inactive';
   return <AgentConversationContext.Provider value={agent}><ArtifactContext.Provider value={artifacts}><PreviewContext.Provider value={scopedPreview}><section className={css.agentConversation} data-agent-id={agent.agent_id} data-agent-state={agent.state} data-view={mode} data-activation-id={agent.current_activation ?? undefined} aria-label={tx('common:activity.agent-label', { name: agent.agent })}>
-    <div hidden={mode !== 'chat'} className={css.agentChat}><JournalSourceProvider content={conversation?.content} messages={conversation?.snapshot?.messages} transcript={conversation?.snapshot?.transcript} source={client&&admission&&conversation?.checkpoint ? {client,target:admission.target,agentId:agent.agent_id,cut:()=>conversation.checkpoint?.read_cut,owned:ownsContent} : undefined}><ToolInspectionContext value={inspect}><SubagentChat client={client} sessionId={sessionId} admission={admission} agent={agent} snapshot={conversation?.snapshot} visible={visible && mode === 'chat'}>
+    <div hidden={mode !== 'chat'} className={css.agentChat}><JournalSourceProvider content={conversation?.content} messages={conversation?.snapshot?.messages} transcript={conversation?.snapshot?.transcript} source={client&&admission&&conversation?.checkpoint ? {client,target:admission.target,agentId:agent.agent_id,cut:()=>conversation.checkpoint?.read_cut,owned:ownsContent} : undefined}><ToolInspectionContext value={inspect}><SubagentChat client={client} sessionId={sessionId} admission={admission} agent={agent} snapshot={conversation?.snapshot} workflows={workflows.snapshot} visible={visible && mode === 'chat'}>
       {transcriptLoading && !conversation && <p role="status">{tx('common:activity.reading')}</p>}
       {metricsError && <p role="alert">{metricsError}</p>}
       {transcriptError && <p role="alert">{transcriptError}</p>}
+      {workflows.error && <p role="alert">{workflows.error}</p>}
       {agent.detail && <p>{detail(agent.detail)}</p>}
       {settledActivation && settledActivation.proof === admission && <small role="status">{settledActivation.outcome ? tx(`common:state.${settledActivation.outcome}`) : tx('common:activity.observed-inactive')}</small>}
       {[request.error, waitRequest.error, interruptRequest.error].filter(Boolean).map((error, index) => <p role="alert" key={index}>{displayText(tx, error!)}</p>)}
@@ -130,16 +131,4 @@ export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible
       }:undefined}><ConversationStats statistics={metrics?.statistics} occupancy={metrics?.occupancy}/></JournalSourceProvider>
     </ComposerSeat>
   </section></PreviewContext.Provider></ArtifactContext.Provider></AgentConversationContext.Provider>;
-}
-
-export function WorkflowCard({ run }: { run: WorkflowRunView }) {
-  const tx = useTranslation();
-  return <section data-workflow-run-id={workflowKey(run.id)} aria-label={tx('common:activity.workflow-label', { id: run.workflow_id })}><SettingsCard title={tx('common:activity.workflow-title', { id: run.workflow_id })} meta={<Badge>{run.state.type === 'settled' ? tx(`common:state.${run.state.outcome}`) : tx(`common:state.${run.state.type}`)}</Badge>}>
-    <p>{tx('common:activity.workflow-counts', { used: run.steps_consumed, max: run.steps_max, agents: run.agents_consumed })}</p>
-    {run.state.type === 'waiting' && <p>{tx('common:activity.waiting-for', { state: tx(`common:state.${run.state.reason}`) })}</p>}
-    {run.instances.filter(instance => instance.child).map(instance => <p key={JSON.stringify([instance.block, instance.node, instance.visit])} data-workflow-activation-id={instance.child} className={css.identity}>
-      {instance.node ?? tx('common:activity.agent-step')} · {tx('common:activity.activation', { id: instance.child! })} · {instance.state.type === 'settled' ? tx(`common:state.${instance.state.outcome}`) : tx(`common:state.${instance.state.type}`)}
-    </p>)}
-    {run.omitted_instances > 0 && <small>{tx('common:activity.omitted', { n: run.omitted_instances })}</small>}
-  </SettingsCard></section>;
 }

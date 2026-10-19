@@ -7,7 +7,7 @@ import { act, cleanup, fireEvent, render, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import type { RuntimeClientAgent, RuntimeClientJob } from '../../protocol/app-server/v50';
 import { RpcFailure } from '../src/client/app-server';
-import { RuntimeFacts as OtherActivity } from '../src/app/agent/Activity';
+import { RuntimeFacts as OtherActivity } from './runtime-facts';
 import { AgentCard } from '../src/app/components/ActivityCards';
 function RuntimeFacts(props: { snapshot: ReturnType<typeof snapshot>; client?: Server['client']; sessionId?: string }) { return <><OtherActivity snapshot={props.snapshot}/>{props.snapshot.jobs?.map(job => <JobItemHarness key={job.job_id} job={job} client={props.client} sessionId={props.sessionId}/>)}{props.snapshot.agents?.map(agent => <AgentCard key={agent.agent_id} agent={agent} client={props.client} sessionId={props.sessionId}/>)}</>; }
 import { Server, snapshot, childConversation } from './fixture';

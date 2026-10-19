@@ -8,7 +8,7 @@ import { shallowEqual, useClientSelector } from '../../client/selectors';
 import { useModelRetryFeedback } from './ModelRetry';
 import { AgentTranscript } from './AgentTranscript';
 import { ContextSeat } from './ContextSeat';
-import { RuntimeFacts } from './Activity';
+import { useWorkflowContent } from './useWorkflowContent';
 import { ConversationStats } from './UsageStats';
 import { TodoDock } from '../composer/TodoDock';
 import { GoalDock } from '../composer/GoalDock';
@@ -50,11 +50,13 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
     const snapshot = preview ? { messages: [], attempt: null, statuses: [], conversation_id: preview.conversationId, transcript: preview.history.page } : view.snapshot;
     if (!snapshot) return undefined;
     return { nodeId:view.nodeId,generation:state.generation,content: preview ? preview.history.page.content ?? [] : transcriptContent(view.history,contentBindings(view.snapshot!)), hasCheckpoint: !!view.checkpoint, configurationObservation:state.configurationObservation?.[view.id], id: view.id, target: view.target, observation: view.attachmentObservation, readable: !disabled && client.isAttachmentObservationCurrent(view.id, view.attachmentObservation), messages: snapshot.messages, message_descriptors: 'message_descriptors' in snapshot ? snapshot.message_descriptors : [], publication_settlements: 'publication_settlements' in snapshot ? snapshot.publication_settlements : undefined, attempt: snapshot.attempt,
-      transcript: snapshot.transcript, statuses: snapshot.statuses, conversation_id: snapshot.conversation_id,
+      transcript: snapshot.transcript, statuses: snapshot.statuses, pending_interactions: 'pending_interactions' in snapshot ? snapshot.pending_interactions : undefined, conversation_id: snapshot.conversation_id,
       readingPreview: !!preview, history: preview?.history ?? view.history, trace: mode === 'trajectory' ? view.trace : undefined,
       safe: lineageSwitchSafe(view), disabled: disabled || !client.isAttachmentControlCurrent(view.id, view.attachmentObservation)
         || !!view.modelMutation || !!view.snapshot?.shutting_down || !!view.snapshot?.durability_failure };
   }, shallowEqual);
+  const workflowView = useClientSelector(client, state => sessionId ? state.views[sessionId] : undefined, (a, b) => a === b || !!a && !!b && a.id === b.id && a.target === b.target && a.attachmentObservation === b.attachmentObservation && a.snapshot?.workflows === b.snapshot?.workflows);
+  const workflows = useWorkflowContent(client, workflowView, mode === 'chat' && !scope?.selected && !view?.readingPreview && !view?.history?.window);
   const contentView = useMemo(() => Symbol('root content view'), [view?.observation, sessionId, mode, scope?.selected]);
   const currentContentView = useRef(contentView); currentContentView.current = contentView;
   const ownsContent = useMemo(() => () => currentContentView.current === contentView && mode === 'chat' && !scope?.selected && !!view?.observation && !!sessionId && client.isAttachmentObservationCurrent(sessionId, view.observation), [contentView, mode, scope?.selected, client, sessionId, view?.observation]);
@@ -90,24 +92,16 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
       latestTurn={view.attempt && ['admitted','running'].includes(view.attempt.phase.type) ? turnAnchor({conversation_id:view.conversation_id,attempt_id:view.attempt.attempt_id,attempt_id_source:view.attempt.attempt_id_source}) : undefined}
       historical={!!view.history?.window} onLatest={() => client.returnToLatest(view.id)} onActiveTurn={setActive}>
       {fork.error && <div role="alert"><p>{fork.error}</p><button type="button" onClick={fork.retry}>{tx('agent:fork-point.reload')}</button></div>}
-      {(view.messages.length > 0 || !!view.transcript.entries?.length || !waiting) && <AgentTranscript compaction={!view.readingPreview && <ContextSeat key={`${view.id}:${view.target?.attachment_id}`} client={client} sessionId={view.id}/>} requestFeedback={requestFeedback} snapshot={view} history={view.history} loadLater={() => client.loadLater(view.id)} loadEarlier={() => { viewport.current?.beginNavigation(); void (view.readingPreview ? client.loadEarlierPreview(view.id) : client.loadEarlier(view.id)).catch(() => {}); }} lineageSwitchSafe={view.safe} historicalDisabled={view.disabled || historicalPending} onHistorical={onHistorical} forkPoint={fork.point} onOpenSource={onOpenSource ? origin => {
+      {(view.messages.length > 0 || !!view.transcript.entries?.length || !waiting) && <AgentTranscript compaction={!view.readingPreview && <ContextSeat key={`${view.id}:${view.target?.attachment_id}`} client={client} sessionId={view.id}/>} requestFeedback={requestFeedback} snapshot={view} workflows={!view.readingPreview && !view.history?.window ? workflows.snapshot : undefined} history={view.history} loadLater={() => client.loadLater(view.id)} loadEarlier={() => { viewport.current?.beginNavigation(); void (view.readingPreview ? client.loadEarlierPreview(view.id) : client.loadEarlier(view.id)).catch(() => {}); }} lineageSwitchSafe={view.safe} historicalDisabled={view.disabled || historicalPending} onHistorical={onHistorical} forkPoint={fork.point} onOpenSource={onOpenSource ? origin => {
         // The gesture publishes its exact Shell intent and installs viewport
         // cancellation in this same stack, before any browser scroll can interleave.
         onOpenSource(origin, viewport.current?.beginNavigation);
       } : undefined} sourceDisabled={!view.readable}/>}
       {view.configurationObservation?.error && <div className={pendingCss.root}><p role="alert">{view.configurationObservation.error}</p></div>}
-      <ConversationActivity client={client} sessionId={view.id}/>
+      {workflows.error && <p role="alert">{workflows.error}</p>}
       <PendingMessage client={client} sessionId={view.id}/>
       </ChatViewport></ToolInspectionContext></JournalSourceProvider>;
 }
-function ConversationActivity({ client, sessionId }: { client: AppServerClient; sessionId: string }) {
-  const snapshot = useClientSelector(client, state => {
-    const value = state.views[sessionId]?.snapshot;
-    return value ? { workflows: value.workflows } : undefined;
-  }, shallowEqual);
-  return snapshot ? <RuntimeFacts snapshot={snapshot}/> : null;
-}
-
 export function ConversationDocks({ client, sessionId, disabled }: { client: AppServerClient; sessionId: string; disabled: boolean }) {
   const todoEvidence = (view: SessionView) => {
     const frontier = view.checkpoint?.collections.find(value => value.domain === 'todos.tasks');

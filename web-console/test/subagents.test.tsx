@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { AgentConversationContext } from '../src/app/agent/subagent-context';
 import { Message } from '../src/app/agent/Message';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
-import { RuntimeFacts } from '../src/app/agent/Activity';
+import { RuntimeFacts } from './runtime-facts';
 import { SubagentScope, SubagentHeader, SubagentSurface } from '../src/app/agent/Subagents';
 import { cellKind } from '../src/app/trajectory/TrajectoryCell';
 import { Server, snapshot } from './fixture';

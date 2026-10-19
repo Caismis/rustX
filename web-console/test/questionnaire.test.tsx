@@ -133,7 +133,9 @@ it('ask_user interaction audits are told by the call row, while other questionna
   const settled = (interaction_id: string) => ({ type: 'interaction_settled' as const, event_id: `${interaction_id}-settled`, timestamp: '2026-10-06T00:00:01Z', attempt_id: 'a', turn_id: 't', interaction_id, settlement: { type: 'questionnaire_declined' as const } });
   s.transcript = { entries: [requested('ask', 'tool-ask-user'), settled('ask'), requested('elicit', 'mcp-elicitation'), settled('elicit')].map((item, index) => ({ cursor: String(index + 1), item })) } as typeof s.transcript;
   const ui = render(<AgentTranscript snapshot={s}/>);
-  expect(ui.getAllByText('Historical interaction details')).toHaveLength(2);
-  expect(ui.container.textContent).toContain('elicit-requested');
-  expect(ui.container.textContent).not.toContain('ask-requested');
+  expect(ui.container.querySelectorAll('[data-interaction-audit]')).toHaveLength(1);
+  fireEvent.click(ui.getByRole('button', { name: /Question · mcp-elicitation/ }));
+  expect(ui.getByText('Which direction?')).toBeTruthy();
+  expect(ui.container.textContent).not.toContain('interaction_requested');
+  expect(ui.container.textContent).not.toContain('tool-ask-user');
 });

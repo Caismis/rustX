@@ -5,6 +5,7 @@ import { interactionKey } from '../../client/app-server';
 import { json } from '../../bindings/projection';
 import { ApprovalTakeover } from '../../presentation/agent/ApprovalTakeover';
 import { Questionnaire } from './Questionnaire';
+import { Review } from './Review';
 import { Button } from '../../presentation/primitives/Button';
 export function Interactions({ client, state, view }: {
   client: AppServerClient; state: ClientView; view: SessionView;
@@ -84,11 +85,11 @@ export function Interactions({ client, state, view }: {
           status={operation || disabled ? status : undefined} submitting={operation === 'in-flight'}
           onSubmit={value => response({ type: 'questionnaire', response: { type: 'submitted', value } })}
           onDecline={() => response({ type: 'questionnaire', response: { type: 'declined' } })} />
-          : <Review key={key} title={status} detail={json({ subject: kind.review.subject, context: kind.review.context })} disabled={disabled}
+          : <Review key={key} title={status} review={kind.review} disabled={disabled} submitting={operation === 'in-flight'} cancel={() => run(key, () => client.answer(view.id, item.interaction))}
             accept={() => response({ type: 'review', response: { instance: kind.review.instance, subject_digest: kind.subject_digest, decision: { type: 'accepted' } } })}
             reject={feedback => response({ type: 'review', response: { instance: kind.review.instance, subject_digest: kind.subject_digest, decision: { type: 'rejected', feedback } } })} />}
       {/* A questionnaire's own dismiss action is its decline. */}
-      {kind.type !== 'questionnaire' && <Button size="sm" disabled={disabled} onClick={() => run(key, () => client.answer(view.id, item.interaction))}>{tx('interactions:interactions.cancel-interaction')}</Button>}
+      {kind.type === 'approval' && <Button size="sm" disabled={disabled} onClick={() => run(key, () => client.answer(view.id, item.interaction))}>{tx('interactions:interactions.cancel-interaction')}</Button>}
     </div>;
   })}
   {failure?.key==='page'&&<p role="alert">{failure.message}</p>}
@@ -96,17 +97,6 @@ export function Interactions({ client, state, view }: {
   {next!=null&&<Button disabled={loading||!client.isAttachmentControlCurrent(view.id,view.attachmentObservation)} onClick={()=>page(Number(next))}>{tx('common:activity.next-interactions')}</Button>}
   </>;
 }
-function Review({ title, detail, disabled, accept, reject }: {
-  title: string; detail: string; disabled: boolean; accept: () => void; reject: (feedback: string) => void;
-}) {
-  const tx = useTranslation();
-  const [feedback, setFeedback] = useState('');
-  return <section className="review"><h3>{tx('interactions:interactions.review')}{' '}{title}</h3><pre>{detail}</pre>
-    <textarea aria-label={tx('interactions:interactions.review-feedback')} value={feedback} disabled={disabled} onChange={event => setFeedback(event.target.value)} />
-    <div className="row"><Button disabled={disabled || !feedback.trim()} onClick={() => reject(feedback)}>{tx('interactions:interactions.reject-with-feedback')}</Button><Button disabled={disabled} variant="primary" onClick={accept}>{tx('interactions:interactions.accept-review')}</Button></div>
-  </section>;
-}
-
 function InteractionField({client,view,index,identity,path}:{client:AppServerClient;view:SessionView;index:number;identity:string;path:string[]}) {
   const tx=useTranslation(),generation=useRef(0);
   const [state,setState]=useState<{text?:string;loading?:boolean;error?:string}>({});

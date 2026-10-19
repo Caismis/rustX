@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { afterEach, expect, it } from 'vitest';
 import type { RuntimeClientJob } from '../../protocol/app-server/v50';
 import { BackgroundJobMenu, BackgroundJobs } from '../src/app/agent/BackgroundJobs';
-import { RuntimeFacts } from '../src/app/agent/Activity';
+import { RuntimeFacts } from './runtime-facts';
 import { Server, snapshot, domainReceipt } from './fixture';
 
 afterEach(cleanup);
