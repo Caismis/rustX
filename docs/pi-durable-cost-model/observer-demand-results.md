@@ -1,0 +1,32 @@
+# Isolated observer-demand comparison
+
+Before: `fbe6ae0ca05d4b11966efd0747f72b8a4ba63383`. After: reviewed/repaired `c01f28f9fac63a6af2efa4387a02123830fd0a3a`, production tree `c60a5caae143a292c7a70d04a72aeceb45d78134`. Both use the identical aligned production Runtime Client harness from `f594a2c1ee579e68b6a3132b2e5586e23517d332`. Executable SHA-256: before `490bdd5ba6584cced1621223b4c135584cb03ad56d52ee13bcd02e2080f67e94`; after `b573b54679fd8dd99d646c2430a715792ce02c1c6018a8b127b3ddf0f782ce06`. Both freshly built the root library and conformance executable using the normal optimized release profile on this cloud machine, with the same compiler/dependencies/flags. This series compares Rust revisions. Pi is absent from it; the separate shared-provider Pi smokes establish harness correctness only.
+
+All **72 samples** passed: three interleaved pairs × six cases × two revisions × two observer modes, with fresh processes/stores. All 36 case pairs and 846 ordered full-request pairs match (1,692 provider requests). Expected/wire/captured/frozen/reopened inputs and complete native results pass. Provider/product remain controller-owned siblings through cleanup. No builds, profiles or compression overlapped these formal samples; every sample and complete process/controller record is retained. The uncommitted native prepared-statement candidate was not compiled into either executable.
+
+Values below are medians of within-pair after/before ratios. They are not ratios of unrelated medians, and no stage ratios are multiplied.
+
+| Observation mode | Case | Turn wall | Turn CPU | Complete CPU | Complete writes | Sampled anon PSS |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| No live subscriber | cancel | 0.9318 | 0.7500 | 0.9412 | 0.9990 | 0.9861 |
+| No live subscriber | large | 0.9246 | 0.8000 | 0.9474 | 1.0000 | 0.9990 |
+| No live subscriber | short-large | 0.6091 | 0.4845 | 0.7193 | 0.9997 | 0.9205 |
+| No live subscriber | short-small | 0.6336 | 0.5129 | 0.6525 | 0.9986 | 0.9047 |
+| No live subscriber | stream | 0.9864 | 0.9375 | 0.9655 | 1.0018 | 0.9906 |
+| No live subscriber | tool | 0.8965 | 0.7778 | 0.9524 | 0.9993 | 0.9945 |
+| Live subscriber | cancel | 1.1581 | 1.2500 | 1.0625 | 1.0000 | 1.0046 |
+| Live subscriber | large | 1.0020 | 1.0000 | 1.0000 | 0.9991 | 1.0041 |
+| Live subscriber | short-large | 0.9837 | 0.9836 | 1.0111 | 0.9998 | 1.0038 |
+| Live subscriber | short-small | 1.0145 | 1.0317 | 1.0305 | 0.9994 | 1.0053 |
+| Live subscriber | stream | 1.0033 | 1.0000 | 1.0000 | 0.9991 | 0.9985 |
+| Live subscriber | tool | 0.9502 | 1.0000 | 1.0000 | 1.0007 | 0.9931 |
+
+The unobserved short-turn benefit follows the removal of ordinary eager read-domain hydration. It does not reduce persistence writes materially. Live short-small slightly regresses; live cancellation is adverse at 1.1581 wall and 1.25 CPU. These observations remain visible rather than being averaged into the unobserved gain. Single-turn CPU uses 10 ms /proc ticks, so its uncertainty is substantial; wall and all individual samples remain available. The source changes include the correctness repair required for frozen/current-thread inspection, not an inference that all effects belong to a single branch condition.
+
+[Readable paired costs](evidence/observer-demand/readable/paired-costs.csv), [all intervals](evidence/observer-demand/readable/paired-uncertainty.json), and [independent recomputation](evidence/observer-demand/readable/recompute.py) expose every metric input and ratio. The uncertainty calculation uses the paired geometric mean and two-sided 90% Student-t interval on log ratios (three samples, df 2, critical 2.91998558), equivalently the one-sided 95% upper limit. It assumes independent approximately normal log ratios; this small exploratory cloud series cannot establish Pi comparability. Seven cross-engine pairs per case/mode and the predeclared full criterion remain required for that claim.
+
+[Verified full raw archive](evidence/observer-demand-results.tar.xz) and [SHA-256 manifest](evidence/observer-demand-results.tar.manifest.json) retain full request/result oracles, process counters, controller/provider costs, complete phase summaries, build identities, hashes and commands. Original cloud evidence remains intact. `run.py` invokes `compare-revisions.py --pairs 3 --observer-mode MODE` for each mode, then `summarize-comparisons.py`. The optimized builds use `build-revision.py`; build identities and the six equal harness hashes are included. The separate [aligned harness/profile report](aligned-observers.md) contains all eight control/profile diagnostics and their overhead, outside the formal samples.
+
+CPU includes all product threads and driver work, with 10 ms resolution. Complete CPU/writes are absolute self counters through cleanup; startup/module loading is separately recorded. Phases expose late public snapshot/full historical reads, independent request verification, shutdown, close/checkpoint, reopen verification and cleanup. Evidence-file output follows the final counter endpoint. No unrelated verification median is subtracted. Sampled RSS/PSS are maxima of sampled points, not peaks; allocations are unavailable. DB/WAL/SHM/temp logical and allocated extents remain in raw footprint samples; process-attributed writes are not physical-device writes. `/tmp` is tmpfs.
+
+The repair has independent exact-delta runtime and Source source reviews with no verified new blocker and successful [FULL/Merge 39192311365](https://github.com/Caismis/rustX/actions/runs/39192311365). CI tested merge `203294a581eafaee710bec3af4067df134e13f7d`, joining base `7d659c06f692277d4711c54b579f9fe0f8d8792d` with `c01f28f9`. Latest main was re-fetched unchanged at `3c355f152d405a201482d53b6e45497df4f44a7f`; ancestry passes. The review did not independently rerun the archived local tests. This completes the repair/isolated demand checkpoint; incremental live display reuse, lazy deep inspection and final performance acceptance remain ongoing. No merge is authorized here.
