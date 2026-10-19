@@ -198,7 +198,23 @@ fn persist_part(
     start: u64,
     end: u64,
 ) -> Result<Fragment, ConversationStoreError> {
-    let mut spool = FactSpool::new(connection);
+    persist_part_with_spool(
+        connection,
+        source,
+        reader,
+        start,
+        end,
+        FactSpool::new(connection),
+    )
+}
+fn persist_part_with_spool(
+    connection: &Connection,
+    source: &SeekableObservationSource,
+    reader: &ObservationByteReader<'_>,
+    start: u64,
+    end: u64,
+    mut spool: FactSpool<'_>,
+) -> Result<Fragment, ConversationStoreError> {
     let (max_path, max_key_path) = capture_facts(&mut spool, source, reader, start, end)?;
     let fields = spool.finish()?;
     let mut builder = index::Builder::new(connection);
@@ -268,6 +284,10 @@ fn persist_encoded_fact(
 pub(super) fn scalar(
     connection: &Connection,
     source: &SeekableObservationSource,
+    capture: Option<(
+        &crate::runtime::identity::ConversationId,
+        &mut super::scalar_cache::Session,
+    )>,
 ) -> Result<(Fragment, u64, u64), ConversationStoreError> {
     let (start, end, _) = source
         .original_field_geometry(&["messages".into()])
@@ -279,8 +299,29 @@ pub(super) fn scalar(
     let reader = source
         .byte_reader()
         .map_err(|error| storage(error.to_string()))?;
+    let spool = if let Some((scope, session)) = capture {
+        let (tools_start, tools_end, _) = source
+            .original_field_geometry(&["tools".into()])
+            .map_err(|error| storage(error.to_string()))?;
+        if tools_end - tools_start <= 65_536 {
+            FactSpool::capturing(
+                connection,
+                session.capture(
+                    scope,
+                    tools_start,
+                    tools_end,
+                    source_bytes(&reader, tools_start, tools_end)?,
+                ),
+            )
+        } else {
+            session.discard();
+            FactSpool::new(connection)
+        }
+    } else {
+        FactSpool::new(connection)
+    };
     Ok((
-        persist_part(connection, source, &reader, 0, length)?,
+        persist_part_with_spool(connection, source, &reader, 0, length, spool)?,
         start,
         end,
     ))

@@ -83,6 +83,8 @@ fn t14_t19_fresh_start_rejects_snapshot_and_original_changes_after_selection_ato
             messages,
             "all trigger writes roll back"
         );
+        assert_eq!(store.conn.scalar_facts.retained_work(), None,
+            "failed native validation cannot install a prospective Source cache");
         assert_eq!(store.presentation_frontier().unwrap(), 0);
         let count: u64 = store
             .lock()
@@ -102,6 +104,8 @@ fn t14_t19_fresh_start_rejects_snapshot_and_original_changes_after_selection_ato
             .commit_model_turn_start(&[], &snapshot, Utc::now())
             .unwrap();
         assert_eq!(take_request_input_reconstructions(), (1, messages.len()));
+        assert!(store.conn.scalar_facts.retained_work().is_some(),
+            "the successful identical native retry can retain derived public facts");
     }
 }
 

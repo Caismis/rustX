@@ -467,6 +467,7 @@ struct ConnectionOwner {
     poisoned: AtomicBool,
     manifest: Arc<manifest::Owner>,
     append_validation: Arc<append_validation::Owner>,
+    scalar_facts: observation_request::composed::scalar_cache::Owner,
 }
 impl ConnectionOwner {
     #[cfg(test)]
@@ -901,6 +902,7 @@ impl SqliteConversationStore {
                 available: Mutex::new(Some(connection)),
                 manifest,
                 append_validation,
+                scalar_facts: observation_request::composed::scalar_cache::Owner::default(),
                 wake: Condvar::new(),
                 poisoned: AtomicBool::new(false),
             }),
@@ -1213,7 +1215,7 @@ impl SqliteConversationStore {
     /// request-scoped canonical context, the frozen snapshot, the
     /// `ModelRequestStarted` event, and the sequence binding (Issue #12,
     /// M9b).
-    #[allow(clippy::too_many_lines)] // One atomic start transition, contribution settlement and native reference validation.
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)] // One atomic start transition and its transaction-local derived fact capture.
     fn insert_fresh_start_tx(
         &self,
         transaction: &rusqlite::Transaction<'_>,
@@ -1222,6 +1224,7 @@ impl SqliteConversationStore {
         timestamp: DateTime<Utc>,
         selection: &manifest::Selection,
         admission_epoch: u64,
+        capture: &mut observation_request::composed::scalar_cache::Session,
     ) -> Result<crate::durable::ModelTurnStartCommit, ConversationStoreError> {
         #[cfg(test)]
         if self.consume_request_start_fault(RequestStartFaultOperation::BeforeContextAppend) {
@@ -1407,6 +1410,7 @@ impl SqliteConversationStore {
             retry_message_id.as_ref(),
             context,
             &persisted.event,
+            capture,
         );
         // Todo progress is a conversation-owned semantic coordinate, not a
         // Surface append count. Advance it only for the first request of a
@@ -4793,6 +4797,7 @@ impl ConversationStore for SqliteConversationStore {
         // anywhere below rolls all of it back, so request-scoped context
         // can never become canonical without its request starting.
         let selection = manifest::persist(&transaction, &snapshot.input, &self.conn.manifest)?;
+        let mut capture = self.conn.scalar_facts.session(&self.conversation_id);
         let mut persisted = self.insert_fresh_start_tx(
             &transaction,
             context,
@@ -4800,6 +4805,7 @@ impl ConversationStore for SqliteConversationStore {
             timestamp,
             &selection,
             admission_epoch,
+            &mut capture,
         )?;
         process_death::reach("before:commit_model_turn_start");
         transaction
@@ -4807,6 +4813,7 @@ impl ConversationStore for SqliteConversationStore {
             .map_err(|error| storage(format!("request start commit: {error}")))?;
         process_death::reach("after:commit_model_turn_start");
         selection.commit(&self.conn.manifest);
+        capture.commit(&self.conn.scalar_facts);
         persisted.verified_snapshot = Some(Box::new(snapshot.clone()));
         Ok(persisted)
     }
@@ -6021,6 +6028,7 @@ fn index_request_read_layouts(
     retry_message_id: Option<&MessageId>,
     context: &[MessageBlock],
     event: &RuntimeEventEnvelope,
+    capture: &mut observation_request::composed::scalar_cache::Session,
 ) {
     let _ = optional_display_layout(transaction, || {
         if let Some(retry) = retry_message_id {
@@ -6037,7 +6045,7 @@ fn index_request_read_layouts(
     let _ = optional_display_layout(transaction, || {
         observation_trace::request_core(transaction, event, snapshot)
     });
-    let _ = optional_display_layout(transaction, || {
+    let captured = optional_display_layout(transaction, || {
         transaction
             .execute(
                 "UPDATE request_snapshots SET observation_source_id=?2 WHERE request_id=?1",
@@ -6052,8 +6060,12 @@ fn index_request_read_layouts(
             input,
             snapshot,
             selection,
+            capture,
         )
     });
+    if captured.is_none() {
+        capture.discard();
+    }
     let _ = optional_display_layout(transaction, || {
         observation_trace::index_context(transaction, event.sequence, snapshot, context)
     });

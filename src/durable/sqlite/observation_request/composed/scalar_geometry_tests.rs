@@ -92,7 +92,7 @@ fn scalar_geometry_reuses_immutable_index_with_exact_fields_bytes_and_pages() {
         crate::runtime::read_layout::take_field_preview_work();
         let expected = legacy_scalar(&old, &source);
         let old_work = crate::runtime::read_layout::take_field_preview_work();
-        let actual = scalar(&new, &source).unwrap();
+        let actual = scalar(&new, &source, None).unwrap();
         let new_work = crate::runtime::read_layout::take_field_preview_work();
         assert_eq!(actual.1, expected.1);
         assert_eq!(actual.2, expected.2);
@@ -145,7 +145,7 @@ fn scalar_geometry_keeps_changed_definition_identity_time_and_old_source_separat
             b"[]"
         );
         let connection = connection();
-        let captured = scalar(&connection, source).unwrap();
+        let captured = scalar(&connection, source, None).unwrap();
         assert_eq!((captured.1, captured.2), (bounds.0, bounds.1));
     }
     assert_eq!(
@@ -170,7 +170,7 @@ fn scalar_geometry_measures_repeated_standard_public_tool_capture() {
     crate::runtime::read_layout::take_field_preview_work();
     let expected = legacy_scalar(&old, &source);
     let old_work = crate::runtime::read_layout::take_field_preview_work();
-    let actual = scalar(&new, &source).unwrap();
+    let actual = scalar(&new, &source, None).unwrap();
     let new_work = crate::runtime::read_layout::take_field_preview_work();
     assert_eq!(old_work, (312, 312));
     assert_eq!(new_work, (312, 0));
@@ -208,4 +208,113 @@ fn scalar_geometry_measures_repeated_standard_public_tool_capture() {
     eprintln!(
         "standard public catalog:312 geometry visits avoided per scalar; remaining Tools facts={count}, encoded key+value bytes={encoded_bytes}; exact field/byte pages unchanged"
     );
+}
+
+#[test]
+fn scoped_tool_fact_merge_preserves_fresh_roots_and_admitted_original_fragment() {
+    use super::super::scalar_cache::Owner;
+    let scope = crate::runtime::identity::ConversationId::generate();
+    let owner = Owner::default();
+    let mut value = fixture(0, 0);
+    value.tools = serde_json::from_str(include_str!("standard_public_tools_fixture.json")).unwrap();
+    let original = SeekableObservationSource::new(&value).unwrap();
+    let baseline = connection();
+    let cached = connection();
+    let expected_original = scalar(&baseline, &original, None).unwrap();
+    let mut initial = owner.session(&scope);
+    let captured_original = scalar(&cached, &original, Some((&scope, &mut initial))).unwrap();
+    assert_eq!(pages(&baseline), pages(&cached));
+    let (reused, retained_rows, owned) = initial.work();
+    assert_eq!(reused, 0);
+    assert!(retained_rows >= 610);
+    assert!(owned <= 1_048_576);
+    initial.commit(&owner);
+    let retained_bytes =
+        bytes(&cached, &captured_original.0, 0, captured_original.0.length).unwrap();
+    let mut after = value;
+    after.request_id = "request-0000000002".into();
+    after.admitted_time = "2026-10-19 00:00:01".into();
+    after.provenance_source["owner"] = "owner-B".into();
+    let current = SeekableObservationSource::new(&after).unwrap();
+    let mut session = owner.session(&scope);
+    spool::take_disk_rows();
+    crate::runtime::read_layout::take_field_preview_work();
+    let expected = scalar(&baseline, &current, None).unwrap();
+    let baseline_previews = crate::runtime::read_layout::take_field_preview_work();
+    let baseline_writes = spool::take_disk_rows();
+    let actual = scalar(&cached, &current, Some((&scope, &mut session))).unwrap();
+    let current_previews = crate::runtime::read_layout::take_field_preview_work();
+    let current_writes = spool::take_disk_rows();
+    assert_eq!(
+        serde_json::to_vec(&actual.0).unwrap(),
+        serde_json::to_vec(&expected.0).unwrap()
+    );
+    assert_eq!((actual.1, actual.2), (expected.1, expected.2));
+    assert_eq!(
+        pages(&baseline),
+        pages(&cached),
+        "every byte/fact page and hash stays exact"
+    );
+    assert_eq!(
+        baseline_previews, current_previews,
+        "all original preview validation remains fresh"
+    );
+    assert_eq!(session.work().0, retained_rows);
+    assert!(baseline_writes >= retained_rows);
+    assert_eq!(
+        current_writes, 0,
+        "fresh non-Tools facts fit the unchanged bounded spool"
+    );
+    assert_eq!(
+        bytes(&cached, &captured_original.0, 0, captured_original.0.length).unwrap(),
+        retained_bytes
+    );
+    assert_ne!(
+        bytes(&cached, &actual.0, 0, actual.0.length).unwrap(),
+        retained_bytes
+    );
+    assert_eq!(
+        serde_json::to_vec(&captured_original.0).unwrap(),
+        serde_json::to_vec(&expected_original.0).unwrap()
+    );
+    eprintln!(
+        "scoped Tools fact reuse rows={retained_rows}, owned={owned}, TEMP inserts={baseline_writes}->{current_writes}; all fresh previews and exact pages retained"
+    );
+}
+
+#[test]
+fn scoped_tool_facts_relearn_changed_definitions_and_scope_without_stale_pages() {
+    use super::super::scalar_cache::Owner;
+    let owner = Owner::default();
+    let scope = crate::runtime::identity::ConversationId::generate();
+    let other = crate::runtime::identity::ConversationId::generate();
+    let mut value = fixture(2, 3);
+    let baseline = connection();
+    let cached = connection();
+    for case in 0..7 {
+        match case {
+            1 => value.tools[0]["name"] = "revised-tool-0".into(),
+            2 => value.tools[0]["input_schema"]["value"]["properties"]["new"] = serde_json::json!({"type":"integer"}),
+            3 => value.tools.swap(0, 1),
+            4 => { value.tools.pop(); }
+            5 => value.tools.push(serde_json::json!({"tool_id":"new-tool","input_schema":{"value":{},"truncated":false}})),
+            _ => {}
+        }
+        let current_scope = if case == 6 { &other } else { &scope };
+        let source = SeekableObservationSource::new(&value).unwrap();
+        let expected = scalar(&baseline, &source, None).unwrap();
+        let mut session = owner.session(current_scope);
+        let actual = scalar(&cached, &source, Some((current_scope, &mut session))).unwrap();
+        assert_eq!(
+            session.work().0,
+            0,
+            "changed definition/order/span/scope must not hit"
+        );
+        assert_eq!(
+            serde_json::to_vec(&actual.0).unwrap(),
+            serde_json::to_vec(&expected.0).unwrap()
+        );
+        assert_eq!(pages(&baseline), pages(&cached));
+        session.commit(&owner);
+    }
 }

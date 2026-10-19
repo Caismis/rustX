@@ -13,6 +13,7 @@ mod nodes;
 #[cfg(feature = "issue-387-profile")]
 mod profile;
 mod read;
+pub(in crate::durable::sqlite) mod scalar_cache;
 mod schema;
 #[cfg(test)]
 mod schema_tests;
@@ -176,6 +177,7 @@ pub(super) fn index_selection(
     input: &crate::model::SelectedModelInput,
     snapshot: &crate::model::RequestSnapshot,
     selection: &manifest::Selection,
+    capture: &mut scalar_cache::Session,
 ) -> Result<(), ConversationStoreError> {
     #[cfg(feature = "issue-387-profile")]
     let mut profile = profile::Request::new(sequence, selection.root.map_or(0, |root| root.count));
@@ -204,7 +206,7 @@ pub(super) fn index_selection(
         );
         let source =
             crate::runtime::read_layout::SeekableObservationSource::new(&value).map_err(storage)?;
-        fragments::scalar(connection, &source)?
+        fragments::scalar(connection, &source, Some((scope, capture)))?
     };
     {
         #[cfg(feature = "issue-387-profile")]

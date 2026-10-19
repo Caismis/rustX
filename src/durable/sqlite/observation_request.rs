@@ -72,6 +72,7 @@ pub(in crate::durable::sqlite) fn index_selection(
     messages: &crate::model::SelectedModelInput,
     snapshot: &crate::model::RequestSnapshot,
     selection: &super::manifest::Selection,
+    capture: &mut composed::scalar_cache::Session,
 ) -> Result<(), ConversationStoreError> {
     composed::index_selection(
         connection,
@@ -80,6 +81,7 @@ pub(in crate::durable::sqlite) fn index_selection(
         messages,
         snapshot,
         selection,
+        capture,
     )
 }
 pub(super) fn index_state<T: serde::Serialize + schemars::JsonSchema>(

@@ -2,11 +2,18 @@
 use super::{Connection, ConversationStoreError, index, params, storage};
 const MAX_BYTES: usize = 65_536;
 const MAX_FACTS: usize = 256;
+#[cfg(test)]
+thread_local! { static DISK_ROWS: std::cell::Cell<usize> = const {std::cell::Cell::new(0)}; }
+#[cfg(test)]
+pub(super) fn take_disk_rows() -> usize {
+    DISK_ROWS.with(|rows| rows.replace(0))
+}
 pub(super) struct FactSpool<'a> {
     connection: &'a Connection,
     facts: Vec<(String, Vec<u8>)>,
     bytes: usize,
     spilled: bool,
+    capture: Option<super::super::scalar_cache::Capture<'a>>,
 }
 impl<'a> FactSpool<'a> {
     pub(super) fn new(connection: &'a Connection) -> Self {
@@ -15,6 +22,16 @@ impl<'a> FactSpool<'a> {
             facts: Vec::new(),
             bytes: 0,
             spilled: false,
+            capture: None,
+        }
+    }
+    pub(super) fn capturing(
+        connection: &'a Connection,
+        capture: super::super::scalar_cache::Capture<'a>,
+    ) -> Self {
+        Self {
+            capture: Some(capture),
+            ..Self::new(connection)
         }
     }
     fn disk_insert(&self, key: &str, value: &[u8]) -> Result<(), ConversationStoreError> {
@@ -23,6 +40,8 @@ impl<'a> FactSpool<'a> {
             .map_err(|error| storage(error.to_string()))?
             .execute(params![key, value])
             .map_err(|error| storage(error.to_string()))?;
+        #[cfg(test)]
+        DISK_ROWS.with(|rows| rows.set(rows.get() + 1));
         Ok(())
     }
     fn spill(&mut self) -> Result<(), ConversationStoreError> {
@@ -43,6 +62,15 @@ impl<'a> FactSpool<'a> {
         if key.len() > 4160 || value.len() > 40960 {
             return Err(storage("fragment fact exceeds bound"));
         }
+        if self
+            .capture
+            .as_mut()
+            .map(|capture| capture.reuse(&key, &value))
+            .transpose()?
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
         if !self.spilled {
             if self.facts.iter().any(|(existing, _)| existing == &key) {
                 return Err(storage("fragment fact repeats"));
@@ -62,27 +90,49 @@ impl<'a> FactSpool<'a> {
     }
     pub(super) fn finish(mut self) -> Result<index::Reference, ConversationStoreError> {
         let mut builder = index::Builder::new(self.connection);
-        if self.spilled {
-            let mut statement = self
-                .connection
-                .prepare_cached("SELECT key,value FROM request_source_fact_spool ORDER BY key")
-                .map_err(|error| storage(error.to_string()))?;
-            let mut rows = statement
-                .query([])
-                .map_err(|error| storage(error.to_string()))?;
-            while let Some(row) = rows.next().map_err(|error| storage(error.to_string()))? {
-                builder.push(
-                    row.get(0).map_err(|error| storage(error.to_string()))?,
-                    row.get(1).map_err(|error| storage(error.to_string()))?,
-                )?;
+        let capture = self.capture.take();
+        let retained = capture
+            .as_ref()
+            .map(super::super::scalar_cache::Capture::rows)
+            .transpose()?
+            .unwrap_or(&[]);
+        let mut retained = retained.iter().peekable();
+        {
+            let mut merge = |key: String, value: Vec<u8>| -> Result<(), ConversationStoreError> {
+                while retained.peek().is_some_and(|row| row.0 < key) {
+                    let row = retained
+                        .next()
+                        .ok_or_else(|| storage("retained fact unavailable"))?;
+                    builder.push(row.0.clone(), row.1.clone())?;
+                }
+                builder.push(key, value)
+            };
+            if self.spilled {
+                let mut statement = self
+                    .connection
+                    .prepare_cached("SELECT key,value FROM request_source_fact_spool ORDER BY key")
+                    .map_err(|error| storage(error.to_string()))?;
+                let mut rows = statement
+                    .query([])
+                    .map_err(|error| storage(error.to_string()))?;
+                while let Some(row) = rows.next().map_err(|error| storage(error.to_string()))? {
+                    merge(
+                        row.get(0).map_err(|error| storage(error.to_string()))?,
+                        row.get(1).map_err(|error| storage(error.to_string()))?,
+                    )?;
+                }
+            } else {
+                // Rust UTF-8 byte ordering is SQLite BINARY ordering. Unstable sort
+                // allocates no scratch buffer; duplicate keys were rejected on push.
+                self.facts.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+                for (key, value) in self.facts {
+                    merge(key, value)?;
+                }
             }
-        } else {
-            // Rust UTF-8 byte ordering is SQLite BINARY ordering. Unstable sort
-            // allocates no scratch buffer; duplicate keys were rejected on push.
-            self.facts.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-            for (key, value) in self.facts {
-                builder.push(key, value)?;
-            }
+        }
+        // Fresh and retained facts share the unchanged sorted index builder.
+        for row in retained {
+            builder.push(row.0.clone(), row.1.clone())?;
         }
         let result = builder
             .finish()?
@@ -93,6 +143,9 @@ impl<'a> FactSpool<'a> {
                 .map_err(|error| storage(error.to_string()))?
                 .execute([])
                 .map_err(|error| storage(error.to_string()))?;
+        }
+        if let Some(capture) = capture {
+            capture.finish()?;
         }
         Ok(result)
     }
