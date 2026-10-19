@@ -1683,6 +1683,35 @@ fn lifecycle_refresh_is_bounded_and_repeats_no_historical_input() {
 }
 
 #[test]
+fn trace_page_bound_native_admission_preserves_full_width_cuts_and_escaped_capacity() {
+    let store = store("conv_fa8cedb3-e605-7a9c-a144-4eb6059d9270");
+    start(&store);
+    request(&store, 0);
+    let mut page = TraceProjection::new(&store)
+        .unwrap()
+        .page(None, 32)
+        .unwrap();
+    let cut = page.read_cut.as_mut().unwrap();
+    cut.revision = u64::MAX;
+    cut.through = u64::MAX;
+    ensure_page_bound(&page).unwrap();
+    let mut bytes = Vec::new();
+    crate::runtime_client::structural_json::to_writer(&mut bytes, &page).unwrap();
+    let decoded: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(decoded["read_cut"]["revision"], u64::MAX.to_string());
+    assert_eq!(decoded["read_cut"]["through"], u64::MAX.to_string());
+    let limit = crate::runtime_client::checkpoint::CHECKPOINT_TARGET_BYTES
+        - crate::runtime_client::checkpoint::CHECKPOINT_ITEM_BYTES;
+    assert!(bytes.len() <= limit);
+
+    page.next_cursor = Some(TraceCursor("\0".repeat(limit / 6 + 1)));
+    assert!(matches!(
+        ensure_page_bound(&page),
+        Err(crate::durable::ConversationStoreError::ObservationCapacityExceeded)
+    ));
+}
+
+#[test]
 fn trace_refresh_page_examines_missing_and_duplicate_interests_without_publication() {
     let store = store("conv_c58ff1b4-cc51-781e-9651-d57205b2bc7a");
     start(&store);
