@@ -1,4 +1,3 @@
-import { readSourceRepairFields } from '../../../protocol/app-server/source-observation';
 import {interactionBody,readInteractionBody} from '../../../protocol/app-server/interaction';
 import { materializeApplication } from '../../../protocol/app-server/application-observation';
 import { sourceObservation } from '../../../protocol/app-server/source-observation';
@@ -14,7 +13,7 @@ import { AgentMeters } from './agent-meters';
 import { UploadFailure, AttachmentIntakes } from './uploads';
 import { checkpointSnapshot, foldRuntimeEvent, observationCheckpoint, transitionFacts } from '../../../protocol/app-server/projection';
 import { hasResponseDeadline, requestEffect, requestLane } from '../../../protocol/app-server/method-policy';
-import { laterRepairSequence, olderRepairSequence, retainSourceRepair, sourceRepairDecision, sourceRepairKey } from '../../../protocol/app-server/source-repair';
+import { SourceRepairObserver } from './source-repairs';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { SessionExportController } from "./session-export";
 import { standaloneTraceCut,inlineTraceDetail,retainedTraceDetailPage,bindTraceDetailReader,TRACE_LIMIT, TRACE_PAGE_SIZE, beginTraceDetail, completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterestBatches,traceInterests, type TraceCache,type TraceFieldReader } from './trace';
@@ -22,14 +21,13 @@ import type {
   TraceToolLocator, ConfigurationApplication, PendingInboundRef, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request, Request1, Response, RuntimeClientSnapshot, RuntimeClientEvent,
   UserInputBlock, UploadReceipt, UploadedFile,
-  SourceTarget,
 } from '../../../protocol/app-server/v50';
 import { transferUpload, uploadOperationId } from '../../../protocol/app-server/upload';
 import { HISTORY_PAGE_SIZE, TURN_PAGE_SIZE, sameReadCut, extendTranscriptWindow, installTranscriptWindow, prependTranscript, refreshTranscript, replaceTranscript, turnKey, turnPageCount, type TurnSelection } from './transcript';
 import type { ObservedTurn, ObservedTurnPage } from '../../../protocol/app-server/v50';
 import { ProtocolLog, type WireContext } from './protocol-log';
 import { OutcomeUncertain, RequestAdmissionDeferred, RequestNotDispatched, RpcFailure, isOutcomeUncertain } from './errors';
-import { interactionKey, type CancellationTarget, type ClientView, type CompactionRequestEvidence, type ConnectionState, type GoalControlOutcome, type InboundControlOutcome, type OperationAdmission, type OutlinePagingIntent, type SessionView, type SourceRepairObservation, type Submission } from './contracts';
+import { interactionKey, type CancellationTarget, type ClientView, type CompactionRequestEvidence, type ConnectionState, type GoalControlOutcome, type InboundControlOutcome, type OperationAdmission, type OutlinePagingIntent, type SessionView, type Submission } from './contracts';
 
 
 interface OutlineDemand {
@@ -48,12 +46,6 @@ interface OutlineRead {
   refresh: boolean;
 }
 
-/** Retained per-source observations are records ordered least recently
- * observed first; the retention rule itself is the protocol's. */
-function retainRepair<V>(sources: Readonly<Record<string, V>>, key: string, value: V): [Record<string, V>, V | undefined] {
-  const { retained, forgotten } = retainSourceRepair(Object.entries(sources), key, value);
-  return [Object.fromEntries(retained), forgotten];
-}
 export interface Socket {
   readonly readyState: number;
   onopen: ((event: Event) => unknown) | null;
@@ -136,28 +128,13 @@ export class AppServerClient {
   onAuthorityRetired = (listener: () => void) => { this.authorityListeners.add(listener); return () => { this.authorityListeners.delete(listener); }; };
   private socket?: Socket;
   private initialized = false;
-  /** Repair observations this connection delivered before its authority was
-   * negotiated; attributed to that authority once `initialize` succeeds.
-   * Finite, under the same retention as `sourceRepairs`. */
-  private unattributedRepairs: Record<string, Omit<SourceRepairObservation, 'authorityId'>> = {};
-  /** The highest native sequence at which this connection forgot a source.
-   * Whatever a source absent from `sourceRepairs` held was current at or
-   * before it, so a notice of an absent source ordered at or after it is never
-   * older than what was forgotten. One ordered before it may be the forgotten
-   * history of an evicted source, or the first notice of a source never seen:
-   * it is ambiguous, never applied, and the source is recovered by an
-   * authoritative read instead. One value, however many sources came and went. */
-  private repairsForgottenThrough = '0';
-  /** This connection's Workspace repair reads in flight, each with the
-   * highest sequence at which its own source was forgotten while it was in
-   * flight. Anything forgotten before a read was sent is older than its
-   * answer, since native snapshots after receiving it; anything forgotten
-   * meanwhile is compared exactly. Each leaves when its read settles. */
-  private repairReads = new Set<{ key: string; forgotten: string }>();
-  /** Workspaces awaiting a recovery read: one entry per source, finite
-   * (`retainSourceRepair`), read one at a time. */
-  private repairRecoveries: Record<string, SourceTarget> = {};
-  private recoveringRepairs = false;
+  private readonly sourceRepairs = new SourceRepairObserver({
+    request: (...args) => this.request(...args),
+    connection: () => ({ generation: this.state.generation, authorityId: this.state.authorityId }),
+    current: (generation, authorityId) => this.current(generation) && this.initialized && (authorityId === undefined || this.state.authorityId === authorityId),
+    held: () => this.state.sourceRepairs ?? {},
+    publish: sourceRepairs => this.publish({ sourceRepairs }),
+  });
   private nextId = 0;
   private listeners = new Set<() => void>();
   private pending = new Map<string, Pending>();
@@ -362,7 +339,7 @@ export class AppServerClient {
         const settings=await this.readSettings(id,current);
         if(!current())return;
         this.setSession(id,{settings:settings.settings});
-        this.visitRepairs(settings.settings.cwd);
+        this.sourceRepairs.visit(settings.settings.cwd);
         void this.refreshDisplaySummary(id).catch(() => {});
       },
       refresh: () => this.refresh(id),
@@ -438,9 +415,7 @@ export class AppServerClient {
       this.retireAuthority();
     }
     this.configurationCuts.clear();this.configurationWeights.clear();
-    this.unattributedRepairs = {};
-    this.repairsForgottenThrough = '0';
-    this.repairRecoveries = {};
+    this.sourceRepairs.connect();
     this.publish({ configuration: {}, configurationObservation: {}, sourceRepairs: {}, endpoint: url.href, connection: transition === 'reconnect' ? 'reconnecting' : 'connecting', capabilities: undefined, error: undefined });
     // Ownership commits after close/retirement, before attempting the new transport.
     committed?.();
@@ -483,9 +458,7 @@ export class AppServerClient {
       }
       this.publish({ authorityId: hello.authority_id });
       this.initialized = true;
-      const unattributed = this.unattributedRepairs;
-      this.unattributedRepairs = {};
-      for (const observation of Object.values(unattributed)) this.observeRepair({ ...observation, authorityId: hello.authority_id });
+      this.sourceRepairs.attribute(hello.authority_id);
       this.lifecycles.transport(generation, true);
       this.publish({ capabilities: hello.capabilities, connection: 'resynchronizing' });
       await this.listSessions();
@@ -529,93 +502,6 @@ export class AppServerClient {
     const views = { ...this.state.views }; delete views[id];
     this.publish({ views });
   }
-  /** Applies one native observation of this connection's authority unless
-   * it is not newer than what this connection holds, or may have held, of its
-   * source. A held source orders it by sequence alone: a higher sequence
-   * replaces it, even with the same receipt or with no receipt on either
-   * side, so a withdrawal retires the receipt and an unchanged one advances
-   * without being presented again (presentation follows receipt ids). Two
-   * observations at one sequence agree; one that disagrees is inconsistent,
-   * never newer, so the held one stays and a notice's source is read again.
-   * An absent source may have been forgotten through `forgotten` — for a
-   * read, its own bound; for a notice, the connection's frontier — and an
-   * observation older than that is never applied; an ambiguous notice is
-   * recovered by reading its source again. */
-  private observeRepair(observation: SourceRepairObservation, forgotten?: string) {
-    const key = sourceRepairKey(observation.target);
-    const decision = sourceRepairDecision(this.state.sourceRepairs?.[key], observation, forgotten, this.repairsForgottenThrough);
-    if (decision === 'recover') this.recoverRepairs(observation.target);
-    if (decision !== 'apply') return;
-    const [sourceRepairs, evicted] = retainRepair(this.state.sourceRepairs ?? {}, key, observation);
-    if (evicted) this.forgetRepairs(evicted);
-    this.publish({ sourceRepairs });
-  }
-  /** Records that this connection no longer holds `evicted`'s source. */
-  private forgetRepairs({ target, sequence }: SourceRepairObservation) {
-    this.repairsForgottenThrough = laterRepairSequence(this.repairsForgottenThrough, sequence);
-    const key = sourceRepairKey(target);
-    for (const read of this.repairReads) if (read.key === key) read.forgotten = laterRepairSequence(read.forgotten, sequence);
-  }
-  /** Reads `target`'s repair observations authoritatively and folds them in:
-   * `configuration/sourcesRead` is read-only on the server and answers for
-   * exactly the canonical target it was asked about. An answer older than
-   * what this connection meanwhile observed of the source — and then forgot —
-   * changes nothing, and an answer from a connection that has since ended is
-   * dropped. */
-  private async readRepairs(target: SourceTarget) {
-    const generation = this.state.generation;
-    const authorityId = this.state.authorityId;
-    if (!authorityId) return;
-    const read = target.kind === 'workspace' ? { key: sourceRepairKey(target), forgotten: '0' } : undefined;
-    if (read) this.repairReads.add(read);
-    try {
-      const current = () => this.current(generation) && this.initialized && !!authorityId && this.state.authorityId === authorityId;
-      const result = await this.request({ method: 'configuration/sourcesRead', params: { target } }, 'source_settings', undefined, current);
-      const projection = await readSourceRepairFields(result.projection, async (reference, offset) =>
-        (await this.request({ method: 'configuration/sourceValueRead', params: { target, reference, offset, max_bytes: 65_536 } }, 'source_value_chunk', undefined, current)).chunk, current);
-      if (!current()) return;
-      const sequence = projection.repair_sequence;
-      // The User is never forgotten, so nothing it held can be newer.
-      this.observeRepair({ authorityId, target: { kind: 'user' }, receipt: projection.user_repair ?? undefined, sequence }, '0');
-      if (read) this.observeRepair({ authorityId, target, receipt: projection.workspace_repair ?? undefined, sequence }, read.forgotten);
-    } finally {
-      if (read) this.repairReads.delete(read);
-    }
-  }
-  /** Reads `target` again because what this connection holds of it may be
-   * missing: a notice of it was ambiguous, or a Session of its Workspace was
-   * attached while the client held nothing of it. Nonblocking, sequential and
-   * bounded: one read in flight, one queued entry per source; a source asked
-   * for again while its read is in flight is read once more after it, since
-   * that read may predate the reason. A failed read proves nothing, and
-   * nothing is read once the connection ended. */
-  private recoverRepairs(target: SourceTarget) {
-    [this.repairRecoveries] = retainRepair(this.repairRecoveries, sourceRepairKey(target), target);
-    if (this.recoveringRepairs) return;
-    this.recoveringRepairs = true;
-    const generation = this.state.generation;
-    void (async () => {
-      try {
-        for (let next = Object.entries(this.repairRecoveries)[0]; next && this.current(generation) && this.initialized; next = Object.entries(this.repairRecoveries)[0]) {
-          delete this.repairRecoveries[next[0]];
-          await this.readRepairs(next[1]).catch(() => undefined);
-        }
-      } finally {
-        this.recoveringRepairs = false;
-      }
-    })();
-  }
-  /** A Session of Workspace `directory` was attached: native now observes
-   * that source for this connection. Native announces the current level of
-   * each source it newly admits for this connection — a receipt or none — so
-   * a source native admits anew needs no read. But native forgets by
-   * addressing and this client by observation: once this client has
-   * forgotten a source, an absent one may be one native still observes and
-   * so never announces again, and it is read rather than assumed healthy. */
-  private visitRepairs(directory: string) {
-    const target: SourceTarget = { kind: 'workspace', directory };
-    if (olderRepairSequence('0', this.repairsForgottenThrough) && !this.state.sourceRepairs?.[sourceRepairKey(target)]) this.recoverRepairs(target);
-  }
   private lose(generation: number) {
     if (this.current(generation)) this.endConnection('stale');
   }
@@ -624,7 +510,7 @@ export class AppServerClient {
     this.retainAppliedObservations();
     this.socket = undefined;
     this.initialized = false;
-    this.unattributedRepairs = {};
+    this.sourceRepairs.disconnect();
     const uncertain = [...this.state.uncertain];
     for (const [id, pending] of this.pending) {
       clearTimeout(pending.timer); pending.validation?.abort(); pending.validation = undefined;
@@ -888,14 +774,7 @@ export class AppServerClient {
       const receipt = value.params.receipt ?? undefined;
       const sequence = value.params.sequence;
       if (typeof sequence !== 'string' || !/^\d+$/.test(sequence)) { this.lose(generation); return; }
-      // Until this connection's `initialize` succeeds, `authorityId` may still
-      // name the authority of a previous connection to the same endpoint.
-      if (this.initialized && this.state.authorityId) this.observeRepair({ authorityId: this.state.authorityId, target, receipt, sequence });
-      else {
-        const key = sourceRepairKey(target);
-        const held = this.unattributedRepairs[key];
-        if (!held || olderRepairSequence(held.sequence, sequence)) [this.unattributedRepairs] = retainRepair<Omit<SourceRepairObservation, 'authorityId'>>(this.unattributedRepairs, key, { target, receipt, sequence });
-      }
+      this.sourceRepairs.notice(target, receipt, sequence, this.initialized ? this.state.authorityId : undefined);
       return;
     }
     if (value.method === 'session/ownershipRetired') return; // Product Host owns execution retirement.

@@ -155,3 +155,12 @@ export interface OperationAdmission {
   validate: (signal: AbortSignal) => Promise<boolean>;
 }
 export const interactionKey = (ref: InteractionRef) => JSON.stringify([ref.conversation_id, ref.interaction_id]);
+/** One correlated App Server request of the connection's bounded pipeline.
+ * No call is ever retried; `dispatchCurrent` is re-checked adjacent to send. */
+export type ConnectionRequest = <T extends MethodResult['type']>(
+  operation: Request1,
+  expected: T,
+  acknowledged?: (result: Extract<MethodResult, { type: T }>) => void,
+  dispatchCurrent?: (() => boolean) | OperationAdmission,
+  observationSignal?: AbortSignal,
+) => Promise<Extract<MethodResult, { type: T }>>;
