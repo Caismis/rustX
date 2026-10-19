@@ -1,9 +1,11 @@
 /// Real driver frames and native registry transitions fence the numerical Fold;
 /// no lifecycle label or elapsed sleep stands in for execution evidence.
+use super::*;
+
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // Keep the gated execution and durable settlement sequence together.
 async fn agent_duration_follows_driver_evidence_through_stopping_and_durable_terminal() {
-    use super::super::ipc::{read_parent_frame, write_child_frame};
+    use super::super::super::ipc::{read_parent_frame, write_child_frame};
     use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
     use crate::runtime::identity::{AttemptId, EventId};
     use crate::runtime_client::agent_statistics::StatisticsFold;
@@ -30,7 +32,7 @@ async fn agent_duration_follows_driver_evidence_through_stopping_and_durable_ter
                 .append_event(RuntimeEventEnvelope {
                     tool_occurrence: None,
                     observation: None,
- schema_version: 1,
+                    schema_version: 1,
                     event_id: EventId::new(uuid::Uuid::now_v7().to_string()),
                     sequence: 0,
                     conversation_id: accepted.child_conversation_id.clone(),
@@ -177,7 +179,7 @@ async fn agent_duration_follows_driver_evidence_through_stopping_and_durable_ter
 
 #[tokio::test]
 async fn agent_duration_freezes_at_durable_evidence_after_control_loss() {
-    use super::super::ipc::{read_parent_frame, write_child_frame};
+    use super::super::super::ipc::{read_parent_frame, write_child_frame};
     use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
     use crate::runtime::identity::{AttemptId, EventId, TurnId};
     use crate::runtime_client::agent_statistics::StatisticsFold;
@@ -207,7 +209,7 @@ async fn agent_duration_freezes_at_durable_evidence_after_control_loss() {
             .append_event(RuntimeEventEnvelope {
                 tool_occurrence: None,
                 observation: None,
- schema_version: 1,
+                schema_version: 1,
                 event_id: EventId::new(format!("event-{seconds}")),
                 sequence: 0,
                 conversation_id: accepted.child_conversation_id.clone(),

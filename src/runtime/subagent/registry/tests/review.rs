@@ -1,4 +1,7 @@
-// Review regressions use registry mutex boundaries, control frames and first-poll gates.
+//! Review regressions use registry mutex boundaries, control frames and first-poll gates.
+use super::*;
+use crate::runtime::ToolCallId;
+
 #[tokio::test]
 async fn admitting_generation_is_interruptible_and_waitable_before_owner_task_runs() {
     let plane = plane(4);
@@ -103,9 +106,12 @@ async fn resume_success_requires_exact_child_canonical_input_acknowledgement() {
             message_origin
         );
         if acknowledge {
-            super::super::ipc::write_child_frame(&mut child.peer, &ChildFrame::DelegateAccepted)
-                .await
-                .unwrap();
+            super::super::super::ipc::write_child_frame(
+                &mut child.peer,
+                &ChildFrame::DelegateAccepted,
+            )
+            .await
+            .unwrap();
             let accepted = send.await.unwrap();
             assert_eq!(accepted.activation_id, current.latest_activation);
             child
@@ -133,7 +139,7 @@ async fn seal_open_restores_same_activation_before_admitting_another_message() {
     let mut child = stage_exit0(&plane);
     let first = start(&plane, &start_spec("seal")).await;
     child.accept_delegate().await;
-    super::super::ipc::write_child_frame(&mut child.peer, &ChildFrame::SealRequested)
+    super::super::super::ipc::write_child_frame(&mut child.peer, &ChildFrame::SealRequested)
         .await
         .unwrap();
     assert!(matches!(child.read_frame().await, ParentFrame::SealGranted));
@@ -151,7 +157,7 @@ async fn seal_open_restores_same_activation_before_admitting_another_message() {
             .admit_guidance(&first.subagent_id, "late", &[])
             .is_err()
     );
-    super::super::ipc::write_child_frame(&mut child.peer, &ChildFrame::SealOpen)
+    super::super::super::ipc::write_child_frame(&mut child.peer, &ChildFrame::SealOpen)
         .await
         .unwrap();
     assert!(matches!(
@@ -173,20 +179,20 @@ async fn seal_open_restores_same_activation_before_admitting_another_message() {
     let ParentFrame::Guidance(guidance) = child.read_frame().await else {
         panic!("guidance");
     };
-    super::super::ipc::write_child_frame(
+    super::super::super::ipc::write_child_frame(
         &mut child.peer,
-        &ChildFrame::GuidanceResult(super::super::ipc::GuidanceResultFrame {
+        &ChildFrame::GuidanceResult(super::super::super::ipc::GuidanceResultFrame {
             guidance_id: guidance.guidance_id,
-            outcome: super::super::ipc::ChildGuidanceOutcome::Accepted,
+            outcome: super::super::super::ipc::ChildGuidanceOutcome::Accepted,
         }),
     )
     .await
     .unwrap();
     assert!(matches!(
         answer.await.unwrap(),
-        super::super::ipc::ChildGuidanceOutcome::Accepted
+        super::super::super::ipc::ChildGuidanceOutcome::Accepted
     ));
-    super::super::ipc::write_child_frame(&mut child.peer, &ChildFrame::SealRequested)
+    super::super::super::ipc::write_child_frame(&mut child.peer, &ChildFrame::SealRequested)
         .await
         .unwrap();
     assert!(matches!(child.read_frame().await, ParentFrame::SealGranted));
@@ -254,7 +260,7 @@ async fn fixed_resume_identity_conflict_attempts_exactly_once() {
     {
         let mut state = plane.registry.state.lock().unwrap();
         state.allocation_failure = Some(
-            super::super::process::SpawnError::ConversationIdentityInUse {
+            super::super::super::process::SpawnError::ConversationIdentityInUse {
                 conversation_id: first.child_conversation_id.clone(),
                 path: plane.runtime_root.clone(),
             },
@@ -500,7 +506,7 @@ async fn unpublished_memory_reservation_never_exposes_an_unconsumed_activation_i
         assert!(futures_util::poll!(&mut interrupting).is_pending());
         if fail_allocation {
             // Refuse allocation before its consumed-ID directory exists.
-            let child_store = super::super::child_conversation_store_path(
+            let child_store = super::super::super::child_conversation_store_path(
                 plane.registry.config.spawn.product_root.root(),
                 &plane.registry.config.spawn.session_id,
                 &first.child_conversation_id,
@@ -530,7 +536,7 @@ async fn unpublished_memory_reservation_never_exposes_an_unconsumed_activation_i
                 assert!(result.outcome.is_none());
             }
             assert!(
-                super::super::physical_recovery::consumed_activation_ids(
+                super::super::super::physical_recovery::consumed_activation_ids(
                     &plane.registry.config.spawn.product_root,
                     &plane.registry.config.spawn.session_id,
                     &first.child_conversation_id,
@@ -635,8 +641,8 @@ async fn active_guidance_uses_real_child_durable_acceptance_and_ack_evidence() {
             let command = commands.recv().await.unwrap();
             assert!(matches!(
                 command,
-                super::super::process::DriverCommand::Route(
-                    super::super::process::ChildBoundRoute::Guidance { .. }
+                super::super::super::process::DriverCommand::Route(
+                    super::super::super::process::ChildBoundRoute::Guidance { .. }
                 )
             ));
             drop(command); // Control owner disappears before the write boundary.
@@ -691,12 +697,12 @@ async fn explicit_guidance_refusal_remains_refusal() {
     let ParentFrame::Guidance(guidance) = child.read_frame().await else {
         panic!("guidance");
     };
-    super::super::ipc::write_child_frame(
+    super::super::super::ipc::write_child_frame(
         &mut child.peer,
-        &ChildFrame::GuidanceResult(super::super::ipc::GuidanceResultFrame {
+        &ChildFrame::GuidanceResult(super::super::super::ipc::GuidanceResultFrame {
             guidance_id: guidance.guidance_id,
-            outcome: super::super::ipc::ChildGuidanceOutcome::Refused(
-                super::super::ipc::ChildGuidanceRefusal::Settled,
+            outcome: super::super::super::ipc::ChildGuidanceOutcome::Refused(
+                super::super::super::ipc::ChildGuidanceRefusal::Settled,
             ),
         }),
     )
@@ -741,8 +747,8 @@ async fn guidance_control_queue_loss_before_write_is_not_delivered() {
     let command = commands.recv().await.unwrap();
     assert!(matches!(
         command,
-        super::super::process::DriverCommand::Route(
-            super::super::process::ChildBoundRoute::Guidance { .. }
+        super::super::super::process::DriverCommand::Route(
+            super::super::super::process::ChildBoundRoute::Guidance { .. }
         )
     ));
     drop(command); // Exact pre-write owner loss: no frame can reach the peer.
