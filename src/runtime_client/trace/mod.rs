@@ -553,14 +553,19 @@ impl<'a> TraceProjection<'a> {
 }
 
 pub(crate) fn ensure_page_bound(page: &TracePage) -> Result<(), ConversationStoreError> {
+    let limit = crate::runtime_client::checkpoint::CHECKPOINT_TARGET_BYTES
+        - crate::runtime_client::checkpoint::CHECKPOINT_ITEM_BYTES;
+    // A positive native structural proof includes the decimal-u64 headroom.
+    // Values requiring the schema codec retain its existing admission path.
+    if crate::runtime_client::preflight::bounded_safe_integer_fit(page, limit) == Some(true) {
+        return Ok(());
+    }
     let schema = crate::runtime_client::structural_json::root::<TracePage>();
     let encoded = crate::runtime_client::structural_json::Encoded {
         value: page,
         schema: &schema,
         root: &schema,
     };
-    let limit = crate::runtime_client::checkpoint::CHECKPOINT_TARGET_BYTES
-        - crate::runtime_client::checkpoint::CHECKPOINT_ITEM_BYTES;
     if crate::runtime_client::preflight::bounded_fit(&encoded, limit) == Some(true) {
         return Ok(());
     }
