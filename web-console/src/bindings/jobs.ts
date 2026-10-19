@@ -1,4 +1,7 @@
 import type { RuntimeClientJob, ToolExecutionResult, UserMessageBlock } from '../../../protocol/app-server/v50';
+import type { ToolDetailsModel } from '../presentation/agent/ToolDetails';
+import type { Translate } from '../locale/translation';
+import { jobStateLabel } from './status-labels';
 
 const object = (value: unknown): Record<string, unknown> | undefined => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 export const jobStates: readonly RuntimeClientJob['state'][] = ['starting', 'running', 'cancelling', 'publishing_terminal', 'succeeded', 'failed', 'denied', 'cancelled', 'timed_out', 'outcome_unknown'];
@@ -39,6 +42,13 @@ export function jobResultItems(value: unknown): JobResultItem[] | undefined {
     rows.push({ jobId: row.job_id, tool: row.tool, state, output: jobResultOutput(row.result) });
   }
   return rows;
+}
+/** Harness job output/list layout, populated only by the recorded native snapshot. */
+export function jobDetails(items: readonly JobResultItem[], tx: Translate): ToolDetailsModel {
+  return { items: items.map(item => ({ title: item.jobId,
+    badge: { label: jobStateLabel(tx, item.state), tone: item.state === 'succeeded' ? 'success' : ['failed', 'denied', 'timed_out'].includes(item.state) ? 'error' : ['cancelled', 'outcome_unknown', 'cancelling'].includes(item.state) ? 'warning' : 'info' },
+    code: item.output,
+  })), empty: tx('common:activity.no-jobs') };
 }
 /** Only the runtime's exact terminal-message identity authorizes this format. */
 export function backgroundNotice(message: UserMessageBlock): (JobResultItem & { output: string }) | undefined {

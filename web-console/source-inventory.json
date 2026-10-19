@@ -673,17 +673,19 @@
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
       "destination": "web-console/src/app/trajectory/TrajectoryInspector.tsx",
-      "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table. Issue #406: current App Server v24 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #407: one native-identity Turn projection shared by ledger and timeline, semantic System Prompt cells, and ordinal-independent interaction state. Issue #407 review: Timeline focus owned by the Trace read epoch; exact native Attempt/Step records inspectable as bounded structural evidence without detail reads. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #410 review: layout-only Questionnaire mirror kept out of the locale; one typed context-kind/facet label owner with locale-independent search. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. Session configuration observation (App Server v35 / Runtime Client v58): generated protocol import only; upstream reference unchanged. Header/Trajectory chrome alignment: Harness title crumb, compact header controls, toolbar, role tags, turn label and detail header. Harness ledger: Steps have no chrome, seats or navigation targets; the Turn label is the only selectable structure. Trace input ownership repair: current App Server v39 imports and protocol display; upstream source unchanged. Trajectory Harness parity (UI repair): details panel tabs, overview sections, DSH resize handle and narrow overlay; overview lane-label safe area, clipped zoom/pan domain and delayed block tooltip; ledger rows without rustX-only fold carets, call toggles, state words or Turn-structure inspector. Native Tool Trace location: App Server v44 imports and exact occurrence navigation; existing upstream baseline unchanged. Main integration #456: general Model Profiles and JSON-object request parameter authoring; existing upstream baseline unchanged. Issue #467: exact native decimal u64 usage and context quantities use BigInt for accounting and formatting; opaque source bytes and upstream reference unchanged. #464: App Server v47 generated-protocol import path. #467: App Server v48 current generated-protocol import path. #467: retain positive bounded Trace descriptors and explicit selected field windows at their original native cuts; upstream presentation reference unchanged. PR #477 final contract repair: mandatory App Server v49 import for nullable native-covered Tool wire correlation; upstream reference unchanged. PR #478: reconciled bounded observation with immutable model-context projections under App Server v50. PR #478 compaction integration: display the original Completed-J bounded summary in the existing Inspector; truncated Summary and Raw Output retain explicit deferred wording. ProjectionHistory remains the independent original checkpoint inspector. Background task alignment: native dispatch acceptance, task settlement and historical observations retain independent ownership; header grouping, native timing and output formatting are presentation only.",
+      "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table. Issue #406: current App Server v24 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #407: one native-identity Turn projection shared by ledger and timeline, semantic System Prompt cells, and ordinal-independent interaction state. Issue #407 review: Timeline focus owned by the Trace read epoch; exact native Attempt/Step records inspectable as bounded structural evidence without detail reads. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #410 review: layout-only Questionnaire mirror kept out of the locale; one typed context-kind/facet label owner with locale-independent search. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. Session configuration observation (App Server v35 / Runtime Client v58): generated protocol import only; upstream reference unchanged. Header/Trajectory chrome alignment: Harness title crumb, compact header controls, toolbar, role tags, turn label and detail header. Harness ledger: Steps have no chrome, seats or navigation targets; the Turn label is the only selectable structure. Trace input ownership repair: current App Server v39 imports and protocol display; upstream source unchanged. Trajectory Harness parity (UI repair): details panel tabs, overview sections, DSH resize handle and narrow overlay; overview lane-label safe area, clipped zoom/pan domain and delayed block tooltip; ledger rows without rustX-only fold carets, call toggles, state words or Turn-structure inspector. Native Tool Trace location: App Server v44 imports and exact occurrence navigation; existing upstream baseline unchanged. Main integration #456: general Model Profiles and JSON-object request parameter authoring; existing upstream baseline unchanged. Issue #467: exact native decimal u64 usage and context quantities use BigInt for accounting and formatting; opaque source bytes and upstream reference unchanged. #464: App Server v47 generated-protocol import path. #467: App Server v48 current generated-protocol import path. #467: retain positive bounded Trace descriptors and explicit selected field windows at their original native cuts; upstream presentation reference unchanged. PR #477 final contract repair: mandatory App Server v49 import for nullable native-covered Tool wire correlation; upstream reference unchanged. PR #478: reconciled bounded observation with immutable model-context projections under App Server v50. PR #478 compaction integration: display the original Completed-J bounded summary in the existing Inspector; truncated Summary and Raw Output retain explicit deferred wording. ProjectionHistory remains the independent original checkpoint inspector. Background task alignment: native dispatch acceptance, task settlement and historical observations retain independent ownership; header grouping, native timing and output formatting are presentation only. Native Tool detail alignment: shared compact result presentation and one Inspect path; duplicate execution JSON disclosures removed; native lifecycle and original Trace Result remain authoritative.",
       "upstream_sha256": "465ce52a8988b3d841438eff50de0ba128ca6dae3dc34289bd9ae75791bd1fa5",
       "retained_dependencies": [
         "../../../../protocol/app-server/trace-identity",
         "../../../../protocol/app-server/v50",
         "../../bindings/jobs",
+        "../../bindings/recorded-tool-details",
         "../../bindings/status-labels",
         "../../client/trace",
         "../../client/trace-content",
         "../../locale/react",
         "../../locale/translation",
+        "../../presentation/agent/ToolDetails",
         "../../presentation/markdown/CodeBlock",
         "../../presentation/markdown/MarkdownText",
         "../../presentation/primitives/Button",
@@ -691,7 +693,6 @@
         "../../presentation/primitives/clipboard",
         "../../presentation/primitives/icons",
         "../../presentation/primitives/json",
-        "../agent/JobResultDetails",
         "../components/Artifact",
         "./Trajectory.module.css",
         "./TrajectoryCell",
@@ -735,7 +736,7 @@
           "treatment": "Details header (role tag, section/group location, icon close) adapted."
         }
       ],
-      "local_sha256": "7b23a8bc7e8af5bcd4436a1c5df3e2b4b4c6f820294591b6c1664590002721a9"
+      "local_sha256": "807f195a11402db7d8457defe4c05b1b18b4cc7e2ca95c27bbbc2b91604b6ed2"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.module.css",
@@ -1210,8 +1211,8 @@
       "destination": "web-console/src/presentation/agent/ToolCard.tsx",
       "upstream_sha256": "df1dbc9771459eb5160a42d28fd284a54ff66b306562a2a3528bd717e42454f4",
       "classification": "B",
-      "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority. retain native Tool diagnostic identity independently of Goal display labels Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #412 adds a dedicated image variant using the existing disclosure and artifact slot; no new dependency or authority. Tool-detail alignment: bounded internal sections, native raw-result copy, uncapped terminal output within the DSH scroll surface, shared flow indent and typography; lifecycle remains native. Native Tool Trace location: App Server v44 imports and exact occurrence navigation; existing upstream baseline unchanged. Issue #467: bounded native observation, deferred source reads and exact view ownership; original presentation and license attribution retained. Background task alignment: native dispatch acceptance, task settlement and historical observations retain independent ownership; header grouping, native timing and output formatting are presentation only.",
-      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
+      "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority. retain native Tool diagnostic identity independently of Goal display labels Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #412 adds a dedicated image variant using the existing disclosure and artifact slot; no new dependency or authority. Tool-detail alignment: bounded internal sections, native raw-result copy, uncapped terminal output within the DSH scroll surface, shared flow indent and typography; lifecycle remains native. Native Tool Trace location: App Server v44 imports and exact occurrence navigation; existing upstream baseline unchanged. Issue #467: bounded native observation, deferred source reads and exact view ownership; original presentation and license attribution retained. Background task alignment: native dispatch acceptance, task settlement and historical observations retain independent ownership; header grouping, native timing and output formatting are presentation only. Native Tool detail alignment: shared compact result presentation and one Inspect path; duplicate execution JSON disclosures removed; native lifecycle and original Trace Result remain authoritative.",
+      "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../locale/react",
         "../primitives/DiffBlock",
@@ -1221,6 +1222,7 @@
         "../primitives/TerminalBlock",
         "../primitives/icons",
         "./Tool.module.css",
+        "./ToolDetails",
         "./ToolTree.module.css",
         "react"
       ],
@@ -1230,7 +1232,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "c2962a6c1a8132962f795d6c1a7190c36f689d1c6a3de341e55b9bef7ca41e0e",
+      "local_sha256": "93ed1ba76714ed2519b49157e8d9130ba987b794455a5923fe748aa8048cde45",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-tool/src/client/tool/components/ToolRow.tsx",
@@ -3291,7 +3293,7 @@
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
       "upstream_sha256": "664def8bce9e753c3a670f9e9f01fe2280227a0921021e3a08b496f8c5d6effe",
-      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v27 imports; upstream reference unchanged. Connection UX: allow local submission during attachment and show generic connecting status; native readiness and admission remain authoritative. Issue #467: bounded native observation, deferred source reads and exact view ownership; original presentation and license attribution retained. Issue #467: deferred Goal content and finite ToolGroup progress copy; native status and execution authority unchanged. Issue #467: translated deferred-content, bounded catalog choices, model availability and canonical result status copy; native facts remain independent of execution settlement. Background task header, grouping, clearing and native-duration copy in English and Chinese. Background task alignment: native dispatch acceptance, task settlement and historical observations retain independent ownership; header grouping, native timing and output formatting are presentation only. DSH task menu UI/UX parity: compact native task rows, translucent material, command-copy output, exclusive expansion and two-press stopping replace generic task controls; native observation ownership is retained.",
+      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v27 imports; upstream reference unchanged. Connection UX: allow local submission during attachment and show generic connecting status; native readiness and admission remain authoritative. Issue #467: bounded native observation, deferred source reads and exact view ownership; original presentation and license attribution retained. Issue #467: deferred Goal content and finite ToolGroup progress copy; native status and execution authority unchanged. Issue #467: translated deferred-content, bounded catalog choices, model availability and canonical result status copy; native facts remain independent of execution settlement. Background task header, grouping, clearing and native-duration copy in English and Chinese. Background task alignment: native dispatch acceptance, task settlement and historical observations retain independent ownership; header grouping, native timing and output formatting are presentation only. DSH task menu UI/UX parity: compact native task rows, translucent material, command-copy output, exclusive expansion and two-press stopping replace generic task controls; native observation ownership is retained. Native Tool detail alignment: shared compact result presentation and one Inspect path; duplicate execution JSON disclosures removed; native lifecycle and original Trace Result remain authoritative.",
       "destination": "web-console/src/locale/dictionaries/common.ts",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -3315,13 +3317,13 @@
           "treatment": "Task count, stop confirmation, duration and output disclosure wording follows the Harness job menu."
         }
       ],
-      "local_sha256": "cf06cfce789f89ebfe7a4efbfbdb2d27d54f5aaef24e59a0f8901a0e46a04574"
+      "local_sha256": "399bd48d24da9147d54f8d695bdfdc3fe8065f0bd4918d650066b5d222b6ac27"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
       "upstream_sha256": "664def8bce9e753c3a670f9e9f01fe2280227a0921021e3a08b496f8c5d6effe",
-      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Repair: localized incomplete historical process outcome. #439: bilingual Busy Enter preference, complementary modifier help and double-Escape Stop wording. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. UI repair: Web last-request context occupancy disclosure removed for Harness parity; its wording is deleted. UI repair: busy-Enter Queue/Steer preference moved from below the Composer card to the General Settings row, matching Harness composer-enter. UI repair: turn-rail wording follows Harness (turn fallback, load-and-jump); paging and ordinal strings removed. UI/UX alignment: Harness step-process done titles and joining wording. UI/UX alignment: Harness usage, session statistics and context meter wording. UI/UX alignment: Harness single branch label and Regenerate wording. Header/Trajectory chrome alignment: Harness title crumb, compact header controls, toolbar, role tags, turn label and detail header. Main integration #456: general Model Profiles and JSON-object request parameter authoring; existing upstream baseline unchanged. PR #458 Shell navigation: one XState route owner, independent native lifecycle settlement and read-only Fork history; upstream reference unchanged. Remove rustX-only historical-window explanation copy to follow Harness Chat reading presentation; native history navigation is unchanged. Align the Chat history control with Harness: compact centered Load earlier, matching Chinese copy, and no visible Load later action; native bounded continuation remains separate.",
+      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Repair: localized incomplete historical process outcome. #439: bilingual Busy Enter preference, complementary modifier help and double-Escape Stop wording. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. UI repair: Web last-request context occupancy disclosure removed for Harness parity; its wording is deleted. UI repair: busy-Enter Queue/Steer preference moved from below the Composer card to the General Settings row, matching Harness composer-enter. UI repair: turn-rail wording follows Harness (turn fallback, load-and-jump); paging and ordinal strings removed. UI/UX alignment: Harness step-process done titles and joining wording. UI/UX alignment: Harness usage, session statistics and context meter wording. UI/UX alignment: Harness single branch label and Regenerate wording. Header/Trajectory chrome alignment: Harness title crumb, compact header controls, toolbar, role tags, turn label and detail header. Main integration #456: general Model Profiles and JSON-object request parameter authoring; existing upstream baseline unchanged. PR #458 Shell navigation: one XState route owner, independent native lifecycle settlement and read-only Fork history; upstream reference unchanged. Remove rustX-only historical-window explanation copy to follow Harness Chat reading presentation; native history navigation is unchanged. Align the Chat history control with Harness: compact centered Load earlier, matching Chinese copy, and no visible Load later action; native bounded continuation remains separate. Native Tool detail alignment: shared compact result presentation and one Inspect path; duplicate execution JSON disclosures removed; native lifecycle and original Trace Result remain authoritative.",
       "destination": "web-console/src/locale/dictionaries/agent.ts",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -3339,7 +3341,7 @@
           "treatment": "Compaction checkpoint disclosure and bilingual summary wording adapted to native Ledger messages; no Harness runtime or command authority."
         }
       ],
-      "local_sha256": "5c859d0bf83b5333db93d3a4c8adf16b3982f3195a87632e29c659dd113dab72"
+      "local_sha256": "4895db1925cba2b3e88dbc692bc32c6952beda5db3a83b45ec3129129a8e4d3d"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",
@@ -3465,7 +3467,7 @@
       "upstream": "packages/client/ui-workspace/src/client/locales.ts",
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
       "upstream_sha256": "448cea752f9daa196284e6a8da59c7acd944b3ad05590df5bddc6e153e43c113",
-      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. UI/UX alignment: Harness ask-question row verdict wording. #454: Harness ui-deliverables present row wording. Native Tool Trace location: App Server v44 imports and exact occurrence navigation; existing upstream baseline unchanged.",
+      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. UI/UX alignment: Harness ask-question row verdict wording. #454: Harness ui-deliverables present row wording. Native Tool Trace location: App Server v44 imports and exact occurrence navigation; existing upstream baseline unchanged. Native Tool detail alignment: shared compact result presentation and one Inspect path; duplicate execution JSON disclosures removed; native lifecycle and original Trace Result remain authoritative.",
       "destination": "web-console/src/locale/dictionaries/tools.ts",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -3489,7 +3491,7 @@
           "upstream_sha256": "4840dc1d554a4f2457b51339e9195041b6230822c72fc5b10c8f3c2aad971cdb"
         }
       ],
-      "local_sha256": "500fc59faaaf109cde0032d69ddbfdbeaa3f9e382f467b89c65c5f5e95158ddd"
+      "local_sha256": "a1387659b696da761a24f464c144da390085db1ef73a11faa3853a89b54b6e0f"
     },
     {
       "upstream": "packages/client/ui-sidebar/src/client/locales.ts",
@@ -3663,8 +3665,8 @@
       "destination": "web-console/src/presentation/agent/QuestionRow.tsx",
       "upstream_sha256": "69a6c6a259e1657957da8ac1701dd8d5a9647e3600c26a62aa275c5cfb92f7e0",
       "classification": "B",
-      "treatment": "Harness AskQuestionRow verdict summary with the QuestionToolRow disclosure and AskQuestionCard record DOM over a pure native ask_user projection; timed-question panels, Inspect and Cordis slot registration excluded. Native Tool Trace location: App Server v44 imports and exact occurrence navigation; existing upstream baseline unchanged. Issue #467: bounded native observation, deferred source reads and exact view ownership; original presentation and license attribution retained.",
-      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
+      "treatment": "Harness AskQuestionRow verdict summary with the QuestionToolRow disclosure and AskQuestionCard record DOM over a pure native ask_user projection; timed-question panels, Inspect and Cordis slot registration excluded. Native Tool Trace location: App Server v44 imports and exact occurrence navigation; existing upstream baseline unchanged. Issue #467: bounded native observation, deferred source reads and exact view ownership; original presentation and license attribution retained. Native Tool detail alignment: shared compact result presentation and one Inspect path; duplicate execution JSON disclosures removed; native lifecycle and original Trace Result remain authoritative.",
+      "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../locale/react",
         "../primitives/DisclosureRow",
@@ -3676,7 +3678,7 @@
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "b584746390a898a4612fb49dc52b02ad6ca6c8ec634a6fbff7f599c6086d7a07"
+      "local_sha256": "bc604df4065b860e256e884dce7ec88c9a7edb8e2f575dcb01d551b368323991"
     },
     {
       "upstream": "packages/client/ui-tool/src/client/tool/components/AskQuestionCard.module.css",
@@ -5834,16 +5836,16 @@
       "local_sha256": "4c8a2187b4c0e00320def0f662a58cca47db6a40306871f48fc3d1688f3a8c0d"
     },
     {
-      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
       "upstream": "packages/client/ui-tool/src/client/tool/components/ToolDetails.module.css",
-      "destination": "web-console/src/app/agent/AgentToolDetails.module.css",
+      "destination": "web-console/src/presentation/agent/ToolDetails.module.css",
       "classification": "B",
-      "treatment": "Bounded result card, caption, divided rows and historical status placement adapted for native Agent ToolResult JSON; raw inspection is explicit.",
+      "treatment": "Harness compact recorded-result card, list, fields, badge, code output, scroll bounds and navigation affordance adapted for native Job, Agent, Goal and Todo results. Runtime/slots, Todo history comparison and file navigation excluded. Native Tool detail alignment: shared compact result presentation and one Inspect path; duplicate execution JSON disclosures removed; native lifecycle and original Trace Result remain authoritative.",
       "upstream_sha256": "ba9603a9c3d90b24fcd0ae2ddb41bff1b5a60a74cd6dd698c46d15e69638d907",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [],
-      "local_sha256": "49805c44d716756371fb7234a2d8e24ea115717e3ba56c75df117c191bff4cac"
+      "local_sha256": "a8370dc48ab2411214d8538c4613c66a8946f247b78217094142526dc4a060b6"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -6062,6 +6064,27 @@
       ],
       "excluded_dependencies": [],
       "local_sha256": "f2deebd1275b5579419bb8ddbddc9c99e66cd360c9919c355640a12ceb25ad9b"
+    },
+    {
+      "destination": "web-console/src/presentation/agent/ToolDetails.tsx",
+      "upstream": "packages/client/ui-tool/src/client/tool/components/ToolDetails.tsx",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "93da8f4d4d510f66ab64b4b23881cea45433e3f3c54523b3a0f96bb14999be7d",
+      "classification": "B",
+      "treatment": "Harness recorded result list, title, subtitle, badge, field and copyable code presentation; finite props supplied by rustX native result adapters. Child navigation is explicitly supplied by the owning Conversation. Cordis, runtime, slots and generic recursive grouping excluded. Native Tool detail alignment: shared compact result presentation and one Inspect path; duplicate execution JSON disclosures removed; native lifecycle and original Trace Result remain authoritative.",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "../../locale/react",
+        "../markdown/CodeBlock",
+        "../primitives/icons",
+        "./ToolDetails.module.css"
+      ],
+      "excluded_dependencies": [
+        "Cordis slots and locale authority",
+        "Harness tool execution models",
+        "File navigation and recursive detail grouping"
+      ],
+      "local_sha256": "a47d3505ff142ff2a2c1eccb1ac65e7b51af2a412dbaaa754f5b9d485befb948"
     }
   ],
   "inspected_only": [
@@ -6081,7 +6104,7 @@
       "upstream": ".agents/notes/archived/feature/2026-07-28-todo-plan-clears-on-next-turn.md",
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
       "upstream_sha256": "af16dd33b87cf31d097e8e1292c590461a6e4428f80b21580c724c61ae602b51",
-      "treatment": "Issue #377 inspected only: Harness turn-scoped plan lifetime. Deliberately NOT adopted \u2014 rustX Todo is the conversation-owned ConversationTodoList authority and is never cleared by a browser lifetime rule."
+      "treatment": "Issue #377 inspected only: Harness turn-scoped plan lifetime. Deliberately NOT adopted — rustX Todo is the conversation-owned ConversationTodoList authority and is never cleared by a browser lifetime rule."
     },
     {
       "upstream": "packages/client/ui-tool/src/client/tool/toolviews/todo-row.tsx",

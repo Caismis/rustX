@@ -2506,3 +2506,44 @@ Issue #467 retains finite successful Trace detail descriptors separately from co
 PR #478 compaction inspection retains the matched original Completed-J summary preview. The Harness-derived Inspector keeps its existing Summary and Raw Output views and marks truncated previews as deferred; original checkpoint inspection stays with ProjectionHistory. The reviewed local hash and treatment are updated for this presentation change; upstream pins, imports and license attribution are unchanged.
 
 PR #478 cancellation review preserves the pinned Harness composer and submission-policy sources. The resident Root explicitly supplies a cancellation-only presentation mode when its exact live attachment remains authorized but observation is unavailable. The editor remains focusable for Escape while read-only; normal Send, draft editing, Child controls and unsupported content retain their existing rules. A new Conversation has no inferred cancellation authority. Reviewed local hashes and treatment notes for `AgentComposer.tsx` and `submission-policy.ts` are updated; upstream hashes, import closure, copyright, license notices and screenshot policies remain unchanged.
+
+## Native Tool detail audit
+
+Read-only reference: `deepseek-harness@687f282e8625c6b8d11ff58211a90524be2e4317`,
+`ui-tool/src/client/tool/{components/ToolRow,components/ToolDetails,toolviews/details-row}`,
+`models/{control-details-model,details-card-model,diff-card-model,read-card-model}`,
+and the existing question, terminal, image and deliverable presentations.
+The native inventory is checked against `src/tools/native` registrations: 21
+fixed Tools, the optional native Todo implementation and the discovered Workflow
+family (23 representative call shapes). No Harness runtime or tool contract is imported.
+
+| Native capability | Presentation and audit outcome |
+| --- | --- |
+| `bash` | Existing terminal card, native command/output, copy and background acceptance distinction retained. |
+| `read` | Existing bounded read card retained; failed/cancelled/uncertain calls now use diagnostic IN/OUT. |
+| `write`, `edit` | Existing intended-change diffs retained and explicitly labeled; rejected/interrupted calls show diagnostics instead of suggesting applied changes. Native results do not contain Harness applied-diff metadata. |
+| `glob`, `grep` | Existing bounded opaque-text search cards retained, with original recovery notices and copy. No total-match count is invented from a bounded search. Errors use diagnostic IN/OUT. |
+| `read_image` | Path and existing managed-image preview share the image body; redundant arguments JSON is removed. Native artifact loading remains explicit. |
+| `present` | Existing delivery row retained; delivery cards still come only from committed successful delivery facts. |
+| `ask_user` | Existing question/answer presentation retained; answered results now have the same Inspect action as cancelled/interrupted results and use committed result content. |
+| `job_list` | Standard row plus compact recorded list, state badges and native truncation caption. |
+| `job_status`, `job_wait`, `job_cancel` | Standard row plus recorded state and copyable output; expanded row omits the repeated status. RustX-only “Recorded task result” and “Full task record” removed. Tool success does not imply Job success. |
+| `subagent`, `list_agents`, `send_message`, `wait_agent`, `interrupt_agent` | Standard Tool row/details replace a separate row layout; historical receipt titles/states come from the recorded result. Current child catalog supplies navigation authority only. Acceptance never implies child completion. |
+| `create_goal`, `get_goal`, `update_goal` | Compact objective, phase, recorded round count and blocked reason replace the complete execution JSON disclosure. Empty Goal is explicit. |
+| `todo` | Recorded post-call tasks, statuses, dependencies and owners replace generic snapshot JSON; the Composer dock still owns current state. |
+| discovered Workflow Tools | Declared output has no fixed entity schema; existing IN/OUT and Inspect remain appropriate, preserving arbitrary workflow-defined results. |
+
+Job, Goal and Todo previews in the trajectory overview share Chat's recorded
+result adapter. The existing Result tab retains original JSON/text content,
+without a second raw-record disclosure. All Tools retain exact native occurrence
+navigation; unavailable/unknown result formats use the existing generic view.
+Copyable Job output uses the existing CodeBlock. The shared details geometry,
+badges, dividers, field grid and scroll caps are adapted from the above reference;
+obsolete separate Agent/Job/Goal detail styles are removed.
+
+The inventory records the shared ToolDetails source and stylesheet, exact hashes
+and imports. Browser plugin is not available in this session; rendered checks use
+the repository's pinned Playwright container. Unit coverage enumerates native
+registration names and exercises each disclosure/Inspect path. Browser coverage
+checks English/Chinese, desktop/narrow layouts, clipboard, trajectory navigation,
+framework overlays and console health; the real native Goal flow is also retained.

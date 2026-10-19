@@ -44,8 +44,10 @@ it('shows recorded Job failure independently of a successful status/wait/cancel 
   expect(ui.container.textContent).toContain('failed');
   fireEvent.click(ui.getByRole('button', { expanded: false }));
   expect(ui.getByText('Command failed')).toBeTruthy();
-  expect(ui.container.querySelectorAll('[data-recorded-job-id="job-one"]')).toHaveLength(1);
-  expect(ui.getByText('Full task record', { selector: 'summary' })).toBeTruthy();
+  expect(ui.container.querySelectorAll('[data-tool-details]')).toHaveLength(1);
+  expect(ui.queryByText('Full task record')).toBeNull();
+  expect(ui.queryByText('Recorded task result')).toBeNull();
+  expect(ui.getByRole('button', { name: 'Copy' })).toBeTruthy();
   expect(ui.queryByRole('button', { name: 'Cancel Job' })).toBeNull();
 });
 

@@ -1,5 +1,21 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
+  "detail.type": "Type",
+  "detail.state": "State",
+  "detail.rounds": "Rounds",
+  "detail.reason": "Reason",
+  "detail.goal-empty": "No current goal",
+  "detail.goal-complete": "Completed",
+  "detail.owner": "Owner",
+  "detail.dependencies": "Depends on",
+  "detail.todo-pending": "Pending",
+  "detail.todo-progress": "In progress",
+  "detail.todo-complete": "Completed",
+  "detail.todo-deleted": "Deleted",
+  "detail.todo-empty": "No tasks",
+  "detail.bounded": "Showing {returned} of {matched}",
+  "todo.title": "Update tasks",
+
   "tool-card.inspect": "Inspect",
   "tool-card.copy": "Copy",
   "tool-card.copied": "Copied",
@@ -36,6 +52,22 @@ export const en = {
 } as const;
 export type ToolsKey = keyof typeof en;
 export const zh = {
+  "detail.type": "类型",
+  "detail.state": "状态",
+  "detail.rounds": "轮次",
+  "detail.reason": "原因",
+  "detail.goal-empty": "暂无目标",
+  "detail.goal-complete": "已完成",
+  "detail.owner": "负责人",
+  "detail.dependencies": "依赖任务",
+  "detail.todo-pending": "待处理",
+  "detail.todo-progress": "进行中",
+  "detail.todo-complete": "已完成",
+  "detail.todo-deleted": "已删除",
+  "detail.todo-empty": "暂无任务",
+  "detail.bounded": "显示 {matched} 项中的 {returned} 项",
+  "todo.title": "更新任务",
+
   "tool-card.inspect": "查看",
   "tool-card.copy": "复制",
   "tool-card.copied": "已复制",

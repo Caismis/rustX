@@ -1,5 +1,5 @@
-import type { RuntimeClientAgent, SubagentState, ForegroundToolExecution } from '../../../../protocol/app-server/v50';
-import type { TranslationKey } from '../../locale/translation';
+import type { RuntimeClientAgent, SubagentState, ForegroundToolExecution } from '../../../protocol/app-server/v50';
+import type { TranslationKey } from '../locale/translation';
 
 export interface AgentToolItem {
   name?: string; agentId?: string; text?: string;
@@ -33,8 +33,9 @@ export function subagentToolDetails(tool: ForegroundToolExecution): AgentToolDet
   const task = string(input?.task) ?? string(input?.message);
   const target = string(input?.agent_id);
   const details: AgentToolDetails = { target, task, items: [] };
-  if (tool.state.type !== 'settled' || tool.state.result.status.type !== 'success') return details;
-  const result = tool.state.result.content?.find(block => block.type === 'json');
+  const body = tool.committed_result ?? (tool.state.type === 'settled' ? tool.state.result : undefined);
+  if (body?.status.type !== 'success') return details;
+  const result = body.content?.length === 1 ? body.content[0] : undefined;
   const value = result?.type === 'json' ? object(result.value) : undefined;
   if (!value) return details;
   details.target ??= string(value.agent_id);

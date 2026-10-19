@@ -6,6 +6,8 @@ import { askUserRow } from '../../bindings/ask-user';
 import { QuestionRow } from '../../presentation/agent/QuestionRow';
 import { PresentRow } from '../../presentation/agent/PresentRow';
 import { presentRow } from '../../bindings/present';
+import { recordedToolDetails } from '../../bindings/recorded-tool-details';
+import { IconChecklistOutline14 } from '../../presentation/primitives/icons';
 import { ToolCard } from '../../presentation/agent/ToolCard';
 import { ToolArtifacts } from '../components/Artifact';
 import { DomainActivity, domainActivity } from './DomainActivity';
@@ -20,5 +22,7 @@ export function Tool({ tool }: { tool: ForegroundToolExecution }) {
   const goal = goalActivityLabel(tx, tool);
   if (goal !== undefined) return <GoalActivity inspect={inspect} tool={tool} label={goal}/>;
   const body = tool.committed_result ?? (tool.state.type === 'settled' ? tool.state.result : undefined);
-  return <ToolCard inspect={inspect} tool={{ ...toolCard(tool), artifacts: body ? <ToolArtifacts result={body}/> : undefined }}/>;
+  const view = toolCard(tool);
+  const details = view.state === 'success' && body?.status.type === 'success' ? recordedToolDetails(tool.tool_id, body.content, tx) : undefined;
+  return <ToolCard inspect={inspect} tool={{ ...view, ...(tool.tool_id === 'tool-todo' ? { title: tx('tools:todo.title'), icon: <IconChecklistOutline14/> } : {}), details, summary: details?.summary ?? details?.empty ?? view.summary, artifacts: body ? <ToolArtifacts result={body}/> : undefined }}/>;
 }

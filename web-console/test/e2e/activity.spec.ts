@@ -142,7 +142,7 @@ test('Trace links the native Job launch and preserves an unknown external outcom
   await page.getByRole('button', { name: 'Close details', exact: true }).click();
   await page.locator('[data-display-type="RecordRow"][data-owner="trace:22"]').click();
   await page.getByRole('tab', { name: 'Result', exact: true }).click();
-  await expect(page.getByRole('tabpanel')).toContainText('outcome unknown');
+  await expect(page.getByRole('tabpanel')).toContainText('outcome_unknown');
   await expect(page.getByRole('tabpanel')).toContainText('External result was not proven');
   await page.screenshot({ path: '/tmp/rustx-background-trajectory.png' });
   await expect(page.locator('vite-error-overlay')).toHaveCount(0);

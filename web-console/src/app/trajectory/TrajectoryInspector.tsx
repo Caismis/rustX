@@ -6,9 +6,10 @@ import { Button } from '../../presentation/primitives/Button';
 import { parseJson, isJsonNumber } from '../../presentation/primitives/json';
 import type { Translate } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
-import { backgroundLaunch, jobResultItems } from '../../bindings/jobs';
+import { backgroundLaunch } from '../../bindings/jobs';
 import { traceStateLabel } from '../../bindings/status-labels';
-import { JobResultDetails } from '../agent/JobResultDetails';
+import { ToolDetails } from '../../presentation/agent/ToolDetails';
+import { recordedToolDetails } from '../../bindings/recorded-tool-details';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/TrajectoryTable.tsx inspector; see PROVENANCE.md. */
 /**
  * The record inspector, ported from the Harness details panel.
@@ -364,8 +365,15 @@ function ToolResult({ record, detail, preview = false }: { record: TraceRecord; 
   const value = block?.type === 'json' && !block.value.truncated ? block.value.value : undefined;
   const launch = !error ? backgroundLaunch(value, record.tool?.name ?? '') : undefined;
   if (launch) return <div><p>{tx('common:activity.background-started')}</p><p>{tx('common:activity.job-title', { id: launch.jobId })}</p><pre className={css.payload}>{launch.outputPath}</pre><Attachments artifacts={artifacts} preview={preview}/></div>;
-  const jobs = !error && record.tool?.tool_id && ['tool-job_list', 'tool-job_status', 'tool-job_wait', 'tool-job_cancel'].includes(record.tool.tool_id) ? jobResultItems(value) : undefined;
-  if (jobs) return <><JobResultDetails items={jobs}/><details><summary>{tx('common:activity.original-job-result')}</summary><Json value={value} label={tx('trajectory:record.result-json')} preview={preview}/></details><Attachments artifacts={artifacts} preview={preview}/></>;
+  // The overview shares Chat's recorded details. Result keeps the original
+  // content blocks in its existing JSON/text view, without a second disclosure.
+  if (preview && !error) {
+    const content = result.blocks.flatMap((block): NonNullable<Parameters<typeof recordedToolDetails>[1]> =>
+      block.type === 'json' && !block.value.truncated ? [{ type: 'json', value: block.value.value }]
+        : block.type === 'text' && !block.text.truncated ? [{ type: 'text', text: block.text.text }] : []);
+    const model = content.length === result.blocks.length ? recordedToolDetails(record.tool?.tool_id, content, tx) : undefined;
+    if (model) return <><ToolDetails model={model}/><Attachments artifacts={artifacts} preview/></>;
+  }
   const text = result.blocks.length === 1 && result.blocks[0]!.type === 'text' ? result.blocks[0]!.text.text : undefined;
   const json = text === undefined ? undefined : parseJsonContainer(text);
   if (json !== undefined && !error) return <><Json value={json} label={tx('trajectory:record.result-json')} preview={preview} /><Attachments artifacts={artifacts} preview={preview} /></>;

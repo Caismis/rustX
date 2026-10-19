@@ -1,7 +1,0 @@
-.list { margin: 0; padding: 0; list-style: none; }
-.item { padding: 10px 14px; }
-.item + .item { border-top: .5px solid var(--dsw-alias-border-l2); }
-.heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-.status { display: inline-flex; align-items: center; gap: 5px; flex: none; }
-.identity { color: var(--dsw-alias-label-tertiary); overflow-wrap: anywhere; }
-.output { max-height: 240px; margin: 8px 0 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }

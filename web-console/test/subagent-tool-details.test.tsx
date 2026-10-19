@@ -2,7 +2,7 @@ import { ToolInspectionContext } from '../src/app/agent/tool-inspection';
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { ForegroundToolExecution } from '../../protocol/app-server/v50';
-import { subagentToolDetails } from '../src/app/agent/subagent-tool-details';
+import { subagentToolDetails } from '../src/bindings/subagent-tool-details';
 import { DomainActivity } from '../src/app/agent/DomainActivity';
 afterEach(cleanup);
 const call = (name: string, input: unknown, result: unknown): ForegroundToolExecution => ({committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'message'},block_index:0},assembly_complete:true,

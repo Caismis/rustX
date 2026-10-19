@@ -18,7 +18,7 @@ export function InboundMessage({ message }: { message: Extract<MessageBlock, { r
   const tx = useTranslation(), [expanded, setExpanded] = useState(false), scope = useSubagents(), receiver = useContext(AgentConversationContext);
   const notice = backgroundNotice(message);
   if (notice) return <div className={own.root} data-inbound-source="job">
-    <DisclosureRow icon={<IconApiOutline14/>} title={tx('common:activity.background-ended')} open={expanded} expandable expandOnRowClick keepContentWhenOpen onToggle={() => setExpanded(value => !value)} collapsedContent={<><span className={css.sep}/><span className={css.summary}>{notice.tool} · {jobStateLabel(tx, notice.state)}</span></>}>
+    <DisclosureRow rowClassName={css.row} leadingClassName={css.leading} titleClassName={css.title} chevronClassName={css.chevron} icon={<IconApiOutline14/>} title={tx('common:activity.background-ended')} open={expanded} expandable expandOnRowClick keepContentWhenOpen onToggle={() => setExpanded(value => !value)} collapsedContent={<><span className={css.sep}/><span className={css.summary}>{notice.tool} · {jobStateLabel(tx, notice.state)}</span></>}>
       <JobResultDetails items={[notice]}/><Content messageId={message.id} blocks={message.content.slice(1)} markdown/>
     </DisclosureRow>
   </div>;
