@@ -3,13 +3,19 @@ use super::{
     storage, weights,
 };
 use crate::runtime::read_layout::{
-    FieldPreview, FieldPreviewPolicy, ObservationByteReader, SeekableObservationSource,
+    FieldPreviewPolicy, ObservationByteReader, SeekableObservationSource,
 };
 use base64::Engine as _;
 const CHUNK: u64 = 8192;
+#[path = "fact_spool.rs"]
+mod spool;
+use spool::FactSpool;
 #[cfg(test)]
 #[path = "child_reference_tests.rs"]
 mod child_reference_tests;
+#[cfg(test)]
+#[path = "metadata_tests.rs"]
+mod metadata_tests;
 #[cfg(test)]
 #[path = "reader_tests.rs"]
 mod reader_tests;
@@ -65,7 +71,7 @@ fn source_bytes(
     Ok(bytes)
 }
 fn persist_key_fact(
-    connection: &Connection,
+    spool: &mut FactSpool<'_>,
     path: &[String],
     start: u64,
     end: u64,
@@ -74,7 +80,7 @@ fn persist_key_fact(
     path.push("$key".into());
     let length = super::super::encoded_path(&path)?.len() as u64;
     persist_fact(
-        connection,
+        spool,
         &Fact {
             path,
             parent: None,
@@ -93,7 +99,7 @@ fn persist_key_fact(
     Ok(length)
 }
 fn capture_facts(
-    connection: &Connection,
+    spool: &mut FactSpool<'_>,
     source: &SeekableObservationSource,
     reader: &ObservationByteReader<'_>,
     start: u64,
@@ -102,88 +108,83 @@ fn capture_facts(
     let mut failure = None;
     let mut max_path = 0_u64;
     let mut max_key_path = 0_u64;
-    let result = source.visit_fields_selecting_previews(
-        |_| FieldPreviewPolicy::Inline,
-        |path, _, parent, field_start, field_end, children, key_span, preview| {
-            let result = (|| {
-                if field_start < start || field_end > end {
-                    return Ok(());
+    let result = source.visit_field_metadata(start, end, |field, value| {
+        let result = (|| {
+            let path = field.path;
+            let key_span = field.key_span;
+            let field_start = field.start;
+            let field_end = field.end;
+            max_path = max_path.max(field.encoded_path.len() as u64);
+            let header = crate::runtime_client::checkpoint::bounded_bytes(value, 16384)
+                .unwrap_or_else(|| b"null".to_vec());
+            let span = field_end - field_start;
+            let nodes = if span > 16384 {
+                33
+            } else if field.recursive_nodes <= 32 {
+                // The full preview just validated this complete bounded subtree.
+                field.recursive_nodes
+            } else {
+                // A truncated preview does not validate the entire subtree's
+                // serde depth/numeric limits. Preserve that bounded validation.
+                super::super::original_node_count(&source_bytes(reader, field_start, field_end)?)?
+            };
+            let fact = Fact {
+                path: path.to_vec(),
+                parent: field.parent.map(|(path, _, _)| path.to_vec()),
+                ordinal: field.parent.map(|(_, _, ordinal)| ordinal),
+                start: field_start - start,
+                end: field_end - start,
+                children: field.children,
+                nodes,
+                object: field.object,
+                container: field.container,
+                header: base64::engine::general_purpose::STANDARD.encode(header),
+                key: None,
+                name: key_span
+                    .filter(|(start, end)| end - start <= 256)
+                    .map(|_| {
+                        field
+                            .key
+                            .map(str::to_owned)
+                            .ok_or_else(|| storage("original field key unavailable"))
+                    })
+                    .transpose()?,
+            };
+            let fact = if path.last().is_some_and(|part| part.starts_with('@')) {
+                Fact {
+                    key: Some(
+                        key_span
+                            .map(|(start, end)| end - start)
+                            .ok_or_else(|| storage("original aliased key span unavailable"))?,
+                    ),
+                    ..fact
                 }
-                let FieldPreview::Inline(value) = preview else {
-                    return Err(storage("composed field preview unavailable"));
-                };
-                max_path = max_path.max(super::super::encoded_path(path)?.len() as u64);
-                let header = crate::runtime_client::checkpoint::bounded_bytes(value, 16384)
-                    .unwrap_or_else(|| b"null".to_vec());
-                let span = field_end - field_start;
-                let first = source_bytes(reader, field_start, field_start + u64::from(span > 0))?;
-                let nodes = if span <= 16384 {
-                    super::super::original_node_count(&source_bytes(
-                        reader,
-                        field_start,
-                        field_end,
-                    )?)?
-                } else {
-                    33
-                };
-                let fact = Fact {
-                    path: path.to_vec(),
-                    parent: parent
-                        .map(|(path, _)| {
-                            serde_json::from_str(path)
-                                .map_err(|_| storage("composed parent path invalid"))
-                        })
-                        .transpose()?,
-                    ordinal: parent.map(|(_, ordinal)| ordinal),
-                    start: field_start - start,
-                    end: field_end - start,
-                    children,
-                    nodes,
-                    object: first == b"{",
-                    container: first == b"{" || first == b"[",
-                    header: base64::engine::general_purpose::STANDARD.encode(header),
-                    key: None,
-                    name: key_span
-                        .filter(|(start, end)| end - start <= 256)
-                        .map(|(start, end)| {
-                            source_bytes(reader, start, end).and_then(|bytes| {
-                                serde_json::from_slice(&bytes)
-                                    .map_err(|_| storage("original field key unavailable"))
-                            })
-                        })
-                        .transpose()?,
-                };
-                let fact = if path.last().is_some_and(|part| part.starts_with('@')) {
-                    Fact {
-                        key: Some(
-                            key_span
-                                .map(|(start, end)| end - start)
-                                .ok_or_else(|| storage("original aliased key span unavailable"))?,
-                        ),
-                        ..fact
-                    }
-                } else {
-                    fact
-                };
-                persist_fact(connection, &fact)?;
-                if let Some((key_start, key_end)) = key_span
-                    && path.last().is_some_and(|part| part.starts_with('@'))
-                {
-                    max_key_path = max_key_path.max(persist_key_fact(
-                        connection,
-                        path,
-                        key_start - start,
-                        key_end - start,
-                    )?);
-                }
-                Ok(())
-            })();
-            result.map_err(|error| {
-                failure = Some(error);
-                "composed fact capture failed"
-            })
-        },
-    );
+            } else {
+                fact
+            };
+            persist_encoded_fact(
+                spool,
+                &fact,
+                field.encoded_path,
+                field.parent.map(|(_, encoded, ordinal)| (encoded, ordinal)),
+            )?;
+            if let Some((key_start, key_end)) = key_span
+                && path.last().is_some_and(|part| part.starts_with('@'))
+            {
+                max_key_path = max_key_path.max(persist_key_fact(
+                    spool,
+                    path,
+                    key_start - start,
+                    key_end - start,
+                )?);
+            }
+            Ok(())
+        })();
+        result.map_err(|error| {
+            failure = Some(error);
+            "composed fact capture failed"
+        })
+    });
     result.map_err(|error| failure.unwrap_or_else(|| storage(error)))?;
     Ok((max_path, max_key_path))
 }
@@ -194,29 +195,9 @@ fn persist_part(
     start: u64,
     end: u64,
 ) -> Result<Fragment, ConversationStoreError> {
-    connection.execute_batch("CREATE TEMP TABLE IF NOT EXISTS request_source_fact_spool(key TEXT PRIMARY KEY,value BLOB NOT NULL) WITHOUT ROWID; DELETE FROM request_source_fact_spool;").map_err(|error|storage(error.to_string()))?;
-    let (max_path, max_key_path) = capture_facts(connection, source, reader, start, end)?;
-    let mut builder = index::Builder::new(connection);
-    let mut statement = connection
-        .prepare("SELECT key,value FROM request_source_fact_spool ORDER BY key")
-        .map_err(|error| storage(error.to_string()))?;
-    let mut rows = statement
-        .query([])
-        .map_err(|error| storage(error.to_string()))?;
-    while let Some(row) = rows.next().map_err(|error| storage(error.to_string()))? {
-        builder.push(
-            row.get(0).map_err(|error| storage(error.to_string()))?,
-            row.get(1).map_err(|error| storage(error.to_string()))?,
-        )?;
-    }
-    let fields = builder
-        .finish()?
-        .ok_or_else(|| storage("composed fragment has no fields"))?;
-    drop(rows);
-    drop(statement);
-    connection
-        .execute("DELETE FROM request_source_fact_spool", [])
-        .map_err(|error| storage(error.to_string()))?;
+    let mut spool = FactSpool::new(connection);
+    let (max_path, max_key_path) = capture_facts(&mut spool, source, reader, start, end)?;
+    let fields = spool.finish()?;
     let mut builder = index::Builder::new(connection);
     let mut offset = start;
     while offset < end {
@@ -244,21 +225,40 @@ fn persist_part(
         max_key_path,
     })
 }
-fn persist_fact(connection: &Connection, fact: &Fact) -> Result<(), ConversationStoreError> {
+fn persist_fact(spool: &mut FactSpool<'_>, fact: &Fact) -> Result<(), ConversationStoreError> {
+    let encoded = super::super::field_path(&fact.path)?;
+    let parent = fact
+        .parent
+        .as_ref()
+        .map(|path| super::super::encoded_path(path))
+        .transpose()?;
+    persist_encoded_fact(spool, fact, &encoded, parent.as_deref().zip(fact.ordinal))
+}
+fn persist_encoded_fact(
+    spool: &mut FactSpool<'_>,
+    fact: &Fact,
+    encoded: &str,
+    parent: Option<(&str, u64)>,
+) -> Result<(), ConversationStoreError> {
+    // The source traversal supplies canonical JSON encoding. Preserve the
+    // request locator's independent component/count/encoded-byte limits.
+    if fact.path.len() > 256
+        || fact.path.iter().any(|part| part.len() > 256)
+        || encoded.len() > 4096
+    {
+        return Err(ConversationStoreError::InvalidReference(
+            "request field locator exceeds bound".into(),
+        ));
+    }
     let bytes = bounded(fact, 40960)?;
-    let field = field_key(&fact.path)?;
-    let mut statement = connection
-        .prepare_cached("INSERT INTO request_source_fact_spool(key,value) VALUES(?1,?2)")
-        .map_err(|error| storage(error.to_string()))?;
-    statement
-        .execute(params![field, bytes])
-        .map_err(|error| storage(error.to_string()))?;
-    if let (Some(parent), Some(ordinal)) = (&fact.parent, fact.ordinal) {
-        // The field index owns the complete Fact. Pagination needs only its path;
-        // the authenticated child key already owns the parent/ordinal relation.
-        statement
-            .execute(params![child_key(parent, ordinal)?, &field.as_bytes()[1..]])
-            .map_err(|error| storage(error.to_string()))?;
+    let field = format!("F{encoded}");
+    spool.push(field, bytes)?;
+    if let Some((parent, ordinal)) = parent {
+        // The complete Fact remains in F; C stores only its exact encoded path.
+        spool.push(
+            format!("C{parent}:{ordinal:020}"),
+            encoded.as_bytes().to_vec(),
+        )?;
     }
     Ok(())
 }

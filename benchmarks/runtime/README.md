@@ -1,3 +1,87 @@
+# Fair local-provider benchmark (issue 481)
+
+For current source, use the external sibling-process controller:
+
+```sh
+python3 benchmarks/runtime/build-revision.py --repo /absolute/checkout \
+  --target /absolute/shared-target --output /absolute/new-build-evidence
+python3 benchmarks/runtime/controller.py --rust /absolute/preserved-conformance \
+  --pi /absolute/pinned-pi --output /absolute/new-evidence --pairs 3
+node --test benchmarks/runtime/pi-oracle.test.mjs
+```
+
+See [the issue 481 checkpoint](../../docs/issue-481/progress.md) for the exact Pi
+revision, offline build commands, ownership, oracle and measurement scopes.
+Never run formal samples concurrently with a build. Preserve the executable,
+its hash, and the exact source commit before rebuilding. Profile in separate runs.
+
+`build-revision.py` cleans the root crate release artifacts before building and
+requires `fresh:false` for both the product library and conformance target.
+A shared Cargo target can otherwise return a newer checkout's cached executable
+when an older checkout has older source mtimes. Source paths and Git labels alone
+do not prove binary identity. The builder records all benchmark fixture hashes,
+commands, root artifacts and executable/library SHA-256 values; originals remain
+in the new evidence directory. Set the same Cargo/Rust environment for every
+revision. The revision controllers reject identical executable hashes before
+starting either product or provider.
+
+The provider is the same Python HTTP/SSE implementation and scenario for both
+engines. Pi uses its production `openAICompletionsApi()` with actual Durable
+SQLite, not its faux provider. Each paired run compares complete core requests
+and separately records the intentionally different native tool schemas.
+Neither full request equality nor product/durability equivalence is claimed.
+
+`measure_canonical_append` separately measures 32 canonical acceptances after
+0, 64, 512 or 2,048 retained messages, using `RUSTX_BENCH_HISTORY` and
+`RUSTX_BENCH_OUTPUT`. Run each size in a fresh process, interleave preserved
+checkpoint executables at least three times, and retain failures. It performs
+no request/context construction. Seed, append, close, reopened validation and
+cleanup counters are separate; evidence output follows the cleanup endpoint.
+
+For the staged revision comparisons and summaries:
+
+```sh
+python3 benchmarks/runtime/compare-revisions.py --before /absolute/before \
+  --after /absolute/after --output /absolute/new-runtime-evidence --pairs 3
+python3 benchmarks/runtime/compare-append.py --before /absolute/before \
+  --after /absolute/after --output /absolute/new-append-evidence --pairs 3
+python3 benchmarks/runtime/summarize-comparisons.py /absolute/new-runtime-evidence
+python3 benchmarks/runtime/summarize-comparisons.py --append /absolute/new-append-evidence
+python3 benchmarks/runtime/summarize-http.py /absolute/new-pi-evidence
+```
+
+For the structural stages after `5457e1c3`, build both checkpoints with the
+identical updated conformance fixture and also run:
+
+```sh
+python3 benchmarks/runtime/compare-append.py --before /absolute/before \
+  --after /absolute/after --output /absolute/new-cold-append-evidence --pairs 3 --cold
+python3 benchmarks/runtime/summarize-comparisons.py --append /absolute/new-cold-append-evidence
+```
+
+Cold mode closes/reopens before each measured append. Per-operation wall excludes
+reopen; CPU/write brackets include counter-sampling overhead and retain raw values
+for all 32 appends. Whole-phase and lifecycle counters include reopen, checkpoint,
+verification and sampling costs. They are not derived by subtracting medians.
+Normal mode retains the existing steady sequence after seeding. Report both;
+10 ms CPU resolution can produce zero denominators, which have no invented ratio.
+Summaries also expose sampled anonymous PSS, with unavailable counters as null.
+
+`pack-evidence.py --root /absolute/evidence --output evidence.tar.xz 'run/*'`
+copies selected raw files, records lengths/SHA-256 in `MANIFEST.json`, and
+verifies every archive member. It does not delete original evidence. Perform
+compression after formal samples finish. `profile-footprints.py` separately samples product-owned Source temporary-file
+logical/allocated bytes from the external controller; it is never a formal timing
+run and does not claim a true peak. The reports under `docs/issue-481`
+separate baseline, Source-only, canonical incremental and combined comparisons.
+
+The remaining documentation describes the **historical issue 480 harness**.
+Its `run.py` expects the old measurement executable and must not be used with
+the new controller-handshake executable. Old Pi in-process timings are not an
+equivalent HTTP comparison and must never be reused as issue 481 baselines.
+
+---
+
 # Offline runtime durability measurements
 
 The ignored `conformance` measurement reuses its real Session/App Server driver,
@@ -159,3 +243,6 @@ An unresolved count must be reported, not silently treated as complete accountin
 RSS/PSS, process write-byte deltas and all per-run values. CPU per turn is the
 measured-window total divided by turn count, including driver/sample overhead;
 it is not an exclusive runtime profile or an allocation count.
+
+Fresh structural-stage results and binary identities: [Source metadata reuse](../../docs/issue-481/source-metadata.md).
+The next isolated stage is [append certificate measurements](../../docs/issue-481/append-certificate-results.md), including warm/cold regressions and complete lifecycle counters.

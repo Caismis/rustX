@@ -229,7 +229,7 @@ to another owner. The default estimator caches exact model-visible JSON byte
 lengths and rounds the complete aggregate once. Arbitrary estimators retain their
 complete-input contract; additivity is never assumed.
 
-The current SQLite development schema is 69, defined by `SQLITE_SCHEMA_VERSION`. It requires independently durable typed checkpoints, historical activations/head, idempotent compaction receipts and exact request manifests. Source child indexes retain bounded paths to the existing field Fact instead of duplicating its payload; original bytes and capture witnesses remain unchanged. Older schemas are refused without migration.
+The current SQLite development schema is 71, defined by `SQLITE_SCHEMA_VERSION`. It requires independently durable typed checkpoints, historical activations/head, idempotent compaction receipts and exact request manifests. Authenticated Source pages use the versioned bounded binary codec; small fact spools have byte/count bounds and spill to disk. Source child indexes retain bounded paths to the existing field Fact instead of duplicating its payload; original bytes and capture witnesses remain unchanged. Older schemas are refused without migration.
 Version 51 (Issue #462) binds every Agent and Workflow to the shared Session
 workspace: ownership facts carry one absolute workspace path, and Agent
 worktree disposal, Workflow workspace ownership, Candidate invocation and

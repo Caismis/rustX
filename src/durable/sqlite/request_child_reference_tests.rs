@@ -1,4 +1,3 @@
-use base64::Engine as _;
 
 fn replace_captured_child(
     connection: &Connection,
@@ -18,7 +17,7 @@ fn replace_captured_child(
         <sha2::Sha256 as sha2::Digest>::digest(&raw).as_slice(),
         hash
     );
-    let mut page: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+    let mut page = observation_request::composed::inspect_index_page(&raw);
     let original = if page["type"] == "leaf" {
         let entry = page["entries"]
             .as_array_mut()
@@ -27,15 +26,11 @@ fn replace_captured_child(
             .find(|entry| entry[0] == key)
             .unwrap();
         let before: Vec<String> = serde_json::from_slice(
-            &base64::engine::general_purpose::STANDARD
-                .decode(entry[1].as_str().unwrap())
-                .unwrap(),
+            &serde_json::from_value::<Vec<u8>>(entry[1].clone()).unwrap(),
         )
         .unwrap();
         assert_ne!(before, ["request_id"]);
-        entry[1] = serde_json::json!(
-            base64::engine::general_purpose::STANDARD.encode(br#"["request_id"]"#)
-        );
+        entry[1] = serde_json::json!(br#"["request_id"]"#.as_slice());
         (hash, raw)
     } else {
         let child = page["children"]
@@ -47,7 +42,7 @@ fn replace_captured_child(
         assert!(child["depth"].as_u64().unwrap() < reference["depth"].as_u64().unwrap());
         replace_captured_child(connection, child, key)
     };
-    let encoded = serde_json::to_vec(&page).unwrap();
+    let encoded = observation_request::composed::encode_test_index_page(page);
     assert!(encoded.len() <= 65_536);
     let digest = <sha2::Sha256 as sha2::Digest>::digest(&encoded);
     connection

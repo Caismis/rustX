@@ -1,0 +1,186 @@
+{
+  "origin": {
+    "head": "3c355f152d405a201482d53b6e45497df4f44a7f",
+    "production_tree": "bf8336c412a8717fed3ed5b8cdc9b5c762267e8f",
+    "harness": {
+      "tests/common/provider_emulator.rs": "cb055ee1f9c9bc55c8af5cae080bb8564f2417226bacab76159f837261a2e47e",
+      "tests/conformance/agent_loop/runtime_benchmark.rs": "0c9b61828fe19270f32308eb382cc2dbe3f0dbb45abceff3790f1cf98e056f16",
+      "tests/conformance/agent_loop/runtime_benchmark/expected_tools.json": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d",
+      "tests/conformance/agent_loop/runtime_benchmark/profiling.rs": "12362c4abf9f80deed923b77855a2529d4aeb427cfffe39d6953cad823de0c66",
+      "tests/conformance/agent_loop/runtime_benchmark/request_oracle.rs": "0bd3c441fea023649b5e9de4f6a6506c46ccb4b5d2bfea564d777770ed5535e5"
+    },
+    "start_utc": "2026-10-18T08:45:01.222578+00:00",
+    "commands": [
+      [
+        "cargo",
+        "clean",
+        "--release",
+        "--package",
+        "rustx"
+      ],
+      [
+        "cargo",
+        "test",
+        "--release",
+        "--locked",
+        "--test",
+        "conformance",
+        "--no-run",
+        "--message-format=json"
+      ]
+    ],
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+    "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)\n",
+    "build_environment": {
+      "CARGO_BUILD_JOBS": "2"
+    },
+    "clean_exit": 0,
+    "build_exit": 0,
+    "root_artifacts": [
+      {
+        "name": "rustx",
+        "kind": [
+          "lib"
+        ],
+        "source_path": "/workspace/rustX-481-origin-baseline/src/lib.rs",
+        "fresh": false
+      },
+      {
+        "name": "rustx",
+        "kind": [
+          "bin"
+        ],
+        "source_path": "/workspace/rustX-481-origin-baseline/src/main.rs",
+        "fresh": false
+      },
+      {
+        "name": "conformance",
+        "kind": [
+          "test"
+        ],
+        "source_path": "/workspace/rustX-481-origin-baseline/tests/conformance/main.rs",
+        "fresh": false
+      }
+    ],
+    "binary": "/workspace/issue-481-evidence/origin-verified-build/conformance",
+    "sha256": "d6623b03b0326d4548d58af01d89a133c3640a0320a9aa0acbc4e385c1f30f18",
+    "library_sha256": "713e9ab9ab77cf66b001d0ec611961ce3b1d4638628e603fd5a27300e4ae76ea",
+    "verified": true,
+    "end_utc": "2026-10-18T08:54:52.365970+00:00"
+  },
+  "certificate": {
+    "head": "563279ac8b6aeac29b36e75f5682195df9dd6c0b",
+    "production_tree": "b93cd763bc4f0a4e3dad539a240fc0f8a8a42f74",
+    "fixture_sha256": "0c9b61828fe19270f32308eb382cc2dbe3f0dbb45abceff3790f1cf98e056f16",
+    "start_utc": "2026-10-18T07:44:50.733802+00:00",
+    "command": [
+      "cargo",
+      "test",
+      "--release",
+      "--locked",
+      "--test",
+      "conformance",
+      "--no-run",
+      "--message-format=json"
+    ],
+    "exit": 0,
+    "end_utc": "2026-10-18T07:54:35.998716+00:00",
+    "binary": "/workspace/issue-481-evidence/certificate-conformance",
+    "sha256": "a9c7e712c54340671af0f6387920e259df754ec26659bb398bdafdb433d030d5"
+  },
+  "compact": {
+    "head": "7ed053952b34705419e8b4ffffcc24ae3e423b0d",
+    "production_tree": "ccc658e1f1186f7ebcf8ef36570a8fc5bd4cbf6e",
+    "harness": {
+      "tests/common/provider_emulator.rs": "cb055ee1f9c9bc55c8af5cae080bb8564f2417226bacab76159f837261a2e47e",
+      "tests/conformance/agent_loop/runtime_benchmark.rs": "0c9b61828fe19270f32308eb382cc2dbe3f0dbb45abceff3790f1cf98e056f16",
+      "tests/conformance/agent_loop/runtime_benchmark/expected_tools.json": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d",
+      "tests/conformance/agent_loop/runtime_benchmark/profiling.rs": "12362c4abf9f80deed923b77855a2529d4aeb427cfffe39d6953cad823de0c66",
+      "tests/conformance/agent_loop/runtime_benchmark/request_oracle.rs": "0bd3c441fea023649b5e9de4f6a6506c46ccb4b5d2bfea564d777770ed5535e5"
+    },
+    "start_utc": "2026-10-18T08:54:53.666993+00:00",
+    "commands": [
+      [
+        "cargo",
+        "clean",
+        "--release",
+        "--package",
+        "rustx"
+      ],
+      [
+        "cargo",
+        "test",
+        "--release",
+        "--locked",
+        "--test",
+        "conformance",
+        "--no-run",
+        "--message-format=json"
+      ]
+    ],
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+    "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)\n",
+    "build_environment": {
+      "CARGO_BUILD_JOBS": "2"
+    },
+    "clean_exit": 0,
+    "build_exit": 0,
+    "root_artifacts": [
+      {
+        "name": "rustx",
+        "kind": [
+          "lib"
+        ],
+        "source_path": "/workspace/rustX-481-compact-pages/src/lib.rs",
+        "fresh": false
+      },
+      {
+        "name": "rustx",
+        "kind": [
+          "bin"
+        ],
+        "source_path": "/workspace/rustX-481-compact-pages/src/main.rs",
+        "fresh": false
+      },
+      {
+        "name": "conformance",
+        "kind": [
+          "test"
+        ],
+        "source_path": "/workspace/rustX-481-compact-pages/tests/conformance/main.rs",
+        "fresh": false
+      }
+    ],
+    "binary": "/workspace/issue-481-evidence/compact-verified-build/conformance",
+    "sha256": "78e044bee701759c17884e2b3813c8f10990ee4e92996008b6a8e65ef243c223",
+    "library_sha256": "09c938f35e6451aeb634b9baa1b6ff5e31c638fbdee5f083ebd45cce1105b2d4",
+    "verified": true,
+    "end_utc": "2026-10-18T09:04:36.301489+00:00"
+  },
+  "environment": {
+    "utc": "2026-10-18T08:51:43.745723+00:00",
+    "kernel": {
+      "system": "Linux",
+      "node": "a39fc1458703",
+      "release": "6.18.55",
+      "version": "#1 SMP Wed Oct 14 19:45:18 UTC 2026",
+      "machine": "x86_64",
+      "processor": ""
+    },
+    "affinity_cpus": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "cpu_max": "400000 100000",
+    "memory_max": "17179869184",
+    "node": "v24.19.0",
+    "pi_revision": "90d863f7c1183b965f099855715d6e88c7b8a52c",
+    "pi_status": "?? packages/ai/tsconfig.benchmark.json\n",
+    "filesystem_types": "/workspace overlayfs\n/tmp tmpfs\n",
+    "scope": "Same cloud machine, quota, mount arrangement, toolchain and fixture inputs. OS caches not dropped. Builds/tests/profiles excluded from formal matrices. Native allocator counts unavailable.",
+    "pi_benchmark_config_sha256": "6ddf23d0e3c6d1ebdd0498a03e4fd7a98046a64378923cfc626656709c559b14"
+  }
+}

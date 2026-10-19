@@ -1,0 +1,6 @@
+{
+  "extends": "./tsconfig.build.json",
+  "include": ["src/index.ts", "src/api/openai-completions.lazy.ts", "src/utils/estimate.ts"],
+  "exclude": [],
+  "compilerOptions": {"noEmitOnError": true}
+}

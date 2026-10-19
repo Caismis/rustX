@@ -133,6 +133,9 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      - name: Test current and historical benchmark controllers and summaries
+        run: python3 -m unittest discover -s benchmarks/runtime -p 'test_*.py' -v
+
       - name: Run Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 

@@ -390,3 +390,12 @@ pub(in crate::durable::sqlite) fn assert_single_native_validation(
         "same-function Source validation reuses its actual native proof"
     );
 }
+
+#[cfg(test)]
+pub(in crate::durable::sqlite) fn inspect_index_page(bytes: &[u8]) -> serde_json::Value {
+    index::inspect_page(bytes)
+}
+#[cfg(test)]
+pub(in crate::durable::sqlite) fn encode_test_index_page(page: serde_json::Value) -> Vec<u8> {
+    index::encode_test_page(page)
+}

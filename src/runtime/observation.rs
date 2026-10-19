@@ -1485,7 +1485,21 @@ impl PendingObservations {
         if state.journal_read != after {
             return Vec::new();
         }
-        let mut transitions = Vec::with_capacity(32);
+        // Admission is still capped at 32. Reserve only the possible work at
+        // this cut: most wakeups contain a handful of large enum values, not
+        // a full page. Include the current-source slots and transcript receipt
+        // so filling the page cannot grow past its existing allocation bound.
+        let current_sources = usize::from(state.pending_head.is_some())
+            + usize::from(!state.latest_progress.is_empty())
+            + usize::from(!state.latest_activity.is_empty())
+            + usize::from(state.latest_offhead_activity.is_some())
+            + usize::from(transcript.prefix > 0);
+        let capacity = facts
+            .len()
+            .saturating_add(state.reliable.len())
+            .saturating_add(current_sources)
+            .min(32);
+        let mut transitions = Vec::with_capacity(capacity);
         for witness in facts {
             let sequence = witness.sequence;
             while transitions.len() < 32
@@ -1504,7 +1518,15 @@ impl PendingObservations {
             if transitions.len() == 32 {
                 break;
             }
-            let mut observations = Vec::with_capacity(33);
+            // The queue is locked, so this bounded prefix is exactly the set
+            // consumed below. Reserve its proofs plus the one Journal witness.
+            let proofs = state
+                .reliable
+                .iter()
+                .take(32)
+                .take_while(|item| item.source_sequence() == Some(sequence))
+                .count();
+            let mut observations = Vec::with_capacity(proofs + 1);
             while observations.len() < 32
                 && state
                     .reliable
@@ -2268,6 +2290,10 @@ mod tests {
         for expected in [32, 32, 32, 32, 18] {
             let transitions = queue.drain();
             assert_eq!(transitions.len(), expected);
+            assert!(
+                transitions.capacity() <= expected,
+                "short native pages do not reserve a full page of observation enums"
+            );
             for transition in transitions {
                 let ConversationObservation::JournalBatch {
                     through: Some(sequence),
@@ -2277,6 +2303,8 @@ mod tests {
                     panic!("complete native J transition");
                 };
                 assert_eq!(observations.len(), 1);
+                // A bare witness does not reserve 32 absent proofs.
+                assert_eq!(observations.capacity(), 1);
                 let ConversationObservation::JournalFact(witness) = &observations[0] else {
                     panic!("finite source witness");
                 };
@@ -2287,7 +2315,10 @@ mod tests {
         }
         assert_eq!(sequences, (1..=146).collect::<Vec<_>>());
         assert!(!queue.has_unpublished());
-        assert!(queue.drain().is_empty());
+        let empty = queue.drain();
+        assert!(empty.is_empty());
+        // An idle drain allocates no observation page.
+        assert_eq!(empty.capacity(), 0);
     }
 
     #[test]

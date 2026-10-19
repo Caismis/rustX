@@ -1,0 +1,371 @@
+{
+  "finding": "Stage-1 corrected cold A/B executed the same metadata binary twice. With shared Cargo target, checkout source mtimes did not invalidate older-root artifacts. Original records retained; new builds must clean root crate and assert fresh:false for library and conformance.",
+  "builds": [
+    {
+      "name": "structural-baseline",
+      "reported_identity": {
+        "head": "5457e1c34106b8d49de0edfb40b49ca8267d0383",
+        "production_tree": "1c4fef821b06766aaf9d28bd98ca0e5bbf2217c9",
+        "harness_patch": "structural-baseline-harness.patch",
+        "fixture_sha256": "6a9c041588babca4c879facf5d002e8c1d4384dd1d506940da5c2fbf0255708a",
+        "start_utc": "2026-10-18T06:52:40.479766+00:00",
+        "command": [
+          "cargo",
+          "test",
+          "--release",
+          "--locked",
+          "--test",
+          "conformance",
+          "--no-run",
+          "--message-format=json"
+        ],
+        "exit": 0,
+        "end_utc": "2026-10-18T07:02:15.176943+00:00",
+        "binary": "/workspace/issue-481-evidence/structural-baseline-conformance",
+        "sha256": "2b12bfb992ef706ffa74ca026bfebca69c5eb9f15c56b9ac34ae41d86c3fc757"
+      },
+      "root_artifacts": [
+        {
+          "target": "rustx",
+          "kind": [
+            "lib"
+          ],
+          "fresh": false,
+          "source_path": "/workspace/rustX-481-structural-baseline/src/lib.rs"
+        },
+        {
+          "target": "rustx",
+          "kind": [
+            "bin"
+          ],
+          "fresh": false,
+          "source_path": "/workspace/rustX-481-structural-baseline/src/main.rs"
+        },
+        {
+          "target": "conformance",
+          "kind": [
+            "test"
+          ],
+          "fresh": false,
+          "source_path": "/workspace/rustX-481-structural-baseline/tests/conformance/main.rs"
+        }
+      ],
+      "verdict": "root library and conformance freshly compiled"
+    },
+    {
+      "name": "metadata",
+      "reported_identity": {
+        "head": "76ecc9d765e5c63080950e7dc5710a32b0b1caa7",
+        "production_tree": "4f63493659971e27e8cbe8fc9833feadf6ebc03c",
+        "harness_patch": null,
+        "fixture_sha256": "6a9c041588babca4c879facf5d002e8c1d4384dd1d506940da5c2fbf0255708a",
+        "start_utc": "2026-10-18T07:02:23.995759+00:00",
+        "command": [
+          "cargo",
+          "test",
+          "--release",
+          "--locked",
+          "--test",
+          "conformance",
+          "--no-run",
+          "--message-format=json"
+        ],
+        "exit": 0,
+        "end_utc": "2026-10-18T07:12:02.435377+00:00",
+        "binary": "/workspace/issue-481-evidence/metadata-conformance",
+        "sha256": "5f006c64b0f207486888a1e2759564069709fe3731d596aaeaba5fb0918ca740"
+      },
+      "root_artifacts": [
+        {
+          "target": "rustx",
+          "kind": [
+            "lib"
+          ],
+          "fresh": false,
+          "source_path": "/workspace/rustX-481-metadata/src/lib.rs"
+        },
+        {
+          "target": "rustx",
+          "kind": [
+            "bin"
+          ],
+          "fresh": false,
+          "source_path": "/workspace/rustX-481-metadata/src/main.rs"
+        },
+        {
+          "target": "conformance",
+          "kind": [
+            "test"
+          ],
+          "fresh": false,
+          "source_path": "/workspace/rustX-481-metadata/tests/conformance/main.rs"
+        }
+      ],
+      "verdict": "root library and conformance freshly compiled"
+    },
+    {
+      "name": "metadata-cold-fixed",
+      "reported_identity": {
+        "head": "76ecc9d765e5c63080950e7dc5710a32b0b1caa7",
+        "production_tree": "4f63493659971e27e8cbe8fc9833feadf6ebc03c",
+        "fixture_sha256": "0c9b61828fe19270f32308eb382cc2dbe3f0dbb45abceff3790f1cf98e056f16",
+        "harness_patch": "/workspace/issue-481-evidence/metadata-cold-fixed-harness.patch",
+        "start_utc": "2026-10-18T07:17:25.795751+00:00",
+        "command": [
+          "cargo",
+          "test",
+          "--release",
+          "--locked",
+          "--test",
+          "conformance",
+          "--no-run",
+          "--message-format=json"
+        ],
+        "exit": 0,
+        "end_utc": "2026-10-18T07:19:04.620216+00:00",
+        "binary": "/workspace/issue-481-evidence/metadata-cold-fixed-conformance",
+        "sha256": "ab315719267cecb3c4f74527349c6f972fd4dbea839dbdb00585b2643f714e5c"
+      },
+      "root_artifacts": [
+        {
+          "target": "rustx",
+          "kind": [
+            "lib"
+          ],
+          "fresh": true,
+          "source_path": "/workspace/rustX-481-metadata/src/lib.rs"
+        },
+        {
+          "target": "rustx",
+          "kind": [
+            "bin"
+          ],
+          "fresh": true,
+          "source_path": "/workspace/rustX-481-metadata/src/main.rs"
+        },
+        {
+          "target": "conformance",
+          "kind": [
+            "test"
+          ],
+          "fresh": false,
+          "source_path": "/workspace/rustX-481-metadata/tests/conformance/main.rs"
+        }
+      ],
+      "verdict": "metadata library cache chain independently confirmed by byte-identical clean rebuild"
+    },
+    {
+      "name": "structural-baseline-cold-fixed",
+      "reported_identity": {
+        "head": "5457e1c34106b8d49de0edfb40b49ca8267d0383",
+        "production_tree": "1c4fef821b06766aaf9d28bd98ca0e5bbf2217c9",
+        "fixture_sha256": "0c9b61828fe19270f32308eb382cc2dbe3f0dbb45abceff3790f1cf98e056f16",
+        "harness_patch": "/workspace/issue-481-evidence/structural-baseline-cold-fixed-harness.patch",
+        "start_utc": "2026-10-18T07:19:04.824544+00:00",
+        "command": [
+          "cargo",
+          "test",
+          "--release",
+          "--locked",
+          "--test",
+          "conformance",
+          "--no-run",
+          "--message-format=json"
+        ],
+        "exit": 0,
+        "end_utc": "2026-10-18T07:19:05.147249+00:00",
+        "binary": "/workspace/issue-481-evidence/structural-baseline-cold-fixed-conformance",
+        "sha256": "ab315719267cecb3c4f74527349c6f972fd4dbea839dbdb00585b2643f714e5c"
+      },
+      "root_artifacts": [
+        {
+          "target": "rustx",
+          "kind": [
+            "lib"
+          ],
+          "fresh": true,
+          "source_path": "/workspace/rustX-481-structural-baseline/src/lib.rs"
+        },
+        {
+          "target": "rustx",
+          "kind": [
+            "bin"
+          ],
+          "fresh": true,
+          "source_path": "/workspace/rustX-481-structural-baseline/src/main.rs"
+        },
+        {
+          "target": "conformance",
+          "kind": [
+            "test"
+          ],
+          "fresh": true,
+          "source_path": "/workspace/rustX-481-structural-baseline/tests/conformance/main.rs"
+        }
+      ],
+      "verdict": "INVALID claimed baseline identity: returned cached metadata executable"
+    },
+    {
+      "name": "certificate",
+      "reported_identity": {
+        "head": "563279ac8b6aeac29b36e75f5682195df9dd6c0b",
+        "production_tree": "b93cd763bc4f0a4e3dad539a240fc0f8a8a42f74",
+        "fixture_sha256": "0c9b61828fe19270f32308eb382cc2dbe3f0dbb45abceff3790f1cf98e056f16",
+        "start_utc": "2026-10-18T07:44:50.733802+00:00",
+        "command": [
+          "cargo",
+          "test",
+          "--release",
+          "--locked",
+          "--test",
+          "conformance",
+          "--no-run",
+          "--message-format=json"
+        ],
+        "exit": 0,
+        "end_utc": "2026-10-18T07:54:35.998716+00:00",
+        "binary": "/workspace/issue-481-evidence/certificate-conformance",
+        "sha256": "a9c7e712c54340671af0f6387920e259df754ec26659bb398bdafdb433d030d5"
+      },
+      "root_artifacts": [
+        {
+          "target": "rustx",
+          "kind": [
+            "lib"
+          ],
+          "fresh": false,
+          "source_path": "/workspace/rustX-481-certificate/src/lib.rs"
+        },
+        {
+          "target": "rustx",
+          "kind": [
+            "bin"
+          ],
+          "fresh": false,
+          "source_path": "/workspace/rustX-481-certificate/src/main.rs"
+        },
+        {
+          "target": "conformance",
+          "kind": [
+            "test"
+          ],
+          "fresh": false,
+          "source_path": "/workspace/rustX-481-certificate/tests/conformance/main.rs"
+        }
+      ],
+      "verdict": "root library and conformance freshly compiled"
+    }
+  ],
+  "clean_metadata_confirmation": {
+    "head": "76ecc9d765e5c63080950e7dc5710a32b0b1caa7",
+    "production_tree": "4f63493659971e27e8cbe8fc9833feadf6ebc03c",
+    "fixture_sha256": "0c9b61828fe19270f32308eb382cc2dbe3f0dbb45abceff3790f1cf98e056f16",
+    "start_utc": "2026-10-18T08:17:26.702540+00:00",
+    "clean_command": [
+      "cargo",
+      "clean",
+      "--release",
+      "--package",
+      "rustx"
+    ],
+    "clean_exit": 0,
+    "command": [
+      "cargo",
+      "test",
+      "--release",
+      "--locked",
+      "--test",
+      "conformance",
+      "--no-run",
+      "--message-format=json"
+    ],
+    "exit": 0,
+    "end_utc": "2026-10-18T08:27:06.805515+00:00",
+    "root_artifacts": [
+      {
+        "name": "rustx",
+        "kind": [
+          "lib"
+        ],
+        "fresh": false,
+        "source_path": "/workspace/rustX-481-metadata/src/lib.rs"
+      },
+      {
+        "name": "rustx",
+        "kind": [
+          "bin"
+        ],
+        "fresh": false,
+        "source_path": "/workspace/rustX-481-metadata/src/main.rs"
+      },
+      {
+        "name": "conformance",
+        "kind": [
+          "test"
+        ],
+        "fresh": false,
+        "source_path": "/workspace/rustX-481-metadata/tests/conformance/main.rs"
+      }
+    ],
+    "binary": "/workspace/issue-481-evidence/metadata-verified-conformance",
+    "sha256": "ab315719267cecb3c4f74527349c6f972fd4dbea839dbdb00585b2643f714e5c",
+    "library_sha256": "2e6bf97c4d496702430816cb02e2248434b7c6883b58ec1c48021328f7d64591",
+    "previous_metadata_sha256": "ab315719267cecb3c4f74527349c6f972fd4dbea839dbdb00585b2643f714e5c",
+    "matches_previous_metadata_binary": true
+  },
+  "clean_baseline_replacement": {
+    "head": "5457e1c34106b8d49de0edfb40b49ca8267d0383",
+    "production_tree": "1c4fef821b06766aaf9d28bd98ca0e5bbf2217c9",
+    "fixture_sha256": "0c9b61828fe19270f32308eb382cc2dbe3f0dbb45abceff3790f1cf98e056f16",
+    "start_utc": "2026-10-18T08:27:07.921170+00:00",
+    "clean_command": [
+      "cargo",
+      "clean",
+      "--release",
+      "--package",
+      "rustx"
+    ],
+    "clean_exit": 0,
+    "command": [
+      "cargo",
+      "test",
+      "--release",
+      "--locked",
+      "--test",
+      "conformance",
+      "--no-run",
+      "--message-format=json"
+    ],
+    "exit": 0,
+    "end_utc": "2026-10-18T08:36:41.492123+00:00",
+    "root_artifacts": [
+      {
+        "name": "rustx",
+        "kind": [
+          "lib"
+        ],
+        "fresh": false,
+        "source_path": "/workspace/rustX-481-structural-baseline/src/lib.rs"
+      },
+      {
+        "name": "rustx",
+        "kind": [
+          "bin"
+        ],
+        "fresh": false,
+        "source_path": "/workspace/rustX-481-structural-baseline/src/main.rs"
+      },
+      {
+        "name": "conformance",
+        "kind": [
+          "test"
+        ],
+        "fresh": false,
+        "source_path": "/workspace/rustX-481-structural-baseline/tests/conformance/main.rs"
+      }
+    ],
+    "binary": "/workspace/issue-481-evidence/structural-baseline-verified-conformance",
+    "sha256": "4d27e7a1cfb17bbe94e6b67653c9fed9c9ab2c8cd581277b0fcdb05d855b8789",
+    "library_sha256": "e6d126b83f2889b535a0b2deb3a8367d590aa72e41d2ff3dcbac8284c87312fd"
+  }
+}

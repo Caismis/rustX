@@ -127,7 +127,7 @@ fn t10_t19_schema_65_source_pages_are_refused_without_conversion() {
         SqliteConversationStore::open_existing(conversation, &path),
         Err(ConversationStoreError::SchemaVersionMismatch {
             stored: 65,
-            expected: 69
+            expected: 71
         })
     ));
     let connection = Connection::open(path).unwrap();
@@ -199,7 +199,7 @@ fn t10_t19_schema_66_full_child_facts_are_refused_without_conversion() {
         SqliteConversationStore::open_existing(conversation, &path),
         Err(ConversationStoreError::SchemaVersionMismatch {
             stored: 66,
-            expected: 69
+            expected: 71
         })
     ));
     let connection = Connection::open(path).unwrap();
@@ -223,5 +223,38 @@ fn t10_t19_schema_66_full_child_facts_are_refused_without_conversion() {
             )
             .unwrap(),
         66
+    );
+}
+
+#[test]
+fn binary_fragment_gate_rejects_schema_70_without_rewriting_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("page-v70.sqlite");
+    let conversation = crate::runtime::identity::ConversationId::generate();
+    let store =
+        crate::durable::sqlite::SqliteConversationStore::open(conversation.clone(), &path).unwrap();
+    store
+        .conn
+        .lock()
+        .unwrap()
+        .execute("UPDATE rustx_store SET schema_version=70", [])
+        .unwrap();
+    drop(store);
+    assert!(matches!(
+        crate::durable::sqlite::SqliteConversationStore::open_existing(conversation, &path),
+        Err(
+            crate::durable::ConversationStoreError::SchemaVersionMismatch {
+                stored: 70,
+                expected: 71
+            }
+        )
+    ));
+    assert_eq!(
+        Connection::open(&path)
+            .unwrap()
+            .query_row("SELECT schema_version FROM rustx_store", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        70
     );
 }

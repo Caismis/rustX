@@ -450,7 +450,10 @@ impl Owner {
     pub(super) fn uninstalled() -> Arc<Self> {
         Self::new()
     }
-    pub fn install(connection: &Connection) -> Result<Arc<Self>, ConversationStoreError> {
+    pub fn install(
+        connection: &Connection,
+        append: Arc<super::append_validation::Owner>,
+    ) -> Result<Arc<Self>, ConversationStoreError> {
         let owner = Self::new();
         let watched = owner.clone();
         let columns = MutationColumns::read(connection);
@@ -463,6 +466,8 @@ impl Owner {
                     if db != "main" {
                         return;
                     }
+                    // One SQLite hook dispatches to independent proof owners.
+                    append.observe(table, change);
                     let invalidates = columns.invalidates(&watched, table, change);
                     if invalidates {
                         watched.invalidate();

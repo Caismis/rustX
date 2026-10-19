@@ -1,0 +1,552 @@
+{
+  "scope": "Remaining-gap diagnostics; 3 pairs (first two incomplete Rust phase tracing), all product oracles passed; final complete pair only for steady counters; no headline samples",
+  "files": [
+    {
+      "path": "analysis-checks.json",
+      "bytes": 747,
+      "sha256": "8b61c6e422169a679ac1409c6c7bc2825edb722d8542ad211a2bdc1265bb9c57"
+    },
+    {
+      "path": "analyze.py",
+      "bytes": 5135,
+      "sha256": "c8eae73401cfe2a381f86536a809972712865a29d6901bb282647ff4d9e59e40"
+    },
+    {
+      "path": "check-and-pack.py",
+      "bytes": 2304,
+      "sha256": "5c2b88f0571519c24b05b570401a1080b4e03b64b61e6eb8729a0e9a992b18c4"
+    },
+    {
+      "path": "comparison.json",
+      "bytes": 20636,
+      "sha256": "94ccba98887ae3c519a0d640de4eb0a12f7c9e5a3a352c55afa205a31ad2f718"
+    },
+    {
+      "path": "complete-comparison.json",
+      "bytes": 20636,
+      "sha256": "94ccba98887ae3c519a0d640de4eb0a12f7c9e5a3a352c55afa205a31ad2f718"
+    },
+    {
+      "path": "complete-pi/after_turns-database.json",
+      "bytes": 7253,
+      "sha256": "6063a92d53924dee09c39951a5cbcf7d78b6e1927c04a5351bcc7d1cd509a2de"
+    },
+    {
+      "path": "complete-pi/before_measured_turns-database.json",
+      "bytes": 6439,
+      "sha256": "ffc98f1dce55eb528fbed0041676deaa4b988926ef1bb15f1087f15059913d4a"
+    },
+    {
+      "path": "complete-pi/calls.strace",
+      "bytes": 1343720,
+      "sha256": "23c718feb3d28399ec25314d427ae62557dabbf0a74c97233eca98a8db10c221"
+    },
+    {
+      "path": "complete-pi/phases.json",
+      "bytes": 724,
+      "sha256": "5ba34fbc4f5aaf96a42f4c40281dff72f73fd8ebe7574318ee2ca84974354aeb"
+    },
+    {
+      "path": "complete-pi/pi-sql-after_cleanup.json",
+      "bytes": 14599,
+      "sha256": "23252d62b9e22306ca75d18244fac5c3fd6acd09a77300c3db357859ab795383"
+    },
+    {
+      "path": "complete-pi/pi-sql-after_final_writer_close.json",
+      "bytes": 14595,
+      "sha256": "50e753015b0976f0b7fff47b8defe1464b6e6129e0ce9b832913208e75370d73"
+    },
+    {
+      "path": "complete-pi/pi-sql-after_initialization.json",
+      "bytes": 9948,
+      "sha256": "19dfdc76f5a04e32902b0b8d62d0e17e4e8aaca6d116f0d37e90f4702f5300cd"
+    },
+    {
+      "path": "complete-pi/pi-sql-after_provider_start.json",
+      "bytes": 2,
+      "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    {
+      "path": "complete-pi/pi-sql-after_reopen_verification.json",
+      "bytes": 14599,
+      "sha256": "23252d62b9e22306ca75d18244fac5c3fd6acd09a77300c3db357859ab795383"
+    },
+    {
+      "path": "complete-pi/pi-sql-after_turns.json",
+      "bytes": 14512,
+      "sha256": "1f95b9e7b7400357522adb9a48850ab5f633643d6e2be8640f283846b87b50f9"
+    },
+    {
+      "path": "complete-pi/pi-sql-after_verification.json",
+      "bytes": 14512,
+      "sha256": "7ef8463c8525bf009547a3508c7d0f5b8768ab8cdbb441ab58f4e87132a4052f"
+    },
+    {
+      "path": "complete-pi/pi-sql-before_initialization.json",
+      "bytes": 2,
+      "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    {
+      "path": "complete-pi/pi-sql-before_measured_turns.json",
+      "bytes": 14482,
+      "sha256": "09421af3c1a0f6a38f732c50a577a5c08564962e0cab71dc134872288b03e9e1"
+    },
+    {
+      "path": "complete-pi/pi-steady.cpuprofile",
+      "bytes": 189783,
+      "sha256": "30d8476a7e4c49d9195a80ca99a6f2644d69314f65d8faa0a0891e3f00361ab1"
+    },
+    {
+      "path": "complete-pi/sample.json",
+      "bytes": 2489673,
+      "sha256": "7face014d85fd91a3b9a25d97f9265e43ceeaf2773491fc55ac9f1218023312a"
+    },
+    {
+      "path": "complete-pi/sample.log",
+      "bytes": 153,
+      "sha256": "868302da8921230a2ef5aa6d4f6298d3fbb725fc9aed997d09be0da28f39d824"
+    },
+    {
+      "path": "complete-pi/sample.process.json",
+      "bytes": 455146,
+      "sha256": "b76f7ea6731617196a09ef3f2fa112c24203c850f762ccb1322408fbc19a4c9e"
+    },
+    {
+      "path": "complete-pi/sample.provider.log",
+      "bytes": 72,
+      "sha256": "6165e10cf9d341af72f5c6d88a5f392053417ab10b719be3ac0683842323a189"
+    },
+    {
+      "path": "complete-pi/sample.provider.stdout",
+      "bytes": 247764,
+      "sha256": "f376beba2f907e7796a98731bbc33257ac7c1b1f6fdf4318c6ca36bc30bb5183"
+    },
+    {
+      "path": "complete-pi/tracer.log",
+      "bytes": 403,
+      "sha256": "0b6d4918af610e38e386ca00bec7317a260bd65aad3bec4df2e3103b3ee01cba"
+    },
+    {
+      "path": "complete-run.log",
+      "bytes": 22,
+      "sha256": "dbe4aef5a5ef65b1ff2cce724dcaa3ad7701e6da4a6ae7f643949f075fd8af96"
+    },
+    {
+      "path": "complete-rust/after_turns-database.json",
+      "bytes": 1989472,
+      "sha256": "b2361849473b83f34b169b40ad7ac924b6ff4eb508684729253d2b92b436af7c"
+    },
+    {
+      "path": "complete-rust/before_measured_turns-database.json",
+      "bytes": 341476,
+      "sha256": "b5cb5bbc253d022c97f6c18a7347f94bf7f7ad91d4ee9d5461e38e9d7da1400c"
+    },
+    {
+      "path": "complete-rust/calls.strace",
+      "bytes": 24189306,
+      "sha256": "a3f234f00b114441a753c0e475f2b3af42a595fb02536824c7b1c7853ef78269"
+    },
+    {
+      "path": "complete-rust/phases.json",
+      "bytes": 877,
+      "sha256": "04e84718246d3194c295243c78a2c38b15e4a8d50de9132e21f96d9c94760cf7"
+    },
+    {
+      "path": "complete-rust/sample.json",
+      "bytes": 6682773,
+      "sha256": "9f5f54fe5cd128c579157fef6d85b1b4ea3b1e7aa128d7cc5945bef5686bf025"
+    },
+    {
+      "path": "complete-rust/sample.log",
+      "bytes": 329,
+      "sha256": "6f558fb7df41cf60381526d9b2aeb3b0a7641118f741ede930c924a7dea40fe8"
+    },
+    {
+      "path": "complete-rust/sample.process.json",
+      "bytes": 1262896,
+      "sha256": "54289918b76238b9c8ad3ac526fbbb9736c6bbd5e490d905131254d3d7dfc187"
+    },
+    {
+      "path": "complete-rust/sample.provider.log",
+      "bytes": 72,
+      "sha256": "cbd79a6a6aa4d5aacd0bd9c6a3a4f297c2a8afe9099de9c941d868bbc1c0cc55"
+    },
+    {
+      "path": "complete-rust/sample.provider.stdout",
+      "bytes": 662604,
+      "sha256": "d8a91da32548daf4358792d81f71145adc6dda09375e208e5612528cdfb5bf01"
+    },
+    {
+      "path": "complete-rust/tracer.log",
+      "bytes": 279,
+      "sha256": "015be0250d5bc69231b74ca10313bd2e6922fa77bc4588fd09619f7088f4e99d"
+    },
+    {
+      "path": "identity.json",
+      "bytes": 460,
+      "sha256": "1d9b67c181af2c45a02878bc0b02a50b2e3e5cfc50d32893a20c865ba61c93ac"
+    },
+    {
+      "path": "matched-comparison.json",
+      "bytes": 20636,
+      "sha256": "94ccba98887ae3c519a0d640de4eb0a12f7c9e5a3a352c55afa205a31ad2f718"
+    },
+    {
+      "path": "matched-pi/after_turns-database.json",
+      "bytes": 7252,
+      "sha256": "1c106182a9751186734b5a690733cf80f796ee96254fecc2cc63aabca5f49c80"
+    },
+    {
+      "path": "matched-pi/before_measured_turns-database.json",
+      "bytes": 6438,
+      "sha256": "f59df0d44bfef67c6a70409931e23ac9c99a7453fdfb756a007add422c2427a0"
+    },
+    {
+      "path": "matched-pi/calls.strace",
+      "bytes": 1332217,
+      "sha256": "d7fcbc8ebaa36058f384f3a94c6231176d0953d19726d1c567defc0380a7424f"
+    },
+    {
+      "path": "matched-pi/phases.json",
+      "bytes": 724,
+      "sha256": "a3c14335cd2503d0f7b9593363a534c51012300e9e32ca70f92a944ddfc382ed"
+    },
+    {
+      "path": "matched-pi/pi-sql-after_cleanup.json",
+      "bytes": 14600,
+      "sha256": "f57cc0cd5eb5ab280211e13b4d4979aef9e1830e7b5b8eb9f0baf9dd88439962"
+    },
+    {
+      "path": "matched-pi/pi-sql-after_final_writer_close.json",
+      "bytes": 14595,
+      "sha256": "c691f8a969f046dc08d449ca56d5c93b3d2c63274561c7f99e6b0f41c44348a4"
+    },
+    {
+      "path": "matched-pi/pi-sql-after_initialization.json",
+      "bytes": 9948,
+      "sha256": "37af7938b141bff7db43201be710c308cc660287299578b251c261d97bb3be49"
+    },
+    {
+      "path": "matched-pi/pi-sql-after_provider_start.json",
+      "bytes": 2,
+      "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    {
+      "path": "matched-pi/pi-sql-after_reopen_verification.json",
+      "bytes": 14600,
+      "sha256": "f57cc0cd5eb5ab280211e13b4d4979aef9e1830e7b5b8eb9f0baf9dd88439962"
+    },
+    {
+      "path": "matched-pi/pi-sql-after_turns.json",
+      "bytes": 14511,
+      "sha256": "2b1e06c1904fb65c3ffdfa900f57559582132a626bfd365a9ff767ccae378c76"
+    },
+    {
+      "path": "matched-pi/pi-sql-after_verification.json",
+      "bytes": 14512,
+      "sha256": "0f8378d15cf392d6231028c800a9e9c4ed846ab5bd584d245e85a1194faeb5b1"
+    },
+    {
+      "path": "matched-pi/pi-sql-before_initialization.json",
+      "bytes": 2,
+      "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    {
+      "path": "matched-pi/pi-sql-before_measured_turns.json",
+      "bytes": 14483,
+      "sha256": "fbc94c9d550db0b79d46758364374adfa9fe839b7367218efae49fdb520c30f3"
+    },
+    {
+      "path": "matched-pi/pi-steady.cpuprofile",
+      "bytes": 179817,
+      "sha256": "d7500e5d77d7452c2610cd59042e6f7777db037ee066255a06f3b14f77a1c8de"
+    },
+    {
+      "path": "matched-pi/sample.json",
+      "bytes": 2489697,
+      "sha256": "76afc5095c891d982824c349939029d30cb414c383048e4addfc63c7ba9c7238"
+    },
+    {
+      "path": "matched-pi/sample.log",
+      "bytes": 152,
+      "sha256": "0c7be967d3a7286b6d6dfb7b43969c907b45dfd0b36a8c6839442906d017d418"
+    },
+    {
+      "path": "matched-pi/sample.process.json",
+      "bytes": 455145,
+      "sha256": "1f09a1395f00418249e5bfd75d5a6b5c20c5050e2eb1b7e849543a0920e9c0a1"
+    },
+    {
+      "path": "matched-pi/sample.provider.log",
+      "bytes": 72,
+      "sha256": "2221330c95d8f55ea1103f00cc429feb20d087afb4947cec70287ac2262ce6ce"
+    },
+    {
+      "path": "matched-pi/sample.provider.stdout",
+      "bytes": 247764,
+      "sha256": "30ac2c6e15bc4437be74eb09e173eddd4bfb8a1598a0a3161d0706f674045655"
+    },
+    {
+      "path": "matched-pi/tracer.log",
+      "bytes": 403,
+      "sha256": "ea8c8b037fc6f7ffb1b87ce4cb6d6433980c7c813b562919e36c177193f85c28"
+    },
+    {
+      "path": "matched-run.log",
+      "bytes": 22,
+      "sha256": "dbe4aef5a5ef65b1ff2cce724dcaa3ad7701e6da4a6ae7f643949f075fd8af96"
+    },
+    {
+      "path": "matched-rust/after_turns-database.json",
+      "bytes": 1989221,
+      "sha256": "cdf57e23d027f4f02f190dc040623b0628002dec2211d44110db7fb32913f843"
+    },
+    {
+      "path": "matched-rust/before_measured_turns-database.json",
+      "bytes": 341550,
+      "sha256": "c605194cf36617e83532225985949f81d7f4c9828b56dbc501214c13156e175e"
+    },
+    {
+      "path": "matched-rust/calls.strace",
+      "bytes": 24174988,
+      "sha256": "71f43762ce3bba4440544bdfc765e1cc8aae0d4f97855f2f143ee80370c6f665"
+    },
+    {
+      "path": "matched-rust/phases.json",
+      "bytes": 877,
+      "sha256": "ae9a63258e805d6ac9f344cacca2d9c32eed5628b3e6b847c938f242e4e24923"
+    },
+    {
+      "path": "matched-rust/sample.json",
+      "bytes": 6682411,
+      "sha256": "996fda384df4441d75075ed2afa8942922d2fadbf846f8577f96d2592ffa0df2"
+    },
+    {
+      "path": "matched-rust/sample.log",
+      "bytes": 328,
+      "sha256": "ae2895ef5e8afca240cfac39206e532f599f3ab1ebbd80d774239548126aa601"
+    },
+    {
+      "path": "matched-rust/sample.process.json",
+      "bytes": 1262895,
+      "sha256": "62a2ec407af266d73505ede014d133a2ba2efa0df81912ae7b85854c5c652642"
+    },
+    {
+      "path": "matched-rust/sample.provider.log",
+      "bytes": 72,
+      "sha256": "d5f21b91d1a6297b5956140219e736fde5f98fa75a6903691b43cbf1a54410fc"
+    },
+    {
+      "path": "matched-rust/sample.provider.stdout",
+      "bytes": 662604,
+      "sha256": "e519aee9d6fd6d2896fa20f51a51d62d9de2c2a880a886c85caa5dd6bdd881d7"
+    },
+    {
+      "path": "matched-rust/tracer.log",
+      "bytes": 279,
+      "sha256": "2393f1068019d2ed430b17ed25a8f9854c69f6c152518d8ca4c9cd273a3424a2"
+    },
+    {
+      "path": "negative-pilot.py",
+      "bytes": 5126,
+      "sha256": "8859503de00615de53494c365203a857644ebc5983dbbb48b38a4f5fb941f433"
+    },
+    {
+      "path": "negative-writev.py",
+      "bytes": 5134,
+      "sha256": "d45b2ff24a397103aaff9271d4af859949c2305184b932b85c0dda3776bc308c"
+    },
+    {
+      "path": "pi/after_turns-database.json",
+      "bytes": 7244,
+      "sha256": "feae002d690d1c2a4e46a13042e8b8f539cf8d1246416adf129db50be5ce9979"
+    },
+    {
+      "path": "pi/before_measured_turns-database.json",
+      "bytes": 6430,
+      "sha256": "3d7a3c2f9c4c9b7e58e16b7356896d979f6a6c3abe0e7beebf2cac3ebe0df231"
+    },
+    {
+      "path": "pi/calls.strace",
+      "bytes": 1281493,
+      "sha256": "876d493f244c804829e99e02432634b236a18e9b9594d877508b2578322a77ea"
+    },
+    {
+      "path": "pi/phases.json",
+      "bytes": 724,
+      "sha256": "a2f8a79012eac66231acf1818981e6cddcff66e66332f4440b8b324aa68110aa"
+    },
+    {
+      "path": "pi/pi-sql-after_cleanup.json",
+      "bytes": 14600,
+      "sha256": "03cd4f33d5c37913134d831fb180c64674043c264523cd6f0ccd5f7af6818d06"
+    },
+    {
+      "path": "pi/pi-sql-after_final_writer_close.json",
+      "bytes": 14594,
+      "sha256": "bd889484692326a4154bef2c6939562ae47cb56b42720be42e448038a1356319"
+    },
+    {
+      "path": "pi/pi-sql-after_initialization.json",
+      "bytes": 9945,
+      "sha256": "f5d708db2249ffb767f56886563887904d1323245439e0e67543555001bd419b"
+    },
+    {
+      "path": "pi/pi-sql-after_provider_start.json",
+      "bytes": 2,
+      "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    {
+      "path": "pi/pi-sql-after_reopen_verification.json",
+      "bytes": 14600,
+      "sha256": "03cd4f33d5c37913134d831fb180c64674043c264523cd6f0ccd5f7af6818d06"
+    },
+    {
+      "path": "pi/pi-sql-after_turns.json",
+      "bytes": 14510,
+      "sha256": "13af77c2853beeb1f23a2969b9ac0cdf4de5cc17e91a4ad282487c6772d7ae0e"
+    },
+    {
+      "path": "pi/pi-sql-after_verification.json",
+      "bytes": 14511,
+      "sha256": "e324f5c9de59c9711b7ff8097aa7096af9da93451dbfe15b7e6b419a69554c3e"
+    },
+    {
+      "path": "pi/pi-sql-before_initialization.json",
+      "bytes": 2,
+      "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    {
+      "path": "pi/pi-sql-before_measured_turns.json",
+      "bytes": 14482,
+      "sha256": "d14738c46d4e7afd4f49503bb628353fe355d4ec8d71d39893185bd62043bb19"
+    },
+    {
+      "path": "pi/pi-steady.cpuprofile",
+      "bytes": 163364,
+      "sha256": "fd598ad45e2e69bfade43fb80774fd7ab99f204f3149c9b52cd7ef70e403d25d"
+    },
+    {
+      "path": "pi/sample.json",
+      "bytes": 2489741,
+      "sha256": "9a929f26c0c93b88815e4464551633398805f3f7318065b36a063757111efd10"
+    },
+    {
+      "path": "pi/sample.log",
+      "bytes": 144,
+      "sha256": "488662a7307e5e811126fbf293f64abfc35c0eaaeeac8816301ec28f7b49637e"
+    },
+    {
+      "path": "pi/sample.process.json",
+      "bytes": 455137,
+      "sha256": "651e829097d2892521fa2b8fb4e8396e9cf52e15ce163b6a931b569134d78544"
+    },
+    {
+      "path": "pi/sample.provider.log",
+      "bytes": 72,
+      "sha256": "5d46dd81bf9144981985f85810a208837e8e7dd5ee20e56c9ba821b1bcd7e452"
+    },
+    {
+      "path": "pi/sample.provider.stdout",
+      "bytes": 247764,
+      "sha256": "3df0f7029a4ec8e27c172af70af6a6453f64e098725770ce6c21fdadc61dc1b8"
+    },
+    {
+      "path": "pi/tracer.log",
+      "bytes": 403,
+      "sha256": "31b276639d9b78deba446a9c2bcd1d4faad0f5b362a8cfcbae57fd07e57b0cdd"
+    },
+    {
+      "path": "pi-driver.mjs",
+      "bytes": 8635,
+      "sha256": "e832ecbd910118470334acc7c2a1dbda28a1bef9fd1e80a533c92b571b1ad70a"
+    },
+    {
+      "path": "pi-instrument.mjs",
+      "bytes": 1751,
+      "sha256": "3ce54e0e4ab4fa5674e7f229a890287fd44b6e1de504b933765868741cf10c9f"
+    },
+    {
+      "path": "run-complete.py",
+      "bytes": 4849,
+      "sha256": "4ba96b2259717f1ddcd782b30755d099c093961163d8bc605e423858b9006463"
+    },
+    {
+      "path": "run-diagnostic.py",
+      "bytes": 4786,
+      "sha256": "4395d78cf1c1a54c8cede64c7e2cc5a2ee3574269680df529253d69eb4a0171d"
+    },
+    {
+      "path": "run-matched.py",
+      "bytes": 4830,
+      "sha256": "bb2f9ae6c23ec9a031babe7a25cafc086c8bb8a3d192d35ece38e33de74bf68c"
+    },
+    {
+      "path": "run.log",
+      "bytes": 22,
+      "sha256": "dbe4aef5a5ef65b1ff2cce724dcaa3ad7701e6da4a6ae7f643949f075fd8af96"
+    },
+    {
+      "path": "rust/after_turns-database.json",
+      "bytes": 1989509,
+      "sha256": "8c6d64252957d9d9519e578f2e79652ee7ccadf69271176f31512bf575782253"
+    },
+    {
+      "path": "rust/before_measured_turns-database.json",
+      "bytes": 341522,
+      "sha256": "3fef984e545f964aaf37777e1e2375764f3006422b235c0396bd277358b211c8"
+    },
+    {
+      "path": "rust/calls.strace",
+      "bytes": 23581884,
+      "sha256": "3dbf21458ad5ff721ca36f1b59cd74a31a297fcb0fdc58ad876e95f598d8485a"
+    },
+    {
+      "path": "rust/phases.json",
+      "bytes": 877,
+      "sha256": "f22c9065bf858f59ba5022c8310d69b92a9500c182a928e293f7e5b66ebaf72b"
+    },
+    {
+      "path": "rust/sample.json",
+      "bytes": 6679692,
+      "sha256": "17edb8b9bed59fab5db2084c64dfe7dedaa3e332c7a14c32bb0b4999f99637cc"
+    },
+    {
+      "path": "rust/sample.log",
+      "bytes": 320,
+      "sha256": "acbf2c8381dc383d827dd62e7386a2c3d0f2d6b98542ee87606427b1ae46bbee"
+    },
+    {
+      "path": "rust/sample.process.json",
+      "bytes": 1262896,
+      "sha256": "6c6a731afec74c72449e78de66fcc13f00752fbffeecdc0d5df525a6a214977e"
+    },
+    {
+      "path": "rust/sample.provider.log",
+      "bytes": 72,
+      "sha256": "e2dc1d84e9a9a1af7a252c7fb83bc6b109a0bcda7c824f6fee5aa71968c0e8c8"
+    },
+    {
+      "path": "rust/sample.provider.stdout",
+      "bytes": 662604,
+      "sha256": "822a35d062e8ec1eead40c0932056935f8d7ff309f4c3ae37311fd573d28ca45"
+    },
+    {
+      "path": "rust/tracer.log",
+      "bytes": 279,
+      "sha256": "d60412b34b8a811174c086dc91e125e3608f2845afde226cfbd971414101dd7e"
+    },
+    {
+      "path": "summary.json",
+      "bytes": 36652,
+      "sha256": "36efd2a9b56f31e1e5b994b994cbe8fec566978bd665d60bdacf08dee60d8954"
+    },
+    {
+      "path": "summary.log",
+      "bytes": 8323,
+      "sha256": "6fdb19db2dfa0baac5083a30f42f936927ba51330d0e3ddd97f24e6fa892990b"
+    }
+  ],
+  "archive_bytes": 3631940,
+  "archive_sha256": "3ca8f8b9782621831efe9328ab47628928b0ea8d5eba29f9b39107263104a9fd"
+}

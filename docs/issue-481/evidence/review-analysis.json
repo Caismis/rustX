@@ -1,0 +1,1499 @@
+{
+  "scope": "Diagnostics, not replacements for the original untrimmed headline matrices. External 10 ms sampling can perturb scheduling. Raw inputs and all paired observations are preserved.",
+  "groups": {
+    "contention-workspace": {
+      "pairs": [
+        {
+          "pair": 0,
+          "before": {
+            "input": "contention-workspace/0-short-small-before.json",
+            "sha256": "4201092e3746a9beb94e495e4c5121566fb14a0e850a33db2e307cb934b041ed",
+            "diagnostic_sha256": "c85314a3fc7dd7c6b27410d9da7e08746f3b3adab9ab239cdb10d925b93c17a1",
+            "mean_turn_ms": 79.1246875,
+            "measured_turn_ms": [
+              74.949,
+              76.799,
+              84.351,
+              88.37,
+              78.402,
+              74.832,
+              83.523,
+              79.717,
+              71.018,
+              84.506,
+              69.355,
+              80.565,
+              76.817,
+              69.2,
+              68.594,
+              84.908,
+              91.262,
+              87.384,
+              71.368,
+              74.305,
+              96.691,
+              72.383,
+              75.992,
+              81.884,
+              72.625,
+              94.556,
+              75.123,
+              73.748,
+              91.128,
+              78.448,
+              75.449,
+              73.738
+            ],
+            "cgroup_throttled_ms": 0.0,
+            "wchan_samples": {
+              "0": 641,
+              "__futex_wait": 3821,
+              "anon_pipe_read": 7,
+              "do_epoll_wait": 406,
+              "__sync_dirty_buffer": 3,
+              "folio_wait_bit_common": 10,
+              "submit_bio_wait": 4
+            },
+            "cpu_max": "400000 100000\n",
+            "dirty_pages_before_after": [
+              0,
+              2149
+            ],
+            "max_sampled_executable_pss_kib": null,
+            "max_sampled_rss_kib": 208452,
+            "executable_warm_ms": null
+          },
+          "after": {
+            "input": "contention-workspace/0-short-small-after.json",
+            "sha256": "195b633fd6ee897b6b346d8132af724ccb9a2c41d75cd85a2cb4e2230a12ad26",
+            "diagnostic_sha256": "a1cda01500a24e35ddc34fabd8d7cff2978b0cada38abc285b7b396e0e05132a",
+            "mean_turn_ms": 73.432625,
+            "measured_turn_ms": [
+              72.985,
+              67.137,
+              77.128,
+              70.872,
+              69.057,
+              75.324,
+              68.333,
+              74.455,
+              74.377,
+              67.835,
+              81.842,
+              68.34,
+              72.876,
+              63.294,
+              78.392,
+              79.983,
+              71.419,
+              70.253,
+              70.127,
+              74.287,
+              67.997,
+              72.031,
+              74.09,
+              80.493,
+              65.96,
+              69.662,
+              68.312,
+              81.544,
+              77.346,
+              73.634,
+              84.874,
+              85.585
+            ],
+            "cgroup_throttled_ms": 0.0,
+            "wchan_samples": {
+              "0": 622,
+              "__futex_wait": 3458,
+              "anon_pipe_read": 7,
+              "do_epoll_wait": 390,
+              "do_mprotect_pkey.constprop.0": 1,
+              "folio_wait_bit_common": 8,
+              "submit_bio_wait": 4,
+              "__sync_dirty_buffer": 3,
+              "fsync_buffers_list": 2,
+              "blk_mq_get_tag": 1
+            },
+            "cpu_max": "400000 100000\n",
+            "dirty_pages_before_after": [
+              2334,
+              4445
+            ],
+            "max_sampled_executable_pss_kib": null,
+            "max_sampled_rss_kib": 208240,
+            "executable_warm_ms": null
+          },
+          "wall_ratio": 0.928062117148962
+        },
+        {
+          "pair": 1,
+          "before": {
+            "input": "contention-workspace/1-short-small-before.json",
+            "sha256": "2e4dc1e7a6b01492aa3030490aefc8c6c2a9797a8bebdb52681ada225e41ef8d",
+            "diagnostic_sha256": "7b72d9a47c0d83b4657d8c6895cb5d8345c899adecc02f99a307230d183ae8bf",
+            "mean_turn_ms": 72.02909375,
+            "measured_turn_ms": [
+              70.068,
+              63.832,
+              77.816,
+              69.003,
+              73.975,
+              71.045,
+              77.224,
+              70.404,
+              71.631,
+              67.717,
+              86.879,
+              66.657,
+              84.031,
+              73.47,
+              70.256,
+              70.454,
+              65.389,
+              69.079,
+              72.72,
+              79.616,
+              77.286,
+              64.568,
+              74.485,
+              65.037,
+              69.791,
+              71.371,
+              68.519,
+              67.2,
+              68.977,
+              70.405,
+              75.72,
+              80.306
+            ],
+            "cgroup_throttled_ms": 0.0,
+            "wchan_samples": {
+              "0": 588,
+              "__futex_wait": 3063,
+              "anon_pipe_read": 7,
+              "do_epoll_wait": 364,
+              "__sync_dirty_buffer": 1,
+              "folio_wait_bit_common": 5,
+              "submit_bio_wait": 3
+            },
+            "cpu_max": "400000 100000\n",
+            "dirty_pages_before_after": [
+              6860,
+              8997
+            ],
+            "max_sampled_executable_pss_kib": null,
+            "max_sampled_rss_kib": 206548,
+            "executable_warm_ms": null
+          },
+          "after": {
+            "input": "contention-workspace/1-short-small-after.json",
+            "sha256": "0942d174d4c1aa4572211587d81b25bb6c417ff087d24b20ccf61ce7f4e64484",
+            "diagnostic_sha256": "97adaa34095f6cbcf29440401e4a06e89e8a0a45c22898fabd8df83db4f27c1c",
+            "mean_turn_ms": 71.54718749999999,
+            "measured_turn_ms": [
+              81.203,
+              78.296,
+              63.818,
+              57.461,
+              67.465,
+              62.709,
+              63.081,
+              72.749,
+              66.9,
+              73.622,
+              78.583,
+              65.225,
+              71.644,
+              75.088,
+              77.488,
+              70.935,
+              71.478,
+              80.246,
+              62.322,
+              74.463,
+              68.789,
+              84.731,
+              73.96,
+              73.961,
+              70.192,
+              72.666,
+              69.724,
+              72.115,
+              69.345,
+              64.226,
+              77.256,
+              77.769
+            ],
+            "cgroup_throttled_ms": 0.0,
+            "wchan_samples": {
+              "0": 575,
+              "__futex_wait": 3073,
+              "anon_pipe_read": 7,
+              "do_epoll_wait": 375,
+              "do_mprotect_pkey.constprop.0": 1,
+              "__sync_dirty_buffer": 1,
+              "submit_bio_wait": 3,
+              "folio_wait_bit_common": 3,
+              "fsync_buffers_list": 1
+            },
+            "cpu_max": "400000 100000\n",
+            "dirty_pages_before_after": [
+              4627,
+              6731
+            ],
+            "max_sampled_executable_pss_kib": null,
+            "max_sampled_rss_kib": 207044,
+            "executable_warm_ms": null
+          },
+          "wall_ratio": 0.9933095611105061
+        },
+        {
+          "pair": 2,
+          "before": {
+            "input": "contention-workspace/2-short-small-before.json",
+            "sha256": "b0aa2e409dddb646d0e76a3417d51b3b3909779f5bc46bac8b7e43780229fdba",
+            "diagnostic_sha256": "eb2c33a6a06a11950d23486b5e80c5703776ed1a37637c10aa42edca0f7d6b38",
+            "mean_turn_ms": 72.19065625,
+            "measured_turn_ms": [
+              69.493,
+              74.115,
+              77.164,
+              70.756,
+              74.969,
+              76.492,
+              65.156,
+              72.114,
+              68.639,
+              61.169,
+              73.991,
+              66.522,
+              69.559,
+              67.954,
+              69.438,
+              71.272,
+              75.306,
+              73.642,
+              70.709,
+              79.333,
+              83.245,
+              71.68,
+              73.639,
+              71.295,
+              72.348,
+              77.773,
+              68.638,
+              73.913,
+              70.638,
+              68.285,
+              69.893,
+              80.961
+            ],
+            "cgroup_throttled_ms": 0.0,
+            "wchan_samples": {
+              "0": 615,
+              "__futex_wait": 3039,
+              "anon_pipe_read": 6,
+              "do_epoll_wait": 372,
+              "folio_wait_bit_common": 5,
+              "submit_bio_wait": 4
+            },
+            "cpu_max": "400000 100000\n",
+            "dirty_pages_before_after": [
+              9163,
+              11267
+            ],
+            "max_sampled_executable_pss_kib": null,
+            "max_sampled_rss_kib": 207404,
+            "executable_warm_ms": null
+          },
+          "after": {
+            "input": "contention-workspace/2-short-small-after.json",
+            "sha256": "01fa3bfa07704832ab71f4aa5b69fa3d404887703d376f8acc20fe40e5b7386d",
+            "diagnostic_sha256": "9398122c68f6f6d43ccd7cffa02a8b19c2d7cc28546c1fed2a1b0a6c3f4d5551",
+            "mean_turn_ms": 73.206375,
+            "measured_turn_ms": [
+              67.043,
+              63.144,
+              72.055,
+              63.403,
+              77.582,
+              68.026,
+              68.63,
+              67.566,
+              67.64,
+              82.733,
+              78.077,
+              62.196,
+              79.779,
+              67.148,
+              70.366,
+              85.396,
+              68.817,
+              80.438,
+              78.225,
+              74.947,
+              73.978,
+              65.311,
+              82.115,
+              74.135,
+              71.644,
+              79.93,
+              84.478,
+              84.846,
+              68.76,
+              69.211,
+              71.907,
+              73.078
+            ],
+            "cgroup_throttled_ms": 0.0,
+            "wchan_samples": {
+              "0": 608,
+              "__futex_wait": 3146,
+              "anon_pipe_read": 6,
+              "do_epoll_wait": 385,
+              "submit_bio_wait": 2,
+              "folio_wait_bit_common": 8,
+              "do_mprotect_pkey.constprop.0": 1
+            },
+            "cpu_max": "400000 100000\n",
+            "dirty_pages_before_after": [
+              11396,
+              13532
+            ],
+            "max_sampled_executable_pss_kib": null,
+            "max_sampled_rss_kib": 207872,
+            "executable_warm_ms": null
+          },
+          "wall_ratio": 1.014069947591036
+        }
+      ],
+      "median_wall_ratio": 0.9933095611105061
+    },
+    "contention-tmpfs": {
+      "pairs": [
+        {
+          "pair": 0,
+          "before": {
+            "input": "contention-tmpfs/0-short-small-before.json",
+            "sha256": "862402170d5712bc49649d04bd79b1bd2c089e10a3438b815ee4f50de5f64c0d",
+            "diagnostic_sha256": "0dadb89fbab2b48d75730aca4894d62d87808b056ffc892dd2567ed77add112c",
+            "mean_turn_ms": 69.25634375,
+            "measured_turn_ms": [
+              63.192,
+              69.028,
+              60.999,
+              64.981,
+              61.723,
+              79.872,
+              84.107,
+              60.249,
+              75.15,
+              64.203,
+              73.492,
+              62.822,
+              62.497,
+              61.632,
+              77.133,
+              78.875,
+              56.813,
+              62.879,
+              72.058,
+              63.225,
+              63.472,
+              78.568,
+              71.942,
+              71.081,
+              76.641,
+              89.401,
+              70.285,
+              63.584,
+              64.962,
+              68.814,
+              70.674,
+              71.849
+            ],
+            "cgroup_throttled_ms": 0.0,
+            "wchan_samples": {
+              "0": 586,
+              "__futex_wait": 2986,
+              "anon_pipe_read": 10,
+              "do_epoll_wait": 368,
+              "do_mprotect_pkey.constprop.0": 1
+            },
+            "cpu_max": "400000 100000\n",
+            "dirty_pages_before_after": [
+              4621,
+              4627
+            ],
+            "max_sampled_executable_pss_kib": null,
+            "max_sampled_rss_kib": 206128,
+            "executable_warm_ms": null
+          },
+          "after": {
+            "input": "contention-tmpfs/0-short-small-after.json",
+            "sha256": "b51e9afd4ccd32b3807b74905957ad5890830fb6ae632a68937a62258cc8ee35",
+            "diagnostic_sha256": "0841544b647eefe08e0a9345ac4656952c2f2a09fc25a260a39a3a08a28d071f",
+            "mean_turn_ms": 75.05134375,
+            "measured_turn_ms": [
+              77.74,
+              71.755,
+              71.657,
+              72.678,
+              70.887,
+              81.307,
+              74.67,
+              79.438,
+              67.82,
+              69.814,
+              71.837,
+              74.757,
+              79.869,
+              78.902,
+              75.448,
+              72.012,
+              64.369,
+              79.164,
+              73.628,
+              74.009,
+              79.43,
+              69.038,
+              73.969,
+              86.2,
+              86.599,
+              72.03,
+              71.866,
+              80.623,
+              77.561,
+              78.477,
+              71.267,
+              72.822
+            ],
+            "cgroup_throttled_ms": 0.0,
+            "wchan_samples": {
+              "0": 617,
+              "__futex_wait": 3219,
+              "anon_pipe_read": 6,
+              "do_epoll_wait": 380
+            },
+            "cpu_max": "400000 100000\n",
+            "dirty_pages_before_after": [
+              4627,
+              4627
+            ],
+            "max_sampled_executable_pss_kib": null,
+            "max_sampled_rss_kib": 207296,
+            "executable_warm_ms": null
+          },
+          "wall_ratio": 1.083674645328068
+        },
+        {
+          "pair": 1,
+          "before": {
+            "input": "contention-tmpfs/1-short-small-before.json",
+            "sha256": "4a76d0edb7088499f80f5be74a20acdc120e9792db30a2d9ca914c12a5db18c5",
+            "diagnostic_sha256": "dd3edd20fdc516c9c8d6729d76ba99ca50493516666267b05213a0bb34219b0c",
+            "mean_turn_ms": 67.94275,
+            "measured_turn_ms": [
+              61.019,
+              72.769,
+              66.783,
+              62.599,
+              71.824,
+              58.693,
+              63.374,
+              62.162,
+              62.828,
+              68.856,
+              65.593,
+              67.138,
+              61.724,
+              68.167,
+              63.366,
+              67.189,
+              60.57,
+              63.11,
+              70.163,
+              72.737,
+              75.276,
+              65.115,
+              70.64,
+              63.298,
+              62.754,
+              60.595,
+              67.156,
+              80.579,
+              71.962,
+              76.142,
+              93.654,
+              76.333
+            ],
+            "cgroup_throttled_ms": 0.0,
+            "wchan_samples": {
+              "0": 580,
+              "__futex_wait": 3086,
+              "anon_pipe_read": 7,
+              "do_epoll_wait": 351,
+              "do_mprotect_pkey.constprop.0": 1
+            },
+            "cpu_max": "400000 100000\n",
+            "dirty_pages_before_after": [
+              4627,
+              4627
+            ],
+            "max_sampled_executable_pss_kib": null,
+            "max_sampled_rss_kib": 205972,
+            "executable_warm_ms": null
+          },
+          "after": {
+            "input": "contention-tmpfs/1-short-small-after.json",
+            "sha256": "c0f8bf58c586d60da5584d4155b070994dc3ab962ee3b11b6c7260a9e579a5e0",
+            "diagnostic_sha256": "27bdd3899a71c8ad69a297f07304d2d6fec6812d1cf5effcb0bbec71fdfe4f01",
+            "mean_turn_ms": 72.102375,
+            "measured_turn_ms": [
+              67.788,
+              61.827,
+              71.998,
+              79.977,
+              71.036,
+              68.143,
+              67.73,
+              82.437,
+              68.152,
+              78.948,
+              79.587,
+              70.01,
+              63.771,
+              74.055,
+              71.897,
+              74.807,
+              71.429,
+              68.117,
+              78.991,
+              68.134,
+              81.486,
+              68.572,
+              82.459,
+              71.458,
+              74.737,
+              81.155,
+              62.744,
+              61.657,
+              64.076,
+              69.525,
+              78.274,
+              72.299
+            ],
+            "cgroup_throttled_ms": 0.0,
+            "wchan_samples": {
+              "0": 625,
+              "__futex_wait": 3254,
+              "anon_pipe_read": 6,
+              "do_epoll_wait": 365,
+              "do_mprotect_pkey.constprop.0": 1
+            },
+            "cpu_max": "400000 100000\n",
+            "dirty_pages_before_after": [
+              4627,
+              4627
+            ],
+            "max_sampled_executable_pss_kib": null,
+            "max_sampled_rss_kib": 208448,
+            "executable_warm_ms": null
+          },
+          "wall_ratio": 1.0612224998252204
+        },
+        {
+          "pair": 2,
+          "before": {
+            "input": "contention-tmpfs/2-short-small-before.json",
+            "sha256": "d79ff3fac103504748ffac09fb1ffcdebcbad7b32eb90617a7e090c0194f9fea",
+            "diagnostic_sha256": "8ae18fa0227b09c154f86f4792ccb5ab3e5fa7853af12bd55d40952032865d58",
+            "mean_turn_ms": 71.307375,
+            "measured_turn_ms": [
+              81.012,
+              104.996,
+              85.476,
+              67.94,
+              72.17,
+              62.264,
+              73.173,
+              68.89,
+              77.679,
+              69.41,
+              75.724,
+              67.249,
+              65.341,
+              61.036,
+              76.342,
+              76.379,
+              69.344,
+              68.676,
+              77.234,
+              68.083,
+              71.781,
+              59.867,
+              67.041,
+              64.811,
+              69.645,
+              69.025,
+              65.687,
+              64.224,
+              71.275,
+              70.613,
+              73.541,
+              65.908
+            ],
+            "cgroup_throttled_ms": 0.0,
+            "wchan_samples": {
+              "0": 602,
+              "__futex_wait": 3371,
+              "anon_pipe_read": 6,
+              "do_epoll_wait": 362
+            },
+            "cpu_max": "400000 100000\n",
+            "dirty_pages_before_after": [
+              13703,
+              13703
+            ],
+            "max_sampled_executable_pss_kib": null,
+            "max_sampled_rss_kib": 208620,
+            "executable_warm_ms": null
+          },
+          "after": {
+            "input": "contention-tmpfs/2-short-small-after.json",
+            "sha256": "0dc09adf04f9c6d90acab63e69878e4754a762b393c0d8edbed2bcf9cf32c3cf",
+            "diagnostic_sha256": "7303bb0b5943a29d46c5f9ba586168e1536a0696360b5d1c9c6c9139f1cdbdee",
+            "mean_turn_ms": 69.56875,
+            "measured_turn_ms": [
+              63.944,
+              66.339,
+              71.46,
+              65.262,
+              76.736,
+              73.536,
+              66.828,
+              65.814,
+              68.38,
+              67.762,
+              62.551,
+              67.901,
+              76.174,
+              70.851,
+              73.121,
+              65.446,
+              62.641,
+              65.75,
+              77.906,
+              63.854,
+              61.889,
+              67.957,
+              62.677,
+              75.519,
+              74.435,
+              70.253,
+              76.002,
+              73.657,
+              76.62,
+              66.169,
+              73.203,
+              75.563
+            ],
+            "cgroup_throttled_ms": 0.0,
+            "wchan_samples": {
+              "0": 618,
+              "__futex_wait": 2962,
+              "anon_pipe_read": 6,
+              "do_epoll_wait": 363,
+              "do_mprotect_pkey.constprop.0": 1
+            },
+            "cpu_max": "400000 100000\n",
+            "dirty_pages_before_after": [
+              13703,
+              13703
+            ],
+            "max_sampled_executable_pss_kib": null,
+            "max_sampled_rss_kib": 208280,
+            "executable_warm_ms": null
+          },
+          "wall_ratio": 0.9756178796372745
+        }
+      ],
+      "median_wall_ratio": 1.0612224998252204
+    },
+    "contention-warm-executables": {
+      "pairs": [
+        {
+          "pair": 0,
+          "before": {
+            "input": "contention-warm-executables/0-short-small-before.json",
+            "sha256": "4b4251313950fdfa67f7102dbcdd3a7056658dbec7b72eb08ee12b5cab4370be",
+            "diagnostic_sha256": "894de9fec0d459458993aa21e316332bf6e077d0b9e1fa8c6e013b0f0ea2b31b",
+            "mean_turn_ms": 72.43790625,
+            "measured_turn_ms": [
+              66.454,
+              57.415,
+              77.205,
+              60.465,
+              64.784,
+              67.748,
+              65.234,
+              73.533,
+              62.887,
+              68.56,
+              73.493,
+              67.817,
+              69.813,
+              75.938,
+              65.883,
+              74.47,
+              69.086,
+              83.796,
+              79.439,
+              63.725,
+              67.76,
+              79.655,
+              78.532,
+              88.288,
+              68.883,
+              91.503,
+              79.103,
+              72.218,
+              71.707,
+              76.554,
+              78.479,
+              77.586
+            ],
+            "cgroup_throttled_ms": 0.0,
+            "wchan_samples": {
+              "0": 552,
+              "__futex_wait": 3105,
+              "anon_pipe_read": 7,
+              "do_epoll_wait": 364,
+              "folio_wait_bit_common": 5,
+              "__sync_dirty_buffer": 1,
+              "submit_bio_wait": 5
+            },
+            "cpu_max": "400000 100000\n",
+            "dirty_pages_before_after": [
+              54,
+              2181
+            ],
+            "max_sampled_executable_pss_kib": 58116,
+            "max_sampled_rss_kib": 206728,
+            "executable_warm_ms": 16.644654
+          },
+          "after": {
+            "input": "contention-warm-executables/0-short-small-after.json",
+            "sha256": "b2063540906aee1a064198aa31652a7a6c382a089509a101f43d491a59ee2860",
+            "diagnostic_sha256": "207c3a3cb21dbe12ab3554e6e24257e17f98b814ca049747e0e8027315da6f26",
+            "mean_turn_ms": 69.62871875,
+            "measured_turn_ms": [
+              64.036,
+              74.311,
+              70.077,
+              67.389,
+              75.776,
+              68.726,
+              60.891,
+              74.174,
+              69.065,
+              75.956,
+              65.017,
+              70.079,
+              66.696,
+              63.211,
+              78.806,
+              68.312,
+              63.501,
+              76.528,
+              70.132,
+              65.221,
+              74.47,
+              61.202,
+              69.27,
+              72.977,
+              67.102,
+              66.558,
+              61.789,
+              73.745,
+              72.523,
+              63.428,
+              78.271,
+              78.88
+            ],
+            "cgroup_throttled_ms": 0.0,
+            "wchan_samples": {
+              "0": 567,
+              "__futex_wait": 2945,
+              "anon_pipe_read": 6,
+              "do_epoll_wait": 356,
+              "fsync_buffers_list": 1,
+              "folio_wait_bit_common": 3,
+              "__sync_dirty_buffer": 2,
+              "submit_bio_wait": 3,
+              "do_mprotect_pkey.constprop.0": 1,
+              "blk_mq_get_tag": 1
+            },
+            "cpu_max": "400000 100000\n",
+            "dirty_pages_before_after": [
+              2310,
+              4463
+            ],
+            "max_sampled_executable_pss_kib": 60220,
+            "max_sampled_rss_kib": 209444,
+            "executable_warm_ms": 16.465273
+          },
+          "wall_ratio": 0.9612193719362231
+        },
+        {
+          "pair": 1,
+          "before": {
+            "input": "contention-warm-executables/1-short-small-before.json",
+            "sha256": "ac4ba2fd3fd197dfb7fa2239f253d3392e12be0fd1dbdf9553366de8084304f1",
+            "diagnostic_sha256": "3d46b9399ac8863a71151fe065bf3d690eb0ced57481d4d91becef07a164ae03",
+            "mean_turn_ms": 73.05203125,
+            "measured_turn_ms": [
+              81.39,
+              65.046,
+              78.742,
+              72.788,
+              73.221,
+              78.793,
+              66.493,
+              70.624,
+              65.905,
+              65.856,
+              80.666,
+              65.558,
+              70.27,
+              70.421,
+              82.468,
+              74.222,
+              66.247,
+              80.141,
+              68.287,
+              66.392,
+              71.989,
+              65.127,
+              71.72,
+              84.184,
+              90.349,
+              79.157,
+              72.008,
+              75.516,
+              71.126,
+              69.231,
+              65.835,
+              77.893
+            ],
+            "cgroup_throttled_ms": 0.0,
+            "wchan_samples": {
+              "0": 567,
+              "__futex_wait": 3212,
+              "anon_pipe_read": 6,
+              "do_epoll_wait": 365,
+              "folio_wait_bit_common": 5,
+              "__sync_dirty_buffer": 2,
+              "submit_bio_wait": 2
+            },
+            "cpu_max": "400000 100000\n",
+            "dirty_pages_before_after": [
+              6875,
+              9017
+            ],
+            "max_sampled_executable_pss_kib": 58172,
+            "max_sampled_rss_kib": 206684,
+            "executable_warm_ms": 17.302166
+          },
+          "after": {
+            "input": "contention-warm-executables/1-short-small-after.json",
+            "sha256": "adfe55b300a28a8914f1d9236be01b79b9ef4d79a639a54f633f7e34f56b3a45",
+            "diagnostic_sha256": "446f46f5db94fafdec0b69dd906ecf1cab545c1190233a7448da79bf7ba6ba35",
+            "mean_turn_ms": 69.54859375,
+            "measured_turn_ms": [
+              76.212,
+              87.451,
+              80.831,
+              63.939,
+              73.836,
+              69.001,
+              64.653,
+              65.423,
+              61.769,
+              69.3,
+              66.528,
+              60.906,
+              65.511,
+              65.461,
+              73.457,
+              64.613,
+              62.192,
+              68.259,
+              62.089,
+              69.015,
+              75.333,
+              63.019,
+              67.532,
+              67.662,
+              70.964,
+              77.419,
+              66.151,
+              72.872,
+              78.751,
+              67.77,
+              75.512,
+              72.124
+            ],
+            "cgroup_throttled_ms": 0.0,
+            "wchan_samples": {
+              "0": 571,
+              "__futex_wait": 2885,
+              "anon_pipe_read": 6,
+              "do_epoll_wait": 354,
+              "folio_wait_bit_common": 3,
+              "submit_bio_wait": 4,
+              "__sync_dirty_buffer": 1
+            },
+            "cpu_max": "400000 100000\n",
+            "dirty_pages_before_after": [
+              4632,
+              6746
+            ],
+            "max_sampled_executable_pss_kib": 60156,
+            "max_sampled_rss_kib": 207600,
+            "executable_warm_ms": 16.041523
+          },
+          "wall_ratio": 0.9520418879522943
+        },
+        {
+          "pair": 2,
+          "before": {
+            "input": "contention-warm-executables/2-short-small-before.json",
+            "sha256": "21cca2a01dab33b6d389564413cbaf645c8763426a924d339dc24bf62c4ba1a6",
+            "diagnostic_sha256": "47568f80654995e0b5ea8c79b38f51c310963d9c65f9674bb7e9c18b8ab07f40",
+            "mean_turn_ms": 72.04784375,
+            "measured_turn_ms": [
+              78.516,
+              65.488,
+              75.69,
+              63.253,
+              89.388,
+              78.454,
+              71.113,
+              76.215,
+              67.298,
+              76.563,
+              66.807,
+              66.758,
+              73.167,
+              71.608,
+              71.264,
+              68.409,
+              72.764,
+              67.933,
+              73.006,
+              62.296,
+              73.522,
+              67.881,
+              71.249,
+              72.362,
+              73.929,
+              69.517,
+              62.787,
+              73.175,
+              77.373,
+              75.535,
+              78.909,
+              73.302
+            ],
+            "cgroup_throttled_ms": 0.0,
+            "wchan_samples": {
+              "0": 565,
+              "__futex_wait": 3305,
+              "anon_pipe_read": 6,
+              "do_epoll_wait": 358,
+              "submit_bio_wait": 1,
+              "folio_wait_bit_common": 10,
+              "do_mprotect_pkey.constprop.0": 2
+            },
+            "cpu_max": "400000 100000\n",
+            "dirty_pages_before_after": [
+              9195,
+              11306
+            ],
+            "max_sampled_executable_pss_kib": 58376,
+            "max_sampled_rss_kib": 206988,
+            "executable_warm_ms": 16.915112
+          },
+          "after": {
+            "input": "contention-warm-executables/2-short-small-after.json",
+            "sha256": "0def2bd827495e36fac6707aff1d7da574ddd4800252491540132a24246df1f4",
+            "diagnostic_sha256": "2d36ca4537006e25b8af7467f7321d7ebc487699183dda29045178d7bc2786e5",
+            "mean_turn_ms": 70.63096875,
+            "measured_turn_ms": [
+              70.268,
+              58.646,
+              77.252,
+              63.999,
+              68.264,
+              65.445,
+              66.017,
+              94.11,
+              64.747,
+              69.703,
+              71.467,
+              66.763,
+              67.096,
+              61.833,
+              73.94,
+              70.162,
+              71.757,
+              70.221,
+              73.432,
+              72.333,
+              65.773,
+              68.973,
+              73.887,
+              69.041,
+              71.86,
+              81.847,
+              73.218,
+              68.439,
+              80.212,
+              70.058,
+              66.312,
+              73.116
+            ],
+            "cgroup_throttled_ms": 0.0,
+            "wchan_samples": {
+              "0": 570,
+              "__futex_wait": 3003,
+              "anon_pipe_read": 6,
+              "do_epoll_wait": 359,
+              "__sync_dirty_buffer": 1,
+              "folio_wait_bit_common": 5,
+              "fsync_buffers_list": 2,
+              "submit_bio_wait": 1,
+              "do_mprotect_pkey.constprop.0": 1,
+              "blk_mq_get_tag": 1
+            },
+            "cpu_max": "400000 100000\n",
+            "dirty_pages_before_after": [
+              11485,
+              13590
+            ],
+            "max_sampled_executable_pss_kib": 56976,
+            "max_sampled_rss_kib": 204988,
+            "executable_warm_ms": 17.72184
+          },
+          "wall_ratio": 0.9803342483792237
+        }
+      ],
+      "median_wall_ratio": 0.9612193719362231
+    }
+  },
+  "memory_median_paired_deltas_kib": {
+    "Source": {
+      "after_initialization": {
+        "Rss": {
+          "pairs": [
+            296,
+            272,
+            892
+          ],
+          "median": 296
+        },
+        "Pss_Anon": {
+          "pairs": [
+            -64,
+            -68,
+            116
+          ],
+          "median": -64
+        },
+        "Pss_File": {
+          "pairs": [
+            362,
+            342,
+            778
+          ],
+          "median": 362
+        }
+      },
+      "after_turns": {
+        "Rss": {
+          "pairs": [
+            1204,
+            1768,
+            1272
+          ],
+          "median": 1272
+        },
+        "Pss_Anon": {
+          "pairs": [
+            508,
+            1388,
+            864
+          ],
+          "median": 864
+        },
+        "Pss_File": {
+          "pairs": [
+            700,
+            384,
+            412
+          ],
+          "median": 412
+        }
+      },
+      "after_cleanup": {
+        "Rss": {
+          "pairs": [
+            1260,
+            2036,
+            972
+          ],
+          "median": 1260
+        },
+        "Pss_Anon": {
+          "pairs": [
+            564,
+            1680,
+            588
+          ],
+          "median": 588
+        },
+        "Pss_File": {
+          "pairs": [
+            700,
+            360,
+            388
+          ],
+          "median": 388
+        }
+      }
+    },
+    "Canonical": {
+      "after_initialization": {
+        "Rss": {
+          "pairs": [
+            3668,
+            3172,
+            2968,
+            3392,
+            2968,
+            3252
+          ],
+          "median": 3212.0
+        },
+        "Pss_Anon": {
+          "pairs": [
+            20,
+            20,
+            -72,
+            -12,
+            -100,
+            24
+          ],
+          "median": 4.0
+        },
+        "Pss_File": {
+          "pairs": [
+            3648,
+            3152,
+            3040,
+            3404,
+            3068,
+            3228
+          ],
+          "median": 3190.0
+        }
+      },
+      "after_turns": {
+        "Rss": {
+          "pairs": [
+            2440,
+            604,
+            2372,
+            2348,
+            4856,
+            2944
+          ],
+          "median": 2406.0
+        },
+        "Pss_Anon": {
+          "pairs": [
+            228,
+            -1036,
+            444,
+            488,
+            2924,
+            1224
+          ],
+          "median": 466.0
+        },
+        "Pss_File": {
+          "pairs": [
+            2212,
+            1640,
+            1928,
+            1860,
+            1932,
+            1720
+          ],
+          "median": 1894.0
+        }
+      },
+      "after_cleanup": {
+        "Rss": {
+          "pairs": [
+            2192,
+            1024,
+            2136,
+            2280,
+            5252,
+            3120
+          ],
+          "median": 2236.0
+        },
+        "Pss_Anon": {
+          "pairs": [
+            128,
+            -764,
+            -28,
+            484,
+            3064,
+            1132
+          ],
+          "median": 306.0
+        },
+        "Pss_File": {
+          "pairs": [
+            2064,
+            1788,
+            2164,
+            1796,
+            2188,
+            1988
+          ],
+          "median": 2026.0
+        }
+      }
+    },
+    "Combined": {
+      "after_initialization": {
+        "Rss": {
+          "pairs": [
+            4180,
+            3952,
+            4152,
+            4624,
+            3960,
+            3668
+          ],
+          "median": 4056.0
+        },
+        "Pss_Anon": {
+          "pairs": [
+            68,
+            32,
+            -128,
+            20,
+            104,
+            140
+          ],
+          "median": 50.0
+        },
+        "Pss_File": {
+          "pairs": [
+            4114,
+            3922,
+            4282,
+            4606,
+            3858,
+            3530
+          ],
+          "median": 4018.0
+        }
+      },
+      "after_turns": {
+        "Rss": {
+          "pairs": [
+            2812,
+            1684,
+            1092,
+            4976,
+            3948,
+            1884
+          ],
+          "median": 2348.0
+        },
+        "Pss_Anon": {
+          "pairs": [
+            476,
+            -788,
+            -1476,
+            1976,
+            1492,
+            -484
+          ],
+          "median": -4.0
+        },
+        "Pss_File": {
+          "pairs": [
+            2340,
+            2476,
+            2572,
+            3004,
+            2460,
+            2372
+          ],
+          "median": 2468.0
+        }
+      },
+      "after_cleanup": {
+        "Rss": {
+          "pairs": [
+            2832,
+            1836,
+            1552,
+            5264,
+            3156,
+            1744
+          ],
+          "median": 2334.0
+        },
+        "Pss_Anon": {
+          "pairs": [
+            304,
+            -632,
+            -1012,
+            2076,
+            832,
+            -492
+          ],
+          "median": -94.0
+        },
+        "Pss_File": {
+          "pairs": [
+            2532,
+            2472,
+            2568,
+            3192,
+            2328,
+            2240
+          ],
+          "median": 2502.0
+        }
+      }
+    },
+    "Append": {
+      "after_seed": {
+        "Rss": {
+          "pairs": [
+            -928,
+            3880,
+            3560,
+            3348,
+            3348,
+            4452
+          ],
+          "median": 3454.0
+        },
+        "Pss_Anon": {
+          "pairs": [
+            -168,
+            -168,
+            -164,
+            -160,
+            -152,
+            -156
+          ],
+          "median": -162.0
+        },
+        "Pss_File": {
+          "pairs": [
+            -760,
+            4048,
+            3724,
+            3508,
+            3500,
+            4608
+          ],
+          "median": 3616.0
+        }
+      },
+      "after_appends": {
+        "Rss": {
+          "pairs": [
+            -1040,
+            3768,
+            3448,
+            3236,
+            3236,
+            4340
+          ],
+          "median": 3342.0
+        },
+        "Pss_Anon": {
+          "pairs": [
+            -280,
+            -280,
+            -276,
+            -272,
+            -264,
+            -268
+          ],
+          "median": -274.0
+        },
+        "Pss_File": {
+          "pairs": [
+            -760,
+            4048,
+            3724,
+            3508,
+            3500,
+            4608
+          ],
+          "median": 3616.0
+        }
+      },
+      "after_cleanup": {
+        "Rss": {
+          "pairs": [
+            -812,
+            3996,
+            3868,
+            3448,
+            3536,
+            4552
+          ],
+          "median": 3702.0
+        },
+        "Pss_Anon": {
+          "pairs": [
+            -52,
+            -52,
+            -48,
+            -60,
+            -52,
+            -56
+          ],
+          "median": -52.0
+        },
+        "Pss_File": {
+          "pairs": [
+            -760,
+            4048,
+            3916,
+            3508,
+            3588,
+            4608
+          ],
+          "median": 3752.0
+        }
+      }
+    }
+  }
+}

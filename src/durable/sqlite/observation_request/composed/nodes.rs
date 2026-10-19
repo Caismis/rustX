@@ -167,7 +167,7 @@ fn store(
     });
     let bytes = bounded(node, 65536)?;
     let digest = hash(&bytes);
-    connection.execute("INSERT INTO request_source_nodes(native_id,native_digest,hash,metadata,origin_source_id,origin_rank) VALUES(?1,?2,?3,?4,?5,?6)",params![node.native.id,node.native.digest.as_slice(),digest.as_slice(),bytes,sequence.to_string(),rank]).map_err(|error|storage(error.to_string()))?;
+    connection.prepare_cached("INSERT INTO request_source_nodes(native_id,native_digest,hash,metadata,origin_source_id,origin_rank) VALUES(?1,?2,?3,?4,?5,?6)").map_err(|error|storage(error.to_string()))?.execute(params![node.native.id,node.native.digest.as_slice(),digest.as_slice(),bytes,sequence.to_string(),rank]).map_err(|error|storage(error.to_string()))?;
     Ok(digest)
 }
 struct Capture<'a> {
