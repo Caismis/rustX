@@ -21266,6 +21266,7 @@ mod executor_wait_tests {
         let owner = Arc::new(ConnectionOwner {
             manifest: manifest::Owner::uninstalled(),
             append_validation: append_validation::Owner::uninstalled(),
+            scalar_facts: observation_request::composed::scalar_cache::Owner::default(),
             available: Mutex::new(Some(Connection::open_in_memory().unwrap())),
             wake: Condvar::new(),
             poisoned: AtomicBool::new(false),
@@ -21299,6 +21300,7 @@ mod presentation_cancellation_tests {
         let owner = Arc::new(ConnectionOwner {
             manifest,
             append_validation: append_validation::Owner::uninstalled(),
+            scalar_facts: observation_request::composed::scalar_cache::Owner::default(),
             available: Mutex::new(Some(Connection::open_in_memory().unwrap())),
             wake: Condvar::new(),
             poisoned: AtomicBool::new(false),
@@ -21343,6 +21345,7 @@ mod presentation_cancellation_tests {
         let owner = Arc::new(ConnectionOwner {
             manifest,
             append_validation: append_validation::Owner::uninstalled(),
+            scalar_facts: observation_request::composed::scalar_cache::Owner::default(),
             available: Mutex::new(Some(Connection::open_in_memory().unwrap())),
             wake: Condvar::new(),
             poisoned: AtomicBool::new(false),
