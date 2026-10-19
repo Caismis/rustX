@@ -1,8 +1,9 @@
+import {traceRefreshed} from './fixture';
 import { afterEach, expect, it } from 'vitest';
 import { Server, checkpoint } from './fixture';
 import { AgentTraceReader } from '../src/client/agent-trace';
 import { traceTool } from './trace-fixture';
-import type {CheckpointPage,TraceInspectionHead,TraceFieldSource} from '../../protocol/app-server/v51';
+import type {CheckpointPage,TraceInspectionHead,TraceFieldSource} from '../../protocol/app-server/v52';
 import {traceInspectionHead} from '../../protocol/app-server/trace-inspection';
 import {readTraceFieldWindow} from '../../protocol/app-server/trace-field';
 import { refreshTrace, replaceTrace, selectTrace } from '../src/client/trace';
@@ -40,7 +41,7 @@ it('native root location selects an unloaded record, retains its interval throug
   const refreshed = refreshTrace(landed, { records: [traceTool(999)], next_cursor: 'trace:999' });
   expect(refreshed.page.records.map(record => record.id)).toEqual(['trace:7']);
   expect(refreshed.selection?.id).toBe('trace:7');
-  server.handlers.set('session/trace', () => ({ type: 'trace', page: { read_cut: rootCut(), records: [traceTool(999)] } }));
+  server.handlers.set('session/trace', (request) => ({refreshed:traceRefreshed(request), type: 'trace', page: { read_cut: rootCut(), records: [traceTool(999)] } }));
   await server.client.returnToLatestTrace('A');
   expect(server.client.getSnapshot().views.A.trace?.located).toBeUndefined();
 });
@@ -62,7 +63,7 @@ it('child location uses only the registered child authority and survives live up
     expect(request.params).toMatchObject({ agent_id: 'child', locator, target: proof.target });
     return { type: 'trace_tool_location', location: { record_id: 'trace:7', page: { read_cut: childCut, records: [traceTool(7)], next_cursor: 'trace:7' } } };
   });
-  server.handlers.set('agent/trace', () => ({ type: 'trace', page: { read_cut: childCut, records: [traceTool(999)], next_cursor: null } }));
+  server.handlers.set('agent/trace', (request) => ({refreshed:traceRefreshed(request), type: 'trace', page: { read_cut: childCut, records: [traceTool(999)], next_cursor: null } }));
   expect(await reader.locate(locator)).toBe(true); await reader.refresh();
   expect(reader.snapshot().selection?.id).toBe('trace:7');
   expect(reader.snapshot().page.records.map(record => record.id)).toEqual(['trace:7']);

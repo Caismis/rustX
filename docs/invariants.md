@@ -506,7 +506,7 @@ spine; clients merge live and older pages by durable transcript cursor. Entry
 identity only detects the same durable fact, and page reads do not move the
 live event cursor.
 
-App Server v51 navigation adds native Turn-relative finite windows at a captured
+App Server v52 navigation adds native Turn-relative finite windows at a captured
 `ConversationReadCut`. It owns positioning and mutation rejection. Web presentation
 retains at most 256 historical entries / 8 MiB plus the independent finite live
 snapshot; it never walks from a distant Turn to the live tail. New navigation,
@@ -7572,7 +7572,7 @@ invented wire ID. Nullable `wire_id` distinguishes absence from explicit correla
 transmitted stored results use actual accepted native IDs. Stateless/full replay IDs
 match the adapter's relevant wire segment, independent of covered historical occurrences.
 Ambiguous duplicate unresolved wire IDs are rejected before detached wire mutation.
-This required observation change is carried by App Server v51 and Runtime Client v71.
+This required observation change is carried by App Server v52 and Runtime Client v71.
 
 ## PR #477 bounded activation header integrity
 

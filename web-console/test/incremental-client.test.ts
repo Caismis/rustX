@@ -1,10 +1,11 @@
+import {traceRefreshed} from './fixture';
 import { contentAdvance } from './fixture';
 import { checkpoint } from "./fixture";
 import { incrementalAgent } from './incremental-agent-fixture';
 import { afterEach, expect, it, vi } from 'vitest';
 import { Server } from './fixture';
 import { tracePage, traceRecord } from './trace-fixture';
-import type { RuntimeClientEvent } from '../../protocol/app-server/v51';
+import type { RuntimeClientEvent } from '../../protocol/app-server/v52';
 const servers: Server[] = [];
 const create = async () => { const s = new Server(); servers.push(s); await s.attached('A'); expect(s.requests.filter(row=>row.request.method==='session/checkpoint')).toHaveLength(1);expect(s.requests.filter(row=>row.request.method==='session/subscribe')).toHaveLength(1);s.requests.splice(0,s.requests.length,...s.requests.filter(row=>!['session/checkpoint','session/subscribe'].includes(row.request.method))); return s; };
 afterEach(() => { for (const s of servers) s.client.disconnect(); servers.length = 0; });
@@ -201,7 +202,7 @@ it.each(['explicit refresh', 'resync'] as const)('snapshot Trace authority super
   const authoritative = s.client.getSnapshot().views.A;
   if (mode === 'explicit refresh') expect(authoritative.trace!.epoch).toBe(epoch);
   expect(authoritative.trace!.page.records[0]).toEqual(completed);
-  s.socket.success(old, { type: 'trace', page: tracePage(old, [running], '1') });
+  s.socket.success(old, {refreshed:traceRefreshed(old), type: 'trace', page: tracePage(old, [running], '1') });
   await oldWork;
   expect(s.client.getSnapshot().views.A.trace!.page.records[0].state).toBe('completed');
   expect(s.client.getSnapshot().views.A.trace!.page.records[0].timing).toEqual(completed.timing);
@@ -212,7 +213,7 @@ it.each(['explicit refresh', 'resync'] as const)('snapshot Trace authority super
   emit(s, '8', { type: 'trace_changed' });
   const fresh = await s.waitFor('session/trace', 2);
   const freshWork = s.client['traceReads'].get('A')!.work;
-  s.socket.success(fresh, { type: 'trace', page: tracePage(fresh, [completed, traceRecord(2)], '8') });
+  s.socket.success(fresh, {refreshed:traceRefreshed(fresh), type: 'trace', page: tracePage(fresh, [completed, traceRecord(2)], '8') });
   await freshWork;
   expect(s.client.getSnapshot().views.A.trace!.page.records).toEqual([completed, traceRecord(2)]);
   expect(s.client.getSnapshot().views.A).toMatchObject({ target, cursor: '8', attachment: 'attached' });
@@ -227,7 +228,7 @@ it('same Session attachment replacement rejects a held Trace response', async ()
   await s.client.release('A'); await s.client.attach('A');
   const replacement = s.client.getSnapshot().views.A;
   expect(replacement.target).not.toEqual(target);
-  s.socket.success(old, { type: 'trace', page: tracePage(old, [traceRecord(1)], '1') });
+  s.socket.success(old, {refreshed:traceRefreshed(old), type: 'trace', page: tracePage(old, [traceRecord(1)], '1') });
   await oldWork;
   expect(s.client.getSnapshot().views.A).toBe(replacement);
 });
@@ -241,10 +242,10 @@ it('snapshot supersession keeps a burst bounded to one active tail read and one 
   const trace = s.client.getSnapshot().views.A.trace;
   for (let cursor = 2; cursor <= 101; cursor++) emit(s, String(cursor), { type: 'trace_changed' });
   expect(s.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(1);
-  s.socket.success(old, { type: 'trace', page: tracePage(old, [traceRecord(1, { state: 'running' })], '1') });
+  s.socket.success(old, {refreshed:traceRefreshed(old), type: 'trace', page: tracePage(old, [traceRecord(1, { state: 'running' })], '1') });
   const fresh = await s.waitFor('session/trace', 2);
   expect(s.client.getSnapshot().views.A.trace).toBe(trace);
-  s.socket.success(fresh, { type: 'trace', page: tracePage(fresh, [traceRecord(1)], '101') });
+  s.socket.success(fresh, {refreshed:traceRefreshed(fresh), type: 'trace', page: tracePage(fresh, [traceRecord(1)], '101') });
   await work;
   expect(s.client.getSnapshot().views.A.trace!.page.records).toEqual([traceRecord(1)]);
   expect(s.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(2);
@@ -279,7 +280,7 @@ it.each([
   const fresh = await next;
   expect(s.client.getSnapshot().views.A).toBe(beforeFailure);
   expect(s.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(2);
-  s.socket.success(fresh, { type: 'trace', page: tracePage(fresh, [traceRecord(1), traceRecord(2)], String(invalidations + 1)) });
+  s.socket.success(fresh, {refreshed:traceRefreshed(fresh), type: 'trace', page: tracePage(fresh, [traceRecord(1), traceRecord(2)], String(invalidations + 1)) });
   await work;
   const view = s.client.getSnapshot().views.A;
   expect(view.trace!.page.records).toEqual([traceRecord(1), traceRecord(2)]);

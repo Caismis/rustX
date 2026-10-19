@@ -129,35 +129,9 @@ export type Request1 =
       params: {
         target: AttachmentTarget;
         /**
-         * @maxItems 8
+         * @maxItems 128
          */
-        records?:
-          | []
-          | [TraceCursor]
-          | [TraceCursor, TraceCursor]
-          | [TraceCursor, TraceCursor, TraceCursor]
-          | [TraceCursor, TraceCursor, TraceCursor, TraceCursor]
-          | [TraceCursor, TraceCursor, TraceCursor, TraceCursor, TraceCursor]
-          | [TraceCursor, TraceCursor, TraceCursor, TraceCursor, TraceCursor, TraceCursor]
-          | [
-              TraceCursor,
-              TraceCursor,
-              TraceCursor,
-              TraceCursor,
-              TraceCursor,
-              TraceCursor,
-              TraceCursor
-            ]
-          | [
-              TraceCursor,
-              TraceCursor,
-              TraceCursor,
-              TraceCursor,
-              TraceCursor,
-              TraceCursor,
-              TraceCursor,
-              TraceCursor
-            ];
+        records?: TraceCursor[];
         before?: TraceCursor | null;
         limit: number;
       };
@@ -1914,6 +1888,10 @@ export type MethodResult =
     }
   | {
       page: TracePage;
+      /**
+       * Complete input prefix examined; resubmit any remaining interests.
+       */
+      refreshed: number;
       type: 'trace';
     }
   | {

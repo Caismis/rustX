@@ -1,5 +1,5 @@
 import {expect,it} from 'vitest';
-import type {CheckpointReadCut,TraceLifecycle,TraceRecord} from '../../protocol/app-server/v51';
+import type {CheckpointReadCut,TraceLifecycle,TraceRecord} from '../../protocol/app-server/v52';
 import {traceAttemptKey,traceStepKey} from '../../protocol/app-server/trace-identity';
 import {beginTraceDetail,refreshTrace,replaceTrace,selectTrace} from '../src/client/trace';
 import {modelRetryPlacements} from '../src/bindings/model-retry';

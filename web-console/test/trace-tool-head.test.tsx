@@ -1,6 +1,7 @@
+import {traceRefreshed} from './fixture';
 import {act,cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
 import {afterEach,expect,it,vi} from 'vitest';
-import type {CheckpointPage,CheckpointReadCut,TraceRecord,TraceToolDefinitionSelection,TraceInspectionHead} from '../../protocol/app-server/v51';
+import type {CheckpointPage,CheckpointReadCut,TraceRecord,TraceToolDefinitionSelection,TraceInspectionHead} from '../../protocol/app-server/v52';
 import {TrajectoryInspector,type TrajectoryInspectorProps} from '../src/app/trajectory/TrajectoryInspector';
 import {ArtifactContext} from '../src/app/components/Artifact';
 import {PreviewContext} from '../src/app/components/ArtifactPreview';
@@ -62,7 +63,7 @@ async function selected(kind:'root'|'child'|'historical') {
   entry=server.client.getSnapshot().views.A.trace!.details[record.id];server.held.add('session/detach');retire=async()=>{const release=server.client.release('A');const detach=await server.waitFor('session/detach',1);server.reply(detach);await release;await waitFor(()=>expect(server.client.getSnapshot().views.A.attachment).toBe('detached'));};
  }else if(kind==='child'){
   await server.attached('A');cut={...checkpoint(snapshot('child')).read_cut,activation_id:'activation-child',revision:'12',through:'300'};
-  server.handlers.set('agent/trace',()=>({type:'trace',page:{read_cut:cut,records:[record],next_cursor:null}}));server.handlers.set('agent/traceDetail',()=>({type:'domain_page',page:toolPage(cut,record,definition)}));
+  server.handlers.set('agent/trace',(request)=>({refreshed:traceRefreshed(request),type:'trace',page:{read_cut:cut,records:[record],next_cursor:null}}));server.handlers.set('agent/traceDetail',()=>({type:'domain_page',page:toolPage(cut,record,definition)}));
   const reader=new AgentTraceReader(server.client,'A',server.client.getSnapshot().views.A.attachmentObservation!,{agent_id:'agent-child',activation_id:'activation-child',child_conversation_id:cut.conversation_id,state:'active'});
   await reader.refresh();await reader.detail(record.id);entry=reader.snapshot().details[record.id];retire=async()=>reader.retire();
  }else{

@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v51 envelope and method vocabulary.
+//! Rust authority for the App Server v52 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 51;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 52;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -211,7 +211,7 @@ pub enum Method {
     Trace {
         target: AttachmentTarget,
         #[serde(default)]
-        #[schemars(length(max = 8))]
+        #[schemars(length(max = 128))]
         records: Vec<crate::runtime_client::trace::TraceCursor>,
         before: Option<crate::runtime_client::trace::TraceCursor>,
         limit: usize,
@@ -1051,6 +1051,9 @@ pub enum MethodResult {
     },
     Trace {
         page: crate::runtime_client::trace::TracePage,
+        /// Complete input prefix examined; resubmit any remaining interests.
+        #[schemars(range(max = 128))]
+        refreshed: usize,
     },
     TraceToolLocation {
         location: Option<crate::runtime_client::trace::TraceToolLocation>,

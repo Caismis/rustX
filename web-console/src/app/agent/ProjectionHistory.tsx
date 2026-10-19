@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { CheckpointReadCut, ProjectionDetail, ProjectionPage } from '../../../../protocol/app-server/v51';
+import type { CheckpointReadCut, ProjectionDetail, ProjectionPage } from '../../../../protocol/app-server/v52';
 import type { AppServerClient } from '../../client/app-server';
 import { useTranslation } from '../../locale/react';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';

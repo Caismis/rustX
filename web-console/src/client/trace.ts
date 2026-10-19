@@ -1,7 +1,7 @@
 export {traceInspectionHead} from '../../../protocol/app-server/trace-inspection';
 import {traceInspectionHead} from '../../../protocol/app-server/trace-inspection';
 import type {TraceValueSelector} from '../../../protocol/app-server/trace-field';
-import type { TraceDetail, TracePage, TraceRecord, TraceLifecycle,CheckpointReadCut,CheckpointPage,CheckpointValueChunk,ContentRef,ContentChunk, Request1 } from '../../../protocol/app-server/v51';
+import type { TraceDetail, TracePage, TraceRecord, TraceLifecycle,CheckpointReadCut,CheckpointPage,CheckpointValueChunk,ContentRef,ContentChunk, Request1 } from '../../../protocol/app-server/v52';
 
 /** Most summary records the browser retains for one Trace interval. */
 export const TRACE_LIMIT = 512;
@@ -31,8 +31,8 @@ function detailWeight(entry: TraceDetailEntry) {
  */
 export interface TraceDetailEntry {
   readonly epoch: number;
-  readonly content?:import('../../../protocol/app-server/v51').ContentBinding[];
-  readonly readContent?:(ref:import('../../../protocol/app-server/v51').ContentRef,offset:number,current:()=>boolean)=>Promise<import('../../../protocol/app-server/v51').ContentChunk>;
+  readonly content?:import('../../../protocol/app-server/v52').ContentBinding[];
+  readonly readContent?:(ref:import('../../../protocol/app-server/v52').ContentRef,offset:number,current:()=>boolean)=>Promise<import('../../../protocol/app-server/v52').ContentChunk>;
   /** A positive finite descriptor is not a complete TraceDetail. */
   readonly page?: CheckpointPage;
   readonly reader?: TraceFieldReader;
@@ -152,7 +152,9 @@ export function bindTraceDetailReader(reader:TraceFieldReader,page:CheckpointPag
  };
 }
 
-type TraceInterests = NonNullable<Extract<Request1, {method:'session/trace'}>['params']['records']>;
+type TraceInterests = NonNullable<Extract<Request1, {method:'session/checkpoint'}>['params']['trace_records']>;
+/** Standalone admission; checkpoint and Agent enrichment still use eight. */
+export const TRACE_REFRESH_SIZE = 128;
 
 function appendInterest(batch: TraceInterests, value: string): TraceInterests {
   if (batch.length === 8) throw new Error('Trace refresh exceeds eight interests.');

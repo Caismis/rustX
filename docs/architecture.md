@@ -6631,7 +6631,7 @@ value and preserves the previously issued Trace cut and its Source pins.
 reads still materialize their captured published native cut; a cached Trace head
 at an older cut cannot satisfy that current checkpoint. Browser Session updates
 also preserve pending Trace page/detail work unless a supplied Trace head owns
-the new cut. Runtime Client 72 / App Server 51 advance every reader together.
+the new cut. Runtime Client 73 / App Server 51 advance every reader together.
 Native commits, publication cadence, recovery and persistence layouts are unchanged.
 
 See [Session-owned workspace uploads](session-uploads.md) for receipt admission, model paths, fork copies and durable cleanup.
@@ -6715,7 +6715,7 @@ facts do not manufacture transcript completion facts.
 The TUI has one disposable child page, fenced by parent attachment epoch and
 child selection/read generation. Reconnect reconstructs from current authority;
 Esc closes presentation without runtime mutation. Child HITL remains routed to
-the existing root interaction owner. See [the protocol](app-server-protocol.md#read-only-native-agent-observation-v51).
+the existing root interaction owner. See [the protocol](app-server-protocol.md#read-only-native-agent-observation-v52).
 
 ## Image Tool and Bash presentation (#412)
 

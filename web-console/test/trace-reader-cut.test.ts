@@ -1,5 +1,6 @@
+import {traceRefreshed} from './fixture';
 import {expect,it} from 'vitest';
-import type {TraceFieldSource} from '../../protocol/app-server/v51';
+import type {TraceFieldSource} from '../../protocol/app-server/v52';
 import {readTraceFieldWindow} from '../../protocol/app-server/trace-field';
 import {Server,checkpoint,snapshot} from './fixture';
 import {traceRecord} from './trace-fixture';
@@ -8,7 +9,7 @@ it('old checkpoint then newer standalone Trace reads its selected original field
  const server=new Server(),old=checkpoint(snapshot(), '1').read_cut,newer={...old,revision:'5',through:'5'};
  const field:Extract<TraceFieldSource,{type:'value'}>={type:'value',field:'model',domain:'trace.records.5.detail.request.model',item_offset:0,path:[],encoded_bytes:'8'};
  const record=traceRecord(5);record.request!.model=null;record.request!.model_source=field;
- server.handlers.set('session/trace',()=>({type:'trace',page:{read_cut:newer,records:[record],next_cursor:null}}));
+ server.handlers.set('session/trace',(request)=>({refreshed:traceRefreshed(request),type:'trace',page:{read_cut:newer,records:[record],next_cursor:null}}));
  server.handlers.set('conversation/checkpointValueRead',request=>{
   if(request.method!=='conversation/checkpointValueRead')throw Error('method');
   expect(request.params.cut).toEqual(newer);expect(request.params.cut).not.toEqual(old);expect(request.params.domain).toBe(field.domain);

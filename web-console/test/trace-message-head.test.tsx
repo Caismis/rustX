@@ -1,6 +1,7 @@
+import {traceRefreshed} from './fixture';
 import {act,cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
 import {afterEach,expect,it,vi} from 'vitest';
-import type {CheckpointPage,CheckpointReadCut,TraceInspectionHead,TraceInspectionMessage,TraceRecord,ContentRef,ForegroundToolExecution} from '../../protocol/app-server/v51';
+import type {CheckpointPage,CheckpointReadCut,TraceInspectionHead,TraceInspectionMessage,TraceRecord,ContentRef,ForegroundToolExecution} from '../../protocol/app-server/v52';
 import {TrajectoryInspector,type TrajectoryInspectorProps} from '../src/app/trajectory/TrajectoryInspector';
 import {traceTool} from './trace-fixture';
 import {checkpoint,Server,snapshot} from './fixture';
@@ -53,7 +54,7 @@ async function selected(kind:'root'|'child'|'historical') {
  if(kind==='root'){
   server.snapshots.set('A',{...snapshot(),trace:{records:[native],next_cursor:null}});await server.attached('A');server.handlers.set('session/traceDetail',()=>({type:'domain_page',page:head(original)}));await server.client.loadTraceDetail('A',native.id);entry=server.client.getSnapshot().views.A.trace!.details[native.id];retire=async()=>server.client.disconnect();
  }else if(kind==='child'){
-  await server.attached('A');server.handlers.set('agent/trace',()=>({type:'trace',page:{read_cut:original,records:[native],next_cursor:null}}));server.handlers.set('agent/traceDetail',()=>({type:'domain_page',page:head(original)}));const reader=new AgentTraceReader(server.client,'A',server.client.getSnapshot().views.A.attachmentObservation!,{agent_id:'child',activation_id:'child-activation',child_conversation_id:'child',state:'active'});await reader.refresh();await reader.detail(native.id);entry=reader.snapshot().details[native.id];retire=async()=>reader.retire();
+  await server.attached('A');server.handlers.set('agent/trace',(request)=>({refreshed:traceRefreshed(request),type:'trace',page:{read_cut:original,records:[native],next_cursor:null}}));server.handlers.set('agent/traceDetail',()=>({type:'domain_page',page:head(original)}));const reader=new AgentTraceReader(server.client,'A',server.client.getSnapshot().views.A.attachmentObservation!,{agent_id:'child',activation_id:'child-activation',child_conversation_id:'child',state:'active'});await reader.refresh();await reader.detail(native.id);entry=reader.snapshot().details[native.id];retire=async()=>reader.retire();
  }else{
   await server.connect();server.held.add('session/attach');server.handlers.set('session/traceHistory',()=>({type:'session_trace_history',conversation_id:original.conversation_id,page:{read_cut:original,records:[native],next_cursor:null}}));server.handlers.set('session/traceHistoryDetail',()=>({type:'session_trace_history_detail',conversation_id:original.conversation_id,page:head(original)}));const attach=server.client.attach('A'),request=await server.waitFor('session/attach',1);await waitFor(()=>expect(server.client.getSnapshot().views.A.tracePreview?.cache.page.records).toHaveLength(1));await server.client.loadTraceDetail('A',native.id);entry=server.client.getSnapshot().views.A.tracePreview!.cache.details[native.id];retire=async()=>{server.reply(request);await attach;};
  }

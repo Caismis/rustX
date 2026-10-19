@@ -2673,7 +2673,7 @@ async fn trace_reads_are_read_only_and_reconnect_repairs_the_same_native_facts()
             },
         )
         .await;
-        let MethodResult::Trace { page } = read else {
+        let MethodResult::Trace { page, .. } = read else {
             panic!("Trace page");
         };
         assert!(

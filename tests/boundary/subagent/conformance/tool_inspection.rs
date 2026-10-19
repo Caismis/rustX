@@ -22,7 +22,7 @@ async fn selected_tool_head(
     store: &dyn ConversationStore,
 ) -> TraceInspectionHead {
     let before = store.observation_read_cut().unwrap();
-    let RuntimeClientResult::TracePage { page } = host
+    let RuntimeClientResult::TracePage { page, .. } = host
         .inner
         .agent_trace_via_inspection(agent, None, 32, Vec::new())
         .await

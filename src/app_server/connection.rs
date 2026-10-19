@@ -1983,7 +1983,7 @@ impl AppServerConnection {
     pub(crate) fn next_source_repair(&self) -> Option<NotificationMethod> {
         use crate::local_runtime::configuration::repair::{SourceChange, SourceKey};
         use crate::local_runtime::configuration::settings::SourceTarget;
-        // A v51 notice reaches only a connection that negotiated v51.
+        // A v52 notice reaches only a connection that negotiated v52.
         if self.initialized.lock().expect("initialize mutex").is_none() {
             return None;
         }
@@ -2901,7 +2901,9 @@ fn native_result(
         RuntimeClientResult::ProjectionDetail { detail } => {
             MethodResult::ProjectionDetail { detail }
         }
-        RuntimeClientResult::TracePage { page } => MethodResult::Trace { page },
+        RuntimeClientResult::TracePage { page, refreshed } => {
+            MethodResult::Trace { page, refreshed }
+        }
         RuntimeClientResult::TraceToolLocation { location } => {
             MethodResult::TraceToolLocation { location }
         }

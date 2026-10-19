@@ -430,13 +430,13 @@ fn t08_t14_t19_standalone_trace_keeps_the_attached_constructor_cut_after_later_c
     let checkpoint = host.checkpoint().unwrap();
     let (attachment, _) = host.attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION).unwrap();
     let subscription = attachment.subscribe_events(checkpoint.cursor).unwrap();
-    let RuntimeClientResult::TracePage {page: before} = host.inner.trace_page(None, 32, Vec::new()).unwrap() else {panic!("native Trace page")};
+    let RuntimeClientResult::TracePage {page: before, ..} = host.inner.trace_page(None, 32, Vec::new()).unwrap() else {panic!("native Trace page")};
     assert_eq!(before.read_cut.as_ref(), Some(&checkpoint.read_cut));
     assert_eq!(before.records.len(), 1);
     assert_eq!(before.records[0].state, crate::runtime_client::trace::TraceState::Incomplete);
     let message = MessageBlock::Assistant(crate::message::types::AssistantMessageBlock {id: MessageId::new("standalone-later-c"), content: vec![AssistantContentBlock::Text(crate::message::content::TextBlock {text: "later original C".into()})]});
     writer.append_canonical_with_event(&message, durable_event(writer.conversation_id(), "standalone-later-j", &attempt, RuntimeEvent::AssistantMessageCommitted {message_id: message.id().clone()})).unwrap();
-    let RuntimeClientResult::TracePage {page: after} = host.inner.trace_page(None, 32, vec![before.records[0].position.clone()]).unwrap() else {panic!("native Trace page")};
+    let RuntimeClientResult::TracePage {page: after, ..} = host.inner.trace_page(None, 32, vec![before.records[0].position.clone()]).unwrap() else {panic!("native Trace page")};
     assert_eq!(after.read_cut, before.read_cut);
     assert_eq!(after.records, before.records);
     assert_eq!(after.updates.len(), 1);
@@ -449,7 +449,7 @@ fn t08_t14_t19_standalone_trace_keeps_the_attached_constructor_cut_after_later_c
     assert_eq!(host.checkpoint().unwrap(), checkpoint);
     assert!(matches!(subscription.try_next(), EventDelivery::Pending));
     let fresh = RuntimeClientHost::new_durable(writer.clone(), None).unwrap();
-    let RuntimeClientResult::TracePage {page: current} = fresh.inner.trace_page(None, 32, Vec::new()).unwrap() else {panic!("new native Trace owner")};
+    let RuntimeClientResult::TracePage {page: current, ..} = fresh.inner.trace_page(None, 32, Vec::new()).unwrap() else {panic!("new native Trace owner")};
     assert_eq!(current.records.len(), 2);
     let fresh_cut = current.read_cut.unwrap();
     assert_eq!(fresh_cut.source_cut.as_ref(), Some(&writer.observation_read_cut().unwrap()));

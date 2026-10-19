@@ -1682,6 +1682,133 @@ fn lifecycle_refresh_is_bounded_and_repeats_no_historical_input() {
     );
 }
 
+#[test]
+fn trace_refresh_page_examines_missing_and_duplicate_interests_without_publication() {
+    let store = store("conv_c58ff1b4-cc51-781e-9651-d57205b2bc7a");
+    start(&store);
+    request(&store, 0);
+    let source = store.observation_read_cut().unwrap();
+    let projection = TraceProjection::at_cut(&store, &source).unwrap();
+    let mut page = projection.page(None, 32).unwrap();
+    let position = record_of(&page, TraceKind::Request).position.clone();
+    let mut interests = vec![position.clone(); TRACE_REFRESH_LIMIT];
+    interests[1] = TraceCursor("trace:1000000".into());
+    let snapshot = quiet_snapshot(&store);
+    let refreshed = projection
+        .refresh_page(&mut page, &interests, Some(&snapshot))
+        .unwrap();
+    assert_eq!(refreshed, interests.len());
+    assert_eq!(page.updates.len(), interests.len() - 1);
+    assert!(page.updates.iter().all(|update| update.id == position.0));
+    assert_eq!(store.observation_read_cut().unwrap(), source);
+    ensure_page_bound(&page).unwrap();
+
+    interests[9] = TraceCursor("invalid-cursor".into());
+    let mut page = projection.page(None, 32).unwrap();
+    assert!(
+        projection
+            .refresh_page(&mut page, &interests, Some(&snapshot))
+            .is_err(),
+        "a later lookup failure must not be hidden as prefix success"
+    );
+    assert!(
+        projection
+            .refresh_page(
+                &mut page,
+                &vec![position; TRACE_REFRESH_LIMIT + 1],
+                Some(&snapshot)
+            )
+            .is_err()
+    );
+    assert_eq!(store.observation_read_cut().unwrap(), source);
+}
+
+#[test]
+fn trace_refresh_page_returns_a_complete_prefix_at_the_original_byte_bound() {
+    let store = store("conv_6b217f81-4fbc-744d-ac6b-cb8a025c435c");
+    start(&store);
+    request_with_identity(
+        &store,
+        0,
+        None,
+        RequestIdentity {
+            attempt_id: AttemptId::new("\0".repeat(512)),
+            turn: TurnId::new("\0".repeat(512)),
+            retry_number: 0,
+        },
+    );
+    let source = store.observation_read_cut().unwrap();
+    let projection = TraceProjection::at_cut(&store, &source).unwrap();
+    let original = projection.page(None, 32).unwrap();
+    let position = record_of(&original, TraceKind::Request).position.clone();
+    let interests = vec![position; TRACE_REFRESH_LIMIT];
+    let snapshot = quiet_snapshot(&store);
+    let mut offset = 0;
+    let mut replies = 0;
+    while offset < interests.len() {
+        let mut page = original.clone();
+        let refreshed = projection
+            .refresh_page(&mut page, &interests[offset..], Some(&snapshot))
+            .unwrap();
+        assert!(refreshed > 0);
+        assert!(refreshed <= interests.len() - offset);
+        assert_eq!(page.updates.len(), refreshed);
+        assert!(page.updates.iter().all(|update| {
+            update.location.attempt_id.as_ref().unwrap().as_str() == "\0".repeat(512)
+        }));
+        ensure_page_bound(&page).unwrap();
+        offset += refreshed;
+        replies += 1;
+    }
+    assert!(
+        replies > 1,
+        "escaped native identities must exercise actual bounded prefix paging"
+    );
+    assert_eq!(offset, TRACE_REFRESH_LIMIT);
+    assert_eq!(store.observation_read_cut().unwrap(), source);
+}
+
+#[test]
+fn trace_refresh_page_keeps_every_interest_at_its_captured_cut_after_later_terminal() {
+    let store = store("conv_643280a1-d980-7f84-8f5c-72378e2a847c");
+    start(&store);
+    let request = request(&store, 0);
+    let source = store.observation_read_cut().unwrap();
+    let old = TraceProjection::at_cut(&store, &source).unwrap();
+    let original = old.page(None, 32).unwrap();
+    let record = record_of(&original, TraceKind::Request);
+    let interests = vec![record.position.clone(); TRACE_REFRESH_LIMIT];
+    let snapshot = quiet_snapshot(&store);
+    completion(&store, &request, None, None, 3);
+    let current = store.observation_read_cut().unwrap();
+    assert_ne!(current, source);
+
+    let mut page = original.clone();
+    assert_eq!(
+        old.refresh_page(&mut page, &interests, Some(&snapshot))
+            .unwrap(),
+        TRACE_REFRESH_LIMIT
+    );
+    assert_eq!(page.read_cut, original.read_cut);
+    assert_eq!(page.updates.len(), TRACE_REFRESH_LIMIT);
+    assert!(
+        page.updates
+            .iter()
+            .all(|update| update.state == record.state && update.timing == record.timing)
+    );
+
+    let fresh = TraceProjection::at_cut(&store, &current).unwrap();
+    let mut page = fresh.page(None, 32).unwrap();
+    assert_eq!(
+        fresh
+            .refresh_page(&mut page, &interests, Some(&snapshot))
+            .unwrap(),
+        TRACE_REFRESH_LIMIT
+    );
+    assert!(page.updates.iter().all(|update| update.state == TraceState::Completed && update.timing.ended_at.is_some()));
+    assert_eq!(store.observation_read_cut().unwrap(), current);
+}
+
 // ---------------------------------------------------------------------------
 // Safety
 // ---------------------------------------------------------------------------

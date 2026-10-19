@@ -280,7 +280,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
     fixtures.push(
         serde_json::from_value(serde_json::json!({
             "jsonrpc": "2.0", "id": "trace-tool-summary", "result": {
-                "type": "trace", "page": { "records": [{
+                "type": "trace", "refreshed": 0, "page": { "records": [{
                     "id": "trace:7", "position": "trace:7", "fields": [], "collections": [],
                     "location": { "attempt_id": "attempt-a", "step_id": "1" },
                     "kind": "tool", "state": "completed",
@@ -904,9 +904,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v51.schema.json", "v51.ts"]);
+        assert_eq!(generations, ["v52.schema.json", "v52.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v51.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v52.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

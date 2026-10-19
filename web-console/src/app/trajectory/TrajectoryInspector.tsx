@@ -20,7 +20,7 @@ import { useTranslation } from '../../locale/react';
  */
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { structuredPatch } from 'diff';
-import type { TraceArtifact, TraceContentBlock, TraceDetail, TraceJson, TraceRecord, TraceToolDefinition } from '../../../../protocol/app-server/v51';
+import type { TraceArtifact, TraceContentBlock, TraceDetail, TraceJson, TraceRecord, TraceToolDefinition } from '../../../../protocol/app-server/v52';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { JsonTree, type JsonTreeLabels } from '../../presentation/primitives/JsonTree';
 import { IconCheckOutline16, IconChevronRightOutline14, IconCopyOutline16, IconWrapLinesOutline16 } from '../../presentation/primitives/icons';
@@ -520,12 +520,12 @@ export interface TrajectoryInspectorProps {
   facet: TrajectoryFacet;
   onFacet: (facet: TrajectoryFacet) => void;
   detail?: TraceDetail | undefined;
-  detailPage?:import('../../../../protocol/app-server/v51').CheckpointPage;
+  detailPage?:import('../../../../protocol/app-server/v52').CheckpointPage;
   detailReader?:import('../../client/trace').TraceFieldReader;
-  deferredContent?:import('../../../../protocol/app-server/v51').ContentBinding[]|undefined;
+  deferredContent?:import('../../../../protocol/app-server/v52').ContentBinding[]|undefined;
   readContent?:import('../../client/trace').TraceDetailEntry['readContent'];
-  fieldSources?:import('../../../../protocol/app-server/v51').TraceFieldSource[];
-  fieldCut?:import('../../../../protocol/app-server/v51').CheckpointReadCut;
+  fieldSources?:import('../../../../protocol/app-server/v52').TraceFieldSource[];
+  fieldCut?:import('../../../../protocol/app-server/v52').CheckpointReadCut;
   fieldReader?:import('../../client/trace').TraceFieldReader;
   loading?: boolean | undefined;
   error?: string | undefined;
