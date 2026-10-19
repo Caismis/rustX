@@ -270,7 +270,7 @@ pub(super) fn scalar(
     source: &SeekableObservationSource,
 ) -> Result<(Fragment, u64, u64), ConversationStoreError> {
     let (start, end, _) = source
-        .original_field_geometry(&["messages".into()])
+        .original_root_field_geometry("messages")
         .map_err(|error| storage(error.to_string()))?;
     let length = source
         .read(&[], 0, 1)

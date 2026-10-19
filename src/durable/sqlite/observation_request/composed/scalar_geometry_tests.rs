@@ -129,8 +129,8 @@ fn scalar_geometry_keeps_changed_definition_identity_time_and_old_source_separat
     let original = SeekableObservationSource::new(&before).unwrap();
     let current = SeekableObservationSource::new(&after).unwrap();
     let path = ["messages".into()];
-    let original_bounds = original.original_field_geometry(&path).unwrap();
-    let current_bounds = current.original_field_geometry(&path).unwrap();
+    let original_bounds = original.original_root_field_geometry("messages").unwrap();
+    let current_bounds = current.original_root_field_geometry("messages").unwrap();
     assert_ne!(original_bounds, current_bounds);
     for (source, value, bounds) in [
         (&original, &before, original_bounds),
@@ -149,7 +149,7 @@ fn scalar_geometry_keeps_changed_definition_identity_time_and_old_source_separat
         assert_eq!((captured.1, captured.2), (bounds.0, bounds.1));
     }
     assert_eq!(
-        original.original_field_geometry(&path).unwrap(),
+        original.original_root_field_geometry("messages").unwrap(),
         original_bounds
     );
 }
