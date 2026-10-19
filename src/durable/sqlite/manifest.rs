@@ -146,7 +146,15 @@ pub(super) fn node(
             },
         );
     });
-    let (item,left,right,left_digest,right_digest): NodeRow=connection.query_row("SELECT CASE WHEN typeof(item_digest)='blob' AND length(item_digest)=32 THEN item_digest END,left_id,right_id,CASE WHEN typeof(left_digest)='blob' AND length(left_digest)=32 THEN left_digest END,CASE WHEN typeof(right_digest)='blob' AND length(right_digest)=32 THEN right_digest END FROM native_input_nodes WHERE id=?1",[seq_to_i64(expected.id)?],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).map_err(|e|storage(e.to_string()))?;
+    let id = seq_to_i64(expected.id)?;
+    let (item, left, right, left_digest, right_digest): NodeRow = connection
+        .prepare_cached("SELECT CASE WHEN typeof(item_digest)='blob' AND length(item_digest)=32 THEN item_digest END,left_id,right_id,CASE WHEN typeof(left_digest)='blob' AND length(left_digest)=32 THEN left_digest END,CASE WHEN typeof(right_digest)='blob' AND length(right_digest)=32 THEN right_digest END FROM native_input_nodes WHERE id=?1")
+        .and_then(|mut statement| {
+            statement.query_row([id], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+            })
+        })
+        .map_err(|error| storage(error.to_string()))?;
     let kind = match (item, left, right, left_digest, right_digest) {
         (Some(item), None, None, None, None) if actual.count == 1 && actual.height == 1 => {
             if digest_leaf(&bytes32(item)?) != actual.digest {
