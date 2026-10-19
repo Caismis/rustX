@@ -100,6 +100,10 @@ function merge(older: TraceRecord[], newer: TraceRecord[]) {
   return [...merged, ...older.slice(offset), ...pending];
 }
 
+function retainRecord(previous: TraceRecord | undefined, current: TraceRecord): TraceRecord {
+  return previous && JSON.stringify(previous) === JSON.stringify(current) ? previous : current;
+}
+
 function bounded(records: TraceRecord[],cuts:Readonly<Record<string,CheckpointReadCut>>={},selection?:TraceRecord) {
   const retained=retainedCuts(cuts,records,selection);
   const uniqueCuts=new Set(Object.values(retained));
@@ -255,7 +259,7 @@ export function refreshTrace(previous: TraceCache | undefined, page: TracePage, 
   const repair = (record: TraceRecord): TraceRecord => {
     const update = repairs.get(record.id);
     if (!update) return record;
-    return {
+    return retainRecord(record, {
       ...record,
       location: update.location,
       fields:update.fields,collections:update.collections,
@@ -266,9 +270,13 @@ export function refreshTrace(previous: TraceCache | undefined, page: TracePage, 
       truncated: update.truncated,
       request: record.request && update.request ? { ...record.request, ...update.request } : record.request,
       tool: record.tool && update.tool ? { ...record.tool, ...update.tool } : record.tool,
-    };
+    });
   };
   if (previous.located||lifecycleOnly) page = { ...previous.page, records: previous.page.records.map(repair) };
+  else {
+    const old = new Map(previous.page.records.map(record => [record.id, record]));
+    page = { ...page, records: page.records.map(record => retainRecord(old.get(record.id), record)) };
+  }
   const selection = previous.selection
     ? repair(page.records.find(record => record.id === previous.selection!.id) ?? previous.selection)
     : undefined;
@@ -279,14 +287,16 @@ export function refreshTrace(previous: TraceCache | undefined, page: TracePage, 
   if (!page.records.some(record => overlap.has(record.id))) {
     return { ...replaceTrace(page, previous,outerCut), selection,readCuts:retainedCuts(readCuts,page.records,selection) };
   }
-  const records = merge(previous.page.records.map(repair), page.records);
+  const merged = merge(previous.page.records.map(repair), page.records);
+  const records = merged.length === previous.page.records.length && merged.every((record,index) => record === previous.page.records[index])
+    ? previous.page.records : merged;
   const latest = new Map(records.map(record => [record.id, record]));
   if (selection) latest.set(selection.id, selection);
   const old = new Map(previous.page.records.map(record => [record.id, record]));
   if (previous.selection) old.set(previous.selection.id, previous.selection);
   // A repaired record needs detail from the new native read cut.
   const details = Object.fromEntries(Object.entries(previous.details).filter(([id]) =>
-    JSON.stringify(old.get(id)) === JSON.stringify(latest.get(id)),
+    old.get(id) === latest.get(id) || JSON.stringify(old.get(id)) === JSON.stringify(latest.get(id)),
   ));
   if (!bounded(records,readCuts,selection)) {
     return { ...replaceTrace(page, previous,outerCut), selection,readCuts:retainedCuts(readCuts,page.records,selection), error: 'Trace window reached its bound; showing latest.' };

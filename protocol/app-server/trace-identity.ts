@@ -2,6 +2,14 @@ import type {TraceFieldSource,TraceLocation,RuntimeClientToolOccurrence} from '.
 import {attemptIdentitySourceKey} from './attempt-identity.ts';
 import {canonicalLocatorKey,contentRefKey} from './content-identity.ts';
 
+const inlineAttempts = new WeakMap<object,{id:string;key:string}>();
+const inlineSteps = new WeakMap<object,{id:string;key:string}>();
+function inlineIdentity(cache:WeakMap<object,{id:string;key:string}>,owner:object,id:string) {
+ const previous=cache.get(owner);
+ if(previous?.id===id)return previous.key;
+ const key=JSON.stringify(['inline',id]);cache.set(owner,{id,key});return key;
+}
+
 /** Source selectors remain closed identity evidence; loading bytes never replaces them. */
 export function traceFieldKey(source:TraceFieldSource):string {
  switch(source.type) {
@@ -11,11 +19,11 @@ export function traceFieldKey(source:TraceFieldSource):string {
 }
 /** The Trace cache supplies conversation isolation; a missing owner does not group rows. */
 export function traceAttemptKey(location:Pick<TraceLocation,'attempt_id'|'attempt_id_source'>):string|undefined {
- if(location.attempt_id!=null)return JSON.stringify(['inline',location.attempt_id]);
+ if(location.attempt_id!=null)return inlineIdentity(inlineAttempts,location,location.attempt_id);
  if(location.attempt_id_source)return JSON.stringify(['source',attemptIdentitySourceKey(location.attempt_id_source)]);
 }
 export function traceStepKey(location:TraceLocation):string|undefined {
- if(location.step_id!=null)return JSON.stringify(['inline',location.step_id]);
+ if(location.step_id!=null)return inlineIdentity(inlineSteps,location,location.step_id);
  if(location.step_id_source)return JSON.stringify(['source',traceFieldKey(location.step_id_source)]);
 }
 export function sameTraceOwner(left:TraceLocation,right:TraceLocation):boolean {
