@@ -318,3 +318,54 @@ fn scoped_tool_facts_relearn_changed_definitions_and_scope_without_stale_pages()
         session.commit(&owner);
     }
 }
+
+#[test]
+fn checked_catalog_merge_matches_pages_when_fresh_non_tool_facts_still_spill() {
+    use super::super::scalar_cache::Owner;
+    let owner = Owner::default();
+    let scope = crate::runtime::identity::ConversationId::generate();
+    let mut value = fixture(0, 0);
+    value.tools = serde_json::from_str(include_str!("standard_public_tools_fixture.json")).unwrap();
+    value.provenance_source = serde_json::json!({
+        "owner":"owner-A", "records":(0..300).map(|index| serde_json::json!({
+            "position":index, "text":"fresh non-Tools row", "@alias":"水🙂"
+        })).collect::<Vec<_>>()
+    });
+    let baseline = connection();
+    let cached = connection();
+    let original = SeekableObservationSource::new(&value).unwrap();
+    let mut initial = owner.session(&scope);
+    scalar(&baseline, &original, None).unwrap();
+    scalar(&cached, &original, Some((&scope, &mut initial))).unwrap();
+    let retained_rows = initial.work().1;
+    assert!(retained_rows >= 610);
+    initial.commit(&owner);
+    value.request_id = "request-0000000002".into();
+    value.provenance_source["owner"] = "owner-B".into();
+    let current = SeekableObservationSource::new(&value).unwrap();
+    let mut session = owner.session(&scope);
+    spool::take_disk_rows();
+    let expected = scalar(&baseline, &current, None).unwrap();
+    let baseline_writes = spool::take_disk_rows();
+    let actual = scalar(&cached, &current, Some((&scope, &mut session))).unwrap();
+    let cached_writes = spool::take_disk_rows();
+    assert_eq!(session.work().0, retained_rows);
+    assert!(
+        cached_writes > 256,
+        "fresh non-Tools facts must actually spill"
+    );
+    assert_eq!(baseline_writes, cached_writes + retained_rows);
+    assert_eq!((actual.1, actual.2), (expected.1, expected.2));
+    assert_eq!(
+        serde_json::to_vec(&actual.0).unwrap(),
+        serde_json::to_vec(&expected.0).unwrap()
+    );
+    assert_eq!(
+        pages(&cached),
+        pages(&baseline),
+        "merged SQL and retained rows keep every byte/page/hash exact"
+    );
+    eprintln!(
+        "non-Tools spill: TEMP INSERTs={baseline_writes}->{cached_writes}, checked retained rows={retained_rows}, identical byte/fact pages"
+    );
+}

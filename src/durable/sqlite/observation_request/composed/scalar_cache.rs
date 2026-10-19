@@ -35,6 +35,13 @@ impl Owner {
             .ok()
             .and_then(|entry| entry.as_ref().map(|entry| (entry.rows.len(), entry.owned)))
     }
+    #[cfg(test)]
+    pub(in crate::durable::sqlite) fn retained_bytes(&self) -> Option<Vec<u8>> {
+        self.catalog
+            .lock()
+            .ok()
+            .and_then(|entry| entry.as_ref().map(|entry| entry.bytes.clone()))
+    }
     pub(in crate::durable::sqlite) fn session(&self, scope: &ConversationId) -> Session {
         let previous = self.catalog.lock().ok().and_then(|entry| {
             entry

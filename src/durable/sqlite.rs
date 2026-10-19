@@ -909,6 +909,11 @@ impl SqliteConversationStore {
         ))
     }
 
+    #[cfg(test)]
+    pub(crate) fn cached_request_catalog_bytes(&self) -> Option<Vec<u8>> {
+        self.conn.scalar_facts.retained_bytes()
+    }
+
     fn from_connection_owner(conversation_id: ConversationId, conn: Arc<ConnectionOwner>) -> Self {
         Self {
             conversation_id,

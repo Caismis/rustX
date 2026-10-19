@@ -386,3 +386,63 @@ impl Drop for TraceIndexFault {
         self.repair();
     }
 }
+
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn admitted_original_trace_read_survives_a_different_native_catalog_capture() {
+    use crate::durable::ConversationStore as _;
+    let (fixture, checkpoint, original_page, original) = completed_trace_fixture().await;
+    let inner = Arc::clone(&fixture.host.inner);
+    let store = fixture.store.as_ref().unwrap();
+    let previous_catalog = store.cached_request_catalog_bytes().expect("original native cache entry");
+    let reference = original_content_reference(&checkpoint, &original);
+    let (entered, release, pending) = hold_admitted_detail(&inner, &original_page);
+    tokio::time::timeout(STREAM_LIVENESS_GUARD, entered).await.unwrap().unwrap();
+    // A real native RequestStart captures different frozen public definitions.
+    // It advances J without mutating the old pending/canonical read epoch.
+    let prior = store.read_request_snapshots(None, 32).unwrap().snapshots.remove(0);
+    let mut replacement = crate::model::RequestSnapshot::new(
+        crate::model::RequestIdentity {
+            attempt_id: AttemptId::new("replacement-catalog-native-owner"),
+            turn: crate::runtime::identity::TurnId::new("1"), retry_number: 0,
+        },
+        crate::context::resources::LedgerFrontier(store.load_head().unwrap().revision.get()),
+        prior.effective_system_prompt.clone(), Vec::new(), prior.runtime_resource_revision,
+        prior.invocation.clone(), prior.context_window_tokens, prior.profile.clone(),
+        prior.reasoning_enabled,
+        vec![crate::tools::types::ModelToolDefinition {
+            id: crate::runtime::identity::ToolId::new("replacement-catalog-tool"),
+            name: "ReplacementCatalog".into(),
+            description: "different immutable public catalog; no Tool is executed".into(),
+            input_schema: serde_json::json!({"type":"object", "properties":(0..48).map(|n| (
+                format!("argument-{n}"), serde_json::json!({"type":"string"})
+            )).collect::<serde_json::Map<_,_>>() }),
+        }],
+        prior.capability_revision,
+        crate::context::assembly::ContextGeneration { id: 1, contributors: Vec::new() },
+        None, Vec::new(),
+    );
+    let history = store.projected_history().unwrap();
+    replacement.history_cut = history.cut;
+    replacement.freeze_input(store.conversation_id(), &crate::model::ModelRequest {
+        images: crate::model::images::ResolvedImages::new(),
+        invocation: replacement.invocation.clone(), messages: history.messages.to_vec().into(),
+        tools: replacement.tool_definitions.clone(),
+        effective_system_prompt: replacement.effective_system_prompt.clone(),
+        continuation: None, continuation_source: None,
+    }).unwrap();
+    let committed = store.commit_model_turn_start(&[], &replacement, chrono::Utc::now()).unwrap().started;
+    let next_catalog = store.cached_request_catalog_bytes().expect("replacement native cache entry");
+    assert_ne!(next_catalog, previous_catalog, "prove that the retained entry was actually replaced");
+    let sink = super::super::NativePublicationProjection { inner: Arc::downgrade(&inner) };
+    assert!(crate::runtime::observation::PublicationProjectionCommit::native_batch(
+        &sink, committed.observation.as_deref().unwrap(),
+    ).is_installed());
+    inner.store.mark_observation_direct(committed.sequence, committed.sequence).unwrap();
+    release.send(()).unwrap();
+    let returned = pending.await.unwrap().unwrap();
+    assert_eq!(returned, original_page, "the already-admitted read retains its exact original cut and items");
+    assert_original_content(&inner, &reference, &original);
+    fixture.runtime.shutdown().await.unwrap();
+    inner.drain_projection().await.unwrap();
+}
