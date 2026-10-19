@@ -6,6 +6,7 @@ pub mod connection;
 pub mod editor_read;
 pub mod protocol;
 pub(crate) mod registration;
+mod rpc_error;
 pub mod schema;
 pub mod session_deletion;
 mod wire;

@@ -1,13 +1,13 @@
 //! Private Product Host file-read seam. Never an ordinary App Server Method.
 //! Transport authentication creates the read authority; JSON cannot create it.
 use super::{
-    connection::{client_error, domain, host_error, manager_error},
     delivery_access,
     host::AppServerHost,
     protocol::{
         AttachmentTarget, ErrorData, Failure, JsonRpcVersion, MethodResult, RequestId, Response,
         RpcError, Success,
     },
+    rpc_error::{client_error, domain, host_error, manager_error},
 };
 use crate::tools::session_files::SessionFileReadFailure as FileFailure;
 use serde::{Deserialize, Serialize};

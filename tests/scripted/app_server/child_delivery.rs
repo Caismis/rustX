@@ -1,4 +1,8 @@
-// Exact native child ownership and physical-root admission, with existing fences.
+//! Exact native child ownership and physical-root admission, with existing fences.
+use super::delivery::{
+    DELIVERED, FILE_HOST_TOKEN, TrustedFileHost, cancel_delivery, delivered_bytes, failed_with,
+};
+use super::*;
 use crate::durable::ConversationStore;
 use crate::message::types::{
     AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, MessageBlock,
@@ -18,10 +22,8 @@ struct ChildDelivery {
     store: crate::durable::SqliteConversationStore,
     message: MessageId,
 }
-mod selected_source {
-    use super::*;
-    include!("child_selected_delivery.rs");
-}
+#[path = "child_selected_delivery.rs"]
+mod selected_source;
 impl ChildDelivery {
     async fn new() -> Self {
         Self::with_delivery(true).await

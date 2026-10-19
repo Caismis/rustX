@@ -56,7 +56,7 @@ async fn granted_connection(
 async fn t08_t11_t12_t14_t19_numeric_delivery_carrier_keeps_real_stdio_and_websocket_bounded() {
     Box::pin(bounded(async {
         for ws in [false, true] {
-            let fixture = Fixture::new().await;
+            let fixture = Fixture::with_session_count(None, 1).await;
             let session = &fixture.sessions[0];
             let file_path = fixture.workspaces[0].join("原始 report.md");
             let original_bytes = b"# Original protected bytes\r\n";

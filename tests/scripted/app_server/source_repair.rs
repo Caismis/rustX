@@ -2,7 +2,7 @@
 //! boundaries, its source-scoped receipts and notices, and their separation
 //! from runtime application, canonical history and execution.
 #![allow(clippy::large_futures)] // bounded fixture futures; no recursive or unbounded stack growth
-use super::protocol::initialize;
+use super::protocol::{call, initialize};
 use super::*;
 use crate::app_server::connection::AppServerConnection;
 use crate::app_server::protocol::{
@@ -15,21 +15,6 @@ use crate::local_runtime::configuration::repair::{
 use crate::local_runtime::configuration::settings::{
     SourceDocumentView, SourceMutation, SourceTarget, SourceView,
 };
-
-async fn call(connection: &AppServerConnection, id: i64, method: Method) -> MethodResult {
-    let response = connection
-        .handle_request(Request {
-            jsonrpc: JsonRpcVersion::V2,
-            id: RequestId::Integer(id),
-            call: method,
-        })
-        .await;
-    let Response::Success(reply) = response else {
-        panic!("{response:?}")
-    };
-    assert_eq!(reply.id, RequestId::Integer(id));
-    reply.result
-}
 
 /// Only source fields this repair contract asserts, from one authoritative read cut.
 struct RepairSourceFields {
@@ -355,7 +340,7 @@ async fn session_creation_repairs_both_sources_before_resolution() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn reconcile_repairs_an_external_edit_once_and_reads_stay_read_only() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let target = workspace(&f, 0);
         let runtime = f.load(0).await.unwrap().unwrap();
         let live = runtime.inspect_runtime().unwrap();
@@ -624,7 +609,7 @@ async fn a_source_write_into_a_replaced_workspace_is_refused_before_application(
     use crate::local_runtime::authoring::SubagentsLayer;
     use crate::local_runtime::configuration::settings::ConfigMutation;
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let target = workspace(&f, 0);
         let runtime = f.load(0).await.unwrap().unwrap();
         let connection = AppServerConnection::new(f.host.clone());
@@ -759,7 +744,7 @@ async fn session_creation_admits_the_selected_workspace_before_any_repair() {
         "Workspace inside the runtime root",
     ] {
         bounded(async {
-            let f = Fixture::new().await;
+            let f = Fixture::with_session_count(None, 1).await;
             let runtime = f.load(0).await.unwrap().unwrap();
             let connection = AppServerConnection::new(f.host.clone());
             initialize(&connection).await;
@@ -1013,7 +998,7 @@ async fn an_unresolvable_session_workspace_repairs_no_source() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_repair_refused_by_the_size_bound_reaches_no_application() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let runtime = f.load(0).await.unwrap().unwrap();
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
@@ -1192,7 +1177,7 @@ fn sequence(f: &Fixture) -> u64 {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_healthy_admission_owes_its_empty_level_exactly_once() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let target = workspace(&f, 0);
         let runtime = f.load(0).await.unwrap().unwrap();
         let live = runtime.inspect_runtime().unwrap();
@@ -1902,7 +1887,7 @@ async fn reconcile_announced(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_restored_original_repaired_again_is_announced_as_a_new_occurrence() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let target = workspace(&f, 0);
         let _runtime = f.load(0).await.unwrap().unwrap();
         let connection = AppServerConnection::new(f.host.clone());
@@ -1988,7 +1973,7 @@ async fn a_restored_original_repaired_again_is_announced_as_a_new_occurrence() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn notices_and_reads_carry_the_same_redacted_receipt() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let target = workspace(&f, 0);
         let _runtime = f.load(0).await.unwrap().unwrap();
         let connection = AppServerConnection::new(f.host.clone());
@@ -2153,7 +2138,7 @@ async fn source_reads_leave_the_filesystem_unchanged() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn source_reads_are_physically_bound_and_trigger_nothing() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let target = workspace(&f, 0);
         let runtime = f.load(0).await.unwrap().unwrap();
         let live = runtime.inspect_runtime().unwrap();
