@@ -23,6 +23,29 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 const noop = () => {};
+it.each(['cancelling', 'settling', 'outcome_unknown', 'cancelled'] as const)('background Inspector preserves %s and links only its original launch Step', state => {
+  const source = traceTool(1), other = traceTool(2, { location: { attempt_id: 'other-attempt', step_id: '1' } });
+  other.tool!.call_id = source.tool!.call_id;
+  const record = traceRecord(3, { kind: 'background', request: null, native_id: 'job-background', originating_tool_call_id: source.tool!.call_id, state, preview: null });
+  show(cacheOf([source, other, record]));
+  fireEvent.click(row('RecordRow', record.id));
+  const summary = screen.getByRole('tabpanel');
+  expect(within(summary).getByText(traceStateLabel(translator('en'), state))).toBeTruthy();
+  expect(within(summary).getByText('job-background')).toBeTruthy();
+  expect(within(summary).getByRole('button', { name: 'bash' })).toBeTruthy();
+  expect(recordText(translator('en'), record)).toContain(traceStateLabel(translator('en'), state));
+});
+
+it('background launch Trace output describes acceptance without claiming the command finished', () => {
+  const record = traceTool(1), detail = toolDetail(1);
+  detail.tool!.result!.blocks = [{ type: 'json', value: { value: { job_id: 'job-background', state: 'starting', tool: 'bash', output_path: '/workspace/background.txt', note: 'Raw continuation guidance' }, truncated: false } }];
+  show(completeTraceDetail(cacheOf([record]), record.id, 1, detail));
+  fireEvent.click(row('RecordRow', record.id));
+  fireEvent.click(screen.getByRole('tab', { name: 'Result' }));
+  expect(screen.getByRole('tabpanel').textContent).toContain('Background task started');
+  expect(screen.getByRole('tabpanel').textContent).toContain('job-background');
+  expect(screen.getByRole('tabpanel').textContent).not.toContain('Raw continuation guidance');
+});
 const trajectoryItems = (records: readonly TraceRecord[]) => flattenTrajectory(translator('en'), projectTrajectory(translator('en'), records));
 const cacheOf = (records: TraceRecord[]) => replaceTrace({ records, next_cursor: null });
 function show(cache: TraceCache, load = vi.fn(), older = vi.fn()) {

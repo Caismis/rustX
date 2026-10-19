@@ -1,4 +1,5 @@
 import { SubagentHeader } from './Subagents';
+import { BackgroundJobs } from './BackgroundJobs';
 import { useSubagents } from './subagent-context';
 import { useConversationPreferences } from '../conversation-preferences';
 import { OpenWorkspace } from './OpenWorkspace';
@@ -36,6 +37,7 @@ export function ConversationHeader({ host, authority, client, view, workspaceId,
       <div className={agentCss.titleRow}>
         <div className={agentCss.titleCluster}>
           <SubagentHeader title={view ? sessionDisplayTitle(tx, view.summary) : 'rustX'}/>
+          {view && !subagents?.selected && <BackgroundJobs client={client} sessionId={view.id}/>}
         </div>
         <div className={agentCss.headerUtilities}>
           {subagents?.selected && <div id="subagent-header-actions"/>}

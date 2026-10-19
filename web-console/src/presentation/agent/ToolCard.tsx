@@ -15,6 +15,7 @@ export interface ToolCardView {
  id?: string; nativeName?: string; identity?: 'call' | 'job'; title: string; summary: string; state: 'assembled' | 'running' | 'success' | 'failure' | 'cancelled' | 'uncertain' | 'starting' | 'cancelling' | 'publishing_terminal';
  variant: 'generic' | 'bash' | 'image' | 'read' | 'write' | 'edit' | 'search'; input?: string; output?: string;
  artifacts?: ReactNode; path?: string; exitCode?: number | null; truncated?: boolean; diffs?: DiffHunk[];
+ background?: boolean; jobId?: string;
 }
 const icons = { image: IconBrowseOutline16, generic: IconSparkle16, bash: IconApiOutline14, read: IconBrowseOutline16, write: IconEditOutline16, edit: IconEditOutline16, search: IconSearchOutline16 };
 /** One dispatch path, one native call. Expansion never changes lifecycle. */
@@ -29,9 +30,9 @@ export function ToolCard({ tool, children, inspect }: { tool: ToolCardView; chil
  <DisclosureRow rowClassName={css.row} leadingClassName={css.leading} titleClassName={css.title} chevronClassName={css.chevron}
  icon={<Icon size={14}/>}
  title={tool.title} open={open} expandable expandOnRowClick keepContentWhenOpen onToggle={() => setOpen(v => !v)}
- collapsedContent={<>{tool.summary && <><span className={css.sep} aria-hidden/><span className={css.summary} data-error={state === 'error' || undefined} data-stopped={state === 'stopped' || undefined}>{tool.summary}</span></>}<span className={css.visuallyHidden} aria-label={tx('tools:tool-card.tool-status')}>{tx(`common:state.${tool.state}`)}</span></>}>
+ collapsedContent={<>{tool.summary && <><span className={css.sep} aria-hidden/><span className={css.summary} data-error={state === 'error' || undefined} data-stopped={state === 'stopped' || undefined}>{tool.summary}</span></>}{tool.background && <span className={css.summary}>{tx(tool.jobId ? 'common:activity.background-started' : 'common:activity.background-starting')}</span>}<span className={css.visuallyHidden} aria-label={tx('tools:tool-card.tool-status')}>{tool.background ? tx(tool.jobId ? 'common:activity.background-started' : 'common:activity.background-starting') : tx(`common:state.${tool.state}`)}</span></>}>
  <div className={css.bodyWrap}>
- {tool.variant === 'bash' ? <TerminalBlock command={tool.input ?? ''} output={tool.output} exitCode={tool.exitCode}
+ {tool.variant === 'bash' ? <TerminalBlock command={tool.input ?? ''} output={tool.output} exitCode={tool.exitCode} background={tool.background}
    lifecycle={{ state: tool.state === 'success' ? 'done' : tool.state === 'failure' ? 'error' : tool.state === 'running' ? 'ongoing' : tool.state === 'assembled' ? 'idle' : 'warning', label: tx(`common:state.${tool.state}`) }}
    running={tool.state === 'running' || tool.state === 'assembled'} maxLines={Infinity} className={css.terminalBody}
    labels={{ ...labels, signal: s => tx('tools:copy.signal-value', { p0: s }), exitCode: n => tx('tools:copy.exit-value', { p0: n }), noExitCode: tx('tools:tool-card.exit-status-unavailable'), running: tx('tools:tool-card.running'), failed: tx('tools:tool-card.failed'), done: tx('tools:tool-card.done'), noOutput: tx('tools:tool-card.no-output') }}/>
@@ -40,10 +41,11 @@ export function ToolCard({ tool, children, inspect }: { tool: ToolCardView; chil
  : tool.variant === 'search' && tool.output !== undefined ? <SearchTextBlock className={css.searchBody} text={tool.output} label={tool.summary} truncated={!!tool.truncated}/>
  : <div className={css.ioCard}>
    {tool.input && <div className={css.ioSection}><span className={css.ioLabel}>{tx('tools:tool-card.in')}</span><span className={css.ioText}>{tool.input}</span></div>}
-   {tool.input && tool.output && <span className={css.ioDivider} aria-hidden/>}
-   {tool.output && <div className={css.ioSection}><span className={css.ioLabel}>{tx('tools:tool-card.out')}</span><span className={css.ioText} data-error={state === 'error' || undefined}>{tool.output}</span></div>}
+   {tool.input && tool.output && !tool.background && <span className={css.ioDivider} aria-hidden/>}
+   {tool.output && !tool.background && <div className={css.ioSection}><span className={css.ioLabel}>{tx('tools:tool-card.out')}</span><span className={css.ioText} data-error={state === 'error' || undefined}>{tool.output}</span></div>}
  </div>}
  {tool.artifacts}
+ {tool.jobId && <small>{tx('common:activity.job-title', { id: tool.jobId })}</small>}
  {inspect && <ToolInspectionButton inspect={inspect}/>}
  </div></DisclosureRow></div>{children && <div className={tree.subCalls}>{children}</div>}</div>;
 }

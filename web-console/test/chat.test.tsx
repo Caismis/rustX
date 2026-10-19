@@ -3,9 +3,8 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { RunningStatus } from '../src/presentation/agent/RunningStatus';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { RuntimeFacts as OtherActivity } from '../src/app/agent/Activity';
-import { AgentCard } from '../src/app/components/ActivityCards';
-import type { ComponentProps } from 'react';
-function RuntimeFacts(props: ComponentProps<typeof OtherActivity>) { return <><OtherActivity {...props}/>{props.snapshot.agents?.map(agent => <AgentCard key={agent.agent_id} agent={agent} client={props.client} sessionId={props.sessionId}/>)}</>; }
+import { AgentCard, JobCard } from '../src/app/components/ActivityCards';
+function RuntimeFacts(props: { snapshot: ReturnType<typeof snapshot>; client?: import('../src/client/app-server').AppServerClient; sessionId?: string }) { return <><OtherActivity snapshot={props.snapshot}/>{props.snapshot.jobs?.map(job => <JobCard key={job.job_id} job={job} client={props.client} sessionId={props.sessionId}/>)}{props.snapshot.agents?.map(agent => <AgentCard key={agent.agent_id} agent={agent} client={props.client} sessionId={props.sessionId}/>)}</>; }
 import { snapshot, projectionHead } from './fixture';
 import { ProjectionSummary } from '../src/app/agent/ContextSeat';
 afterEach(cleanup);

@@ -1,7 +1,7 @@
 import { useToolInspection } from './tool-inspection';
 import { useState } from 'react';
 import { DisclosureRow } from '../../presentation/primitives/DisclosureRow';
-import { IconAgentPresetOutline16 } from '../../presentation/primitives/icons';
+import { IconAgentPresetOutline16, IconApiOutline14 } from '../../presentation/primitives/icons';
 import { subagentToolDetails } from './subagent-tool-details';
 import detailsCss from './AgentToolDetails.module.css';
 import { useSubagents } from './subagent-context';
@@ -11,6 +11,9 @@ import type { TranslationKey } from '../../locale/translation';
 import type { ForegroundToolExecution } from '../../../../protocol/app-server/v50';
 import { ToolCard, ToolInspectionButton } from '../../presentation/agent/ToolCard';
 import { toolCard } from '../../bindings/tools';
+import { jobResultItems } from '../../bindings/jobs';
+import { JobResultDetails } from './JobResultDetails';
+import { jobStateLabel } from '../../bindings/status-labels';
 
 const names: Record<string, { domain: 'job' | 'agent'; title: TranslationKey }> = {
   'tool-job_list': { domain: 'job', title: 'common:activity.jobs' },
@@ -65,6 +68,17 @@ export function DomainActivity({ tool }: { tool: ForegroundToolExecution }) {
   let target: string | undefined;
   try { const input = JSON.parse(tool.state.arguments); if (typeof input?.job_id === 'string') target = input.job_id; }
   catch { /* Partial streaming arguments. */ }
+  const result = tool.committed_result ?? (tool.state.type === 'settled' ? tool.state.result : undefined);
+  const block = result?.status.type === 'success' && result.content?.length === 1 ? result.content[0] : undefined;
+  const items = block?.type === 'json' && view.state === 'success' ? jobResultItems(block.value) : undefined;
+  if (items) return <div className={css.root} data-activity-domain="job" data-tool-call-id={tool.call_id}>
+    <DisclosureRow icon={<IconApiOutline14/>} title={tx(domain.title)} open={expanded} expandable expandOnRowClick keepContentWhenOpen onToggle={() => setExpanded(value => !value)}
+      collapsedContent={<><span className={css.sep}/><span className={css.summary}>{tool.tool_id === 'tool-job_list' ? tx('common:activity.job-count', { count: items.length }) : `${target ?? items[0]?.jobId} · ${items[0] ? jobStateLabel(tx, items[0].state) : ''}`}</span></>}>
+      <div className={detailsCss.root}><div className={detailsCss.caption}>{tx('common:activity.recorded-job-result')}{inspect && <ToolInspectionButton inspect={inspect}/>}</div><JobResultDetails items={items}/>
+        <details><summary>{tx('common:activity.original-job-result')}</summary><pre>{view.output}</pre></details>
+      </div>
+    </DisclosureRow>
+  </div>;
   return <div data-activity-domain={domain.domain}><ToolCard inspect={inspect} tool={{ ...view, title: tx(domain.title),
     summary: target ?? tx('common:activity.finite-tool') }}/></div>;
 }

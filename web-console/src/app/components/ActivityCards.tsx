@@ -1,5 +1,6 @@
 import { JournalSourceProvider } from '../agent/ObservationSource';
 import { ChildObservation } from '../../../../protocol/app-server/child-observation';
+import { domainOriginalValue } from '../../../../protocol/app-server/domain-observation';
 import { ToolInspectionContext, useToolTraceNavigation } from '../agent/tool-inspection';
 import { AgentConversationContext } from '../agent/subagent-context';
 import { StateDot } from '../../presentation/primitives/StateDot';
@@ -10,7 +11,6 @@ import { useEffect, useLayoutEffect, useContext, useMemo, useRef, useState, useS
 import type { AgentStatistics, RuntimeClientAgent, RuntimeClientJob, MethodResult, WorkflowRunView, WorkflowRunId } from '../../../../protocol/app-server/v50';
 import type { Observation } from '../../client/session-lifecycle/port';
 import { AppServerClient, RpcFailure } from '../../client/app-server';
-import { json } from '../../bindings/projection';
 import { Badge, SettingsCard } from '../../presentation/settings/SettingsContent';
 import { Button } from '../../presentation/primitives/Button';
 import { ToolCard } from '../../presentation/agent/ToolCard';
@@ -20,6 +20,8 @@ import css from './ActivityCards.module.css';
 import { SubagentChat } from '../agent/SubagentChat';
 import { ConversationStats } from '../agent/UsageStats';
 import { agentDot, agentRunning, agentStatus } from '../agent/subagent-state';
+import { jobActive } from '../agent/job-state';
+import { jobResultOutput } from '../../bindings/jobs';
 import { SubagentTrajectory, type SubagentTraceHandle } from '../agent/SubagentTrajectory';
 import { ComposerSeat } from '../agent/ComposerSeat';
 import { AgentComposer } from '../agent/AgentComposer';
@@ -169,20 +171,31 @@ export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible
 
 export function JobCard({ job, ...controls }: { job: RuntimeClientJob } & Controls) {
   const tx = useTranslation();
+  const source = useRef(job); source.current = job;
+  const [loaded, setLoaded] = useState<{ source: RuntimeClientJob; value: RuntimeClientJob; current: () => boolean }>();
   const request = useActivityRequest(controls);
   const waitRequest = useActivityRequest(controls);
-  const output = job.result ? (job.result.content ?? []).flatMap(block => block.type === 'text' ? [block.text] : block.type === 'json' ? [block.value && typeof block.value === 'object' && !Array.isArray(block.value) && typeof block.value.combined === 'string' ? block.value.combined : json(block.value)] : []).join('\n') : job.progress ? [job.progress.message, job.progress.completed == null ? undefined : job.progress.total == null ? tx('common:activity.completed', { n: job.progress.completed }) : `${job.progress.completed} / ${job.progress.total}`].filter(Boolean).join('\n') : undefined;
-  const active = job.state === 'starting' || job.state === 'running' || job.state === 'cancelling' || job.state === 'publishing_terminal';
+  const value = loaded?.source === job && loaded.current() ? loaded.value : job;
+  const output = value.result ? jobResultOutput(value.result) : value.progress ? [value.progress.message, value.progress.completed == null ? undefined : value.progress.total == null ? tx('common:activity.completed', { n: value.progress.completed }) : `${value.progress.completed} / ${value.progress.total}`].filter(Boolean).join('\n') : undefined;
+  const active = jobActive(job);
   return <section data-job-state={job.state} aria-label={tx('common:activity.job-label', { name: job.tool_name })}>
-    <ToolCard tool={{ id: job.job_id, identity: 'job', title: job.tool_name, variant: job.tool_id === 'tool-bash' ? 'bash' : 'generic', summary: job.bash?.description ?? job.bash?.command ?? tx('common:activity.job-title', { id: job.job_id }), input: job.bash?.command,
+    <ToolCard tool={{ id: job.job_id, identity: 'job', title: value.tool_name, variant: value.tool_id === 'tool-bash' ? 'bash' : 'generic', summary: value.bash?.description ?? value.bash?.command ?? tx('common:activity.job-title', { id: job.job_id }), input: value.bash?.command,
       state: job.state === 'succeeded' ? 'success' : job.state === 'failed' || job.state === 'denied' || job.state === 'timed_out' ? 'failure' : job.state === 'outcome_unknown' ? 'uncertain' : job.state,
-      output, exitCode: job.result?.exit_code, truncated: job.result?.truncation?.truncated,
-      artifacts: job.result ? <ToolArtifacts result={job.result}/> : undefined }}/>
-    {job.result?.managed_output && <details><summary>{tx('common:activity.retained', { type: job.result.managed_output.type })}</summary>
-      {'locator' in job.result.managed_output && <p className={css.identity}>{job.result.managed_output.locator}</p>}
-      {'diagnostic' in job.result.managed_output && <p>{detail(job.result.managed_output.diagnostic)}</p>}
+      output, exitCode: value.result?.exit_code, truncated: value.result?.truncation?.truncated,
+      artifacts: value.result ? <ToolArtifacts result={value.result}/> : undefined }}/>
+    {value.result?.managed_output && <details><summary>{tx('common:activity.retained', { type: value.result.managed_output.type })}</summary>
+      {'locator' in value.result.managed_output && <p className={css.identity}>{value.result.managed_output.locator}</p>}
+      {'diagnostic' in value.result.managed_output && <p>{detail(value.result.managed_output.diagnostic)}</p>}
     </details>}
     {controls.client && <div className={css.controls}>
+      {!!value.deferred_fields?.length && <Button size="sm" variant="outline" disabled={request.disabled} onClick={() => void request.run(async (client, target, current) => {
+        const owned = () => current() && source.current === job;
+        const { page } = await client.request({ method: 'job/status', params: { target, job_id: job.job_id } }, 'domain_page', undefined, owned);
+        if (page.domain !== `jobs.${job.job_id}` || page.read_cut.conversation_id !== target.conversation_id) throw new Error('Job details source changed.');
+        const original = await domainOriginalValue<RuntimeClientJob>(page, client.domainReader(target, owned));
+        if (original.job_id !== job.job_id) throw new Error('Job details named another native execution.');
+        if (owned()) setLoaded({ source: job, value: original, current });
+      }, false)}>{tx('common:activity.job-details')}</Button>}
       <Button size="sm" variant="outline" disabled={request.disabled} onClick={() => void request.run(async (client, target, current) => { await client.request({ method: 'job/status', params: { target, job_id: job.job_id } }, 'domain_page', undefined, current); })}>{tx('common:activity.status')}</Button>
       <Button size="sm" variant="outline" disabled={waitRequest.disabled || !active} onClick={() => void waitRequest.run(async (client, target, current) => { await client.request({ method: 'job/wait', params: { target, job_id: job.job_id } }, 'job_outcome', undefined, current); })}>{tx('common:activity.wait-job')}</Button>
       <Button size="sm" variant="outline" disabled={request.disabled || !active || job.state === 'cancelling'} onClick={() => void request.run(async (client, target, current) => { const receipt = await client.request({ method: 'job/cancel', params: { target, job_id: job.job_id } }, 'job_cancellation_accepted', undefined, current); if (receipt.job_id !== job.job_id) throw new Error('Job cancellation receipt named another native execution.'); }, false)}>{tx('common:activity.cancel-job')}</Button>

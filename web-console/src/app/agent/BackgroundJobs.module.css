@@ -1,0 +1,17 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Adapted from ui-jobs JobListAction.module.css; see PROVENANCE.md. */
+.trigger { display: inline-flex; flex: none; align-items: center; gap: 4px; min-height: 28px; padding: 3px 2px; border: 0; border-radius: var(--dsw-radius-sm); background: transparent; color: var(--dsw-alias-label-tertiary); font: inherit; font-size: 12px; line-height: 18px; white-space: nowrap; cursor: pointer; }
+.trigger:hover, .trigger:focus-visible { color: var(--dsw-alias-label-primary); }
+.triggerOpen { transform: rotate(180deg); }
+.menu { position: fixed; z-index: 100; box-sizing: border-box; display: flex; flex-direction: column; width: 500px; max-width: calc(100vw - 32px); max-height: min(480px, calc(100vh - 140px)); border-radius: var(--dsw-radius-lg); background: var(--dsw-specific-menu); --dsw-elevation-stroke-color: var(--dsw-alias-border-l1); box-shadow: var(--dsw-elevation-prominent); overflow: hidden; }
+.body { display: flex; flex-direction: column; gap: 4px; min-height: 0; padding: 4px; overflow: auto; }
+.section { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 8px; margin: 4px; padding: 4px 0 3px; border-top: .5px solid var(--dsw-alias-border-l1); color: var(--dsw-alias-label-tertiary); font-size: 11px; line-height: 16px; }
+.section:first-child { margin-top: 0; border-top: 0; }
+.action { display: inline-flex; align-items: center; gap: 3px; padding: 2px 4px; border: 0; border-radius: var(--dsw-radius-sm); background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.action:hover, .action:focus-visible { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-secondary); }
+.sectionClosed { transform: rotate(-90deg); }
+.item { min-width: 0; padding: 6px; border-radius: var(--dsw-radius-md); }
+.item[hidden] { display: none; }
+.item[data-live=true] { background: var(--dsw-alias-bg-module-platform); }
+.item :global(pre) { max-height: 240px; overflow: auto; }
+.duration { display: block; padding: 2px 4px; color: var(--dsw-alias-label-tertiary); font-size: 11px; font-variant-numeric: tabular-nums; }
+.status { display: flex; align-items: center; gap: 5px; padding: 2px 4px; color: var(--dsw-alias-label-tertiary); font-size: 11px; }

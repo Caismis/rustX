@@ -1,3 +1,23 @@
+## Background task presentation
+
+Reference inspected read-only: local `../deepseek-harness` at immutable commit
+`687f282e8625c6b8d11ff58211a90524be2e4317`, especially
+`packages/client/ui-jobs/src/client/JobListAction.{tsx,module.css}` and
+`packages/client/ui-tool/src/client/tool/models/terminal-card-model.ts`.
+The header entry, viewport-fixed popup, active/ended groups and client-only Clear
+follow that reference. Native rustX status/wait/cancel operations remain in each
+task row. The menu clock runs only while open, with matching native background
+Trace timing; absent native starts produce no synthetic elapsed time.
+
+Chat background launches now follow the command-only settled presentation:
+dispatch acceptance has its own label, command copy remains available, and no
+exit outcome or output placeholder is invented. Failed launches retain their
+ordinary diagnostic presentation. Historical Job controls and runtime terminal
+notices share the native Job state labels and output formatting. Trace displays
+acceptance separately from task settlement, retains the full native background
+state vocabulary, and links a background record to its unique same-Step launch.
+Harness job services, transport, event folding and model tools are excluded.
+
 ## Local Harness desktop presentation alignment
 
 The installed DeepSeek Harness Windows desktop UI was visually inspected on

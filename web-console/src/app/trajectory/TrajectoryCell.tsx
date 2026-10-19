@@ -7,6 +7,7 @@ import { IconSettingsOutline16, IconSparkle16, IconUserOutline16 } from '../../p
 import { Tooltip } from '../../presentation/primitives/Tooltip';
 import { recordLabel, type InspectableDisplayItem } from './layout';
 import { markdownPreviewText } from '../../presentation/markdown/preview';
+import { traceStateLabel } from '../../bindings/status-labels';
 import css from './Trajectory.module.css';
 
 /** The ledger's role vocabulary: native kinds plus the two input cells. */
@@ -95,6 +96,7 @@ function compactionText(tx: Translate, record: TraceRecord): string {
 export function recordText(tx: Translate, record: TraceRecord): string {
   if (record.kind === 'compaction') return compactionText(tx, record);
   const preview = record.preview?.text ? markdownPreviewText(record.preview.text) : '';
+  if (record.kind === 'background' && preview === '') return `${tx('common:activity.background-jobs')} · ${traceStateLabel(tx, record.state)}`;
   const attachments = attachmentSummary(tx, record);
   return attachments === '' ? preview : preview === '' ? attachments : `${attachments} · ${preview}`;
 }

@@ -38,6 +38,12 @@ const records = [
   traceRecord(13, { kind: 'workflow', request: null, location: {}, preview: text('Release checklist run') }),
 ];
 const params = new URLSearchParams(location.search);
+const backgroundJobs = params.has('background-jobs');
+const backgroundRecords = [
+  traceTool(20),
+  traceRecord(21, { kind: 'background', request: null, native_id: 'job-launched', originating_tool_call_id: 'call-20', state: 'outcome_unknown', preview: null }),
+  traceTool(22, { tool: { ...traceTool(22).tool!, tool_id: 'tool-job_wait', name: 'job_wait' } }),
+];
 const long = params.has('long'); const threshold = params.has('threshold');
 const renumber = params.has('renumber');
 const structure = params.has('structure'); const toolFirst = params.has('tool');
@@ -69,7 +75,7 @@ const retainedRecords = [
   traceRecord(4, { kind: 'user', request: null, location: {}, preview: text('Second input') }),
   traceRecord(5, { kind: 'assistant', request: null, location: { attempt_id: 'attempt-b', step_id: '1' }, preview: text('Second response') }),
 ];
-const snapshot = { records: retainedInputs ? retainedRecords : stepLess ? stepLessRecords().slice(1) : ordered ? orderedRecords : chrome ? chromeRecords : params.has('ledger') ? semanticLedgerRecords() : mixedRecords ?? (long || threshold ? Array.from({ length: long ? 480 : 90 }, (_, n) => toolFirst && n === 0 ? traceTool(100) : request(n + 100, !threshold && n % 7 === 0 ? 'changed' : 'unchanged', 'unchanged')) : params.has('structural-search') ? structuralSearchRecords() : records), next_cursor: 'older' };
+const snapshot = { records: backgroundJobs ? backgroundRecords : retainedInputs ? retainedRecords : stepLess ? stepLessRecords().slice(1) : ordered ? orderedRecords : chrome ? chromeRecords : params.has('ledger') ? semanticLedgerRecords() : mixedRecords ?? (long || threshold ? Array.from({ length: long ? 480 : 90 }, (_, n) => toolFirst && n === 0 ? traceTool(100) : request(n + 100, !threshold && n % 7 === 0 ? 'changed' : 'unchanged', 'unchanged')) : params.has('structural-search') ? structuralSearchRecords() : records), next_cursor: 'older' };
 function Fixture() {
   const [cache, setCache] = useState(() => replaceTrace(snapshot));
   const [reads, setReads] = useState(0); const [pages, setPages] = useState(0);
@@ -90,13 +96,18 @@ function Fixture() {
         setCache(current => {
           const n = Number(id.split(':')[1]); const record = current.page.records.find(record => record.id === id)!;
           const detail = record.kind === 'tool' ? toolDetail(n) : record.kind === 'request' ? requestDetail(n) : requestDetail(n, { kind: record.kind, request: null, messages: [] });
+          if (backgroundJobs && n === 20) detail.tool!.result!.blocks = [{ type: 'json', value: { value: { job_id: 'job-launched', state: 'starting', tool: 'bash', output_path: '/workspace/output.txt' }, truncated: false } }];
+          if (backgroundJobs && n === 22) {
+            detail.tool!.name = 'job_wait'; detail.tool!.tool_id = 'tool-job_wait';
+            detail.tool!.result!.blocks = [{ type: 'json', value: { value: { job_id: 'job-launched', tool: 'bash', state: 'outcome_unknown', result: { status: { type: 'outcome_unknown', detail: 'External result was not proven' } } }, truncated: false } }];
+          }
           if (detail.request) {
             detail.request.messages.push(...(record.request?.context_additions ?? []).map(context => { if (context.message_id == null) throw new Error('Finite fixture Context needs its original inline identity.'); return { role: 'user' as const, message_id: context.message_id, provenance_source:null, provenance: {type:'original' as const,conversation_id:'conv_36524fd8-f674-7fc2-8125-06d01fee0e18',content_digest:'fixture-digest',locator:null,message_id_source:null,source:{conversation_id:'conv_36524fd8-f674-7fc2-8125-06d01fee0e18',message_id:context.message_id,content_digest:'fixture-digest'}}, source: 'runtime', blocks: [{ type: 'text' as const, text: text(`Full content: ${context.preview?.text}`) }], truncated: false }; }));
             if (record.request?.system_prompt.state === 'previous_unavailable') { detail.request.predecessor = { availability: 'unavailable', request_id: 'previous-request' }; detail.request.previous_system_prompt = null; }
             if (n === 3) { detail.request.predecessor = { availability: 'not_applicable' }; detail.request.previous_system_prompt = null; }
             if (n === 11) { detail.request.effective_system_prompt.truncated = true; detail.request.previous_system_prompt!.truncated = true; }
           }
-          if (detail.tool) {
+          if (detail.tool && !backgroundJobs) {
             detail.tool.source!.text = text('git diff --stat');
             detail.tool.result!.blocks = [{ type: 'json', value: { value: { files: 3, insertions: 28 }, truncated: false } }, { type: 'text', text: text('Review complete.') }];
           }

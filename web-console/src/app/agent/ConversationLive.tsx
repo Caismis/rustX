@@ -102,9 +102,9 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
 function ConversationActivity({ client, sessionId }: { client: AppServerClient; sessionId: string }) {
   const snapshot = useClientSelector(client, state => {
     const value = state.views[sessionId]?.snapshot;
-    return value ? { agents: value.agents, jobs: value.jobs, workflows: value.workflows } : undefined;
+    return value ? { workflows: value.workflows } : undefined;
   }, shallowEqual);
-  return snapshot ? <RuntimeFacts snapshot={snapshot} client={client} sessionId={sessionId}/> : null;
+  return snapshot ? <RuntimeFacts snapshot={snapshot}/> : null;
 }
 
 export function ConversationDocks({ client, sessionId, disabled }: { client: AppServerClient; sessionId: string; disabled: boolean }) {

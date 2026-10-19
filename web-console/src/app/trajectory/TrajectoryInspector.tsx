@@ -6,6 +6,9 @@ import { Button } from '../../presentation/primitives/Button';
 import { parseJson, isJsonNumber } from '../../presentation/primitives/json';
 import type { Translate } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
+import { backgroundLaunch, jobResultItems } from '../../bindings/jobs';
+import { traceStateLabel } from '../../bindings/status-labels';
+import { JobResultDetails } from '../agent/JobResultDetails';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/TrajectoryTable.tsx inspector; see PROVENANCE.md. */
 /**
  * The record inspector, ported from the Harness details panel.
@@ -82,10 +85,10 @@ function stateOf(record: TraceRecord): RecordState {
   return record.state === 'completed' ? 'complete' : record.state === 'running' || record.state === 'pending' || record.state === 'waiting' ? 'running' : 'complete';
 }
 
-function StatusValue({ state }: { state: RecordState }) {
+function StatusValue({ state, nativeState }: { state: RecordState; nativeState?: TraceRecord['state'] }) {
   const tx = useTranslation();
   return <dd className={state === 'error' ? css.error : undefined}>
-    {tx(state === 'error' ? 'trajectory:status.failed' : state === 'running' ? 'trajectory:status.pending' : 'trajectory:status.completed')}
+    {nativeState ? traceStateLabel(tx, nativeState) : tx(state === 'error' ? 'trajectory:status.failed' : state === 'running' ? 'trajectory:status.pending' : 'trajectory:status.completed')}
   </dd>;
 }
 
@@ -356,9 +359,15 @@ function ToolResult({ record, detail, preview = false }: { record: TraceRecord; 
   const result = detail?.result;
   if (!result) return <><NoPayload>{tx(stateOf(record) === 'running' ? 'trajectory:code.running' : 'trajectory:record.no-result')}</NoPayload><Attachments artifacts={record.attachments} preview={preview} /></>;
   const error = result.outcome !== 'success';
+  const artifacts = [...new Map([...record.attachments, ...result.attachments, ...blockArtifacts(result.blocks)].map(artifact => [artifact.artifact_id, artifact])).values()];
+  const block = result.blocks.length === 1 ? result.blocks[0] : undefined;
+  const value = block?.type === 'json' && !block.value.truncated ? block.value.value : undefined;
+  const launch = !error ? backgroundLaunch(value, record.tool?.name ?? '') : undefined;
+  if (launch) return <div><p>{tx('common:activity.background-started')}</p><p>{tx('common:activity.job-title', { id: launch.jobId })}</p><pre className={css.payload}>{launch.outputPath}</pre><Attachments artifacts={artifacts} preview={preview}/></div>;
+  const jobs = !error && record.tool?.tool_id && ['tool-job_list', 'tool-job_status', 'tool-job_wait', 'tool-job_cancel'].includes(record.tool.tool_id) ? jobResultItems(value) : undefined;
+  if (jobs) return <><JobResultDetails items={jobs}/><details><summary>{tx('common:activity.original-job-result')}</summary><Json value={value} label={tx('trajectory:record.result-json')} preview={preview}/></details><Attachments artifacts={artifacts} preview={preview}/></>;
   const text = result.blocks.length === 1 && result.blocks[0]!.type === 'text' ? result.blocks[0]!.text.text : undefined;
   const json = text === undefined ? undefined : parseJsonContainer(text);
-  const artifacts = [...new Map([...record.attachments, ...result.attachments, ...blockArtifacts(result.blocks)].map(artifact => [artifact.artifact_id, artifact])).values()];
   if (json !== undefined && !error) return <><Json value={json} label={tx('trajectory:record.result-json')} preview={preview} /><Attachments artifacts={artifacts} preview={preview} /></>;
   return <div className={[css.resultBlocks, preview ? css.resultBlocksPreview : undefined, error ? css.errorPayload : undefined].filter(Boolean).join(' ')}>
     {error && result.detail?.text && <pre className={css.resultBlockText}>{result.detail.text}</pre>}
@@ -566,6 +575,8 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
   const ownRequest = record.kind === 'assistant' ? records.find(candidate => traceRequestAccepts(candidate,record)) : undefined;
   const assistantOf = (id: string) => [...executions].find(([, tools]) => tools.some(tool => tool.id === id))?.[0];
   const parentAssistant = record.kind === 'tool' ? assistantOf(record.id) : undefined;
+  const launchCalls = record.kind === 'background' && record.originating_tool_call_id ? records.filter(candidate => candidate.kind === 'tool' && candidate.tool?.call_id === record.originating_tool_call_id && sameTraceStep(candidate.location, record.location)) : [];
+  const launchCall = launchCalls.length === 1 ? launchCalls[0] : undefined;
   const requestAssistant = item.type === 'RequestBoundary' ? records.find(candidate => traceRequestAccepts(record,candidate)) : undefined;
   const openCall = (call: Extract<TraceContentBlock, {type:'tool_call'}>) => {
     const proposal = (call as TraceDisplayBlock).nativeOccurrence ?? record.calls.find(proposal => proposal.call_id != null && proposal.call_id === call.call_id)?.occurrence;
@@ -680,7 +691,9 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
           <dt>{tx('trajectory:details.hierarchy')}</dt>
           <dd className={css.overviewParentLinks}><NavLink label={tx('trajectory:details.assistant-message')} onClick={() => onOpen(parentAssistant)} /></dd>
         </div>}
-        <div><dt>{tx('trajectory:details.status')}</dt><StatusValue state={state} /></div>
+        <div><dt>{tx('trajectory:details.status')}</dt><StatusValue state={state} nativeState={record.kind === 'background' ? record.state : undefined}/></div>
+        {record.kind === 'background' && record.native_id && <div><dt>{tx('common:activity.background-jobs')}</dt><dd>{record.native_id}</dd></div>}
+        {launchCall && <div><dt>{tx('common:activity.background-launch-call')}</dt><dd><NavLink label={launchCall.tool?.name ?? launchCall.tool?.tool_id ?? launchCall.id} onClick={() => onOpen(launchCall.id)}/></dd></div>}
         {record.kind === 'assistant' && <TokenRows usage={usage} />}
         {(item.type === 'ContextRow' || record.kind === 'user') && <div><dt>{tx('trajectory:timing.duration')}</dt><dd>{formatDurationMillis(tx, wireCount(record.timing.duration_ms) ?? 0)}</dd></div>}
       </dl>
