@@ -1,4 +1,5 @@
-import { domainReceipt, jobReceipt } from './fixture';
+import { JobItemHarness } from './job-item-harness';
+import { domainReceipt } from './fixture';
 import { localeController } from '../src/locale/controller';
 import { translator } from '../src/locale/translation';
 import { useSyncExternalStore } from 'react';
@@ -7,8 +8,8 @@ import { afterEach, beforeEach, expect, it } from 'vitest';
 import type { RuntimeClientAgent, RuntimeClientJob } from '../../protocol/app-server/v50';
 import { RpcFailure } from '../src/client/app-server';
 import { RuntimeFacts as OtherActivity } from '../src/app/agent/Activity';
-import { AgentCard, JobCard } from '../src/app/components/ActivityCards';
-function RuntimeFacts(props: { snapshot: ReturnType<typeof snapshot>; client?: Server['client']; sessionId?: string }) { return <><OtherActivity snapshot={props.snapshot}/>{props.snapshot.jobs?.map(job => <JobCard key={job.job_id} job={job} client={props.client} sessionId={props.sessionId}/>)}{props.snapshot.agents?.map(agent => <AgentCard key={agent.agent_id} agent={agent} client={props.client} sessionId={props.sessionId}/>)}</>; }
+import { AgentCard } from '../src/app/components/ActivityCards';
+function RuntimeFacts(props: { snapshot: ReturnType<typeof snapshot>; client?: Server['client']; sessionId?: string }) { return <><OtherActivity snapshot={props.snapshot}/>{props.snapshot.jobs?.map(job => <JobItemHarness key={job.job_id} job={job} client={props.client} sessionId={props.sessionId}/>)}{props.snapshot.agents?.map(agent => <AgentCard key={agent.agent_id} agent={agent} client={props.client} sessionId={props.sessionId}/>)}</>; }
 import { Server, snapshot, childConversation } from './fixture';
 import { Tool } from '../src/app/agent/Tool';
 beforeEach(() => { const host = document.createElement('div'); host.id = 'subagent-header-actions'; document.body.append(host); });
@@ -37,7 +38,8 @@ it('intent receipts leave Agent and Job execution unchanged until their complete
   }
   const ui = render(<Harness/>), row = ui.container.querySelector('[data-agent-id="agent-worker"]');
   await act(async () => fireEvent.click(ui.getByRole('button', { name: 'Stop' })));
-  await act(async () => fireEvent.click(ui.getByRole('button', { name: 'Cancel Job' })));
+  fireEvent.click(ui.getByRole('button', { name: /^Stop task / }));
+  await act(async () => fireEvent.click(ui.getByRole('button', { name: 'Click again to confirm' })));
   expect(row?.getAttribute('data-agent-state')).toBe('active');
   expect(ui.container.querySelector('[data-job-state="running"]')).not.toBeNull();
   expect(ui.queryByText('cancelled', { exact: true })).toBeNull();
@@ -48,8 +50,8 @@ it('intent receipts leave Agent and Job execution unchanged until their complete
   expect(ui.container.querySelector('[data-agent-id="agent-worker"]')).toBe(row);
   expect(row?.getAttribute('data-agent-state')).toBe('inactive');
   expect(within(document.getElementById('subagent-header-actions')!).getByRole('status').textContent).toBe('cancelled');
-  expect((ui.getByRole('button', { name: 'Cancel Job' }) as HTMLButtonElement).disabled).toBe(true);
-  await act(async () => fireEvent.click(ui.getByRole('button', { name: /^Build/ })));
+  expect(ui.queryByRole('button', { name: /^Stop task / })).toBeNull();
+  await act(async () => fireEvent.click(ui.getByRole('button', { name: 'Show output of Build' })));
   expect(ui.getByText('Process settled')).toBeTruthy();
   expect(server.requests.filter(({ request }) => request.method === 'agent/interrupt')).toHaveLength(1);
   expect(server.requests.filter(({ request }) => request.method === 'job/cancel')).toHaveLength(1);
@@ -84,17 +86,19 @@ it('Active and Inactive send use one owner operation; wait remains interruptible
   expect(server.requests.filter(row => row.request.method === 'agent/wait')).toHaveLength(1);
 });
 
-it('Job wait does not disable cancellation and terminal projections cannot resume or receive messages', async () => {
+it('Job stopping needs a second press, stays pending until native publication, and offers no terminal controls', async () => {
   const server = new Server(); servers.push(server); await server.attached('A');
-  const s = snapshot(); const job: RuntimeClientJob = { job_id: 'job-a', tool_id: 'tool-bash', tool_name: 'bash', state: 'running' }; s.jobs = [job]; server.snapshots.set('A', s);
-  server.held.add('job/wait');
-  server.handlers.set('job/cancel', () => (jobReceipt({ ...job, state: 'cancelled' })));
+  const s = snapshot(), job: RuntimeClientJob = { job_id: 'job-a', tool_id: 'tool-bash', tool_name: 'bash', state: 'running' };
+  s.jobs = [job]; server.snapshots.set('A', s);
+  server.handlers.set('job/cancel', () => ({ type: 'job_cancellation_accepted', job_id: job.job_id }));
   const ui = render(<RuntimeFacts snapshot={s} client={server.client} sessionId="A"/>);
-  await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Wait for Job' })); await server.waitFor('job/wait', 1); });
-  expect((ui.getByRole('button', { name: 'Cancel Job' }) as HTMLButtonElement).disabled).toBe(false);
-  await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Cancel Job' })); await server.waitFor('job/cancel', 1); });
+  fireEvent.click(ui.getByRole('button', { name: 'Stop task bash' }));
+  expect(server.requests.some(row => row.request.method === 'job/cancel')).toBe(false);
+  await act(async () => fireEvent.click(ui.getByRole('button', { name: 'Click again to confirm' })));
+  expect((ui.getByRole('button', { name: 'Stop task bash' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(ui.container.querySelector('[data-job-state]')?.getAttribute('data-job-state')).toBe('running');
   ui.rerender(<RuntimeFacts snapshot={{ ...s, jobs: [{ ...job, state: 'cancelled' }] }} client={server.client} sessionId="A"/>);
-  expect((ui.getByRole('button', { name: 'Cancel Job' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(ui.queryByRole('button', { name: /^Stop task / })).toBeNull();
   expect(ui.queryByRole('textbox')).toBeNull();
 });
 
@@ -254,21 +258,23 @@ it('Starting activation uses authoritative Admitting owner state', async () => {
   expect((ui.getByRole('button', { name: 'Stop' }) as HTMLButtonElement).disabled).toBe(false);
 });
 
-it.each(['job/wait', 'job/cancel'] as const)('%s finishes with native publication failure and preserves owner state', async method => {
+it('Job cancellation failure preserves native owner state and translates the diagnostic', async () => {
+  const method = 'job/cancel' as const;
   const server = new Server(); servers.push(server); await server.attached('A');
-  const s = snapshot(); const job: RuntimeClientJob = { job_id: 'job-a', tool_id: 'tool-bash', tool_name: 'bash', state: 'publishing_terminal' }; s.jobs = [job]; server.snapshots.set('A', s);
+  const s = snapshot(); const job: RuntimeClientJob = { job_id: 'job-a', tool_id: 'tool-bash', tool_name: 'bash', state: 'running' }; s.jobs = [job]; server.snapshots.set('A', s);
   server.handlers.set(method, () => { throw new RpcFailure({ code: -32000, message: 'Publication failed', data: { kind: 'job_publication_abandoned', job_id: job.job_id } }); });
   const ui = render(<RuntimeFacts snapshot={s} client={server.client} sessionId="A"/>);
-  await act(async () => { fireEvent.click(ui.getByRole('button', { name: method === 'job/wait' ? 'Wait for Job' : 'Cancel Job' })); await server.waitFor(method, 1); });
+  fireEvent.click(ui.getByRole('button', { name: 'Stop task bash' }));
+  await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Click again to confirm' })); await server.waitFor(method, 1); });
   expect(ui.getByRole('alert').textContent).toContain('Job job-a terminal publication was abandoned');
   expect(ui.queryByText('Waiting for settlement…')).toBeNull();
   expect(ui.queryByText('Request pending…')).toBeNull();
-  expect(ui.container.querySelector('[data-job-state]')?.getAttribute('data-job-state')).toBe('publishing_terminal');
+  expect(ui.container.querySelector('[data-job-state]')?.getAttribute('data-job-state')).toBe('running');
   expect(server.requests.filter(row => row.request.method === method)).toHaveLength(1);
   const requests = [...server.requests];
   act(() => localeController.setLocale('zh'));
   expect(ui.getByRole('alert').textContent).toBe(translator('zh')('common:activity.publication-abandoned', { id: job.job_id }));
-  expect(ui.container.querySelector('[data-job-state]')?.getAttribute('data-job-state')).toBe('publishing_terminal');
+  expect(ui.container.querySelector('[data-job-state]')?.getAttribute('data-job-state')).toBe('running');
   expect(server.requests).toEqual(requests);
   act(() => localeController.setLocale('en'));
 });

@@ -1,3 +1,4 @@
+import { traceRecord } from '../trace-fixture';
 import { domainReceipt, jobReceipt } from '../fixture';
 // Explicit native-state gates. This fixture is not part of the production bundle.
 import { useSyncExternalStore } from 'react';
@@ -28,6 +29,7 @@ const agent: RuntimeClientAgent = { title: 'Worker',
 };
 s.agents = [agent];
 s.jobs = [{ job_id: 'job-build', tool_id: 'tool-bash', tool_name: 'Build', state: 'running', bash: { command: 'printf authoritative-command', description: 'Check the build <safely>' } }];
+s.trace.records = [traceRecord(90, { kind: 'background', native_id: 'job-build', timing: { started_at: new Date(Date.now() - 27000).toISOString() } })];
 server.snapshots.set('A', s);
 server.handlers.set('agent/observe', () => childConversation( { entries: [{ cursor: '1', item: { type: 'message', message: { role: 'assistant', id: 'report', content: [{ type: 'text', text: '## Final report\nCanonical child output.' }] } } }] }, agent.agent_id, agent.activation_id, agent.child_conversation_id));
 server.handlers.set('agent/sendMessage', request => {

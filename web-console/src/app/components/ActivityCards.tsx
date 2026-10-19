@@ -1,72 +1,35 @@
 import { JournalSourceProvider } from '../agent/ObservationSource';
 import { ChildObservation } from '../../../../protocol/app-server/child-observation';
-import { domainOriginalValue } from '../../../../protocol/app-server/domain-observation';
 import { ToolInspectionContext, useToolTraceNavigation } from '../agent/tool-inspection';
 import { AgentConversationContext } from '../agent/subagent-context';
 import { StateDot } from '../../presentation/primitives/StateDot';
-import { displayText, message as uiMessage, type DisplayText } from '../../locale/translation';
+import { displayText } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
 import { createPortal } from 'react-dom';
 import { useEffect, useLayoutEffect, useContext, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import type { AgentStatistics, RuntimeClientAgent, RuntimeClientJob, MethodResult, WorkflowRunView, WorkflowRunId } from '../../../../protocol/app-server/v50';
+import type { AgentStatistics, RuntimeClientAgent, MethodResult, WorkflowRunView, WorkflowRunId } from '../../../../protocol/app-server/v50';
 import type { Observation } from '../../client/session-lifecycle/port';
-import { AppServerClient, RpcFailure } from '../../client/app-server';
+import { AppServerClient } from '../../client/app-server';
 import { Badge, SettingsCard } from '../../presentation/settings/SettingsContent';
-import { Button } from '../../presentation/primitives/Button';
-import { ToolCard } from '../../presentation/agent/ToolCard';
-import { ArtifactContext, ToolArtifacts } from './Artifact';
+import { ArtifactContext } from './Artifact';
 import { PreviewContext } from './ArtifactPreview';
 import css from './ActivityCards.module.css';
 import { SubagentChat } from '../agent/SubagentChat';
 import { ConversationStats } from '../agent/UsageStats';
 import { agentDot, agentRunning, agentStatus } from '../agent/subagent-state';
-import { jobActive } from '../agent/job-state';
-import { jobResultOutput } from '../../bindings/jobs';
 import { SubagentTrajectory, type SubagentTraceHandle } from '../agent/SubagentTrajectory';
 import { ComposerSeat } from '../agent/ComposerSeat';
 import { AgentComposer } from '../agent/AgentComposer';
 import { ArtifactResources } from '../../client/artifacts';
 import { IconRefreshOutline14, IconClockOutline16, IconCloseOutline16 } from '../../presentation/primitives/icons';
 
+import { useActivityRequest } from './useActivityRequest';
+
 const detail = (value: string) => value.length > 1024 ? `${value.slice(0, 1024)}…` : value;
 export const workflowKey = (id: WorkflowRunId) => JSON.stringify([id.conversation_id, id.attempt_id, id.invocation]);
 type AgentWait = Extract<MethodResult, { type: 'agent_wait' }>;
 type Controls = { client?: AppServerClient; sessionId?: string };
 const noSubscription = () => () => {};
-
-/** Typed domain failures are presentation copy; opaque native diagnostics stay raw. */
-function activityFailure(cause: unknown): DisplayText {
-  const data = cause instanceof RpcFailure ? cause.error.data : undefined;
-  switch (data?.kind) {
-    case 'agent_not_delivered': return uiMessage('common:activity.not-delivered', { id: data.agent_id });
-    case 'agent_delivery_unknown': return uiMessage('common:activity.delivery-unknown', { id: data.agent_id });
-    case 'job_publication_abandoned': return uiMessage('common:activity.publication-abandoned', { id: data.job_id });
-    case 'agent_settlement': return uiMessage('common:activity.agent-unresolved', { id: data.agent_id });
-    default: return cause instanceof Error ? cause.message : String(cause);
-  }
-}
-
-/** Request presentation only: native state always comes from the next snapshot.
- * A lost response is never retried, and a changed attachment cannot adopt it. */
-function useActivityRequest({ client, sessionId }: Controls) {
-  const view = useSyncExternalStore(client?.subscribe ?? noSubscription, () => sessionId ? client?.getSnapshot().views[sessionId] : undefined);
-  const proof = view?.attachmentObservation;
-  const [state, setState] = useState<{ operation: { proof: Observation }; pending: boolean; error?: DisplayText }>();
-  const visible = !!client && !!sessionId && client.isAttachmentObservationCurrent(sessionId, proof) && state?.operation.proof === proof;
-  const pending = visible && !!state?.pending, error = visible ? state?.error : undefined;
-  const enabled = !!client && !!sessionId && client.isAttachmentControlCurrent(sessionId, proof);
-  async function run(operation: (client: AppServerClient, target: ReturnType<AppServerClient['target']>, current: () => boolean) => Promise<void>, refreshAfter = true) {
-    if (!enabled || pending || !client || !sessionId || !proof) return false;
-    const target = client.target(sessionId), owner = { proof };
-    const current = () => client.isAttachmentObservationCurrent(sessionId, owner.proof);
-    if (!current()) return false;
-    setState({ operation: owner, pending: true });
-    try { await operation(client, target, current); if (refreshAfter && current()) await client.refresh(sessionId); return current(); }
-    catch (cause) { if (current()) setState(previous => current() && previous?.operation === owner ? { ...previous, error: activityFailure(cause) } : previous); return false; }
-    finally { setState(previous => previous?.operation === owner ? { ...previous, pending: false } : previous); }
-  }
-  return { run, disabled: !enabled || pending, pending, error };
-}
 
 /** Durable identity is the React key; the selected transcript survives resume. */
 export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible = true, embedded = false, onMode, close, ...controls }: { agent: RuntimeClientAgent; metrics?: AgentStatistics; metricsError?: string; mode?: 'chat' | 'trajectory'; visible?: boolean; embedded?: boolean; onMode?: (mode: 'chat' | 'trajectory') => void; close?: () => void } & Controls) {
@@ -167,44 +130,6 @@ export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible
       }:undefined}><ConversationStats statistics={metrics?.statistics} occupancy={metrics?.occupancy}/></JournalSourceProvider>
     </ComposerSeat>
   </section></PreviewContext.Provider></ArtifactContext.Provider></AgentConversationContext.Provider>;
-}
-
-export function JobCard({ job, ...controls }: { job: RuntimeClientJob } & Controls) {
-  const tx = useTranslation();
-  const source = useRef(job); source.current = job;
-  const [loaded, setLoaded] = useState<{ source: RuntimeClientJob; value: RuntimeClientJob; current: () => boolean }>();
-  const request = useActivityRequest(controls);
-  const waitRequest = useActivityRequest(controls);
-  const value = loaded?.source === job && loaded.current() ? loaded.value : job;
-  const output = value.result ? jobResultOutput(value.result) : value.progress ? [value.progress.message, value.progress.completed == null ? undefined : value.progress.total == null ? tx('common:activity.completed', { n: value.progress.completed }) : `${value.progress.completed} / ${value.progress.total}`].filter(Boolean).join('\n') : undefined;
-  const active = jobActive(job);
-  return <section data-job-state={job.state} aria-label={tx('common:activity.job-label', { name: job.tool_name })}>
-    <ToolCard tool={{ id: job.job_id, identity: 'job', title: value.tool_name, variant: value.tool_id === 'tool-bash' ? 'bash' : 'generic', summary: value.bash?.description ?? value.bash?.command ?? tx('common:activity.job-title', { id: job.job_id }), input: value.bash?.command,
-      state: job.state === 'succeeded' ? 'success' : job.state === 'failed' || job.state === 'denied' || job.state === 'timed_out' ? 'failure' : job.state === 'outcome_unknown' ? 'uncertain' : job.state,
-      output, exitCode: value.result?.exit_code, truncated: value.result?.truncation?.truncated,
-      artifacts: value.result ? <ToolArtifacts result={value.result}/> : undefined }}/>
-    {value.result?.managed_output && <details><summary>{tx('common:activity.retained', { type: value.result.managed_output.type })}</summary>
-      {'locator' in value.result.managed_output && <p className={css.identity}>{value.result.managed_output.locator}</p>}
-      {'diagnostic' in value.result.managed_output && <p>{detail(value.result.managed_output.diagnostic)}</p>}
-    </details>}
-    {controls.client && <div className={css.controls}>
-      {!!value.deferred_fields?.length && <Button size="sm" variant="outline" disabled={request.disabled} onClick={() => void request.run(async (client, target, current) => {
-        const owned = () => current() && source.current === job;
-        const { page } = await client.request({ method: 'job/status', params: { target, job_id: job.job_id } }, 'domain_page', undefined, owned);
-        if (page.domain !== `jobs.${job.job_id}` || page.read_cut.conversation_id !== target.conversation_id) throw new Error('Job details source changed.');
-        const original = await domainOriginalValue<RuntimeClientJob>(page, client.domainReader(target, owned));
-        if (original.job_id !== job.job_id) throw new Error('Job details named another native execution.');
-        if (owned()) setLoaded({ source: job, value: original, current });
-      }, false)}>{tx('common:activity.job-details')}</Button>}
-      <Button size="sm" variant="outline" disabled={request.disabled} onClick={() => void request.run(async (client, target, current) => { await client.request({ method: 'job/status', params: { target, job_id: job.job_id } }, 'domain_page', undefined, current); })}>{tx('common:activity.status')}</Button>
-      <Button size="sm" variant="outline" disabled={waitRequest.disabled || !active} onClick={() => void waitRequest.run(async (client, target, current) => { await client.request({ method: 'job/wait', params: { target, job_id: job.job_id } }, 'job_outcome', undefined, current); })}>{tx('common:activity.wait-job')}</Button>
-      <Button size="sm" variant="outline" disabled={request.disabled || !active || job.state === 'cancelling'} onClick={() => void request.run(async (client, target, current) => { const receipt = await client.request({ method: 'job/cancel', params: { target, job_id: job.job_id } }, 'job_cancellation_accepted', undefined, current); if (receipt.job_id !== job.job_id) throw new Error('Job cancellation receipt named another native execution.'); }, false)}>{tx('common:activity.cancel-job')}</Button>
-      {request.pending && <small role="status">{tx('common:activity.pending')}</small>}
-      {waitRequest.pending && <small role="status">{tx('common:activity.settling')}</small>}
-      {waitRequest.error && <p role="alert">{displayText(tx, waitRequest.error)}</p>}
-      {request.error && <p role="alert">{displayText(tx, request.error)}</p>}
-    </div>}
-  </section>;
 }
 
 export function WorkflowCard({ run }: { run: WorkflowRunView }) {

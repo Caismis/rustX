@@ -67,11 +67,10 @@ it('uses a matching native Trace start for the open-menu clock and freezes at te
   const records = [traceRecord(1, { kind: 'background', native_id: job.job_id, timing: { started_at: '2026-10-19T12:00:00Z' } })];
   const ui = render(<BackgroundJobMenu jobs={[job]} records={records}/>);
   fireEvent.click(ui.getByRole('button', { name: 'Background tasks' }));
-  expect(screen.getByText('Duration 5s')).toBeTruthy();
+  expect(screen.getByText('5s')).toBeTruthy();
   await act(async () => vi.advanceTimersByTime(2000));
-  expect(screen.getByText('Duration 7s')).toBeTruthy();
+  expect(screen.getByText('7s')).toBeTruthy();
   ui.rerender(<BackgroundJobMenu jobs={[{ ...job, state: 'succeeded', result: { status: { type: 'success' }, duration_ms: '6000' } }]} records={records}/>);
-  fireEvent.click(screen.getByRole('button', { name: 'Ended 1' }));
   await act(async () => vi.advanceTimersByTime(3000));
-  expect(screen.getByText('Duration 6s')).toBeTruthy();
+  expect(screen.getByText('6s')).toBeTruthy();
 });

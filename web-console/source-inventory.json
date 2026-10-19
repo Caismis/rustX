@@ -3032,7 +3032,7 @@
       "destination": "web-console/src/presentation/primitives/TerminalBlock.tsx",
       "upstream_sha256": "8e24248d8f361fe538059abd0c733ac90465b73dd1048efb67ee679ebf3949de",
       "classification": "B",
-      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes. Native Tool Trace location: App Server v44 imports and exact occurrence navigation; existing upstream baseline unchanged. Background task alignment: native dispatch acceptance, task settlement and historical observations retain independent ownership; header grouping, native timing and output formatting are presentation only.",
+      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes. Native Tool Trace location: App Server v44 imports and exact occurrence navigation; existing upstream baseline unchanged. Background task alignment: native dispatch acceptance, task settlement and historical observations retain independent ownership; header grouping, native timing and output formatting are presentation only. DSH task menu UI/UX parity: compact native task rows, translucent material, command-copy output, exclusive expansion and two-press stopping replace generic task controls; native observation ownership is retained.",
       "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "./Pill.tsx",
@@ -3049,7 +3049,15 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "e91ffde438416016c0b4734fc499d006a0cb5f39fdd1c92a0548bd97b439b8b1"
+      "local_sha256": "04c46111526151aa9576fc4cf4ee6b346dd7c20b621dab7873648a49396cef83",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-primitives/src/TerminalBlock.tsx",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "94b06b80b239de0d7ebdc8eeb8c1e0fcad17bffeabea6a84fd7568b62e359fed",
+          "treatment": "copyText and runStateDot options allow the task row to own lifecycle while its terminal copies the command during execution."
+        }
+      ]
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -3275,7 +3283,7 @@
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
       "upstream_sha256": "664def8bce9e753c3a670f9e9f01fe2280227a0921021e3a08b496f8c5d6effe",
-      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v27 imports; upstream reference unchanged. Connection UX: allow local submission during attachment and show generic connecting status; native readiness and admission remain authoritative. Issue #467: bounded native observation, deferred source reads and exact view ownership; original presentation and license attribution retained. Issue #467: deferred Goal content and finite ToolGroup progress copy; native status and execution authority unchanged. Issue #467: translated deferred-content, bounded catalog choices, model availability and canonical result status copy; native facts remain independent of execution settlement. Background task header, grouping, clearing and native-duration copy in English and Chinese. Background task alignment: native dispatch acceptance, task settlement and historical observations retain independent ownership; header grouping, native timing and output formatting are presentation only.",
+      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v27 imports; upstream reference unchanged. Connection UX: allow local submission during attachment and show generic connecting status; native readiness and admission remain authoritative. Issue #467: bounded native observation, deferred source reads and exact view ownership; original presentation and license attribution retained. Issue #467: deferred Goal content and finite ToolGroup progress copy; native status and execution authority unchanged. Issue #467: translated deferred-content, bounded catalog choices, model availability and canonical result status copy; native facts remain independent of execution settlement. Background task header, grouping, clearing and native-duration copy in English and Chinese. Background task alignment: native dispatch acceptance, task settlement and historical observations retain independent ownership; header grouping, native timing and output formatting are presentation only. DSH task menu UI/UX parity: compact native task rows, translucent material, command-copy output, exclusive expansion and two-press stopping replace generic task controls; native observation ownership is retained.",
       "destination": "web-console/src/locale/dictionaries/common.ts",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -3291,9 +3299,15 @@
           "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
           "upstream_sha256": "448cea752f9daa196284e6a8da59c7acd944b3ad05590df5bddc6e153e43c113",
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
+        },
+        {
+          "upstream": "packages/client/ui-jobs/src/client/locales.ts",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "e565e9e40db8b5fc395d89c4fc97f2a74e1d4906e44cbdbafd3295b0d2b2a20e",
+          "treatment": "Task count, stop confirmation, duration and output disclosure wording follows the Harness job menu."
         }
       ],
-      "local_sha256": "ce428296a38f3e18cb1b706111cb346d7fee700e49c6e39c1f24fffd0554d818"
+      "local_sha256": "cf06cfce789f89ebfe7a4efbfbdb2d27d54f5aaef24e59a0f8901a0e46a04574"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -5945,39 +5959,101 @@
       "upstream": "packages/client/ui-jobs/src/client/JobListAction.tsx",
       "destination": "web-console/src/app/agent/BackgroundJobs.tsx",
       "classification": "B",
-      "treatment": "Harness header Jobs entry, fixed viewport popup, active/ended grouping, ended disclosure and client-only clearing adapted to native rustX Job snapshots and existing status/wait/cancel controls. Durations derive from native Trace starts or native terminal results; absent starts are never invented. No Harness transport, model or job controller is retained. Background task alignment: native dispatch acceptance, task settlement and historical observations retain independent ownership; header grouping, native timing and output formatting are presentation only.",
+      "treatment": "Harness header Jobs entry, fixed translucent popup, native-timed active/ended ordering, default settled folding, exclusive output expansion and client-only clearing adapted to rustX Job snapshots. Native authority owns state, detail reads and cancellation; no Harness transport, model or job controller is retained.",
       "upstream_sha256": "ae1b9aac19c1d50cfc915c909edfefd07ff54371a26af43ecc2e323d253914d7",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../../../protocol/app-server/v50",
-        "../../bindings/status-labels",
         "../../client/app-server",
         "../../client/selectors",
         "../../locale/react",
-        "../../presentation/primitives/StateDot",
+        "../../presentation/primitives/MenuSurface",
         "../../presentation/primitives/icons",
-        "../components/ActivityCards",
+        "./BackgroundJobItem",
         "./BackgroundJobs.module.css",
+        "./JobStateDot",
         "./job-state",
-        "./token-format",
         "@floating-ui/react-dom",
         "react",
         "react-dom"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "f35cd5aa9e35f9c869d28888a639249ba9a88ac80fb22ae83ae6b95eb13d9368"
+      "local_sha256": "b5dec05214c0a09c5c3b80a55385a4d0d3379a89de44dc29c684c407935b1670"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
       "upstream": "packages/client/ui-jobs/src/client/JobListAction.module.css",
       "destination": "web-console/src/app/agent/BackgroundJobs.module.css",
       "classification": "B",
-      "treatment": "Harness header Jobs entry, fixed viewport popup, active/ended grouping, ended disclosure and client-only clearing adapted to native rustX Job snapshots and existing status/wait/cancel controls. Native result durations only: no client-invented start timestamp. No Harness transport, model or job controller is retained. Background task alignment: native dispatch acceptance, task settlement and historical observations retain independent ownership; header grouping, native timing and output formatting are presentation only.",
+      "treatment": "Harness Jobs popup geometry, compact live and settled rows, square expansion/stop controls, wrapped scrollable output, translucent material and grey ring loader. Styles and tokens are scoped to the native rustX background task menu; native state and timing remain independent.",
       "upstream_sha256": "98ba8551bb494586f3097d455a45dc1f5b26b88ed66b4a8d70dd7b993d9cf564",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [],
-      "local_sha256": "5a0531125bbe312c6f2f38c7b9e593e59f38137d5d0b1db2813fd9cffa11f663"
+      "local_sha256": "979811b080ae2ab5a34ea9629453a62590022edd5fd4d61046828567398474c1",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-primitives/src/StateDot.module.css",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "ad4603fd7a499dcc3b672dc87663f6c73302a8cedaf4a9859db0abdb9144bee8",
+          "treatment": "Scope the current Harness task loader animation and menu material tokens to the background Jobs menu."
+        },
+        {
+          "upstream": "packages/client/ui-theme/src/styles/design-platform.css",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "809b20ae477324fdf5181a2d338655a19919cabbf1b0e60adc149908462c5a66",
+          "treatment": "Scope the current Harness task loader animation and menu material tokens to the background Jobs menu."
+        },
+        {
+          "upstream": "packages/client/ui-theme/src/styles/gradient-shadow-text.css",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "b6e1e8387edbfa60ec03bb29aad7c01245c0adbd22229d5a6f2916caa7e7b427",
+          "treatment": "Scope the current Harness task loader animation and menu material tokens to the background Jobs menu."
+        }
+      ]
+    },
+    {
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream": "packages/client/ui-jobs/src/client/JobListAction.tsx",
+      "destination": "web-console/src/app/agent/BackgroundJobItem.tsx",
+      "classification": "B",
+      "treatment": "Harness JobItem row layout, exclusive output expansion and two-press stop affordance adapted to native rustX job lifecycle, deferred details and cancellation authority. Native progress stays in the row; only native terminal content is shell output. No Harness job observation transport or model is imported.",
+      "upstream_sha256": "ae1b9aac19c1d50cfc915c909edfefd07ff54371a26af43ecc2e323d253914d7",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "../../../../protocol/app-server/domain-observation",
+        "../../../../protocol/app-server/v50",
+        "../../bindings/jobs",
+        "../../bindings/status-labels",
+        "../../client/app-server",
+        "../../locale/react",
+        "../../locale/translation",
+        "../../presentation/primitives/TerminalBlock",
+        "../../presentation/primitives/icons",
+        "../components/Artifact",
+        "../components/useActivityRequest",
+        "./BackgroundJobs.module.css",
+        "./JobStateDot",
+        "./job-state",
+        "react"
+      ],
+      "excluded_dependencies": [],
+      "local_sha256": "26c39f6f8e57634dd594b94952173363af6c6d3c91aba3b49f49a329fba55ec5"
+    },
+    {
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream": "packages/client/ui-primitives/src/StateDot.tsx",
+      "destination": "web-console/src/app/agent/JobStateDot.tsx",
+      "classification": "B",
+      "treatment": "Current Harness grey synchronized task-loader ring, scoped to the Jobs header and rows. Native state semantics are supplied by the existing job adapter; no other surface changes reference baseline.",
+      "upstream_sha256": "1e6965a29523ee47df115c5a5f9c13b55a3954451c1bd211ba57f7d87ed6bdf9",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "../../presentation/primitives/StateDot",
+        "./BackgroundJobs.module.css"
+      ],
+      "excluded_dependencies": [],
+      "local_sha256": "f2deebd1275b5579419bb8ddbddc9c99e66cd360c9919c355640a12ceb25ad9b"
     }
   ],
   "inspected_only": [

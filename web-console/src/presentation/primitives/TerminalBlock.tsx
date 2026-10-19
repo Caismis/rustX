@@ -65,6 +65,10 @@ export interface TerminalBlockProps {
   running?: boolean | undefined
   /** A launch receipt is independent of the detached execution's exit. */
   background?: boolean | undefined
+  /** Copy the command while observing output, including before the task settles. */
+  copyText?: string | undefined
+  /** Surrounding task rows already provide the state marker and accessible label. */
+  runStateDot?: boolean | undefined
   /** Height cap in output lines before the middle collapses (default {@link DEFAULT_TERMINAL_MAX_LINES}); Infinity disables the cap. */
   maxLines?: number | undefined
   /** Extra class merged onto the wrapper (callers position; this component draws). */
@@ -152,6 +156,8 @@ export function TerminalBlock({
   signal,
   running = false,
   background = false,
+  copyText,
+  runStateDot = true,
   maxLines = DEFAULT_TERMINAL_MAX_LINES,
   className,
   labels,
@@ -175,7 +181,7 @@ export function TerminalBlock({
   const [expanded, setExpanded] = useState(false)
   // The raw output, never the rendered tree: the prompt line and the status pill
   // are chrome the user did not run.
-  const { copied, onCopy } = useCopyFeedback(background ? command : text)
+  const { copied, onCopy } = useCopyFeedback(copyText ?? (background ? command : text))
 
   const onToggle = useCallback(() => { setExpanded(value => !value) }, [])
 
@@ -209,14 +215,14 @@ export function TerminalBlock({
     >
       <div className={css.header}>
         <div className={css.prompt}>
-          {(!background || running) && <span className={css.runStateLabel}>{state.label}</span>}
+          {runStateDot && (!background || running) && <span className={css.runStateLabel}>{state.label}</span>}
           {commandLines.map((line, index) => (
             <div key={index} className={css.promptLine}>
               {/* One dot for the card, on the first row: the exit status the
                   view carries is the whole call's, and bash reports no
                   per-command status, so a dot per row would assert a
                   per-line outcome nothing here knows. */}
-              {index === 0 && (!background || running) && <StateDot state={state.state} className={css.runState} />}
+              {index === 0 && runStateDot && (!background || running) && <StateDot state={state.state} className={css.runState} />}
               {/* The cwd labels the CALL, so only its first row carries it. The
                   view knows one working directory — where the call started —
                   and a later line may well run somewhere else (a `cd` in the
@@ -231,7 +237,7 @@ export function TerminalBlock({
           ))}
         </div>
         {status !== undefined && <Pill className={css.status}>{status}</Pill>}
-        {!running && (background ? command !== '' : !empty) && (
+        {(copyText !== undefined || !running && (background ? command !== '' : !empty)) && (
           <button type="button" className={css.copyButton} onClick={onCopy}>
             {copied ? copy.copied : copy.copy}
           </button>

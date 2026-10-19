@@ -5,9 +5,21 @@ Reference inspected read-only: local `../deepseek-harness` at immutable commit
 `packages/client/ui-jobs/src/client/JobListAction.{tsx,module.css}` and
 `packages/client/ui-tool/src/client/tool/models/terminal-card-model.ts`.
 The header entry, viewport-fixed popup, active/ended groups and client-only Clear
-follow that reference. Native rustX status/wait/cancel operations remain in each
-task row. The menu clock runs only while open, with matching native background
-Trace timing; absent native starts produce no synthetic elapsed time.
+follow that reference. The task row now follows its two-line live card, compact
+settled row, square expansion/stop controls and command-copy terminal panel,
+including the translucent MenuSurface material and the current tertiary-grey
+ring loader (scoped to Jobs). Generic status/wait/cancel cards
+and the retained-output path disclosure were removed from this menu. Only one
+output panel expands at a time; expanding reads deferred native details, and
+stopping uses the reference's two-press confirmation with a three-second expiry.
+An accepted cancellation stays pending until native state publication. Settled
+rows open by default when no live work remains; explicit folding wins. Native
+Trace timing orders the groups and supplies elapsed time; absent starts produce
+no synthetic timing. The native Jobs contract currently supplies bounded progress
+and terminal result content, not Harness's live-output observation stream; progress
+remains in the row and is never presented as shell stdout. TerminalBlock retains
+explicit native lifecycle, with the reference's copyText and runStateDot options
+for the menu's command-copy panel. No Harness job transport is introduced.
 
 Chat background launches now follow the command-only settled presentation:
 dispatch acceptance has its own label, command copy remains available, and no
