@@ -1756,7 +1756,12 @@ export class AppServerClient {
               result=await this.request({method:'session/trace',params:{target,before:null,limit:index?1:TRACE_PAGE_SIZE,records}},'trace',undefined,current);
             }catch(error){if(!read.dirty||!current())throw error;break;}
             standaloneTraceCut(result.page,target.conversation_id);
-            if(current()&&this.traceAuthorities.get(id)===authority)this.setSession(id,{trace:{...refreshTrace(this.state.views[id]?.trace,result.page,result.page.updates??[],undefined,index>0),fields:this.liveTraceFields(target)}});
+            if(current()&&this.traceAuthorities.get(id)===authority){
+              const previous=this.state.views[id]?.trace;
+              // This read recovered. Clear its old error before merging so a
+              // newly produced window-bound error remains authoritative.
+              this.setSession(id,{trace:{...refreshTrace(previous?{...previous,error:undefined}:undefined,result.page,result.page.updates??[],undefined,index>0),fields:this.liveTraceFields(target)}});
+            }
           }
         }
       } finally {
