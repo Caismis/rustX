@@ -31,3 +31,5 @@ The prior counter profile found one 12–13 KiB SQLite-indexed request scalar pe
 CPU includes product threads and driver, with 10 ms resolution. Lifecycle includes verification/checkpoint/close/reopen/cleanup; evidence output follows cleanup. Provider/controller are siblings; provider survives product cleanup. Startup/control and complete lifecycle remain in raw phase records. Writes are process-attributed, not physical-device writes. RSS/PSS are sampled maxima, not peaks; allocations unavailable. No median subtraction or multiplied stage ratios.
 
 [Verified compact archive](evidence/compact-navigation-results.tar.xz) and [manifest](evidence/compact-navigation-results.tar.manifest.json) retain all inputs, executable/build identity, commands, phase results and summaries. Original evidence remains available. Correctness: [85 targeted tests](compact-navigation.md). Exact-head FULL and independent review remain required; no merge.
+
+[Readable paired inputs and independent recomputation](evidence/compact-navigation/readable/README.md) expose all 36 samples without remeasurement.
