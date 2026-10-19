@@ -26,6 +26,137 @@ fn connection() -> Connection {
     create_schema(&connection).unwrap();
     connection
 }
+
+fn cached_shape_fixture(capacity: usize) -> (Connection, super::NodeRef, super::NodeRef) {
+    let mut connection = connection();
+    let owner = Owner::install(
+        &connection,
+        super::super::append_validation::Owner::uninstalled(),
+    )
+    .unwrap();
+    let scope = ConversationId::generate();
+    let mut roots = Vec::new();
+    for messages in [vec![message(1)], vec![message(1), message(2)]] {
+        let input = SelectedInputManifest::from_messages(&scope, &messages);
+        let transaction = connection.transaction().unwrap();
+        let selection = persist(&transaction, &input, &owner).unwrap();
+        roots.push(selection.root.unwrap());
+        transaction.commit().unwrap();
+        selection.commit(&owner);
+    }
+    connection.set_prepared_statement_cache_capacity(capacity);
+    (connection, roots[0], roots[1])
+}
+
+#[test]
+fn native_shape_statement_reuses_preparation_and_rebinds_leaf_and_branch_ids() {
+    use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+    use std::sync::{Arc, atomic::AtomicUsize};
+    for capacity in [0, 16] {
+        let (connection, leaf, branch) = cached_shape_fixture(capacity);
+        let prepares = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&prepares);
+        connection
+            .authorizer(Some(move |context: AuthContext<'_>| {
+                if matches!(
+                    context.action,
+                    AuthAction::Read {
+                        table_name: "native_input_nodes",
+                        column_name: "item_digest",
+                        ..
+                    }
+                ) {
+                    observed.fetch_add(1, Ordering::SeqCst);
+                }
+                Authorization::Allow
+            }))
+            .unwrap();
+        assert!(matches!(
+            super::node(&connection, &leaf).unwrap().kind,
+            super::NodeKind::Leaf
+        ));
+        assert!(prepares.swap(0, Ordering::SeqCst) > 0);
+        assert!(matches!(
+            super::node(&connection, &branch).unwrap().kind,
+            super::NodeKind::Branch { .. }
+        ));
+        let repeated = prepares.swap(0, Ordering::SeqCst);
+        if capacity == 0 {
+            assert!(repeated > 0);
+        } else {
+            assert_eq!(
+                repeated, 0,
+                "shape lookup must reuse SQL, not its prior row"
+            );
+        }
+        assert!(matches!(
+            super::node(&connection, &leaf).unwrap().kind,
+            super::NodeKind::Leaf
+        ));
+    }
+}
+
+#[test]
+fn warmed_native_shape_reads_reject_changed_leaf_and_branch_evidence() {
+    for capacity in [0, 16] {
+        let (connection, leaf, branch) = cached_shape_fixture(capacity);
+        for (node, column) in [(leaf, "item_digest"), (branch, "left_digest")] {
+            super::node(&connection, &node).unwrap();
+            let original: Vec<u8> = connection
+                .query_row(
+                    &format!("SELECT {column} FROM native_input_nodes WHERE id=?1"),
+                    [node.id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            connection
+                .execute(
+                    &format!("UPDATE native_input_nodes SET {column}=zeroblob(32) WHERE id=?1"),
+                    [node.id],
+                )
+                .unwrap();
+            assert!(super::node(&connection, &node).is_err());
+            connection
+                .execute(
+                    &format!("UPDATE native_input_nodes SET {column}=?2 WHERE id=?1"),
+                    rusqlite::params![node.id, original],
+                )
+                .unwrap();
+            super::node(&connection, &node).unwrap();
+        }
+    }
+}
+
+#[test]
+fn warmed_native_shape_statement_obeys_later_read_authorization() {
+    use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+    for capacity in [0, 16] {
+        let (connection, leaf, branch) = cached_shape_fixture(capacity);
+        super::node(&connection, &leaf).unwrap();
+        super::node(&connection, &branch).unwrap();
+        connection
+            .authorizer(Some(|context: AuthContext<'_>| {
+                if matches!(
+                    context.action,
+                    AuthAction::Read {
+                        table_name: "native_input_nodes",
+                        column_name: "item_digest",
+                        ..
+                    }
+                ) {
+                    Authorization::Deny
+                } else {
+                    Authorization::Allow
+                }
+            }))
+            .unwrap();
+        assert!(super::node(&connection, &branch).is_err());
+        connection
+            .authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
+            .unwrap();
+        super::node(&connection, &branch).unwrap();
+    }
+}
 #[test]
 fn native_manifest_rollback_never_certifies_absent_or_reused_row_ids() {
     let mut connection = connection();
