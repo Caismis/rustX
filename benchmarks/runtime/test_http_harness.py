@@ -35,8 +35,8 @@ def process(ticks=0, writes=0, rss=1024):
 
 
 def sample():
-    wire = [{'body': {'model': 'chat-model'}}]
-    return {'measurement_version': 3, 'case': 'cancel', 'history': 0, 'measured': 1,
+    wire = [{'body': {'model': 'chat-model', 'messages': [{'role':'user','content':'benchmark turn 0000'}, {'role':'user','content':controller.MODEL_REMINDER}]}}]
+    return {'workload_version':3,'model_time':controller.MODEL_TIME,'measurement_version': 3, 'case': 'cancel', 'history': 0, 'measured': 1,
             'oracle': 'passed', 'wire_requests': wire,
             'live_requests': [{'messages': []}], 'reopened_requests': [{'messages': []}],
             'verified_live_requests': 1, 'verified_reopened_requests': 1,
@@ -48,6 +48,15 @@ def sample():
 
 
 class ObserverModeTests(unittest.TestCase):
+    def test_model_time_cannot_be_normalized_away(self):
+        value=sample()
+        result={'product_exit':0,'provider_exit':0,
+                'provider_report':{'ok':True,'requestCount':1,'requests':value['wire_requests']}}
+        check=lambda: controller.validate_sample(result,value,'cancel',f'test {controller.TEST} ... ok')
+        check()
+        value['wire_requests'][0]['body']['messages'][1]['content']=controller.MODEL_REMINDER.replace('00:00:00','00:00:01')
+        with self.assertRaises(AssertionError): check()
+
     def test_new_modes_require_matching_raw_and_per_turn_identity(self):
         for mode in controller.OBSERVER_MODES[1:]:
             value=sample()
@@ -64,7 +73,7 @@ class ObserverModeTests(unittest.TestCase):
             value['lifecycle']=[{'phase':name,'elapsed_us':i*1000,'process':process(i*10)} for i,name in enumerate(phases)]
             value['canonical']=[]
             value['late_snapshot']={'messages':[],'checkpoint':{'cursor':1,'read_cut':{'source_cut':{'ledger_through':0}}},'replay':{'kind':'contiguous','through':1}}
-            value['observer_validation']={'completed_attempts':1,'text':[],'tool_results':[]}
+            value['observer_validation']={'oracle_version':2,'explicit_settlements':[],'checkpoint_terminal_sightings':1,'completed_attempts':1,'text':[],'tool_results':[]}
             check()
             for key in ['messages','checkpoint','replay']:
                 saved=value['late_snapshot'].pop(key)

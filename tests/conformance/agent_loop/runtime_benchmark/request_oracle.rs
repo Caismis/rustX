@@ -3,6 +3,22 @@ use serde_json::{Value, json};
 
 const TIME_PREFIX: &str = "<system-reminder>\nTimezone: UTC\nCurrent time: ";
 const TIME_SUFFIX: &str = "\n</system-reminder>";
+pub(super) const MODEL_TIME: &str = "2026-10-19 00:00:00";
+pub(super) struct FixedStatusClock(chrono::DateTime<chrono::Utc>);
+impl Default for FixedStatusClock {
+    fn default() -> Self {
+        Self(
+            chrono::NaiveDateTime::parse_from_str(MODEL_TIME, "%Y-%m-%d %H:%M:%S")
+                .unwrap()
+                .and_utc(),
+        )
+    }
+}
+impl rustx::context::AgentStatusClock for FixedStatusClock {
+    fn now(&self) -> chrono::DateTime<chrono::Utc> {
+        self.0
+    }
+}
 const NOTE: &str = "deterministic-note-payload-6d41";
 
 fn text(role: &str, value: &str) -> Value {
@@ -12,7 +28,7 @@ fn text(role: &str, value: &str) -> Value {
 pub(super) fn expected_body(case: &str, index: usize) -> Value {
     let mut messages = vec![
         text("user", "benchmark turn 0000"),
-        text("user", &format!("{TIME_PREFIX}<TIME>{TIME_SUFFIX}")),
+        text("user", &format!("{TIME_PREFIX}{MODEL_TIME}{TIME_SUFFIX}")),
     ];
     if case.starts_with("short-") {
         for turn in 0..index {
@@ -33,27 +49,11 @@ pub(super) fn expected_body(case: &str, index: usize) -> Value {
         "tools":serde_json::from_str::<Value>(include_str!("expected_tools.json")).unwrap()})
 }
 
-/// JSON argument spelling is transport-only; timestamp/path normalization is
-/// applied only for the independent expectation, never wire/frozen equivalence.
-fn normalize(body: &Value, workspace: &str, dynamic: bool) -> Value {
+/// Only transport JSON argument spelling and the exact fixture path vary.
+/// Model-facing timestamps remain exact semantic input.
+fn normalize(body: &Value, workspace: &str, fixture_path: bool) -> Value {
     let mut body = body.clone();
     for message in body["messages"].as_array_mut().unwrap() {
-        for block in message["content"].as_array_mut().unwrap() {
-            if let Some(value) = block["text"].as_str()
-                && value.starts_with(TIME_PREFIX)
-                && dynamic
-            {
-                let timestamp = value
-                    .strip_prefix(TIME_PREFIX)
-                    .unwrap()
-                    .strip_suffix(TIME_SUFFIX)
-                    .expect("complete time context");
-                let parsed = chrono::NaiveDateTime::parse_from_str(timestamp, "%Y-%m-%d %H:%M:%S")
-                    .expect("valid generated UTC timestamp");
-                assert_eq!(parsed.format("%Y-%m-%d %H:%M:%S").to_string(), timestamp);
-                block["text"] = json!(format!("{TIME_PREFIX}<TIME>{TIME_SUFFIX}"));
-            }
-        }
         if let Some(calls) = message["tool_calls"].as_array_mut() {
             for call in calls {
                 let mut arguments: Value = serde_json::from_str(
@@ -62,7 +62,7 @@ fn normalize(body: &Value, workspace: &str, dynamic: bool) -> Value {
                         .expect("wire JSON arguments"),
                 )
                 .unwrap();
-                if dynamic && arguments["path"] == json!(format!("{workspace}/note.txt")) {
+                if fixture_path && arguments["path"] == json!(format!("{workspace}/note.txt")) {
                     arguments["path"] = json!("<WORKSPACE>/note.txt");
                 }
                 call["function"]["arguments"] = arguments;
@@ -192,10 +192,7 @@ pub(super) fn assert_identity(
 mod tests {
     use super::*;
     fn wire(index: usize) -> Value {
-        let mut body = expected_body("short-large", index);
-        body["messages"][1]["content"][0]["text"] =
-            json!(format!("{TIME_PREFIX}2026-10-17 00:00:00{TIME_SUFFIX}"));
-        body
+        expected_body("short-large", index)
     }
     #[test]
     fn complete_oracle_rejects_omitted_older_history_even_when_wire_and_frozen_agree() {
@@ -237,6 +234,18 @@ mod tests {
                 .is_err()
             );
         }
+    }
+    #[test]
+    fn complete_oracle_rejects_changed_time_even_when_wire_and_frozen_agree() {
+        let mut bad = wire(0);
+        bad["messages"][1]["content"][0]["text"] =
+            json!(format!("{TIME_PREFIX}2026-10-19 00:00:01{TIME_SUFFIX}"));
+        assert!(
+            std::panic::catch_unwind(|| {
+                assert_bodies("short-small", 0, "/fixture", &bad, &bad)
+            })
+            .is_err()
+        );
     }
     #[test]
     fn complete_oracle_rejects_changed_tool_schema() {

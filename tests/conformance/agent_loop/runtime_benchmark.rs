@@ -159,7 +159,13 @@ async fn measure_runtime() {
     );
     lifecycle_sample(&mut lifecycle, "after_provider_start", lifecycle_began);
     let began = Instant::now();
-    let mut driver = Driver::start_in(root, &emulator, &Setup::new("emulator/chat-model")).await;
+    let mut driver = Driver::start_in_with_status_clock(
+        root,
+        &emulator,
+        &Setup::new("emulator/chat-model"),
+        Arc::new(request_oracle::FixedStatusClock::default()),
+    )
+    .await;
     let open_us = began.elapsed().as_micros();
     let initial = process_sample();
     lifecycle_sample(&mut lifecycle, "after_initialization", lifecycle_began);
@@ -303,7 +309,7 @@ async fn measure_runtime() {
             "case":case,"schema":rustx::durable::sqlite::SQLITE_SCHEMA_VERSION,
             "protocol":APP_SERVER_PROTOCOL_VERSION,"history":history,"measured":measured,
             "requests":expected_requests,"open_us":open_us,"samples":samples,
-            "initial_process":initial,"lifecycle":lifecycle,"measurement_version":3,
+            "initial_process":initial,"lifecycle":lifecycle,"workload_version":3,"model_time":request_oracle::MODEL_TIME,"measurement_version":3,
             "wire_requests":requests,"live_requests":verified_requests,
             "reopened_requests":reopened_requests,"canonical":history_messages,
             "oracle_version":2,"verified_live_requests":verified_live_requests,

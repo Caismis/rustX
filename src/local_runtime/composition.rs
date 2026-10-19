@@ -172,6 +172,10 @@ pub enum StartupSession {
 /// need provider synchronization use an explicit catalog endpoint aimed at a
 /// local HTTP fixture.
 pub struct LocalRuntimeDependencies {
+    /// Clock for model-facing Agent Status time contributions. Production uses
+    /// UTC wall time; deterministic fixtures can supply the same model input
+    /// without changing runtime event clocks or monotonic deadlines.
+    pub status_clock: Arc<dyn crate::context::AgentStatusClock>,
     /// Local product Session selection; never part of effective configuration.
     pub startup_session: StartupSession,
     /// Optional test/embedding provider environment. Production uses the
@@ -190,6 +194,7 @@ impl Default for LocalRuntimeDependencies {
     fn default() -> Self {
         Self {
             startup_session: StartupSession::Empty,
+            status_clock: Arc::new(crate::context::SystemClock),
             credentials: None,
             estimator: Arc::new(DefaultTokenEstimator),
             child_program: None,
@@ -1460,6 +1465,7 @@ impl LocalConversationCore {
                 model_timeout_policy,
                 tool_deadline_policy,
                 context: ConversationContextConfig {
+                    status_clock: Arc::clone(&dependencies.status_clock),
                     policy: runtime_config.context_policy(),
                     estimator: Arc::clone(&dependencies.estimator),
                     // The root Agent's frozen native Agent Extension composition
@@ -1467,7 +1473,7 @@ impl LocalConversationCore {
                     // Its Todo half was materialized alongside the conversation's
                     // other owned resources in the tool runtime above.
                     status_engine: extensions
-                        .agent_status_engine(Arc::new(crate::context::SystemClock)),
+                        .agent_status_engine(Arc::clone(&dependencies.status_clock)),
                 },
                 tool_runtime: tool_runtime.clone(),
                 capability: capability.clone(),
@@ -1815,6 +1821,7 @@ impl LocalConversationCore {
                 model_timeout_policy: spec.model_timeout_policy,
                 tool_deadline_policy: spec.tool_deadline_policy,
                 context: ConversationContextConfig {
+                    status_clock: Arc::clone(&dependencies.status_clock),
                     policy: spec.context,
                     estimator: Arc::clone(&dependencies.estimator),
                     // The child materializes exactly the extension composition
@@ -1824,7 +1831,7 @@ impl LocalConversationCore {
                     status_engine: spec
                         .resolved
                         .extensions
-                        .agent_status_engine(Arc::new(crate::context::SystemClock)),
+                        .agent_status_engine(Arc::clone(&dependencies.status_clock)),
                 },
                 tool_runtime: tool_runtime.clone(),
                 capability: capability.clone(),

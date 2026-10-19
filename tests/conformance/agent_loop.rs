@@ -195,6 +195,21 @@ impl Driver {
     /// (a Skill package must exist before the capability candidate is
     /// prepared, which happens inside composition).
     async fn start_in(root: tempfile::TempDir, emulator: &ProviderEmulator, setup: &Setup) -> Self {
+        Self::start_in_with_status_clock(
+            root,
+            emulator,
+            setup,
+            Arc::new(rustx::context::SystemClock),
+        )
+        .await
+    }
+
+    async fn start_in_with_status_clock(
+        root: tempfile::TempDir,
+        emulator: &ProviderEmulator,
+        setup: &Setup,
+        status_clock: Arc<dyn rustx::context::AgentStatusClock>,
+    ) -> Self {
         let workspace = root.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
         if setup.images {
@@ -238,6 +253,7 @@ impl Driver {
             runtime_root: root.path().join("private"),
         };
         let dependencies = LocalRuntimeDependencies {
+            status_clock,
             credentials: Some(Arc::new(MapCredentialEnvironment::new([(
                 CREDENTIAL_VARIABLE.to_owned(),
                 CREDENTIAL_VALUE.to_owned(),

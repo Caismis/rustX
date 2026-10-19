@@ -25,6 +25,17 @@ in the new evidence directory. Set the same Cargo/Rust environment for every
 revision. The revision controllers reject identical executable hashes before
 starting either product or provider.
 
+Current workload version 3 supplies the same model-facing Agent Status time,
+`2026-10-19 00:00:00`, to both engines. Rust uses the supported composition-owned
+`AgentStatusClock`; Pi authors that exact reminder through its native entry API.
+Runtime event time, deadlines, provider pacing and performance clocks remain real.
+Request comparison preserves time text exactly; only transport argument spelling
+and the one fixture workspace path are normalized. Old archives remain unchanged:
+their timestamp-normalized equality does not prove identical model-facing input.
+The live consumer oracle retains and independently checks every observed assistant
+and tool-output version, including cancelled prefixes and replacement/resync paths.
+Rust distinguishes checkpoint terminal sightings from explicit settlement events.
+
 The provider is the same Python HTTP/SSE implementation and scenario for both
 engines. Pi uses its production `openAICompletionsApi()` with actual Durable
 SQLite, not its faux provider. Each paired run compares complete core requests
