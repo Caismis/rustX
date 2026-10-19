@@ -187,7 +187,16 @@ test('native distant reading rail, detached/latest follow and measured width in 
     await expect(page.getByText(/Native reading answer 299\n/)).toHaveCount(1);
     expect(await page.evaluate(()=>(window as any).readingTransport.windows)).toEqual([32,32]);
     expect(await viewport.locator('[data-chat-anchor-key]').count()).toBeLessThanOrEqual(256);
-    await expect(page.getByRole('button', { name: 'Load later', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Load later', exact: true })).toHaveCount(0);
+    const continuation = page.locator('[data-chat-history-boundary]');
+    await expect(continuation).toHaveCount(1);
+    const after = await continuation.getAttribute('data-chat-history-boundary');
+    await continuation.scrollIntoViewIfNeeded();
+    await viewport.hover();
+    await page.mouse.wheel(0, 80);
+    await expect.poll(() => page.evaluate(() => (window as any).readingTransport.other)).toBe(1);
+    await expect(continuation).not.toHaveAttribute('data-chat-history-boundary', after!);
+    await page.screenshot({ path: '/tmp/rustx-history-main-continuation.png' });
     await page.getByRole('button', { name: 'Return to latest', exact: true }).click();
     await expect.poll(()=>viewport.evaluate(el=>el.scrollHeight-el.clientHeight-el.scrollTop)).toBeLessThan(3);
     // Ordinary detached state has no historical jump/cache-limit prerequisite.
@@ -304,9 +313,18 @@ test('Fork source exact Message landing and cancellation by scrolling, newer nav
       return row.top >= view.top - 1 && row.top < view.bottom && row.bottom > view.top;
     })).toBe(true);
     await expect.poll(async () => Math.abs(await anchor.evaluate(el => el.getBoundingClientRect().top) - await viewport.evaluate(el => el.getBoundingClientRect().top))).toBeLessThan(3);
-    await expect(page.getByRole('button', { name: 'Load later', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Load later', exact: true })).toHaveCount(0);
+    await expect(page.locator('[data-chat-history-boundary]')).toHaveCount(1);
     await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toHaveCount(0);
     await page.screenshot({ path: '/tmp/pr458-shell-read-only-history.png' });
+    const continuation = page.locator('[data-chat-history-boundary]');
+    const after = await continuation.getAttribute('data-chat-history-boundary');
+    await continuation.scrollIntoViewIfNeeded();
+    await viewport.hover();
+    await page.mouse.wheel(0, 80);
+    await expect(continuation).not.toHaveAttribute('data-chat-history-boundary', after!);
+    const forward = await page.evaluate(() => (window as any).sourceTransport.requests.filter((request: any) => request.method === 'session/history' && request.params.at.type === 'newer'));
+    expect(forward).toHaveLength(1);
     await expect(page.locator('[data-history-session]')).toHaveAttribute('data-history-node', sourceNode);
     await page.getByRole('button', { name: 'Return to conversation', exact: true }).click();
     await expect(page.locator(`button[data-session-id="${forkId}"]`)).toHaveAttribute('aria-current', 'page');

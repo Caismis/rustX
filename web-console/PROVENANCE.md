@@ -1471,6 +1471,16 @@ confirms that its reading surface has history loading and a return-to-bottom
 control without this persistent banner. Native bounded reading, loaded-window
 paging and latest-tail ownership are unchanged for parent and child Chat.
 
+The visible history controls now follow the same Harness ChatView reference:
+only its compact, centered Load earlier control appears at the top, with matching
+Chinese wording. The rustX-only Load later action and copy have been removed.
+Native bounded newer-page reads continue when downward reading reaches the end
+of the loaded historical window, before the separately observed live tail. This
+continuation has no visible row, performs no eager history traversal, coalesces
+pending reads, ignores programmatic scroll/anchor corrections and releases its listeners on return to latest or view disposal.
+Main Chat, child Chat and immutable source history share this presentation;
+native read cuts, source ownership and viewport anchoring remain authoritative.
+
 Reference: `/home/caismis/Documents/codes/deepseek-harness@5badb15009ae1756c3afe0ae0cef1faafc290ccc`,
 read-only. `ui-chat` `ChatView.tsx` and `use-chat-navigation.ts`, and
 `session-controller` `Session.loadOlder`/`loadThrough`, were consulted; no new

@@ -195,7 +195,7 @@
 
 .older button {
   border: none;
-  border-radius: 14px;
+  border-radius: var(--dsw-radius-sm);
   padding: 4px 12px;
   font-size: 12px;
   color: var(--dsw-alias-label-secondary);
@@ -261,3 +261,6 @@
 .modalAction {
   min-width: 72px;
 }
+
+/* Invisible native-window continuation; it contributes no paging controls or flow spacing. */
+.column > .continuation { height: 1px; margin-top: 0; overflow: hidden; }

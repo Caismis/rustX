@@ -45,8 +45,8 @@ export function HistorySurface({ client, route, current, back, settings }: { cli
     <div className={css.body}><div className={css.scrollBody} data-conversation-scroll>
       <ChatViewport ref={viewport} historical chromeVisible={false}>
         {error && <p role="alert">{error}</p>}
-        <JournalSourceProvider source={{client,sessionId:route.sessionId,nodeId:route.nodeId,historyCut:history.page.source_cut??undefined,cut:()=>undefined,epoch:contentEpoch,owned:()=>current()&&!settings.getSnapshot().context.page&&!settings.getSnapshot().matches('resolvingOwner')}} content={history.page.content} transcript={history.page}><AgentTranscript snapshot={{ conversation_id: route.conversationId, messages: [], attempt: null, statuses: [], transcript: history.page }} history={history} historicalDisabled sourceDisabled
-          loadEarlier={!loading && history.page.next_cursor ? () => void page(true) : undefined} loadLater={!loading && history.window?.newer_cursor ? () => void page(false) : undefined}/></JournalSourceProvider>
+        <JournalSourceProvider source={{client,sessionId:route.sessionId,nodeId:route.nodeId,historyCut:history.page.source_cut??undefined,cut:()=>undefined,epoch:contentEpoch,owned:()=>current()&&!settings.getSnapshot().context.page&&!settings.getSnapshot().matches('resolvingOwner')}} content={history.page.content} transcript={history.page}><AgentTranscript snapshot={{ conversation_id: route.conversationId, messages: [], attempt: null, statuses: [], transcript: history.page }} history={{ ...history, loading }} historicalDisabled sourceDisabled
+          loadEarlier={!loading && history.page.next_cursor ? () => void page(true) : undefined} loadLater={history.window?.newer_cursor ? () => page(false) : undefined}/></JournalSourceProvider>
       </ChatViewport>
     </div></div>
   </section>;
