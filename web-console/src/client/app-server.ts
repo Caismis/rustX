@@ -1209,7 +1209,13 @@ export class AppServerClient {
     if (checkpointAdvanced) void this.refreshDisplaySummary(id);
     // A replacement can summarize native facts while retaining an older Trace
     // head. Repair that independent cache without retiring its pending readers.
-    if (checkpointAdvanced && !traceAdvanced || transitionFacts(event).some(fact=>fact.type==='trace_changed')) void this.refreshTraceDomain(id).catch(() => {});
+    if (checkpointAdvanced && !traceAdvanced || transitionFacts(event).some(fact=>fact.type==='trace_changed')) {
+      const authority=this.traceAuthorities.get(id);
+      void this.refreshTraceDomain(id).catch(cause=>{
+        const trace=this.state.views[id]?.trace;
+        if(observation.current()&&this.traceAuthorities.get(id)===authority&&trace)this.setSession(id,{trace:{...trace,error:String(cause),loading:false}});
+      });
+    }
   }
 
   domainReader(target: AttachmentTarget, current: () => boolean, agentId?: string): DomainReader {

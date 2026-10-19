@@ -1645,6 +1645,8 @@ pub(crate) struct ClientInner {
     #[cfg(test)]
     checkpoint_read_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     #[cfg(test)]
+    checkpoint_page_admitted_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    #[cfg(test)]
     checkpoint_source_wait_hook: Mutex<Option<Box<dyn FnMut() + Send>>>,
     #[cfg(test)]
     cancellation_receipt_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
@@ -3453,6 +3455,13 @@ impl ClientInner {
         self.lock_published_state()
             .projection
             .validate_checkpoint_cut(cut)?;
+        #[cfg(test)]
+        {
+            let hook = self.checkpoint_page_admitted_hook.lock().unwrap().take();
+            if let Some(hook) = hook {
+                hook();
+            }
+        }
         if super::delivery::selection(domain).is_some() {
             return super::delivery::page(self.store.as_ref(), cut, domain, offset, limit);
         }
@@ -5474,6 +5483,8 @@ impl RuntimeClientHost {
             #[cfg(test)]
             checkpoint_read_hook: Mutex::new(None),
             #[cfg(test)]
+            checkpoint_page_admitted_hook: Mutex::new(None),
+            #[cfg(test)]
             checkpoint_source_wait_hook: Mutex::new(None),
             #[cfg(test)]
             cancellation_receipt_hook: Mutex::new(None),
@@ -5575,6 +5586,8 @@ impl RuntimeClientHost {
             snapshot_read_hook: Mutex::new(None),
             #[cfg(test)]
             checkpoint_read_hook: Mutex::new(None),
+            #[cfg(test)]
+            checkpoint_page_admitted_hook: Mutex::new(None),
             #[cfg(test)]
             checkpoint_source_wait_hook: Mutex::new(None),
             #[cfg(test)]
@@ -6308,6 +6321,9 @@ mod tests {
     }
     mod source_recovery_tests {
         include!("host/source_recovery_tests.rs");
+    }
+    mod trace_demand_recovery_tests {
+        include!("host/trace_demand_recovery_tests.rs");
     }
     mod native_cancellation_tests {
         include!("host/native_cancellation_tests.rs");
@@ -11625,6 +11641,7 @@ mod tests {
             RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } => {
                 snapshot.clone_from(&checkpoint.snapshot);
             }
+            RuntimeClientEvent::TraceChanged => {} // Independent read domain.
             _ => panic!("unexpected captured-cut fact"),
         }
     }

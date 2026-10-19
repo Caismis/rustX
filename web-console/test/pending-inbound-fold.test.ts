@@ -9,11 +9,13 @@ const enqueued:RuntimeClientEvent={type:'inbound_enqueued',sequence:'4',message,
 it('a complete pending head and its positive enqueue fact equal the whole native checkpoint',()=>{
  const row={sequence:'4',revision:'2',deferred:true,message:{...message,content:[{type:'text' as const,text:'newer native body'}]}};
  const initial=checkpoint(snapshot(),'71');
- const expected=checkpoint({...snapshot(),inbound:{pending:[row]}},'72');
+ // A pending-only transition keeps the independently materialized Trace cut.
+ const expected=checkpoint({...snapshot(),trace:initial.snapshot.trace,inbound:{pending:[row]}},'72');
  const {snapshot:_,cursor:__,...metadata}=expected;
  const event:RuntimeClientEvent={type:'projection_transition',events:[{type:'pending_inbound_changed',pending:[row]},enqueued],metadata};
  const folded=foldRuntimeEvent(checkpointSnapshot(initial),event);
  expect(observationCheckpoint(folded,'72')).toEqual(expected);
+ expect(folded.trace.read_cut).toEqual(initial.snapshot.trace.read_cut);
  expect(folded.inbound.pending).toEqual([row]);
  expect(folded.inbound.pending![0]).toBe(row);
  expect(foldRuntimeEvent(folded,enqueued)).toBe(folded);
