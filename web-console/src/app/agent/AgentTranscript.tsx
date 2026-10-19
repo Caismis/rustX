@@ -63,7 +63,7 @@ export interface RequestFeedback {
   messages: ReadonlyMap<string, ReactNode>;
   attempts: ReadonlyMap<string, ReactNode>;
 }
-export function AgentTranscript({ snapshot, history, loadEarlier, loadLater, onHistorical, historicalDisabled, lineageSwitchSafe = false, forkPoint, onOpenSource, sourceDisabled, requestFeedback }: { snapshot: Pick<RuntimeClientSnapshot, 'messages' | 'attempt' | 'transcript' | 'statuses' | 'conversation_id'> & Partial<Pick<RuntimeClientSnapshot,'message_descriptors'|'publication_settlements'>>; history?: TranscriptCache; loadEarlier?: () => void; loadLater?: () => void | Promise<void>; onHistorical?: (action: ResponseAction, response: CompletedResponseView) => void; historicalDisabled?: boolean; lineageSwitchSafe?: boolean; forkPoint?: ForkPointInfo; onOpenSource?: (origin: ForkOrigin) => void; sourceDisabled?: boolean; requestFeedback?: RequestFeedback }) {
+export function AgentTranscript({ snapshot, history, loadEarlier, loadLater, onHistorical, historicalDisabled, lineageSwitchSafe = false, forkPoint, onOpenSource, sourceDisabled, requestFeedback, compaction }: { snapshot: Pick<RuntimeClientSnapshot, 'messages' | 'attempt' | 'transcript' | 'statuses' | 'conversation_id'> & Partial<Pick<RuntimeClientSnapshot,'message_descriptors'|'publication_settlements'>>; history?: TranscriptCache; loadEarlier?: () => void; loadLater?: () => void | Promise<void>; onHistorical?: (action: ResponseAction, response: CompletedResponseView) => void; historicalDisabled?: boolean; lineageSwitchSafe?: boolean; forkPoint?: ForkPointInfo; onOpenSource?: (origin: ForkOrigin) => void; sourceDisabled?: boolean; requestFeedback?: RequestFeedback; compaction?: ReactNode }) {
   const tx = useTranslation();
   const [{ transcriptMode }] = useConversationPreferences();
   const verbose = transcriptMode === 'verbose';
@@ -267,6 +267,7 @@ export function AgentTranscript({ snapshot, history, loadEarlier, loadLater, onH
     {!!currentContext.length && <details><summary>{tx('agent:agent-transcript.current-context')}</summary>{currentContext.map(message => <Message key={message.id} message={message} />)}</details>}
     {runningAttempt && requestFeedback?.attempts.get(attemptOwnerKey({conversation_id:snapshot.conversation_id,...runningAttempt}))}
     {runningAttempt && <RunningStatus key={attemptOwnerKey({conversation_id:snapshot.conversation_id,...runningAttempt})} startTime={startTime !== undefined && Number.isFinite(startTime) ? startTime : undefined}/>}
+    {compaction}
   </div>;
 }
 

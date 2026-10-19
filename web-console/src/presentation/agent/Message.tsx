@@ -1,6 +1,7 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Derived from pinned Harness; see PROVENANCE.md. */
 import { useState, type ReactNode } from 'react';
 import { IconApiOutline14, IconChevronDownOutline14, IconChevronRightOutline14 } from '../primitives/icons';
+import { TextShimmer } from '../primitives/TextShimmer';
 import css from './Message.module.css';
 /** Harness user-stack/bubble; native adapters supply canonical content and actions. */
 export function UserMessage({ label, attachments, children, actions }: { label: string; attachments?: ReactNode; children: ReactNode; actions?: ReactNode }) {
@@ -11,21 +12,22 @@ export function AssistantMessage({ label, children }: { label: string; children:
  return <article aria-label={label} data-assistant-message>{children}</article>;
 }
 
-/** Checkpoint disclosure; content and provenance come from the native projection read domain. */
-export function CompactionMessage({ title, summary, preview, description, children }: { title: string; summary: string; preview: string; description: string; children: ReactNode }) {
+/** Harness compaction marker/command. Only its expanded body contains summary text. */
+export function CompactionMessage({ title, summary, children, running = false, error = false }: { title: string; summary: string; children?: ReactNode; running?: boolean; error?: boolean }) {
  const [open, setOpen] = useState(false);
- return <div className={css.compactionRow} data-compaction-marker="">
-  <button type="button" className={css.compactionButton} aria-label={`${title} · ${summary}`} aria-expanded={open} onClick={() => setOpen(value => !value)}>
+ const expandable = !!children, expanded = expandable && open;
+ return <div className={css.compactionRow} data-compaction-marker="" data-state={running ? 'running' : error ? 'error' : 'ok'}>
+  <button type="button" className={css.compactionButton} disabled={!expandable} aria-label={`${title} · ${summary}`} aria-expanded={expandable ? expanded : undefined} onClick={() => setOpen(value => !value)}>
    <span className={css.compactionLeading} aria-hidden="true">
     <span className={css.compactionContextIcon} data-compaction-icon="context"><IconApiOutline14/></span>
-    <span className={css.compactionDisclosureIcon} data-compaction-disclosure={open ? 'expanded' : 'collapsed'}>
-     {open ? <IconChevronDownOutline14/> : <IconChevronRightOutline14/>}
+    <span className={css.compactionDisclosureIcon} data-compaction-disclosure={expanded ? 'expanded' : 'collapsed'}>
+     {expanded ? <IconChevronDownOutline14/> : <IconChevronRightOutline14/>}
     </span>
    </span>
    <span className={css.compactionTitle}>{title}</span>
    <span className={css.compactionSep} aria-hidden="true"/>
-   <span className={css.compactionSummary}>{summary}{preview && <> · {preview}</>}</span>
+   <span className={css.compactionSummary} data-error={error || undefined}>{running ? <TextShimmer active>{summary}</TextShimmer> : summary}</span>
   </button>
-  {open && <div className={css.compactionBody} data-compaction-body=""><p className={css.compactionDescription}>{description}</p>{children}</div>}
+  {expanded && <div className={css.compactionBody} data-compaction-body="">{children}</div>}
  </div>;
 }

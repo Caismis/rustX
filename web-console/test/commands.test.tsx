@@ -152,7 +152,7 @@ describe('successful command draft consumption', () => {
     const input = await open('/compact');
     expect(input).toHaveProperty('value', '');
     expect(screen.queryByRole('dialog')).toBeNull();
-    expect(screen.getByText('Submitting compaction request…')).toBeTruthy();
+    expect(screen.getByText('Compacting context…')).toBeTruthy();
     fireEvent.change(input, { target: { value: '/compact' } });
     fireEvent.keyDown(input, { key: 'Enter' }); fireEvent.keyDown(input, { key: 'Enter' });
     fireEvent.change(input, { target: { value: 'next draft' } });

@@ -2,7 +2,7 @@ import { createContext, useContext, useCallback, useRef, type ReactNode } from '
 import type { AttachmentTarget, CheckpointReadCut, ObservationReadCut, ContentRef, ContentBinding, MessageBlock, RuntimeClientTranscriptPage } from '../../../../protocol/app-server/v50';
 import type { AppServerClient } from '../../client/app-server';
 
-type Source = { client: AppServerClient; cut: () => CheckpointReadCut | undefined; owned: () => boolean; epoch?: number; content?: ContentBinding[]; messages?: MessageBlock[]; transcript?: RuntimeClientTranscriptPage; history?: RuntimeClientTranscriptPage } & (
+type Source = { client: AppServerClient; cut: () => CheckpointReadCut | undefined; owned: () => boolean; epoch?: number; historyFrozen?: boolean; content?: ContentBinding[]; messages?: MessageBlock[]; transcript?: RuntimeClientTranscriptPage; history?: RuntimeClientTranscriptPage } & (
   { target: AttachmentTarget; agentId?: string } | { sessionId: string; nodeId?: string | null; historyCut?: ObservationReadCut }
 );
 export function observationSourceIdentity(source?: Source) {
@@ -18,8 +18,8 @@ export async function readObservationValue(source: Source, cut: CheckpointReadCu
 const JournalSource = createContext<Source | undefined>(undefined);
 /** Existing exact attachment/Child observation scope for selected native fields. */
 export function useObservationSource() { return useContext(JournalSource); }
-export function JournalSourceProvider({ source, content, messages, transcript, history, children }: { source?: Source; content?: ContentBinding[]; messages?: MessageBlock[]; transcript?: RuntimeClientTranscriptPage; history?: RuntimeClientTranscriptPage; children: ReactNode }) {
-  return <JournalSource value={source && { ...source, content, messages, transcript, history }}>{children}</JournalSource>;
+export function JournalSourceProvider({ source, content, messages, transcript, history, historical, children }: { historical?: boolean; source?: Source; content?: ContentBinding[]; messages?: MessageBlock[]; transcript?: RuntimeClientTranscriptPage; history?: RuntimeClientTranscriptPage; children: ReactNode }) {
+  return <JournalSource value={source && { ...source, content, messages, transcript, history, historyFrozen: historical ?? source.historyFrozen }}>{children}</JournalSource>;
 }
 
 /** Selected content keeps the original live or historical authority across all chunks. */

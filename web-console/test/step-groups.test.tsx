@@ -62,8 +62,8 @@ it('an independently seated retry splits process groups without pulling later re
   render(<AgentTranscript snapshot={{ ...snapshot(), transcript: { entries } }} requestFeedback={{ messages: new Map([['asking', <span key="retry">Retry boundary</span>]]), attempts: new Map() }}/>);
   const marker = screen.getByText('Retry boundary');
   expect(marker.closest('[hidden]')).toBeNull();
-  const [earlier, laterRead] = screen.getAllByText('Assembling read…', { exact: true });
-  const later = screen.getByText('Assembling ask_user…', { exact: true });
+  const [earlier, laterRead] = screen.getAllByText('Tool details unavailable: read', { exact: true });
+  const later = screen.getByText('Tool details unavailable: ask_user', { exact: true });
   expect(earlier.compareDocumentPosition(marker) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(marker.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(marker.compareDocumentPosition(laterRead) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -78,15 +78,15 @@ it('the expanded settled turn shows Harness group titles that open their members
   expect(process.getAttribute('aria-expanded')).toBe('false');
   expect(screen.getByText('Let me look first.').closest('[hidden]')).toBeNull();
   expect(screen.getByText('Flying it is.').closest('[hidden]')).toBeNull();
-  expect(screen.getByText('Assembling ask_user…').closest('[hidden]')).not.toBeNull();
+  expect(screen.getByText('Tool details unavailable: ask_user').closest('[hidden]')).not.toBeNull();
   fireEvent.click(process);
   expect(process.getAttribute('aria-expanded')).toBe('true');
-  expect(screen.getByText('Assembling ask_user…').closest('[hidden]')).toBeNull();
+  expect(screen.getByText('Tool details unavailable: ask_user').closest('[hidden]')).toBeNull();
   expect(screen.getByText('Historical interaction details').closest('[hidden]')).toBeNull();
   // Canonical order survives grouping: opening reply, its process, then the final reply.
   const text = document.body.textContent!;
-  expect(text.indexOf('Let me look first.')).toBeLessThan(text.indexOf('Assembling read'));
-  expect(text.indexOf('Assembling ask_user')).toBeLessThan(text.indexOf('Flying it is.'));
+  expect(text.indexOf('Let me look first.')).toBeLessThan(text.indexOf('Tool details unavailable: read'));
+  expect(text.indexOf('Tool details unavailable: ask_user')).toBeLessThan(text.indexOf('Flying it is.'));
   act(() => localeController.setLocale('zh'));
   expect(screen.getByRole('button', { name: '已读取文件，执行了命令，向用户提出了问题' })).toBeTruthy();
   expect(screen.getByRole('button', { name: '已完成分析' })).toBeTruthy();

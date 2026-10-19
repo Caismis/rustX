@@ -295,6 +295,8 @@ export interface TrajectoryLedgerRow {
    * request-boundary runs: consecutive dots step right instead of stacking. */
   requestRun?: number;
   turnStart: boolean;
+  /** Presentation of unscoped history and checkpoint summaries, never execution ownership. */
+  betweenTurns?: boolean;
   summary?: string;
   /** The Assistant record whose folded Tool calls a summary row expands. */
   callsOwner?: string;
@@ -336,7 +338,7 @@ export function ledgerRows(tx: Translate, projection: TrajectoryProjection, item
     if (!isInspectable(item)) return [];
     if (item.type === 'RequestBoundary' && !markerSeats.has(item.display_key)) return [];
     return [{ display_key: item.type === 'RequestBoundary' ? displayKey('marker-seat', item.display_key) : item.display_key, kind: item.type === 'RequestBoundary' ? 'marker' : 'semantic', height: item.type === 'RequestBoundary' ? 10 : 30,
-      item, turn: turnOf(item.record), request: hosts.get(item.display_key), turnStart: false }];
+      item, betweenTurns: item.record.kind === 'compaction', turn: turnOf(item.record), request: hosts.get(item.display_key), turnStart: false }];
   });
   const ownerOf = (row: TrajectoryLedgerRow) => row.item?.owner_record_id ?? row.callsOwner;
   const rows = seats.filter(row => row.kind === 'history');
@@ -345,7 +347,7 @@ export function ledgerRows(tx: Translate, projection: TrajectoryProjection, item
   // a group's representation, never its position relative to another group.
   for (const section of projection.sections) {
     if (section.kind === 'outside') {
-      rows.push(...seats.filter(row => ownerOf(row) === section.record.id));
+      rows.push(...seats.filter(row => ownerOf(row) === section.record.id).map(row => ({ ...row, betweenTurns: row.kind === 'semantic' && !isInitial(row) })));
       continue;
     }
     const turn = turns.get(section.ownerKey);
@@ -353,7 +355,7 @@ export function ledgerRows(tx: Translate, projection: TrajectoryProjection, item
     const owned = seats.filter(row => row.turn === turn);
     // As in Harness, a Turn folds only when it has more than one content row;
     // its System cells and first content row stay visible above the summary.
-    const content = owned.filter(row => row.kind === 'semantic' && row.item?.type !== 'SystemPromptCell');
+    const content = owned.filter(row => row.kind === 'semantic' && row.item?.type !== 'SystemPromptCell' && !row.betweenTurns);
     const collapsed = !searching && folded.has(turn.ownerKey) && content.length > 1;
     const main = content[0];
     // Promotion changes presentation only; the native Request/Step stays intact.
@@ -365,7 +367,7 @@ export function ledgerRows(tx: Translate, projection: TrajectoryProjection, item
       // Attempt's message group; neither creates a synthetic Step.
       const members = new Set(group.records.map(record => record.id));
       const segment = owned.filter(row => members.has(ownerOf(row) ?? '') && !isInitial(row)
-        && (!collapsed || row.item?.type === 'SystemPromptCell' || row === main));
+        && (!collapsed || row.item?.type === 'SystemPromptCell' || row.betweenTurns || row === main));
       // As in Harness, a Step has no chrome of its own: a Step with no visible
       // content has no seat, and a folded Turn counts Steps in its summary.
       body.push(...segment);
@@ -378,9 +380,10 @@ export function ledgerRows(tx: Translate, projection: TrajectoryProjection, item
           tx(calls === 1 ? 'trajectory:summary.tool-calls.one' : 'trajectory:summary.tool-calls.other', { count: calls })].join(' · ') });
     }
     if (!body.length) body.push({ display_key: displayKey('structure-marker', turn.ownerKey), kind: 'structure', height: 20, turn, turnStart: false });
-    body[0]!.turnStart = true;
+    const firstTurnRow = body.find(row => !row.betweenTurns);
+    if (firstTurnRow) firstTurnRow.turnStart = true;
     // A tiny Request seat cannot carry the Turn label.
-    if (body[0]!.kind === 'marker') { body[0]!.kind = 'structure'; body[0]!.height = 20; }
+    if (firstTurnRow?.kind === 'marker') { firstTurnRow.kind = 'structure'; firstTurnRow.height = 20; }
     rows.push(...body);
   }
   let run = 0;

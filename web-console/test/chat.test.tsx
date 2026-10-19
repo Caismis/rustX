@@ -6,8 +6,8 @@ import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { RuntimeFacts as OtherActivity } from '../src/app/agent/Activity';
 import { AgentCard } from '../src/app/components/ActivityCards';
 function RuntimeFacts(props: { snapshot: ReturnType<typeof snapshot>; client?: import('../src/client/app-server').AppServerClient; sessionId?: string }) { return <><OtherActivity snapshot={props.snapshot}/>{props.snapshot.jobs?.map(job => <JobItemHarness key={job.job_id} job={job} client={props.client} sessionId={props.sessionId}/>)}{props.snapshot.agents?.map(agent => <AgentCard key={agent.agent_id} agent={agent} client={props.client} sessionId={props.sessionId}/>)}</>; }
-import { snapshot, projectionHead } from './fixture';
-import { ProjectionSummary } from '../src/app/agent/ContextSeat';
+import { snapshot, projectionHead, Server } from './fixture';
+import { CompactionCheckpoint } from '../src/app/agent/CompactionCheckpoint';
 afterEach(cleanup);
 const rich = '## Answer\n\n| Key | Value |\n| --- | --- |\n| one | two |\n\n- **Strong**\n\n```rust\nfn main() {}\n```\n\n$x^2$';
 it('Chat uses the same rich Markdown through streaming and canonical settlement exactly once', () => {
@@ -39,7 +39,7 @@ it('reasoning, refusal and native Tool identities are readable without fabricate
   s.transcript = { entries: s.messages.map(message => ({ cursor: '1', item: { type: 'message', message } })) };
   const ui = render(<><AgentTranscript snapshot={s} /><RuntimeFacts snapshot={s} /></>);
   expect(ui.getByText('Reasoning')).toBeTruthy(); expect(ui.getByText('Refusal fact')).toBeTruthy();
-  expect(ui.getAllByText('Assembling Same title…')).toHaveLength(2);
+  expect(ui.getAllByText('Tool details unavailable: Same title')).toHaveLength(2);
   expect(ui.queryByText('Subagents')).toBeNull(); expect(ui.queryByText('Workflows')).toBeNull(); expect(ui.queryByText('Todo')).toBeNull();
 });
 it('durable user/assistant order and tool artifact galleries follow only transcript positions', () => {
@@ -150,13 +150,13 @@ it('projected summary disclosure cannot acquire a canonical transcript position 
     {cursor:'1',item:{type:'message',message:{role:'user',id:'before',source:'human',content:[{type:'text',text:'Earlier question'}]}}},
     {cursor:'2',item:{type:'message',message:{role:'user',id:'after',source:'human',content:[{type:'text',text:'Next question'}]}}},
   ]};
-  const ui=render(<><AgentTranscript snapshot={s}/><ProjectionSummary head={projectionHead()}/></>);
+  const ui=render(<><AgentTranscript snapshot={s}/><CompactionCheckpoint head={projectionHead()} client={new Server().client} sessionId="A"/></>);
   expect([...ui.container.querySelectorAll('[data-chat-anchor-key]')].map(node=>node.getAttribute('data-chat-anchor-key'))).toEqual(['message:before','message:after']);
-  const marker=ui.getByRole('button',{name:'Compacted model context · Projection 1 · canonical frontier 100'});
+  const marker=ui.getByRole('button',{name:'Context compacted · View compaction summary'});
   expect(ui.queryByRole('heading',{name:'Preserved context'})).toBeNull();
   fireEvent.click(marker);
   expect(ui.getAllByRole('heading',{name:'Preserved context'})).toHaveLength(1);
-  expect(ui.container.querySelector('[data-projection-checkpoint]')?.getAttribute('data-turn-process-owner')).toBeNull();
+  expect(ui.container.querySelector('[data-compaction-checkpoint]')?.getAttribute('data-turn-process-owner')).toBeNull();
 });
 
 it.each(['cancelled', 'failed'] as const)('native %s keeps released partial prose without recovery JSON or completed-response actions', outcome => {

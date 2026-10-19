@@ -1591,3 +1591,36 @@ it('compaction summary exposes loading and read errors before detail arrives', (
   view.rerender(<Trajectory cache={failed} loadEarlier={noop} onSelect={noop} onLoadDetail={noop} />);
   expect(screen.getByRole('alert').textContent).toBe('Summary read failed');
 });
+
+
+it('checkpoint summaries and unscoped reused history display Between turns without acquiring execution ownership', () => {
+  const records = [
+    traceRecord(0, { kind: 'user', request: null, location: {}, preview: { text: 'Reused original context', truncated: false } }),
+    traceRecord(1, { kind: 'compaction', request: null, location: { attempt_id: 'native-attempt', step_id: 'native-step' } }),
+    traceRecord(2, { kind: 'user', request: null, location: { attempt_id: 'native-attempt' } }),
+  ];
+  const original = JSON.stringify(records);
+  const tx = translator('en'), projection = projectTrajectory(tx, records);
+  const rows = ledgerRows(tx, projection, flattenTrajectory(tx, projection), new Set(), false);
+  expect(rows.filter(row => row.betweenTurns).map(row => row.item?.owner_record_id)).toEqual(['trace:0', 'trace:1']);
+  expect(rows.find(row => row.item?.owner_record_id === 'trace:2')?.turnStart).toBe(true);
+  show(cacheOf(records));
+  expect(row('RecordRow', 'trace:0').querySelector('[aria-label="Between turns"]')).not.toBeNull();
+  expect(row('RecordRow', 'trace:1').querySelector('[aria-label="Between turns"]')).not.toBeNull();
+  fireEvent.click(row('RecordRow', 'trace:1'));
+  expect(within(screen.getByRole('complementary', { name: 'Event details' })).getByText('Between turns')).toBeTruthy();
+  expect(document.querySelector('[class*="turnRail"]')).toBeNull();
+  expect(JSON.stringify(records)).toBe(original);
+});
+
+it('a request after a between-turn summary keeps a full-height Turn label seat', () => {
+  const records = [
+    traceRecord(0, { kind: 'compaction', request: null, location: { attempt_id: 'attempt-a', step_id: '1' } }),
+    traceRecord(1, { state: 'running' }),
+  ];
+  const tx = translator('en'), projection = projectTrajectory(tx, records);
+  const rows = ledgerRows(tx, projection, flattenTrajectory(tx, projection), new Set(), false);
+  expect(rows.find(row => row.request)?.height).toBe(20);
+  expect(rows.find(row => row.request)?.turnStart).toBe(true);
+  expect(rows.find(row => row.item?.record.kind === 'compaction')?.turnStart).toBe(false);
+});

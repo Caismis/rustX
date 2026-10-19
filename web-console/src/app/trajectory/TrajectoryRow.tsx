@@ -38,7 +38,7 @@ export function TrajectoryRow({ row, index, style, activeKey, activeTurn, folded
     else if (turn) actions.toggleTurn(turn.ownerKey);
   };
   const onDoubleClick = (event: MouseEvent) => {
-    if (summary || !item || item.type === 'RequestBoundary' || !turn) return;
+    if (summary || !item || item.type === 'RequestBoundary' || !turn || row.betweenTurns) return;
     if (folded.has(turn.ownerKey) && actions.foldableTurns.has(turn.ownerKey)) { event.preventDefault(); actions.toggleTurn(turn.ownerKey); return; }
     if (item.type === 'RecordRow' && actions.callOwners.has(item.owner_record_id)) { event.preventDefault(); actions.toggleCalls(item.owner_record_id); return; }
     if (row.turnStart && actions.foldableTurns.has(turn.ownerKey)) { event.preventDefault(); actions.toggleTurn(turn.ownerKey); }
@@ -55,7 +55,7 @@ export function TrajectoryRow({ row, index, style, activeKey, activeTurn, folded
     data-display-type={row.kind === 'structure' ? 'StructuralSeat' : row.kind === 'marker' ? 'MarkerSeat' : summary ? (row.callsOwner ? 'CallsSummary' : 'TurnSummary') : item?.type}
     data-kind={item ? cellKind(item) : undefined} data-state={record?.state} data-attempt={turn?.attempt_id}
     data-error={error || undefined} data-running={record?.state === 'running' || undefined}
-    data-selected={selected || undefined} data-turn-start={row.turnStart || undefined}
+    data-between-turns={row.betweenTurns || undefined} data-selected={selected || undefined} data-turn-start={row.turnStart || undefined}
     data-collapsed-summary={summary ? (row.callsOwner ? 'assistant' : 'turn') : undefined}
     data-timeline-focus={focusedIds && record ? focusedIds.has(record.id) ? 'inside' : 'outside' : undefined}
     role="row" aria-rowindex={index + 1} aria-selected={selected} aria-label={label}
@@ -75,9 +75,10 @@ export function TrajectoryRow({ row, index, style, activeKey, activeTurn, folded
         style={row.requestRun ? { '--request-boundary-offset': `${row.requestRun * 8}px` } as CSSProperties : undefined}
         onClick={event => { event.stopPropagation(); actions.select(request); }}
         onDoubleClick={event => { event.stopPropagation(); }} />}
-      {turn && turn.ownerKey === activeTurn && !initialSystem && <span className={css.turnRail} aria-hidden="true" />}
+      {turn && turn.ownerKey === activeTurn && !initialSystem && !row.betweenTurns && <span className={css.turnRail} aria-hidden="true" />}
       {selected && <span className={css.selectionRail} aria-hidden="true" />}
-      {row.turnStart && turn && <span className={turn.ownerKey === activeTurn ? `${css.turnLabel} ${css.turnLabelActive}` : css.turnLabel} aria-label={turn.label}>
+      {row.betweenTurns && <span className={css.turnLabel} aria-label={tx('trajectory:section.between-turns')}>{tx('trajectory:section.between-turns')}</span>}
+      {row.turnStart && !row.betweenTurns && turn && <span className={turn.ownerKey === activeTurn ? `${css.turnLabel} ${css.turnLabelActive}` : css.turnLabel} aria-label={turn.label}>
         <span className={css.turnLabelFull} aria-hidden="true">{turn.label}</span>
         <span className={css.turnLabelCompact} aria-hidden="true">#{turn.ordinal}</span>
       </span>}

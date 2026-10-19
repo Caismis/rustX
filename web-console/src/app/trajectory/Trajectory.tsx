@@ -75,7 +75,7 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLates
   // Loaded-window ordinals, like the Turn labels: identity stays native.
   const requestNumbers = useMemo(() => new Map(records.filter(record => record.kind === 'request').map((record, index) => [record.id, index + 1])), [records]);
   const foldableTurns = useMemo(() => new Set(projection.sections.flatMap(section => section.kind === 'turn'
-    && allItems.filter(item => isInspectable(item) && item.type !== 'SystemPromptCell' && item.type !== 'RequestBoundary' && traceAttemptKey(item.record.location) === section.ownerKey).length > 1
+    && allItems.filter(item => isInspectable(item) && item.record.kind !== 'compaction' && item.type !== 'SystemPromptCell' && item.type !== 'RequestBoundary' && traceAttemptKey(item.record.location) === section.ownerKey).length > 1
     ? [section.ownerKey] : [])), [projection, allItems]);
   // Timeline focus is valid only within the Trace read domain that created it.
   // Within one epoch (prepend, lifecycle refresh) it persists as native record
@@ -156,7 +156,7 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLates
   // Harness locates a detail by its section and group: "Turn 2 · Step 1".
   const location = (() => {
     const attempt = selected&&traceAttemptKey(selected.location);
-    if (!attempt) return undefined;
+    if (!attempt || selected?.kind === 'compaction') return undefined;
     const step = traceStepKey(selected.location);
     const turn = allItems.find((item): item is StructuralDisplayItem => item.type === 'TurnHeader' && item.ownerKey === attempt);
     const group = allItems.find((item): item is StructuralDisplayItem => item.type === 'GroupHeader' && item.ownerKey === attempt && item.stepKey === step);

@@ -50,7 +50,7 @@ export function SubagentChat({ client, sessionId, admission, agent, snapshot, vi
         if (intent) void reader.navigate(selection, intent.current).then(turn => { if (turn) intent.commit(turnAnchor(turn.id), intent.current); });
       }}/>}
   >
-    {snapshot && <JournalSourceProvider source={source} content={transcriptContent(reading.history, source?.content ?? [])} messages={snapshot.messages} transcript={snapshot.transcript} history={reading.history?.page}><AgentTranscript snapshot={snapshot} history={reading.history} loadEarlier={() => void reader?.loadEarlier()} loadLater={() => reader?.loadLater()} historicalDisabled/></JournalSourceProvider>}
+    {snapshot && <JournalSourceProvider historical={!!reading.history?.window} source={source} content={transcriptContent(reading.history, source?.content ?? [])} messages={snapshot.messages} transcript={snapshot.transcript} history={reading.history?.page}><AgentTranscript snapshot={snapshot} history={reading.history} loadEarlier={() => { viewport.current?.beginNavigation(); void reader?.loadEarlier(); }} loadLater={() => reader?.loadLater()} historicalDisabled/></JournalSourceProvider>}
     <div className={chatCss.column}>{children}</div>
   </ChatViewport>;
 }

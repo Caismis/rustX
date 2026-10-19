@@ -435,3 +435,23 @@ def web_fork_source_reading() -> Scenario:
 
 
 SCENARIOS["web_fork_source_reading"] = web_fork_source_reading
+
+
+def web_large_write() -> Scenario:
+    """A real write with deferred arguments followed by native file delivery."""
+    content = "# Native write report\n\n" + "\n".join(
+        f"Row {i}: preserve original content 水 and native tool identity." for i in range(300)
+    )
+    expected = Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model")
+    return Scenario("web_large_write",
+        Step(expected, Stream(ToolCall("large-write", "write", json.dumps({
+            "path": "large-write.md", "content": content,
+        }, ensure_ascii=False)), Finish("tool_calls"))),
+        Step(expected, Stream(ToolCall("large-write-present", "present", json.dumps({
+            "files": [{"path": "large-write.md", "description": "Native write report"}],
+        })), Finish("tool_calls"))),
+        Step(expected, Stream(Text("Large write finished."), Finish())),
+    )
+
+
+SCENARIOS["web_large_write"] = web_large_write

@@ -7,6 +7,7 @@ import type { AppServerClient, SessionView } from '../../client/app-server';
 import { shallowEqual, useClientSelector } from '../../client/selectors';
 import { useModelRetryFeedback } from './ModelRetry';
 import { AgentTranscript } from './AgentTranscript';
+import { ContextSeat } from './ContextSeat';
 import { RuntimeFacts } from './Activity';
 import { ConversationStats } from './UsageStats';
 import { TodoDock } from '../composer/TodoDock';
@@ -72,7 +73,7 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
   if (!view) return sessionId ? <ChatViewport latestLabel={tx('agent:agent-transcript.return-to-latest')}><PendingMessage client={client} sessionId={sessionId}/></ChatViewport> : null;
   return mode === 'trajectory' && view.trace
     ? <Trajectory key={`${view.id}:${view.target?.attachment_id}`} cache={view.trace} onLatest={() => void client.returnToLatestTrace(view.id)} onSelect={id => client.selectTrace(view.id, id)} onLoadDetail={id => { void client.loadTraceDetail(view.id, id); }} loadEarlier={() => void client.loadEarlierTrace(view.id).catch(() => {})}/>
-    : <JournalSourceProvider content={view.content} messages={view.messages} transcript={view.transcript} history={view.history?.page} source={view.readingPreview&&view.history?.page.source_cut?{client,sessionId:view.id,nodeId:view.nodeId,historyCut:view.history.page.source_cut,cut:()=>undefined,owned:ownsHistory}:view.target ? {client,target:view.target,cut:()=>client.getSnapshot().views[view.id]?.checkpoint?.read_cut,owned:ownsContent} : undefined}><ToolInspectionContext value={inspect}><ChatViewport chromeVisible={!scope?.selected} ref={viewport} key={`${view.id}:${view.target?.attachment_id}`} latestLabel={tx('agent:agent-transcript.return-to-latest')}
+    : <JournalSourceProvider historical={view.readingPreview || !!view.history?.window} content={view.content} messages={view.messages} transcript={view.transcript} history={view.history?.page} source={view.readingPreview&&view.history?.page.source_cut?{client,sessionId:view.id,nodeId:view.nodeId,historyCut:view.history.page.source_cut,cut:()=>undefined,owned:ownsHistory}:view.target ? {client,target:view.target,cut:()=>client.getSnapshot().views[view.id]?.checkpoint?.read_cut,owned:ownsContent} : undefined}><ToolInspectionContext value={inspect}><ChatViewport chromeVisible={!scope?.selected} ref={viewport} key={`${view.id}:${view.target?.attachment_id}`} latestLabel={tx('agent:agent-transcript.return-to-latest')}
       overlay={<TurnNavigator key={`rail:${view.id}:${view.target?.attachment_id}`} previewCurrent={previewCurrent} client={client} sessionId={view.id} active={active} onNavigate={turn=>{
         let clientIntent: number | undefined;
         const clientCurrent = () => {
@@ -89,7 +90,7 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
       latestTurn={view.attempt && ['admitted','running'].includes(view.attempt.phase.type) ? turnAnchor({conversation_id:view.conversation_id,attempt_id:view.attempt.attempt_id,attempt_id_source:view.attempt.attempt_id_source}) : undefined}
       historical={!!view.history?.window} onLatest={() => client.returnToLatest(view.id)} onActiveTurn={setActive}>
       {fork.error && <div role="alert"><p>{fork.error}</p><button type="button" onClick={fork.retry}>{tx('agent:fork-point.reload')}</button></div>}
-      {(view.messages.length > 0 || !!view.transcript.entries?.length || !waiting) && <AgentTranscript requestFeedback={requestFeedback} snapshot={view} history={view.history} loadLater={() => client.loadLater(view.id)} loadEarlier={() => void (view.readingPreview ? client.loadEarlierPreview(view.id) : client.loadEarlier(view.id)).catch(() => {})} lineageSwitchSafe={view.safe} historicalDisabled={view.disabled || historicalPending} onHistorical={onHistorical} forkPoint={fork.point} onOpenSource={onOpenSource ? origin => {
+      {(view.messages.length > 0 || !!view.transcript.entries?.length || !waiting) && <AgentTranscript compaction={!view.readingPreview && <ContextSeat key={`${view.id}:${view.target?.attachment_id}`} client={client} sessionId={view.id}/>} requestFeedback={requestFeedback} snapshot={view} history={view.history} loadLater={() => client.loadLater(view.id)} loadEarlier={() => { viewport.current?.beginNavigation(); void (view.readingPreview ? client.loadEarlierPreview(view.id) : client.loadEarlier(view.id)).catch(() => {}); }} lineageSwitchSafe={view.safe} historicalDisabled={view.disabled || historicalPending} onHistorical={onHistorical} forkPoint={fork.point} onOpenSource={onOpenSource ? origin => {
         // The gesture publishes its exact Shell intent and installs viewport
         // cancellation in this same stack, before any browser scroll can interleave.
         onOpenSource(origin, viewport.current?.beginNavigation);

@@ -1716,10 +1716,10 @@ remain separate, and a window containing no native region still has no selection
 
 ## Unified canonical compaction summary presentation
 
-CompactionMessage is the sole checkpoint disclosure. The adapter retains a bounded
-plain-text preview while collapsed, and the explanation and original Markdown
-while expanded. Trajectory and compaction share the existing GFM preview projection
-in src/presentation/markdown/preview.ts; the former app-local preview module and
+CompactionMessage is the sole checkpoint disclosure. The collapsed row retains
+only the Harness label and expansion hint; its expanded body shows original
+Markdown. Trajectory retains the existing GFM preview projection in
+src/presentation/markdown/preview.ts; the former app-local preview module and
 CompactionSummary component/styles are removed. Native transcript identity, fork
 boundaries and explicit source navigation remain unchanged. Both local presentation
 notes and the upstream interruption/continuation references are retained.
@@ -2503,7 +2503,7 @@ Issue #467 retry disclosures read the advertised original failure field at its r
 
 Issue #467 retains finite successful Trace detail descriptors separately from complete detail values. The existing Inspector exposes explicit original field pages and byte windows for Options, prompts, tools and Diff, using captured native cuts and exact predecessor evidence. Its presentation and localized labels retain their Harness attribution; the changed local hashes and actual import closures are recorded without changing upstream pins or license notices.
 
-PR #478 compaction inspection retains the matched original Completed-J summary preview. The Harness-derived Inspector keeps its existing Summary and Raw Output views and marks truncated previews as deferred; original checkpoint inspection stays with ProjectionHistory. The reviewed local hash and treatment are updated for this presentation change; upstream pins, imports and license attribution are unchanged.
+PR #478 compaction inspection retains the matched original Completed-J summary preview. The Harness-derived Inspector keeps its existing Summary and Raw Output views and marks truncated previews as deferred; the Chat marker now reads its original checkpoint summary on expansion. The reviewed local hash and treatment are updated for this presentation change; upstream pins, imports and license attribution are unchanged.
 
 PR #478 cancellation review preserves the pinned Harness composer and submission-policy sources. The resident Root explicitly supplies a cancellation-only presentation mode when its exact live attachment remains authorized but observation is unavailable. The editor remains focusable for Escape while read-only; normal Send, draft editing, Child controls and unsupported content retain their existing rules. A new Conversation has no inferred cancellation authority. Reviewed local hashes and treatment notes for `AgentComposer.tsx` and `submission-policy.ts` are updated; upstream hashes, import closure, copyright, license notices and screenshot policies remain unchanged.
 
@@ -2547,3 +2547,46 @@ the repository's pinned Playwright container. Unit coverage enumerates native
 registration names and exercises each disclosure/Inspect path. Browser coverage
 checks English/Chinese, desktop/narrow layouts, clipboard, trajectory navigation,
 framework overlays and console health; the real native Goal flow is also retained.
+
+
+### Compaction Chat and trajectory alignment
+
+The pinned Harness `ui-chat` CompactionItem, CompactionCommandCard,
+GenericCommandCard and MessageItem styles provide the compact command/checkpoint
+row, running shimmer, neutral completed label and summary-only disclosure.
+The marker now belongs to the conversation column; the separate projection dock,
+historical projection list, duplicated summaries and internal frontier/provenance
+copy are removed. Summary reads remain lazy and bound to the exact native
+checkpoint, activation and current attachment. A bounded summary stays explicitly
+truncated when its native detail is incomplete.
+
+Trajectory checkpoint summaries and unscoped reused history display the Harness
+“Between turns” gutter label. This is presentation metadata only: original
+Attempt/Step locations, record selections, native request ownership and timing
+remain authoritative. Scoped summaries retain their native evidence but do not
+acquire a Turn label or disappear when the Turn is folded.
+
+Retention was checked against Harness compaction-basic config/region selection
+and rustX context planning/execution. Both use token budgets rather than a fixed
+message count. rustX defaults to a 4096-token recent-content target, preserving
+complete call/result boundaries subject to hard request fit. The integration
+regression verifies a nonzero recent target against both actual provider input
+and the reconstructed frozen request: derived summary followed by the exact
+original recent message. The zero-retention browser maintenance fixture does
+not establish default retention behavior. No retention policy is changed by
+this presentation repair.
+
+
+The explicit Return to latest intent now survives delayed native history backfill,
+rather than expiring after one animation frame. Reader scrolling, Turn navigation
+and explicit older-history reads retire that intent. This keeps compaction
+settlement and subsequent replies visible while preserving detached reading.
+
+Large native Tool inputs retain the existing Harness ToolCard disclosure and
+DiffBlock presentation. Expansion reads deferred original arguments through the
+native occurrence's one-item Tool page and 64 KiB content windows, without changing
+execution state. Accepted canonical calls whose execution descriptor exceeded the
+inline budget read their native descriptor in place; only an actual streaming
+proposal uses assembling copy. Optional display IDs do not replace the native
+block occurrence. Unknown/unavailable sources remain explicit, with late reads
+fenced by the original Conversation/attachment or frozen history cut.

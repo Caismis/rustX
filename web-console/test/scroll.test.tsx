@@ -603,3 +603,24 @@ it('locating a prompt selects its turn while the owned response is still below t
   expect(v.active).toHaveBeenLastCalledWith('turn:last');
   v.scroll(499); expect(v.active).toHaveBeenLastCalledWith('turn:first');
 });
+
+
+it('Return to latest survives delayed history backfill after its first frame, until the reader navigates', () => {
+  const v = coordinatedViewport();
+  v.scroll(210);
+  fireEvent.click(v.ui.getByRole('button', { name: 'Return to latest' }));
+  v.flush();
+  v.positions.older = 0;
+  for (const key of ['a', 'b', 'turn:target']) v.positions[key] += 200;
+  v.grow(200); v.replace(['older', 'a', 'b', 'turn:target']); v.flush();
+  expect(v.top()).toBe(1000);
+  v.grow(100); v.flush(); expect(v.top()).toBe(1100);
+  expect(v.ui.queryByRole('button', { name: 'Return to latest' })).toBeNull();
+  // An explicit history read owns the reading position even for short history.
+  v.owner().beginNavigation();
+  v.positions.oldest = -200;
+  v.grow(200); v.replace(['oldest', 'older', 'a', 'b', 'turn:target']); v.flush();
+  const reading = v.top();
+  v.grow(100); v.flush(); expect(v.top()).toBe(reading);
+  expect(v.ui.getByRole('button', { name: 'Return to latest' })).toBeTruthy();
+});

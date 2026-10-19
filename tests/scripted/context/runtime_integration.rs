@@ -687,6 +687,31 @@ async fn proactive_compaction_accounts_for_frozen_extension_system_sections() {
             .effective_system_prompt
             .contains(&extension_guidance)
     );
+    // Inspect the actual provider input, not just the hot conversation's ids:
+    // the retired prefix is replaced, while the recent message keeps its exact
+    // original body and canonical identity after the summary.
+    assert_eq!(requests[0].messages.len(), 2);
+    let ModelInputMessage::Derived(summary) = &requests[0].messages[0] else {
+        panic!("the compacted prefix must be a derived summary");
+    };
+    assert!(
+        summary
+            .transformations
+            .contains(&rustx::model::projected::SemanticTransformation::Summary)
+    );
+    assert_eq!(
+        requests[0].messages[1].as_canonical(),
+        Some(&user("recent", "recent history")),
+        "nonzero recent-token retention preserves the original message verbatim"
+    );
+    let history = rustx::runtime::RequestHistory::new(tool_runtime.durable_store());
+    let frozen = common::request_snapshots(&history);
+    assert_eq!(frozen.len(), 1);
+    let reconstructed = history.reconstruct(&frozen[0].identity).unwrap();
+    assert_eq!(
+        reconstructed.messages, requests[0].messages,
+        "the frozen request inspected by Trace preserves the same summary and original recent suffix"
+    );
 }
 
 /// A long history compacts proactively before the next model request: the

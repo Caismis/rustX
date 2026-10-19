@@ -13,7 +13,6 @@ import { deriveSessionProductState, type SessionRecovery } from '../../bindings/
 import { SessionStatus } from '../SessionStatus';
 import { ConversationComposer } from '../new-conversation/ConversationComposer';
 import { ConversationDocks, ConversationTotals } from './ConversationLive';
-import { ContextSeat } from './ContextSeat';
 import { Interactions } from './Interactions';
 import type { CommandId } from '../commands/registry';
 import type { ComposerDraft } from '../composer/draft';
@@ -47,7 +46,7 @@ export function ConversationSeat({ client, host, authority, associations, sessio
   return <ComposerSeat>
     <div hidden={view?.observationState === 'following' && !!view.snapshot?.pending_interactions?.length}>
       <ConversationComposer draftOwner={draftOwner} client={client} host={host} authority={authority} associations={associations} initialWorkspace={initialWorkspace} workspacePicked={workspacePicked} binding={binding} activeView={view} current={current} consumed={consumed} preparePublication={preparePublication}
-        context={view && <><ContextSeat client={client} sessionId={view.id}/><ConversationDocks key={view.id} client={client} sessionId={view.id} disabled={disabled}/></>}
+        context={view && <ConversationDocks key={view.id} client={client} sessionId={view.id} disabled={disabled}/>}
         active={view ? {
           initialContent: restored?.conversation === (view.nodeConversationId ?? view.target?.conversation_id ?? view.snapshot?.conversation_id) ? restored?.content : undefined,
           submissionTarget: view.target, submitDisabled: false, disabled, busy: sending === owner, active: activeAttempt(view.snapshot),

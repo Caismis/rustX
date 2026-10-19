@@ -46,7 +46,7 @@ const withStatusHistory = (base = snapshot()): RuntimeClientSnapshot => {
 const withTodoHistory = (base = snapshot()): RuntimeClientSnapshot => {
   const call = { role: 'assistant' as const, id: 'history-call', content: [{ type: 'tool_call' as const, id: 'call-todo', tool_id: 'tool-todo', name: 'todo', arguments: { action: 'create', subject: 'Historical task' } }] };
   const result = { role: 'tool' as const, occurrence: { assistant_message_id: 'history-call', block_index: 0 }, id: 'history-result', tool_call_id: 'call-todo', tool_id: 'tool-todo', result: { status: { type: 'success' as const }, duration_ms: '1' } };
-  return { ...base, transcript: { entries: [call, result].map((message, index) => ({ cursor: String(index + 1), item: { type: 'message' as const, message } })) } };
+  return { ...base, transcript: { entries: [call, result].map((message, index) => ({ cursor: String(index + 1), item: { type: 'message' as const, message }, tool_calls: message.role === 'assistant' ? [{ message_id: call.id, occurrence: { locator: { type: 'by_message_id' as const, message_id: call.id }, block_index: 0 }, block_index: 0, call_id: 'call-todo', tool_id: 'tool-todo', name: 'todo', assembly_complete: true, committed_result_deferred: false, committed_result: result.result, state: { type: 'assembled' as const, arguments: JSON.stringify(call.content[0].arguments) } }] : [] })) } };
 };
 
 let server: Server;
@@ -182,7 +182,7 @@ describe('Todo dock binds only the composed native Todo projection', () => {
   it('follows native projection changes and never reconstructs from historical todo Tool facts', async () => {
     await mount(withTodoHistory(snapshot()));
     // History is visible as execution fact, yet no Todo extension means no current dock.
-    expect(screen.getByText('Assembling todo…')).toBeTruthy();
+    expect(document.querySelector('[data-tool-call-id="call-todo"]')).not.toBeNull();
     expect(region('To-dos')).toBeNull();
     await update(withTodoHistory(withTodos([])));
     expect(region('To-dos')).toBeNull();
@@ -211,7 +211,7 @@ describe('Todo dock binds only the composed native Todo projection', () => {
     for (const key of ['message:a1', 'message:u2']) {
       expect(within(document.querySelector(`[data-chat-anchor-key="${key}"]`) as HTMLElement).queryByRole('note')).toBeNull();
     }
-    expect(screen.getByText('Assembling todo…')).toBeTruthy();
+    expect(document.querySelector('[data-tool-call-id="call-todo"]')).not.toBeNull();
     // The historical annotation still carries the historical Todo section, and no
     // current Todo selector ever reads an Agent Status section.
     fireEvent.click(within(notes[0]).getByRole('button', { expanded: false }));

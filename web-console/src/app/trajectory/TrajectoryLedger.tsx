@@ -21,7 +21,10 @@ export function TrajectoryLedger({ ref, rows, first, activeKey, focusKey, onFocu
   const tx = useTranslation();
   const targets = useMemo(() => ledgerFocusTargets(rows), [rows]);
   // As in Harness, only the Turn that owns the current selection draws its rail.
-  const activeTurn = useMemo(() => activeKey === undefined ? undefined : rows.find(row => rowOwnsKey(row, activeKey))?.turn?.ownerKey, [rows, activeKey]);
+  const activeTurn = useMemo(() => {
+    const row = activeKey === undefined ? undefined : rows.find(row => rowOwnsKey(row, activeKey));
+    return row?.betweenTurns ? undefined : row?.turn?.ownerKey;
+  }, [rows, activeKey]);
   const viewport = useRef<HTMLDivElement>(null);
   const followsTail = useRef(true);
   const prepend = useRef<{ first?: string; key: string; offset: number } | null>(null);

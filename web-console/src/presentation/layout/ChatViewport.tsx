@@ -35,6 +35,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
   private retireGesture?: () => void;
   private retireNavigation = () => {
     const retire = this.retireGesture; this.retireGesture = undefined;
+    this.explicitLatest = false;
     this.intent++; this.navigation = undefined; this.landed = undefined; retire?.();
   };
   private navigation?: { intent: number; anchor: string; current: () => boolean };
@@ -98,7 +99,6 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
     if (Math.abs(el.scrollTop - desired) > 0.5) el.scrollTop = desired;
     this.writtenTop = el.scrollTop;
     this.reading = this.following ? undefined : this.position();
-    this.explicitLatest = false;
     this.publishActive();
   };
   private publishActive = () => {
@@ -148,12 +148,12 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
   };
   /** Explicit action changes intent; positioning still belongs to the frame. */
   returnToBottom = () => {
-    this.props.onLatest?.();
     this.writtenTop = this.scroller()?.scrollTop ?? this.writtenTop;
     this.retireNavigation();
     this.explicitLatest = true;
     this.following = true; this.reading = undefined;
     this.setState({ detached: false }); this.markLayoutDirty();
+    this.props.onLatest?.();
   };
   beginNavigation = (retired?: () => void) => {
     this.retireNavigation();

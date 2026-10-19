@@ -131,7 +131,7 @@
   width: calc(16px + var(--dsh-content-font-delta, 0px));
   height: calc(16px + var(--dsh-content-font-delta, 0px));
   margin-right: 6px;
-  color: var(--dsw-alias-label-secondary);
+  color: inherit;
 }
 
 /* Same glyph-scaling rule as DisclosureRow's leading: the CSS edge overrides
@@ -198,10 +198,7 @@
   line-height: calc(24px + var(--dsh-content-font-delta, 0px));
 }
 
-.compactionDescription {
-  margin: 0 0 12px;
-  color: var(--dsw-alias-label-tertiary);
-}
+.compactionSummary[data-error] { color: var(--dsw-alias-state-error-primary); }
 
 .retryRow {
   color: var(--dsw-alias-label-tertiary);

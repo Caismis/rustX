@@ -8,6 +8,7 @@ import { Artifact } from '../components/Artifact';
 import { UserMessage, AssistantMessage } from '../../presentation/agent/Message';
 import { Reasoning } from '../../presentation/agent/Reasoning';
 import { Tool } from './Tool';
+import { CanonicalTool } from './CanonicalTool';
 import type { ForegroundToolExecution } from '../../../../protocol/app-server/v50';
 import type { ReactNode } from 'react';
 import { messageContentBinding, useContentSource } from './ObservationSource';
@@ -28,8 +29,8 @@ export function Content({ blocks, messageId, markdown = false, streaming = false
     if (block.type === 'tool_call') {
       const indexInMessage='block_index' in block?block.block_index:index;
       const id = 'block_index' in block ? block.call_id : block.id;
-      const tool = tools.find(tool => tool.block_index === indexInMessage && (id==null||tool.call_id===id) && (block.tool_id==null||tool.tool_id===block.tool_id));
-      return tool ? <Tool key={indexInMessage} tool={tool}/> : <small key={indexInMessage}>{tx('agent:message.assembling')}{' '}{block.name}…</small>;
+      const tool = tools.find(tool => tool.block_index === indexInMessage && (id==null||tool.call_id==null||tool.call_id===id) && (block.tool_id==null||tool.tool_id==null||tool.tool_id===block.tool_id));
+      return tool ? <Tool key={indexInMessage} tool={tool}/> : messageId && !streaming ? <CanonicalTool key={indexInMessage} messageId={messageId} blockIndex={indexInMessage} name={block.name}/> : <small key={indexInMessage}>{tx('agent:message.assembling')}{' '}{block.name}…</small>;
     }
     return null;
   });
