@@ -1,7 +1,6 @@
 import { message } from '../../locale/translation';
 import { useTranslation, useNotice } from '../../locale/react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Popover } from '@base-ui/react/popover';
 import { sourceObservation } from '../../../../protocol/app-server/source-observation';
 import type { SourceFieldPage, CheckpointPage, ModelCatalogView, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v50';
 import { AppServerClient, isOutcomeUncertain, sameTarget, type SessionView } from '../../client/app-server';
@@ -10,7 +9,6 @@ import { ModelSelect } from '../../presentation/agent/ModelSelect';
 import { Toast } from '../../presentation/primitives/Toast';
 import { IconWarningOutline16 } from '../../presentation/primitives/icons';
 import { Button } from '../../presentation/primitives/Button';
-import { activeAttempt } from '../../bindings/projection';
 import { catalogAdmits, catalogChoices, intentProfile, nextModelSelection, selectionChanges } from '../../bindings/model-catalog';
 import type { ModelSelectionIntent } from '../../presentation/agent/ModelSelect';
 import { selectSessionModel } from '../model-preference';
@@ -83,8 +81,6 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
  };
  const model = view?.snapshot?.model;
  const modelStatus = view?.snapshot?.model_status;
- const frozen = activeAttempt(view?.snapshot) ? view?.snapshot?.attempt?.model : undefined;
- const sessionProfile = model?.configured.profile ?? (model?.unavailable == null ? model?.effective?.profile : undefined);
  const configured = (queued?.phase !== 'failed' ? queued?.config : undefined) ?? (model?.configured ?? (view?.settings ? view.settings.model ?? (coldSource?.session_models?.kind === 'available' ? coldSource.session_models.default_model : undefined) : undefined));
  const source = draft?.source ?? coldSource;
  const sourceChoices = draft?.source?.session_models?.kind === 'available' ? draft.source.session_models.catalog : coldCatalog?.catalog;
@@ -138,15 +134,6 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
    choose={intent => { void choose(intent); }}/>
    {!draft && modelStatus?.body_deferred && <p role="status">{tx('common:activity.model-details-deferred')}</p>}
    {!draft && modelStatus?.available === false && <p role="status">{tx('common:activity.model-unavailable')}</p>}
-   {frozen && <Popover.Root key={view?.snapshot?.attempt?.attempt_id}>
-     <Popover.Trigger className="running-model-trigger" data-running-model>{tx('agent:agent-controls.running')}{' '}{frozen.primary.model}{frozen.primary.profile ? ` / ${frozen.primary.profile}` : ''}</Popover.Trigger>
-     <Popover.Portal><Popover.Positioner side="top" align="end" sideOffset={36} collisionPadding={12} className="running-model-positioner">
-       <Popover.Popup className="running-model-details" data-running-model-details aria-label={tx('agent:agent-controls.running')}>
-         {model && <p data-session-model>{tx('agent:agent-controls.session-selection')}{' '}{model.configured.model}{sessionProfile ? ` / ${sessionProfile}` : ''}</p>}
-         <Popover.Description>{tx('agent:agent-controls.frozen-invocation')}</Popover.Description><pre>{JSON.stringify(frozen, null, 2)}</pre>
-       </Popover.Popup>
-     </Popover.Positioner></Popover.Portal>
-   </Popover.Root>}
    {!draft && !busy && (blocked && error || queued?.phase === 'failed') && <Button size="sm" disabled={!attached} onClick={() => load(true)}>{tx('agent:agent-controls.reread-models')}</Button>}
  </div>;
  return <>{children ? children(toolbar, picker) : toolbar}{draftError && <p role="alert">{draftError}</p>}{selectionError && <Toast key={toastSequence} text={selectionError} icon={<IconWarningOutline16 />} anchor={root.current?.closest<HTMLElement>('[data-composer-card]') ?? null} onDone={() => setSelectionError('')}/>}</>;

@@ -1,8 +1,5 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
-  "navigation.opening-history": "Opening history…",
-  "navigation.opening-conversation": "Opening conversation…",
-  "navigation.stay": "Stay here",
   "history.title": "Conversation history",
   "history.read-only": "Read-only history · execution remains in the original conversation",
   "history.return": "Return to conversation",
@@ -182,9 +179,6 @@ export const en = {
   "agent-composer.describe-what-you-want-to-do": "Describe what you want to do…",
   "agent-composer.give-this-session-a-task": "Give this Session a task…",
   "agent-composer.attach-files": "Attach files",
-  "agent-controls.running": "Running:",
-  "agent-controls.session-selection": "Session selection:",
-  "agent-controls.frozen-invocation": "Frozen at admission. Session selection applies to future independent attempts. This attempt keeps these model, profile, request parameters, output limits and summary settings.",
   "agent-controls.reread-models": "Reread models",
   "agent-status.agent-status": "Agent Status",
   "agent-transcript.canonical-conversation": "Canonical conversation",
@@ -397,9 +391,6 @@ export const en = {
 } as const;
 export type AgentKey = keyof typeof en;
 export const zh = {
-  "navigation.opening-history": "正在打开历史…",
-  "navigation.opening-conversation": "正在打开对话…",
-  "navigation.stay": "留在此处",
   "history.title": "对话历史",
   "history.read-only": "只读历史 · 执行仍在原对话中",
   "history.return": "返回对话",
@@ -579,9 +570,6 @@ export const zh = {
   "agent-composer.describe-what-you-want-to-do": "描述你想做的事…",
   "agent-composer.give-this-session-a-task": "给此会话一个任务…",
   "agent-composer.attach-files": "附加文件",
-  "agent-controls.running": "运行中：",
-  "agent-controls.session-selection": "会话选择：",
-  "agent-controls.frozen-invocation": "准入时冻结。会话选择适用于后续独立执行；本次执行保留此处的模型、配置档、请求参数、输出上限和摘要设置。",
   "agent-controls.reread-models": "重新读取模型",
   "agent-status.agent-status": "智能体状态",
   "agent-transcript.canonical-conversation": "规范对话",

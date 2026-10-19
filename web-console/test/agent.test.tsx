@@ -69,9 +69,8 @@ it('selects a profile during execution without changing its frozen profile, para
  initial.model!.effective!.maxOutputTokens = 777;
  const frozen = { primary: structuredClone(initial.model!.effective!), summary: { ...structuredClone(initial.model!.effective!), mode: 'explicit' as const, model: 'summary/original' } };
  initial.attempt = { ...running().attempt!, model: frozen };
- await server.attached('A'); const ui = render(<Control/>); await openModels();
+ await server.attached('A'); render(<Control/>); await openModels();
  expect((screen.getByRole('button', { name: 'Model and profile' }) as HTMLButtonElement).disabled).toBe(false);
- expect(ui.container.querySelector('[data-running-model]')?.textContent).toBe('Running: exact/model / deliberate');
  fireEvent.click(screen.getByRole('menuitem', { name: 'Profile' }));
  server.held.add('session/setModel'); server.held.add('session/checkpoint');
  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'brief' })));
@@ -82,30 +81,12 @@ it('selects a profile during execution without changing its frozen profile, para
  const reread = await server.waitFor('session/checkpoint', 2);
  await act(async () => server.reply(reread));
  expect(screen.getByRole('button', { name: 'Model and profile' }).textContent).toContain('brief');
- expect(ui.container.querySelector('[data-running-model]')?.textContent).toBe('Running: exact/model / deliberate');
- await act(async () => fireEvent.click(ui.container.querySelector('[data-running-model]')!));
- expect(document.querySelector('[data-session-model]')?.textContent).toBe('Session selection: exact/model / brief');
- expect(JSON.parse(document.querySelector('[data-running-model-details] pre')!.textContent!)).toEqual(frozen);
  expect(server.client.getSnapshot().views.A.snapshot?.attempt?.model).toEqual(frozen);
  expect(count('session/setModel')).toBe(1);
  server.held.delete('session/checkpoint');
  await act(async () => { await server.client.release('A'); await server.client.attach('A'); });
  expect(screen.getByRole('button', { name: 'Model and profile' }).textContent).toContain('brief');
- // The new attachment owns a fresh disclosure; its frozen invocation is unchanged.
- await act(async () => fireEvent.click(ui.container.querySelector('[data-running-model]')!));
- expect(JSON.parse(document.querySelector('[data-running-model-details] pre')!.textContent!)).toEqual(frozen);
-});
-it('shows frozen effective settings even when the selected model and profile names are unchanged', async () => {
- modelFixture();
- const initial = server.snapshots.get('A')!;
- const frozen = { primary: { ...structuredClone(initial.model!.effective!), requestParams: { effort: 'original' }, maxOutputTokens: 777 }, summary: { mode: 'session' as const } };
- initial.attempt = { ...running().attempt!, model: frozen };
- initial.model!.effective!.requestParams = { effort: 'new' };
- await server.attached('A'); const ui = render(<Control/>);
- expect(ui.container.querySelector('[data-running-model]')?.textContent).toBe('Running: exact/model / deliberate');
- await act(async () => fireEvent.click(ui.container.querySelector('[data-running-model]')!));
- expect(JSON.parse(document.querySelector('[data-running-model-details] pre')!.textContent!)).toEqual(frozen);
- expect(document.querySelector('[data-running-model-details]')?.textContent).toContain('future independent attempts');
+ expect(server.client.getSnapshot().views.A.snapshot?.attempt?.model).toEqual(frozen);
 });
 it('does not dim the model trigger during a held catalog read', async () => {
  modelFixture(); await server.attached('A'); server.held.add('session/models'); render(<Control/>);

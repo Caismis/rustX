@@ -774,7 +774,6 @@ test('View Source installs cancellation in the click stack before the next user 
   await page.getByRole('button', { name: 'View source', exact: true }).click();
   await page.evaluate(() => window.sessionFixture.wireBarrier());
   await expect(page.locator('[data-shell-route]')).toHaveAttribute('data-shell-route', 'session');
-  await expect(page.getByText('Opening history…', { exact: true })).toHaveCount(0);
   await expect(page.locator('[data-history-session]')).toHaveCount(0);
   await expect(page.getByLabel('Session title')).toHaveText('Session A');
   const delta = (await page.evaluate(() => window.sessionFixture.requests())).slice(requests.length);
@@ -784,7 +783,6 @@ test('View Source installs cancellation in the click stack before the next user 
   expect(reads.length).toBeLessThanOrEqual(1); expect(nativeMutations(delta)).toEqual([]);
   const port = page.locator('[data-conversation-scroll]'), position = await port.evaluate(element => element.scrollTop);
   if (reads.length) await page.evaluate(() => window.sessionFixture.settleHistory(true));
-  await expect(page.getByRole('button', { name: 'Stay here', exact: true })).toHaveCount(0);
   await expect(page.locator('[data-history-session]')).toHaveCount(0);
   expect(await port.evaluate(element => element.scrollTop)).toBe(position);
   await expect(page.getByRole('alert')).toHaveCount(0); expect(errors).toEqual([]);

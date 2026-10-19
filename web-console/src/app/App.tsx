@@ -298,7 +298,6 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
     <DetachedFirstSubmissions client={client} binding={String(draftBinding)} active={!!selected}/>
     {(previews.problem || previews.downloadError) && <div className="notice error" role="alert">{previews.problem ? tx(`artifacts:workspace.limit-${previews.problem}`) : previews.downloadError}<Button size="sm" onClick={() => previewOwner.dismissProblem()}>{tx('common:app.dismiss-notice')}</Button></div>}
     {(error || routeState.context.error) && <div className="notice error" role="alert">{error || routeState.context.error}<Button size="sm" onClick={() => { setError(''); shell.send({ type: 'DISMISS.ERROR' }); }}>{tx('common:app.dismiss-notice')}</Button></div>}
-    {routeState.matches('preparing') && <div className="notice" role="status"><span>{tx(routeState.context.pending?.destination.kind === 'history' ? 'agent:navigation.opening-history' : 'agent:navigation.opening-conversation')}</span><Button size="sm" onClick={() => shell.send({ type: 'CANCEL' })}>{tx('agent:navigation.stay')}</Button></div>}
     {/* Native automatic configuration repairs: nonblocking, never a modal,
         and silent for a healthy source. View details opens the exact owner,
         which acknowledges the receipt once it has presented its details. */}
