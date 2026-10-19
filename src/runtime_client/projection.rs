@@ -5849,6 +5849,15 @@ impl RuntimeClientProjection {
                 .any(|event| matches!(event, RuntimeClientEvent::TraceChanged))
         {
             accumulate_finite_facts(&mut publication, RuntimeClientEvent::TraceChanged);
+            // Invalidation belongs to this same native cut, before its terminal
+            // settlement. Consumers may stop after that terminal fact.
+            if let Some(terminal) = publication
+                .0
+                .iter()
+                .position(|event| matches!(event, RuntimeClientEvent::AttemptSettled { .. }))
+            {
+                publication.0[terminal..].rotate_right(1);
+            }
         }
         let (events, _, replacement) = publication;
         if events.is_empty() && !replacement {

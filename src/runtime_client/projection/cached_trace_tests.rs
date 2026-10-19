@@ -2,6 +2,39 @@
 use crate::durable::ConversationStore;
 use crate::runtime_client::RuntimeClientError;
 
+#[test]
+fn native_terminal_keeps_trace_invalidation_before_its_final_settlement() {
+    let (mut projection, store) = initialized_source_projection();
+    let started = append_source_attempt_start(&store, "terminal-trace-start");
+    publish_source_fact(&mut projection, |projection| {
+        projection.apply_native_batch(started.observation.as_deref().unwrap());
+    });
+    let before = projection.checkpoint_candidate().unwrap();
+    let terminal = store.append_event(source_tool_event(
+        &store,
+        RuntimeEvent::AttemptCompleted {
+            attempt_id: attempt(),
+            finish_reason: ModelFinishReason::Stop,
+        },
+        "terminal-trace-completed",
+    )).unwrap();
+    crate::runtime_client::trace::take_page_read_work();
+    publish_source_fact(&mut projection, |projection| {
+        projection.apply_native_batch(terminal.observation.as_deref().unwrap());
+    });
+    let after = projection.checkpoint_candidate().unwrap();
+    assert_eq!(after.cursor.get(), before.cursor.get() + 1);
+    assert_eq!(after.read_cut.through, terminal.sequence);
+    assert_eq!(after.snapshot.trace, before.snapshot.trace);
+    assert_eq!(crate::runtime_client::trace::take_page_read_work(), 0);
+    let publications = collect(&mut projection, before.cursor);
+    assert_eq!(publications.len(), 1, "same native publication and cursor");
+    let facts = publications[0].event.facts();
+    assert_eq!(facts.iter().filter(|fact| matches!(fact, RuntimeClientEvent::TraceChanged)).count(), 1);
+    assert_eq!(facts.iter().filter(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. })).count(), 1);
+    assert!(matches!(facts.last(), Some(RuntimeClientEvent::AttemptSettled { .. })));
+}
+
 // Local takeover probe, independently reconstructed from published 672eccb8.
 // This proves the producer boundary only; the real native-to-browser workflow
 // remains required before accepting a correction.
