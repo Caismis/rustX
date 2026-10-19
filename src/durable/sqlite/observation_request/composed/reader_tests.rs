@@ -79,7 +79,8 @@ fn t08_t15_t20_scalar_capture_scopes_span_io_without_changing_any_original_field
     super::super::create_schema(&connection).unwrap();
     let (fragment, _, _) = scalar(&connection, &source, None).unwrap();
     assert_eq!(INDEX_OPENS.with(std::cell::Cell::get), 3);
-    assert_eq!(take_file_work(), (0, 4));
+    // Geometry uses the index without opening a byte carrier.
+    assert_eq!(take_file_work(), (0, 3));
     assert!(!expected.is_empty());
     for (path, start, end, children, preview) in expected {
         let actual = fact(&connection, &fragment, &path).unwrap().unwrap();

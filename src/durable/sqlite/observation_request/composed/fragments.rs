@@ -290,7 +290,7 @@ pub(super) fn scalar(
     )>,
 ) -> Result<(Fragment, u64, u64), ConversationStoreError> {
     let (start, end, _) = source
-        .original_field_geometry(&["messages".into()])
+        .original_root_field_geometry("messages")
         .map_err(|error| storage(error.to_string()))?;
     let length = source
         .read(&[], 0, 1)
@@ -301,7 +301,7 @@ pub(super) fn scalar(
         .map_err(|error| storage(error.to_string()))?;
     let spool = if let Some((scope, session)) = capture {
         let (tools_start, tools_end, _) = source
-            .original_field_geometry(&["tools".into()])
+            .original_root_field_geometry("tools")
             .map_err(|error| storage(error.to_string()))?;
         if tools_end - tools_start <= 65_536 {
             FactSpool::capturing(
