@@ -167,6 +167,13 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await expect(page.getByText('A is running. A finished.', { exact: true })).toBeVisible();
     await expect(page.getByLabel('Session location', { exact: true })).toHaveCount(0);
     expect(readFileSync(fixture.settings, 'utf8')).toContain('second-model');
+    // The raw log retains only 300 entries / 1 MiB. Observe a fresh real
+    // attachment rather than requiring an earlier frame to survive all audits.
+    await closeView(idA);
+    await openSession(idA);
+    await expect.poll(async () => JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText())).toMatchObject({
+      SessionId: idA, attachment: 'attached', runtime_incarnation: incarnationA,
+    });
     await page.getByLabel('Method filter').fill('session/attach');
     await expect(page.locator('.protocol-log')).toContainText('session/attach');
     await page.getByRole('button', { name: 'Pause log' }).click(); await expect(page.getByRole('button', { name: 'Resume log' })).toBeVisible();
