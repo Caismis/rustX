@@ -1,4 +1,4 @@
-import type { CanonicalContentLocator, ContentRef, ContentSource } from './v50.ts';
+import type { CanonicalContentLocator, ContentRef, ContentSource } from './v51.ts';
 
 /** Closed native identities are independent of JSON object property order. */
 export function canonicalLocatorKey(locator: CanonicalContentLocator): string {

@@ -2,7 +2,7 @@ import {act,cleanup,fireEvent,render} from '@testing-library/react';
 import {afterEach,expect,it,vi} from 'vitest';
 import {CollectionPages} from '../src/app/agent/CollectionPages';
 import {checkpoint,Server,snapshot} from './fixture';
-import type {CheckpointPage} from '../../protocol/app-server/v50';
+import type {CheckpointPage} from '../../protocol/app-server/v51';
 let server:Server;
 afterEach(()=>{cleanup();server?.client.disconnect();});
 it('T15 native collection pages replace the loaded workset and never advance Applied',async()=>{

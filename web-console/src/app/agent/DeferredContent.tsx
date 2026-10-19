@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { AttachmentTarget, ContentBinding, ContentRef, ContentChunk } from '../../../../protocol/app-server/v50';
+import type { AttachmentTarget, ContentBinding, ContentRef, ContentChunk } from '../../../../protocol/app-server/v51';
 import { ContentCache } from '../../../../protocol/app-server/content-cache';
 import { contentRefKey } from '../../../../protocol/app-server/content-identity';
 import type { AppServerClient } from '../../client/app-server';

@@ -4,7 +4,7 @@ import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { TurnUsage, ConversationStats } from '../src/app/agent/UsageStats';
 import { localeController } from '../src/locale/controller';
 import { prependTranscript, refreshTranscript, replaceTranscript } from '../src/client/transcript';
-import type { CompletedResponseView, RuntimeClientSnapshot } from '../../protocol/app-server/v50';
+import type { CompletedResponseView, RuntimeClientSnapshot } from '../../protocol/app-server/v51';
 import { snapshot } from './fixture';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); act(() => localeController.setLocale('en')); });

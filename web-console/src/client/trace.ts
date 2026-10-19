@@ -1,7 +1,7 @@
 export {traceInspectionHead} from '../../../protocol/app-server/trace-inspection';
 import {traceInspectionHead} from '../../../protocol/app-server/trace-inspection';
 import type {TraceValueSelector} from '../../../protocol/app-server/trace-field';
-import type { TraceDetail, TracePage, TraceRecord, TraceLifecycle,CheckpointReadCut,CheckpointPage,CheckpointValueChunk,ContentRef,ContentChunk, Request1 } from '../../../protocol/app-server/v50';
+import type { TraceDetail, TracePage, TraceRecord, TraceLifecycle,CheckpointReadCut,CheckpointPage,CheckpointValueChunk,ContentRef,ContentChunk, Request1 } from '../../../protocol/app-server/v51';
 
 /** Most summary records the browser retains for one Trace interval. */
 export const TRACE_LIMIT = 512;
@@ -31,8 +31,8 @@ function detailWeight(entry: TraceDetailEntry) {
  */
 export interface TraceDetailEntry {
   readonly epoch: number;
-  readonly content?:import('../../../protocol/app-server/v50').ContentBinding[];
-  readonly readContent?:(ref:import('../../../protocol/app-server/v50').ContentRef,offset:number,current:()=>boolean)=>Promise<import('../../../protocol/app-server/v50').ContentChunk>;
+  readonly content?:import('../../../protocol/app-server/v51').ContentBinding[];
+  readonly readContent?:(ref:import('../../../protocol/app-server/v51').ContentRef,offset:number,current:()=>boolean)=>Promise<import('../../../protocol/app-server/v51').ContentChunk>;
   /** A positive finite descriptor is not a complete TraceDetail. */
   readonly page?: CheckpointPage;
   readonly reader?: TraceFieldReader;

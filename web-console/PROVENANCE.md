@@ -1795,7 +1795,7 @@ and reproduced in `THIRD-PARTY-NOTICES.txt`. No runtime dependency was added.
 
 The main branch owns the bounded v37 navigation, outline demand scheduler and
 command menu presentation. This integration retains those owners and upgrades
-mandatory generated imports to the final v50 contract for the native Message window selector
+mandatory generated imports to the final v51 contract for the native Message window selector
 and the upstream committed-delivery contract.
 Fork source navigation performs one indexed native read and validates message
 identity before anchoring. Existing source references and immutable upstream
@@ -2082,7 +2082,7 @@ file/artifact access resolves the owned child conversation and workspace.
 
 WebUI reuses AgentComposer and AttachmentIntake, scopes both conversation and
 trajectory preview resources to the Agent, and retires native observation reads
-when navigation changes. No child model settings are introduced. App Server v50,
+when navigation changes. No child model settings are introduced. App Server v51,
 Runtime Client v68, child IPC v30 and Product Host file-read v3 are synchronized.
 The Browser plugin is unavailable; the repository's pinned Playwright browser
 validates real native child processes and deterministic provider streams.
@@ -2217,7 +2217,7 @@ icons remain stable on failure, summaries use native failure/stopped tones and
 lifecycle announcements are visually hidden. Keyboard expansion and running copy
 visibility follow the upstream flow.
 
-The Inspect pill is pure presentation. App Server v50 / Runtime Client v71 native
+The Inspect pill is pure presentation. App Server v51 / Runtime Client v71 native
 readers locate the canonical occurrence across the complete indexed Journal,
 including historical and exited child stores. RustX supplies bounded continuous
 windows, exact record IDs and lifecycle repairs, replacing Harness runtime/store
@@ -2250,7 +2250,7 @@ TanStack/XState unit bridge); invalid, non-object or duplicate-key text stays a
 local buffer that blocks submission, and formatting-only edits begin no draft.
 Native Rust remains the configuration authority. No upstream source is added.
 Inventory hashes and dependency closures describe this final source, including
-the v50 import renames.
+the v51 import renames.
 
 The #456 selection review separates configured from effective Profiles in the
 Harness-derived `ModelSelect`: its Profile submenu gains a "Model default
@@ -2264,7 +2264,7 @@ configured Profile is pinned, so the pin can be cleared.
 
 ### PR #461: integrating the current main contracts
 
-The main integration keeps App Server v50 and Runtime Client v68, which remain
+The main integration keeps App Server v51 and Runtime Client v68, which remain
 newer than main's v39/v61, and SQLite 51's checkpoint/Model Profile contract.
 Subagent IPC becomes v31 because main and this branch had different v30
 vocabularies; either old peer is rejected. The current generated protocol and
@@ -2356,10 +2356,10 @@ The integration keeps PR #461's native child conversation, Trace, attachment
 and file-delivery presentation. Agent workspace values now carry the frozen
 Session path, and retired worktree disposal and Candidate controls are absent.
 The historical entries above retain the versions reviewed at those snapshots.
-The combined current contracts are App Server v50, Runtime Client v71, SQLite 61,
+The combined current contracts are App Server v51, Runtime Client v71, SQLite 61,
 Session catalog16, Runtime Event1, Child IPC33 and Product Host file-read4; see the [format inventory](../docs/agent-workflow-shared-workspace.md#format-and-version-inventory)
 for owners and rejection behavior. Imports and generated client contracts use
-App Server v50. The source inventory
+App Server v51. The source inventory
 records the resulting local hashes and actual dependency closure; upstream
 Harness pins, licenses and source attribution remain unchanged.
 
@@ -2439,7 +2439,7 @@ Session Lifecycle retains every dispatched Switch transaction. Fresh Host author
 
 Four dark shell references deliberately retained the enabled Stop control in the preceding repair: settings-shell-dark, desktop-expanded-dark, mobile-rail-dark and mobile-expanded-dark. Their reference/actual/diff inspection showed 952 changed pixels per reference confined to Stop, with identical dimensions and surrounding pixels. This refactor retains that control contract. Screenshot comparator, noise, stabilization, timeout and retry policies remain unchanged.
 
-Fork metadata and exact history identity use App Server v50 `session/node`, which reuses the native Session catalog's exact node map lookup. Immutable source identity and inherited transcript placement remain native facts. The matching Runtime Client v71 and SQLite v58 contracts reject prior peers/stores before dependent work. Current generated imports and local provenance hashes are synchronized.
+Fork metadata and exact history identity use App Server v51 `session/node`, which reuses the native Session catalog's exact node map lookup. Immutable source identity and inherited transcript placement remain native facts. The matching Runtime Client v71 and SQLite v58 contracts reject prior peers/stores before dependent work. Current generated imports and local provenance hashes are synchronized.
 
 The intentional `mobile-settings-dark-linux.png` reference change removes the obsolete sidebar backdrop beneath the Settings modal after successful Settings navigation. The reference, actual and diff were inspected: modal content and geometry are identical, and the changed pixels are the surrounding backdrop. The pinned browser generator updates this one changed reference; screenshot thresholds, noise policy and stabilization are unchanged.
 

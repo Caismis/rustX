@@ -12,7 +12,8 @@ Publication suffixes do not dirty these domains. Native projection/cursor public
 remains under the host lock, but blocking Store reads run outside it and install
 only after their revision/frontier fence validates. Attempt settlement ends execution
 independently of downstream durable enrichment. Trace remains a separate read capability.
-Only `trace_changed` triggers a Trace repair; `read_domains_updated` does not. `session/trace.records` requests bounded
+`read_domains_updated.trace: null` preserves pending Trace reads, their cache and
+its original issued cut. `trace_changed` and a full replacement carrying an older Trace cut trigger Trace repair; `read_domains_updated` does not. `session/trace.records` requests bounded
 lifecycle repairs returned as `page.updates`, so older loaded records do not require
 a Session snapshot. `tool_call_assembled.arguments_json` preserves native JSON number
 spelling exactly instead of asking JavaScript to reserialize provider arguments.
@@ -339,8 +340,8 @@ no-overwrite rules, mutable file semantics, fork copies and deletion recovery.
 
 ## WEB-02 review corrections
 
-The mandatory App Server vocabulary is v50 (`rustx.app-server.v50` and generated
-`protocol/app-server/v50.ts` / `v50.schema.json`). v12 and earlier initialization and
+The mandatory App Server vocabulary is v51 (`rustx.app-server.v51` and generated
+`protocol/app-server/v51.ts` / `v51.schema.json`). v12 and earlier initialization and
 WebSocket offers are rejected; there is no compatibility mode. Runtime Client
 retains its independently versioned contract.
 
@@ -437,7 +438,7 @@ exact aggregate generation. Failed requests with evidence remain included.
 Immutable bootstrap provenance preserves response timing and usage through
 Branch/Fork/reopen/deeper lineage without copying source execution records.
 Destination execution totals remain destination-local. Mandatory versions are
-App Server v50, Runtime Client v71, SQLite v61, and Session catalog v16, with no
+App Server v51, Runtime Client v72, SQLite v61, and Session catalog v16, with no
 old protocol artifacts or compatibility readers.
 
 Projection cost is currently O(J + R): indexed 128-event batches over the captured
@@ -498,7 +499,7 @@ the existing transaction coordinator. A confirmation gates elevation. The source
 controls future admission; an already-admitted Attempt remains frozen. Composer
 model intent is different: it never authors the Workspace default model.
 
-App Server v50 / Runtime Client v71 project one `turn_process` owner on exact
+App Server v51 / Runtime Client v72 project one `turn_process` owner on exact
 canonical Assistant and Tool members. Native Journal identities, whole-process
 counts and an immutable control cursor survive unsuccessful settlement and
 bounded paging. Failed/stopped processes stay open; successful final-answer,

@@ -1,6 +1,6 @@
 /** Pure Runtime Client read-model fold. Routing/cursor continuity belongs to
  * the attachment owner. No I/O, providers, React, or execution authority. */
-import type { RuntimeClientSnapshot as Snapshot, RuntimeClientEvent as Event, InFlightBlock, ForegroundToolExecution, ContentRef, ContentBinding, CanonicalContentLocator, RuntimeClientCheckpoint, ProjectionMetadata, RuntimeClientCursor } from './v50.ts';
+import type { RuntimeClientSnapshot as Snapshot, RuntimeClientEvent as Event, InFlightBlock, ForegroundToolExecution, ContentRef, ContentBinding, CanonicalContentLocator, RuntimeClientCheckpoint, ProjectionMetadata, RuntimeClientCursor } from './v51.ts';
 import { canonicalLocatorKey, contentSourceKey, sameContentRef } from './content-identity.ts';
 
 const cuts = new WeakMap<Snapshot, ProjectionMetadata>();
@@ -192,7 +192,7 @@ function foldOrdinaryEvent(state: Snapshot, event: Exclude<Event, {type: 'projec
     ? withAttempt({ in_flight: { ...attempt.in_flight, blocks: update(attempt.in_flight.blocks ?? []) } }) : state;
   switch (event.type) {
     case 'trace_changed': return state; // Separate read domain; cursor still advances.
-    case 'read_domains_updated': return { ...state, transcript: event.transcript, trace: event.trace, todos: event.todos, context: { ...state.context!, occupancy: event.occupancy ?? undefined, projection_head: event.projection_head ?? undefined } };
+    case 'read_domains_updated': return { ...state, transcript: event.transcript, trace: event.trace ?? state.trace, todos: event.todos, context: { ...state.context!, occupancy: event.occupancy ?? undefined, projection_head: event.projection_head ?? undefined } };
     case 'goal_changed': return { ...state, goal: event.view };
     case 'workflows_updated': return { ...state, workflows: event.workflows };
     case 'attempt_started': return { ...state, attempt: { attempt_id: event.attempt_id, attempt_id_source: null, phase: { type: 'running' }, turn: 0, model: event.model, execution_settings: event.execution_settings, last_usage: undefined, in_flight: undefined, foreground: [] } };

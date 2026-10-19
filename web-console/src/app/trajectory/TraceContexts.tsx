@@ -1,5 +1,5 @@
 import {useEffect,useRef,useState} from 'react';
-import type {CheckpointReadCut,TraceContextPresentation,TraceRequestSummary} from '../../../../protocol/app-server/v50';
+import type {CheckpointReadCut,TraceContextPresentation,TraceRequestSummary} from '../../../../protocol/app-server/v51';
 import {canonicalLocatorKey} from '../../../../protocol/app-server/content-identity';
 import type {TraceFieldReader} from '../../client/trace';
 import {TraceFields} from './TraceFields';

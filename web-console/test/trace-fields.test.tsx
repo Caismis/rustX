@@ -1,6 +1,6 @@
 import {act,cleanup,fireEvent,render,waitFor} from '@testing-library/react';
 import {afterEach,expect,it,vi} from 'vitest';
-import type {CheckpointReadCut,CheckpointValueChunk,TraceFieldSource} from '../../protocol/app-server/v50';
+import type {CheckpointReadCut,CheckpointValueChunk,TraceFieldSource} from '../../protocol/app-server/v51';
 import {TraceFields} from '../src/app/trajectory/TraceFields';
 import type {TraceFieldReader} from '../src/client/trace';
 

@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
 import { DeferredContent } from '../src/app/agent/DeferredContent';
-import type { ContentBinding, ContentChunk, ContentRef } from '../../protocol/app-server/v50';
+import type { ContentBinding, ContentChunk, ContentRef } from '../../protocol/app-server/v51';
 
 afterEach(cleanup);
 const reference=(message:string,bytes:number):ContentRef=>({conversation_id:'conversation-A',source:{type:'live_publication_prefix',component:'payload',stream_id:'stream-A',message_id:message,attempt_id:'attempt-A',turn_id:'turn-A',publication_request_id:'request-A',block_index:0},representation:'utf8_text',version:1,content_revision:1,readable_end:bytes});

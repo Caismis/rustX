@@ -6624,6 +6624,16 @@ settlement, cancellation or recovery. Its dedicated Trace cursor and newest
 snapshot window remain separate from canonical messages, transcript paging and
 live observation cursors.
 
+The live read-domain worker enriches bounded Session domains without reading
+the deep Trace page. A Session-only `read_domains_updated` carries a null Trace
+value and preserves the previously issued Trace cut and its Source pins.
+`trace_changed` independently announces Trace work. A replacement carrying an older Trace cut requests a separate repair without cancelling pending Trace readers. Explicit checkpoint and Trace
+reads still materialize their captured published native cut; a cached Trace head
+at an older cut cannot satisfy that current checkpoint. Browser Session updates
+also preserve pending Trace page/detail work unless a supplied Trace head owns
+the new cut. Runtime Client 72 / App Server 51 advance every reader together.
+Native commits, publication cadence, recovery and persistence layouts are unchanged.
+
 See [Session-owned workspace uploads](session-uploads.md) for receipt admission, model paths, fork copies and durable cleanup.
 
 ### Pending inbound mutation and committed claim receipts
@@ -6705,7 +6715,7 @@ facts do not manufacture transcript completion facts.
 The TUI has one disposable child page, fenced by parent attachment epoch and
 child selection/read generation. Reconnect reconstructs from current authority;
 Esc closes presentation without runtime mutation. Child HITL remains routed to
-the existing root interaction owner. See [the protocol](app-server-protocol.md#read-only-native-agent-observation-v50).
+the existing root interaction owner. See [the protocol](app-server-protocol.md#read-only-native-agent-observation-v51).
 
 ## Image Tool and Bash presentation (#412)
 

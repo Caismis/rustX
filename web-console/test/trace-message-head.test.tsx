@@ -1,6 +1,6 @@
 import {act,cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
 import {afterEach,expect,it,vi} from 'vitest';
-import type {CheckpointPage,CheckpointReadCut,TraceInspectionHead,TraceInspectionMessage,TraceRecord,ContentRef,ForegroundToolExecution} from '../../protocol/app-server/v50';
+import type {CheckpointPage,CheckpointReadCut,TraceInspectionHead,TraceInspectionMessage,TraceRecord,ContentRef,ForegroundToolExecution} from '../../protocol/app-server/v51';
 import {TrajectoryInspector,type TrajectoryInspectorProps} from '../src/app/trajectory/TrajectoryInspector';
 import {traceTool} from './trace-fixture';
 import {checkpoint,Server,snapshot} from './fixture';

@@ -10,7 +10,7 @@ import { CommandSession } from '../src/app/commands/native';
 import { WorkspaceAuthority } from '../src/workspaces/authority';
 import { WorkspaceSessionAdmission } from '../src/workspaces/session-admission';
 import type { ProductHostWorkspaces, SessionLocation } from '../src/workspaces/host';
-import type { MethodResult } from '../../protocol/app-server/v50';
+import type { MethodResult } from '../../protocol/app-server/v51';
 import { Server, endpoint } from './fixture';
 
 function deferred<T>() {

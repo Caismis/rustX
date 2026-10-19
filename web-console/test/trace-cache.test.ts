@@ -231,11 +231,62 @@ it('a lifecycle repair invalidates cached detail and fences a pending older read
   expect(refreshTrace(cached, { records: [entry(1)] }).details[running.id]).toBeUndefined();
 });
 
-it('native TraceChanged coalesces burst reads independently of durable Session updates', async () => {
+it('Session-only enrichment preserves pending Trace page and detail reads and their authority', async () => {
+  server = new Server();
+  server.snapshots.set('A', { ...snapshot(), trace: { records: [entry(10)], next_cursor: 'trace:10' } });
+  await server.attached('A');
+  server.held.add('session/trace'); server.held.add('session/traceDetail');
+  const older = server.client.loadEarlierTrace('A');
+  const page = await server.waitFor('session/trace', 1);
+  const pendingDetail = server.client.loadTraceDetail('A', 'trace:10');
+  const selected = await server.waitFor('session/traceDetail', 1);
+  const before = server.client.getSnapshot().views.A;
+  server.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: {
+    target: server.target('A'), cursor: '1', event: { type: 'read_domains_updated',
+      projection_head: before.snapshot!.context?.projection_head,
+      transcript: before.snapshot!.transcript, occupancy: before.snapshot!.context?.occupancy,
+      todos: before.snapshot!.todos, trace: null },
+  } });
+  const after = server.client.getSnapshot().views.A;
+  expect(after.snapshot!.trace).toBe(before.snapshot!.trace);
+  expect(after.trace).toBe(before.trace);
+  expect(after.cursor).toBe('1');
+  server.socket.success(selected, traceReceipt(detail(10)));
+  await pendingDetail;
+  server.socket.success(page, { type: 'trace', page: {read_cut:rootCut(), records:[entry(9),entry(10)]} });
+  const repair = await server.waitFor('session/trace', 2);
+  server.socket.success(repair, { type: 'trace', page: {read_cut:rootCut(), records:[entry(10)]} });
+  await older;
+  expect(server.client.getSnapshot().views.A.trace?.details['trace:10']?.detail).toEqual(detail(10));
+  expect(server.client.getSnapshot().views.A.trace?.page.records.map(row=>row.id)).toEqual(['trace:9','trace:10']);
+  expect(server.requests.filter(row=>row.request.method==='session/checkpoint')).toHaveLength(1);
+});
+
+it('a replacement carrying an older Trace cut repairs it without cancelling pending detail', async () => {
+  server = new Server();
+  server.snapshots.set('A',{...snapshot(),trace:{records:[entry(10)],read_cut:rootCut()}});
+  await server.attached('A');
+  server.held.add('session/traceDetail');server.held.add('session/trace');
+  const pending=server.client.loadTraceDetail('A','trace:10');
+  const detailRequest=await server.waitFor('session/traceDetail',1);
+  const before=server.client.getSnapshot().views.A;
+  await server.update('A',before.snapshot!);
+  const repair=await server.waitFor('session/trace',1);
+  const work=server.client['traceReads'].get('A')!.work;
+  expect(server.client.getSnapshot().views.A.trace).toBe(before.trace);
+  server.socket.success(detailRequest,traceReceipt(detail(10)));await pending;
+  server.socket.success(repair,{type:'trace',page:{read_cut:{...rootCut(),revision:'1'},records:[entry(10),entry(11)]}});
+  await work;
+  expect(server.client.getSnapshot().views.A.trace?.details['trace:10']?.detail).toEqual(detail(10));
+  expect(server.client.getSnapshot().views.A.trace?.page.records.map(row=>row.id)).toEqual(['trace:10','trace:11']);
+  expect(server.requests.filter(row=>row.request.method==='session/checkpoint')).toHaveLength(1);
+});
+
+it('native TraceChanged coalesces burst reads independently of Session enrichment', async () => {
   server = new Server(); await server.attached('A');
   server.held.add('session/trace');
   let cursor = 0;
-  const emit = (event: import('../../protocol/app-server/v50').RuntimeClientEvent) => server.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: server.target('A'), cursor: String(++cursor), event } });
+  const emit = (event: import('../../protocol/app-server/v51').RuntimeClientEvent) => server.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: server.target('A'), cursor: String(++cursor), event } });
   emit({ type: 'read_domains_updated', transcript: { entries: [] }, trace: {records:[],next_cursor:null} });
   expect(server.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(0);
   emit({ type: 'trace_changed' });

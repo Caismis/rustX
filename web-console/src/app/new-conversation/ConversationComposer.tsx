@@ -4,7 +4,7 @@ import { useTranslation, useNotice } from '../../locale/react';
 import { useClientSelector, transportSelection, sameValue } from '../../client/selectors';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted EmptyHero and WorkspacePicker; see PROVENANCE.md. */
 import { useEffect, useEffectEvent, useState, useSyncExternalStore, type ComponentProps, type ReactNode } from 'react';
-import type { SessionModelConfig } from '../../../../protocol/app-server/v50';
+import type { SessionModelConfig } from '../../../../protocol/app-server/v51';
 import type { AppServerClient, SessionView } from '../../client/app-server';
 import { WorkspaceHostError, type ProductHostWorkspaces, type WorkspaceCatalog } from '../../workspaces/host';
 import type { WorkspaceAuthority, WorkspaceAuthorityObservation } from '../../workspaces/authority';

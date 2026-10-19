@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { CheckpointReadCut, RuntimeClientContextOccupancy } from '../../../../protocol/app-server/v50';
+import type { CheckpointReadCut, RuntimeClientContextOccupancy } from '../../../../protocol/app-server/v51';
 import { useTranslation } from '../../locale/react';
 import { Button } from '../../presentation/primitives/Button';
 import { observationSourceIdentity, readObservationValue, useObservationSource } from './JournalValue';

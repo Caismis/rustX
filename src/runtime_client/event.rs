@@ -77,7 +77,9 @@ pub enum RuntimeClientEvent {
     ReadDomainsUpdated {
         projection_head: Option<super::snapshot::RuntimeClientProjectionHeadView>,
         transcript: super::snapshot::RuntimeClientTranscriptPage,
-        trace: super::trace::TracePage,
+        /// A supplied native Trace head replaces the loaded cache. None leaves
+        /// its issued cut/pins intact; native facts advertise independent Trace reads.
+        trace: Option<super::trace::TracePage>,
         occupancy: Option<super::occupancy::RuntimeClientContextOccupancy>,
         todos: Option<crate::tools::todo::TodoSnapshot>,
     },

@@ -76,6 +76,36 @@ fn assert_frozen_tool_result_absent(
     );
 }
 
+#[test]
+fn live_domain_refresh_defers_trace_and_keeps_issued_pins_while_checkpoint_reads_its_cut() {
+    let (mut projection, store, call, witness) = native_running_tool_fixture();
+    install_current_trace(&mut projection, &store);
+    let cached = projection.checkpoint_candidate().unwrap().snapshot.trace;
+    let issued = cached.read_cut.clone().unwrap();
+    let occurrence = witness.tool_occurrence.unwrap();
+    commit_result_without_terminal_j(&mut projection, &store, call);
+    let fence = projection.read_domain_cut().unwrap();
+    crate::runtime_client::trace::take_page_read_work();
+    let live = fence.read_live(&store).unwrap();
+    assert!(live.trace.is_none());
+    assert_eq!(crate::runtime_client::trace::take_page_read_work(), 0);
+    publish_source_fact(&mut projection, |projection| {
+        assert!(projection.install_read_domains(&fence, Ok(live), true));
+    });
+    assert_eq!(projection.checkpoint_candidate().unwrap().snapshot.trace, cached);
+    projection.validate_checkpoint_cut(&issued).unwrap();
+    assert_frozen_tool_result_absent(&store, &issued, &occurrence);
+    let cursor = projection.cursor;
+    crate::runtime_client::trace::take_page_read_work();
+    let complete = projection.checkpoint_seed().checkpoint_with_read_domains(&store).unwrap();
+    assert_eq!(crate::runtime_client::trace::take_page_read_work(), 1);
+    assert_eq!(complete.snapshot.trace.read_cut.as_ref(), Some(&complete.read_cut));
+    assert!(store.observation_trace_tool_result(complete.read_cut.source_cut.as_ref().unwrap(), &occurrence).unwrap().is_some());
+    assert_eq!(projection.cursor, cursor, "inspection publishes no replacement");
+    assert_eq!(projection.checkpoint_candidate().unwrap().snapshot.trace, cached);
+    projection.validate_checkpoint_cut(&issued).unwrap();
+}
+
 /// Capacity suite: this test's value comes from its scale, so FAST skips
 /// `::scale::` and FULL runs it (tests/README.md, "Capacity tests").
 mod scale {
@@ -90,7 +120,7 @@ mod scale {
         let issued = cached.read_cut.as_ref().unwrap().clone();
         assert_eq!(issued, initial.read_cut);
         assert!(projection.replay.back().unwrap().1.facts().iter().any(|event| {
-            matches!(event, RuntimeClientEvent::ReadDomainsUpdated {trace,..} if trace == &cached)
+            matches!(event, RuntimeClientEvent::ReadDomainsUpdated {trace: Some(trace),..} if trace == &cached)
         }));
         let held_fence = projection.read_domain_fence();
         let held_read = held_fence.read(&store).unwrap();
@@ -173,7 +203,7 @@ fn t08_t14_cached_trace_cut_is_not_retagged_by_todo_or_unchanged_installation() 
         projection.publish(RuntimeClientEvent::ReadDomainsUpdated {
             projection_head: projection.snapshot.context.projection_head.clone(),
             transcript: projection.snapshot.transcript.clone(),
-            trace: projection.snapshot.trace.clone(),
+            trace: Some(projection.snapshot.trace.clone()),
             occupancy: projection.snapshot.context.occupancy.clone(),
             todos: projection.snapshot.todos.clone(),
         });
@@ -183,6 +213,6 @@ fn t08_t14_cached_trace_cut_is_not_retagged_by_todo_or_unchanged_installation() 
         cached
     );
     assert!(projection.replay.back().unwrap().1.facts().iter().any(|event| {
-        matches!(event, RuntimeClientEvent::ReadDomainsUpdated {trace,..} if trace == &cached)
+        matches!(event, RuntimeClientEvent::ReadDomainsUpdated {trace: Some(trace),..} if trace == &cached)
     }));
 }

@@ -489,7 +489,9 @@ fn stamp_event_trace_cut(
     cut: &super::checkpoint::CheckpointReadCut,
 ) {
     match event {
-        RuntimeClientEvent::ReadDomainsUpdated { trace, .. } => stamp_trace_cut(trace, cut),
+        RuntimeClientEvent::ReadDomainsUpdated {
+            trace: Some(trace), ..
+        } => stamp_trace_cut(trace, cut),
         RuntimeClientEvent::ProjectionTransition { events, .. } => {
             for event in events {
                 stamp_event_trace_cut(event, cut);
@@ -744,11 +746,14 @@ impl CheckpointSeed {
             projection_head,
             transcript,
             occupancy,
-            mut trace,
+            trace,
             trace_total,
         } = cut
             .read(store)
             .map_err(RuntimeClientError::observation_store_error)?;
+        let mut trace = trace.ok_or_else(|| RuntimeClientError::ObservationUnavailable {
+            message: "complete checkpoint Trace head unavailable".into(),
+        })?;
         let mut seed = self.clone();
         super::trace::repair_records(&mut trace.records, &seed.snapshot);
         stamp_trace_cut(&mut trace, &seed.read_cut);
@@ -1622,7 +1627,7 @@ pub(crate) struct ReadDomainValues {
     pub(crate) projection_head: Option<super::snapshot::RuntimeClientProjectionHeadView>,
     pub(crate) transcript: super::snapshot::RuntimeClientTranscriptPage,
     pub(crate) occupancy: Option<super::occupancy::RuntimeClientContextOccupancy>,
-    pub(crate) trace: super::trace::TracePage,
+    pub(crate) trace: Option<super::trace::TracePage>,
     pub(crate) trace_total: u64,
 }
 
@@ -1694,6 +1699,18 @@ pub(crate) fn checkpoint_view(
 
 impl ReadDomainCut {
     pub(crate) fn read(&self, store: &dyn crate::durable::ConversationStore) -> ReadDomains {
+        self.read_with_trace(store, true)
+    }
+
+    pub(crate) fn read_live(&self, store: &dyn crate::durable::ConversationStore) -> ReadDomains {
+        self.read_with_trace(store, false)
+    }
+
+    fn read_with_trace(
+        &self,
+        store: &dyn crate::durable::ConversationStore,
+        materialize_trace: bool,
+    ) -> ReadDomains {
         let mut page = if let Some(cut) = &self.source_cut {
             super::snapshot::transcript_header_view(store.transcript_header_page(
                 cut,
@@ -1711,9 +1728,14 @@ impl ReadDomainCut {
             .source_cut
             .as_ref()
             .ok_or(crate::durable::ConversationStoreError::ObservationCutExpired)?;
-        let mut trace = super::trace::TraceProjection::at_cut(store, trace_cut)?
-            .page(None, super::trace::TRACE_PAGE_LIMIT)?;
-        trace.read_cut = None;
+        let trace = if materialize_trace {
+            let mut trace = super::trace::TraceProjection::at_cut(store, trace_cut)?
+                .page(None, super::trace::TRACE_PAGE_LIMIT)?;
+            trace.read_cut = None;
+            Some(trace)
+        } else {
+            None
+        };
         let trace_total = store.observation_trace_total(self.through)?;
         Ok(ReadDomainValues {
             projection_head: projection_head_view(store, self.through)?,
@@ -1754,7 +1776,12 @@ impl SnapshotCandidate {
         self.snapshot.transcript = domains.transcript;
         self.snapshot.context.occupancy = domains.occupancy;
         self.snapshot.context.projection_head = domains.projection_head;
-        self.snapshot.trace = domains.trace;
+        self.snapshot.trace =
+            domains
+                .trace
+                .ok_or_else(|| RuntimeClientError::ObservationUnavailable {
+                    message: "complete snapshot Trace head unavailable".into(),
+                })?;
         Ok(self)
     }
 }
@@ -5122,7 +5149,7 @@ impl RuntimeClientProjection {
             events.push(RuntimeClientEvent::ReadDomainsUpdated {
                 projection_head: self.snapshot.context.projection_head.clone(),
                 transcript: self.snapshot.transcript.clone(),
-                trace: self.snapshot.trace.clone(),
+                trace: None,
                 occupancy: self.snapshot.context.occupancy.clone(),
                 todos: self.snapshot.todos.clone(),
             });
@@ -6169,7 +6196,11 @@ impl RuntimeClientProjection {
     fn capture_working_seed(&self) -> CheckpointSeed {
         let read_cut = self.working_read_cut();
         CheckpointSeed {
-            read_domains: self.read_domains_dirty.then(|| ReadDomainCut {
+            read_domains: (self.read_domains_dirty
+                || self.snapshot.trace.read_cut.as_ref().is_none_or(|trace| {
+                    trace.through != read_cut.through || trace.source_cut != read_cut.source_cut
+                }))
+            .then(|| ReadDomainCut {
                 revision: read_cut.revision,
                 through: read_cut.through,
                 source_cut: read_cut.source_cut.clone(),
@@ -7087,30 +7118,39 @@ impl RuntimeClientProjection {
             self.wake_subscribers();
         }
         self.read_domains_dirty = false;
-        super::trace::repair_records(&mut trace.records, &self.snapshot);
-        // A read result has not been published yet. Compare its contents using
-        // the cache's existing cut so an unchanged installation stays a no-op.
-        trace.read_cut.clone_from(&self.snapshot.trace.read_cut);
-        self.source_frontiers.insert(
-            "trace.records".into(),
-            super::trace::checkpoint_frontier(
-                trace_total,
-                trace.records.len() as u64,
-                trace.next_cursor.as_ref(),
-            ),
-        );
+        let trace_changed = trace.as_mut().is_some_and(|trace| {
+            super::trace::repair_records(&mut trace.records, &self.snapshot);
+            // This cache owns its original issued cut. A live refresh without
+            // Trace never clears, retags or retires its physical Source pins.
+            trace.read_cut.clone_from(&self.snapshot.trace.read_cut);
+            self.snapshot.trace != *trace
+        });
+        if let Some(trace) = &trace {
+            self.source_frontiers.insert(
+                "trace.records".into(),
+                super::trace::checkpoint_frontier(
+                    trace_total,
+                    trace.records.len() as u64,
+                    trace.next_cursor.as_ref(),
+                ),
+            );
+        }
         if recovered_failure
             || self.snapshot.transcript != transcript
             || self.snapshot.context.occupancy != occupancy
             || self.snapshot.context.projection_head != projection_head
-            || self.snapshot.trace != trace
+            || trace_changed
         {
-            trace.read_cut = None;
             self.snapshot.transcript.clone_from(&transcript);
-            if self.snapshot.trace.records != trace.records {
-                self.trace_head = super::checkpoint::PreparedTraceHead::default();
+            if let Some(trace) = &mut trace {
+                if trace_changed {
+                    trace.read_cut = None;
+                }
+                if self.snapshot.trace.records != trace.records {
+                    self.trace_head = super::checkpoint::PreparedTraceHead::default();
+                }
+                self.snapshot.trace.clone_from(trace);
             }
-            self.snapshot.trace.clone_from(&trace);
             self.snapshot.context.occupancy.clone_from(&occupancy);
             self.snapshot
                 .context
@@ -7120,7 +7160,7 @@ impl RuntimeClientProjection {
                 self.publish(RuntimeClientEvent::ReadDomainsUpdated {
                     projection_head,
                     transcript,
-                    trace,
+                    trace: trace_changed.then_some(trace).flatten(),
                     occupancy,
                     todos: self.snapshot.todos.clone(),
                 });
@@ -10220,7 +10260,7 @@ mod tests {
                 projection_head: None,
                 transcript: super::super::snapshot::RuntimeClientTranscriptPage::default(),
                 occupancy: None,
-                trace: super::super::trace::TracePage::default(),
+                trace: Some(super::super::trace::TracePage::default()),
                 trace_total: 0,
             }),
             true
@@ -10336,7 +10376,7 @@ mod tests {
             projection_head: projection.snapshot.context.projection_head.clone(),
             transcript: projection.snapshot.transcript.clone(),
             occupancy: projection.snapshot.context.occupancy.clone(),
-            trace: projection.snapshot.trace.clone(),
+            trace: Some(projection.snapshot.trace.clone()),
             trace_total: 0,
         };
         assert!(projection.install_read_domains(&cut, Ok(domains), false));
@@ -10430,7 +10470,7 @@ mod tests {
             projection_head: projection.snapshot.context.projection_head.clone(),
             transcript: projection.snapshot.transcript.clone(),
             occupancy: None,
-            trace: super::super::trace::TracePage::default(),
+            trace: Some(super::super::trace::TracePage::default()),
             trace_total: 0,
         };
         assert!(!projection.install_read_domains(&failed, Ok(domains.clone()), true));
@@ -10468,7 +10508,7 @@ mod tests {
                 projection_head: None,
                 transcript: super::super::snapshot::RuntimeClientTranscriptPage::default(),
                 occupancy: None,
-                trace: super::super::trace::TracePage::default(),
+                trace: Some(super::super::trace::TracePage::default()),
                 trace_total: 0,
             }),
             true

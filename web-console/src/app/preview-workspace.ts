@@ -1,4 +1,4 @@
-import type { AttachmentTarget } from '../../../protocol/app-server/v50';
+import type { AttachmentTarget } from '../../../protocol/app-server/v51';
 import { sameTarget, type AppServerClient } from '../client/app-server';
 import { FilePreviewCoordinator, samePreviewSource, type FilePreviewLease, type PreviewSource } from '../client/session-files';
 import { PREVIEW_POLICY } from '../client/preview-policy';

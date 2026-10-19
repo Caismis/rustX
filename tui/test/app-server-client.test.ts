@@ -110,8 +110,8 @@ describe("initialization", () => {
   it("negotiates the protocol version once and records server capabilities", async () => {
     const { client, transport } = await initialized();
     const params = paramsOf(transport.log.matching("initialize")[0]!, "initialize");
-    assert.equal(APP_SERVER_PROTOCOL_VERSION, 50);
-    assert.equal(params.protocol_version, 50);
+    assert.equal(APP_SERVER_PROTOCOL_VERSION, 51);
+    assert.equal(params.protocol_version, 51);
     assert.equal(params.client.name, "rustx-tui");
     assert.deepEqual(client.capabilities, CAPABILITIES);
     assert.equal(transport.log.count("initialize"), 1);
@@ -148,7 +148,7 @@ describe("initialization", () => {
       protocol_version: 45,
       capabilities: CAPABILITIES,
     });
-    await assert.rejects(pending, /negotiated protocol 45, this client speaks 50/);
+    await assert.rejects(pending, /negotiated protocol 45, this client speaks 51/);
     assert.ok(transport.closed, "invalid initialization does not retain a listener slot");
   });
 });

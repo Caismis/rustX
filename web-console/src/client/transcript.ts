@@ -1,5 +1,5 @@
 import { attemptOwnerKey } from '../../../protocol/app-server/attempt-identity';
-import type { ContentBinding, ConversationReadCut, ConversationWindow, ObservedTurn, ObservedTurnPage, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v50';
+import type { ContentBinding, ConversationReadCut, ConversationWindow, ObservedTurn, ObservedTurnPage, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v51';
 import { contentRefKey } from '../../../protocol/app-server/content-identity';
 
 export const HISTORY_PAGE_SIZE = 32;
