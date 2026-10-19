@@ -17,7 +17,7 @@ Three interleaved pairs per case, new processes/stores, same optimized build set
 | tool | 0.9269 | 1.0000 | 0.9630 | 0.9993 | 0.9977 |
 | cancel | 1.0120 | 0.8571 | 0.9524 | 1.0000 | 1.0061 |
 
-Short-turn median wall/CPU reductions are about 11–12%/10–11%; writes are effectively unchanged. Adverse samples remain visible: short-small pair 1 CPU is 86.25 vs 84.6875 ms/turn, cancellation pair 0 wall is 59.076 vs 43.179 ms, and large-case median paired CPU ratio is 1.1429. Large-case CPU samples are only 6–8 clock ticks: the increase is unresolved at this sample size, not erased as noise. Sampled anonymous memory increases about 0.8% in both short cases.
+Short-turn median wall/CPU reductions are provisionally about 11–12%/10–11%; writes are effectively unchanged. Short-small intervals cross 1, so these exploratory medians do not establish a stable universal gain. Adverse samples remain visible: short-small pair 1 CPU is 86.25 vs 84.6875 ms/turn, cancellation pair 0 wall is 59.076 vs 43.179 ms, and large-case median paired CPU ratio is 1.1429. Large-case CPU samples are only 6–8 clock ticks: the increase is unresolved at this sample size, not erased as noise. Sampled anonymous memory increases about 0.8% in both short cases.
 
 ## Uncertainty
 
@@ -47,8 +47,10 @@ Warm CPU regressions at histories 0 and 512 are retained. Whole 32-append CPU in
 
 ## Reproduction and validation
 
+[Readable per-pair inputs, CSV and independent recomputation](evidence/query-plan/readable/README.md) expose all 84 samples. All 594 numeric paired ratios, all medians and all 12 runtime intervals reproduce exactly; raw hashes and raw-to-summary derivation also pass. Parameter-sensitive plan tradeoffs remain: six workloads and four append histories do not cover arbitrary production data distributions or larger scales.
+
 `run-measurements.py` records the compiler/executable checks, host/quota identity and exact commands. It runs `compare-revisions.py` with three pairs across all six cases, then `compare-append.py` with three pairs at all four histories, warm and `--cold`. Summaries and every original sample are in the [verified evidence archive](evidence/query-plan-results.tar.xz) and [manifest](evidence/query-plan-results.tar.manifest.json). The readable uncertainty file is reproduced by the archived report script. Original evidence is retained.
 
 CPU is self user+system across product threads plus driver, at 10 ms resolution; the provider/controller are separate siblings and provider teardown follows product cleanup. Runtime lifecycle includes verification, checkpoint, close, reopen and cleanup; evidence-file output is afterward. Startup/control and all lifecycle phases remain in raw results. Writes are process-attributed, not physical-device writes. RSS/PSS are sampled maxima, not peaks. Allocations remain unavailable. No overhead subtraction or multiplied stage ratios.
 
-Correctness: 56 distinct native storage tests (including differential historical query rows, zero recompiles and no full scans/sorts), 18 Python controller negatives and 8 Pi oracle negatives pass; formatting/whitespace pass. Test-only compilation used root-package opt-level=0, while both measured executables use the identical normal optimized release profile. FULL for measured head: [39177505760](https://github.com/Caismis/rustX/actions/runs/39177505760), pending at report creation. No merge.
+Correctness: 56 distinct native storage tests (including differential historical query rows, zero recompiles and no full scans/sorts), 18 Python controller negatives and 8 Pi oracle negatives pass; formatting/whitespace pass. Test-only compilation used root-package opt-level=0, while both measured executables use the identical normal optimized release profile. FULL for measured head: [39177505760](https://github.com/Caismis/rustX/actions/runs/39177505760), cancelled after later pushes; no exact-head FULL success is claimed. No merge.
