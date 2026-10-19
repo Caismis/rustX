@@ -401,7 +401,11 @@ fn native_actor_transition(observation: &ConversationObservation) -> bool {
         | ConversationObservation::Workflow(_)
         | ConversationObservation::PendingHead { .. }
         | ConversationObservation::InteractionPending { .. }
-        | ConversationObservation::InteractionSettled { .. } => true,
+        | ConversationObservation::InteractionSettled { .. }
+        // Native drain already owns this finite state transition. Publish it
+        // before return, so projection close cannot discard a queued shutdown.
+        // Preparation is CPU-only and never re-enters the coordinator.
+        | ConversationObservation::Shutdown => true,
         #[cfg(test)]
         ConversationObservation::InteractionRemoved { .. } => true,
         ConversationObservation::CollectionProof {
@@ -3996,7 +4000,7 @@ impl ClientInner {
             state.projection.validate_published_source()?;
             state.projection.checkpoint_seed()
         };
-        let mut checkpoint = seed.checkpoint_candidate()?;
+        let mut checkpoint = seed.checkpoint_with_shutdown_domains(self.store.as_ref())?;
         self.materialize_content_bindings(&mut checkpoint.content)?;
         self.materialize_trace(&mut checkpoint.snapshot, &checkpoint.read_cut, records)?;
         if !records.is_empty() {
@@ -10755,6 +10759,194 @@ mod tests {
                 .iter()
                 .any(|fact| matches!(fact, RuntimeClientEvent::AttemptTurnUpdated { turn: 1, .. }))
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn native_shutdown_publishes_before_projection_drain_with_worker_parked() {
+        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
+        let inner = fixture.host.weak_inner().upgrade().unwrap();
+        inner.park_projection_worker();
+        fixture.runtime.shutdown().await.unwrap();
+        assert!(
+            inner
+                .lock_published_state()
+                .projection
+                .snapshot_ref()
+                .shutting_down,
+            "native shutdown publication cannot depend on the parked worker"
+        );
+        let cursor = inner.lock_published_state().projection.cursor();
+        inner.drain_projection().await.unwrap();
+        let checkpoint = fixture.host.checkpoint().unwrap();
+        assert!(checkpoint.snapshot.shutting_down);
+        assert_eq!(checkpoint.cursor, cursor);
+        assert!(fixture.runtime.is_quiescent());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn dormant_shutdown_checkpoint_materializes_the_frozen_native_cut() {
+        let scripts = [113, 229]
+            .into_iter()
+            .map(|input_tokens| {
+                let mut steps = one_turn_stop();
+                let Some(GatedStep::Emit(ModelEvent::Completed { usage, .. })) = steps.last_mut()
+                else {
+                    panic!("terminal fixture");
+                };
+                *usage = Some(crate::model::ModelUsage {
+                    input_tokens,
+                    output_tokens: 17,
+                    total_tokens: input_tokens + 17,
+                    details: None,
+                });
+                steps
+            })
+            .collect();
+        let (_, fixture) = host_fixture(scripts, ToolRegistry::new(), status_engine()).await;
+        for text in ["unobserved first", "unobserved second"] {
+            let mut settled = Box::pin(fixture.runtime.settlement_signal().notified());
+            settled.as_mut().enable();
+            fixture
+                .runtime
+                .submit_inbound(submit_content(text))
+                .unwrap();
+            tokio::time::timeout(STREAM_LIVENESS_GUARD, settled)
+                .await
+                .unwrap();
+        }
+        fixture.runtime.shutdown().await.unwrap();
+        let inner = fixture.host.weak_inner().upgrade().unwrap();
+        let mut turns = inner.worker_turns.subscribe();
+        loop {
+            turns.borrow_and_update();
+            if inner
+                .lock_published_state()
+                .projection
+                .snapshot_ref()
+                .shutting_down
+            {
+                break;
+            }
+            tokio::time::timeout(STREAM_LIVENESS_GUARD, turns.changed())
+                .await
+                .unwrap()
+                .unwrap();
+        }
+        inner.drain_projection().await.unwrap();
+        let (cut, cursor, frozen) = {
+            let state = inner.lock_published_state();
+            assert!(state.projection.snapshot_ref().shutting_down);
+            assert!(state.projection.read_domain_cut().is_some());
+            (
+                state.projection.read_domain_fence(),
+                state.projection.cursor(),
+                state.projection.checkpoint_read_cut(),
+            )
+        };
+        let expected = cut.read(inner.store.as_ref()).unwrap();
+        assert!(!expected.transcript.entries.is_empty());
+        assert_eq!(expected.occupancy.as_ref().unwrap().input_tokens, 229);
+        let expected_text = serde_json::to_string(&expected.transcript).unwrap();
+        assert!(
+            expected_text.contains("unobserved first")
+                && expected_text.contains("unobserved second")
+        );
+        // A later authoritative append cannot enter the frozen shutdown view.
+        inner
+            .store
+            .append_canonical(&MessageBlock::User(inbound_text(
+                "future-after-shutdown",
+                "must stay outside shutdown cut",
+            )))
+            .unwrap();
+        for _ in 0..2 {
+            let (attachment, _) = fixture
+                .host
+                .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+                .unwrap();
+            let checkpoint = attachment.checkpoint().unwrap();
+            assert_eq!(
+                checkpoint.cursor, cursor,
+                "inspection must not publish after shutdown"
+            );
+            assert_eq!(checkpoint.read_cut, frozen);
+            assert_eq!(checkpoint.snapshot.transcript, expected.transcript);
+            assert_eq!(checkpoint.snapshot.context.occupancy, expected.occupancy);
+            assert_eq!(
+                checkpoint.snapshot.context.projection_head,
+                expected.projection_head
+            );
+            assert!(checkpoint.snapshot.shutting_down);
+            assert_eq!(checkpoint.snapshot.trace.records, expected.trace.records);
+            let page = inner
+                .checkpoint_page(&checkpoint.read_cut, "transcript.entries", 0, 32)
+                .unwrap();
+            assert_eq!(
+                page.total,
+                frozen.source_cut.as_ref().unwrap().transcript_total
+            );
+            let page_text = serde_json::to_string(&page).unwrap();
+            assert!(page_text.contains("unobserved second"));
+            assert!(!page_text.contains("must stay outside shutdown cut"));
+            let trace = inner
+                .checkpoint_page(&checkpoint.read_cut, "trace.records", 0, 32)
+                .unwrap();
+            assert_eq!(trace.total, expected.trace_total);
+            attachment.detach();
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn dormant_dirty_subscription_hydrates_without_a_checkpoint() {
+        let (_, fixture) =
+            host_fixture(vec![one_turn_stop()], ToolRegistry::new(), status_engine()).await;
+        let mut settled = Box::pin(fixture.runtime.settlement_signal().notified());
+        settled.as_mut().enable();
+        fixture
+            .runtime
+            .submit_inbound(submit_content("observe late"))
+            .unwrap();
+        tokio::time::timeout(STREAM_LIVENESS_GUARD, settled)
+            .await
+            .unwrap();
+        let inner = fixture.host.weak_inner().upgrade().unwrap();
+        let cursor = {
+            let state = inner.lock_published_state();
+            assert!(state.projection.read_domain_cut().is_some());
+            state.projection.cursor()
+        };
+        let (entered, entered_rx) = tokio::sync::oneshot::channel();
+        let (release, release_rx) = std::sync::mpsc::channel();
+        *inner.read_domain_hook.lock().unwrap() = Some(Box::new(move || {
+            let _ = entered.send(());
+            let _ = release_rx.recv();
+            Ok(())
+        }));
+        let (attachment, _) = fixture
+            .host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .unwrap();
+        let subscription = attachment.subscribe_events(cursor).unwrap();
+        tokio::time::timeout(STREAM_LIVENESS_GUARD, entered_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(inner.lock_state().projection.read_domain_cut().is_some());
+        release.send(()).unwrap();
+        let events = receive_until(&subscription, |event| {
+            event
+                .event
+                .facts()
+                .iter()
+                .any(|fact| matches!(fact, RuntimeClientEvent::ReadDomainsUpdated { .. }))
+        })
+        .await;
+        assert!(!events.is_empty());
+        assert!(inner.lock_state().projection.read_domain_cut().is_none());
+        let checkpoint = attachment.checkpoint().unwrap();
+        assert!(!checkpoint.snapshot.transcript.entries.is_empty());
+        fixture.runtime.shutdown().await.unwrap();
+        inner.drain_projection().await.unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
