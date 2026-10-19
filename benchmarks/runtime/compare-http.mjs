@@ -4,6 +4,14 @@ import {createHash} from 'node:crypto';
 import {normalized} from './pi-oracle.mjs';
 const [rustFile,piFile,output]=process.argv.slice(2);
 const rust=JSON.parse(await readFile(rustFile)),pi=JSON.parse(await readFile(piFile));
+const modes=['native-workflow','no-live-subscriber','live-subscriber'];
+const mode=rust.observer_mode??'native-workflow';
+assert(modes.includes(mode));
+if(mode!=='native-workflow' || pi.observer_mode!==undefined) assert.equal(pi.observer_mode,mode,'paired observer mode');
+if(mode!=='native-workflow') {
+ assert(rust.observer_mode && pi.observer_mode);
+ for(const sample of [rust,pi]) assert(sample.samples.every(turn=>turn.observer_mode===mode));
+}
 const sameEngine=pi.measurement_version !== undefined;
 const rightRequests=pi.wire_requests??pi.requests;
 assert.equal(rust.case,pi.scenario??pi.case);
@@ -28,4 +36,4 @@ for(let i=0;i<rightRequests.length;i++) {
  const digest=x=>createHash('sha256').update(JSON.stringify(x)).digest('hex');
  checked.push({index:i,coreEqual:true,fullRequestEqual:sameEngine || JSON.stringify(a)===JSON.stringify(b),rustToolNames:rustTools.map(t=>t.function.name),piToolNames:piTools.map(t=>t.function.name),rustToolsSha256:digest(rustTools),piToolsSha256:digest(piTools)});
 }
-await writeFile(output,JSON.stringify({case:rust.case,checked},null,2));
+await writeFile(output,JSON.stringify({case:rust.case,observer_mode:mode,checked},null,2));

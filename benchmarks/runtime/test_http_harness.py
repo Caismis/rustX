@@ -47,6 +47,54 @@ def sample():
                           for i,name in enumerate(controller.RUST_PHASES)]}
 
 
+class ObserverModeTests(unittest.TestCase):
+    def test_new_modes_require_matching_raw_and_per_turn_identity(self):
+        for mode in controller.OBSERVER_MODES[1:]:
+            value=sample()
+            result={'product_exit':0,'provider_exit':0,'observer_mode':mode,
+                    'provider_report':{'ok':True,'requestCount':1,'requests':value['wire_requests']}}
+            check=lambda: controller.validate_sample(result,value,'cancel',f'test {controller.TEST} ... ok')
+            with self.assertRaises(AssertionError): check()
+            value['observer_mode']=mode
+            with self.assertRaises(AssertionError): check()
+            value['samples'][0]['observer_mode']=mode
+            value['measurement_version']=4
+            phases=list(controller.RUST_PHASES)
+            phases.insert(phases.index('after_turns')+1,'after_late_snapshot')
+            value['lifecycle']=[{'phase':name,'elapsed_us':i*1000,'process':process(i*10)} for i,name in enumerate(phases)]
+            value['canonical']=[]
+            value['late_snapshot']={'messages':[],'checkpoint':{'cursor':1,'read_cut':{'source_cut':{'ledger_through':0}}},'replay':{'kind':'contiguous','through':1}}
+            value['observer_validation']={'completed_attempts':1,'text':[],'tool_results':[]}
+            check()
+            for key in ['messages','checkpoint','replay']:
+                saved=value['late_snapshot'].pop(key)
+                with self.assertRaises((KeyError,AssertionError)): check()
+                value['late_snapshot'][key]=saved
+            value['late_snapshot']['messages']=[{'changed':True}]
+            with self.assertRaises(AssertionError): check()
+            value['late_snapshot']['messages']=[]
+            value['late_snapshot']['replay']['through']=2
+            with self.assertRaises(AssertionError): check()
+            value['late_snapshot']['replay']['through']=1
+            if mode=='live-subscriber':
+                value['live_requests'][0]['snapshot']={'provisional_message_id':'partial-owner'}
+                value['reopened_requests']=copy.deepcopy(value['live_requests'])
+                value['observer_validation']['text']=[{'message_id':'partial-owner','block_index':'ContentBlockIndex(0)','text':'partial'}]
+                check()
+                value['observer_validation']['text'][0]['text']='must not appear'
+                with self.assertRaises(AssertionError): check()
+                value['observer_validation']['text'][0]['text']='partial'
+                value['observer_validation']['text'][0]['message_id']='wrong-owner'
+                with self.assertRaises(AssertionError): check()
+                value['observer_validation']['text']=[]
+            value['observer_mode']='native-workflow'
+            with self.assertRaises(AssertionError): check()
+
+    def test_aligned_modes_require_late_snapshot_phase(self):
+        value=sample(); value['observer_mode']='no-live-subscriber'
+        with self.assertRaises(AssertionError): controller.validate_lifecycle(value)
+
+
 class FakeProcess:
     def __init__(self, name, stdout, events, exit_code=0):
         self.name, self.stdout = name, io.StringIO(stdout)
@@ -184,6 +232,19 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(result['max_sampled_rss_mib'],8)
         self.assertEqual(result['phases'][-1]['through'],'after_cleanup')
 
+    def test_aligned_startup_and_complete_self_cpu_remain_separate(self):
+        value=sample(); value['observer_mode']='no-live-subscriber'
+        index=next(i for i,p in enumerate(value['lifecycle']) if p['phase']=='after_turns')+1
+        late=copy.deepcopy(value['lifecycle'][index-1]); late['phase']='after_late_snapshot'
+        value['lifecycle'].insert(index,late)
+        for i,point in enumerate(value['lifecycle']): point['process']=process(100+i*10,1000+i*100)
+        result=http.sample(self.write('startup',value))
+        self.assertEqual(result['startup_self_cpu_ms'],1000)
+        self.assertEqual(result['through_cleanup_self_cpu_ms'],2000)
+        self.assertEqual(result['lifecycle_cpu_ms'],1000)
+        self.assertEqual(result['through_cleanup_process_write_mib'],2000/2**20)
+        self.assertEqual(result['lifecycle_write_mib'],1000/2**20)
+
     def test_unavailable_counters_are_none_not_zero(self):
         p={'process':{'stat':None,'io':None,'smaps_rollup':None}}
         self.assertEqual(http.counters(p),dict.fromkeys(('cpu_ms','write_bytes','rss_kib','pss_kib','anon_pss_kib')))
@@ -194,6 +255,36 @@ class SummaryTests(unittest.TestCase):
             for side,time_ms in (('before',b),('after',a)):
                 value=sample();value['samples'][0]['settled_us']=time_ms*1000
                 self.write(f'{i}-cancel-{side}',value)
+
+    def set_pair_mode(self, pair, mode):
+        for side in ('before', 'after'):
+            path=self.root/f'{pair}-cancel-{side}.json'
+            value=json.loads(path.read_text()); value['observer_mode']=mode
+            value['measurement_version']=4
+            for turn in value['samples']: turn['observer_mode']=mode
+            index=next(i for i,p in enumerate(value['lifecycle']) if p['phase']=='after_turns')+1
+            late=copy.deepcopy(value['lifecycle'][index-1]); late['phase']='after_late_snapshot'
+            value['lifecycle'].insert(index,late)
+            path.write_text(json.dumps(value))
+            path.with_name(path.stem+'.process.json').write_text(json.dumps({'accepted':True,'observer_mode':mode}))
+
+    def test_observer_modes_cannot_mix_within_or_between_pairs(self):
+        self.pairs(); self.set_pair_mode(0,'live-subscriber')
+        with self.assertRaisesRegex(ValueError,'mixed observer modes'):
+            paired.summarize([self.root])
+        for i in (1,2): self.set_pair_mode(i,'live-subscriber')
+        self.assertEqual(paired.summarize([self.root])['observer_mode'],'live-subscriber')
+        path=self.root/'0-cancel-after.process.json'
+        path.write_text(json.dumps({'accepted':True,'observer_mode':'no-live-subscriber'}))
+        with self.assertRaisesRegex(AssertionError,'observer mode'):
+            paired.summarize([self.root])
+
+    def test_manifest_observer_mode_must_match_raw_samples(self):
+        self.pairs()
+        for i in range(3): self.set_pair_mode(i,'no-live-subscriber')
+        (self.root/'manifest.json').write_text(json.dumps({'observer_mode':'live-subscriber'}))
+        with self.assertRaisesRegex(ValueError,'manifest observer mode'):
+            paired.summarize([self.root])
 
     def test_pairwise_ratio_is_not_ratio_of_unrelated_medians(self):
         self.pairs();result=paired.summarize([self.root])

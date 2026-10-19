@@ -4,6 +4,7 @@ use super::*;
 use serde_json::json;
 use std::time::Instant;
 
+mod aligned;
 mod profiling;
 mod request_oracle;
 
@@ -121,6 +122,13 @@ fn verify_requests(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "offline performance measurement; no timing gate"]
 async fn measure_runtime() {
+    let mode =
+        std::env::var("RUSTX_BENCH_OBSERVER_MODE").unwrap_or_else(|_| "native-workflow".into());
+    match mode.as_str() {
+        "live-subscriber" | "no-live-subscriber" => return aligned::measure(&mode).await,
+        "native-workflow" => {}
+        _ => panic!("unknown observer mode"),
+    }
     let case = std::env::var("RUSTX_BENCH_CASE").expect("case");
     let output = PathBuf::from(std::env::var_os("RUSTX_BENCH_OUTPUT").expect("output"));
     let (history, measured) = match case.as_str() {
