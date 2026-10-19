@@ -575,6 +575,11 @@ export class AppServerClient {
           throw error;
         }
         this.setSession(id, { observationState: chain.phase });
+        // Resuming Session replay does not carry independent Trace repairs.
+        // Its retained snapshot can predate the latest head without a new event.
+        const traceCut=observed.trace.read_cut;
+        if(resumable&&(traceCut?.through!==checkpoint.read_cut.through
+          ||JSON.stringify(traceCut?.source_cut)!==JSON.stringify(checkpoint.read_cut.source_cut)))this.repairTraceDomain(id);
         this.reconcileInteractions(id); this.settleSubmissions(id);
         const settings=await this.readSettings(id,current);
         if(!current())return;
@@ -1209,13 +1214,7 @@ export class AppServerClient {
     if (checkpointAdvanced) void this.refreshDisplaySummary(id);
     // A replacement can summarize native facts while retaining an older Trace
     // head. Repair that independent cache without retiring its pending readers.
-    if (checkpointAdvanced && !traceAdvanced || transitionFacts(event).some(fact=>fact.type==='trace_changed')) {
-      const authority=this.traceAuthorities.get(id);
-      void this.refreshTraceDomain(id).catch(cause=>{
-        const trace=this.state.views[id]?.trace;
-        if(observation.current()&&this.traceAuthorities.get(id)===authority&&trace)this.setSession(id,{trace:{...trace,error:String(cause),loading:false}});
-      });
-    }
+    if (checkpointAdvanced && !traceAdvanced || transitionFacts(event).some(fact=>fact.type==='trace_changed')) this.repairTraceDomain(id);
   }
 
   domainReader(target: AttachmentTarget, current: () => boolean, agentId?: string): DomainReader {
@@ -1726,6 +1725,15 @@ export class AppServerClient {
     ) };
   }
   private traceReads = new Map<string, { dirty: boolean; work: Promise<void> }>();
+  private repairTraceDomain(id:string) {
+    const observation=this.lifecycles.observe(id);
+    if(!observation)return;
+    const authority=this.traceAuthorities.get(id);
+    void this.refreshTraceDomain(id).catch(cause=>{
+      const trace=this.state.views[id]?.trace;
+      if(observation.current()&&this.traceAuthorities.get(id)===authority&&trace)this.setSession(id,{trace:{...trace,error:String(cause),loading:false}});
+    });
+  }
   private refreshTraceDomain(id: string): Promise<void> {
     const existing = this.traceReads.get(id);
     if (existing) { existing.dirty = true; return existing.work; }
