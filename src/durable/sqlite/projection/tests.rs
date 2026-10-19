@@ -105,60 +105,92 @@ fn settle_summary_call(
     call_id: crate::runtime::identity::AuxiliaryCallId,
     request_id: RequestId,
 ) {
+    settle_summary_call_with_outcome(store, call_id, request_id, AuxiliaryCallOutcome::Completed);
+}
+
+fn settle_summary_call_with_outcome(
+    store: &SqliteConversationStore,
+    call_id: crate::runtime::identity::AuxiliaryCallId,
+    request_id: RequestId,
+    outcome: AuxiliaryCallOutcome,
+) -> crate::durable::AuxiliarySettlementCommit {
     let usage = ModelUsage {
         input_tokens: 40,
         output_tokens: 8,
         total_tokens: 48,
         details: None,
     };
-    let terminal = RuntimeEventEnvelope {
-        tool_occurrence: None,
-        observation: None,
-        schema_version: EVENT_SCHEMA_VERSION,
-        event_id: EventId::new(format!("auxiliary-request-completed:{request_id}")),
-        sequence: 0,
-        conversation_id: store.conversation_id().clone(),
-        attempt_id: None,
-        turn_id: None,
-        timestamp: chrono::Utc::now(),
-        event: RuntimeEvent::ModelRequestCompleted {
-            owner: ModelRequestOwner::Auxiliary {
-                call_id: call_id.clone(),
-                ordinal: 0,
-            },
+    let owner = ModelRequestOwner::Auxiliary {
+        call_id: call_id.clone(),
+        ordinal: 0,
+    };
+    let event = if outcome == AuxiliaryCallOutcome::Completed {
+        RuntimeEvent::ModelRequestCompleted {
+            owner,
             request_id: request_id.clone(),
             finish_reason: ModelFinishReason::Stop,
             usage: Some(usage.clone()),
             generation: None,
-        },
+        }
+    } else {
+        RuntimeEvent::ModelRequestFailed {
+            owner,
+            request_id: request_id.clone(),
+            error: crate::model::error::ModelError {
+                kind: if outcome == AuxiliaryCallOutcome::Cancelled {
+                    ModelErrorKind::Cancelled
+                } else {
+                    ModelErrorKind::Authentication
+                },
+                message: "Summary generation did not complete".into(),
+                retry_disposition: crate::model::error::ModelRetryDisposition::Never,
+                retry_after_ms: None,
+                provider_code: None,
+                context_overflow: None,
+                malformed_tool_proposal: None,
+                timeout_phase: None,
+                generation: None,
+            },
+            usage: Some(usage.clone()),
+            generation: None,
+        }
     };
-    let settled = RuntimeEventEnvelope {
-        tool_occurrence: None,
-        observation: None,
-        schema_version: EVENT_SCHEMA_VERSION,
-        event_id: EventId::new(format!("auxiliary-call-settled:{call_id}")),
-        sequence: 0,
-        conversation_id: store.conversation_id().clone(),
-        attempt_id: None,
-        turn_id: None,
-        timestamp: chrono::Utc::now(),
-        event: RuntimeEvent::AuxiliaryCallSettled {
-            call_id,
-            outcome: crate::model::auxiliary::AuxiliaryCallOutcome::Completed,
-            request_evidence: Some(AuxiliaryRequestEvidence {
-                request_id,
-                observed_provider_terminal: Some(AuxiliaryObservedProviderTerminal::Completed {
-                    finish_reason: crate::model::auxiliary::AuxiliaryFinishReason::Stop,
-                }),
-                usage: Some(usage),
-                usage_completeness: AuxiliaryUsageCompleteness::Complete,
-                remote_execution_uncertainty: false,
-            }),
-        },
+    let observed_provider_terminal = match &event {
+        RuntimeEvent::ModelRequestCompleted { .. } => {
+            Some(AuxiliaryObservedProviderTerminal::Completed {
+                finish_reason: crate::model::auxiliary::AuxiliaryFinishReason::Stop,
+            })
+        }
+        RuntimeEvent::ModelRequestFailed { error, .. } => {
+            Some(AuxiliaryObservedProviderTerminal::Failed {
+                kind: error.kind.clone(),
+            })
+        }
+        _ => unreachable!(),
     };
+    let envelope = |event| {
+        crate::durable::auxiliary::auxiliary_settlement_envelope(
+            store.conversation_id().clone(),
+            chrono::Utc::now(),
+            event,
+        )
+        .unwrap()
+    };
+    let terminal = envelope(event);
+    let settled = envelope(RuntimeEvent::AuxiliaryCallSettled {
+        call_id,
+        outcome,
+        request_evidence: Some(AuxiliaryRequestEvidence {
+            request_id,
+            observed_provider_terminal,
+            usage: Some(usage),
+            usage_completeness: AuxiliaryUsageCompleteness::Complete,
+            remote_execution_uncertainty: false,
+        }),
+    });
     store
         .commit_auxiliary_request_settlement(terminal, settled)
-        .unwrap();
+        .unwrap()
 }
 
 fn summary_reference(
@@ -2643,7 +2675,8 @@ fn current_head_validation_is_bounded_by_publication_not_timeline_length() {
 }
 
 #[test]
-fn summary_generation_dependency_allows_later_auxiliary_journal_and_does_not_leak_terminal() {
+fn summary_generation_dependency_accepts_success_after_resource_capture_and_preserves_old_audit_cut()
+ {
     let root = tempfile::tempdir().unwrap();
     let store = SqliteConversationStore::open(
         ConversationId::generate(),
@@ -2661,6 +2694,8 @@ fn summary_generation_dependency_allows_later_auxiliary_journal_and_does_not_lea
         true,
     );
     let request_id = request_id.unwrap();
+    let historical_through = store.auxiliary_audit_cut().unwrap().journal;
+    settle_summary_call(&store, call_id.clone(), request_id.clone());
     let through = store.auxiliary_audit_cut().unwrap().journal;
     checkpoint.summary_generation = Some(summary_reference(&store, call_id.clone(), through));
     let mut without_dependency = checkpoint.clone();
@@ -2696,11 +2731,12 @@ fn summary_generation_dependency_allows_later_auxiliary_journal_and_does_not_lea
         receipt.checkpoint.candidate.summary_generation,
         checkpoint.summary_generation
     );
-    settle_summary_call(&store, call_id.clone(), request_id.clone());
     let historical = store
         .load_auxiliary_call(
             &call_id,
-            crate::model::auxiliary::AuxiliaryAuditCut { journal: through },
+            crate::model::auxiliary::AuxiliaryAuditCut {
+                journal: historical_through,
+            },
         )
         .unwrap()
         .unwrap();
@@ -2710,7 +2746,9 @@ fn summary_generation_dependency_allows_later_auxiliary_journal_and_does_not_lea
         store
             .load_auxiliary_request(
                 &request_id,
-                crate::model::auxiliary::AuxiliaryAuditCut { journal: through },
+                crate::model::auxiliary::AuxiliaryAuditCut {
+                    journal: historical_through,
+                },
             )
             .unwrap()
             .unwrap()
@@ -2721,11 +2759,102 @@ fn summary_generation_dependency_allows_later_auxiliary_journal_and_does_not_lea
         .read_lineage_cut(store.load_head().unwrap().revision)
         .unwrap();
     assert_eq!(lineage.auxiliary_audits.len(), 1);
-    assert_eq!(lineage.auxiliary_audits[0].records.len(), 2);
+    assert_eq!(lineage.auxiliary_audits[0].records.len(), 4);
     assert_eq!(
         lineage.auxiliary_audits[0].completeness,
-        crate::durable::reading::AuxiliaryAuditCompleteness::OpenAtCut
+        crate::durable::reading::AuxiliaryAuditCompleteness::CompleteAtCut
     );
+}
+
+#[test]
+fn local_checkpoint_rejects_unconfirmed_or_unsuccessful_summary_without_partial_commit() {
+    for status in [
+        "open",
+        "failed",
+        "cancelled",
+        "completed_after_cut",
+        "physical_terminal_before_call_settlement",
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let store = SqliteConversationStore::open(
+            ConversationId::generate(),
+            &root.path().join("summary-admission.sqlite"),
+        )
+        .unwrap();
+        store.initialize(&[message(1)]).unwrap();
+        store
+            .commit_projection(commit_input(
+                &store,
+                "preceding-operation",
+                candidate(&store, "preceding", vec![summary("retained head")]),
+                &CancellationSignal::new(),
+            ))
+            .unwrap();
+        let mut checkpoint = candidate(&store, "candidate", vec![summary("generated")]);
+        let operation_id = CompactionOperationId::new("summary-operation");
+        let (call_id, request_id) = start_summary_call(
+            &store,
+            AuxiliaryBusinessSource::Compaction {
+                operation_id: operation_id.clone(),
+            },
+            true,
+        );
+        let started_cut = store.auxiliary_audit_cut().unwrap();
+        let outcome = match status {
+            "open" => None,
+            "failed" => Some(AuxiliaryCallOutcome::Failed),
+            "cancelled" => Some(AuxiliaryCallOutcome::Cancelled),
+            _ => Some(AuxiliaryCallOutcome::Completed),
+        };
+        let settled = outcome.map(|outcome| {
+            settle_summary_call_with_outcome(&store, call_id.clone(), request_id.unwrap(), outcome)
+        });
+        let current_cut = store.auxiliary_audit_cut().unwrap();
+        let through = match status {
+            "completed_after_cut" => started_cut.journal,
+            "physical_terminal_before_call_settlement" => {
+                settled
+                    .as_ref()
+                    .unwrap()
+                    .request_terminal
+                    .as_ref()
+                    .unwrap()
+                    .sequence
+            }
+            _ => current_cut.journal,
+        };
+        checkpoint.summary_generation = Some(summary_reference(&store, call_id.clone(), through));
+        let before = (
+            projection_authority_counts(&store),
+            store.projection_head().unwrap(),
+            store.compaction_resource_cut().unwrap(),
+            store.load_auxiliary_call(&call_id, current_cut).unwrap(),
+            store.load_canonical().unwrap(),
+        );
+        let error = store
+            .commit_projection(commit_input(
+                &store,
+                operation_id.as_str(),
+                checkpoint,
+                &CancellationSignal::new(),
+            ))
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("successfully completed Call"),
+            "{status}: {error}"
+        );
+        assert_eq!(
+            (
+                projection_authority_counts(&store),
+                store.projection_head().unwrap(),
+                store.compaction_resource_cut().unwrap(),
+                store.load_auxiliary_call(&call_id, current_cut).unwrap(),
+                store.load_canonical().unwrap(),
+            ),
+            before,
+            "{status}: rejected Summary dependency changed durable authority"
+        );
+    }
 }
 
 #[test]

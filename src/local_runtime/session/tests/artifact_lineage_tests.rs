@@ -208,21 +208,6 @@ pub(super) fn source(
 pub(super) fn link_summary_generation(
     store: &SqliteConversationStore,
 ) -> (AuxiliaryCallId, RequestId, u64) {
-    link_summary_generation_with_outcome(store, true)
-}
-
-#[allow(clippy::type_complexity)]
-pub(super) fn link_failed_summary_generation(
-    store: &SqliteConversationStore,
-) -> (AuxiliaryCallId, RequestId, u64) {
-    link_summary_generation_with_outcome(store, false)
-}
-
-#[allow(clippy::type_complexity)]
-fn link_summary_generation_with_outcome(
-    store: &SqliteConversationStore,
-    completed: bool,
-) -> (AuxiliaryCallId, RequestId, u64) {
     use crate::model::auxiliary::{
         AuxiliaryAttribution, AuxiliaryBusinessSource, AuxiliaryCallStart, AuxiliaryFingerprint,
         AuxiliaryInputEvidence, AuxiliaryRequestStart,
@@ -291,7 +276,7 @@ fn link_summary_generation_with_outcome(
             Utc::now(),
         )
         .unwrap();
-    super::archive_tests::settle_auxiliary(store, call_id.clone(), request_id.clone(), completed);
+    super::archive_tests::settle_auxiliary(store, call_id.clone(), request_id.clone(), true);
     let through = store.auxiliary_audit_cut().unwrap().journal;
     candidate.summary_generation = Some(crate::context::checkpoint::SummaryGenerationRef {
         conversation_id: store.conversation_id().clone(),
@@ -308,24 +293,19 @@ fn link_summary_generation_with_outcome(
     (call_id, request_id, through)
 }
 
-/// Commit a checkpoint against the Call's complete facts at the request cut,
-/// then settle the source Call only after that historical view exists.
-#[allow(clippy::type_complexity)]
-pub(super) fn link_open_summary_generation(
+/// Build detached historical inspection input from real, cut-bounded audit rows.
+/// Open and failed source evidence never authorizes a new local checkpoint.
+#[allow(clippy::too_many_lines, clippy::type_complexity)]
+pub(super) fn historical_summary_audit_fixture(
     store: &SqliteConversationStore,
-) -> (AuxiliaryCallId, RequestId, u64) {
+    failed: bool,
+) -> (AuxiliaryCallId, RequestId, u64, LineageReadCut) {
     use crate::model::auxiliary::{
         AuxiliaryAttribution, AuxiliaryBusinessSource, AuxiliaryCallStart, AuxiliaryFingerprint,
         AuxiliaryInputEvidence, AuxiliaryRequestStart,
     };
     use crate::runtime::identity::CompactionOperationId;
 
-    let mut candidate = crate::scripted_suites::support::context::checkpoint_fixture(
-        store,
-        "summary-open-link",
-        1,
-        "Open linked Summary generation",
-    );
     let operation_id = CompactionOperationId::new("operation:summary-open-link");
     let call_id = AuxiliaryCallId::generate();
     let request_id =
@@ -382,20 +362,62 @@ pub(super) fn link_open_summary_generation(
             Utc::now(),
         )
         .unwrap();
-    let through = store.auxiliary_audit_cut().unwrap().journal;
-    candidate.summary_generation = Some(crate::context::checkpoint::SummaryGenerationRef {
-        conversation_id: store.conversation_id().clone(),
-        call_id: call_id.clone(),
-        through_journal: through,
-    });
-    store
-        .commit_projection(
-            crate::scripted_suites::support::context::checkpoint_commit_fixture(
-                store, candidate, None,
-            ),
-        )
+    if failed {
+        super::archive_tests::settle_auxiliary(store, call_id.clone(), request_id.clone(), false);
+    }
+    let audit_cut = store.auxiliary_audit_cut().unwrap();
+    let through = audit_cut.journal;
+    let mut source_cut = store
+        .read_lineage_cut(store.load_head().unwrap().revision)
         .unwrap();
-    (call_id, request_id, through)
+    let checkpoint = source_cut.projections.last_mut().unwrap();
+    checkpoint.candidate.summary_generation =
+        Some(crate::context::checkpoint::SummaryGenerationRef {
+            conversation_id: store.conversation_id().clone(),
+            call_id: call_id.clone(),
+            through_journal: through,
+        });
+    checkpoint.fingerprint = checkpoint.candidate.fingerprint();
+    let page = store.read_auxiliary_audit(audit_cut, None, 32).unwrap();
+    assert!(page.next_offset.is_none());
+    assert!(source_cut.auxiliary_audits.is_empty());
+    source_cut
+        .auxiliary_audits
+        .push(crate::durable::reading::AuxiliaryAuditSnapshot {
+            origin: crate::durable::reading::AuxiliaryAuditOrigin::Local,
+            source_conversation_id: store.conversation_id().clone(),
+            call_id: call_id.clone(),
+            through_journal: through,
+            completeness: if failed {
+                crate::durable::reading::AuxiliaryAuditCompleteness::CompleteAtCut
+            } else {
+                crate::durable::reading::AuxiliaryAuditCompleteness::OpenAtCut
+            },
+            records: page
+                .records
+                .into_iter()
+                .filter(|record| match &record.fact {
+                    crate::model::auxiliary::AuxiliaryAuditFact::CallStarted(call)
+                    | crate::model::auxiliary::AuxiliaryAuditFact::CallSettled(call) => {
+                        call.call_id == call_id
+                    }
+                    crate::model::auxiliary::AuxiliaryAuditFact::RequestStarted(request)
+                    | crate::model::auxiliary::AuxiliaryAuditFact::RequestSettled(request) => {
+                        request.call_id == call_id
+                    }
+                })
+                .collect(),
+        });
+    assert!(
+        store
+            .projection_head()
+            .unwrap()
+            .unwrap()
+            .candidate
+            .summary_generation
+            .is_none()
+    );
+    (call_id, request_id, through, source_cut)
 }
 
 #[test]

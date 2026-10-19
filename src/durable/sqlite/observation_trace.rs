@@ -220,6 +220,9 @@ pub(super) fn facts(
             Some(anchor_sequence)
         }
     };
+    // Required membership is written with the original event before optional
+    // Trace capture. It excludes auxiliary facts while retaining primary facts
+    // whose header or ownership is missing, so those failures remain visible.
     // Seek only bounded numeric candidates per closed kind, then fetch <=32
     // headers. No original body and no growing multi-kind sort is read.
     let mut sequences = Vec::with_capacity(query.limit * query.kinds.len());
@@ -229,10 +232,13 @@ pub(super) fn facts(
                 ("events_trace_owner_idx", "observation_trace_owner=?5")
             }
             TraceFactScope::Agent => (
-                "events_trace_kind_idx",
-                "EXISTS(SELECT 1 FROM request_owners o WHERE o.owner_kind='agent' AND (o.start_sequence=events.sequence OR o.terminal_sequence=events.sequence))",
+                "events_primary_trace_kind_idx",
+                "observation_trace_fact_required=1 AND observation_kind IN ('model_request_started','model_request_completed','model_request_failed')",
             ),
-            TraceFactScope::All => ("events_trace_kind_idx", "1=1"),
+            TraceFactScope::All => (
+                "events_primary_trace_kind_idx",
+                "observation_trace_fact_required=1",
+            ),
         };
         let sql = format!(
             "SELECT sequence FROM events INDEXED BY {index} WHERE observation_kind=?1 AND sequence<?2 AND sequence>?3 AND sequence<=?4 AND {predicate} ORDER BY sequence {} LIMIT ?6",

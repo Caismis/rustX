@@ -5053,6 +5053,22 @@ impl ConversationStore for SqliteConversationStore {
         SqliteConversationStore::load_auxiliary_request(self, request_id, cut)
     }
 
+    fn read_auxiliary_call_requests(
+        &self,
+        call_id: &crate::runtime::identity::AuxiliaryCallId,
+        cut: crate::model::auxiliary::AuxiliaryAuditCut,
+        after_started_sequence: Option<u64>,
+        limit: usize,
+    ) -> Result<Vec<crate::model::auxiliary::AuxiliaryRequestAudit>, ConversationStoreError> {
+        SqliteConversationStore::read_auxiliary_call_requests(
+            self,
+            call_id,
+            cut,
+            after_started_sequence,
+            limit,
+        )
+    }
+
     fn latest_contribution_emission(
         &self,
         producer: &crate::runtime::identity::ContextContributorIdentity,
@@ -14565,6 +14581,9 @@ mod tests {
     }
     mod auxiliary_supervision_tests {
         include!("sqlite/auxiliary_supervision_tests.rs");
+    }
+    mod auxiliary_adversarial_tests {
+        include!("sqlite/auxiliary_adversarial_tests.rs");
     }
     use super::*;
 

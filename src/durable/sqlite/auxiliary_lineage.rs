@@ -1324,6 +1324,13 @@ pub(super) fn validate_local_reference(
             "Summary generation closure does not begin with CallStarted",
         ));
     };
+    if snapshot.value.completeness != AuxiliaryAuditCompleteness::CompleteAtCut
+        || call.outcome != Some(AuxiliaryCallOutcome::Completed)
+    {
+        return Err(invalid(
+            "new Summary generation requires a successfully completed Call at its declared cut",
+        ));
+    }
     let input_matches_capture = matches!(
         &call.input,
         crate::model::auxiliary::AuxiliaryInputEvidence::Historical {

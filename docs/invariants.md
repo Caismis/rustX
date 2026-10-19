@@ -7624,5 +7624,9 @@ when required by lineage/dependency closure; no stronger global audit is implied
 - Local audit survives for the Conversation lifetime. Inherited source audit is
   separate from local execution, admission, quota and correlation. History
   overlap alone does not create a Summary generation dependency.
+- A new local checkpoint's Summary generation dependency requires successful
+  physical generation and a completed local Call at its declared Journal cut.
+  Historical inspection and inherited source audit retain their captured open
+  or failed outcomes without authorizing a new checkpoint commit.
 - See [Auxiliary request facts and inspection](auxiliary-execution.md) for bounds,
   uncertainty, source ownership and validation.

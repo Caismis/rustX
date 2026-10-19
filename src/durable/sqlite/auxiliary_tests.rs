@@ -9,12 +9,11 @@ use crate::durable::inbox::ConversationStoreError;
 use crate::model::auxiliary::{
     AUXILIARY_CALL_START_ENCODED_MAX, AUXILIARY_INPUT_MESSAGE_REF_LIMIT_MAX,
     AUXILIARY_REQUEST_ID_BYTES_MAX, AUXILIARY_REQUEST_MODEL_BYTES_MAX,
-    AUXILIARY_TERMINAL_ENVELOPE_ENCODED_MAX, AuxiliaryAuditCut, AuxiliaryAuditFact,
-    AuxiliaryBusinessSource, AuxiliaryCallOutcome, AuxiliaryCallStart,
-    AuxiliaryAttribution, AuxiliaryCommitConfirmation, AuxiliaryCommitDisposition,
-    AuxiliaryFingerprint, AuxiliaryInputEvidence, AuxiliaryObservedProviderTerminal,
-    AuxiliaryRequestEvidence, AuxiliaryRequestStart, AuxiliaryRequestTerminal,
-    AuxiliaryUsageCompleteness,
+    AUXILIARY_TERMINAL_ENVELOPE_ENCODED_MAX, AuxiliaryAttribution, AuxiliaryAuditCut,
+    AuxiliaryAuditFact, AuxiliaryBusinessSource, AuxiliaryCallOutcome, AuxiliaryCallStart,
+    AuxiliaryCommitConfirmation, AuxiliaryCommitDisposition, AuxiliaryFingerprint,
+    AuxiliaryInputEvidence, AuxiliaryObservedProviderTerminal, AuxiliaryRequestEvidence,
+    AuxiliaryRequestStart, AuxiliaryRequestTerminal, AuxiliaryUsageCompleteness,
 };
 use crate::model::deadline::ModelTimeoutPhase;
 use crate::model::finish::ModelFinishReason;
@@ -101,7 +100,10 @@ fn request_terminal(
     completed: bool,
     usage: Option<ModelUsage>,
 ) -> RuntimeEventEnvelope {
-    let event_id = format!("auxiliary-request-{}:{request_id}", if completed { "completed" } else { "failed" });
+    let event_id = format!(
+        "auxiliary-request-{}:{request_id}",
+        if completed { "completed" } else { "failed" }
+    );
     let owner = ModelRequestOwner::Auxiliary { call_id, ordinal };
     let event = if completed {
         RuntimeEvent::ModelRequestCompleted {
@@ -120,11 +122,7 @@ fn request_terminal(
             generation: None,
         }
     };
-    auxiliary_envelope(
-        store,
-        event_id,
-        event,
-    )
+    auxiliary_envelope(store, event_id, event)
 }
 
 fn failed_terminal_with_encoded_len(
@@ -188,9 +186,7 @@ fn initialized_store() -> (tempfile::TempDir, SqliteConversationStore) {
         &directory.path().join("auxiliary.sqlite"),
     )
     .unwrap();
-    store
-        .initialize(&[user_message("base", "base")])
-        .unwrap();
+    store.initialize(&[user_message("base", "base")]).unwrap();
     (directory, store)
 }
 
@@ -205,8 +201,7 @@ fn assert_known_not_committed<T: core::fmt::Debug>(
 
 fn append_generic_events(store: &SqliteConversationStore, namespace: &str, count: usize) {
     for index in 0..count {
-        let attempt_id =
-            crate::runtime::identity::AttemptId::new(format!("{namespace}-{index}"));
+        let attempt_id = crate::runtime::identity::AttemptId::new(format!("{namespace}-{index}"));
         let mut envelope = auxiliary_envelope(
             store,
             format!("{namespace}-event-{index}"),
@@ -289,7 +284,10 @@ fn auxiliary_lifecycle_round_trips_through_real_sqlite_and_reopen() {
         settlement.disposition,
         AuxiliaryCommitDisposition::NewlyCommitted
     );
-    assert_eq!(settlement.call.outcome, Some(AuxiliaryCallOutcome::Completed));
+    assert_eq!(
+        settlement.call.outcome,
+        Some(AuxiliaryCallOutcome::Completed)
+    );
     let request_audit = settlement.request.as_ref().unwrap();
     assert_eq!(
         request_audit.local_terminal,
@@ -360,7 +358,9 @@ fn auxiliary_lifecycle_round_trips_through_real_sqlite_and_reopen() {
     let snapshots: u64 = store
         .lock()
         .unwrap()
-        .query_row("SELECT count(*) FROM request_snapshots", [], |row| row.get(0))
+        .query_row("SELECT count(*) FROM request_snapshots", [], |row| {
+            row.get(0)
+        })
         .unwrap();
     assert_eq!(snapshots, 0);
 
@@ -371,9 +371,7 @@ fn auxiliary_lifecycle_round_trips_through_real_sqlite_and_reopen() {
         AuxiliaryCommitConfirmation::ConfirmedCommitted(_)
     ));
     assert!(matches!(
-        reopened
-            .confirm_auxiliary_request_start(&request)
-            .unwrap(),
+        reopened.confirm_auxiliary_request_start(&request).unwrap(),
         AuxiliaryCommitConfirmation::ConfirmedCommitted(_)
     ));
     assert!(matches!(
@@ -440,13 +438,9 @@ fn historical_input_uses_the_complete_native_cut() {
 
     let mut missing_compaction = call_start(AuxiliaryCallId::generate());
     missing_compaction.business_source = AuxiliaryBusinessSource::Compaction {
-        operation_id: crate::runtime::identity::CompactionOperationId::new(
-            "missing-compaction",
-        ),
+        operation_id: crate::runtime::identity::CompactionOperationId::new("missing-compaction"),
     };
-    assert_known_not_committed(
-        store.commit_auxiliary_call_start(&missing_compaction, timestamp()),
-    );
+    assert_known_not_committed(store.commit_auxiliary_call_start(&missing_compaction, timestamp()));
 
     let mut foreign = call_start(AuxiliaryCallId::generate());
     let mut foreign_cut = cut;
@@ -473,16 +467,15 @@ fn auxiliary_bounds_are_checked_before_any_durable_allocation() {
     let request_rows: i64 = store
         .lock()
         .unwrap()
-        .query_row("SELECT count(*) FROM auxiliary_requests", [], |row| row.get(0))
+        .query_row("SELECT count(*) FROM auxiliary_requests", [], |row| {
+            row.get(0)
+        })
         .unwrap();
     let mut oversized_model = request_start(call_id.clone(), 0, generated_request_id());
     oversized_model.model = "m".repeat(AUXILIARY_REQUEST_MODEL_BYTES_MAX + 1);
-    assert_known_not_committed(
-        store.commit_auxiliary_request_start(&oversized_model, timestamp()),
-    );
+    assert_known_not_committed(store.commit_auxiliary_request_start(&oversized_model, timestamp()));
     let mut oversized_request = request_start(call_id.clone(), 0, generated_request_id());
-    oversized_request.request_id =
-        RequestId::new("r".repeat(AUXILIARY_REQUEST_ID_BYTES_MAX + 1));
+    oversized_request.request_id = RequestId::new("r".repeat(AUXILIARY_REQUEST_ID_BYTES_MAX + 1));
     assert_known_not_committed(
         store.commit_auxiliary_request_start(&oversized_request, timestamp()),
     );
@@ -501,16 +494,17 @@ fn auxiliary_bounds_are_checked_before_any_durable_allocation() {
     encoded_oversize.selected_message_ids = (0..AUXILIARY_INPUT_MESSAGE_REF_LIMIT_MAX)
         .map(|index| MessageId::new(format!("{index}-{}", "x".repeat(600))))
         .collect();
-    assert!(serde_json::to_vec(&encoded_oversize).unwrap().len() > AUXILIARY_CALL_START_ENCODED_MAX);
-    assert_known_not_committed(
-        store.commit_auxiliary_call_start(&encoded_oversize, timestamp()),
+    assert!(
+        serde_json::to_vec(&encoded_oversize).unwrap().len() > AUXILIARY_CALL_START_ENCODED_MAX
     );
+    assert_known_not_committed(store.commit_auxiliary_call_start(&encoded_oversize, timestamp()));
     assert_eq!(store.auxiliary_audit_cut().unwrap(), before);
     assert_eq!(
         store
             .lock()
             .unwrap()
-            .query_row("SELECT count(*) FROM events", [], |row| row.get::<_, i64>(0))
+            .query_row("SELECT count(*) FROM events", [], |row| row
+                .get::<_, i64>(0))
             .unwrap(),
         event_rows
     );
@@ -533,14 +527,8 @@ fn auxiliary_bounds_are_checked_before_any_durable_allocation() {
         )
         .unwrap();
     let before_terminal = store.auxiliary_audit_cut().unwrap();
-    let mut oversized_terminal = request_terminal(
-        &store,
-        call_id.clone(),
-        0,
-        request_id.clone(),
-        false,
-        None,
-    );
+    let mut oversized_terminal =
+        request_terminal(&store, call_id.clone(), 0, request_id.clone(), false, None);
     if let RuntimeEvent::ModelRequestFailed { error, .. } = &mut oversized_terminal.event {
         error.message = "x".repeat(20_000);
     }
@@ -581,8 +569,7 @@ fn terminal_reserved_sequence_bound_is_exact_after_late_allocation() {
     let before = store.auxiliary_audit_cut().unwrap();
 
     let max_sequence_digits = u64::MAX.to_string().len();
-    let exact_initial_len =
-        AUXILIARY_TERMINAL_ENVELOPE_ENCODED_MAX - (max_sequence_digits - 1);
+    let exact_initial_len = AUXILIARY_TERMINAL_ENVELOPE_ENCODED_MAX - (max_sequence_digits - 1);
     let settled = call_terminal(
         &store,
         call_id.clone(),
@@ -608,12 +595,7 @@ fn terminal_reserved_sequence_bound_is_exact_after_late_allocation() {
 
     let receipt = store
         .commit_auxiliary_request_settlement(
-            failed_terminal_with_encoded_len(
-                &store,
-                call_id,
-                request_id,
-                exact_initial_len,
-            ),
+            failed_terminal_with_encoded_len(&store, call_id, request_id, exact_initial_len),
             settled,
         )
         .unwrap();
@@ -641,14 +623,7 @@ fn observed_completion_kind_must_match_local_completed_terminal() {
         )
         .unwrap();
     let before = store.auxiliary_audit_cut().unwrap();
-    let terminal = request_terminal(
-        &store,
-        call_id.clone(),
-        0,
-        request_id.clone(),
-        true,
-        None,
-    );
+    let terminal = request_terminal(&store, call_id.clone(), 0, request_id.clone(), true, None);
     let settled = call_terminal(
         &store,
         call_id,
@@ -664,9 +639,7 @@ fn observed_completion_kind_must_match_local_completed_terminal() {
         )),
     );
     assert!(matches!(
-        assert_known_not_committed(
-            store.commit_auxiliary_request_settlement(terminal, settled)
-        ),
+        assert_known_not_committed(store.commit_auxiliary_request_settlement(terminal, settled)),
         ConversationStoreError::InvalidReference(_)
     ));
     assert_eq!(store.auxiliary_audit_cut().unwrap(), before);
@@ -706,14 +679,7 @@ fn locally_completed_request_requires_observed_completion_without_partial_write(
     };
 
     let error = assert_known_not_committed(store.commit_auxiliary_request_settlement(
-        request_terminal(
-            &store,
-            call_id.clone(),
-            0,
-            request_id.clone(),
-            true,
-            None,
-        ),
+        request_terminal(&store, call_id.clone(), 0, request_id.clone(), true, None),
         call_terminal(
             &store,
             call_id.clone(),
@@ -790,10 +756,7 @@ fn unknown_provider_completion_prose_is_not_duplicated_into_audit() {
         true,
         Some(terminal_usage.clone()),
     );
-    let RuntimeEvent::ModelRequestCompleted {
-        finish_reason, ..
-    } = &mut terminal.event
-    else {
+    let RuntimeEvent::ModelRequestCompleted { finish_reason, .. } = &mut terminal.event else {
         unreachable!()
     };
     *finish_reason = ModelFinishReason::Other {
@@ -850,14 +813,7 @@ fn settlement_evidence_preserves_provider_and_local_outcomes() {
         AuxiliaryUsageCompleteness::Unreported,
         true,
     );
-    let terminal = request_terminal(
-        &store,
-        call_id.clone(),
-        0,
-        request_id.clone(),
-        false,
-        None,
-    );
+    let terminal = request_terminal(&store, call_id.clone(), 0, request_id.clone(), false, None);
     let settled = call_terminal(
         &store,
         call_id.clone(),
@@ -897,14 +853,8 @@ fn incomplete_usage_and_contradictory_provider_evidence_are_rejected() {
         .unwrap();
     let before = store.auxiliary_audit_cut().unwrap();
 
-    let missing_usage = request_terminal(
-        &store,
-        call_id.clone(),
-        0,
-        request_id.clone(),
-        true,
-        None,
-    );
+    let missing_usage =
+        request_terminal(&store, call_id.clone(), 0, request_id.clone(), true, None);
     let missing_usage_settled = call_terminal(
         &store,
         call_id.clone(),
@@ -953,14 +903,8 @@ fn incomplete_usage_and_contradictory_provider_evidence_are_rejected() {
         ),
     );
 
-    let local_completed = request_terminal(
-        &store,
-        call_id.clone(),
-        0,
-        request_id.clone(),
-        true,
-        None,
-    );
+    let local_completed =
+        request_terminal(&store, call_id.clone(), 0, request_id.clone(), true, None);
     let provider_failed = call_terminal(
         &store,
         call_id.clone(),
@@ -979,14 +923,7 @@ fn incomplete_usage_and_contradictory_provider_evidence_are_rejected() {
         store.commit_auxiliary_request_settlement(local_completed, provider_failed),
     );
 
-    let wrong_key = request_terminal(
-        &store,
-        call_id.clone(),
-        0,
-        request_id.clone(),
-        true,
-        None,
-    );
+    let wrong_key = request_terminal(&store, call_id.clone(), 0, request_id.clone(), true, None);
     let wrong_key_settled = call_terminal(
         &store,
         call_id.clone(),
@@ -1024,14 +961,7 @@ fn unreported_usage_stays_absent_instead_of_becoming_zero() {
         .unwrap();
     let committed = store
         .commit_auxiliary_request_settlement(
-            request_terminal(
-                &store,
-                call_id.clone(),
-                0,
-                request_id.clone(),
-                true,
-                None,
-            ),
+            request_terminal(&store, call_id.clone(), 0, request_id.clone(), true, None),
             call_terminal(
                 &store,
                 call_id,
@@ -1094,14 +1024,7 @@ fn final_request_settlement_rolls_back_atomically_and_reports_known_noncommit() 
              BEGIN SELECT RAISE(ABORT,'injected settlement failure'); END;",
         )
         .unwrap();
-    let terminal = request_terminal(
-        &store,
-        call_id.clone(),
-        0,
-        request_id.clone(),
-        true,
-        None,
-    );
+    let terminal = request_terminal(&store, call_id.clone(), 0, request_id.clone(), true, None);
     let settled = call_terminal(
         &store,
         call_id.clone(),
@@ -1209,9 +1132,7 @@ fn zero_request_ack_loss_is_exactly_confirmable_after_later_history() {
     let before_confirmation = store.auxiliary_audit_cut().unwrap();
 
     assert!(matches!(
-        store
-            .confirm_auxiliary_call_settlement(&expected)
-            .unwrap(),
+        store.confirm_auxiliary_call_settlement(&expected).unwrap(),
         AuxiliaryCommitConfirmation::ConfirmedCommitted(_)
     ));
     let mut with_sequence = expected.clone();
@@ -1386,13 +1307,7 @@ fn dense_audit_offsets_and_total_are_independent_of_journal_sequence() {
     assert!(store.load_auxiliary_call(&later, cut).unwrap().is_none());
     assert!(
         store
-            .read_auxiliary_audit(
-                AuxiliaryAuditCut {
-                    journal: u64::MAX,
-                },
-                None,
-                1,
-            )
+            .read_auxiliary_audit(AuxiliaryAuditCut { journal: u64::MAX }, None, 1,)
             .is_err()
     );
     assert!(store.read_auxiliary_audit(cut, Some(34), 1).is_err());
@@ -1404,7 +1319,12 @@ fn dense_audit_offsets_and_total_are_independent_of_journal_sequence() {
     {
         assert_eq!(record.audit_offset, index as u64 + 1);
     }
-    assert!(store.load_auxiliary_call(&call_ids[0], cut).unwrap().is_some());
+    assert!(
+        store
+            .load_auxiliary_call(&call_ids[0], cut)
+            .unwrap()
+            .is_some()
+    );
 }
 
 #[test]
@@ -1447,14 +1367,7 @@ fn optional_observation_capture_failure_preserves_authoritative_audit() {
         .unwrap();
     store
         .commit_auxiliary_request_settlement(
-            request_terminal(
-                &store,
-                call_id.clone(),
-                0,
-                request_id.clone(),
-                true,
-                None,
-            ),
+            request_terminal(&store, call_id.clone(), 0, request_id.clone(), true, None),
             call_terminal(
                 &store,
                 call_id.clone(),
@@ -1524,14 +1437,7 @@ fn auxiliary_completion_never_establishes_primary_p_marker() {
         .unwrap();
     store
         .commit_auxiliary_request_settlement(
-            request_terminal(
-                &store,
-                call_id.clone(),
-                0,
-                request_id.clone(),
-                true,
-                None,
-            ),
+            request_terminal(&store, call_id.clone(), 0, request_id.clone(), true, None),
             call_terminal(
                 &store,
                 call_id,
@@ -1623,9 +1529,7 @@ fn auxiliary_request_cap_does_not_limit_agent_request_identity() {
 #[test]
 fn auxiliary_request_cannot_reuse_an_agent_request_owner() {
     let store = store();
-    store
-        .initialize(&[user_message("base", "base")])
-        .unwrap();
+    store.initialize(&[user_message("base", "base")]).unwrap();
     let mut snapshot = test_request_snapshot(store.load_head().unwrap().revision, invocation());
     freeze_test_input(&store, &mut snapshot, &[]);
     store
@@ -1649,10 +1553,7 @@ fn auxiliary_request_cannot_reuse_an_agent_request_owner() {
     );
     assert!(
         store
-            .load_auxiliary_request(
-                &snapshot.request_id,
-                store.auxiliary_audit_cut().unwrap(),
-            )
+            .load_auxiliary_request(&snapshot.request_id, store.auxiliary_audit_cut().unwrap(),)
             .unwrap()
             .is_none()
     );
@@ -1666,10 +1567,7 @@ fn schema_70_is_rejected_without_rewriting_the_database() {
     store
         .lock()
         .unwrap()
-        .execute(
-            "UPDATE rustx_store SET schema_version=70 WHERE id=1",
-            [],
-        )
+        .execute("UPDATE rustx_store SET schema_version=70 WHERE id=1", [])
         .unwrap();
     drop(store);
     let before = std::fs::read(&path).unwrap();
@@ -1708,7 +1606,10 @@ fn resource_read_cut_is_part_of_the_stored_call_identity() {
     let receipt = store
         .commit_auxiliary_call_start(&start, timestamp())
         .unwrap();
-    assert_eq!(receipt.call.input, AuxiliaryInputEvidence::Historical { cut });
+    assert_eq!(
+        receipt.call.input,
+        AuxiliaryInputEvidence::Historical { cut }
+    );
     assert!(matches!(
         receipt.event.event,
         RuntimeEvent::AuxiliaryCallStarted { .. }
@@ -1878,6 +1779,305 @@ fn settlement_constructor_rejects_primary_and_nonterminal_events() {
         assert!(
             auxiliary_settlement_envelope(store.conversation_id().clone(), timestamp(), event)
                 .is_err()
+        );
+    }
+}
+
+mod call_request_lookup {
+    use super::*;
+
+    #[test]
+    fn local_requests_preserve_frozen_cuts_and_validate_exact_cursor_authority() {
+        let (directory, store) = initialized_store();
+        let conversation = store.conversation_id().clone();
+        let before_call = store.auxiliary_audit_cut().unwrap();
+        let call_id = AuxiliaryCallId::generate();
+        let mut call = call_start(call_id.clone());
+        call.purpose = AuxiliaryAttribution::new("suggested_input").unwrap();
+        call.trigger = AuxiliaryAttribution::new("draft_revision").unwrap();
+        call.business_source = AuxiliaryBusinessSource::Business {
+            namespace: AuxiliaryAttribution::new("composer").unwrap(),
+            reference: AuxiliaryAttribution::new("draft-17").unwrap(),
+        };
+        let started = store
+            .commit_auxiliary_call_start(&call, timestamp())
+            .unwrap();
+        let before_request = store.auxiliary_audit_cut().unwrap();
+        let request = request_start(call_id.clone(), 0, generated_request_id());
+        let receipt = store
+            .commit_auxiliary_request_start(&request, timestamp())
+            .unwrap();
+        let historical = store.auxiliary_audit_cut().unwrap();
+        let expected = vec![receipt.request.clone()];
+        assert_eq!(
+            store
+                .read_auxiliary_call_requests(&call_id, historical, None, 1)
+                .unwrap(),
+            expected
+        );
+        for cut in [before_call, before_request] {
+            assert!(
+                store
+                    .read_auxiliary_call_requests(&call_id, cut, None, 32)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+
+        let other = call_start(AuxiliaryCallId::generate());
+        store
+            .commit_auxiliary_call_start(&other, timestamp())
+            .unwrap();
+        let other_request = request_start(other.call_id.clone(), 0, generated_request_id());
+        let other_receipt = store
+            .commit_auxiliary_request_start(&other_request, timestamp())
+            .unwrap();
+        let terminal = request_terminal(
+            &store,
+            call_id.clone(),
+            0,
+            request.request_id.clone(),
+            true,
+            None,
+        );
+        let settled = call_terminal(
+            &store,
+            call_id.clone(),
+            AuxiliaryCallOutcome::Completed,
+            Some(request_evidence(
+                request.request_id.clone(),
+                Some(AuxiliaryObservedProviderTerminal::Completed {
+                    finish_reason: crate::model::auxiliary::AuxiliaryFinishReason::Stop,
+                }),
+                None,
+                AuxiliaryUsageCompleteness::Unreported,
+                false,
+            )),
+        );
+        let settlement = store
+            .commit_auxiliary_request_settlement(terminal, settled)
+            .unwrap();
+        let current = store.auxiliary_audit_cut().unwrap();
+        let current_request = settlement.request.unwrap();
+        assert_eq!(
+            store
+                .read_auxiliary_call_requests(&call_id, current, None, 32)
+                .unwrap(),
+            vec![current_request.clone()]
+        );
+        assert_eq!(
+            store
+                .read_auxiliary_call_requests(&call_id, historical, None, 32)
+                .unwrap(),
+            expected
+        );
+        assert!(
+            store
+                .read_auxiliary_call_requests(&call_id, current, Some(receipt.event.sequence), 1)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            store
+                .read_auxiliary_call_requests(&AuxiliaryCallId::generate(), current, None, 1)
+                .unwrap()
+                .is_empty()
+        );
+        for cursor in [
+            0,
+            started.event.sequence,
+            other_receipt.event.sequence,
+            settlement.request_terminal.unwrap().sequence,
+            settlement.call_settled.sequence,
+            current.journal + 1,
+        ] {
+            assert!(
+                store
+                    .read_auxiliary_call_requests(&call_id, current, Some(cursor), 1)
+                    .is_err(),
+                "cursor {cursor}"
+            );
+        }
+        for limit in [0, 33, usize::MAX] {
+            assert!(
+                store
+                    .read_auxiliary_call_requests(&call_id, current, None, limit)
+                    .is_err(),
+                "limit {limit}"
+            );
+        }
+        assert!(
+            store
+                .read_auxiliary_call_requests(
+                    &call_id,
+                    before_request,
+                    Some(receipt.event.sequence),
+                    1
+                )
+                .is_err()
+        );
+        assert!(
+            store
+                .read_auxiliary_call_requests(
+                    &call_id,
+                    AuxiliaryAuditCut {
+                        journal: current.journal + 1
+                    },
+                    None,
+                    1
+                )
+                .is_err()
+        );
+        drop(store);
+        let reopened =
+            SqliteConversationStore::open(conversation, &directory.path().join("auxiliary.sqlite"))
+                .unwrap();
+        assert_eq!(
+            reopened
+                .read_auxiliary_call_requests(&call_id, historical, None, 32)
+                .unwrap(),
+            expected
+        );
+        assert_eq!(
+            reopened
+                .read_auxiliary_call_requests(&call_id, current, None, 32)
+                .unwrap(),
+            vec![current_request]
+        );
+    }
+
+    #[test]
+    fn missing_or_reassigned_request_evidence_cannot_become_an_empty_successful_page() {
+        for mutation in [
+            "DELETE FROM auxiliary_audit_facts WHERE sequence=?1",
+            "UPDATE auxiliary_audit_facts SET call_id=?3 WHERE sequence=?1",
+            "UPDATE auxiliary_audit_facts SET request_id='foreign-request' WHERE sequence=?1",
+            "UPDATE auxiliary_audit_facts SET ordinal=1 WHERE sequence=?1",
+            "DELETE FROM auxiliary_requests WHERE request_id=?2",
+            "DELETE FROM request_owners WHERE request_id=?2",
+        ] {
+            let (_directory, store) = initialized_store();
+            let call_id = AuxiliaryCallId::generate();
+            store
+                .commit_auxiliary_call_start(&call_start(call_id.clone()), timestamp())
+                .unwrap();
+            let request = request_start(call_id.clone(), 0, generated_request_id());
+            let started = store
+                .commit_auxiliary_request_start(&request, timestamp())
+                .unwrap();
+            let other = call_start(AuxiliaryCallId::generate());
+            store
+                .commit_auxiliary_call_start(&other, timestamp())
+                .unwrap();
+            let cut = store.auxiliary_audit_cut().unwrap();
+            assert_eq!(
+                store
+                    .read_auxiliary_call_requests(&call_id, cut, None, 1)
+                    .unwrap(),
+                vec![started.request]
+            );
+            let connection = store.lock().unwrap();
+            let mut statement = connection.prepare(mutation).unwrap();
+            for (index, value) in [
+                (
+                    1,
+                    rusqlite::types::Value::Integer(i64::try_from(started.event.sequence).unwrap()),
+                ),
+                (
+                    2,
+                    rusqlite::types::Value::Text(request.request_id.to_string()),
+                ),
+                (3, rusqlite::types::Value::Text(other.call_id.to_string())),
+            ] {
+                if index <= statement.parameter_count() {
+                    statement.raw_bind_parameter(index, value).unwrap();
+                }
+            }
+            assert_eq!(
+                statement.raw_execute().unwrap(),
+                1,
+                "fault must modify exactly one row"
+            );
+            drop(statement);
+            drop(connection);
+            assert!(
+                store
+                    .read_auxiliary_call_requests(&call_id, cut, None, 1)
+                    .is_err(),
+                "mutation: {mutation}"
+            );
+            assert!(
+                store
+                    .read_auxiliary_call_requests(&call_id, cut, Some(started.event.sequence), 1)
+                    .is_err(),
+                "cursor mutation: {mutation}"
+            );
+        }
+    }
+
+    #[test]
+    fn call_request_selection_seeks_only_the_requested_call_and_captured_interval() {
+        let store = store();
+        store.initialize(&[]).unwrap();
+        let call_id = AuxiliaryCallId::generate();
+        store
+            .commit_auxiliary_call_start(&call_start(call_id.clone()), timestamp())
+            .unwrap();
+        let request = request_start(call_id.clone(), 0, generated_request_id());
+        let started = store
+            .commit_auxiliary_request_start(&request, timestamp())
+            .unwrap();
+        for _ in 0..128 {
+            let other = call_start(AuxiliaryCallId::generate());
+            store
+                .commit_auxiliary_call_start(&other, timestamp())
+                .unwrap();
+            let unrelated = request_start(other.call_id, 0, generated_request_id());
+            store
+                .commit_auxiliary_request_start(&unrelated, timestamp())
+                .unwrap();
+        }
+        let cut = store.auxiliary_audit_cut().unwrap();
+        assert_eq!(
+            store
+                .read_auxiliary_call_requests(&call_id, cut, None, 1)
+                .unwrap(),
+            vec![started.request]
+        );
+        assert!(
+            store
+                .read_auxiliary_call_requests(&call_id, cut, Some(started.event.sequence), 1)
+                .unwrap()
+                .is_empty()
+        );
+        let connection = store.lock().unwrap();
+        let selected_steps = |sql: &str| {
+            let mut statement = connection.prepare(sql).unwrap();
+            let rows = statement
+                .query_map(
+                    params![call_id.as_str(), started.event.sequence, cut.journal, 1],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            assert!(rows.is_empty());
+            assert_eq!(statement.get_status(rusqlite::StatementStatus::Sort), 0);
+            statement.get_status(rusqlite::StatementStatus::VmStep)
+        };
+        let bounded = selected_steps(super::super::super::auxiliary::AUXILIARY_CALL_REQUESTS_SQL);
+        let unbounded = selected_steps(
+            "SELECT sequence FROM auxiliary_audit_facts NOT INDEXED
+             WHERE call_id=?1 AND sequence>?2 AND sequence<=?3 AND kind='request_started'
+             ORDER BY sequence LIMIT ?4",
+        );
+        assert!(
+            bounded < 100,
+            "keyed empty-page lookup executed {bounded} VM steps"
+        );
+        assert!(
+            unbounded > bounded * 10,
+            "negative control did not visit unrelated Calls: {bounded} vs {unbounded}"
         );
     }
 }

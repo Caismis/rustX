@@ -424,8 +424,6 @@ async fn archive_cut_before_auxiliary_settlement_does_not_leak_later_terminal() 
 async fn archive_exports_only_named_inherited_summary_generation_audit() {
     let (directory, mut catalog, _) = open_catalog();
     let (store, _) = super::artifact_lineage_tests::source(&catalog, false);
-    let (call_id, request_id, through) =
-        super::artifact_lineage_tests::link_failed_summary_generation(&store);
     let (unrelated_call, unrelated_request) = start_auxiliary(
         &store,
         AuxiliaryAttribution::new("btw").unwrap(),
@@ -437,9 +435,8 @@ async fn archive_exports_only_named_inherited_summary_generation_audit() {
         unrelated_request.clone(),
         true,
     );
-    let source_cut = store
-        .read_lineage_cut(store.load_head().unwrap().revision)
-        .unwrap();
+    let (call_id, request_id, through, source_cut) =
+        super::artifact_lineage_tests::historical_summary_audit_fixture(&store, true);
     assert_eq!(source_cut.auxiliary_audits.len(), 1);
     let clone = catalog
         .prepare_clone_session(&state(), &source_cut)
@@ -510,11 +507,8 @@ async fn archive_exports_only_named_inherited_summary_generation_audit() {
 async fn archive_inherited_summary_cut_does_not_leak_later_settlement() {
     let (directory, mut catalog, _) = open_catalog();
     let (store, _) = super::artifact_lineage_tests::source(&catalog, false);
-    let (call_id, request_id, through) =
-        super::artifact_lineage_tests::link_open_summary_generation(&store);
-    let source_cut = store
-        .read_lineage_cut(store.load_head().unwrap().revision)
-        .unwrap();
+    let (call_id, request_id, through, source_cut) =
+        super::artifact_lineage_tests::historical_summary_audit_fixture(&store, false);
     assert_eq!(source_cut.auxiliary_audits[0].records.len(), 2);
     let clone = catalog
         .prepare_clone_session(&state(), &source_cut)

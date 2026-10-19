@@ -1,9 +1,9 @@
 use super::*;
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc;
 
 use chrono::{TimeZone, Utc};
 use futures_util::{StreamExt, stream};
@@ -16,14 +16,13 @@ use crate::durable::auxiliary::{
 use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
 use crate::model::adapter::{ModelAdapter, ModelStream, ModelStreamItem};
 use crate::model::auxiliary::{
-    AuxiliaryAuditFact, AuxiliaryBusinessSource, AuxiliaryCallOutcome, AuxiliaryCallStart, AuxiliaryAttribution, AuxiliaryCommitConfirmation,
-    AuxiliaryCommitDisposition, AuxiliaryFingerprint, AuxiliaryInputEvidence,
-    AuxiliaryObservedProviderTerminal, AuxiliaryRequestEvidence, AuxiliaryRequestStart,
-    AuxiliaryRequestTerminal, AuxiliaryUsageCompleteness,
+    AuxiliaryAttribution, AuxiliaryAuditFact, AuxiliaryBusinessSource, AuxiliaryCallOutcome,
+    AuxiliaryCallStart, AuxiliaryCommitConfirmation, AuxiliaryCommitDisposition,
+    AuxiliaryFingerprint, AuxiliaryInputEvidence, AuxiliaryObservedProviderTerminal,
+    AuxiliaryRequestEvidence, AuxiliaryRequestStart, AuxiliaryRequestTerminal,
+    AuxiliaryUsageCompleteness,
 };
-use crate::model::error::{
-    ModelError, ModelErrorKind, ModelRetryDisposition,
-};
+use crate::model::error::{ModelError, ModelErrorKind, ModelRetryDisposition};
 use crate::model::event::ModelEvent;
 use crate::model::finish::ModelFinishReason;
 use crate::model::snapshot::ModelRequestOwner;
@@ -33,9 +32,7 @@ use crate::model::{
     SelectedModelInput,
 };
 use crate::runtime::cancellation::CancellationSignal;
-use crate::runtime::identity::{
-    AuxiliaryCallId, RequestId, SystemUuidV7Generator,
-};
+use crate::runtime::identity::{AuxiliaryCallId, RequestId, SystemUuidV7Generator};
 
 const MAX_STAGES: usize = 16;
 
@@ -84,6 +81,8 @@ impl Trace {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AdapterScript {
     Complete,
+    UsageThenFailure,
+    UsageThenCompletionWithoutFinalUsage,
     AwaitCancellation,
 }
 
@@ -92,6 +91,7 @@ enum StreamTerminal {
     Completed {
         finish_reason: ModelFinishReason,
         usage: Option<ModelUsage>,
+        usage_completeness: AuxiliaryUsageCompleteness,
     },
     Failed {
         error: ModelError,
@@ -140,22 +140,38 @@ impl ModelAdapter for ScriptedAdapter {
         let _ = self.entered.send(());
 
         match self.script {
-            AdapterScript::Complete => Box::pin(stream::unfold(0_u8, |phase| async move {
-                match phase {
-                    0 => Some((
-                        ModelStreamItem::Event(ModelEvent::Started),
-                        phase + 1,
-                    )),
-                    1 => Some((
-                        ModelStreamItem::Event(ModelEvent::Completed {
-                            finish_reason: ModelFinishReason::Stop,
-                            usage: Some(success_usage()),
-                        }),
-                        phase + 1,
-                    )),
-                    _ => None,
-                }
-            })),
+            AdapterScript::Complete
+            | AdapterScript::UsageThenFailure
+            | AdapterScript::UsageThenCompletionWithoutFinalUsage => {
+                let terminal = match self.script {
+                    AdapterScript::Complete => ModelEvent::Completed {
+                        finish_reason: ModelFinishReason::Stop,
+                        usage: Some(success_usage()),
+                    },
+                    AdapterScript::UsageThenCompletionWithoutFinalUsage => ModelEvent::Completed {
+                        finish_reason: ModelFinishReason::Stop,
+                        usage: None,
+                    },
+                    AdapterScript::UsageThenFailure => ModelEvent::Failed {
+                        error: ModelError::timeout(
+                            crate::model::deadline::ModelTimeoutPhase::ResponseStart,
+                        ),
+                    },
+                    AdapterScript::AwaitCancellation => {
+                        unreachable!("cancellation owns its stream")
+                    }
+                };
+                Box::pin(stream::iter([
+                    ModelStreamItem::Event(ModelEvent::Started),
+                    ModelStreamItem::Event(ModelEvent::UsageUpdate {
+                        usage: earlier_usage(),
+                    }),
+                    ModelStreamItem::Event(ModelEvent::UsageUpdate {
+                        usage: latest_usage(),
+                    }),
+                    ModelStreamItem::Event(terminal),
+                ]))
+            }
             AdapterScript::AwaitCancellation => {
                 let state = CancellationState {
                     phase: 0,
@@ -165,10 +181,7 @@ impl ModelAdapter for ScriptedAdapter {
                     match state.phase {
                         0 => {
                             state.phase = 1;
-                            Some((
-                                ModelStreamItem::Event(ModelEvent::Started),
-                                state,
-                            ))
+                            Some((ModelStreamItem::Event(ModelEvent::Started), state))
                         }
                         1 => {
                             state.cancellation.cancelled().await;
@@ -259,22 +272,18 @@ impl OwnedWriter {
                         receipt,
                         reply,
                     } => {
-                        match store.commit_auxiliary_request_settlement(
-                            request_terminal,
-                            call_settled,
-                        ) {
+                        match store
+                            .commit_auxiliary_request_settlement(request_terminal, call_settled)
+                        {
                             Ok(commit) => {
                                 trace.record(Stage::SettlementCommitted);
                                 let disposition = commit.disposition;
                                 let reply_value = SettlementReply {
                                     disposition,
                                     request_terminal: canonical_terminal_envelope(
-                                        commit
-                                            .request_terminal
-                                            .clone()
-                                            .expect(
-                                                "final auxiliary settlement has a request terminal",
-                                            ),
+                                        commit.request_terminal.clone().expect(
+                                            "final auxiliary settlement has a request terminal",
+                                        ),
                                     ),
                                     call_settled: canonical_terminal_envelope(
                                         commit.call_settled.clone(),
@@ -378,9 +387,7 @@ impl OwnedWriter {
     }
 }
 
-fn canonical_terminal_envelope(
-    mut envelope: RuntimeEventEnvelope,
-) -> RuntimeEventEnvelope {
+fn canonical_terminal_envelope(mut envelope: RuntimeEventEnvelope) -> RuntimeEventEnvelope {
     envelope.tool_occurrence = None;
     envelope.observation = None;
     envelope
@@ -589,32 +596,42 @@ async fn run_operation(
     };
 
     let terminal = if dispatched {
-        let mut model_stream = adapter.stream(adapter_request(&request_start), cancellation.clone());
+        let mut model_stream =
+            adapter.stream(adapter_request(&request_start), cancellation.clone());
         let mut terminal = None;
+        // Trusted scripted cumulative updates exercise the Store handoff only.
+        // General provider stream-integrity validation belongs to AUX-02.
+        let mut observed_usage = None;
         while let Some(item) = model_stream.next().await {
             if terminal.is_some() {
                 return Err("adapter emitted an item after its terminal".to_owned());
             }
             match item {
                 ModelStreamItem::Event(ModelEvent::UsageUpdate { usage }) => {
-                    if let Some(StreamTerminal::Failed {
-                        usage: observed, ..
-                    }) = terminal.as_mut()
-                    {
-                        *observed = Some(usage);
-                    }
+                    observed_usage = Some(usage);
                 }
                 ModelStreamItem::Event(ModelEvent::Completed {
                     finish_reason,
                     usage,
                 }) => {
+                    let usage_completeness = if usage.is_some() {
+                        AuxiliaryUsageCompleteness::Complete
+                    } else if observed_usage.is_some() {
+                        AuxiliaryUsageCompleteness::Partial
+                    } else {
+                        AuxiliaryUsageCompleteness::Unreported
+                    };
                     terminal = Some(StreamTerminal::Completed {
                         finish_reason,
-                        usage,
+                        usage: usage.or_else(|| observed_usage.take()),
+                        usage_completeness,
                     });
                 }
                 ModelStreamItem::Event(ModelEvent::Failed { error }) => {
-                    terminal = Some(StreamTerminal::Failed { error, usage: None });
+                    terminal = Some(StreamTerminal::Failed {
+                        error,
+                        usage: observed_usage.take(),
+                    });
                 }
                 ModelStreamItem::Event(_) | ModelStreamItem::Progress(_) => {}
             }
@@ -628,12 +645,7 @@ async fn run_operation(
         }
     };
 
-    let settlement = settlement_for(
-        store,
-        &request_start,
-        dispatched,
-        terminal,
-    );
+    let settlement = settlement_for(store, &request_start, dispatched, terminal);
     let settlement_reply = writer
         .settle(
             settlement.request_terminal.clone(),
@@ -674,6 +686,7 @@ fn settlement_for(
         StreamTerminal::Completed {
             finish_reason,
             usage,
+            usage_completeness,
         } => {
             let evidence_usage = usage.clone();
             let request_terminal = runtime_envelope(
@@ -688,17 +701,11 @@ fn settlement_for(
             );
             let request_evidence = AuxiliaryRequestEvidence {
                 request_id: request_start.request_id.clone(),
-                observed_provider_terminal: Some(
-                    AuxiliaryObservedProviderTerminal::Completed {
-                        finish_reason: (&finish_reason).into(),
-                    },
-                ),
+                observed_provider_terminal: Some(AuxiliaryObservedProviderTerminal::Completed {
+                    finish_reason: (&finish_reason).into(),
+                }),
                 usage: evidence_usage,
-                usage_completeness: if usage.is_some() {
-                    AuxiliaryUsageCompleteness::Complete
-                } else {
-                    AuxiliaryUsageCompleteness::Unreported
-                },
+                usage_completeness,
                 remote_execution_uncertainty: false,
             };
             Settlement {
@@ -772,13 +779,13 @@ fn call_settled_envelope(
     )
 }
 
-fn runtime_envelope(
-    store: &SqliteConversationStore,
-    event: RuntimeEvent,
-) -> RuntimeEventEnvelope {
+fn runtime_envelope(store: &SqliteConversationStore, event: RuntimeEvent) -> RuntimeEventEnvelope {
     crate::durable::auxiliary::auxiliary_settlement_envelope(
-        store.conversation_id().clone(), fixture_time(), event,
-    ).unwrap()
+        store.conversation_id().clone(),
+        fixture_time(),
+        event,
+    )
+    .unwrap()
 }
 
 fn adapter_request(request_start: &AuxiliaryRequestStart) -> ModelRequest {
@@ -797,6 +804,27 @@ fn adapter_request(request_start: &AuxiliaryRequestStart) -> ModelRequest {
         effective_system_prompt: String::new(),
         continuation: None,
         continuation_source: None,
+    }
+}
+
+fn earlier_usage() -> ModelUsage {
+    ModelUsage {
+        input_tokens: 2,
+        output_tokens: 1,
+        total_tokens: 3,
+        details: Some(crate::model::types::UsageDetails {
+            reasoning_tokens: Some(1),
+            cached_input_tokens: Some(0),
+        }),
+    }
+}
+
+fn latest_usage() -> ModelUsage {
+    ModelUsage {
+        input_tokens: 7,
+        output_tokens: 4,
+        total_tokens: 11,
+        details: None,
     }
 }
 
@@ -863,10 +891,7 @@ fn drop_optional_layout_failure(store: &SqliteConversationStore) -> Result<(), S
         .map_err(|error| format!("drop optional auxiliary layout failure: {error}"))
 }
 
-fn observation_unavailable(
-    store: &SqliteConversationStore,
-    sequence: u64,
-) -> Result<bool, String> {
+fn observation_unavailable(store: &SqliteConversationStore, sequence: u64) -> Result<bool, String> {
     store
         .lock()
         .map_err(|error| error.to_string())?
@@ -929,9 +954,7 @@ fn assert_exact_committed_chain(
         "the four Call lifecycle facts commit exactly once and in order"
     );
     assert!(
-        facts
-            .windows(2)
-            .all(|pair| pair[0].0 < pair[1].0),
+        facts.windows(2).all(|pair| pair[0].0 < pair[1].0),
         "each lifecycle fact allocates a distinct Journal sequence"
     );
 
@@ -949,15 +972,18 @@ fn assert_exact_committed_chain(
     );
     assert_eq!(
         request.normalized_failure_kind,
-        (expected_outcome != AuxiliaryCallOutcome::Completed)
-            .then_some(ModelErrorKind::Cancelled)
+        match expected_outcome {
+            AuxiliaryCallOutcome::Completed => None,
+            AuxiliaryCallOutcome::Cancelled => Some(ModelErrorKind::Cancelled),
+            AuxiliaryCallOutcome::Failed => match &request_terminal.event {
+                RuntimeEvent::ModelRequestFailed { error, .. } => Some(error.kind.clone()),
+                _ => panic!("a failed Call must retain its physical failure"),
+            },
+        }
     );
     assert_eq!(request.usage, expected_evidence.usage);
     assert_eq!(&request.request_evidence, &Some(expected_evidence.clone()));
-    assert_eq!(
-        request.terminal_sequence,
-        Some(request_terminal.sequence)
-    );
+    assert_eq!(request.terminal_sequence, Some(request_terminal.sequence));
     let call = store
         .load_auxiliary_call(&request_start.call_id, cut)
         .unwrap()
@@ -966,14 +992,8 @@ fn assert_exact_committed_chain(
     assert_eq!(call.settled_sequence, Some(call_settled.sequence));
 
     for event_id in [
-        format!(
-            "auxiliary-call-started:{}",
-            request_start.call_id
-        ),
-        format!(
-            "auxiliary-request-started:{}",
-            request_start.request_id
-        ),
+        format!("auxiliary-call-started:{}", request_start.call_id),
+        format!("auxiliary-request-started:{}", request_start.request_id),
         request_terminal.event_id.to_string(),
         call_settled.event_id.to_string(),
     ] {
@@ -997,9 +1017,7 @@ fn event_count(store: &SqliteConversationStore, event_id: &str) -> i64 {
         .unwrap()
 }
 
-async fn finish_receipts(
-    fixture: &mut SupervisedFixture,
-) -> AuxiliarySettlementCommit {
+async fn finish_receipts(fixture: &mut SupervisedFixture) -> AuxiliarySettlementCommit {
     fixture.wait_committed().await;
     let receipt = fixture.receipt.take().expect("receipt receiver");
     fixture
@@ -1015,9 +1033,7 @@ async fn finish_receipts(
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn cancellation_before_dispatch_grant_never_enters_adapter_and_settles_cancelled() {
-    let store = Arc::new(
-        SqliteConversationStore::in_memory(ConversationId::generate()).unwrap(),
-    );
+    let store = Arc::new(SqliteConversationStore::in_memory(ConversationId::generate()).unwrap());
     let mut fixture = spawn_supervised(store.clone(), AdapterScript::Complete, false);
 
     fixture.next_stage(Stage::CallStartedCommitted).await;
@@ -1072,11 +1088,8 @@ async fn cancellation_before_dispatch_grant_never_enters_adapter_and_settles_can
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn dispatch_grant_wins_then_cancellation_exits_one_real_adapter_stream_before_settlement() {
-    let store = Arc::new(
-        SqliteConversationStore::in_memory(ConversationId::generate()).unwrap(),
-    );
-    let mut fixture =
-        spawn_supervised(store.clone(), AdapterScript::AwaitCancellation, false);
+    let store = Arc::new(SqliteConversationStore::in_memory(ConversationId::generate()).unwrap());
+    let mut fixture = spawn_supervised(store.clone(), AdapterScript::AwaitCancellation, false);
 
     fixture.next_stage(Stage::CallStartedCommitted).await;
     fixture.next_stage(Stage::RequestStartedCommitted).await;
@@ -1107,10 +1120,7 @@ async fn dispatch_grant_wins_then_cancellation_exits_one_real_adapter_stream_bef
     assert_ne!(writer_exit.thread_id, std::thread::current().id());
     assert_eq!(fixture.adapter_entries.load(Ordering::Acquire), 1);
     assert_eq!(core.call_outcome, AuxiliaryCallOutcome::Cancelled);
-    assert_eq!(
-        core.request_evidence.observed_provider_terminal,
-        None
-    );
+    assert_eq!(core.request_evidence.observed_provider_terminal, None);
     assert!(core.request_evidence.remote_execution_uncertainty);
     assert_exact_committed_chain(
         &store,
@@ -1124,10 +1134,138 @@ async fn dispatch_grant_wins_then_cancellation_exits_one_real_adapter_stream_bef
 
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
+async fn trusted_cumulative_usage_reaches_exact_settlement_without_primary_attribution() {
+    for (script, expected_outcome) in [
+        (
+            AdapterScript::UsageThenFailure,
+            AuxiliaryCallOutcome::Failed,
+        ),
+        (
+            AdapterScript::UsageThenCompletionWithoutFinalUsage,
+            AuxiliaryCallOutcome::Completed,
+        ),
+    ] {
+        let store =
+            Arc::new(SqliteConversationStore::in_memory(ConversationId::generate()).unwrap());
+        store
+            .initialize(&[user_message("usage-primary-human", "Primary input")])
+            .unwrap();
+        let mut primary = progress_request_snapshot(
+            "usage-primary-attempt",
+            "1",
+            0,
+            store.load_head().unwrap().revision,
+            Vec::new(),
+        );
+        freeze_test_input(&store, &mut primary, &[]);
+        store
+            .commit_model_turn_start(&[], &primary, fixture_time())
+            .unwrap();
+        let before = store.auxiliary_audit_cut().unwrap().journal;
+        let original_canonical = store.load_canonical().unwrap();
+        let original_head = store.load_head().unwrap();
+        let original_statistics = store.observation_agent_statistics(before).unwrap();
+        let original_occupancy = store.observation_occupancy(before).unwrap();
+        let original_trace_count = store.observation_trace_total(before).unwrap();
+        assert!(
+            original_trace_count > 0,
+            "the control requires a real primary request"
+        );
+
+        let mut fixture = spawn_supervised(store.clone(), script, false);
+        fixture.next_stage(Stage::CallStartedCommitted).await;
+        fixture.next_stage(Stage::RequestStartedCommitted).await;
+        fixture.send_grant();
+        fixture.next_stage(Stage::DispatchGranted).await;
+        fixture.next_stage(Stage::AdapterEntered).await;
+        fixture.next_stage(Stage::AdapterStreamExited).await;
+        fixture.next_stage(Stage::SettlementCommitted).await;
+        let receipt = finish_receipts(&mut fixture).await;
+        assert_eq!(
+            receipt.disposition,
+            AuxiliaryCommitDisposition::NewlyCommitted
+        );
+        fixture.next_stage(Stage::ReceiptDelivered).await;
+        fixture.next_stage(Stage::WriterJoined).await;
+        fixture.next_stage(Stage::OperationFinished).await;
+
+        let request_start = fixture.request_start.clone();
+        let entries = fixture.adapter_entries.clone();
+        let (core, writer_exit) = fixture.task.await.unwrap().unwrap();
+        assert_ne!(writer_exit.thread_id, std::thread::current().id());
+        assert_eq!(entries.load(Ordering::Acquire), 1);
+        assert_eq!(core.call_outcome, expected_outcome);
+        let expected_usage = ModelUsage {
+            input_tokens: 7,
+            output_tokens: 4,
+            total_tokens: 11,
+            details: None,
+        };
+        assert_eq!(core.request_evidence.usage, Some(expected_usage.clone()));
+        assert_eq!(
+            core.request_evidence.usage_completeness,
+            AuxiliaryUsageCompleteness::Partial
+        );
+        assert_ne!(expected_usage, earlier_usage());
+        assert_ne!(
+            expected_usage.total_tokens,
+            earlier_usage().total_tokens + latest_usage().total_tokens
+        );
+        match &core.request_terminal.event {
+            RuntimeEvent::ModelRequestFailed { error, usage, .. } => {
+                assert_eq!(expected_outcome, AuxiliaryCallOutcome::Failed);
+                assert_eq!(error.kind, ModelErrorKind::Timeout);
+                assert_eq!(usage.as_ref(), Some(&expected_usage));
+                assert!(core.request_evidence.remote_execution_uncertainty);
+                assert!(core.request_evidence.observed_provider_terminal.is_none());
+            }
+            RuntimeEvent::ModelRequestCompleted { usage, .. } => {
+                assert_eq!(expected_outcome, AuxiliaryCallOutcome::Completed);
+                assert_eq!(usage.as_ref(), Some(&expected_usage));
+                assert!(!core.request_evidence.remote_execution_uncertainty);
+                assert_eq!(
+                    core.request_evidence.observed_provider_terminal,
+                    Some(AuxiliaryObservedProviderTerminal::Completed {
+                        finish_reason: crate::model::auxiliary::AuxiliaryFinishReason::Stop,
+                    })
+                );
+            }
+            _ => panic!("the fixture must commit the scripted physical terminal"),
+        }
+        assert_exact_committed_chain(
+            &store,
+            &request_start,
+            &core.request_terminal,
+            &core.call_settled,
+            &core.request_evidence,
+            expected_outcome,
+        );
+        let after = store.auxiliary_audit_cut().unwrap().journal;
+        assert_eq!(store.load_canonical().unwrap(), original_canonical);
+        assert_eq!(store.load_head().unwrap(), original_head);
+        assert_eq!(
+            store.load_request_snapshot(&primary.request_id).unwrap(),
+            primary
+        );
+        assert_eq!(
+            store.observation_agent_statistics(after).unwrap(),
+            original_statistics
+        );
+        assert_eq!(
+            store.observation_occupancy(after).unwrap(),
+            original_occupancy
+        );
+        assert_eq!(
+            store.observation_trace_total(after).unwrap(),
+            original_trace_count
+        );
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn successful_stream_commits_then_lost_receipt_is_confirmed_only_after_both_joins() {
-    let store = Arc::new(
-        SqliteConversationStore::in_memory(ConversationId::generate()).unwrap(),
-    );
+    let store = Arc::new(SqliteConversationStore::in_memory(ConversationId::generate()).unwrap());
     let mut fixture = spawn_supervised(store.clone(), AdapterScript::Complete, false);
 
     fixture.next_stage(Stage::CallStartedCommitted).await;
@@ -1139,7 +1277,12 @@ async fn successful_stream_commits_then_lost_receipt_is_confirmed_only_after_bot
     fixture.next_stage(Stage::SettlementCommitted).await;
 
     fixture.wait_committed().await;
-    drop(fixture.receipt.take().expect("real settlement receipt receiver"));
+    drop(
+        fixture
+            .receipt
+            .take()
+            .expect("real settlement receipt receiver"),
+    );
     fixture.trace.record(Stage::ReceiptReceiverDropped);
     fixture.next_stage(Stage::ReceiptReceiverDropped).await;
     fixture
@@ -1197,9 +1340,7 @@ async fn successful_stream_commits_then_lost_receipt_is_confirmed_only_after_bot
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn optional_layout_failure_does_not_change_successful_mandatory_settlement() {
-    let store = Arc::new(
-        SqliteConversationStore::in_memory(ConversationId::generate()).unwrap(),
-    );
+    let store = Arc::new(SqliteConversationStore::in_memory(ConversationId::generate()).unwrap());
     let mut fixture = spawn_supervised(store.clone(), AdapterScript::Complete, true);
 
     fixture.next_stage(Stage::CallStartedCommitted).await;
@@ -1252,12 +1393,9 @@ fn unfinished_blocked_writer_is_unknown_then_joined_commit_is_exact() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("auxiliary-supervision.sqlite");
     let conversation = ConversationId::generate();
-    let observer =
-        Arc::new(SqliteConversationStore::open(conversation.clone(), &path).unwrap());
-    let contender =
-        Arc::new(SqliteConversationStore::open(conversation.clone(), &path).unwrap());
-    let holder =
-        Arc::new(SqliteConversationStore::open(conversation, &path).unwrap());
+    let observer = Arc::new(SqliteConversationStore::open(conversation.clone(), &path).unwrap());
+    let contender = Arc::new(SqliteConversationStore::open(conversation.clone(), &path).unwrap());
+    let holder = Arc::new(SqliteConversationStore::open(conversation, &path).unwrap());
 
     let call_id = AuxiliaryCallId::generate();
     let request_start = AuxiliaryRequestStart {
@@ -1299,8 +1437,7 @@ fn unfinished_blocked_writer_is_unknown_then_joined_commit_is_exact() {
                 let _ = busy.send(());
             }
         });
-        let outcome =
-            contender.commit_auxiliary_request_start(&contender_start, fixture_time());
+        let outcome = contender.commit_auxiliary_request_start(&contender_start, fixture_time());
         (std::thread::current().id(), outcome)
     });
     busy_rx
@@ -1314,7 +1451,9 @@ fn unfinished_blocked_writer_is_unknown_then_joined_commit_is_exact() {
         AuxiliaryCommitConfirmation::Unknown
     ));
     assert_eq!(
-        observer.auxiliary_audit_total(observer.auxiliary_audit_cut().unwrap()).unwrap(),
+        observer
+            .auxiliary_audit_total(observer.auxiliary_audit_cut().unwrap())
+            .unwrap(),
         1,
         "only CallStarted is visible while the request writer remains unfinished"
     );
@@ -1344,9 +1483,7 @@ fn unfinished_blocked_writer_is_unknown_then_joined_commit_is_exact() {
 
 #[test]
 fn actual_rolled_back_auxiliary_transaction_is_typed_known_not_committed() {
-    let store = Arc::new(
-        SqliteConversationStore::in_memory(ConversationId::generate()).unwrap(),
-    );
+    let store = Arc::new(SqliteConversationStore::in_memory(ConversationId::generate()).unwrap());
     let call_id = AuxiliaryCallId::generate();
     let request_start = AuxiliaryRequestStart {
         call_id: call_id.clone(),

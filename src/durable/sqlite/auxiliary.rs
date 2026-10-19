@@ -2858,6 +2858,12 @@ pub(super) const AUXILIARY_AUDIT_FRONTIER_SQL: &str =
      INDEXED BY auxiliary_audit_sequence_idx
      WHERE sequence<=?1 ORDER BY sequence DESC LIMIT 1";
 
+pub(super) const AUXILIARY_CALL_REQUESTS_SQL: &str =
+    "SELECT sequence,request_id,ordinal FROM auxiliary_audit_facts
+     INDEXED BY auxiliary_audit_call_idx
+     WHERE call_id=?1 AND sequence>?2 AND sequence<=?3 AND kind='request_started'
+     ORDER BY sequence LIMIT ?4";
+
 pub(super) const AUXILIARY_AUTHORITATIVE_FRONTIER_SQL: &str = "
 SELECT max(sequence) FROM (
     SELECT max(sequence) AS sequence
@@ -3809,7 +3815,7 @@ impl SqliteConversationStore {
             .prepare(
                 "SELECT sequence,audit_offset,kind,call_id,request_id,ordinal
                  FROM auxiliary_audit_facts
-                 WHERE audit_offset>?1 AND sequence<=?2
+                 WHERE audit_offset>?1 AND audit_offset<=?4 AND sequence<=?2
                  ORDER BY audit_offset LIMIT ?3",
             )
             .map_err(|error| storage(format!("auxiliary audit page query: {error}")))?;
@@ -3819,6 +3825,7 @@ impl SqliteConversationStore {
                     i64::try_from(after).map_err(|_| storage("auxiliary audit cursor overflow"))?,
                     seq_to_i64(cut.journal)?,
                     requested,
+                    i64::try_from(total).map_err(|_| storage("auxiliary audit total overflow"))?,
                 ],
                 |row| {
                     Ok((
@@ -3979,6 +3986,162 @@ impl SqliteConversationStore {
             }
         }
         Ok(audit)
+    }
+
+    pub(super) fn read_auxiliary_call_requests(
+        &self,
+        call_id: &AuxiliaryCallId,
+        cut: AuxiliaryAuditCut,
+        after_started_sequence: Option<u64>,
+        limit: usize,
+    ) -> Result<Vec<AuxiliaryRequestAudit>, ConversationStoreError> {
+        if !(1..=AUXILIARY_AUDIT_PAGE_LIMIT_MAX).contains(&limit) {
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "auxiliary Call request limit must be 1..={AUXILIARY_AUDIT_PAGE_LIMIT_MAX}"
+            )));
+        }
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|error| storage(format!("auxiliary Call request snapshot: {error}")))?;
+        if cut.journal > journal_prefix(&transaction)? {
+            return Err(ConversationStoreError::InvalidReference(
+                "auxiliary audit cut is in the future".into(),
+            ));
+        }
+        if after_started_sequence.is_some_and(|after| after == 0 || after > cut.journal) {
+            return Err(ConversationStoreError::InvalidReference(
+                "auxiliary Call request cursor is outside its captured cut".into(),
+            ));
+        }
+        let call = call_audit_at_tx(&transaction, &self.conversation_id, call_id, cut)?;
+        if call.is_none() {
+            if after_started_sequence.is_some()
+                || has_call_journal_fact_through_tx(&transaction, call_id, cut.journal)?
+            {
+                return Err(ConversationStoreError::InvalidReference(
+                    "auxiliary Call request lookup has no visible Call authority".into(),
+                ));
+            }
+            return Ok(Vec::new());
+        }
+        let mut next_ordinal = Some(0_u32);
+        if let Some(after) = after_started_sequence {
+            let anchor = audit_fact_row(&transaction, after)?.ok_or_else(|| {
+                ConversationStoreError::InvalidReference(
+                    "auxiliary Call request cursor has no audit fact".into(),
+                )
+            })?;
+            if anchor.kind != "request_started" || anchor.call_id != *call_id {
+                return Err(ConversationStoreError::InvalidReference(
+                    "auxiliary Call request cursor must name this Call's request start".into(),
+                ));
+            }
+            let request_id = anchor.request_id.as_ref().ok_or_else(|| {
+                ConversationStoreError::InvalidReference(
+                    "auxiliary Call request cursor has no request identity".into(),
+                )
+            })?;
+            let request =
+                request_audit_at_tx(&transaction, &self.conversation_id, request_id, cut)?
+                    .ok_or_else(|| {
+                        ConversationStoreError::InvalidReference(
+                            "auxiliary Call request cursor has no visible request authority".into(),
+                        )
+                    })?;
+            if request.call_id != *call_id
+                || request.started_sequence != after
+                || Some(request.ordinal) != anchor.ordinal
+            {
+                return Err(ConversationStoreError::InvalidReference(
+                    "auxiliary Call request cursor disagrees with its request".into(),
+                ));
+            }
+            next_ordinal = request.ordinal.checked_add(1);
+        }
+        let rows = transaction
+            .prepare_cached(AUXILIARY_CALL_REQUESTS_SQL)
+            .map_err(|error| storage(format!("auxiliary Call request lookup: {error}")))?
+            .query_map(
+                params![
+                    call_id.as_str(),
+                    seq_to_i64(after_started_sequence.unwrap_or(0))?,
+                    seq_to_i64(cut.journal)?,
+                    i64::try_from(limit)
+                        .map_err(|_| storage("auxiliary request limit overflow"))?,
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, u32>(2)?,
+                    ))
+                },
+            )
+            .map_err(|error| storage(format!("auxiliary Call request query: {error}")))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| storage(format!("auxiliary Call request row: {error}")))?;
+        let mut requests = Vec::with_capacity(rows.len());
+        for (sequence, request_id, ordinal) in rows {
+            let request = request_audit_at_tx(
+                &transaction,
+                &self.conversation_id,
+                &RequestId::new(request_id),
+                cut,
+            )?
+            .ok_or_else(|| {
+                ConversationStoreError::InvalidReference(
+                    "auxiliary Call request fact has no visible request authority".into(),
+                )
+            })?;
+            if request.call_id != *call_id
+                || request.started_sequence != sequence_from_i64(sequence)?
+                || request.ordinal != ordinal
+                || Some(ordinal) != next_ordinal
+            {
+                return Err(ConversationStoreError::InvalidReference(
+                    "auxiliary Call request facts disagree with sequential request authority"
+                        .into(),
+                ));
+            }
+            bounded_encoded_len(
+                &request,
+                AUXILIARY_AUDIT_RECORD_ENCODED_MAX,
+                "auxiliary Call request audit",
+            )?;
+            next_ordinal = ordinal.checked_add(1);
+            requests.push(request);
+        }
+        if requests.len() < limit
+            && let Some(ordinal) = next_ordinal
+        {
+            let indexed_start: Option<i64> = transaction
+                .query_row(
+                    "SELECT started_sequence FROM auxiliary_requests
+                     WHERE call_id=?1 AND ordinal=?2
+                     UNION ALL
+                     SELECT start_sequence FROM request_owners
+                     INDEXED BY request_owners_source_idx
+                     WHERE owner_kind='auxiliary' AND call_id=?1 AND auxiliary_ordinal=?2
+                     ORDER BY 1 LIMIT 1",
+                    params![call_id.as_str(), ordinal],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|error| {
+                    storage(format!("auxiliary Call request completeness: {error}"))
+                })?;
+            if indexed_start
+                .map(sequence_from_i64)
+                .transpose()?
+                .is_some_and(|sequence| sequence <= cut.journal)
+            {
+                return Err(ConversationStoreError::InvalidReference(
+                    "auxiliary Call request page is missing indexed request evidence".into(),
+                ));
+            }
+        }
+        Ok(requests)
     }
 
     pub(super) fn load_auxiliary_request(

@@ -3038,6 +3038,19 @@ pub trait ConversationStore: Send + Sync + 'static {
         cut: AuxiliaryAuditCut,
     ) -> Result<Option<AuxiliaryRequestAudit>, ConversationStoreError>;
 
+    /// Reads at most `limit` local requests of one Call in start order at `cut`.
+    /// Pass the last returned `started_sequence` to advance; an empty page ends
+    /// iteration. A supplied cursor must name a visible request start of this
+    /// Call. Later facts and inherited source audit never enter this lookup.
+    /// Limits use [`crate::model::auxiliary::AUXILIARY_AUDIT_PAGE_LIMIT_MAX`].
+    fn read_auxiliary_call_requests(
+        &self,
+        call_id: &crate::runtime::identity::AuxiliaryCallId,
+        cut: AuxiliaryAuditCut,
+        after_started_sequence: Option<u64>,
+        limit: usize,
+    ) -> Result<Vec<AuxiliaryRequestAudit>, ConversationStoreError>;
+
     /// Reads the one pending unresolved-output source, when one exists. The
     /// pointer is durable recovery state only; its body authority remains the
     /// keyed Publication Audit.
