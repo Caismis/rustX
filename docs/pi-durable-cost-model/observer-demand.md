@@ -11,3 +11,5 @@ Validation uses a real library test executable with root opt-level 0 for local c
 [Verified validation archive](evidence/observer-demand-validation.tar.xz) and [manifest](evidence/observer-demand-validation.tar.manifest.json) include source diff, build/test logs, initial failures and exact test names. Original evidence remains preserved.
 
 Independent review found a dirty-head shutdown regression in this initial stage. The [shutdown inspection repair](shutdown-observation.md) records the reproduction, frozen-cut fix and additional validation; the original validation archive remains unchanged.
+
+The subsequent [retained-cut checkpoint repair](checkpoint-retained-cut.md) supersedes the worker-dependent checkpoint behavior described above. Ordinary inspection now hydrates its captured seed independently; live subscriber reads and known Source-failure repairs retain the worker owner. The original stage evidence is unchanged.
