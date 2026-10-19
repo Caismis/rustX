@@ -35,6 +35,6 @@ for(let i=0;i<rightRequests.length;i++) {
  assert.deepEqual(rustCore,piCore);
  if(sameEngine) assert.deepEqual(a,b);
  const digest=x=>createHash('sha256').update(JSON.stringify(x)).digest('hex');
- checked.push({index:i,coreEqual:true,fullRequestEqual:sameEngine || JSON.stringify(a)===JSON.stringify(b),rustToolNames:rustTools.map(t=>t.function.name),piToolNames:piTools.map(t=>t.function.name),rustToolsSha256:digest(rustTools),piToolsSha256:digest(piTools)});
+ checked.push({index:i,coreSemanticEqual:true,fullSemanticRequestEqual:sameEngine || JSON.stringify(a)===JSON.stringify(b),rustToolNames:rustTools.map(t=>t.function.name),piToolNames:piTools.map(t=>t.function.name),rustToolsSha256:digest(rustTools),piToolsSha256:digest(piTools)});
 }
-await writeFile(output,JSON.stringify({workload_version:3,model_time:MODEL_TIME,case:rust.case,observer_mode:mode,checked},null,2));
+await writeFile(output,JSON.stringify({workload_version:3,model_time:MODEL_TIME,equality_scope:'semantic JSON input; exact model-facing time; only text representation, JSON argument spelling and the exact fixture path normalized; transport byte equality is not asserted',case:rust.case,observer_mode:mode,checked},null,2));
