@@ -9,7 +9,7 @@ async fn web08_source_and_session_cas_cross_the_real_protocol_boundary() {
     use crate::local_runtime::configuration::settings::SourceMutation;
     use crate::model::{catalog::ModelRef, session::SessionModelConfig};
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         // Authorized, canonical TOML; only full-runtime Workflow semantics fail.
         std::fs::write(
             f.workspaces[0].join("rustx.toml"),
@@ -120,7 +120,7 @@ async fn web08_source_and_session_cas_cross_the_real_protocol_boundary() {
 async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolution() {
     use crate::local_runtime::configuration::settings::SourceMutation;
     bounded(Box::pin(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let initial = f
@@ -398,7 +398,7 @@ async fn c12_source_read_is_independent_of_concurrent_session_revision() {
 async fn c12_source_commit_is_independent_of_concurrent_session_revision() {
     use crate::local_runtime::configuration::settings::SourceMutation;
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let id = f.sessions[0].id.clone();
         let before = f
             .manager
@@ -474,7 +474,7 @@ async fn c12_source_commit_is_independent_of_concurrent_session_revision() {
 async fn c12_mcp_source_commit_is_independent_of_session_revision() {
     use crate::local_runtime::configuration::settings::{McpWrite, SourceMutation};
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let id = f.sessions[0].id.clone();
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
@@ -606,7 +606,7 @@ async fn cfg332_workspace_mcp_definition_and_policy_have_independent_authoring_o
     use crate::local_runtime::configuration::settings::{ConfigMutation, McpWrite, SourceMutation};
     use crate::runtime::identity::McpServerId;
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let _id = f.sessions[0].id.clone();
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
@@ -749,7 +749,7 @@ async fn t15_source_fields_and_many_small_revisions_page_with_exact_cut_evidence
     bounded(async {
         use crate::local_runtime::configuration::{observation as source, settings::SourceTarget};
         use base64::Engine;
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 0).await;
         let mut native = f
             .manager
             .source_settings(&SourceTarget::User)
@@ -930,7 +930,7 @@ async fn t15_cold_settings_deferred_value_advances_with_exact_catalog_revision()
     use crate::local_runtime::configuration::observation as source;
     use base64::Engine;
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let (revision, mut settings) = f
             .manager
             .sessions
@@ -1001,7 +1001,7 @@ async fn t15_effective_configuration_preserves_all_fields_and_advancing_pages() 
     bounded(async {
         let mut phases = FixturePhase::new("effective-configuration-pages");
         phases.enter("fixture");
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         phases.enter("load");
         f.manager.load(&f.sessions[0].id, None).await.unwrap();
         phases.enter("native effective configuration");

@@ -399,7 +399,7 @@ async fn adapter_disconnect_cannot_settle_approval_or_questionnaire() {
 async fn blocked_pipe_overflows_and_drops_writer_while_runtime_progresses() {
     bounded(async {
         use tokio::io::AsyncWriteExt;
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = Arc::new(AppServerConnection::new(f.host.clone()));
         let direct = app_server_conformance::DirectDriver(&connection);
         initialize(&direct).await;
@@ -451,7 +451,7 @@ async fn blocked_pipe_overflows_and_drops_writer_while_runtime_progresses() {
 async fn blocked_websocket_overflows_with_controlled_duplex_capacity() {
     bounded(async {
         use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 0).await;
         // Real WebSocket HTTP handshake and framing over an exactly bounded byte pipe.
         let (client, server) = tokio::io::duplex(128);
         let manager = f.host.clone();
@@ -518,7 +518,7 @@ async fn adapters_share_direct_semantic_expectations() {
 #[tokio::test]
 async fn blocked_writer_deadline_is_cancellable_without_another_input_record() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let f = Fixture::new().await;
+    let f = Fixture::with_session_count(None, 0).await;
     let connection = Arc::new(AppServerConnection::new(f.host.clone()));
     let (mut input, reader) = tokio::io::duplex(1024);
     let (writer, mut unread) = tokio::io::duplex(1);
@@ -567,7 +567,7 @@ async fn request_admission_overflow_is_correlated_and_disconnect_retains_server_
  {
     bounded(async {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = Arc::new(AppServerConnection::new(f.host.clone()));
         let direct = app_server_conformance::DirectDriver(&connection);
         initialize(&direct).await;
@@ -772,7 +772,7 @@ async fn adapter_disconnect_does_not_cancel_server_owned_background_execution() 
 
 #[tokio::test]
 async fn incomplete_websocket_handshake_has_a_finite_deadline() {
-    let f = Fixture::new().await;
+    let f = Fixture::with_session_count(None, 0).await;
     let (_silent_client, server) = tokio::io::duplex(1024);
     tokio::time::pause();
     let result = websocket::connection(
@@ -852,7 +852,7 @@ async fn one_pending_session_request_does_not_serialize_another_session() {
 async fn authenticated_websocket_capacity_is_released_after_client_reaping() {
     bounded(async {
         use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 0).await;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("ws://{}", listener.local_addr().unwrap());
         let stop = CancellationToken::new();
@@ -970,7 +970,7 @@ impl tokio::io::AsyncWrite for ReplenishingWriter {
 async fn ready_control_admission_does_not_wait_for_continuous_notifications() {
     bounded(async {
         use tokio::io::AsyncWriteExt;
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = Arc::new(AppServerConnection::new(f.host.clone()));
         let direct = app_server_conformance::DirectDriver(&connection);
         initialize(&direct).await;
@@ -1058,7 +1058,7 @@ async fn websocket_delivery_access_is_a_separate_additive_revocable_credential()
     bounded(async {
         const DELIVERY: &str = "delivery-secret-000000000000000000000000000000000000";
         const PRODUCT_HOST: &str = "product-host-secret-0000000000000000000000000000000000";
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         f.host
             .bind_delivery_access(Some(websocket::Credential::new(DELIVERY.into()).unwrap()));
         f.host
@@ -1483,7 +1483,7 @@ async fn delivery_publication_linearizes_at_the_transports_first_accepted_byte()
     };
     use crate::tools::session_files::{SESSION_FILE_MAX_READS, SessionFileReadFailure};
     bounded(Box::pin(async {
-        let f = Fixture::with_tool(Some("present")).await;
+        let f = Fixture::with_session_count(Some("present"), 1).await;
         let tool = committed_delivery(&f).await;
         let probe = f.host.file_read_probe();
         let permits = f.host.file_reads();
@@ -1694,7 +1694,7 @@ async fn delivery_revocation_overlapping_a_hand_off_is_ordered_after_its_accepta
     };
     use crate::tools::session_files::{SESSION_FILE_MAX_READS, SessionFileReadFailure};
     bounded(Box::pin(async {
-        let f = Fixture::with_tool(Some("present")).await;
+        let f = Fixture::with_session_count(Some("present"), 1).await;
         let tool = committed_delivery(&f).await;
         let probe = f.host.file_read_probe();
         let permits = f.host.file_reads();
@@ -1852,7 +1852,7 @@ async fn websocket_writer_stages_nothing_while_the_reader_holds_the_stream() {
         tungstenite::{Message, protocol::Role},
     };
     bounded(Box::pin(async {
-        let f = Fixture::with_tool(Some("present")).await;
+        let f = Fixture::with_session_count(Some("present"), 1).await;
         let tool = committed_delivery(&f).await;
         let permits = f.host.file_reads();
         let connection = Arc::new(AppServerConnection::with_delivery_access(
@@ -1960,7 +1960,7 @@ async fn websocket_delivery_publication_is_decided_when_tungstenite_takes_the_fr
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     bounded(Box::pin(async {
         const DELIVERY: &str = "delivery-secret-000000000000000000000000000000000000";
-        let f = Fixture::with_tool(Some("present")).await;
+        let f = Fixture::with_session_count(Some("present"), 1).await;
         let tool = committed_delivery(&f).await;
         let probe = f.host.file_read_probe();
         let permits = f.host.file_reads();
@@ -2161,7 +2161,7 @@ async fn delivery_credential_rotation_is_one_transition_ordered_against_publicat
     };
     use crate::tools::session_files::{SESSION_FILE_MAX_READS, SessionFileReadFailure};
     bounded(Box::pin(async {
-        let f = Fixture::with_tool(Some("present")).await;
+        let f = Fixture::with_session_count(Some("present"), 1).await;
         let tool = committed_delivery(&f).await;
         let permits = f.host.file_reads();
         for next in [Some(ROTATION_B), None] {
@@ -2252,7 +2252,7 @@ async fn product_host_credential_rotation_is_one_transition_ordered_against_publ
     use futures_util::StreamExt;
     use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
     bounded(Box::pin(async {
-        let f = Fixture::with_tool(Some("present")).await;
+        let f = Fixture::with_session_count(Some("present"), 1).await;
         let tool = committed_delivery(&f).await;
         let permits = f.host.file_reads();
         f.host
@@ -2466,7 +2466,7 @@ async fn overlapping_delivery_credential_rotations_take_one_total_order() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn authentication_racing_a_rotation_sees_one_side_of_it() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let probe = f.host.file_read_probe();
         f.host
             .bind_delivery_access(Some(rotation_credential(ROTATION_A)));
@@ -2525,7 +2525,7 @@ async fn t07_oversized_controlled_response_keeps_publication_owner_at_websocket_
     use futures_util::StreamExt;
     use tokio_tungstenite::tungstenite::protocol::{Role, WebSocketConfig};
     bounded(Box::pin(async {
-        let f = Fixture::with_tool(Some("present")).await;
+        let f = Fixture::with_session_count(Some("present"), 1).await;
         let message = committed_delivery(&f).await;
         for cancel_first in [true, false] {
             let connection =
@@ -2606,7 +2606,7 @@ async fn t16_pending_receipt_supersession_and_stale_queue_progression() {
     use std::task::Poll;
     use tokio_tungstenite::tungstenite::protocol::Role;
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = AppServerConnection::new(f.host.clone());
         super::protocol::initialize(&connection).await;
         let target = super::protocol::attach(&connection, &f, 0).await;
@@ -2732,7 +2732,7 @@ async fn t16_physical_acceptance_wins_before_replacement_no_lock_cycle() {
     use crate::app_server::registration::Acceptance;
     use std::{io::Write, task::Poll};
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = Arc::new(AppServerConnection::new(f.host.clone()));
         super::protocol::initialize(&connection).await;
         let target = super::protocol::attach(&connection, &f, 0).await;
@@ -2867,7 +2867,7 @@ impl<W: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for FirstByteGate<W
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn t17_partial_os_pipe_record_finishes_after_registration_replacement() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = Arc::new(AppServerConnection::new(f.host.clone()));
         super::protocol::initialize(&connection).await;
         let target = super::protocol::attach(&connection, &f, 0).await;
@@ -2969,7 +2969,7 @@ async fn t17_t20_stdio_saturation_deadline_finishes_the_physically_accepted_reco
     use tokio::io::AsyncWriteExt;
     bounded(async {
         eprintln!("T17 saturation deadline: fixture");
-        let fixture = Fixture::new().await;
+        let fixture = Fixture::with_session_count(None, 0).await;
         let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
         super::protocol::initialize(&connection).await;
         eprintln!("T17 saturation deadline: initialized");
@@ -3083,7 +3083,7 @@ async fn t17_stdio_teardown_retires_unaccepted_record_without_write_readiness() 
     bounded(async {
         for eof in [true, false] {
             eprintln!("T17 teardown eof={eof}: fixture");
-            let fixture = Fixture::new().await;
+            let fixture = Fixture::with_session_count(None, 0).await;
             let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
             super::protocol::initialize(&connection).await;
             let valve = ValveControl::new();
@@ -3181,7 +3181,7 @@ async fn t17_stdio_teardown_retires_unaccepted_record_without_write_readiness() 
 async fn t17_stdio_input_eof_finishes_the_physically_accepted_output_record() {
     use tokio::io::AsyncWriteExt;
     bounded(async {
-        let fixture = Fixture::new().await;
+        let fixture = Fixture::with_session_count(None, 1).await;
         let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
         super::protocol::initialize(&connection).await;
         let target = super::protocol::attach(&connection, &fixture, 0).await;
@@ -3305,7 +3305,7 @@ impl<W: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for PendingWritePro
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn t16_pending_physical_pipe_replacement_advances_without_readiness() {
     Box::pin(bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = AppServerConnection::new(f.host.clone());
         super::protocol::initialize(&connection).await;
         let target = super::protocol::attach(&connection, &f, 0).await;
@@ -3402,7 +3402,7 @@ async fn t16_pending_physical_pipe_replacement_advances_without_readiness() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn t17_partial_event_disconnect_replays_from_locally_applied_cursor() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = Arc::new(AppServerConnection::new(f.host.clone()));
         super::protocol::initialize(&connection).await;
         let target = super::protocol::attach(&connection, &f, 0).await;
@@ -3552,7 +3552,7 @@ async fn t16_t17_websocket_frame_handoff_precedes_physical_write_failure() {
     use tokio::io::AsyncWriteExt;
     use tokio_tungstenite::tungstenite::protocol::Role;
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = AppServerConnection::new(f.host.clone());
         super::protocol::initialize(&connection).await;
         let target = super::protocol::attach(&connection, &f, 0).await;

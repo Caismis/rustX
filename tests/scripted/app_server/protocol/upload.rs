@@ -53,7 +53,7 @@ async fn workspace_upload_receipt_admission_and_model_projection_use_one_owner()
 async fn lost_upload_waiter_does_not_cancel_or_replay_the_owned_commit() {
     use crate::local_runtime::session::deletion::{DeletionBlocker, SessionDeleteResult};
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let target = attach(&connection, &f, 0).await;
@@ -148,7 +148,7 @@ async fn restored_destination_receipts_admit_a_turn_after_source_deletion() {
         use crate::message::types::{
             InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
         };
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let controller = f.manager.session_controller();
         let source = &f.sessions[0];
         let files = controller
@@ -286,7 +286,7 @@ async fn restored_destination_receipts_admit_a_turn_after_source_deletion() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn binary_upload_one_mib_document_repairs_original_receipts_without_model_requests() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let target = attach(&connection, &f, 0).await;
@@ -365,7 +365,7 @@ async fn saturated_binary_admission_does_not_hold_control_and_refuses_excess() {
     bounded(async {
         use futures_util::StreamExt;
         use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let target = attach(&connection, &f, 0).await;
@@ -449,7 +449,7 @@ async fn binary_carrier_rejects_bad_lengths_reuse_expiry_and_paths_before_alloca
         };
         use futures_util::{SinkExt, StreamExt};
         use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let target = attach(&connection, &f, 0).await;
@@ -618,7 +618,7 @@ async fn binary_carrier_rejects_bad_lengths_reuse_expiry_and_paths_before_alloca
 async fn binary_ready_commit_precedes_lost_reply_and_exact_read_repair() {
     bounded(async {
         use crate::local_runtime::session::uploads::UploadOutcome;
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let target = attach(&connection, &f, 0).await;
@@ -701,7 +701,7 @@ async fn binary_ready_commit_precedes_lost_reply_and_exact_read_repair() {
 async fn stdio_prepared_upload_is_revoked_when_drain_wins_admission() {
     bounded(async {
         use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let target = attach(&connection, &f, 0).await;
@@ -761,7 +761,7 @@ async fn stdio_prepared_upload_is_revoked_when_drain_wins_admission() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stdio_active_upload_is_owned_until_native_settlement_during_drain() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let target = attach(&connection, &f, 0).await;
@@ -970,7 +970,7 @@ async fn native_user_input_receipt_collection_enforces_count_bytes_and_authority
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn upload_supervisors_settle_after_success_without_accumulating_expiry_actors() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let target = attach(&connection, &f, 0).await;
@@ -990,7 +990,7 @@ async fn upload_supervisors_settle_after_success_without_accumulating_expiry_act
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn upload_drain_waits_for_revoked_loopback_supervisor_physical_exit() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let target = attach(&connection, &f, 0).await;
@@ -1044,7 +1044,7 @@ async fn upload_drain_waits_for_revoked_loopback_supervisor_physical_exit() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn detached_unconsumed_upload_is_absent_and_releases_supervisor_capacity() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let target = attach(&connection, &f, 0).await;

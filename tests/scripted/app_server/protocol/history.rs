@@ -453,7 +453,7 @@ async fn durable_session_operations_never_compose_a_runtime() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn trace_reads_are_read_only_and_reconnect_repairs_the_same_native_facts() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let target = attach(&connection, &f, 0).await;
@@ -650,7 +650,7 @@ async fn completed_response_cut_is_shared_by_branch_and_fork_and_distinct_from_r
         use crate::message::TextBlock;
         use crate::model::finish::ModelFinishReason;
         use crate::runtime::identity::{AttemptId, EventId, MessageId};
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let source = &f.sessions[0];
         let controller = f.manager.session_controller();
         let access = controller.acquire_session(&source.id, None).await.unwrap();
@@ -759,7 +759,7 @@ async fn completed_response_cut_is_shared_by_branch_and_fork_and_distinct_from_r
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn durable_history_is_readable_before_and_during_runtime_preparation() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = std::sync::Arc::new(AppServerConnection::new(f.host.clone()));
         initialize(&connection).await;
         let id = f.id(0).await;
@@ -830,7 +830,7 @@ async fn t08_t13_t15_editor_and_origin_history_use_finite_native_ledger_identity
         use crate::local_runtime::session::LineageSide;
         use crate::message::types::{InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource};
         use crate::runtime::identity::MessageId;
-        let fixture = Fixture::new().await;
+        let fixture = Fixture::with_session_count(None, 1).await;
         let source = &fixture.sessions[0];
         let controller = fixture.manager.session_controller();
         let access = controller.acquire_session(&source.id, None).await.unwrap();
@@ -878,7 +878,7 @@ async fn projection_history_and_activation_fork_cross_native_app_server_boundary
         use crate::durable::{ConversationStore, SqliteConversationStore};
         use crate::message::types::{InboundKind, MessageBlock, UserMessageBlock, UserSource};
         use crate::runtime::identity::MessageId;
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let source = &f.sessions[0];
         let controller = f.manager.session_controller();
         let access = controller.acquire_session(&source.id, None).await.unwrap();

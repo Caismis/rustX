@@ -12,7 +12,7 @@ async fn headless_approval_and_questionnaire_survive_detach_and_settle_once() {
         use std::sync::Arc;
         for tool in ["read", "ask_user"] {
             for cancel_first in [false, true] {
-                let f = Fixture::with_tool(Some(tool)).await;
+                let f = Fixture::with_session_count(Some(tool), 1).await;
                 let connection = Arc::new(AppServerConnection::new(f.host.clone()));
                 initialize(&connection).await;
                 let initial = attach(&connection, &f, 0).await;

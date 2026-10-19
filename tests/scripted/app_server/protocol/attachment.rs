@@ -6,7 +6,7 @@ use super::*;
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn detach_during_unloading_needs_no_operation_lease() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let old = attach(&connection, &f, 0).await;
@@ -41,7 +41,7 @@ async fn detach_during_unloading_needs_no_operation_lease() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stale_detach_cannot_remove_replacement_route() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let old = attach(&connection, &f, 0).await;
@@ -80,7 +80,7 @@ async fn admitted_async_operation_drains_before_delete_releases_resources() {
     bounded(async {
         use crate::local_runtime::session::deletion::SessionDeleteResult;
         use std::sync::Arc;
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = Arc::new(AppServerConnection::new(f.host.clone()));
         initialize(&connection).await;
         let target = attach(&connection, &f, 0).await;
@@ -430,7 +430,7 @@ async fn concurrent_final_slot_is_reserved_before_composition() {
 async fn cancelled_attach_releases_reservation_but_not_manager_owned_load() {
     bounded(async {
         use std::sync::Arc;
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = Arc::new(AppServerConnection::new(f.host.clone()));
         initialize(&connection).await;
         let probe = f.manager.probe(&f.id(0).await);
@@ -781,7 +781,7 @@ async fn one_connection_pipelines_sessions_without_cross_routing_and_detach_keep
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stale_connection_cannot_retain_or_control_replacement() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let old = attach(&connection, &f, 0).await;
@@ -830,7 +830,7 @@ async fn stale_connection_cannot_retain_or_control_replacement() {
 async fn t13_attach_identity_checkpoint_and_subscribe_preserve_the_native_cut() {
     bounded(async {
         use std::sync::Arc;
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let identity = f.manager.load(&f.sessions[0].id, None).await.unwrap();
         let runtime = identity.inspect_runtime().unwrap();
         let connection = Arc::new(AppServerConnection::new(f.host.clone()));
@@ -975,7 +975,7 @@ async fn t13_attach_identity_checkpoint_and_subscribe_preserve_the_native_cut() 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn explicit_close_is_idempotent_and_revokes_claims_despite_retained_arc() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = std::sync::Arc::new(AppServerConnection::new(f.host.clone()));
         initialize(&connection).await;
         let old = attach(&connection, &f, 0).await;
@@ -1010,7 +1010,7 @@ async fn explicit_close_is_idempotent_and_revokes_claims_despite_retained_arc() 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn close_linearizes_before_pending_attach_commit() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let probe = f.manager.probe(&f.id(0).await);
         probe.before_compose.arm();
         let connection = std::sync::Arc::new(AppServerConnection::new(f.host.clone()));
@@ -1046,7 +1046,7 @@ async fn close_linearizes_before_pending_attach_commit() {
 async fn another_connection_deletes_an_attached_idle_session_and_closes_its_route() {
     bounded(async {
         use crate::app_server::session_deletion::SessionDeletionResult as Deleted;
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let viewer = AppServerConnection::new(f.host.clone());
         let deleter = AppServerConnection::new(f.host.clone());
         initialize(&viewer).await;
@@ -1150,7 +1150,7 @@ async fn retained_huge_root(fixture: &Fixture) -> Vec<(crate::runtime::identity:
 async fn t13_lost_huge_root_attach_receipt_is_reconciled_without_second_admission() {
     bounded(async {
         use std::task::Poll;
-        let fixture = Fixture::new().await;
+        let fixture = Fixture::with_session_count(None, 1).await;
         let originals = retained_huge_root(&fixture).await;
         let session = &fixture.sessions[0];
         let connection = AppServerConnection::new(fixture.host.clone());
@@ -1261,7 +1261,7 @@ async fn t07_t13_source_failure_fences_registration_without_replay_loss_or_curso
             }
         }
         impl Drop for SourceFault { fn drop(&mut self) { self.restore(); } }
-        let fixture = Fixture::new().await;
+        let fixture = Fixture::with_session_count(None, 1).await;
         let connection = AppServerConnection::new(fixture.host.clone());
         initialize(&connection).await;
         let target = attach(&connection, &fixture, 0).await;

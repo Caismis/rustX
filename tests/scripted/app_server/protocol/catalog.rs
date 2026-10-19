@@ -335,7 +335,7 @@ async fn explicit_node_switch_commits_aba_ownership_and_coalesces_exact_retireme
             InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
         };
         use crate::runtime::identity::MessageId;
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let source = &f.sessions[0];
         let controller = f.manager.session_controller();
         let access = controller.acquire_session(&source.id, None).await.unwrap();
@@ -525,7 +525,7 @@ async fn switch_residency_settlement_survives_failure_and_lost_acknowledgement()
         use crate::local_runtime::session_runtime_manager::ResidencyState;
         use std::sync::atomic::Ordering;
         for outcome in ["success", "composition_failure", "lost_ack"] {
-            let f = Fixture::new().await;
+            let f = Fixture::with_session_count(None, 1).await;
             let (connection, target_a, branch) = switch_fixture(&f).await;
             let retiring = f.manager.probe(&target_a.conversation_id);
             let probe = f.manager.probe(&branch.active_conversation_id);

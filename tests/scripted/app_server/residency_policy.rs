@@ -320,7 +320,7 @@ async fn idle_claim_has_both_attach_and_inbound_winners_at_publication() {
 #[tokio::test]
 async fn active_turn_after_detach_starts_grace_only_after_settlement() {
     bounded(async {
-        let mut f = Fixture::new().await;
+        let mut f = Fixture::with_session_count(None, 1).await;
         let clock = policy(&mut f, 2);
         let a = f.load(0).await.unwrap().unwrap();
         let native = a.inspect_runtime().unwrap();
@@ -393,7 +393,7 @@ async fn drain_reports_failure_and_still_settles_sibling_without_releasing_faile
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn accepted_inbound_before_attempt_admission_prevents_idle_claim() {
     bounded(async {
-        let mut f = Fixture::new().await;
+        let mut f = Fixture::with_session_count(None, 1).await;
         let clock = policy(&mut f, 2);
         let a = f.load(0).await.unwrap().unwrap();
         let native = a.inspect_runtime().unwrap();
@@ -473,7 +473,7 @@ async fn concurrent_distinct_loads_cannot_oversubscribe_one_slot() {
 #[tokio::test]
 async fn one_reaper_timer_wakes_from_manual_clock_and_unloads_automatically() {
     bounded(async {
-        let mut f = Fixture::new().await;
+        let mut f = Fixture::with_session_count(None, 1).await;
         let clock = policy(&mut f, 2);
         let a = f.load(0).await.unwrap().unwrap();
         let native = a.inspect_runtime().unwrap();
@@ -756,7 +756,7 @@ async fn goal_resume_and_idle_claim_have_both_winner_orders() {
 #[tokio::test]
 async fn host_admission_commit_accounts_for_requests_connections_and_attachments() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let request = f
             .host
             .admit_request(
@@ -824,7 +824,7 @@ fn residency_owner_source_spells_no_app_server_path() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn host_request_and_runtime_lease_commit_before_drain_as_one_admission() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let a = f.load(0).await.unwrap().unwrap();
         let probe = f.manager.probe(a.conversation_id());
         probe.before_operation.arm();

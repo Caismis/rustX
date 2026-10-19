@@ -152,7 +152,7 @@ async fn the_first_turn_publishes_the_bounded_projection_and_later_turns_never_r
 #[tokio::test]
 async fn a_projection_published_underneath_a_name_survives_over_the_wire() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let MethodResult::Session { session } = call(
@@ -219,7 +219,7 @@ async fn a_projection_published_underneath_a_name_survives_over_the_wire() {
 #[tokio::test]
 async fn an_agent_sourced_boundary_never_repaints_the_settled_projection() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let target = attach(&connection, &f, 0).await;
@@ -300,7 +300,7 @@ async fn an_agent_sourced_boundary_never_repaints_the_settled_projection() {
 async fn a_failed_projection_commit_preserves_history_and_repairs_exactly_once() {
     bounded(async {
         use crate::durable::ConversationStore as _;
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let target = attach(&connection, &f, 0).await;
@@ -429,7 +429,7 @@ async fn a_failed_projection_commit_preserves_history_and_repairs_exactly_once()
 #[tokio::test]
 async fn an_upload_only_first_turn_settles_the_projection_absent_and_never_repaints() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let target = attach(&connection, &f, 0).await;
@@ -522,7 +522,7 @@ async fn an_upload_only_first_turn_settles_the_projection_absent_and_never_repai
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_parked_publication_serves_a_null_summary_then_invalidates_it() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let target = attach(&connection, &f, 0).await;
@@ -631,7 +631,7 @@ async fn a_parked_publication_serves_a_null_summary_then_invalidates_it() {
 async fn cold_loading_a_branch_repairs_the_projection_from_the_session_root() {
     bounded(async {
         use crate::durable::ConversationStore as _;
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let sessions = &f.manager.sessions;
         let session = f.sessions[0].clone();
         let root_node = session.active_node.clone();

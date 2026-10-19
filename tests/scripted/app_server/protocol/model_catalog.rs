@@ -29,7 +29,7 @@ async fn issue459_published_profile_reaches_attached_session_without_adoption() 
     use serde_json::json;
     use std::sync::atomic::Ordering;
     bounded(Box::pin(async {
-        let f = Fixture::with_tool(Some("read")).await;
+        let f = Fixture::with_session_count(Some("read"), 1).await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let balanced = ("balanced", json!({"temperature": 0.5}));
@@ -281,7 +281,7 @@ async fn issue459_removed_selected_profile_is_reported_until_explicit_recovery()
     use serde_json::json;
     use std::sync::atomic::Ordering;
     bounded(Box::pin(async {
-        let f = Fixture::with_tool(Some("read")).await;
+        let f = Fixture::with_session_count(Some("read"), 1).await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let fast = ("fast", json!({"temperature": 1.0, "top_p": 0.5}));
@@ -506,7 +506,7 @@ async fn issue459_removed_selected_model_is_replaced_explicitly_in_place() {
     use serde_json::json;
     use std::sync::atomic::Ordering;
     bounded(Box::pin(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let target = attach(&connection, &f, 0).await;

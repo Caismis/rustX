@@ -72,7 +72,7 @@ async fn initialize_and_malformed_wire_are_transactional() {
 #[tokio::test]
 async fn host_request_owner_outlives_dropped_protocol_waiter() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = std::sync::Arc::new(AppServerConnection::new(f.host.clone()));
         initialize(&connection).await;
         let target = attach(&connection, &f, 0).await;
@@ -123,7 +123,7 @@ async fn host_request_owner_outlives_dropped_protocol_waiter() {
 
 #[tokio::test]
 async fn ux04_initialize_identity_is_owned_by_host_not_connection_or_endpoint() {
-    let f = Fixture::new().await;
+    let f = Fixture::with_session_count(None, 0).await;
     let replacement = crate::app_server::host::AppServerHost::new(
         f.manager.clone(),
         crate::local_runtime::app_server_policy::AppServerPolicy::default(),
@@ -160,7 +160,7 @@ async fn ux04_initialize_identity_is_owned_by_host_not_connection_or_endpoint() 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn manual_compaction_correlation_is_bounded_before_admission() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let target = attach(&connection, &f, 0).await;
@@ -249,7 +249,7 @@ async fn manual_compaction_correlation_is_bounded_before_admission() {
 #[tokio::test]
 async fn t01_invalid_identity_precedes_method_and_connection_admission() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 0).await;
         let connection = AppServerConnection::new(f.host.clone());
         for id in [
             serde_json::json!("x".repeat(255)),
@@ -319,7 +319,7 @@ async fn t01_invalid_identity_precedes_method_and_connection_admission() {
 #[tokio::test]
 async fn t20_request_identity_remains_owned_through_response_disposition() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 0).await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let request = || Request {
@@ -346,7 +346,7 @@ async fn t20_request_identity_remains_owned_through_response_disposition() {
 #[tokio::test]
 async fn t20_observation_cancel_after_admission_before_first_poll_never_dispatches() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let MethodResult::Attached { target, .. } = call(
@@ -397,7 +397,7 @@ async fn t20_observation_cancel_after_admission_before_first_poll_never_dispatch
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn t20_aborted_response_waiter_retains_native_operation_reservation_until_termination() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let MethodResult::Attached { target, .. } = call(

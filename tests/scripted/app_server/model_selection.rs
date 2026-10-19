@@ -49,7 +49,7 @@ impl Drop for SelectionGate {
     }
 }
 
-fn selection(model: &str) -> SessionModelConfig {
+pub(super) fn selection(model: &str) -> SessionModelConfig {
     SessionModelConfig::of(ModelRef::parse(model).unwrap())
 }
 
@@ -87,7 +87,7 @@ async fn fixture() -> Fixture {
     fixture
 }
 
-async fn assert_authority(fixture: &Fixture, expected: &SessionModelConfig) {
+pub(super) async fn assert_authority(fixture: &Fixture, expected: &SessionModelConfig) {
     let id = &fixture.sessions[0].id;
     let (_, durable) = fixture.manager.sessions.read_settings(id).await.unwrap();
     assert_eq!(durable.model.as_ref(), Some(expected));
@@ -131,13 +131,6 @@ fn assert_conflict(result: &Result<crate::model::session::SessionModelView, Mode
         ),
         "{result:?}"
     );
-}
-
-async fn gate_entered(gate: &Arc<Gate>) {
-    let gate = gate.clone();
-    tokio::task::spawn_blocking(move || gate.wait_entered())
-        .await
-        .unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
