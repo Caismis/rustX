@@ -76,8 +76,8 @@ fn legacy_scalar(
 }
 fn node_count(value: &serde_json::Value) -> usize {
     1 + match value {
-        serde_json::Value::Array(values) => values.iter().map(node_count).sum(),
-        serde_json::Value::Object(values) => values.values().map(node_count).sum(),
+        serde_json::Value::Array(values) => values.iter().map(node_count).sum::<usize>(),
+        serde_json::Value::Object(values) => values.values().map(node_count).sum::<usize>(),
         _ => 0,
     }
 }
@@ -148,5 +148,61 @@ fn scalar_geometry_keeps_changed_definition_identity_time_and_old_source_separat
     assert_eq!(
         original.original_field_geometry(&path).unwrap(),
         original_bounds
+    );
+}
+
+#[test]
+fn scalar_geometry_measures_repeated_standard_public_tool_capture() {
+    // Public Tools projection from the archived local fake-provider623 cohort.
+    // It contains no provider/private request configuration or authorization key.
+    let tools: Vec<serde_json::Value> =
+        serde_json::from_str(include_str!("standard_public_tools_fixture.json")).unwrap();
+    assert_eq!(tools.len(), 7);
+    assert_eq!(node_count(&serde_json::Value::Array(tools.clone())), 305);
+    let mut value = fixture(0, 0);
+    value.tools = tools;
+    let source = SeekableObservationSource::new(&value).unwrap();
+    let old = connection();
+    let new = connection();
+    crate::runtime::read_layout::take_field_preview_work();
+    let expected = legacy_scalar(&old, &source);
+    let old_work = crate::runtime::read_layout::take_field_preview_work();
+    let actual = scalar(&new, &source).unwrap();
+    let new_work = crate::runtime::read_layout::take_field_preview_work();
+    assert_eq!(old_work, (312, 312));
+    assert_eq!(new_work, (312, 0));
+    assert_eq!((actual.1, actual.2), (expected.1, expected.2));
+    assert_eq!(
+        serde_json::to_vec(&actual.0).unwrap(),
+        serde_json::to_vec(&expected.0).unwrap()
+    );
+    assert_eq!(pages(&new), pages(&old));
+    // Quantify the remaining repeated Tools fact capture before selecting any
+    // cross-request cache or its memory budget. This does not reuse those facts.
+    let measured = connection();
+    let length = source.read(&[], 0, 1).unwrap().readable_end;
+    let reader = source.byte_reader().unwrap();
+    let mut spool = FactSpool::new(&measured);
+    capture_facts(&mut spool, &source, &reader, 0, length).unwrap();
+    let mut statement = measured
+        .prepare("SELECT key,value FROM request_source_fact_spool")
+        .unwrap();
+    let mut rows = statement.query([]).unwrap();
+    let (mut count, mut encoded_bytes) = (0, 0);
+    while let Some(row) = rows.next().unwrap() {
+        let key: String = row.get(0).unwrap();
+        let bytes: Vec<u8> = row.get(1).unwrap();
+        if key.starts_with("F[\"tools\"")
+            || key.starts_with("C[\"tools\"")
+            || bytes.as_slice() == b"[\"tools\"]"
+        {
+            count += 1;
+            encoded_bytes += key.len() + bytes.len();
+        }
+    }
+    assert!(count >= 610);
+    assert!(encoded_bytes > 65_536);
+    eprintln!(
+        "standard public catalog:312 geometry visits avoided per scalar; remaining Tools facts={count}, encoded key+value bytes={encoded_bytes}; exact field/byte pages unchanged"
     );
 }
