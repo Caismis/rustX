@@ -1477,7 +1477,7 @@ fn answered_once(received: &Received, id: i64, times: usize) {
 /// requests answered, every native read permit returned.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn delivery_publication_linearizes_at_the_transports_first_accepted_byte() {
-    use super::protocol::{
+    use super::protocol::delivery::{
         DELIVERED, cancel_delivery, committed_delivery, delivered_bytes, delivery_request,
         failed_with,
     };
@@ -1688,7 +1688,7 @@ async fn delivery_publication_linearizes_at_the_transports_first_accepted_byte()
 /// waiting, and has not completed; only the release completes both.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn delivery_revocation_overlapping_a_hand_off_is_ordered_after_its_acceptance() {
-    use super::protocol::{
+    use super::protocol::delivery::{
         DELIVERED, cancel_delivery, committed_delivery, delivered_bytes, delivery_request,
         failed_with,
     };
@@ -1844,7 +1844,7 @@ async fn delivery_revocation_overlapping_a_hand_off_is_ordered_after_its_accepta
 /// forwarded it to tungstenite after the revocation.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn websocket_writer_stages_nothing_while_the_reader_holds_the_stream() {
-    use super::protocol::{committed_delivery, delivery_request, failed_with};
+    use super::protocol::delivery::{committed_delivery, delivery_request, failed_with};
     use crate::tools::session_files::{SESSION_FILE_MAX_READS, SessionFileReadFailure};
     use futures_util::StreamExt;
     use tokio_tungstenite::{
@@ -1952,7 +1952,7 @@ async fn websocket_writer_stages_nothing_while_the_reader_holds_the_stream() {
 /// retract it: that is the documented WebSocket limit.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn websocket_delivery_publication_is_decided_when_tungstenite_takes_the_frame() {
-    use super::protocol::{
+    use super::protocol::delivery::{
         DELIVERED, committed_delivery, delivered_bytes, delivery_request, failed_with,
     };
     use crate::tools::session_files::{SESSION_FILE_MAX_READS, SessionFileReadFailure};
@@ -2156,7 +2156,7 @@ async fn delivery_websocket(
 /// `unauthorized`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn delivery_credential_rotation_is_one_transition_ordered_against_publication() {
-    use super::protocol::{
+    use super::protocol::delivery::{
         DELIVERED, committed_delivery, delivered_bytes, delivery_request, failed_with,
     };
     use crate::tools::session_files::{SESSION_FILE_MAX_READS, SessionFileReadFailure};
@@ -2246,7 +2246,7 @@ async fn delivery_credential_rotation_is_one_transition_ordered_against_publicat
 /// credential and an ordinary connection keep their authority.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn product_host_credential_rotation_is_one_transition_ordered_against_publication() {
-    use super::protocol::{DELIVERED, committed_delivery};
+    use super::protocol::delivery::{DELIVERED, committed_delivery};
     use crate::tools::session_files::SESSION_FILE_MAX_READS;
     use base64::Engine;
     use futures_util::StreamExt;
@@ -2372,7 +2372,7 @@ async fn product_host_credential_rotation_is_one_transition_ordered_against_publ
 /// revoked.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn overlapping_delivery_credential_rotations_take_one_total_order() {
-    use super::protocol::{
+    use super::protocol::delivery::{
         DELIVERED, committed_delivery, delivered_bytes, delivery_request, failed_with,
     };
     use crate::tools::session_files::SessionFileReadFailure;
@@ -2521,7 +2521,7 @@ async fn authentication_racing_a_rotation_sees_one_side_of_it() {
 /// together. A real TCP WebSocket carries the selected correlated terminal reply.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn t07_oversized_controlled_response_keeps_publication_owner_at_websocket_handoff() {
-    use super::protocol::{cancel_delivery, committed_delivery, delivery_request};
+    use super::protocol::delivery::{cancel_delivery, committed_delivery, delivery_request};
     use futures_util::StreamExt;
     use tokio_tungstenite::tungstenite::protocol::{Role, WebSocketConfig};
     bounded(Box::pin(async {

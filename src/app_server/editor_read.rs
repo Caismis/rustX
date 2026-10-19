@@ -1,8 +1,8 @@
 //! Bounded editor recovery from an immutable fork origin. The source canonical
 //! message remains the byte authority; destination uploads own their receipts.
 use super::{
-    connection::{client_error, domain},
     protocol::{ErrorData, MethodResult, RpcError},
+    rpc_error::{client_error, domain},
 };
 use crate::{
     durable::ConversationStore,
@@ -70,7 +70,7 @@ pub(super) async fn read(
     let (destination, origin) = sessions
         .acquire_read_origin(&requested.session_id, &requested.node_id)
         .await
-        .map_err(super::connection::session_error)?;
+        .map_err(super::rpc_error::session_error)?;
     if origin.side != LineageSide::Before
         || origin.source_session != requested.source_session
         || origin.source_node != requested.source_node
@@ -88,7 +88,7 @@ pub(super) async fn read(
     let source = sessions
         .acquire_read(&requested.source_session, Some(&requested.source_node))
         .await
-        .map_err(super::connection::session_error)?;
+        .map_err(super::rpc_error::session_error)?;
     let _destination = destination;
     let (mut page, upload_block) = tokio::task::spawn_blocking(move || {
         let store = crate::durable::SqliteConversationStore::open_existing(
@@ -147,7 +147,7 @@ pub(super) async fn read(
                 .lock()
                 .await
                 .editor_upload_receipt(&page.locator.session_id, &block)
-                .map_err(super::connection::session_error)?,
+                .map_err(super::rpc_error::session_error)?,
         );
     }
     Ok(MethodResult::EditorPage { page })

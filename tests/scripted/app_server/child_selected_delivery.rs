@@ -1,4 +1,6 @@
-// A tiny Child delivery has no dependency on a complete historical Host.
+//! A tiny Child delivery has no dependency on a complete historical Host.
+use super::super::delivery::DELIVERED;
+use super::*;
 use crate::runtime_client::content::CanonicalContentLocator;
 
 fn giant_selected_delivery(

@@ -27,9 +27,10 @@
 //! its typed failure for the same id, one that overlaps it waits for it and is
 //! ordered after it, and accepted bytes are never retracted.
 use super::{
-    connection::{Route, client_error, domain, host_error, manager_error},
+    connection::Route,
     host::AppServerHost,
     protocol::{ErrorData, MethodResult, RequestId, Response, RpcError},
+    rpc_error::{client_error, domain, host_error, manager_error},
 };
 use crate::tools::session_files::SessionFileReadFailure as FileFailure;
 use base64::Engine;
@@ -565,7 +566,7 @@ impl Publication {
         });
         match decision {
             Ok(()) => response,
-            Err(error) => super::connection::failure(Some(self.id.clone()), error),
+            Err(error) => super::rpc_error::failure(Some(self.id.clone()), error),
         }
     }
 
@@ -590,7 +591,7 @@ impl Publication {
             let replacement = match self.decide(*state, success) {
                 Ok(()) => None,
                 Err(error) => Some(super::transport::serialize_record(
-                    &super::connection::failure(Some(self.id.clone()), error),
+                    &super::rpc_error::failure(Some(self.id.clone()), error),
                 )?),
             };
             let accepted = ready!(accept(replacement.as_deref().unwrap_or(record)));
