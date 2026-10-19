@@ -391,6 +391,7 @@ struct ForegroundResultContent {
 
 #[derive(Clone)]
 pub(crate) struct CheckpointSeed {
+    read_domains_dirty: bool,
     snapshot: RuntimeClientSnapshot,
     capability_head: super::capability_source::PreparedCapabilityHead,
     trace_head: super::checkpoint::PreparedTraceHead,
@@ -714,6 +715,53 @@ impl CheckpointSeed {
                     .item("attempt.execution_settings", &attempt.execution_settings)
                     .flatten(),
             })
+    }
+
+    /// A closed host cannot restart its cancelled projection reader. Explicit
+    /// inspection instead hydrates a request-owned seed at the already frozen
+    /// shutdown cut. It neither changes the seed/cursor nor publishes a repair.
+    pub(crate) fn checkpoint_with_shutdown_domains(
+        &self,
+        store: &dyn crate::durable::ConversationStore,
+    ) -> Result<super::checkpoint::RuntimeClientCheckpoint, RuntimeClientError> {
+        if !self.snapshot.shutting_down
+            || !self.read_domains_dirty
+            || self.exhausted
+            || self.journal_failure
+        {
+            return self.checkpoint_candidate();
+        }
+        let cut = ReadDomainCut {
+            revision: self.read_cut.revision,
+            through: self.read_cut.through,
+            source_cut: self.read_cut.source_cut.clone(),
+        };
+        let ReadDomainValues {
+            projection_head,
+            transcript,
+            occupancy,
+            mut trace,
+            trace_total,
+        } = cut
+            .read(store)
+            .map_err(RuntimeClientError::observation_store_error)?;
+        let mut seed = self.clone();
+        super::trace::repair_records(&mut trace.records, &seed.snapshot);
+        stamp_trace_cut(&mut trace, &seed.read_cut);
+        seed.source_frontiers.insert(
+            "trace.records".into(),
+            super::trace::checkpoint_frontier(
+                trace_total,
+                trace.records.len() as u64,
+                trace.next_cursor.as_ref(),
+            ),
+        );
+        seed.snapshot.transcript = transcript;
+        seed.snapshot.context.occupancy = occupancy;
+        seed.snapshot.context.projection_head = projection_head;
+        seed.snapshot.trace = trace;
+        seed.trace_head = super::checkpoint::PreparedTraceHead::default();
+        seed.checkpoint_candidate()
     }
 
     /// Finite capture at the native semantic cut. No Store work or awaiting is
@@ -6116,6 +6164,7 @@ impl RuntimeClientProjection {
 
     fn capture_working_seed(&self) -> CheckpointSeed {
         CheckpointSeed {
+            read_domains_dirty: self.read_domains_dirty,
             snapshot: self.snapshot.clone(),
             capability_head: self.capability_head.clone(),
             trace_head: self.trace_head.clone(),
