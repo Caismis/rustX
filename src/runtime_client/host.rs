@@ -4168,9 +4168,9 @@ impl ClientInner {
                 message: "Trace limit must be 1..=32".into(),
             });
         }
-        if records.len() > super::trace::TRACE_RECORD_LIMIT {
+        if records.len() > super::trace::TRACE_REFRESH_LIMIT {
             return Err(RuntimeClientError::InvalidRequest {
-                message: "Trace refresh limit is 8".into(),
+                message: "Trace refresh limit is 128".into(),
             });
         }
         let seed = self.lock_published_state().projection.checkpoint_seed();
@@ -4192,12 +4192,12 @@ impl ClientInner {
         if self.runtime.is_some() {
             super::trace::repair_records(&mut page.records, &current);
         }
-        page.updates = projection
-            .refresh(&records, self.runtime.as_ref().map(|_| &current))
+        let refreshed = projection
+            .refresh_page(&mut page, &records, self.runtime.as_ref().map(|_| &current))
             .map_err(RuntimeClientError::observation_store_error)?;
         super::trace::ensure_page_bound(&page)
             .map_err(RuntimeClientError::observation_store_error)?;
-        Ok(RuntimeClientResult::TracePage { page })
+        Ok(RuntimeClientResult::TracePage { page, refreshed })
     }
 
     /// Locate an exact Tool occurrence through the complete native history.
@@ -10726,7 +10726,7 @@ mod tests {
         let id = format!("trace:{}", committed.sequence);
         // Default checkpoints preserve their published bounded read cache.
         // The read-only native Trace page discovers the newly represented J.
-        let RuntimeClientResult::TracePage { page } =
+        let RuntimeClientResult::TracePage { page, .. } =
             inner.trace_page(None, 32, Vec::new()).unwrap()
         else {
             panic!("native Trace page");
@@ -10907,8 +10907,9 @@ mod tests {
             crate::runtime_client::trace::TraceState::Running
         );
         assert_eq!(during_terminal.trace_updates[0].timing.duration_ms, None);
-        let RuntimeClientResult::TracePage { page: historical } =
-            inner.trace_page(None, 32, Vec::new()).unwrap()
+        let RuntimeClientResult::TracePage {
+            page: historical, ..
+        } = inner.trace_page(None, 32, Vec::new()).unwrap()
         else {
             panic!("Trace page")
         };

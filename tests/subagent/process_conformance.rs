@@ -252,7 +252,7 @@ async fn run_real_child_inherits_the_frozen_timeout_policy_and_retries_locally()
             records: Vec::new(),
         })
         .await;
-    let Ok(rustx::app_server::protocol::MethodResult::Trace { page }) = trace else {
+    let Ok(rustx::app_server::protocol::MethodResult::Trace { page, .. }) = trace else {
         panic!("the child's original timeout evidence: {trace:?}");
     };
     let cut = page.read_cut.as_ref().expect("standalone Child Trace cut");

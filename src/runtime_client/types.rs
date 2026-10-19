@@ -272,7 +272,8 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// Version 70 represents absent wire fields for native-covered Tool associations.
 /// Version 71 adds bounded observation and exact source-unavailability handling.
 /// Version 72 permits Session enrichment without replacing the separately pinned Trace cache.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 72;
+/// Version 73 admits bounded standalone Trace repair prefixes with explicit input progress.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 73;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -884,6 +885,8 @@ pub enum RuntimeClientResult {
     /// Bounded read-only Trace page of summary records.
     TracePage {
         page: super::trace::TracePage,
+        /// Complete input prefix examined, including missing and duplicate interests.
+        refreshed: usize,
     },
     TraceToolLocation {
         location: Option<super::trace::TraceToolLocation>,
@@ -1362,7 +1365,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 72);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 73);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

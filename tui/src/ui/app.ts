@@ -79,7 +79,7 @@ import {
 import { correlateTools } from "../presentation/tools.ts";
 import { selectTodos } from "../presentation/todos.ts";
 import type { PresentationState } from "../presentation/state.ts";
-import type { CheckpointPage } from '../../../protocol/app-server/v51.ts';
+import type { CheckpointPage } from '../../../protocol/app-server/v52.ts';
 import { AppServerRequestError, isDeliveryCancelled } from "../app-server/client.ts";
 import type { AppServerHost } from "../app-server/host.ts";
 import type { AppServerSession } from "../app-server/session.ts";
@@ -2058,7 +2058,7 @@ export class RustxTuiApp {
       const { page, items } = await session.checkpointPage('pending_interactions', offset, previous?.page);
       if (!overlay || this.#hitlOverlay !== overlay || !this.#isCurrentPresentationLease(lease) || read !== this.#interactionRead || stamp !== this.#interactionStamp()) return;
       if (page.items.length > 32) throw new Error('Pending interaction page exceeded its item bound.');
-      this.#interactionPage = { session, stamp, offset, page, items: (items as import('../../../protocol/app-server/v51.ts').RuntimeClientInteractionHeader[]).map(displayInteraction) };
+      this.#interactionPage = { session, stamp, offset, page, items: (items as import('../../../protocol/app-server/v52.ts').RuntimeClientInteractionHeader[]).map(displayInteraction) };
       this.#interactionFocus = this.#interactionPage.items[0]?.interaction;
       this.#hitlDismissed = undefined;
       this.#renderState(session.state);

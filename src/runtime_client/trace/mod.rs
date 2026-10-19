@@ -117,8 +117,10 @@ use crate::events::types::RuntimeEventEnvelope;
 
 /// Largest page a client may request.
 pub const TRACE_PAGE_LIMIT: usize = 32;
-/// Most loaded records a client may ask the server to refresh at one cut.
+/// Most records resolved together during checkpoint or Agent enrichment.
 pub const TRACE_RECORD_LIMIT: usize = 8;
+/// Most loaded identities admitted by one standalone Root Trace repair.
+pub const TRACE_REFRESH_LIMIT: usize = 128;
 
 /// The closed anchor vocabulary. One anchor becomes one ledger record.
 #[cfg(test)]
@@ -515,6 +517,38 @@ impl<'a> TraceProjection<'a> {
             })
             .collect::<Result<Vec<_>, _>>()
             .map(|updates| updates.into_iter().flatten().collect())
+    }
+
+    /// Fill one bounded reply with a complete prefix of the supplied interests.
+    /// Missing anchors still consume their input position. Every lookup uses
+    /// this projection's captured Source cut; no publication is produced.
+    pub(crate) fn refresh_page(
+        &self,
+        page: &mut TracePage,
+        records: &[TraceCursor],
+        snapshot: Option<&super::snapshot::RuntimeClientSnapshot>,
+    ) -> Result<usize, ConversationStoreError> {
+        if records.len() > TRACE_REFRESH_LIMIT {
+            return Err(ConversationStoreError::InvalidReference(
+                "too many Trace refresh interests".into(),
+            ));
+        }
+        let mut refreshed = 0;
+        for batch in records.chunks(TRACE_RECORD_LIMIT) {
+            let previous = page.updates.len();
+            // A lookup failure is an explicit read failure, even when an
+            // earlier batch would have fitted. It is never hidden by paging.
+            page.updates.extend(self.refresh(batch, snapshot)?);
+            if let Err(error) = ensure_page_bound(page) {
+                page.updates.truncate(previous);
+                if refreshed == 0 {
+                    return Err(error);
+                }
+                break;
+            }
+            refreshed += batch.len();
+        }
+        Ok(refreshed)
     }
 }
 

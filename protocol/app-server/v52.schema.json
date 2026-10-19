@@ -5324,7 +5324,7 @@
                   "items": {
                     "$ref": "#/$defs/TraceCursor"
                   },
-                  "maxItems": 8,
+                  "maxItems": 128,
                   "default": []
                 },
                 "before": {
@@ -12541,6 +12541,13 @@
             "page": {
               "$ref": "#/$defs/TracePage"
             },
+            "refreshed": {
+              "description": "Complete input prefix examined; resubmit any remaining interests.",
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0,
+              "maximum": 128
+            },
             "type": {
               "type": "string",
               "const": "trace"
@@ -12549,7 +12556,8 @@
           "additionalProperties": false,
           "required": [
             "type",
-            "page"
+            "page",
+            "refreshed"
           ]
         },
         {

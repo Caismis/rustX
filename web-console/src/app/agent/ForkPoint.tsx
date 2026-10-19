@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { AttachmentTarget, MethodResult, SessionNodeObservation, SessionSummary } from '../../../../protocol/app-server/v51';
+import type { AttachmentTarget, MethodResult, SessionNodeObservation, SessionSummary } from '../../../../protocol/app-server/v52';
 import { sameTarget, type AppServerClient, type SessionView } from '../../client/app-server';
 import { sessionDisplayTitle } from '../../bindings/session-title';
 import { useTranslation } from '../../locale/react';

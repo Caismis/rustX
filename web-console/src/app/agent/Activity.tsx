@@ -1,5 +1,5 @@
 import { useTranslation } from '../../locale/react';
-import type { RuntimeClientSnapshot } from '../../../../protocol/app-server/v51';
+import type { RuntimeClientSnapshot } from '../../../../protocol/app-server/v52';
 import type { AppServerClient } from '../../client/app-server';
 import { JobCard, WorkflowCard, workflowKey } from '../components/ActivityCards';
 

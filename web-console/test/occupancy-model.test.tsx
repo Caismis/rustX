@@ -4,7 +4,7 @@ import { afterEach, expect, it } from 'vitest';
 import { OccupancyModelValue } from '../src/app/agent/OccupancyModelValue';
 import { JournalSourceProvider } from '../src/app/agent/JournalValue';
 import { checkpoint, Server, snapshot } from './fixture';
-import type { RuntimeClientContextOccupancy } from '../../protocol/app-server/v51';
+import type { RuntimeClientContextOccupancy } from '../../protocol/app-server/v52';
 let server: Server;
 afterEach(()=>{cleanup();server?.client.disconnect();});
 const occupancy: RuntimeClientContextOccupancy = {estimated:false,input_tokens:'75',context_window_tokens:'100',

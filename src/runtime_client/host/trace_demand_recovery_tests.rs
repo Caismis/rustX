@@ -324,7 +324,7 @@ async fn trace_only_page_fault_defers_to_explicit_reads_and_same_cut_retry_succe
     );
     fault.repair();
     let repaired = inner.checkpoint().unwrap();
-    let RuntimeClientResult::TracePage { page } = inner.trace_page(None, 32, Vec::new()).unwrap()
+    let RuntimeClientResult::TracePage { page, .. } = inner.trace_page(None, 32, Vec::new()).unwrap()
     else {
         panic!("same-cut explicit retry");
     };

@@ -248,7 +248,7 @@ anchor      native identity, own grouping, own durable terminal    shared
 A lifecycle refresh resolves only the facts a `TraceLifecycle` transmits. It
 performs no System Prompt predecessor lookup, reads no predecessor
 `RequestSnapshot`, joins no canonical Context out of the Message Ledger, and
-resolves no recorded Tool name. One refresh may cover up to eight records, so
+resolves no recorded Tool name. One internal enrichment batch covers up to eight records, so
 this is a correctness rule and not only a cost one: an error reached solely
 while resolving a request's immutable Context presentation must not be able
 to make that record's lifecycle repair unavailable, and a path that is never
@@ -374,9 +374,14 @@ Inactive durable inspection instead captures its own SQLite frontier; it has no
 live publication boundary and receives no live lifecycle overlay: a durable start
 alone remains incomplete. Paging cursors remain Trace-specific in both cases.
 Exact positive lifecycle evidence applies regardless of anchor age. For loaded
-records outside the newest tail, `session/trace` accepts at most eight opaque
-`records` positions and returns `page.updates`, resolved at the same represented
-read cut. Recovery acquires a bounded `session/checkpoint` and independently
+records outside the newest tail, `session/trace` accepts at most 128 opaque
+`records` positions and returns a complete bounded prefix in `page.updates`, resolved at the same represented
+read cut. The mandatory `refreshed` count acknowledges examined input positions,
+including missing anchors and duplicates. The client validates positive bounded
+progress and submits the remainder. Packing retains the existing frame ceiling;
+lookup failures stay visible even after an earlier batch would have fitted.
+Checkpoint and Agent enrichment retain their eight-interest bound.
+Recovery acquires a bounded `session/checkpoint` and independently
 reloads the Trace window at its native read cut. `trace_changed` schedules a
 coalesced bounded Trace read. These typed patches carry lifecycle/timing, safe
 request usage/failure details and original source references. Each update is
@@ -402,8 +407,8 @@ byte cache; evicting either cache does not change Applied Cursor.
 At most one selected entry is retained separately from history. It stays
 inspector-visible after a no-overlap rebase and receives server lifecycle patches
 through the existing bounded interests request. It is not inserted into the
-historical list. Selection receives first priority within each eight-interest
-batch; subsequent batches cover the other retained records at their returned cuts.
+historical list. Selection receives first priority in the bounded interest list;
+subsequent prefix replies cover the other retained records at their returned cuts.
 Paging completion requests another repair so settlement while an older read was
 pending cannot leave newly loaded entries stale. Reconnect/reattach/resync and
 explicit latest replace the domain, including retained selection. Notifications

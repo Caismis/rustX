@@ -3846,7 +3846,7 @@ async fn goal351_trace_still_identifies_the_exact_native_goal_tools() {
         .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
         .unwrap()
         .0;
-    let rustx::runtime_client::RuntimeClientResult::TracePage { page } = host
+    let rustx::runtime_client::RuntimeClientResult::TracePage { page, .. } = host
         .weak_inner()
         .upgrade()
         .unwrap()

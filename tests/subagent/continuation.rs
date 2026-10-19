@@ -637,7 +637,7 @@ async fn cold_trace_evidence(
             records: Vec::new(),
         })
         .await;
-    let Ok(MethodResult::Trace { page }) = trace else {
+    let Ok(MethodResult::Trace { page, .. }) = trace else {
         panic!("inactive Child's original Trace: {trace:?}");
     };
     let cut = page.read_cut.expect("standalone cold Trace read evidence");

@@ -4,7 +4,7 @@ import { contentAdvance } from './fixture';
 import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { SessionConfiguration } from '../src/app/SessionConfiguration';
-import type { AdoptionEligibility, ConfigurationApplication, RuntimeClientEvent } from '../../protocol/app-server/v51';
+import type { AdoptionEligibility, ConfigurationApplication, RuntimeClientEvent } from '../../protocol/app-server/v52';
 import { cfg3Application } from './cfg3-data';
 import { Server, snapshot } from './fixture';
 import { RpcFailure } from '../src/client/app-server';

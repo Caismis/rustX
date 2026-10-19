@@ -903,7 +903,7 @@ async fn subagent_process_stack(alias_root: bool) {
             records: Vec::new(),
         })
         .await;
-    let Ok(MethodResult::Trace { page: trace }) = trace else {
+    let Ok(MethodResult::Trace { page: trace, .. }) = trace else {
         panic!("child Trace after exit: {trace:?}");
     };
     assert!(
@@ -1041,7 +1041,7 @@ async fn subagent_process_stack(alias_root: bool) {
                 .collect(),
         })
         .await;
-    let Ok(MethodResult::Trace { page: older }) = older else {
+    let Ok(MethodResult::Trace { page: older, .. }) = older else {
         panic!("child Trace paging: {older:?}");
     };
     assert_eq!(older.records.len(), 1);
@@ -1284,7 +1284,7 @@ async fn running_child_inspection_is_execution_independent() {
                 "refused Child endpoint is explicit unavailable: {trace:?}"
             );
         } else {
-            let Ok(MethodResult::Trace { page: trace }) = trace else {
+            let Ok(MethodResult::Trace { page: trace, .. }) = trace else {
                 panic!("running child Trace: {trace:?}");
             };
             let requests: Vec<_> = trace

@@ -1,6 +1,7 @@
+import {traceRefreshed} from './fixture';
 import {act,cleanup,fireEvent,render,screen,waitFor,within} from '@testing-library/react';
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
-import type {CheckpointPage,CheckpointReadCut,MethodResult,Request} from '../../protocol/app-server/v51';
+import type {CheckpointPage,CheckpointReadCut,MethodResult,Request} from '../../protocol/app-server/v52';
 import {Server,checkpoint,snapshot} from './fixture';
 import {traceRecord,requestDetail} from './trace-fixture';
 import {AgentTraceReader} from '../src/client/agent-trace';
@@ -61,7 +62,7 @@ it.each(['root','child','historical'] as const)('%s keeps its own page cut and s
  }else if(kind==='child'){
   server=new Server();servers.push(server);await server.attached('A');
   cut={...checkpoint(snapshot('child')).read_cut,activation_id:'activation-child',revision:'12',through:'8'};
-  server.handlers.set('agent/trace',()=>({type:'trace',page:{read_cut:cut,records:[record()],next_cursor:null}}));
+  server.handlers.set('agent/trace',(request)=>({refreshed:traceRefreshed(request),type:'trace',page:{read_cut:cut,records:[record()],next_cursor:null}}));
   server.handlers.set('agent/traceDetail',()=>({type:'domain_page',page:descriptor(cut)}));
   const child=new AgentTraceReader(server.client,'A',server.client.getSnapshot().views.A.attachmentObservation!,{agent_id:'agent-child',activation_id:'activation-child',child_conversation_id:cut.conversation_id,state:'active'});
   await child.refresh();await child.detail('trace:4');entry=child.snapshot().details['trace:4'];retire=async()=>child.retire();

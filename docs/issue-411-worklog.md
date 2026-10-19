@@ -602,7 +602,7 @@ run is not represented as green.
   records / 131 package notices. Final generated-schema/build/browser checks are
   pending integrated runtime generation and are not implied by these results.
 
-Review validation after generated App Server v25 / Runtime Client v51:
+Review validation after generated App Server v25 / Runtime Client v52:
 `cargo test --lib --all-features runtime_client::trace::` passed 75 tests;
 Web `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm test` (980 / 56
 files), `pnpm check:provenance` (135 source records, 131 notices) and `pnpm build`
@@ -627,7 +627,7 @@ unnecessary temporary binding to satisfy the 100-line Clippy gate. Finite
 Workflow activation provenance is presented explicitly as Workflow, with a
 regression rejecting a fabricated Message Tool label or ToolCall relation.
 Current UI architecture/handshake/import references audited at App Server v25 /
-Runtime Client v51; historical provenance audit records remain historical.
+Runtime Client v52; historical provenance audit records remain historical.
 Workflow provenance schema final validation: Web typecheck, provenance and build
 passed; full Web unit suite rerun passed **981 tests / 56 files** after the new
 Workflow-origin regression (`/tmp/411-review-web-unit25-final.log`).

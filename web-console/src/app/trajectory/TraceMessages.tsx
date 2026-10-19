@@ -1,5 +1,5 @@
 import {useEffect,useRef,useState,type ReactNode} from 'react';
-import type {CheckpointPage,TraceArtifact,TraceInspectionMessages,TraceInspectionMessage,TraceFieldSource} from '../../../../protocol/app-server/v51';
+import type {CheckpointPage,TraceArtifact,TraceInspectionMessages,TraceInspectionMessage,TraceFieldSource} from '../../../../protocol/app-server/v52';
 import {traceInspectionMessage} from '../../../../protocol/app-server/trace-inspection';
 import {traceFieldKey} from '../../../../protocol/app-server/trace-identity';
 import {canonicalLocatorKey} from '../../../../protocol/app-server/content-identity';

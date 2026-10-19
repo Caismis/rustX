@@ -15,16 +15,16 @@ import { UploadFailure, AttachmentIntakes } from './uploads';
 import { checkpointSnapshot, foldRuntimeEvent, observationCheckpoint, transitionFacts } from '../../../protocol/app-server/projection';
 import { FirstSubmissions } from '../app/new-conversation/first-submit';
 import { SessionExportController } from "./session-export";
-import { standaloneTraceCut,inlineTraceDetail,retainedTraceDetailPage,bindTraceDetailReader,TRACE_LIMIT, TRACE_PAGE_SIZE, beginTraceDetail, completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterestBatches,traceInterests, type TraceCache,type TraceFieldReader } from './trace';
+import { standaloneTraceCut,inlineTraceDetail,retainedTraceDetailPage,bindTraceDetailReader,TRACE_LIMIT, TRACE_PAGE_SIZE, TRACE_REFRESH_SIZE, beginTraceDetail, completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterestBatches,traceInterests, type TraceCache,type TraceFieldReader } from './trace';
 import type {
   TraceToolLocator, ConfigurationApplication, PendingInboundRef, PendingMutationOutcome, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request, Request1, Response, RuntimeClientCursor, RuntimeClientSnapshot, RuntimeClientEvent,
   SessionPersistentState, SessionSummary, ServerCapabilities, UserInputBlock, UploadReceipt, UploadedFile,
   ConfigRepairReceipt, SourceTarget,
-} from '../../../protocol/app-server/v51';
+} from '../../../protocol/app-server/v52';
 import { transferUpload, uploadOperationId } from '../../../protocol/app-server/upload';
 import { HISTORY_PAGE_SIZE, TURN_PAGE_SIZE, sameReadCut, extendTranscriptWindow, installTranscriptWindow, prependTranscript, refreshTranscript, replaceTranscript, turnKey, turnPageCount, type TranscriptCache, type TurnSelection } from './transcript';
-import type { ObservedTurn, ObservedTurnPage } from '../../../protocol/app-server/v51';
+import type { ObservedTurn, ObservedTurnPage } from '../../../protocol/app-server/v52';
 import { ProtocolLog, type WireContext } from './protocol-log';
 
 
@@ -79,16 +79,16 @@ export interface SessionView extends Omit<LifecycleFacts, 'error' | 'attachmentI
   /** Last native catalog row, retained when the Sidebar reads a different page. */
   summary?: SessionSummary;
   snapshot?: RuntimeClientSnapshot;
-  checkpoint?: import('../../../protocol/app-server/v51').RuntimeClientCheckpoint;
+  checkpoint?: import('../../../protocol/app-server/v52').RuntimeClientCheckpoint;
   observationState?: import('../../../protocol/app-server/observation').ObservationPhase;
-  interactionDetail?:{target:AttachmentTarget;cut:import('../../../protocol/app-server/v51').CheckpointReadCut;body:import('../../../protocol/app-server/v51').RoutedInteraction};
-  interactionPage?:{target:AttachmentTarget;page:import('../../../protocol/app-server/v51').CheckpointPage;rows:import('../../../protocol/app-server/v51').RuntimeClientInteractionHeader[];offset:number};
+  interactionDetail?:{target:AttachmentTarget;cut:import('../../../protocol/app-server/v52').CheckpointReadCut;body:import('../../../protocol/app-server/v52').RoutedInteraction};
+  interactionPage?:{target:AttachmentTarget;page:import('../../../protocol/app-server/v52').CheckpointPage;rows:import('../../../protocol/app-server/v52').RuntimeClientInteractionHeader[];offset:number};
   trace?: TraceCache;
   cursor?: RuntimeClientCursor;
   history?: TranscriptCache;
   /** Read-only durable history, never an execution snapshot or control claim. */
   preview?: { conversationId: string; history: TranscriptCache };
-  statisticsPreview?: { conversationId: string; nodeId?: string; cut: import('../../../protocol/app-server/v51').CheckpointReadCut; statistics: import('../../../protocol/app-server/v51').ConversationStatistics; occupancy?: import('../../../protocol/app-server/v51').RuntimeClientContextOccupancy | null };
+  statisticsPreview?: { conversationId: string; nodeId?: string; cut: import('../../../protocol/app-server/v52').CheckpointReadCut; statistics: import('../../../protocol/app-server/v52').ConversationStatistics; occupancy?: import('../../../protocol/app-server/v52').RuntimeClientContextOccupancy | null };
   tracePreview?: { conversationId: string; cache: TraceCache };
   turnOutline?: { paging: OutlinePagingIntent; page?: ObservedTurnPage; loading?: boolean; error?: string };
   turnNavigation?: { intent: number; pending?: string; error?: string };
@@ -98,7 +98,7 @@ export interface SessionView extends Omit<LifecycleFacts, 'error' | 'attachmentI
   /** Current-generation turn/start or turn/steer requests awaiting an outcome.
    * Transport ownership only, including unsent requests in the bounded pipeline. */
   inboundRequests?: number;
-  modelIntent?: { config: import('../../../protocol/app-server/v51').SessionModelConfig; phase: 'waiting' | 'applying' | 'failed'; error?: string };
+  modelIntent?: { config: import('../../../protocol/app-server/v52').SessionModelConfig; phase: 'waiting' | 'applying' | 'failed'; error?: string };
   modelMutation?: { generation: number; status: 'in-flight' | 'acknowledged' | 'uncertain' };
   cancellation?: { attemptId?: string; status: 'in-flight' | 'acknowledged' | 'uncertain' };
   error?: string;
@@ -383,7 +383,7 @@ export class AppServerClient {
   private acquiring = new Set<string>();
   private resubscribe = new Set<string>();
   private observationChains = new Map<string, ObservationChain<RuntimeClientEvent>>();
-  private resumeSeeds = new Map<string,{target:AttachmentTarget;snapshot:RuntimeClientSnapshot;checkpoint:import('../../../protocol/app-server/v51').RuntimeClientCheckpoint;cursor:string;bytes:number}>();
+  private resumeSeeds = new Map<string,{target:AttachmentTarget;snapshot:RuntimeClientSnapshot;checkpoint:import('../../../protocol/app-server/v52').RuntimeClientCheckpoint;cursor:string;bytes:number}>();
   private retainAppliedObservations() {
     for(const [id,chain] of this.observationChains) {
       const view=this.state.views[id];
@@ -541,7 +541,7 @@ export class AppServerClient {
         this.resumeSeeds.delete(id);
         const resumable=previous&&previous.target.conversation_id===result.target.conversation_id
           &&previous.target.runtime_incarnation===result.target.runtime_incarnation;
-        let checkpoint:import('../../../protocol/app-server/v51').RuntimeClientCheckpoint;
+        let checkpoint:import('../../../protocol/app-server/v52').RuntimeClientCheckpoint;
         let observed:RuntimeClientSnapshot;
         if(resumable){checkpoint={...previous.checkpoint,cursor:previous.cursor};observed=previous.snapshot;}
         else {
@@ -667,7 +667,7 @@ export class AppServerClient {
     // Ownership commits after close/retirement, before attempting the new transport.
     committed?.();
     try {
-      const socket = this.socketFactory(url.href, ['rustx.app-server.v51', `rustx-token.${token}`]);
+      const socket = this.socketFactory(url.href, ['rustx.app-server.v52', `rustx-token.${token}`]);
       this.socket = socket;
       await new Promise<void>((resolve, reject) => {
         const fail = (message: string) => {
@@ -685,12 +685,12 @@ export class AppServerClient {
         socket.onerror = () => { clearTimeout(timer); fail('WebSocket failed. Check endpoint and transport token.'); };
       });
       const hello = await this.request({ method: 'initialize', params: {
-        protocol_version: 51, client: { name: 'rustx-web-console', version: '0.1.0' },
+        protocol_version: 52, client: { name: 'rustx-web-console', version: '0.1.0' },
         presentation: { images: true, questionnaires: true, reviews: true },
       } }, 'initialized');
       if (!this.current(generation)) return;
-      if (!hello.authority_id || hello.protocol_version !== 51 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
-        throw new Error('Incompatible App Server protocol or capabilities. Protocol v51 with native multi-Session, headless interactions, and single-controller admission is required.');
+      if (!hello.authority_id || hello.protocol_version !== 52 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
+        throw new Error('Incompatible App Server protocol or capabilities. Protocol v52 with native multi-Session, headless interactions, and single-controller admission is required.');
       }
       if (this.state.authorityId && this.state.authorityId !== hello.authority_id) {
         try { this.admitAuthorityReplacement(); }
@@ -1224,9 +1224,9 @@ export class AppServerClient {
   }
   async modelRead(target: AttachmentTarget, current: () => boolean) {
     const {page}=await this.request({method:'session/model',params:{target}},'domain_page',undefined,current);
-    return domainValue<import('../../../protocol/app-server/v51').SessionModelView>(page,this.domainReader(target,current));
+    return domainValue<import('../../../protocol/app-server/v52').SessionModelView>(page,this.domainReader(target,current));
   }
-  async modelCatalogRead(target: AttachmentTarget, current: () => boolean, previous?: import('../../../protocol/app-server/v51').CheckpointPage) {
+  async modelCatalogRead(target: AttachmentTarget, current: () => boolean, previous?: import('../../../protocol/app-server/v52').CheckpointPage) {
     const reader=this.domainReader(target,current);
     const page=previous?.next_offset!=null ? await reader.page(previous,Number(previous.next_offset)) : (await this.request({method:'session/models',params:{target}},'domain_page',undefined,current)).page;
     if (!current() || page.items.length > 32) throw new Error('Model catalog observation was replaced or exceeded its bound.');
@@ -1234,7 +1234,7 @@ export class AppServerClient {
     // and profile collections remain explicitly readable through their page;
     // opening this menu never downloads every growing catalog row.
     const models = page.items.flatMap(item => {
-      const row = item.value as import('../../../protocol/app-server/v51').CatalogModelView | null;
+      const row = item.value as import('../../../protocol/app-server/v52').CatalogModelView | null;
       return row && typeof row.model === 'string' && row.model.length <= 256
         && (row.profiles?.length ?? 0) <= 32
         && (row.profiles ?? []).every(profile => typeof profile.id === 'string' && profile.id.length <= 256)
@@ -1242,15 +1242,15 @@ export class AppServerClient {
     });
     return {catalog:{models},page};
   }
-  async sourceModelCatalogRead(source: import('../../../protocol/app-server/v51').SourceSettings, current: () => boolean, offset = 0) {
+  async sourceModelCatalogRead(source: import('../../../protocol/app-server/v52').SourceSettings, current: () => boolean, offset = 0) {
     const cut = sourceObservation(source);
     if (!cut || !current()) throw new Error('Model source observation is unavailable.');
     const {page} = await this.request({method:'configuration/sourcePage',params:{target:cut.target,revision:cut.revision,field:'session_models',offset,limit:32}},'source_page',undefined,current);
     if (page.revision !== cut.revision || page.field !== 'session_models' || page.items.length > 32) throw new Error('Model source page cut changed.');
-    const models: import('../../../protocol/app-server/v51').CatalogModelView[] = [];
+    const models: import('../../../protocol/app-server/v52').CatalogModelView[] = [];
     for (const [index,item] of page.items.entries()) {
       if (Number(item.index) !== offset + index || !current()) throw new Error('Model source page failed to advance.');
-      const value = await materializeFields<{model:import('../../../protocol/app-server/v51').CatalogModelView},import('../../../protocol/app-server/v51').SourceFieldRef>(
+      const value = await materializeFields<{model:import('../../../protocol/app-server/v52').CatalogModelView},import('../../../protocol/app-server/v52').SourceFieldRef>(
         {revision:cut.revision,fields:[{name:'model',value:item.value,reference:item.reference}]},
         async(reference,offset)=>(await this.request({method:'configuration/sourceValueRead',params:{target:cut.target,reference,offset,max_bytes:65536}},'source_value_chunk',undefined,current)).chunk,current);
       models.push(value.model);
@@ -1262,7 +1262,7 @@ export class AppServerClient {
     const {projection}=await this.request({method:'session/effectiveConfiguration',params:{target}},'effective_configuration',undefined,current);
     return materializeEffective(projection,async(reference,offset)=>(await this.request({method:'session/effectiveConfigurationValueRead',params:{target,reference,offset,max_bytes:65536}},'configuration_value_chunk',undefined,current)).chunk,current);
   }
-  private readonly configurationCuts=new Map<string,import('../../../protocol/app-server/v51').BoundedSessionApplication>();
+  private readonly configurationCuts=new Map<string,import('../../../protocol/app-server/v52').BoundedSessionApplication>();
   private readonly configurationReads=new Map<string,Promise<void>>();
   private readonly configurationWeights=new Map<string,number>();
   private retainConfiguration(application:ConfigurationApplication) {
@@ -1285,14 +1285,14 @@ export class AppServerClient {
     this.publish({configuration,configurationObservation:diagnostics});
   }
 
-  private loadApplication(cut:import('../../../protocol/app-server/v51').BoundedSessionApplication,generation:number) {
+  private loadApplication(cut:import('../../../protocol/app-server/v52').BoundedSessionApplication,generation:number) {
     if(this.configurationReads.has(cut.scope))return;
     const current=()=>this.current(generation)&&this.configurationCuts.get(cut.scope)===cut;
     const load=async()=>{
       if(this.state.views[cut.scope])return materializeApplication(cut,async(reference,offset)=>(await this.request({method:'session/configurationValueRead',params:{session_id:cut.scope,reference,offset,max_bytes:65536}},'session_application_value_chunk',undefined,current)).chunk,current);
       const target=cut.sources[0];if(!target)throw new Error('Configuration source is unavailable.');
       const {projection}=await this.request({method:'configuration/sourcesRead',params:{target}},'source_settings',undefined,current);
-      const application=projection.inline?.application ?? (await materializeFields<{application:ConfigurationApplication},import('../../../protocol/app-server/v51').SourceFieldRef>({revision:projection.revision,fields:projection.fields.filter(field=>field.name==='application')},async(reference,offset)=>(await this.request({method:'configuration/sourceValueRead',params:{target,reference,offset,max_bytes:65536}},'source_value_chunk',undefined,current)).chunk,current)).application;
+      const application=projection.inline?.application ?? (await materializeFields<{application:ConfigurationApplication},import('../../../protocol/app-server/v52').SourceFieldRef>({revision:projection.revision,fields:projection.fields.filter(field=>field.name==='application')},async(reference,offset)=>(await this.request({method:'configuration/sourceValueRead',params:{target,reference,offset,max_bytes:65536}},'source_value_chunk',undefined,current)).chunk,current)).application;
       if(application?.version!==cut.version||application.scope!==cut.scope)throw new Error('Configuration source cut changed.');return application;
     };
     this.publish({configurationObservation:{...this.state.configurationObservation,[cut.scope]:{version:cut.version,phase:'loading'}}});
@@ -1311,7 +1311,7 @@ export class AppServerClient {
     const settings = await materializeSettings(projection, async(reference,offset)=>(await this.request({method:'session/settingsValueRead',params:{session_id:id,reference,offset,max_bytes:65_536}},'settings_value_chunk',undefined,current)).chunk, current);
     return {revision:projection.revision,settings};
   }
-  async readContent(target: AttachmentTarget, agentId: string | undefined, content_ref: import('../../../protocol/app-server/v51').ContentRef, offset: number, current: () => boolean) {
+  async readContent(target: AttachmentTarget, agentId: string | undefined, content_ref: import('../../../protocol/app-server/v52').ContentRef, offset: number, current: () => boolean) {
     return (await this.request({ method: 'conversation/contentRead', params: { target, agent_id: agentId ?? null, content_ref, offset, max_bytes: 65_536 } }, 'content_chunk', undefined, current)).chunk;
   }
   private listEpoch = 0;
@@ -1694,7 +1694,7 @@ export class AppServerClient {
     if(existing&&scope?.generation===this.state.generation&&sameTarget(scope.target,target))return existing;
     const generation=this.state.generation;
     const current=()=>generation===this.state.generation&&sameTarget(this.lifecycles.observe(target.session_id)?.target,target);
-    const valid=(cut:import('../../../protocol/app-server/v51').CheckpointReadCut,owns:()=>boolean)=>{
+    const valid=(cut:import('../../../protocol/app-server/v52').CheckpointReadCut,owns:()=>boolean)=>{
       if(!current()||!owns()||cut.conversation_id!==target.conversation_id||cut.activation_id!=null)throw new Error('Trace field source was replaced.');
     };
     const reader:TraceFieldReader={
@@ -1706,7 +1706,7 @@ export class AppServerClient {
     return reader;
   }
   private coldTraceFields(id:string,node:string|null|undefined,conversation:string,current:()=>boolean):TraceFieldReader {
-    const valid=(cut:import('../../../protocol/app-server/v51').CheckpointReadCut,owns:()=>boolean)=>{
+    const valid=(cut:import('../../../protocol/app-server/v52').CheckpointReadCut,owns:()=>boolean)=>{
       if(!current()||!owns()||cut.conversation_id!==conversation||cut.activation_id!=null)throw new Error('Historical Trace field source was replaced.');
     };
     return {
@@ -1748,21 +1748,25 @@ export class AppServerClient {
           // while it awaits owns a separate, coalesced follow-up obligation.
           read.dirty = false;
           const authority = this.traceAuthorities.get(id);
-          const batches=traceInterestBatches(this.state.views[id]?.trace);
-          for(const [index,records] of batches.entries()) {
+          const interests=traceInterestBatches(this.state.views[id]?.trace).flat();
+          let offset=0,index=0;
+          do {
             if(!current()||this.traceAuthorities.get(id)!==authority)break;
+            const records=interests.slice(offset,offset+TRACE_REFRESH_SIZE);
             let result;
             try {
               result=await this.request({method:'session/trace',params:{target,before:null,limit:index?1:TRACE_PAGE_SIZE,records}},'trace',undefined,current);
             }catch(error){if(!read.dirty||!current())throw error;break;}
             standaloneTraceCut(result.page,target.conversation_id);
+            if(!Number.isInteger(result.refreshed)||result.refreshed<0||result.refreshed>records.length||(records.length>0&&result.refreshed===0))throw new Error('Trace repair returned invalid progress.');
             if(current()&&this.traceAuthorities.get(id)===authority){
               const previous=this.state.views[id]?.trace;
               // This read recovered. Clear its old error before merging so a
               // newly produced window-bound error remains authoritative.
               this.setSession(id,{trace:{...refreshTrace(previous&&index===0?{...previous,error:undefined}:previous,result.page,result.page.updates??[],undefined,index>0),fields:this.liveTraceFields(target)}});
             }
-          }
+            offset+=result.refreshed;index++;
+          } while(offset<interests.length);
         }
       } finally {
         // Retire in the same continuation that decides to exit, so a new call
@@ -2073,7 +2077,7 @@ export class AppServerClient {
     return this.readHistoryPage(id, { type: 'older', before: history.page.next_cursor, cut: history.window?.cut ?? null });
   }
   /** One gesture, one read. Navigation intent fences both page and anchor reads. */
-  private async readHistoryPage(id: string, at: import('../../../protocol/app-server/v51').ConversationWindowAt) {
+  private async readHistoryPage(id: string, at: import('../../../protocol/app-server/v52').ConversationWindowAt) {
     const history = this.state.views[id]?.history;
     const observation = this.lifecycles.observe(id);
     if (!history || !observation) return;
@@ -2143,8 +2147,8 @@ export class AppServerClient {
     if (!observation) throw new Error('Session is not attached.');
     return (await this.request({ method: 'session/projections', params: { target: observation.target, after, limit: 16 } }, 'projections', undefined, () => observation.current())).page;
   }
-  private readonly projectionReaders = new WeakMap<import('../../../protocol/app-server/v51').ProjectionDetail, TraceFieldReader>();
-  projectionDetailReader(detail: import('../../../protocol/app-server/v51').ProjectionDetail) { return this.projectionReaders.get(detail); }
+  private readonly projectionReaders = new WeakMap<import('../../../protocol/app-server/v52').ProjectionDetail, TraceFieldReader>();
+  projectionDetailReader(detail: import('../../../protocol/app-server/v52').ProjectionDetail) { return this.projectionReaders.get(detail); }
   async projectionDetail(id: string, checkpointId: string, offset = 0) {
     const observation = this.lifecycles.observe(id);
     if (!observation) throw new Error('Session is not attached.');
@@ -2335,10 +2339,10 @@ export class AppServerClient {
     if (observed && view?.snapshot) this.setSession(id, { history: replaceTranscript(view.snapshot.transcript, view.history) });
     return observed;
   }
-  private modelPreparations = new Map<string, { work: Promise<import('../../../protocol/app-server/v51').SessionModelConfig>; retire: () => void }>();
+  private modelPreparations = new Map<string, { work: Promise<import('../../../protocol/app-server/v52').SessionModelConfig>; retire: () => void }>();
   /** Client-owned selection while native resources initialize. Last unsent choice
    * wins; the existing native mutation and authoritative reread still own apply. */
-  prepareAgentModel(id: string, config: import('../../../protocol/app-server/v51').SessionModelConfig) {
+  prepareAgentModel(id: string, config: import('../../../protocol/app-server/v52').SessionModelConfig) {
     const view = this.state.views[id];
     if (view?.attachment !== 'attaching' || view.attachmentIntent !== 'wanted' || view.deleting)
       return Promise.reject(new Error('Conversation is no longer connecting.'));
@@ -2375,7 +2379,7 @@ export class AppServerClient {
     return work;
   }
   /** Native catalog defaults at the exact generation whose ordinals were read. */
-  async selectCatalogModel(id:string,choice:import('../../../protocol/app-server/v51').CatalogModelSelection,owned:()=>boolean=()=>true) {
+  async selectCatalogModel(id:string,choice:import('../../../protocol/app-server/v52').CatalogModelSelection,owned:()=>boolean=()=>true) {
     const target=this.target(id),generation=this.state.generation;
     if(this.state.views[id].modelMutation)throw new Error('Reread native model state before another mutation.');
     const current=()=>owned()&&this.current(generation)&&sameTarget(this.state.views[id]?.target,target);
@@ -2392,7 +2396,7 @@ export class AppServerClient {
 
   /** Transport continuation guard, not Session model authority. A successful
    * mutation response alone cannot enable a dependent Send. */
-  async setAgentModel(id: string, config: import('../../../protocol/app-server/v51').SessionModelConfig) {
+  async setAgentModel(id: string, config: import('../../../protocol/app-server/v52').SessionModelConfig) {
     const target = this.target(id), generation = this.state.generation;
     if (this.state.views[id].modelMutation) throw new Error('Reread native model state before another mutation.');
     const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);
@@ -2499,7 +2503,7 @@ export class AppServerClient {
     if(loaded&&sameTarget(view.target,loaded.target)&&this.interactionCutCurrent(view,loaded.page.read_cut))return loaded.rows;
     return view?.snapshot?.pending_interactions??[];
   }
-  interactionBody(id:string,header:import('../../../protocol/app-server/v51').RuntimeClientInteractionHeader) {
+  interactionBody(id:string,header:import('../../../protocol/app-server/v52').RuntimeClientInteractionHeader) {
     const view=this.state.views[id],detail=view?.interactionDetail;
     if(detail&&sameTarget(view.target,detail.target)&&this.interactionCutCurrent(view,detail.cut)&&interactionKey(detail.body.interaction)===interactionKey(header.interaction))return detail.body;
     return interactionBody(header);
@@ -2533,7 +2537,7 @@ export class AppServerClient {
     if(bytes.length>65536||!Number.isSafeInteger(chunk.readable_end)||offset+bytes.length>chunk.readable_end||offset<chunk.readable_end&&!bytes.length||(chunk.next_offset??null)!==(offset+bytes.length<chunk.readable_end?offset+bytes.length:null))throw new Error('Interaction range failed to advance exactly.');
     return {bytes,next:chunk.next_offset??undefined,readableEnd:chunk.readable_end};
   }
-  private interactionCutCurrent(view:SessionView,cut:import('../../../protocol/app-server/v51').CheckpointReadCut) {
+  private interactionCutCurrent(view:SessionView,cut:import('../../../protocol/app-server/v52').CheckpointReadCut) {
     const current=view.checkpoint?.read_cut;
     return !!current&&current.conversation_id===cut.conversation_id&&current.activation_id===cut.activation_id
       &&(cut.domain_revisions.pending_interactions!==undefined
@@ -2546,7 +2550,7 @@ export class AppServerClient {
     const current=()=>observation.current()&&!!this.state.views[id]&&this.interactionCutCurrent(this.state.views[id],cut);
     const {page}=await this.request({method:'conversation/checkpointPage',params:{target,agent_id:null,cut,domain:'pending_interactions',offset,limit:32}},'checkpoint_page',undefined,current);
     if(page.items.length>32)throw new Error('Interaction page exceeds its item bound.');
-    const rows=page.items.map(item=>{if(item.value==null)throw new Error('Interaction descriptor is missing.');return item.value as import('../../../protocol/app-server/v51').RuntimeClientInteractionHeader;});
+    const rows=page.items.map(item=>{if(item.value==null)throw new Error('Interaction descriptor is missing.');return item.value as import('../../../protocol/app-server/v52').RuntimeClientInteractionHeader;});
     if(!current())throw new Error('Interaction observation was replaced.');
     this.setSession(id,{interactionPage:{target,page,rows,offset}});
   }

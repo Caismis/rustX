@@ -1,5 +1,5 @@
 import { useContext,useEffect,useRef,useState } from 'react';
-import type { CheckpointReadCut,RuntimeClientDeliveryHead,RuntimeClientDeliveryItem } from '../../../../protocol/app-server/v51';
+import type { CheckpointReadCut,RuntimeClientDeliveryHead,RuntimeClientDeliveryItem } from '../../../../protocol/app-server/v52';
 import { deliveryHead,deliveryItem,deliveryItemKey,deliveryPage,readDeliveryMetadata } from '../../../../protocol/app-server/delivery-observation';
 import { observationSourceIdentity,readObservationValue,useObservationSource } from './JournalValue';
 import { DeliveryCards } from '../components/Artifact';

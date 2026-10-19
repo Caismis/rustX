@@ -1,3 +1,4 @@
+import {traceRefreshed} from '../fixture';
 import{traceReceipt}from'../fixture';
 import { domainReceipt } from '../fixture';
 import { createActor } from 'xstate';
@@ -16,7 +17,7 @@ import { Server, snapshot, childConversation } from '../fixture';
 import { cfg3Source, cfg3Effective } from '../cfg3-data';
 import { traceRecord, traceTool, requestDetail, toolDetail } from '../trace-fixture';
 import { RpcFailure } from '../../src/client/app-server';
-import type { CheckpointReadCut, Request } from '../../../protocol/app-server/v51';
+import type { CheckpointReadCut, Request } from '../../../protocol/app-server/v52';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -100,7 +101,7 @@ if (new URL(location.href).searchParams.has('subagents')) {
       : traceRecord(n + 1, { preview: { text: `${agent_id} request ${n + 1}`, truncated: false } }));
     const end = before ? records.findIndex(record => record.position === before) : records.length;
     const start = Math.max(0, end - limit);
-    return { type: 'trace', page: { read_cut: childTraceCut(agent_id), records: records.slice(start, end), next_cursor: start > 0 ? records[start]!.position : null } };
+    return {refreshed:traceRefreshed(request), type: 'trace', page: { read_cut: childTraceCut(agent_id), records: records.slice(start, end), next_cursor: start > 0 ? records[start]!.position : null } };
   });
   server.handlers.set('agent/traceDetail', request => {
     if (request.method !== 'agent/traceDetail') throw Error('Wrong method');

@@ -1,7 +1,8 @@
+import {traceRefreshed} from './fixture';
 import{traceReceipt}from'./fixture';
 import { checkpoint } from "./fixture";
 import { afterEach, expect, it, vi } from 'vitest';
-import type { Request, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v51';
+import type { Request, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v52';
 import { Server, snapshot } from './fixture';
 import { tracePage, traceRecord, requestDetail } from './trace-fixture';
 const servers: Server[] = [];
@@ -64,9 +65,9 @@ it.each(['latest', 'earlier', 'detail'] as const)('held Trace %s cannot publish 
   const work = kind === 'detail' ? s.client.loadTraceDetail('A', 'trace:10') : kind === 'earlier' ? s.client.loadEarlierTrace('A')
     : (s.client as unknown as { refreshTraceDomain(id: string): Promise<void> }).refreshTraceDomain('A');
   const read = await s.waitFor(method, 1), closing = await revoke(s, 'release');
-  s.handlers.set('session/trace', request => ({ type: 'trace', page: tracePage(request, [traceRecord(9)]) }));
+  s.handlers.set('session/trace', request => ({refreshed:traceRefreshed(request), type: 'trace', page: tracePage(request, [traceRecord(9)]) }));
   s.held.delete(method);
-  s.socket.success(read, kind === 'detail' ? traceReceipt(requestDetail(10)) : { type: 'trace', page: { ...tracePage(read, [traceRecord(9)]), next_cursor: null } });
+  s.socket.success(read, kind === 'detail' ? traceReceipt(requestDetail(10)) : {refreshed:traceRefreshed(read), type: 'trace', page: { ...tracePage(read, [traceRecord(9)]), next_cursor: null } });
   await work;
   expect(view(s).trace?.page).toEqual(before.page); expect(view(s).trace?.details['trace:10']).toBeUndefined(); expect(view(s).trace?.loading).not.toBe(true);
   expect(count(s, method)).toBe(1); expect(view(s).target).toEqual(s.target('A'));

@@ -1,3 +1,4 @@
+import {traceRefreshed} from './fixture';
 import { contentAdvance } from './fixture';
 import { incrementalAgent } from './incremental-agent-fixture';
 import { Profiler } from 'react';
@@ -5,7 +6,7 @@ import { act, cleanup, render, fireEvent } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
 import { Server } from './fixture';
 import { ConversationLive } from '../src/app/agent/ConversationLive';
-import type { RuntimeClientEvent } from '../../protocol/app-server/v51';
+import type { RuntimeClientEvent } from '../../protocol/app-server/v52';
 const servers: Server[] = [];
 afterEach(() => { cleanup(); for (const s of servers) s.client.disconnect(); servers.length = 0; });
 const emit = (s: Server, event: RuntimeClientEvent) => {
@@ -42,7 +43,7 @@ it('native message id keeps both row and Assistant element through canonical cor
 });
 it('Trace, summary and Goal updates preserve transcript references and React commits; controls remain observable', async () => {
   const s = new Server(); servers.push(s); await s.attached('A');
-  s.handlers.set('session/trace', () => ({ type: 'trace', page: { records: [] } }));
+  s.handlers.set('session/trace', (request) => ({refreshed:traceRefreshed(request), type: 'trace', page: { records: [] } }));
   let commits = 0;
   await act(async () => { render(<Profiler id="chat" onRender={() => commits++}><ConversationLive client={s.client} sessionId="A" mode="chat" disabled={false} onHistorical={() => {}}/></Profiler>); });
   const before = s.client.getSnapshot().views.A.snapshot!, count = commits;
