@@ -14,11 +14,15 @@ it('resumed Session replay repairs its independent Trace head without a new chec
   server.socket.deliver({jsonrpc:'2.0',method:'session/event',params:{target:server.target('A'),cursor:'1',event:{type:'projection_transition',events:[{type:'trace_changed'}],metadata:{read_cut:published.read_cut,content:published.content,collections:published.collections}}}});
   const first=await server.waitFor('session/trace',1);
   const firstWork=server.client['traceReads'].get('A')!.work;
-  const page={read_cut:{...rootCut(),revision:'1',through:'1'},records:[entry(10),entry(11)]};
+  const page={read_cut:{...rootCut(),revision:'1',through:'1'},records:[entry(10),entry(11,{state:'running'})]};
   server.socket.success(first,{type:'trace',page});await firstWork;
   expect(server.client.getSnapshot().views.A.snapshot?.trace.records).toEqual([]);
+  expect(server.client.getSnapshot().views.A.trace?.page.records.at(-1)?.state).toBe('running');
+  const originalTarget=server.target('A');
   await server.connect();
   await server.client.attach('A');
+  expect(server.target('A').runtime_incarnation).toBe(originalTarget.runtime_incarnation);
+  expect(server.target('A').attachment_id).not.toBe(originalTarget.attachment_id);
   expect(server.client.getSnapshot().views.A.observationState).toBe('following');
   expect(server.client.getSnapshot().views.A.cursor).toBe('1');
   expect(server.requests.filter(row=>row.request.method==='session/checkpoint')).toHaveLength(1);
