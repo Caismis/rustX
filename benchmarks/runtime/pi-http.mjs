@@ -1,6 +1,9 @@
 // Pi Durable at its pinned revision, using the production HTTP/SSE adapter.
 import assert from 'node:assert/strict';
 import { verify } from './pi-oracle.mjs';
+import { PiObserver } from './pi-observer.mjs';
+const observerMode = process.env.RUSTX_BENCH_OBSERVER_MODE ?? 'native-workflow';
+assert(['native-workflow','no-live-subscriber','live-subscriber'].includes(observerMode));
 import { execFileSync } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, readdir, stat, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
@@ -14,7 +17,7 @@ assert.equal(revision, '90d863f7c1183b965f099855715d6e88c7b8a52c');
 const load = (path) => import(pathToFileURL(join(checkout, path)).href);
 const { createModels, createProvider } = await load('packages/ai/src/models.ts');
 const { openAICompletionsApi } = await load('packages/ai/src/api/openai-completions.lazy.ts');
-const { Harness, createRegistry, GenerationTask, hook } = await load('packages/durable/src/index.ts');
+const { Harness, createRegistry, GenerationTask, hook, watchEvents } = await load('packages/durable/src/index.ts');
 const { CodingTools } = await load('packages/durable/src/tools/index.ts');
 const { NodeExecutionEnv } = await load('packages/durable/src/env/node.ts');
 const { allEntries, textOf } = await load('packages/durable/test/chat-support.ts');
@@ -65,6 +68,12 @@ const open = async () => {
 };
 let {harness,root} = await open();
 harness.resume();
+const observer = observerMode === 'live-subscriber' ? new PiObserver() : null;
+const liveWatch = observer ? await watchEvents(harness,root.id,context) : null;
+if(liveWatch) {
+  observer.consume(liveWatch.snapshot);
+  liveWatch.start(async events => { for(const event of events) observer.consume(event); });
+}
 await phase('after_initialization');
 const history = scenario === 'short-small' ? 8 : scenario === 'short-large' ? 64 : 0;
 const measured = history ? 32 : 1;
@@ -73,6 +82,7 @@ const footprint = async () => Promise.all((await readdir(rootDir)).map(async nam
 const reply = i => scenario === 'large' ? 'L'.repeat(32768) : scenario === 'stream' ? Array.from({length:128},(_,n)=>`stream-delta-${String(n).padStart(4,'0')} `).join('') : scenario === 'tool' ? 'deterministic-note-payload-6d41' : `reply ${String(i).padStart(4,'0')}`;
 for (let i=0;i<history+measured;i++) {
   const began = performance.now();
+  if(observer) observer.firstContentAt=null;
   let content = `benchmark turn ${String(i).padStart(4,'0')}`;
   if (i===0) {
     // Persist the same two ordered input messages using Pi's native entry API.
@@ -96,14 +106,40 @@ for (let i=0;i<history+measured;i++) {
   }
   const settled = await submission.wait(context);
   assert.equal(settled.status, scenario==='cancel'?'unanswered':'done');
-  samples.push({turn:i,measured:i>=history,accepted_us,settled_us:Math.round((performance.now()-began)*1000),process:await processSample(),footprint:await footprint()});
+  if(observer) await Promise.race([
+    observer.waitForRun(submission.id),
+    liveWatch.closed.then(end=>{throw new Error(`observation ended before run: ${JSON.stringify(end)}`);}),
+  ]);
+  samples.push({observer_mode:observerMode,first_consumed_publication_us:observer?.firstContentAt == null ? null : Math.round((observer.firstContentAt-began)*1000),turn:i,measured:i>=history,accepted_us,settled_us:Math.round((performance.now()-began)*1000),process:await processSample(),footprint:await footprint()});
 }
 await phase('after_turns');
+let lateSnapshot = null;
+if(observerMode !== 'native-workflow') {
+  const late = await watchEvents(harness,root.id,context);
+  lateSnapshot = structuredClone(late.snapshot);
+  assert.equal(lateSnapshot.run,undefined);
+  assert.equal(lateSnapshot.generation,undefined);
+  if(observer) {
+    assert.deepEqual(observer.entries,lateSnapshot.entries);
+    assert.equal(observer.tools.size,0);
+    if(scenario==='stream') assert(observer.counts.message_update > 0);
+    if(scenario==='tool') {
+      assert.equal(observer.toolResults.length,1);
+      const expected=lateSnapshot.entries.filter(entry=>entry.model?.some(message=>message.role==='toolResult'));
+      assert.deepEqual(observer.toolResults,expected);
+      assert(JSON.stringify(observer.toolResults[0]).includes('deterministic-note-payload-6d41'));
+    } else assert.deepEqual(observer.toolResults,[]);
+  }
+  assert.equal((await late.stop()).reason,'stopped');
+  if(liveWatch) assert.equal((await liveWatch.stop()).reason,'stopped');
+  await phase('after_late_snapshot');
+}
 const requests = (await control('requests')).requests;
 assert.equal(requests.length,history+measured+(scenario==='tool'?1:0));
 assert.equal(captures.length,requests.length);
 for(let i=0;i<requests.length;i++) verify(scenario,i,workspace,requests[i].body,captures[i].messages,expectedTools);
 const entries = await allEntries(root);
+if(lateSnapshot) assert.deepEqual(lateSnapshot.entries,entries);
 const answers = entries.filter(e=>e.kind==='pi.assistant').flatMap(e=>e.model??[]).map(textOf).filter(v=>v!==undefined && v!=='');
 assert.deepEqual(answers,scenario==='cancel'?[]:Array.from({length:history+measured},(_,i)=>reply(i)));
 assert.deepEqual(reports,[]);
@@ -127,4 +163,4 @@ await harness.close(context);
 await phase('after_reopen_verification');
 await rm(rootDir,{recursive:true});
 await phase('after_cleanup');
-await writeFile(output,JSON.stringify({revision,scenario,history,measured,samples,lifecycle,requests,captures,reopenedRequests,expectedTools,entries,liveContext,before_close,closed_footprint,oracle:'passed',allocations:null,provider:'production openAICompletionsApi HTTP/SSE'},null,2));
+await writeFile(output,JSON.stringify({observer_mode:observerMode,observer_surface:observerMode==='native-workflow'?'submission settlement':'Harness ConversationViews/watchEvents',observer_counts:observer?.counts??{},observed_partial_text:observer?.lastAssistantText??null,lateSnapshot,revision,scenario,history,measured,samples,lifecycle,requests,captures,reopenedRequests,expectedTools,entries,liveContext,before_close,closed_footprint,oracle:'passed',allocations:null,provider:'production openAICompletionsApi HTTP/SSE'},null,2));
