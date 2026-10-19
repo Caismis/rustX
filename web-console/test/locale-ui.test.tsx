@@ -150,43 +150,6 @@ it('Session renaming never promotes a localized fallback title into native data 
   expect(sequences[1]).toEqual(sequences[0]);
 });
 
-it('Inspector filters retain semantic wire kinds across a live locale switch', async () => {
-  const { LiveInspector } = await import('../src/app/Inspector');
-  server = new Server(); await server.connect();
-  render(<LiveInspector client={server.client}/>);
-  const select = screen.getByRole('combobox', { name: 'Message kind filter' }) as HTMLSelectElement;
-  fireEvent.change(select, { target: { value: 'request' } });
-  const before = [...document.querySelectorAll('.protocol-log pre')].map(node => node.textContent);
-  expect(before.length).toBeGreaterThan(0);
-  const requests = [...server.requests];
-  act(() => localeController.setLocale('zh'));
-  expect(select.value).toBe('request');
-  expect([...select.options].map(option => option.value)).toEqual(['', 'request', 'response', 'notification', 'invalid']);
-  expect([...document.querySelectorAll('.protocol-log pre')].map(node => node.textContent)).toEqual(before);
-  expect(server.requests).toEqual(requests);
-});
-
-
-it.each([true, false])('retained Inspector clipboard completion (%s) live-switches without repeating any operation', async success => {
-  const { LiveInspector } = await import('../src/app/Inspector');
-  server = new Server(); await server.connect();
-  const writeText = vi.fn(() => success ? Promise.resolve() : Promise.reject(new Error('Clipboard denied')));
-  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
-  render(<LiveInspector client={server.client}/>);
-  const before = [...server.requests];
-  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Copy JSON' })));
-  const key = success ? 'inspector:copy.copied-json' : 'inspector:copy.copy-failed-clipboard-unavailable';
-  const notice = screen.getByRole('status');
-  expect(notice.textContent).toContain(translator('en')(key));
-  act(() => localeController.setLocale('zh'));
-  expect(screen.getByRole('status')).toBe(notice);
-  expect(notice.textContent).toContain(translator('zh')(key));
-  expect(notice.textContent).not.toContain(translator('en')(key));
-  expect(writeText).toHaveBeenCalledTimes(1);
-  expect(server.requests).toEqual(before);
-});
-
-
 it.each(['en', 'zh'] as const)('policy display choices preserve exact native values in %s', async locale => {
   const { PolicyFields } = await import('../src/app/settings/tools/ToolsPage');
   act(() => localeController.setLocale(locale));

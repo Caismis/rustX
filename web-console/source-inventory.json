@@ -123,7 +123,6 @@
         "../../locale/translation",
         "../../presentation/primitives/Button",
         "../../presentation/primitives/Modal",
-        "../agent/CollectionPages",
         "./Commands.module.css",
         "./native",
         "./registry",
@@ -137,7 +136,7 @@
         "Harness queue and retry authority"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "7884e60220b8273d4ca1f087f42f886992fa5bedd085dbf4493ff86317898ce4"
+      "local_sha256": "1940465762bc1fd5371ed9e5eba7ae5f781ea5fd4f69a9242b03fd949d52e640"
     },
     {
       "upstream": "packages/client/ui-commands/src/client/PopupSelectView.module.css",
@@ -2216,12 +2215,11 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "retained_dependencies": [
-        "../primitives/Button",
-        "./InspectorPanel.module.css",
+        "./PreviewPanel.module.css",
         "./SidebarRight.module.css",
         "react"
       ],
-      "local_sha256": "b43d0735229d2b3c8c608ed92b677a1fbf439756f229060834258107de91ff70",
+      "local_sha256": "e8e26dba98a8bebdf30cf0c8e66a052e977217a5dfe95eb3a9c63a4186c33b9b",
       "classification": "B"
     },
     {
@@ -3289,7 +3287,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "fbf16a1bd138dda3b50246235638f4982b22ae3e9bc1160899c7b87759903c96"
+      "local_sha256": "5e3fdfd4c37800f6e062a7b2c2f7a00eea0f0250ce0e295c9daa60e237c33ba6"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -3313,7 +3311,7 @@
           "treatment": "Compaction checkpoint disclosure and bilingual summary wording adapted to native Ledger messages; no Harness runtime or command authority."
         }
       ],
-      "local_sha256": "9e028d5abd596d3354f23f052db359afccbf52ae2691d490ef882150bef61292"
+      "local_sha256": "bf6ce33d12cea89de302979ee7052e5f538e441c2ec3f5fd107e092f2ae43017"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",
@@ -3409,7 +3407,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "d42468c697dab7d8c9a083e9d6708f9eb4b7659302ca6437e5a239894db8fa58"
+      "local_sha256": "4f3476d8e4555a1c7b2660e7f20f0818b794929250171c737bdb1fee48ab0739"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -5279,13 +5277,13 @@
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream_sha256": "2062ebe9808edbaf4f9c197859140b6881a8b531493605a6f07dd77dd8c2f25f",
       "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
-      "destination": "web-console/src/presentation/right-panel/InspectorPanel.module.css",
+      "destination": "web-console/src/presentation/right-panel/PreviewPanel.module.css",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
         "Harness Cordis runtime, slots and resource transport"
       ],
       "retained_dependencies": [],
-      "local_sha256": "af1ea13edeba84fb7f4c477bb5bb607d42e6426bac976e0f604728c541b66556"
+      "local_sha256": "ed40d5b7516e1f7840bbe426383b99dfa9792ac1c5917077b8cc7145729e9100"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/html/bootstrap.ts",

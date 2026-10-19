@@ -28,7 +28,8 @@ baseline; no brand assets, runtime code or new dependencies are imported.
   File selection keeps the existing upload owner and slash discovery remains
   command-only; the separate attachment toolbar button is removed.
 - Chat/trajectory, Session actions, history navigation, attachment and command
-  controls, approvals, settings and the developer inspector retain their owners.
+  controls, approvals and settings retain their owners. The developer inspector
+  and generic conversation collection browser have been removed.
 
 The local hashes for adapted presentation files are updated in the
 source inventory. The independent-session fork glyph additionally reuses Harness
@@ -94,7 +95,7 @@ Tool proposals have no Chat body. Audits retain their native cursor; their
 message identity suppresses stale streaming duplicates. Native terminal facts
 continue to own stopped/failed labels. Copy and the native settlement time are
 available for partial prose; completed-response actions are not fabricated.
-Native audit data remains available through existing Inspector/Trajectory reads.
+Native audit data remains available through native protocol and Trajectory reads.
 The adapter and grouping changes are rustX-authored; no Harness runtime or
 interruption state machine is copied.
 

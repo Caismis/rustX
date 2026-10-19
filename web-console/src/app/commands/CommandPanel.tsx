@@ -4,7 +4,6 @@ import { useTranslation, useNotice } from '../../locale/react';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { AppServerClient } from '../../client/app-server';
 import type { CheckpointPage } from '../../../../protocol/app-server/v50';
-import { CollectionPages } from '../agent/CollectionPages';
 import { lineageSwitchSafe } from '../../bindings/projection';
 import { Modal } from '../../presentation/primitives/Modal';
 import { Button } from '../../presentation/primitives/Button';
@@ -83,12 +82,6 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
     {toolsPage && <>
       {toolsPage.items.some(item => item.value == null || item.deferred) && <p role="status">{tx('common:activity.content-deferred')}</p>}
       {toolsPage.items.map(item => item.value != null ? <pre key={item.offset}>{JSON.stringify(item.value, null, 2)}</pre> : null)}
-      {/* This inspector has loaded the native descriptor, not the selected
-          field rows. Its local loaded ranges start empty; native evidence stays
-          intact in toolsPage and Applied is untouched. */}
-      <CollectionPages client={client} target={scope.target} cut={toolsPage.read_cut}
-        collections={(toolsPage.collections ?? []).map(field => ({ ...field, loaded: '0', next_offset: BigInt(field.total) > 0n ? '0' : null }))}
-        owned={scope.current} />
     </>}
     {error && <p role="alert">{error}</p>}
     {blocked && <p role="status">{tx('commands:command-panel.waiting-for-native-execution-and-accepted-inbound-to-settle')}</p>}

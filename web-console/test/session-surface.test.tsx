@@ -1,6 +1,6 @@
 import { boundedSettings } from "./fixture";
 import { translator, displayText } from '../src/locale/translation';
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { OutcomeUncertain } from '../src/client/app-server';
 import { App } from '../src/app/App';
@@ -347,21 +347,17 @@ it('A stays healthy while B uncertainty remains visible, scoped and never replay
   expect(screen.queryByLabelText('Session status')).toBeNull();
   expect(row('B').textContent).toContain('Needs verification');
   expect(row('A').textContent).not.toContain('Needs verification');
-  fireEvent.click(screen.getByRole('button', { name: 'Toggle Inspector' }));
-  const selected = () => screen.getByRole('region', { name: 'Selected Session diagnostics' });
-  expect(within(selected()).getByLabelText('Native diagnostic JSON').textContent).not.toContain(String(request.id));
-  expect(JSON.parse(within(selected()).getByLabelText('Native diagnostic JSON').textContent!).uncertain_operations).toEqual([]);
-  expect(screen.getByRole('region', { name: 'Global / other Session diagnostics' }).textContent).toContain(String(request.id));
+  expect(server.client.getSnapshot().uncertain).toMatchObject([{ id: request.id, sessionId: 'B' }]);
   const before = methods().length;
   await select('B');
   expect(screen.getByLabelText('Session status').textContent).toContain('Needs verification');
-  expect(JSON.parse(within(selected()).getByLabelText('Native diagnostic JSON').textContent!).uncertain_operations).toMatchObject([{ id: request.id, sessionId: 'B' }]);
+  expect(server.client.getSnapshot().uncertain).toMatchObject([{ id: request.id, sessionId: 'B' }]);
   await select('A');
   expect(methods().slice(before).filter(method => ['turn/start', 'turn/cancel', 'session/unload', 'session/detach', 'session/attach'].includes(method))).toEqual([]);
   expect(methods().filter(method => method === 'turn/start')).toHaveLength(1);
 });
 
-it('unscoped uncertainty is global, not assigned to every Session; reviewed diagnostics acknowledge locally outside Inspector', async () => {
+it('unscoped uncertainty is global, not assigned to every Session; reviewed diagnostics acknowledge locally in Connection Settings', async () => {
   await mount();
   server.held.add('session/create');
   const lost = server.client.request({ method: 'session/create', params: { settings: { cwd: '/workspace/A' } } }, 'session').catch(() => {});
@@ -371,8 +367,6 @@ it('unscoped uncertainty is global, not assigned to every Session; reviewed diag
   expect(state.uncertain[0].sessionId).toBeUndefined();
   for (const id of ['A', 'B']) expect(deriveSessionProductState(translator('en'), state, state.views[id]).status).toBe('idle');
   expect(screen.getByText(/A global operation needs verification/)).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: 'Toggle Inspector' }));
-  expect(JSON.parse(screen.getByLabelText('Native diagnostic JSON').textContent!).uncertain_operations).toEqual([]);
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Settings' })); });
   fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
   fireEvent.click(screen.getByRole('button', { name: 'Connection' }));
@@ -393,12 +387,9 @@ it('interaction operation evidence is scoped and cannot be dismissed as a non-in
   await server.waitFor('interaction/respond', 1);
   await act(async () => { server.socket.close(); await server.connect(); });
   await select('A');
-  fireEvent.click(screen.getByRole('button', { name: 'Toggle Inspector' }));
-  expect(JSON.parse(screen.getByLabelText('Native diagnostic JSON').textContent!).interactions).toEqual({});
-  expect(screen.getByRole('region', { name: 'Selected Session diagnostics' }).textContent).not.toContain('interaction-approval');
+  expect(screen.queryByLabelText('Session status')).toBeNull();
   await select('B');
-  const evidence = JSON.parse(screen.getByLabelText('Native diagnostic JSON').textContent!);
-  expect(Object.values(evidence.interactions)).toEqual([{ sessionId: 'B', status: 'uncertain' }]);
+  expect(Object.values(server.client.getSnapshot().interactionOperations)).toEqual([{ sessionId: 'B', status: 'uncertain' }]);
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Settings' })); });
   fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
   fireEvent.click(screen.getByRole('button', { name: 'Connection' }));

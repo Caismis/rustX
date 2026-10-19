@@ -63,11 +63,10 @@ exploration intentionally leaves the provider script unconsumed.
 
 ## 1. Two Workspaces, concurrent Sessions, recovery and frozen configuration
 
-1. Select Workspace A and Create Session; record its native SessionId from the
-   inspector. Create B in Workspace B; keep both views open.
+1. Select Workspace A and Create Session; identify it by its Sidebar row. Create B in Workspace B; keep both views open.
 2. Send `Long action in A` in A. Observe `A is running.`. The named `finish-a`
    provider gate now holds work open. In B send `Use B while A runs`; observe
-   `B stayed responsive.`. Confirm the inspector's SessionId/cwd changes with the
+   `B stayed responsive.`. Confirm the selected Session and workspace change with the
    selected view, while A's work remains running.
 3. In A switch Chat → Trajectory. Inspect the running model request: an unavailable
    end/duration is unavailable, not zero or a client timer. Switch to Settings,
@@ -179,7 +178,7 @@ Stale boundaries are refused by Rust; no UI silently substitutes a newer cut.
 
 Restart with `dogfood:server web_workflow_conformance`, create A and send
 `workflow conformance request`. At `workflow-child-admitted`, inspect the native
-Workflow and Subagent cards, reload/reconnect and compare their identities in Developer Inspector. In
+Workflow and Subagent cards, reload/reconnect and compare their execution details in Trajectory. In
 Trajectory inspect Workflow Timing: end/duration remain unavailable while running.
 Release the gate and observe `workflow conformance complete`. Settings →
 Integrations contains the existing acceptance Skill, reviewer Agent and review_pr
@@ -252,14 +251,13 @@ stays New session without repeated metadata IO. Sidebar `session/list` search/pa
 must not change to resolve the header; `view.summary` is a replaceable observation.
 No LLM naming is implemented. Check deletion
 title and impact counts without raw identity/revision. With A healthy and B uncertain,
-verify B's visible row warning, A's clean status, and Inspector ownership separation.
+verify B's visible row warning, A's clean status.
 Read global uncertainty separately; review/acknowledge non-interaction notices only
 after checking affected work, through Connection → Review uncertain operations.
 Fresh/idle Sessions have no exact Attempt or attachment line. A running turn says
 Working; queued input stays in Queue; a stop request says Stopping until authority
 settles it. Disconnect exposes Reconnect. A lost response says Needs verification
-and is never replayed; inspect the exact request evidence in Developer Inspector.
-Read all Inspector sections and filter/pause/clear the local log: none may emit a
-native mutation. Verify Session actions → Session tree, Chat/Trajectory, Settings,
+and is never replayed; review uncertain operations in Connection Settings.
+Verify Session actions → Session tree, Chat/Trajectory, Settings,
 light/dark and 390/820/1280/1600px keyboard access. Confirmed deletion settles
 active work through the native runtime owner; Close view only detaches.

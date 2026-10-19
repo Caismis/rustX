@@ -483,7 +483,7 @@ describe('typed native operations and continuation fencing', () => {
     await act(() => server.update('A', { ...fixture.original, messages: [{ role: 'user', source: 'human', id: 'accepted-user', content: [{ type: 'text', text: 'accepted' }] }] }));
     expect(row).toHaveProperty('disabled', false);
   });
-  it('T11 T15 tools keep native deferred descriptors and read only selected field pages', async () => {
+  it('tools retains deferred native descriptors without exposing a collection browser', async () => {
     const { scope, navigation } = await subject();
     const receipt = domainReceipt('capabilities', [null]);
     receipt.page.items[0]!.deferred = true;
@@ -491,19 +491,11 @@ describe('typed native operations and continuation fencing', () => {
     receipt.page.collections = [{ domain: 'capabilities.available_tools', revision: '0', total: '1000', loaded: '0', next_offset: '0' }];
     server.handlers.set('resources/read', () => receipt);
     expect(await scope.tools()).toEqual(receipt.page);
-    expect(methods()).not.toContain('conversation/checkpointValueRead');
-    server.handlers.set('conversation/checkpointPage', request => {
-      if (request.method !== 'conversation/checkpointPage') throw new Error('wrong method');
-      expect(request.params.domain).toBe('capabilities.available_tools');
-      expect(request.params.limit).toBe(32);
-      return { type: 'checkpoint_page', page: { ...receipt.page, domain: request.params.domain, total: '1000', items: [], next_offset: null } };
-    });
     render(<CommandPanel request={{ id: 'tools' }} client={server.client} sessionId="A" current={navigation.capture()} close={() => {}} succeeded={() => {}} navigate={() => {}} />);
     await screen.findByText('Content deferred');
-    fireEvent.click(screen.getByText('More conversation details'));
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'capabilities.available_tools' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Read first page' }));
-    await waitFor(() => expect(methods()).toContain('conversation/checkpointPage'));
+    expect(screen.queryByText('More conversation details')).toBeNull();
+    expect(screen.queryByRole('combobox')).toBeNull();
+    expect(methods()).not.toContain('conversation/checkpointPage');
     expect(methods()).not.toContain('conversation/checkpointValueRead');
   });
   it('selects native model identities without any command-string RPC', async () => {

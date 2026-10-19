@@ -135,9 +135,6 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     expect(await page.locator('main').evaluate(el => getComputedStyle(el.parentElement!).transitionDuration)).toBe('0s');
     await page.screenshot({ path: `test-results/acceptance-keyboard-${width}.png`, fullPage: true });
     await page.keyboard.press('Escape');
-    await tabTo(page.getByRole('button', { name: 'Toggle Inspector', exact: true })); await page.keyboard.press('Enter');
-    await expect(page.getByRole('complementary', { name: 'Developer inspector' })).toBeVisible();
-    await tabTo(page.getByRole('button', { name: 'Close Inspector', exact: true })); await page.keyboard.press('Enter');
     await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
   } finally { await page.close(); const report = await fixture.stop(false); expect(report.requestCount).toBe(0); }
 });

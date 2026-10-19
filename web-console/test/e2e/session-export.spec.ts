@@ -1,3 +1,4 @@
+import { selectedSessionId } from './shell-actions';
 import { openEmptySession } from './shell-actions';
 import { test, expect } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
@@ -5,7 +6,7 @@ import { join } from 'node:path';
 import { AppServerHost } from '../../../tui/src/app-server/host.ts';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
-import { connectRemote, showInspector, expectSettled } from './shell-actions';
+import { connectRemote, expectSettled } from './shell-actions';
 import { wireProbe } from './wire-probe';
 function logicalArchive(path: string) {
   // Test-only decoder. Production has no import/restore path.
@@ -25,8 +26,8 @@ test('browser native download and remote TUI consume the same authenticated nati
     await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Archive this Session');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await expect(page.getByText('Archive fixture settled.', { exact: true })).toBeVisible();
-    await expectSettled(page); await showInspector(page);
-    const id = JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).SessionId as string;
+    await expectSettled(page, wire);
+    const id = await selectedSessionId(page);
     const downloadStarted = page.waitForEvent('download');
     await page.getByRole('button', { name: 'Session actions', exact: true }).click();
     await page.screenshot({ path: test.info().outputPath('session-export-menu.png') });

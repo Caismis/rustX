@@ -118,15 +118,13 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
     await expect(workspace.locator('[data-preview-pane]:visible')).toHaveCount(2); await expect.poll(liveWorkers).toBe(2);
 
     // Wide -> hidden narrow -> reveal is the stale-admission direction.
-    for (const hiddenMode of ['collapse', 'Inspector']) {
-      if (hiddenMode === 'collapse') await panel.getByRole('button', { name: 'Collapse preview workspace', exact: true }).click();
-      else await page.getByRole('button', { name: 'Toggle Inspector', exact: true }).click();
+    for (const hiddenWidth of [390, 1200]) {
+      await panel.getByRole('button', { name: 'Collapse preview workspace', exact: true }).click();
       await expect.poll(liveWorkers).toBe(0);
-      await page.setViewportSize({ width: hiddenMode === 'Inspector' ? 1200 : 390, height: 844 });
+      await page.setViewportSize({ width: hiddenWidth, height: 844 });
       const readsBeforeReveal = reads.length;
       await page.evaluate(() => { (window as any).previewObservation.revealMaximumWorkers = 0; });
-      if (hiddenMode === 'collapse') await page.getByRole('button', { name: 'Reopen previews', exact: true }).click();
-      else await page.getByRole('button', { name: 'Toggle Inspector', exact: true }).click();
+      await page.getByRole('button', { name: 'Reopen previews', exact: true }).click();
       await expect(workspace.locator('[data-preview-pane]:visible')).toHaveCount(1);
       await expect(panel.locator('.textLayer')).toHaveCount(1); await expect.poll(liveWorkers).toBe(1);
       expect(reads.length - readsBeforeReveal).toBe(1);
@@ -169,9 +167,9 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
     await officePane.getByRole('tab', { name: 'sample.docx', exact: true }).click();
     await expect(panel.locator('.textLayer')).toHaveCount(2); await expect.poll(liveWorkers).toBe(2);
 
-    await page.getByRole('button', { name: 'Toggle Inspector', exact: true }).click();
-    await expect(page.getByRole('complementary', { name: 'Developer inspector', exact: true })).toBeVisible(); await expect.poll(liveWorkers).toBe(0); await expect.poll(liveUrls).toBe(0);
-    await page.getByRole('button', { name: 'Toggle Inspector', exact: true }).click(); await expect(panel).toBeVisible();
+    await panel.getByRole('button', { name: 'Collapse preview workspace', exact: true }).click();
+    await expect(panel).not.toBeVisible(); await expect.poll(liveWorkers).toBe(0); await expect.poll(liveUrls).toBe(0);
+    await page.getByRole('button', { name: 'Reopen previews', exact: true }).click(); await expect(panel).toBeVisible();
     await expect(tabs).toHaveCount(8); await expect.poll(liveWorkers).toBe(2);
 
     // Keep the PDF active and the Office tab selected in the other logical pane.
@@ -256,8 +254,7 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
     await page.locator(`button[data-session-id="${sessionA}"]`).click();
     await expect(panel).toBeVisible(); await expect.poll(liveWorkers).toBe(2);
     expect(await tabs.evaluateAll(elements => elements.map(element => element.getAttribute('data-preview-tab')))).toEqual(beforeSession);
-    await page.getByRole('button', { name: 'Toggle Inspector', exact: true }).click();
-    await page.getByRole('button', { name: 'Close Inspector', exact: true }).click();
+    await panel.getByRole('button', { name: 'Collapse preview workspace', exact: true }).click();
     await expect.poll(liveWorkers).toBe(0);
     await page.locator(`button[data-session-id="${sessionB}"]`).click();
     await page.locator(`button[data-session-id="${sessionA}"]`).click();

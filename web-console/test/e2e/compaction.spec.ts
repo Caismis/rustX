@@ -35,8 +35,6 @@ for (const [locale, theme] of [['en', 'light'], ['zh', 'dark']] as const) {
       await routeWorkspaceHost(page, fixture); await page.goto('/');
       await connectRemote(page, fixture.endpoint, fixture.token);
       await openEmptySession(page, fixture, 'Workspace A');
-      const inspector = page.getByRole('button', { name: 'Toggle Inspector', exact: true });
-      if (await inspector.getAttribute('aria-expanded') === 'true') await inspector.click();
       if (locale === 'zh') {
         await page.getByRole('button', { name: 'Settings', exact: true }).click();
         await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文');

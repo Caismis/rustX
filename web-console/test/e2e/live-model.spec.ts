@@ -1,3 +1,4 @@
+import { selectedCheckpoint } from './shell-actions';
 import { test, expect, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -5,7 +6,7 @@ import { AppServerHost } from '../../../tui/src/app-server/host';
 import type { SessionModelConfig } from '../../../protocol/app-server/v50';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
-import { connectRemote, openEmptySession, showInspector } from './shell-actions';
+import { connectRemote, openEmptySession } from './shell-actions';
 import { wireProbe } from './wire-probe';
 import { materializeEffective } from '../../../protocol/app-server/effective-observation';
 
@@ -122,9 +123,8 @@ max_output_tokens = { mode = "limit", tokens = 333 }
       await connectRemote(page, fixture.endpoint, fixture.token);
       await openExistingSession(page, id, width);
       await expect(trigger).toContainText('high');
-      await showInspector(page);
-      const facts = JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText());
-      expect(facts.model.configured).toEqual(complete);
+
+      expect((await selectedCheckpoint(page, wire)).snapshot.model!.configured).toEqual(complete);
       expect(await remote.readSettings(id)).toEqual(explicit);
       expect(wire.requests.filter(request => request.method === 'session/setModel')).toHaveLength(2);
       expect((await fixture.control('requests')).requests).toHaveLength(0);
@@ -233,8 +233,8 @@ for (const [width, acknowledgement] of [[1440, 'received'], [390, 'lost']] as co
       await expect(running).toHaveCount(0);
       try { await expect(input).toBeEnabled(); }
       catch (cause) {
-        await showInspector(page);
-        await test.info().attach('recovery-authority', { body: await page.getByLabel('Native diagnostic JSON').innerText(), contentType: 'application/json' });
+
+        await test.info().attach('recovery-authority', { body: JSON.stringify(await selectedCheckpoint(page, wire)), contentType: 'application/json' });
         throw cause;
       }
       await input.fill('tui multi-session: session B quick task');

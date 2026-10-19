@@ -136,12 +136,7 @@ for (const mode of ['empty', 'preview', 'named', 'delete', 'other-uncertain', 'b
     await expect(page.getByRole('dialog', { name: 'Confirm Session deletion' })).toContainText('Delete Inspect the Session ownership boundary?');
   }
   await expectStableScreenshot(page, `sidebar-${mode}-light.png`);
-  if (mode === 'other-uncertain') {
-    await page.getByRole('button', { name: 'Toggle Inspector' }).click();
-    await page.getByText('Complete native runtime facts', { exact: true }).click();
-    expect(JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).uncertain_operations).toEqual([]);
-    await expectStableScreenshot(page, 'sidebar-scoped-inspector.png');
-  }
+
   expect(errors).toEqual([]);
 });
 // Intentional updates in the pinned browser environment: pnpm test:e2e:update
@@ -161,10 +156,6 @@ test('Harness shell reference states and presentation-only navigation', async ({
   await expect(page.getByRole('tree', { name: 'Session browser' })).toContainText('Waiting for approval');
   await expect(page.getByRole('tree', { name: 'Session browser' })).toContainText('Running');
   await expectStableScreenshot(page, 'desktop-expanded-light.png');
-  await page.getByRole('button', { name: 'Toggle Inspector' }).click();
-  await expect(page.getByRole('complementary', { name: 'Developer inspector' })).toBeVisible();
-  await expectStableScreenshot(page, 'desktop-right-panel.png');
-  await page.getByRole('button', { name: 'Close Inspector' }).click();
   await page.getByRole('button', { name: 'Collapse Sidebar' }).click();
   await expect(page.locator('[data-sidebar-wide]')).toHaveAttribute('data-sidebar-wide', 'false');
   expect((await page.locator('main').boundingBox())!.x).toBe(56);
@@ -193,7 +184,7 @@ test('Harness shell reference states and presentation-only navigation', async ({
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
 });
 
-test('Session product states stay concise and recovery evidence remains in Inspector', async ({ page }) => {
+test('Session product states stay concise without developer diagnostics', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.clock.setFixedTime(new Date('2026-09-18T12:00:00Z'));
@@ -213,14 +204,8 @@ test('Session product states stay concise and recovery evidence remains in Inspe
       await expect(page.getByRole('status').filter({ hasText: 'Disconnected. Last confirmed groups are shown.' })).toBeVisible();
     }
     await expectStableScreenshot(page, `session-${mode}-light.png`);
-    if (mode === 'uncertain') {
-      await page.getByRole('button', { name: 'Toggle Inspector' }).click();
-      await page.getByText('Uncertain operations and reconciliation evidence', { exact: true }).click();
-      await expect(page.getByRole('complementary', { name: 'Developer inspector' })).toContainText('turn/cancel');
-      await page.getByRole('button', { name: 'Close Inspector' }).click();
-      await page.setViewportSize({ width: 390, height: 844 });
-      await expectStableScreenshot(page, 'session-uncertain-mobile.png');
-    }
+    await expect(page.getByRole('button', { name: /Inspector/ })).toHaveCount(0);
+    await expect(page.getByText('More conversation details', { exact: true })).toHaveCount(0);
   }
   expect(errors).toEqual([]);
 });

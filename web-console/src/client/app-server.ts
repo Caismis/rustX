@@ -25,7 +25,6 @@ import type {
 import { transferUpload, uploadOperationId } from '../../../protocol/app-server/upload';
 import { HISTORY_PAGE_SIZE, TURN_PAGE_SIZE, sameReadCut, extendTranscriptWindow, installTranscriptWindow, prependTranscript, refreshTranscript, replaceTranscript, turnKey, turnPageCount, type TranscriptCache, type TurnSelection } from './transcript';
 import type { ObservedTurn, ObservedTurnPage } from '../../../protocol/app-server/v50';
-import { ProtocolLog, type WireContext } from './protocol-log';
 
 
 interface OutlineDemand {
@@ -240,7 +239,7 @@ interface Pending {
   validation?: AbortController;
   acknowledged?: (result: MethodResult) => void;
   request: Request;
-  context: WireContext;
+  sessionId?: string;
   mutation: boolean;
   sent: boolean;
   expected: MethodResult['type'];
@@ -347,7 +346,6 @@ export class AppServerClient {
     }
   });
   readonly attachmentIntakes = new AttachmentIntakes();
-  readonly log = new ProtocolLog();
   readonly firstSubmissions = new FirstSubmissions();
   /** Final client lifetime ends only explicitly, never on a component unmount. */
   dispose() { this.attachmentIntakes.dispose(); this.firstSubmissions.dispose(); return this.disconnect(); }
@@ -630,7 +628,6 @@ export class AppServerClient {
     if (this.state.uncertain.length || sessions.length) detached.push({ authority: this.state.endpoint!, authorityId: this.state.authorityId, operations: this.state.uncertain, sessions });
     this.lifecycles.replaceAuthority(); this.readingAuthorities.clear(); for (const id of this.outlineReads.keys()) this.retireOutline(id); this.readingIntents.clear(); this.summarySettled.clear(); this.summaryInvalidations.clear(); this.summaryObservedEpoch.clear(); this.summaryInFlight.clear(); this.summaryReads.clear(); this.summaryObservations.clear();
     this.listEpoch++; this.listOffset = 0; this.listQuery = '';
-    this.log.clear();
     this.publish({ authorityId: undefined, views: {}, sessions: [], nextOffset: undefined, uncertain: [], interactionOperations: {}, detached,
       authorityRevision: (this.state.authorityRevision ?? 0) + 1 });
   }
@@ -727,7 +724,7 @@ export class AppServerClient {
     const views = Object.values(this.state.views);
     if ((this.state.detached?.length ?? 0) >= 8) throw new Error('Review and acknowledge detached authority diagnostics before replacing another App Server.');
     const sessions = new Set(views.filter(view => view.deleting || view.error || view.modelMutation || view.cancellation).map(view => view.id));
-    for (const pending of this.pending.values()) if (pending.context.sessionId) sessions.add(pending.context.sessionId);
+    for (const pending of this.pending.values()) if (pending.sessionId) sessions.add(pending.sessionId);
     if (sessions.size > 64) throw new Error('Too many unresolved Session diagnostics. Review the current authority before replacing it.');
   }
   private current(generation: number) { return generation === this.state.generation && !!this.socket; }
@@ -855,7 +852,7 @@ export class AppServerClient {
       clearTimeout(pending.timer); pending.validation?.abort(); pending.validation = undefined;
       if (pending.sent && pending.mutation) {
         const params = pending.request.params;
-        uncertain.push({ id, method: pending.request.method, sessionId: pending.context.sessionId,
+        uncertain.push({ id, method: pending.request.method, sessionId: pending.sessionId,
           generation: this.state.generation,
           ...(pending.request.method === 'session/uploadPrepare' ? { uploadOperationId: pending.request.params.operation_id } : {}),
           ...(pending.request.method === 'context/compact' ? { compactionRequestId: pending.request.params.request_id } : {}),
@@ -927,9 +924,8 @@ export class AppServerClient {
     let abortObservation = () => {};
     const work = new Promise<MethodResult>((resolve, reject) => {
       const params = operation.params;
-      const context = { method: operation.method,
-        sessionId: 'target' in params && 'session_id' in params.target ? params.target.session_id : 'session_id' in params ? params.session_id : undefined };
-      this.pending.set(id, { request, context, mutation: mayCommit(operation), sent: false, expected, resolve, reject, dispatchCurrent, authority, acknowledged: result => acknowledged?.(result as Extract<MethodResult, { type: T }>) });
+      const sessionId = 'target' in params && 'session_id' in params.target ? params.target.session_id : 'session_id' in params ? params.session_id : undefined;
+      this.pending.set(id, { request, sessionId, mutation: mayCommit(operation), sent: false, expected, resolve, reject, dispatchCurrent, authority, acknowledged: result => acknowledged?.(result as Extract<MethodResult, { type: T }>) });
       abortObservation = () => {
         if (operation.method !== 'agent/observe') return;
         const pending = this.pending.get(id);
@@ -1030,7 +1026,6 @@ export class AppServerClient {
     // No external observer runs between this final proof and send invocation.
     // sent means transmission attempted, never native acceptance.
     pending.sent = true;
-    this.log.observe('out', generation, raw, pending.context);
     if (requestLane(pending.request.method) === 'rpc' && !longWait(pending.request.method)) pending.timer = setTimeout(() => this.lose(generation), this.timeoutMs);
     try { socket.send(raw); } catch { this.lose(generation); }
     try { if (typeof pending.dispatchCurrent === 'object') pending.dispatchCurrent.sent?.(); }
@@ -1040,14 +1035,13 @@ export class AppServerClient {
     if (typeof data !== 'string' || data.length > 1_048_576 || new TextEncoder().encode(data).length > 1_048_576) { this.lose(generation); return; }
     let parsed: unknown;
     try { parsed = JSON.parse(data); } catch {
-      this.log.observe('in', generation, data); this.lose(generation); return;
+      this.lose(generation); return;
     }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      this.log.observe('in', generation, data); this.lose(generation); return;
+      this.lose(generation); return;
     }
     const value = parsed as Response | Notification;
     const pending = 'id' in value && value.id !== null ? this.pending.get(String(value.id)) : undefined;
-    this.log.observe('in', generation, data, pending?.context);
     if (value.jsonrpc !== '2.0') { this.lose(generation); return; }
     if ('result' in value || 'error' in value || 'id' in value) {
       if (!pending || !pending.sent) return;
@@ -1060,7 +1054,7 @@ export class AppServerClient {
       this.pending.delete(String(value.id)); clearTimeout(pending.timer);
       this.capacityReleased();
       if ('result' in value && value.result?.type === 'session_transition' && value.result.durability_diagnostic) {
-        this.publish({ uncertain: [...this.state.uncertain, { id: String(value.id), method: pending.request.method, sessionId: pending.context.sessionId, generation,
+        this.publish({ uncertain: [...this.state.uncertain, { id: String(value.id), method: pending.request.method, sessionId: pending.sessionId, generation,
           committedNode: { sessionId: value.result.session.id, nodeId: value.result.session.active_node }, diagnostic: value.result.durability_diagnostic }] });
       }
       // Evidence observers run at decode time, before continuation authority
@@ -2210,7 +2204,7 @@ export class AppServerClient {
     const view = this.state.views[id];
     if (!view) return;
     const inboundRequests = [...this.pending.values()].filter(item =>
-      (item.request.method === 'turn/start' || item.request.method === 'turn/steer') && item.context.sessionId === id).length;
+      (item.request.method === 'turn/start' || item.request.method === 'turn/steer') && item.sessionId === id).length;
     const submissions = view.submissions ?? [];
     this.setSession(id, { inboundRequests, submissions: accepted && !submissions.some(item => item.messageId === accepted.messageId)
       ? [...submissions, accepted] : submissions });
@@ -2351,22 +2345,6 @@ export class AppServerClient {
     void work.finally(() => { if (this.modelPreparations.get(id)?.work === work) this.modelPreparations.delete(id); }).catch(() => {});
     return work;
   }
-  /** Native catalog defaults at the exact generation whose ordinals were read. */
-  async selectCatalogModel(id:string,choice:import('../../../protocol/app-server/v50').CatalogModelSelection,owned:()=>boolean=()=>true) {
-    const target=this.target(id),generation=this.state.generation;
-    if(this.state.views[id].modelMutation)throw new Error('Reread native model state before another mutation.');
-    const current=()=>owned()&&this.current(generation)&&sameTarget(this.state.views[id]?.target,target);
-    if(!current())return;
-    const operation={generation,status:'in-flight' as const};this.setSession(id,{modelMutation:operation});
-    try {
-      await this.request({method:'session/selectModel',params:{target,choice}},'model_set',undefined,current);
-      if(this.current(generation)&&sameTarget(this.state.views[id]?.target,target))this.setSession(id,{modelMutation:{generation,status:'acknowledged'}});
-    }catch(error){
-      if(this.state.views[id]?.modelMutation===operation)this.setSession(id,{modelMutation:error instanceof RequestNotDispatched?undefined:{generation,status:isOutcomeUncertain(error)?'uncertain':'acknowledged'}});
-      throw error;
-    }
-  }
-
   /** Transport continuation guard, not Session model authority. A successful
    * mutation response alone cannot enable a dependent Send. */
   async setAgentModel(id: string, config: import('../../../protocol/app-server/v50').SessionModelConfig) {

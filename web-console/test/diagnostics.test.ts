@@ -1,28 +1,6 @@
 import { translator } from '../src/locale/translation';
 import { expect, it } from 'vitest';
-import { ProtocolLog, filterLog } from '../src/client/protocol-log';
 import { displayNumber, emptyDraft, finiteNumber, submission } from '../src/bindings/questionnaire';
-const frame = (id: number, session = 'A') => JSON.stringify({ jsonrpc: '2.0', id, method: 'session/read', params: { session_id: session } });
-it('bounds raw retention by count and bytes and reports dropped/truncated frames', () => {
-  const log = new ProtocolLog(3, 500, 100);
-  for (let i = 0; i < 20; i++) log.observe('out', 1, frame(i));
-  expect(log.getSnapshot().entries).toHaveLength(3);
-  expect(log.getSnapshot().dropped).toBe(17); expect(log.getSnapshot().truncated).toBe(20);
-  expect(log.getSnapshot().entries.reduce((sum, entry) => sum + entry.json.length * 2, 0)).toBeLessThanOrEqual(500);
-});
-it('filtering, pause, clear and resume are deterministic and keep bounded storage', () => {
-  const log = new ProtocolLog(2);
-  log.observe('out', 1, frame(1)); log.observe('out', 1, frame(2, 'B'));
-  expect(filterLog(log.getSnapshot(), 'session/read', 'B', 'request')).toHaveLength(1);
-  log.pause(true); const frozen = log.getSnapshot().entries;
-  for (let i = 3; i <= 10; i++) log.observe('out', 1, frame(i));
-  expect(log.getSnapshot().entries).toBe(frozen);
-  log.pause(false); expect(log.getSnapshot().entries).toHaveLength(2);
-  expect(log.getSnapshot().dropped).toBe(8);
-  log.pause(true); log.clear(); expect(log.getSnapshot().entries).toEqual([]);
-  log.observe('out', 2, frame(11)); expect(log.getSnapshot().entries).toEqual([]);
-  log.pause(false); expect(log.getSnapshot().entries).toHaveLength(1);
-});
 it('encodes native Questionnaire scalar, choice, custom, boolean and partial answers exactly', () => {
   expect(finiteNumber(translator('en'), '1.25')).toBe('3ff4000000000000'); expect(displayNumber(finiteNumber(translator('en'), '1.25'))).toBe(1.25);
   expect(finiteNumber(translator('en'), '-0')).toBe('0000000000000000'); expect(() => finiteNumber(translator('en'), 'Infinity')).toThrow('finite');
@@ -42,20 +20,4 @@ it('encodes native Questionnaire scalar, choice, custom, boolean and partial ans
     { type: 'options', value: { option_indices: [0, 1] } }, { type: 'custom', value: { answer: 'Custom' } },
   ]);
   expect(() => submission(translator('en'), [{ header: 'i', question: 'i', answer: { type: 'integer' } }], [{ ...emptyDraft(), text: '9223372036854775808' }])).toThrow('bounds');
-});
-
-it('identifies a Session in a native create response even before an attachment exists', () => {
-  const log = new ProtocolLog();
-  log.observe('in', 1, JSON.stringify({ jsonrpc: '2.0', id: 'create', result: { type: 'session_transition', session: { id: 'new-session' } } }), { method: 'session/create' });
-  expect(filterLog(log.getSnapshot(), 'session/create', 'new-session', 'response')).toHaveLength(1);
-});
-
-it('records ordered bounded evidence immediately but coalesces subscriber notification after the dispatch stack', async () => {
-  const log = new ProtocolLog(2); const notifications: number[] = [];
-  let notified!: () => void; const publication = new Promise<void>(resolve => { notified = resolve; });
-  log.subscribe(() => { notifications.push(log.getSnapshot().entries.length); notified(); });
-  for (let id = 1; id <= 3; id++) log.observe('out', 7, frame(id));
-  expect(notifications).toEqual([]);
-  expect(log.getSnapshot().entries.map(entry => entry.sequence)).toEqual([2, 3]); expect(log.getSnapshot().dropped).toBe(1);
-  await publication; expect(notifications).toEqual([2]);
 });

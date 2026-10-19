@@ -1,7 +1,6 @@
 import { JournalSourceProvider } from './JournalValue';
 import { contentBindings } from '../../../../protocol/app-server/projection';
 import { DeferredContent } from './DeferredContent';
-import { CollectionPages } from './CollectionPages';
 import { useSubagents } from './subagent-context';
 import { ToolInspectionContext, useToolTraceNavigation } from './tool-inspection';
 import type { AppServerClient, SessionView } from '../../client/app-server';
@@ -98,24 +97,9 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
       {view.configurationObservation && <p role={view.configurationObservation.error?'alert':'status'}>{view.configurationObservation.error??tx('common:activity.content-deferred')}</p>}
       <ConversationActivity client={client} sessionId={view.id}/>
       <PendingMessage client={client} sessionId={view.id}/>
-    <ConversationCollections client={client} sessionId={view.id} owned={ownsContent}/>
     {view?.target && view.hasCheckpoint && <DeferredContent client={client} target={view.target} bindings={view.content} owned={ownsContent}/>}
       </ChatViewport></ToolInspectionContext></JournalSourceProvider>;
 }
-function ConversationCollections({client,sessionId,owned}:{client:AppServerClient;sessionId:string;owned:()=>boolean}) {
-  const agents = useSubagents();
-  const source=useClientSelector(client,state=>{const view=state.views[sessionId];return view?.target&&view.checkpoint?.collections.some(value=>value.next_offset!=null)?{target:view.target,checkpoint:view.checkpoint}:undefined;},shallowEqual);
-  return source?<CollectionPages client={client} target={source.target} cut={source.checkpoint.read_cut} collections={source.checkpoint.collections} owned={owned} onAgent={agents ? agent => agents.open(agent.agent_id, agent) : undefined} onModel={async(page,item,current)=>{
-    const revision=source.checkpoint.snapshot.model_status?.binding_revision;
-    if(revision==null)throw new Error('Native catalog binding is unavailable.');
-    const profile=/^model_catalog\.models\.@([0-9]+)\.profiles$/.exec(page.domain);
-    if(page.domain!=='model_catalog.models'&&!profile)throw new Error('Native catalog selection is unavailable for this field.');
-    const model_position=profile?Number(profile[1]):Number(item.offset),profile_position=profile?Number(item.offset):null;
-    if(!Number.isSafeInteger(model_position)||profile_position!==null&&!Number.isSafeInteger(profile_position))throw new Error('Native catalog position exceeds protocol bounds.');
-    await client.selectCatalogModel(sessionId,{binding_revision:revision,model_position,profile_position},current);
-  }}/>:null;
-}
-
 function ConversationActivity({ client, sessionId }: { client: AppServerClient; sessionId: string }) {
   const snapshot = useClientSelector(client, state => {
     const value = state.views[sessionId]?.snapshot;

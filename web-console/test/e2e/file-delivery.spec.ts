@@ -43,7 +43,7 @@ test('explicit native delivery, safe shared viewers, actual original-byte downlo
     await expect(canonical.locator('[data-delivery-card]')).toHaveCount(0);
     await expect(canonical.locator('a[download]')).toHaveCount(0);
     await fixture.release('delivery-before-declaration');
-    await expect(canonical.getByText('Delivery finished.', { exact: true })).toBeVisible(); await expectSettled(page);
+    await expect(canonical.getByText('Delivery finished.', { exact: true })).toBeVisible(); await expectSettled(page, wire);
     // Harness summary: four cards per committed result until explicitly expanded.
     await expect(canonical.locator('[data-delivery-card]')).toHaveCount(5);
     const all = canonical.getByRole('button', { name: 'Show all 6 delivered files', exact: true });

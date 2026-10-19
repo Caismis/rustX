@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { DeferredContent } from '../agent/DeferredContent';
-import { CollectionPages, type CollectionRead } from '../agent/CollectionPages';
 import type { ContentRef } from '../../../../protocol/app-server/v50';
 import type { AppServerClient, OperationAdmission } from '../../client/app-server';
 import { extendTranscriptWindow, installTranscriptWindow, sameReadCut } from '../../client/transcript';
@@ -28,10 +27,6 @@ export function HistorySurface({ client, route, current, back, settings }: { cli
     return (await client.request({method:'session/historyContentRead',params:{session_id:route.sessionId,node_id:route.nodeId,cut,content_ref,offset,max_bytes:65_536}},'content_chunk',undefined,()=>ownsContent()&&readCurrent())).chunk;
   }, [client, route, history.page.source_cut, ownsContent]);
   const read = useRef<AbortController | undefined>(undefined);
-  const collectionRead=useMemo<CollectionRead>(()=>({identity:JSON.stringify([route.sessionId,route.nodeId,history.page.source_cut]),
-    page:async(domain,offset,_previous,readCurrent)=>{const cut=history.page.source_cut;if(!cut)throw new Error('Historical collection cut is unavailable.');return (await client.request({method:'session/historyPage',params:{session_id:route.sessionId,node_id:route.nodeId,cut,domain,offset,limit:32}},'checkpoint_page',undefined,()=>ownsContent()&&readCurrent())).page;},
-    value:async(page,item,offset,readCurrent)=>{const cut=history.page.source_cut;if(!cut||JSON.stringify(page.read_cut.source_cut)!==JSON.stringify(cut))throw new Error('Historical collection cut changed.');return (await client.request({method:'session/historyValueRead',params:{session_id:route.sessionId,node_id:route.nodeId,cut,domain:page.domain,item_offset:Number(item.offset),path:[],offset,max_bytes:65_536}},'checkpoint_value_chunk',undefined,()=>ownsContent()&&readCurrent())).chunk;}
-  }),[client,route,history.page.source_cut,ownsContent]);
   useEffect(() => {
     const subscription = settings.subscribe(() => { read.current?.abort(); read.current = undefined; setLoading(false); setReadEpoch(epoch=>epoch+1); });
     return () => { subscription.unsubscribe(); read.current?.abort(); };
@@ -62,7 +57,6 @@ export function HistorySurface({ client, route, current, back, settings }: { cli
         {error && <p role="alert">{error}</p>}
         <AgentTranscript snapshot={{ conversation_id: route.conversationId, messages: [], attempt: null, statuses: [], transcript: history.page }} history={history} historicalDisabled sourceDisabled
           loadEarlier={!loading && history.page.next_cursor ? () => void page(true) : undefined} loadLater={!loading && history.window?.newer_cursor ? () => void page(false) : undefined}/>
-        <CollectionPages read={collectionRead} collections={history.page.collections ?? []} owned={ownsContent}/>
         <DeferredContent bindings={history.page.content ?? []} read={contentRead} owned={ownsContent}/>
       </ChatViewport>
     </div></div>

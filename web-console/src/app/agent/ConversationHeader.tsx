@@ -11,7 +11,7 @@ import type { SourceTarget } from '../../../../protocol/app-server/v50';
 import { useClientSelector, sameValue } from '../../client/selectors';
 import { Menu } from '../../presentation/primitives/Menu';
 import { Button } from '../../presentation/primitives/Button';
-import { IconEllipsisOutline16, IconInspectOutline12, IconDownloadOutline16, IconForkOutline16 } from '../../presentation/primitives/icons';
+import { IconEllipsisOutline16, IconDownloadOutline16, IconForkOutline16 } from '../../presentation/primitives/icons';
 import { navigateTabs } from '../../presentation/primitives/tabs';
 import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
 import { sessionDisplayTitle } from '../../bindings/session-title';
@@ -19,9 +19,9 @@ import { SessionConfiguration } from '../SessionConfiguration';
 import { WorkspaceControls } from '../new-conversation/WorkspaceControls';
 import { AgentControls } from './AgentControls';
 import agentCss from '../../presentation/agent/Conversation.module.css';
-export function ConversationHeader({ host, authority, client, view, workspaceId, authorityRevision, connected, attached, commandOpen, inspectorOpen, toggleInspector, invokeCommand, openOwningSettings, conversationMode, setConversationMode, settingsFeedback, previewToggle }: {
+export function ConversationHeader({ host, authority, client, view, workspaceId, authorityRevision, connected, attached, commandOpen, invokeCommand, openOwningSettings, conversationMode, setConversationMode, settingsFeedback, previewToggle }: {
   host: ProductHostWorkspaces; workspaceId?: string; authority: WorkspaceAuthority; settingsFeedback?: ReactNode; previewToggle?: ReactNode; client: AppServerClient; view?: SessionView; authorityRevision?: number; connected: boolean; attached: boolean; commandOpen: boolean;
-  inspectorOpen: boolean; toggleInspector: () => void; invokeCommand: (request: { id: 'tree' }) => void;
+  invokeCommand: (request: { id: 'tree' }) => void;
   openOwningSettings: (owner: SourceTarget) => void; conversationMode: 'chat' | 'trajectory'; setConversationMode: (mode: 'chat' | 'trajectory') => void;
 }) {
   const tx = useTranslation();
@@ -41,7 +41,6 @@ export function ConversationHeader({ host, authority, client, view, workspaceId,
           {subagents?.selected && <div id="subagent-header-actions"/>}
           {view?.summary && <OpenWorkspace client={client} host={host} authority={authority} target={{ session_id: view.id, active_node: view.summary.active_node }} disabled={!connected || !!view.deleting}/>}
           {view && !subagents?.selected && <SessionActions client={client} sessionId={view.id} connected={connected} attached={attached} commandOpen={commandOpen} settings={() => setSessionSettingsOpen(value => !value)} tree={() => invokeCommand({ id: 'tree' })} exportSession={exportSession}/>}
-          <Button size="sm" className={agentCss.iconButton} aria-label={tx('agent:conversation-header.toggle-inspector')} aria-expanded={inspectorOpen} onClick={toggleInspector}><IconInspectOutline12 /></Button>
         </div>
         <div className={agentCss.headerCorner}>{previewToggle}</div>
       </div>

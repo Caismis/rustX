@@ -46,7 +46,7 @@ export function ConnectionSettings({ connection, client }: { connection: Connect
       </section>)}
     </details>}
     {!!transport.uncertain.filter(item => !item.interactionKey).length && <details><summary>{tx('settings:connection-settings.review-uncertain-operations')}</summary>
-      <p>{tx('settings:connection-settings.verify-the-affected-work-in-developer-inspector-before-acknowled')}</p>
+      <p>{tx('settings:connection-settings.verify-the-affected-work-before-acknowledging')}</p>
       {transport.uncertain.filter(item => !item.interactionKey).map(item => <div key={item.id}><p>{item.method} {tx('settings:connection-settings.request')}{' '}{item.id}</p><Button onClick={() => client.acknowledgeDiagnostic(item.id)}>{tx('settings:connection-settings.i-have-verified-the-affected-work')}</Button></div>)}
     </details>}
   </section>;

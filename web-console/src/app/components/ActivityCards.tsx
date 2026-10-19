@@ -1,6 +1,5 @@
 import { JournalSourceProvider } from '../agent/JournalValue';
 import { DeferredContent } from '../agent/DeferredContent';
-import { CollectionPages } from '../agent/CollectionPages';
 import { ChildObservation } from '../../../../protocol/app-server/child-observation';
 import { ToolInspectionContext, useToolTraceNavigation } from '../agent/tool-inspection';
 import { AgentConversationContext } from '../agent/subagent-context';
@@ -133,7 +132,6 @@ export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible
   const acceptsMessage = agent.state === 'active' || agent.state === 'inactive';
   return <AgentConversationContext.Provider value={agent}><ArtifactContext.Provider value={artifacts}><PreviewContext.Provider value={scopedPreview}><section className={css.agentConversation} data-agent-id={agent.agent_id} data-agent-state={agent.state} data-view={mode} data-activation-id={agent.current_activation ?? undefined} aria-label={tx('common:activity.agent-label', { name: agent.agent })}>
     <div hidden={mode !== 'chat'} className={css.agentChat}><JournalSourceProvider source={client&&admission&&conversation?.checkpoint ? {client,target:admission.target,agentId:agent.agent_id,cut:()=>conversation.checkpoint?.read_cut,owned:ownsContent} : undefined}><ToolInspectionContext value={inspect}><SubagentChat client={client} sessionId={sessionId} admission={admission} agent={agent} snapshot={conversation?.snapshot} visible={visible && mode === 'chat'}>
-      {client && admission && conversation?.checkpoint && <CollectionPages client={client} target={admission.target} agentId={agent.agent_id} cut={conversation.checkpoint.read_cut} collections={conversation.checkpoint.collections} owned={ownsContent}/>}
       {client && admission && conversation?.checkpoint && <DeferredContent client={client} target={admission.target} agentId={agent.agent_id} bindings={conversation.content} owned={ownsContent}/>}
       {conversation?.phase === 'durableOnly' && <p role="status">{tx('common:activity.durable-only')}</p>}
       {transcriptLoading && !conversation && <p role="status">{tx('common:activity.reading')}</p>}

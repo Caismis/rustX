@@ -232,18 +232,7 @@ describe('cold attach, live folding and resync converge on one placement', () =>
     expect(server.client.getSnapshot().views.A.snapshot?.statuses).toHaveLength(3);
   });
 
-  it('the Inspector names the bounded window as history, not one current value', async () => {
-    await mount(full());
-    fireEvent.click(screen.getByRole('button', { name: 'Toggle Inspector' }));
-    const panel = screen.getByRole('complementary', { name: 'Developer inspector' });
-    const history = within(panel).getByText(/Agent Status history/);
-    expect(history.textContent).toContain('recent compositions');
-    fireEvent.click(history);
-    expect((history.parentElement as HTMLElement).textContent).toContain('not current Agent, Todo, Goal or Queue state');
-    // Raw native diagnostics, including the model-facing rendered text, are retained.
-    expect((history.parentElement as HTMLElement).querySelector('pre')?.textContent).toContain('rendered prose s1');
-    expect(within(panel).queryByText(/Tools, Subagents, Workflows and Agent status/)).toBeNull();
-  });
+
 });
 
 

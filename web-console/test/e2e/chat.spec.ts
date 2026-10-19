@@ -1,3 +1,5 @@
+import { selectedCheckpoint } from './shell-actions';
+import { wireProbe } from './wire-probe';
 import { connectRemote } from './shell-actions';
 import { connectionAction, closeSettings, expectSettled } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
@@ -21,6 +23,7 @@ async function loadOriginalHistory(page: Page) {
 
 test('native history, rich settlement, real image decode/lightbox, reconnect and native upload receipts', async ({ page }) => {
   const fixture = await startDogfood('web_chat_history');
+  const wire = await wireProbe(page);
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.addInitScript(() => {
     const urls = new Set<string>();
@@ -194,10 +197,9 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     const load = canonical.getByRole('button', { name: 'Load attachment' });
     // Text-only continuation keeps a useful artifact reference while durable
     // image content remains available to the managed preview.
-    await expectSettled(page);
-    await expect(page.getByLabel('Native diagnostic JSON')).toContainText('completed');
-    await page.getByRole('button', { name: 'Close Inspector' }).click();
     await expect(canonical.locator('[data-tool-call-id="chat-image"]')).toHaveCount(1);
+    await expectSettled(page, wire);
+    expect((await selectedCheckpoint(page, wire)).snapshot.attempt?.phase).toMatchObject({ type: 'settled', outcome: { type: 'completed' } });
     const expandImage = async () => {
       // A settled Turn is first drawn from its canonical head, its process
       // shown directly without a disclosure; the durable transcript entry then

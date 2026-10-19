@@ -46,7 +46,7 @@ export interface AgentStatusPlacement {
  * composition is one fact however many times a snapshot or a folded event
  * restates it, and a render key alone would not prevent a second annotation.
  * An unplaced composition enters no bucket, so it is never drawn in ordinary
- * transcript UI; the runtime still owns it and the Inspector still shows it. */
+ * transcript UI; the runtime still owns it. */
 export function agentStatusPlacement(statuses?: readonly AgentStatusView[]): AgentStatusPlacement {
   const placement: AgentStatusPlacement = { byMessageId: new Map(), byCursor: new Map() };
   const seen = new Set<string>();

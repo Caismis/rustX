@@ -12,7 +12,7 @@ it('Harness column solve preserves the center, concedes the right panel and keep
   expect(computeColumns(900, 280, 648)).toEqual({ sidebar: 280, center: 620, rightbar: 0 });
   expect(computeColumns(390, 0, 648)).toEqual({ sidebar: 56, center: 334, rightbar: 0 });
 });
-it('collapse, rail expansion, Inspector and Settings appearance gestures emit no native operations', async () => {
+it('collapse, rail expansion and Settings appearance gestures emit no native operations', async () => {
   await server.connect();
   await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost} />); });
   const baseline = server.requests.length;
@@ -23,8 +23,6 @@ it('collapse, rail expansion, Inspector and Settings appearance gestures emit no
   expect(screen.getByRole('button', { name: 'New Conversation' })).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Expand Sidebar' }));
   expect(document.querySelector('[data-sidebar-wide]')?.getAttribute('data-sidebar-wide')).toBe('true');
-  fireEvent.click(screen.getByRole('button', { name: 'Toggle Inspector' }));
-  expect(screen.getByRole('complementary', { name: 'Developer inspector' }).hasAttribute('data-sidebar-right-open')).toBe(true);
   fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
   // Appearance lives on General, the page global Settings opens at.
   const theme = (option: string) => {
