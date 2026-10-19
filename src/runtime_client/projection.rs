@@ -5822,17 +5822,35 @@ impl RuntimeClientProjection {
     }
 
     pub(crate) fn finish_publication(&mut self) -> Option<PublicationDraft> {
-        let (events, _, replacement) = self
+        let mut publication = self
             .staged_publication
             .take()
             .expect("native publication reservation");
         if self.native_source_pending() {
-            for event in events {
+            for event in publication.0 {
                 accumulate_finite_facts(&mut self.deferred_events, event);
             }
-            self.deferred_events.2 |= replacement;
+            self.deferred_events.2 |= publication.2;
             return None;
         }
+        // Native receipts can advance J or C without the worker's JournalBatch.
+        // Invalidate independent Trace readers in this same encoded publication,
+        // only after the complete represented Source prefix is readable.
+        if self.source_cut.is_some()
+            && self.validate_source_prefix().is_ok()
+            && self.published_seed.as_ref().is_some_and(|published| {
+                published.read_cut.source_cut.is_none()
+                    || published.read_cut.through != self.read_through
+                    || published.source_cut != self.source_cut
+            })
+            && !publication
+                .0
+                .iter()
+                .any(|event| matches!(event, RuntimeClientEvent::TraceChanged))
+        {
+            accumulate_finite_facts(&mut publication, RuntimeClientEvent::TraceChanged);
+        }
+        let (events, _, replacement) = publication;
         if events.is_empty() && !replacement {
             return None;
         }
@@ -10285,10 +10303,19 @@ mod tests {
         store
             .mark_observation_direct(first.sequence, first.sequence)
             .unwrap();
-        assert_eq!(
-            projection.checkpoint_candidate().unwrap(),
-            initial,
-            "a trace-only working update does not expose an unencoded published cut"
+        let first_published = projection.checkpoint_candidate().unwrap();
+        assert_eq!(first_published.cursor.get(), initial.cursor.get() + 1);
+        assert_eq!(first_published.read_cut.through, first.sequence);
+        assert_eq!(first_published.snapshot.trace, initial.snapshot.trace);
+        assert!(
+            projection
+                .replay
+                .back()
+                .unwrap()
+                .1
+                .facts()
+                .iter()
+                .any(|fact| { matches!(fact, RuntimeClientEvent::TraceChanged) })
         );
         let old_fence = projection.read_domain_cut().unwrap();
         assert_eq!(old_fence.through, first.sequence);
@@ -10327,13 +10354,16 @@ mod tests {
             !projection.install_read_domains(&old_fence, Ok(old_read), true),
             "a coherent older worker read still cannot install at a newer native fence"
         );
-        assert_eq!(projection.checkpoint_candidate().unwrap(), initial);
+        let second_published = projection.checkpoint_candidate().unwrap();
+        assert_eq!(second_published.cursor.get(), initial.cursor.get() + 2);
+        assert_eq!(second_published.read_cut.through, second.sequence);
+        assert_eq!(second_published.snapshot.trace, initial.snapshot.trace);
         let read = current.read(&store).unwrap();
         publish_source_fact(&mut projection, |projection| {
             assert!(projection.install_read_domains(&current, Ok(read), true));
         });
         let published = projection.checkpoint_candidate().unwrap();
-        assert_eq!(published.cursor.get(), initial.cursor.get() + 1);
+        assert_eq!(published.cursor.get(), initial.cursor.get() + 3);
         assert_eq!(published.read_cut.through, second.sequence);
         assert_eq!(published.read_cut.source_cut, current.source_cut);
         assert_eq!(

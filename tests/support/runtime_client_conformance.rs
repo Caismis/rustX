@@ -296,6 +296,12 @@ impl RuntimeClientProtocolDriver for StdioJsonlDriver {
                             response.id, id,
                             "a response record correlates its request id exactly"
                         );
+                        if matches!(response.result, Some(RuntimeClientResult::Detached)) {
+                            // The acknowledged detach retires this subscription.
+                            // Its already-buffered notifications cannot be replayed
+                            // as notifications of a later subscription.
+                            self.buffered_events.clear();
+                        }
                         return response;
                     }
                     // A notification arriving before the response is normal:
