@@ -140,7 +140,10 @@ fn scalar_geometry_keeps_changed_definition_identity_time_and_old_source_separat
         let mut raw = Vec::new();
         source.copy_original_bytes_to(&mut raw).unwrap();
         assert_eq!(raw, serde_json::to_vec(value).unwrap());
-        assert_eq!(&raw[bounds.0 as usize..bounds.1 as usize], b"[]");
+        assert_eq!(
+            &raw[usize::try_from(bounds.0).unwrap()..usize::try_from(bounds.1).unwrap()],
+            b"[]"
+        );
         let connection = connection();
         let captured = scalar(&connection, source).unwrap();
         assert_eq!((captured.1, captured.2), (bounds.0, bounds.1));
