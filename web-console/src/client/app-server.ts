@@ -5,7 +5,6 @@ import { lifecycleAvailability, type LifecycleContext } from './session-lifecycl
 import { AgentMeters } from './agent-meters';
 import { AttachmentIntakes } from './uploads';
 import { checkpointSnapshot, foldRuntimeEvent, observationCheckpoint, transitionFacts } from '../../../protocol/app-server/projection';
-import { hasResponseDeadline, requestEffect, requestLane } from '../../../protocol/app-server/method-policy';
 import { SourceRepairObserver } from './source-repairs';
 import { SessionCatalog } from './session-catalog';
 import { SessionReads } from './session-reads';
@@ -22,60 +21,21 @@ import { SessionExportController } from "./session-export";
 import { refreshTrace, replaceTrace, traceInterestBatches, traceInterests } from './trace';
 import type {
   TraceToolLocator, PendingInboundRef, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
-  Request, Request1, Response, RuntimeClientSnapshot, RuntimeClientEvent,
+  Request1, Response, RuntimeClientSnapshot, RuntimeClientEvent,
   UserInputBlock, UploadReceipt, UploadedFile, SessionModelConfig, CatalogModelSelection, RuntimeClientInteractionHeader,
 } from '../../../protocol/app-server/v50';
 import { transferUpload } from '../../../protocol/app-server/upload';
 import { refreshTranscript, replaceTranscript, type TurnSelection } from './transcript';
-import { ProtocolLog, type WireContext } from './protocol-log';
-import { OutcomeUncertain, RequestAdmissionDeferred, RequestNotDispatched, RpcFailure, isOutcomeUncertain } from './errors';
-import { interactionKey, type CancellationTarget, type ClientView, type ConnectionState, type OperationAdmission, type SessionView, type Submission } from './contracts';
+import { ProtocolLog } from './protocol-log';
+import { RequestPipeline } from './request-pipeline';
+import { RequestAdmissionDeferred, RequestNotDispatched, RpcFailure, isOutcomeUncertain } from './errors';
+import { interactionKey, type CancellationTarget, type ClientView, type ConnectionState, type OperationAdmission, type SessionView, type Socket, type SocketFactory, type Submission } from './contracts';
 
 
-export interface Socket {
-  readonly readyState: number;
-  onopen: ((event: Event) => unknown) | null;
-  onmessage: ((event: MessageEvent) => unknown) | null;
-  onclose: ((event: CloseEvent) => unknown) | null;
-  onerror: ((event: Event) => unknown) | null;
-  send(data: string): void;
-  close(): void;
-}
-export type SocketFactory = (url: string, protocols: string[]) => Socket;
 type SessionAdmission = (id: string, current: () => boolean) => Promise<false | OperationAdmission>;
 /** One installation lifetime of an attachment-admission owner. Identity is the
  * object, never the callback: reinstalling the same callback is a new owner. */
 interface SessionAdmissionOwner { readonly admit: SessionAdmission }
-interface Pending {
-  /** Pure actor authority, evaluated after caller-owned admission callbacks. */
-  authority?: () => boolean;
-  dispatchCurrent?: (() => boolean) | OperationAdmission;
-  /** Final validation holding an RPC slot; `timer` is its deadline until send. */
-  validation?: AbortController;
-  acknowledged?: (result: MethodResult) => void;
-  request: Request;
-  context: WireContext;
-  mutation: boolean;
-  sent: boolean;
-  expected: MethodResult['type'];
-  resolve: (result: MethodResult) => void;
-  reject: (error: Error) => void;
-  timer?: ReturnType<typeof setTimeout>;
-}
-/** Shared method semantics; this transport keeps its own queue, backpressure
- * and lifetime implementation. Only a side-effecting request may have
- * committed when its response is lost. */
-const mayCommit = (operation: Request1) => requestEffect(operation) === 'side_effecting';
-const DOMAIN_CAPACITY = { control: 2, observation: 8 } as const;
-const RPC_CAPACITY = 6;
-/** Operation-admission validations reserve ordinary RPC slots so the final check
- * stays adjacent to send, but at most two at once: a stalled Product Host read
- * can never take the remaining slots needed to cancel or control native work. */
-const VALIDATION_CAPACITY = 2;
-
-const dispatchCurrent = ({ dispatchCurrent: proof }: Pending) => !proof || (typeof proof === 'function' ? proof() : proof.current());
-
-
 /** One native rustX connection. All retained snapshots are replaceable read caches.
  * Runtime events fold below React; snapshots initialize or repair exact attachments. */
 export class AppServerClient {
@@ -111,9 +71,27 @@ export class AppServerClient {
     held: () => this.state.sourceRepairs ?? {},
     publish: sourceRepairs => this.publish({ sourceRepairs }),
   });
-  private nextId = 0;
   private listeners = new Set<() => void>();
-  private pending = new Map<string, Pending>();
+  private readonly pipeline = new RequestPipeline({
+    timeoutMs: () => this.timeoutMs,
+    log: this.log,
+    socket: () => this.socket,
+    initialized: () => this.initialized,
+    state: () => this.state,
+    current: generation => this.current(generation),
+    lose: generation => this.lose(generation),
+    claimLifecycleAdmission: admission => this.lifecycleAdmissions.delete(admission),
+    observes: (id, admission) => this.lifecycles.observes(id, admission),
+    controls: (id, admission) => this.isAttachmentControlCurrent(id, admission),
+    inboundChanged: id => this.publishInbound(id),
+    inboundAnswered: (id, accepted) => { this.publishInbound(id, accepted); this.settleSubmissions(id); },
+    uncertainCommit: operation => this.publish({ uncertain: [...this.state.uncertain, operation] }),
+    admissionAvailable: revision => this.agentMeters.admissionAvailable(revision),
+  });
+  /** Correlation only. No call is ever retried. Every payload is a generated union. */
+  request<T extends MethodResult['type']>(operation: Request1, expected: T, acknowledged?: (result: Extract<MethodResult, { type: T }>) => void, dispatchCurrent?: (() => boolean) | OperationAdmission, observationSignal?: AbortSignal): Promise<Extract<MethodResult, { type: T }>> {
+    return this.pipeline.request(operation, expected, acknowledged, dispatchCurrent, observationSignal);
+  }
   private refreshes = new Map<string, Promise<void>>();
   private dirty = new Set<string>();
   private acquiring = new Set<string>();
@@ -140,19 +118,6 @@ export class AppServerClient {
   private state: ClientView = {
     connection: 'disconnected', generation: 0, sessions: [], views: {}, uncertain: [], interactionOperations: {},
   };
-  private admissionRevision = 0;
-  private admissionNotification = false;
-  private capacityReleased() {
-    ++this.admissionRevision;
-    if (this.admissionNotification) return;
-    this.admissionNotification = true;
-    // Notify after pending-map mutation/pumping has committed. A readiness cut
-    // also prevents a completion racing the refusal continuation from being lost.
-    queueMicrotask(() => {
-      this.admissionNotification = false;
-      if (this.socket && this.initialized && this.pending.size < 64) this.agentMeters.admissionAvailable(this.admissionRevision);
-    });
-  }
   constructor(private readonly socketFactory: SocketFactory = (url, protocols) => new WebSocket(url, protocols), private readonly timeoutMs = 30_000, private readonly uploadCarrier = transferUpload) {
     // Navigation retires admission proofs; release their reservations outside the caller's stack.
   }
@@ -317,7 +282,7 @@ export class AppServerClient {
   private replaceSessionAdmission(owner?: SessionAdmissionOwner) {
     this.sessionAdmission = owner;
     // Owner change retires its proofs; release their reservations outside the caller's stack, as navigation does.
-    queueMicrotask(() => this.pump());
+    queueMicrotask(() => this.pipeline.pump());
   }
   async admitSessionOperation(id: string, current: () => boolean = () => true): Promise<false | OperationAdmission> {
     const generation = this.state.generation;
@@ -437,7 +402,7 @@ export class AppServerClient {
     const views = Object.values(this.state.views);
     if ((this.state.detached?.length ?? 0) >= 8) throw new Error('Review and acknowledge detached authority diagnostics before replacing another App Server.');
     const sessions = new Set(views.filter(view => view.deleting || view.error || view.modelMutation || view.cancellation).map(view => view.id));
-    for (const pending of this.pending.values()) if (pending.context.sessionId) sessions.add(pending.context.sessionId);
+    for (const id of this.pipeline.sessions()) sessions.add(id);
     if (sessions.size > 64) throw new Error('Too many unresolved Session diagnostics. Review the current authority before replacing it.');
   }
   private current(generation: number) { return generation === this.state.generation && !!this.socket; }
@@ -449,7 +414,7 @@ export class AppServerClient {
   acknowledgeDetached(index: number) { this.publish({ detached: this.state.detached?.filter((_, at) => at !== index) }); }
   /** Browser evidence only. No native settlement, deletion notification or RPC. */
   acknowledgeSessionDiagnostic(id: string) {
-    if (this.socket || this.pending.size) throw new Error('Disconnect before acknowledging current Session evidence.');
+    if (this.socket || this.pipeline.size) throw new Error('Disconnect before acknowledging current Session evidence.');
     const view = this.state.views[id];
     if (!view || !(view.deleting || view.error || view.modelMutation || view.cancellation)) return;
     this.lifecycles.forget(id);
@@ -466,22 +431,7 @@ export class AppServerClient {
     this.initialized = false;
     this.sourceRepairs.disconnect();
     const uncertain = [...this.state.uncertain];
-    for (const [id, pending] of this.pending) {
-      clearTimeout(pending.timer); pending.validation?.abort(); pending.validation = undefined;
-      if (pending.sent && pending.mutation) {
-        const params = pending.request.params;
-        uncertain.push({ id, method: pending.request.method, sessionId: pending.context.sessionId,
-          generation: this.state.generation,
-          ...(pending.request.method === 'session/uploadPrepare' ? { uploadOperationId: pending.request.params.operation_id } : {}),
-          ...(pending.request.method === 'context/compact' ? { compactionRequestId: pending.request.params.request_id } : {}),
-          ...('interaction' in params ? { interactionKey: interactionKey(params.interaction) } : {}),
-        });
-        pending.reject(new OutcomeUncertain());
-      } else pending.reject(pending.sent
-        ? new Error('Disconnected before a response.')
-        : new RequestNotDispatched('Disconnected before a response. Unsent operations were discarded.'));
-    }
-    this.pending.clear();
+    uncertain.push(...this.pipeline.disconnect(this.state.generation));
     this.models.disconnect();
     for (const chain of this.observationChains.values()) chain.retire(); this.observationChains.clear();
     this.refreshes.clear(); this.traces.disconnect(); this.acquiring.clear(); this.dirty.clear(); this.resubscribe.clear();
@@ -504,152 +454,6 @@ export class AppServerClient {
       void this.closing.catch(() => {});
     }
   }
-  /** Correlation only. No call is ever retried. Every payload is a generated union. */
-  async request<T extends MethodResult['type']>(operation: Request1, expected: T, acknowledged?: (result: Extract<MethodResult, { type: T }>) => void, dispatchCurrent?: (() => boolean) | OperationAdmission, observationSignal?: AbortSignal): Promise<Extract<MethodResult, { type: T }>> {
-    if (!this.socket || (!this.initialized && operation.method !== 'initialize')) throw new RequestNotDispatched('Connect and initialize first.');
-    if (['session/attach', 'session/detach', 'session/switchNode', 'session/delete', 'session/recoverDeletion'].includes(operation.method)
-      && (typeof dispatchCurrent !== 'object' || !this.lifecycleAdmissions.delete(dispatchCurrent))) throw new RequestNotDispatched('Session lifecycle operations require actor admission.');
-    // The Session actor owns control admission. Retained targets authorize only
-    // lifecycle settlement; live reads and new effects require the exact committed
-    // attachment proof, captured once and checked again adjacent to socket send.
-    let authority: (() => boolean) | undefined;
-    if ('target' in operation.params && 'session_id' in operation.params.target
-      && mayCommit(operation)
-      && operation.method !== 'session/detach' && operation.method !== 'session/switchNode') {
-      const target = operation.params.target, id = target.session_id;
-      const admission = this.state.views[id]?.attachmentObservation;
-      const current = () => (operation.method === 'turn/cancel' || operation.method === 'context/compact'
-        ? this.lifecycles.observes(id, admission)
-        : this.isAttachmentControlCurrent(id, admission)) && sameTarget(admission?.target, target);
-      if (!current()) throw new RequestNotDispatched('Attachment control authority was revoked.');
-      authority = current;
-    }
-    if ((operation.method.startsWith('artifact/') || operation.method === 'agent/artifactRead') && [...this.pending.values()].filter(item => (item.request.method.startsWith('artifact/') || item.request.method === 'agent/artifactRead')).length >= 2) throw new RequestNotDispatched('Artifact transfer capacity reached. Retry after current transfers finish.');
-    const lane = requestLane(operation.method);
-    if (lane !== 'rpc' && lane !== 'observation' && [...this.pending.values()].filter(item => requestLane(item.request.method) === lane).length >= DOMAIN_CAPACITY[lane]) {
-      throw new RequestNotDispatched(`Client ${lane} capacity reached. Inspect current operations before issuing another.`);
-    }
-    if (this.pending.size >= 64) throw new RequestAdmissionDeferred(this.admissionRevision);
-    // Keep uncertain diagnostics finite without silently forgetting unresolved mutations.
-    if (mayCommit(operation) && this.state.uncertain.length + this.pending.size >= 64) throw new RequestNotDispatched('Uncertain-operation capacity reached. Inspect and acknowledge diagnostics first.');
-    const generation = this.state.generation;
-    const id = `${generation}:${++this.nextId}`;
-    const request: Request = { jsonrpc: '2.0', id, ...operation };
-    try {
-      if (new TextEncoder().encode(JSON.stringify(request)).length > 1_048_576) throw new Error('Request exceeds the App Server 1 MiB limit.');
-    } catch (cause) { throw new RequestNotDispatched(cause); }
-    let abortObservation = () => {};
-    const work = new Promise<MethodResult>((resolve, reject) => {
-      const params = operation.params;
-      const context = { method: operation.method,
-        sessionId: 'target' in params && 'session_id' in params.target ? params.target.session_id : 'session_id' in params ? params.session_id : undefined };
-      this.pending.set(id, { request, context, mutation: mayCommit(operation), sent: false, expected, resolve, reject, dispatchCurrent, authority, acknowledged: result => acknowledged?.(result as Extract<MethodResult, { type: T }>) });
-      abortObservation = () => {
-        if (operation.method !== 'agent/observe') return;
-        const pending = this.pending.get(id);
-        if (!pending) return;
-        if (!pending.sent) { this.refuse(pending, new Error('Observation retired before dispatch')); this.pump(); }
-        else void this.request({method:'agent/observeCancel',params:{request_id:id}},'agent_observe_cancelled').catch(() => {});
-      };
-      observationSignal?.addEventListener('abort', abortObservation, {once:true});
-      if (observationSignal?.aborted) abortObservation();
-
-      if (operation.method === 'turn/start' || operation.method === 'turn/steer') this.publishInbound(operation.params.target.session_id);
-      this.pump();
-    });
-    const result = observationSignal ? await work.finally(() => observationSignal.removeEventListener('abort', abortObservation)) : await work;
-    if (!this.current(generation)) throw new Error('Obsolete connection response; inspect the current authoritative state.');
-    if (result.type !== expected) {
-      this.lose(this.state.generation);
-      throw new Error(`Incompatible response: expected ${expected}, received ${result.type}.`);
-    }
-    return result as Extract<MethodResult, { type: T }>;
-  }
-  private dispatchAllowed(pending: Pending): boolean {
-    try {
-      return dispatchCurrent(pending) && (!pending.authority || pending.authority())
-        && !!this.socket && this.pending.get(String(pending.request.id)) === pending && !pending.sent;
-    }
-    catch (cause) { this.refuse(pending, cause); return false; }
-  }
-  /** A cancelled read remains the native admission owner until its correlated
-   * terminal response arrives. Replacements wait in the existing bounded queue;
-   * cancellation and reads of other exact targets retain their own lanes. */
-  private observeOccupied(pending: Pending): boolean {
-    const request = pending.request;
-    if (request.method !== 'agent/observe') return false;
-    return [...this.pending.values()].some(other => other !== pending && other.sent
-      && other.request.method === 'agent/observe'
-      && other.request.params.agent_id === request.params.agent_id
-      && sameTarget(other.request.params.target, request.params.target));
-  }
-  private pump() {
-    // An obsolete proof releases its reservation now, never after its Host read.
-    for (const pending of this.pending.values()) if (pending.validation && !this.dispatchAllowed(pending)) this.refuse(pending);
-    let occupied = [...this.pending.values()].filter(p => (p.sent || p.validation) && requestLane(p.request.method) === 'rpc').length;
-    let observing = [...this.pending.values()].filter(p => p.sent && requestLane(p.request.method) === 'observation').length;
-    let validating = [...this.pending.values()].filter(p => p.validation).length;
-    for (const pending of this.pending.values()) {
-      if (!this.socket) break;
-      const lane = requestLane(pending.request.method);
-      if (pending.sent || pending.validation || (lane === 'rpc' && occupied >= RPC_CAPACITY) || (lane === 'observation' && observing >= DOMAIN_CAPACITY.observation)) continue;
-      if (!this.dispatchAllowed(pending)) { this.refuse(pending); continue; }
-      if (this.observeOccupied(pending)) continue;
-      const proof = typeof pending.dispatchCurrent === 'object' ? pending.dispatchCurrent : undefined;
-      // A waiting validation holds nothing, so later requests are never blocked behind it.
-      if (proof && validating >= VALIDATION_CAPACITY) continue;
-      if (lane === 'rpc') occupied++;
-      if (lane === 'observation') observing++;
-      if (proof) {
-        validating++;
-        // Reserve the same bounded RPC slot while the operation owner revalidates.
-        // No request is sent or marked uncertain during this read. The deadline
-        // starts here, not at send; retirement aborts the read without awaiting it.
-        const validation = new AbortController();
-        pending.validation = validation;
-        pending.timer = setTimeout(() => {
-          this.refuse(pending, new Error('Operation admission validation timed out. No operation was sent.')); this.pump();
-        }, this.timeoutMs);
-        // Only the settlement that still owns the reservation may act on it.
-        let checked: Promise<boolean>;
-        try { checked = proof.validate(validation.signal); }
-        catch (cause) { this.refuse(pending, cause); occupied--; validating--; continue; }
-        void checked.then(allowed => {
-          if (pending.validation !== validation) return;
-          if (!allowed || !this.dispatchAllowed(pending)) this.refuse(pending);
-          else { pending.validation = undefined; clearTimeout(pending.timer); this.sendPending(pending); }
-        }, cause => {
-          if (pending.validation === validation) this.refuse(pending, cause);
-        }).finally(() => this.pump());
-      } else this.sendPending(pending);
-    }
-  }
-  private refuse(pending: Pending, cause: unknown = new Error('Authority changed before dispatch. No operation was sent.')) {
-    if (pending.sent || !this.pending.delete(String(pending.request.id))) return;
-    this.capacityReleased();
-    clearTimeout(pending.timer); pending.validation?.abort(); pending.validation = undefined;
-    pending.reject(new RequestNotDispatched(cause));
-    if (pending.request.method === 'turn/start' || pending.request.method === 'turn/steer') this.publishInbound(pending.request.params.target.session_id);
-  }
-  private sendPending(pending: Pending) {
-    const socket = this.socket, generation = this.state.generation;
-    let raw: string;
-    try { raw = JSON.stringify(pending.request); }
-    catch (cause) { this.refuse(pending, cause); return; }
-    if (!this.dispatchAllowed(pending)) { this.refuse(pending); return; }
-    if (!socket || this.socket !== socket || !this.current(generation)
-      || this.pending.get(String(pending.request.id)) !== pending || pending.sent) return;
-    if (this.observeOccupied(pending)) return;
-    if (socket.readyState !== 1) { this.lose(generation); return; }
-    // No external observer runs between this final proof and send invocation.
-    // sent means transmission attempted, never native acceptance.
-    pending.sent = true;
-    this.log.observe('out', generation, raw, pending.context);
-    if (requestLane(pending.request.method) === 'rpc' && hasResponseDeadline(pending.request.method)) pending.timer = setTimeout(() => this.lose(generation), this.timeoutMs);
-    try { socket.send(raw); } catch { this.lose(generation); }
-    try { if (typeof pending.dispatchCurrent === 'object') pending.dispatchCurrent.sent?.(); }
-    catch (error) { console.error('App Server dispatch observer failed', error); }
-  }
   private receive(data: unknown, generation: number) {
     if (typeof data !== 'string' || data.length > 1_048_576 || new TextEncoder().encode(data).length > 1_048_576) { this.lose(generation); return; }
     let parsed: unknown;
@@ -660,52 +464,9 @@ export class AppServerClient {
       this.log.observe('in', generation, data); this.lose(generation); return;
     }
     const value = parsed as Response | Notification;
-    const pending = 'id' in value && value.id !== null ? this.pending.get(String(value.id)) : undefined;
-    this.log.observe('in', generation, data, pending?.context);
+    this.log.observe('in', generation, data, 'id' in value ? this.pipeline.context(value.id) : undefined);
     if (value.jsonrpc !== '2.0') { this.lose(generation); return; }
-    if ('result' in value || 'error' in value || 'id' in value) {
-      if (!pending || !pending.sent) return;
-      if (('result' in value) === ('error' in value) ||
-          ('result' in value && (!value.result || value.result.type !== pending.expected))) {
-        // Leave the transmitted request registered while closing, so a malformed
-        // acknowledgement cannot erase its uncertain mutation diagnostic.
-        this.lose(generation); return;
-      }
-      this.pending.delete(String(value.id)); clearTimeout(pending.timer);
-      this.capacityReleased();
-      if ('result' in value && value.result?.type === 'session_transition' && value.result.durability_diagnostic) {
-        this.publish({ uncertain: [...this.state.uncertain, { id: String(value.id), method: pending.request.method, sessionId: pending.context.sessionId, generation,
-          committedNode: { sessionId: value.result.session.id, nodeId: value.result.session.active_node }, diagnostic: value.result.durability_diagnostic }] });
-      }
-      // Evidence observers run at decode time, before continuation authority
-      // checks. Their failures are local diagnostics, never a native RPC result.
-      try {
-        if ('result' in value) pending.acknowledged?.(value.result);
-      } catch (error) {
-        console.error('App Server acknowledgement observer failed', error);
-      }
-      try {
-        const operation = pending.request;
-        if (operation.method === 'turn/start' || operation.method === 'turn/steer') {
-          const target = operation.params.target;
-          const accepted = 'result' in value && value.result.type === 'inbound_accepted' && sameTarget(this.state.views[target.session_id]?.target, target)
-            ? { messageId: value.result.message_id, content: operation.params.content } : undefined;
-          // One publication hands request ownership to exact acknowledged identity.
-          // Never publish a zero count before publishing the accepted MessageId.
-          this.publishInbound(target.session_id, accepted);
-          this.settleSubmissions(target.session_id);
-        }
-      } catch (error) {
-        console.error('App Server response presentation failed', error);
-      } finally {
-        // The correlated wire outcome alone settles the RPC. Presentation
-        // subscribers cannot strand it or consume a request capacity slot.
-        if ('error' in value) pending.reject(new RpcFailure(value.error));
-        else if ('result' in value) pending.resolve(value.result);
-        this.pump();
-      }
-      return;
-    }
+    if ('result' in value || 'error' in value || 'id' in value) { this.pipeline.response(value as Response, generation); return; }
     if (value.method === 'configuration/changed') { this.configurations.changed(value.params.application, generation); return; }
     if (value.method === 'configuration/sourceRepairChanged') {
       // Source-scoped (Issue #464): it addresses a configuration source, never
@@ -1079,8 +840,7 @@ export class AppServerClient {
   private publishInbound(id: string, accepted?: Submission) {
     const view = this.state.views[id];
     if (!view) return;
-    const inboundRequests = [...this.pending.values()].filter(item =>
-      (item.request.method === 'turn/start' || item.request.method === 'turn/steer') && item.context.sessionId === id).length;
+    const inboundRequests = this.pipeline.inboundRequests(id);
     const submissions = view.submissions ?? [];
     this.setSession(id, { inboundRequests, submissions: accepted && !submissions.some(item => item.messageId === accepted.messageId)
       ? [...submissions, accepted] : submissions });
@@ -1121,7 +881,7 @@ export class AppServerClient {
   }
   /** Resample admission proofs after their browser owner retires. No native
    * transaction is cancelled after dispatch. */
-  recheckAdmissions() { queueMicrotask(() => this.pump()); }
+  recheckAdmissions() { queueMicrotask(() => this.pipeline.pump()); }
   clearError() { this.publish({ error: undefined }); }
   acknowledgeDiagnostic(id: string) {
     // This acknowledges only the notice. Uncertain interaction controls remain

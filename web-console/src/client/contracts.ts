@@ -164,3 +164,14 @@ export type ConnectionRequest = <T extends MethodResult['type']>(
   dispatchCurrent?: (() => boolean) | OperationAdmission,
   observationSignal?: AbortSignal,
 ) => Promise<Extract<MethodResult, { type: T }>>;
+/** The browser WebSocket surface one connection uses. */
+export interface Socket {
+  readonly readyState: number;
+  onopen: ((event: Event) => unknown) | null;
+  onmessage: ((event: MessageEvent) => unknown) | null;
+  onclose: ((event: CloseEvent) => unknown) | null;
+  onerror: ((event: Event) => unknown) | null;
+  send(data: string): void;
+  close(): void;
+}
+export type SocketFactory = (url: string, protocols: string[]) => Socket;
