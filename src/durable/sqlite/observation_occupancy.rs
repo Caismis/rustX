@@ -1,7 +1,7 @@
 //! Finite native reading evidence; original model fields keep their immutable source.
 use super::{Connection, ConversationStoreError, OptionalExtension, params, storage};
 use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
-use crate::runtime_client::occupancy::RuntimeClientContextOccupancy;
+use crate::observation::occupancy::RuntimeClientContextOccupancy;
 #[cfg(test)]
 thread_local! {
     static FAIL_COMPACTION_CAPTURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -58,7 +58,7 @@ pub(super) fn witness(
 pub(super) fn compaction(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
-) -> Result<crate::runtime_client::snapshot::RuntimeClientCompactionView, ConversationStoreError> {
+) -> Result<crate::observation::head::RuntimeClientCompactionView, ConversationStoreError> {
     let RuntimeEvent::CompactionCompleted {
         generation,
         checkpoint_id,
@@ -77,15 +77,13 @@ pub(super) fn compaction(
         return Err(storage("fault injected at derived compaction capture"));
     }
     let _ = connection;
-    Ok(
-        crate::runtime_client::snapshot::RuntimeClientCompactionView {
-            generation: *generation,
-            checkpoint_id: checkpoint_id.clone(),
-            activation_id: *activation_id,
-            tokens_before: *tokens_before,
-            estimated_tokens_after: *estimated_tokens_after,
-        },
-    )
+    Ok(crate::observation::head::RuntimeClientCompactionView {
+        generation: *generation,
+        checkpoint_id: checkpoint_id.clone(),
+        activation_id: *activation_id,
+        tokens_before: *tokens_before,
+        estimated_tokens_after: *estimated_tokens_after,
+    })
 }
 
 #[cfg(test)]
@@ -123,7 +121,7 @@ pub(super) fn event(
         }),
         _ => return Ok(()),
     };
-    let bytes = crate::runtime_client::checkpoint::bounded_bytes(&value, 16_384)
+    let bytes = crate::observation::bounded::bounded_bytes(&value, 16_384)
         .ok_or_else(|| storage("native occupancy header exceeds bound"))?;
     connection
         .execute(
@@ -148,7 +146,7 @@ pub(super) fn inherited(
             Some("context.occupancy.inherited.model".into()),
         )
     });
-    let bytes = crate::runtime_client::checkpoint::bounded_bytes(&value, 16_384)
+    let bytes = crate::observation::bounded::bounded_bytes(&value, 16_384)
         .ok_or_else(|| storage("inherited occupancy header exceeds bound"))?;
     connection
         .execute(

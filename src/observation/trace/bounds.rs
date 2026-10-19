@@ -295,10 +295,8 @@ pub fn encoded_len<T: Serialize>(value: &T) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        TRACE_JSON_DEPTH, TRACE_JSON_NODES, TRACE_JSON_STRING_BYTES, TraceJson, TracePreview,
-        TraceText, identity_fits,
-    };
+    use super::{TRACE_JSON_DEPTH, TRACE_JSON_NODES, TRACE_JSON_STRING_BYTES};
+    use super::{TraceJson, TracePreview, TraceText, identity_fits};
 
     #[test]
     fn t15_t20_trace_size_counter_preserves_encoded_boundaries_and_stops_a_growing_sequence() {

@@ -815,7 +815,7 @@ pub(crate) trait InteractionObserver: Send + Sync {
 pub(crate) enum InteractionRouteEvent {
     /// A requested fact has committed and is now being exposed at the root
     /// human-facing surface.
-    Requested(Box<crate::runtime_client::snapshot::RuntimeClientInteractionHeader>),
+    Requested(Box<crate::observation::interaction::RuntimeClientInteractionHeader>),
     /// Physical origin loss retires observation without inventing a settlement.
     Removed { interaction: InteractionRef },
     /// The originating coordinator selected its terminal outcome.
@@ -925,8 +925,8 @@ struct PublishedInteraction {
     request: Arc<InteractionRequest>,
 }
 impl PublishedInteraction {
-    fn route_header(&self) -> crate::runtime_client::snapshot::RuntimeClientInteractionHeader {
-        let mut header = crate::runtime_client::checkpoint::interaction_request_header(
+    fn route_header(&self) -> crate::observation::interaction::RuntimeClientInteractionHeader {
+        let mut header = crate::observation::interaction::interaction_request_header(
             &self.request,
             InteractionSource::Primary,
         );
@@ -2638,7 +2638,7 @@ mod tests {
         let mut projection = crate::runtime_client::projection::RuntimeClientProjection::new(
             id,
             vec![],
-            crate::runtime_client::snapshot::CapabilityView {
+            crate::observation::capability_source::CapabilityView {
                 configured_tools: Vec::new(),
                 revision: crate::runtime::identity::CapabilityRevision::new(1),
                 tools: vec![],
@@ -3683,13 +3683,13 @@ mod tests {
         assert!(requested.iter().any(|request| {
             matches!(
                 &request.kind,
-                crate::runtime_client::snapshot::RuntimeClientInteractionKind::Approval
+                crate::observation::interaction::RuntimeClientInteractionKind::Approval
             )
         }));
         assert!(requested.iter().any(|request| {
             matches!(
                 &request.kind,
-                crate::runtime_client::snapshot::RuntimeClientInteractionKind::Questionnaire
+                crate::observation::interaction::RuntimeClientInteractionKind::Questionnaire
             )
         }));
 
@@ -3698,15 +3698,15 @@ mod tests {
         // participates in routing.
         for request in requested.iter().rev() {
             let response = match &request.kind {
-                crate::runtime_client::snapshot::RuntimeClientInteractionKind::Approval => {
+                crate::observation::interaction::RuntimeClientInteractionKind::Approval => {
                     InteractionResponse::Approval {
                         decision: ApprovalDecision::Allow,
                     }
                 }
-                crate::runtime_client::snapshot::RuntimeClientInteractionKind::Questionnaire => {
+                crate::observation::interaction::RuntimeClientInteractionKind::Questionnaire => {
                     single_response(0)
                 }
-                crate::runtime_client::snapshot::RuntimeClientInteractionKind::Review => {
+                crate::observation::interaction::RuntimeClientInteractionKind::Review => {
                     panic!("this fixture has no Review")
                 }
             };

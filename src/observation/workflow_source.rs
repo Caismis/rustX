@@ -6,7 +6,7 @@ use std::sync::{Arc, OnceLock};
 #[derive(Debug, Clone)]
 pub(crate) struct WorkflowReadSource {
     original: Arc<WorkflowSnapshot>,
-    prepared: Arc<OnceLock<(WorkflowSnapshot, Vec<super::checkpoint::CollectionFrontier>)>>,
+    prepared: Arc<OnceLock<(WorkflowSnapshot, Vec<super::cut::CollectionFrontier>)>>,
 }
 impl WorkflowReadSource {
     pub(crate) fn new(original: Arc<WorkflowSnapshot>) -> Self {
@@ -25,8 +25,7 @@ impl WorkflowReadSource {
             for (ordinal, run) in self.original.runs.iter().enumerate() {
                 // Serialize only borrowed scalar metadata before copying any
                 // identifiers. Native retained instance bodies stay in the Arc.
-                let Some(bytes) = super::checkpoint::bounded_item_bytes(&RunHeader(run), 4096)
-                else {
+                let Some(bytes) = super::bounded::bounded_item_bytes(&RunHeader(run), 4096) else {
                     continue;
                 };
                 let Ok(mut header) = serde_json::from_slice::<WorkflowRunView>(&bytes) else {
@@ -38,13 +37,13 @@ impl WorkflowReadSource {
                     .iter()
                     .take(32)
                     .filter_map(|instance| {
-                        let value = super::checkpoint::bounded_clone(instance, 2048);
+                        let value = super::bounded::bounded_clone(instance, 2048);
                         omitted |= value.is_none();
                         value
                     })
                     .collect();
                 let loaded = header.instances.len() as u64;
-                collections.push(super::checkpoint::CollectionFrontier {
+                collections.push(super::cut::CollectionFrontier {
                     domain: format!("workflows.runs.@{ordinal}.instances"),
                     revision: self.original.revision.0,
                     total: run.instances.len() as u64,
@@ -58,7 +57,7 @@ impl WorkflowReadSource {
                 runs.push(header);
             }
             let loaded = runs.len() as u64;
-            collections.push(super::checkpoint::CollectionFrontier {
+            collections.push(super::cut::CollectionFrontier {
                 domain: "workflows.runs".into(),
                 revision: self.original.revision.0,
                 total: self.original.runs.len() as u64,
@@ -82,7 +81,7 @@ impl WorkflowReadSource {
             .0
             .clone()
     }
-    pub(crate) fn frontiers(&self) -> Vec<super::checkpoint::CollectionFrontier> {
+    pub(crate) fn frontiers(&self) -> Vec<super::cut::CollectionFrontier> {
         self.prepared
             .get()
             .expect("native Workflow header prepared")
@@ -186,7 +185,7 @@ mod tests {
         assert_eq!(header.runs[0].steps_consumed, 13);
         assert_eq!(
             source.frontiers()[0],
-            super::super::checkpoint::CollectionFrontier {
+            crate::observation::cut::CollectionFrontier {
                 domain: "workflows.runs.@0.instances".into(),
                 revision: 7,
                 total: 73,
@@ -194,15 +193,15 @@ mod tests {
                 next_offset: Some(32),
             }
         );
-        assert!(super::super::checkpoint::bounded_bytes(&header, 786_432).is_some());
+        assert!(crate::observation::bounded::bounded_bytes(&header, 786_432).is_some());
         assert_eq!(
             serde_json::to_value(&source).unwrap(),
             serde_json::to_value(&*original).unwrap()
         );
-        let source = super::super::domain::DomainSource::Workflow(Arc::new(
-            super::super::domain::SourceValue::new(Arc::new(source)),
+        let source = crate::runtime_client::domain::DomainSource::Workflow(Arc::new(
+            crate::runtime_client::domain::SourceValue::new(Arc::new(source)),
         ));
-        let cut = super::super::checkpoint::CheckpointReadCut {
+        let cut = crate::observation::cut::CheckpointReadCut {
             conversation_id: crate::runtime::identity::ConversationId::new(
                 "conv_01900000-0000-7000-8000-000000000012",
             ),

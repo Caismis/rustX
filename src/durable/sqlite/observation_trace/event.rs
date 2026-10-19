@@ -6,8 +6,8 @@ use super::{
     encode, header, params, storage, value_source,
 };
 use crate::events::types::{RuntimeEvent as E, RuntimeEventEnvelope};
+use crate::observation::trace::{TraceLocation, TracePreview, TraceToolOutcome};
 use crate::runtime::types::CancellationReason as R;
-use crate::runtime_client::trace::{TraceLocation, TracePreview, TraceToolOutcome};
 use crate::tools::types::ToolExecutionStatus as Status;
 
 fn find(
@@ -432,7 +432,7 @@ fn actor_data(
             Ok(TraceFactData::SubagentStart {
                 activation_id: (subagent_id.as_str().len() <= 512).then(|| subagent_id.clone()),
                 agent_id: child_agent_id.clone(),
-                origin: crate::runtime_client::checkpoint::bounded_clone(origin, 1024),
+                origin: crate::observation::bounded::bounded_clone(origin, 1024),
                 agent_preview: TracePreview::of(agent),
             })
         }
@@ -448,7 +448,7 @@ fn actor_data(
                 "tool_call_id",
                 tool_call_id.as_str(),
             )?;
-            let native_id = crate::runtime_client::checkpoint::bounded_bytes(run_id, 512)
+            let native_id = crate::observation::bounded::bounded_bytes(run_id, 512)
                 .map(|bytes| String::from_utf8(bytes).expect("native JSON UTF8"));
             if native_id.is_none() {
                 fields.push(value_source(
@@ -1011,12 +1011,12 @@ pub(in crate::durable::sqlite) fn prefer_original_raw(
             connection,
             conversation,
             &binding.content_ref.source,
-            crate::runtime_client::content::ContentRepresentation::RawJsonUtf8,
+            crate::observation::content::ContentRepresentation::RawJsonUtf8,
         )?;
         if let Some(raw) = raw {
             binding.content_ref = raw;
         } else if binding.content_ref.representation
-            == crate::runtime_client::content::ContentRepresentation::RawJsonUtf8
+            == crate::observation::content::ContentRepresentation::RawJsonUtf8
         {
             return Err(storage("required original raw Tool arguments unavailable"));
         }

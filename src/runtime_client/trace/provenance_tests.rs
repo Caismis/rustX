@@ -1,4 +1,3 @@
-use super::{TraceInputProvenance, TraceMessageRole};
 use crate::durable::{ConversationStore, SqliteConversationStore};
 use crate::message::types::{
     InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
@@ -8,6 +7,7 @@ use crate::model::projected::{
     CanonicalMessageRef, CheckpointSourceRef, DerivedModelMessage, ProjectedMessage,
     ProjectedUserKind, SemanticTransformation,
 };
+use crate::observation::trace::{TraceInputProvenance, TraceMessageRole};
 use crate::runtime::identity::{CheckpointId, ConversationId, MessageId};
 
 fn original(scope: &ConversationId, id: &str) -> CanonicalMessageRef {
@@ -43,16 +43,16 @@ fn giant_original_provenance_retains_scope_digest_and_exact_canonical_metadata_s
         authority.matches(&native),
         "native reconstruction verifies the exact original"
     );
-    let mut view = super::request::request_message_with_original(
+    let mut view = crate::observation::trace::request::request_message_with_original(
         &ModelInputMessage::Canonical(native.clone()),
         &scope,
         Some(&authority),
     );
-    super::request::bind_original_provenance(&mut view, &header).unwrap();
+    crate::observation::trace::request::bind_original_provenance(&mut view, &header).unwrap();
     assert_eq!(view.role, TraceMessageRole::User);
     assert!(view.message_id.is_none());
     assert!(view.truncated);
-    assert!(crate::runtime_client::checkpoint::bounded_bytes(&view, 4096).is_some());
+    assert!(crate::observation::bounded::bounded_bytes(&view, 4096).is_some());
     let TraceInputProvenance::Original {
         source,
         conversation_id,
@@ -70,9 +70,7 @@ fn giant_original_provenance_retains_scope_digest_and_exact_canonical_metadata_s
     assert_eq!(
         locator,
         Some(
-            crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition {
-                position: 1
-            }
+            crate::observation::content::CanonicalContentLocator::ByLedgerPosition { position: 1 }
         )
     );
     let binding = message_id_source
@@ -82,8 +80,8 @@ fn giant_original_provenance_retains_scope_digest_and_exact_canonical_metadata_s
     assert!(binding.deferred);
     assert!(matches!(
         binding.content_ref.source,
-        crate::runtime_client::content::ContentSource::CanonicalMessageBlock {
-            component: crate::runtime_client::content::CanonicalContentComponent::MessageMetadata,
+        crate::observation::content::ContentSource::CanonicalMessageBlock {
+            component: crate::observation::content::CanonicalContentComponent::MessageMetadata,
             ..
         }
     ));
@@ -125,12 +123,14 @@ fn derived_provenance_admits_exact_byte_bounded_prefixes_without_copying_giant_a
         ],
         transformations: vec![SemanticTransformation::Summary; 1000],
     };
-    let view =
-        super::request::request_message(&ModelInputMessage::Derived(derived.clone()), &scope);
+    let view = crate::observation::trace::request::request_message(
+        &ModelInputMessage::Derived(derived.clone()),
+        &scope,
+    );
     assert!(view.truncated);
     assert!(view.message_id.is_none());
     assert!(view.source.as_ref().unwrap().len() < 512);
-    assert!(crate::runtime_client::checkpoint::bounded_bytes(&view, 8192).is_some());
+    assert!(crate::observation::bounded::bounded_bytes(&view, 8192).is_some());
     let TraceInputProvenance::Derived {
         sources,
         checkpoint_sources,

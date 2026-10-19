@@ -577,22 +577,22 @@ fn user_message_without_timestamp_stays_compatible() {
 fn t08_t19_bounded_content_reference_and_chunk_contract_round_trip() {
     use base64::Engine;
     use rustx::message::types::ContentBlockIndex;
+    use rustx::observation::content::{
+        ContentChunk, ContentRef, ContentRepresentation, ContentSource,
+    };
     use rustx::runtime::identity::{
         AttemptId, ConversationId, PublicationStreamId, RequestId, TurnId,
     };
-    use rustx::runtime_client::content::{
-        ContentChunk, ContentRef, ContentRepresentation, ContentSource,
-    };
     let sources = [
         ContentSource::CanonicalMessageBlock {
-            component: rustx::runtime_client::content::CanonicalContentComponent::Payload,
-            locator: rustx::runtime_client::content::CanonicalContentLocator::ByMessageId {
+            component: rustx::observation::content::CanonicalContentComponent::Payload,
+            locator: rustx::observation::content::CanonicalContentLocator::ByMessageId {
                 message_id: MessageId::new("message"),
             },
             block_index: ContentBlockIndex::new(0),
         },
         ContentSource::DurableTranscriptAudit {
-            component: rustx::runtime_client::content::PublicationContentComponent::Payload,
+            component: rustx::observation::content::PublicationContentComponent::Payload,
             stream_id: PublicationStreamId::new("stream"),
             message_id: MessageId::new("message"),
             attempt_id: AttemptId::new("attempt"),
@@ -601,7 +601,7 @@ fn t08_t19_bounded_content_reference_and_chunk_contract_round_trip() {
             block_index: ContentBlockIndex::new(0),
         },
         ContentSource::LivePublicationPrefix {
-            component: rustx::runtime_client::content::PublicationContentComponent::Payload,
+            component: rustx::observation::content::PublicationContentComponent::Payload,
             stream_id: PublicationStreamId::new("stream"),
             message_id: MessageId::new("message"),
             attempt_id: AttemptId::new("attempt"),

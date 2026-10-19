@@ -570,7 +570,7 @@ impl SessionModelReadSource {
     }
     pub(crate) fn prepare(&self) {
         self.inline.get_or_init(|| {
-            serde_json::from_slice(&crate::runtime_client::checkpoint::bounded_item_bytes(
+            serde_json::from_slice(&crate::observation::bounded::bounded_item_bytes(
                 self, 16_384,
             )?)
             .ok()
@@ -680,7 +680,7 @@ impl AttemptModelReadSource {
     }
     pub(crate) fn prepare(&self) {
         self.inline.get_or_init(|| {
-            serde_json::from_slice(&crate::runtime_client::checkpoint::bounded_item_bytes(
+            serde_json::from_slice(&crate::observation::bounded::bounded_item_bytes(
                 self, 16_384,
             )?)
             .ok()

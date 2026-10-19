@@ -75,7 +75,7 @@ fn statistics_body_fixture() -> StatisticsBodyFixture {
 }
 #[test]
 fn t08_t14_t19_agent_statistics_use_fixed_headers_with_giant_original_bodies() {
-    use crate::runtime_client::agent_statistics::StatisticsFold;
+    use crate::observation::statistics::StatisticsFold;
     let StatisticsBodyFixture {
         store,
         attempt_start: started,
@@ -184,7 +184,7 @@ fn t14_t19_local_agent_statistics_exclude_inherited_aggregates() {
     assert_eq!(store.observation_statistics(0).unwrap().model_requests, 9);
     assert_eq!(
         store.observation_agent_statistics(0).unwrap(),
-        crate::runtime_client::agent_statistics::AgentStatistics::default()
+        crate::observation::statistics::AgentStatistics::default()
     );
 }
 
@@ -249,7 +249,7 @@ fn t10_t14_t19_statistics_seed_fault_preserves_original_lineage_and_explicit_una
     let store = store();
     assert_eq!(
         store.observation_statistics(0).unwrap(),
-        crate::runtime_client::response::ConversationStatistics::default()
+        crate::observation::statistics::ConversationStatistics::default()
     );
     store.lock().unwrap().execute_batch("CREATE TRIGGER statistics_seed_fault BEFORE UPDATE OF observation_statistics ON rustx_store BEGIN SELECT RAISE(FAIL,'derived statistics seed fault'); END;").unwrap();
     store
@@ -291,7 +291,7 @@ fn t10_t14_t19_statistics_seed_fault_preserves_original_lineage_and_explicit_una
     empty.initialize(&[]).unwrap();
     assert_eq!(
         empty.observation_statistics(0).unwrap(),
-        crate::runtime_client::response::ConversationStatistics::default()
+        crate::observation::statistics::ConversationStatistics::default()
     );
 }
 
@@ -386,8 +386,8 @@ fn t08_t14_t19_giant_attempt_clock_keeps_counts_times_and_original_journal_ident
 
 fn statistics_read_attempt_identity(
     store: &SqliteConversationStore,
-    cut: &crate::runtime_client::checkpoint::CheckpointReadCut,
-    source: &crate::runtime_client::snapshot::JournalFieldRef,
+    cut: &crate::observation::cut::CheckpointReadCut,
+    source: &crate::observation::tool::JournalFieldRef,
 ) -> String {
     use base64::Engine;
     let domain = format!("journal.{}", source.sequence);

@@ -1,8 +1,9 @@
 //! Native pending-body range composition. Root routing adds only finite source
 //! metadata; the original request bytes stay in the originating coordinator.
-use super::checkpoint::{CheckpointReadCut, CheckpointValueChunk};
-use super::snapshot::RuntimeClientInteractionHeader;
+use super::checkpoint::CheckpointValueChunk;
 use super::types::RuntimeClientError;
+use crate::observation::cut::CheckpointReadCut;
+use crate::observation::interaction::RuntimeClientInteractionHeader;
 use base64::Engine as _;
 
 fn invalid() -> RuntimeClientError {
@@ -12,9 +13,14 @@ fn invalid() -> RuntimeClientError {
 }
 fn prefix(header: &RuntimeClientInteractionHeader) -> Result<Vec<u8>, RuntimeClientError> {
     let mut value = b"{\"interaction\":".to_vec();
-    value.extend(super::checkpoint::bounded_bytes(&header.interaction, 4096).ok_or_else(invalid)?);
+    value.extend(
+        crate::observation::bounded::bounded_bytes(&header.interaction, 4096)
+            .ok_or_else(invalid)?,
+    );
     value.extend(b",\"source\":");
-    value.extend(super::checkpoint::bounded_bytes(&header.source, 4096).ok_or_else(invalid)?);
+    value.extend(
+        crate::observation::bounded::bounded_bytes(&header.source, 4096).ok_or_else(invalid)?,
+    );
     value.extend(b",\"request\":");
     Ok(value)
 }

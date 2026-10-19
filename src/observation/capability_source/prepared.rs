@@ -1,6 +1,7 @@
 //! Admission certificates owned by one already prepared capability header.
 use super::{CapabilitySourceView, CapabilityView, RuntimeClientSkill, RuntimeClientTool};
-use crate::runtime_client::checkpoint::{Capture, CollectionFrontier};
+use crate::observation::capture::Capture;
+use crate::observation::cut::CollectionFrontier;
 use serde::{Serialize, de::DeserializeOwned};
 use std::sync::Arc;
 
@@ -19,9 +20,9 @@ impl<T: Serialize + DeserializeOwned + Clone> PreparedPage<T> {
         };
         for item in items
             .iter()
-            .take(crate::runtime_client::checkpoint::CHECKPOINT_PAGE_ITEMS)
+            .take(crate::observation::bounded::CHECKPOINT_PAGE_ITEMS)
         {
-            let Some(row) = crate::runtime_client::checkpoint::prepare_capture_item(item) else {
+            let Some(row) = crate::observation::bounded::prepare_capture_item(item) else {
                 prepared.invalid_head = true;
                 break;
             };

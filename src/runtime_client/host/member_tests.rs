@@ -1,8 +1,8 @@
 // Actual Native C/J receipts and finite Host checkpoints share one member owner.
 use super::*;
 use crate::runtime_client::checkpoint::RuntimeClientCheckpoint;
-use crate::runtime_client::content::CanonicalContentLocator;
-use crate::runtime_client::snapshot::RuntimeClientMessageDescriptor;
+use crate::observation::content::CanonicalContentLocator;
+use crate::observation::transcript::RuntimeClientMessageDescriptor;
 
 fn member_event(
     store: &dyn ConversationStore,
@@ -89,7 +89,7 @@ fn member_descriptor(
         .deferred_entries
         .iter()
         .find_map(|row| {
-            let descriptor = crate::runtime_client::structural_json::decode::<
+            let descriptor = crate::observation::structural_json::decode::<
                 RuntimeClientMessageDescriptor,
             >(row.value.clone()?)
             .ok()?;
@@ -162,9 +162,9 @@ fn assert_completed_member_head(
     );
     assert!(matches!(
         call.state,
-        crate::runtime_client::snapshot::ForegroundToolState::Assembled { .. }
+        crate::observation::tool::ForegroundToolState::Assembled { .. }
     ));
-    assert!(crate::runtime_client::checkpoint::bounded_bytes(checkpoint, 786_432).is_some());
+    assert!(crate::observation::bounded::bounded_bytes(checkpoint, 786_432).is_some());
 }
 
 fn copied_member_host(

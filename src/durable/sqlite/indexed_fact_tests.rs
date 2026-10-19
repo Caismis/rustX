@@ -869,11 +869,11 @@ fn measured_vm<T>(store: &SqliteConversationStore, read: impl FnOnce() -> T) -> 
 fn decorate_original_window(
     store: &SqliteConversationStore,
     window: crate::durable::reading::DurableConversationWindow,
-) -> crate::runtime_client::snapshot::RuntimeClientTranscriptPage {
+) -> crate::observation::transcript::RuntimeClientTranscriptPage {
     let inherited_through = window.page.inherited_through;
     let read = window.cut;
     let through = read.journal;
-    let mut page = crate::runtime_client::snapshot::transcript_page_view(window.page).unwrap();
+    let mut page = crate::observation::transcript::transcript_page_view(window.page).unwrap();
     page.source_cut = Some(crate::durable::observation::ObservationReadCut {
         ledger_through: read.ledger_through,
         transcript_total: read.transcript_total,
@@ -1365,7 +1365,7 @@ fn inherited_window_membership_is_independent_of_local_finite_execution_cuts() {
     );
     assert!(mixed.statistics.is_none());
     for entry in &mixed.entries {
-        if let crate::runtime_client::snapshot::RuntimeClientTranscriptItem::Message {
+        if let crate::observation::transcript::RuntimeClientTranscriptItem::Message {
             message: MessageBlock::Assistant(message),
         } = &entry.item
         {
@@ -1426,7 +1426,7 @@ fn inherited_provenance_schema_requires_native_indexes_and_rejects_schema_54() {
 fn materialized_member_process(
     store: &SqliteConversationStore,
     id: &str,
-) -> Result<Option<crate::runtime_client::response::TurnProcessView>, ConversationStoreError> {
+) -> Result<Option<crate::observation::turn::TurnProcessView>, ConversationStoreError> {
     let transcript: u64 = store.lock().unwrap().query_row(
         "SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1",
         [id], |row| row.get(0),

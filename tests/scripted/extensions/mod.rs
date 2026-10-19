@@ -491,7 +491,7 @@ async fn goal351_recovery_starts_only_when_a_composed_runtime_is_explicitly_open
         // nothing else: there is no activation member to read.
         assert_eq!(
             snapshot.goal,
-            Some(rustx::runtime_client::goal::RuntimeClientGoalView::from_native(Some(&stored)))
+            Some(rustx::observation::goal::RuntimeClientGoalView::from_native(Some(&stored)))
         );
         drop(attachment);
         let (reattached, _) = host
@@ -2851,16 +2851,14 @@ async fn goal84_recovery_authorizes_pending_human_but_does_not_infer_continuatio
     }
 }
 
-fn goal_display(
-    view: &rustx::goal::GoalView,
-) -> rustx::runtime_client::goal::RuntimeClientGoalView {
-    rustx::runtime_client::goal::RuntimeClientGoalView::from_native(view.current.as_ref())
+fn goal_display(view: &rustx::goal::GoalView) -> rustx::observation::goal::RuntimeClientGoalView {
+    rustx::observation::goal::RuntimeClientGoalView::from_native(view.current.as_ref())
 }
 
 async fn goal_event(
     subscription: &rustx::runtime_client::EventSubscription,
 ) -> (
-    rustx::runtime_client::goal::RuntimeClientGoalView,
+    rustx::observation::goal::RuntimeClientGoalView,
     rustx::runtime_client::RuntimeClientCursor,
 ) {
     tokio::time::timeout(Duration::from_secs(10), async {
@@ -3210,7 +3208,7 @@ async fn goal84_runtime_client_subscriber_sees_model_create_block_and_complete()
         let created = created.current.unwrap();
         assert_eq!(created.phase, rustx::goal::GoalPhase::Active);
         assert!(
-            matches!(created.origin,rustx::runtime_client::goal::RuntimeClientGoalOrigin::HumanAttempt{message_id:Some(message_id),..} if message_id==accepted.message_id)
+            matches!(created.origin,rustx::observation::goal::RuntimeClientGoalOrigin::HumanAttempt{message_id:Some(message_id),..} if message_id==accepted.message_id)
         );
         let (updated, cursor2) = goal_event(&subscription).await;
         assert!(cursor2 > cursor1);

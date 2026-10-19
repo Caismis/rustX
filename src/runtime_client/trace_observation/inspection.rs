@@ -1,9 +1,8 @@
 //! Closed finite inspection dispatch over the caller's original native cut.
 use crate::durable::observation::{TraceFactData, TraceFactHeader};
 use crate::durable::{ConversationStore, ConversationStoreError};
-use crate::runtime_client::checkpoint::{
-    CheckpointPage, CheckpointPageItem, CheckpointReadCut, CollectionFrontier,
-};
+use crate::observation::cut::{CheckpointPageItem, CheckpointReadCut, CollectionFrontier};
+use crate::runtime_client::checkpoint::CheckpointPage;
 use crate::runtime_client::trace::{TraceInspectionContent, TraceProjection};
 use crate::runtime_client::{RuntimeClientCursor, RuntimeClientError};
 
@@ -72,15 +71,15 @@ pub(super) fn is_request(anchor: &TraceFactHeader) -> bool {
 pub(super) fn value<T: serde::Serialize + schemars::JsonSchema>(
     head: &T,
 ) -> Result<serde_json::Value, RuntimeClientError> {
-    let schema = crate::runtime_client::structural_json::root::<T>();
-    let encoded = crate::runtime_client::structural_json::Encoded {
+    let schema = crate::observation::structural_json::root::<T>();
+    let encoded = crate::observation::structural_json::Encoded {
         value: head,
         schema: &schema,
         root: &schema,
     };
-    let bytes = crate::runtime_client::checkpoint::bounded_bytes(
+    let bytes = crate::observation::bounded::bounded_bytes(
         &encoded,
-        crate::runtime_client::trace::TRACE_DETAIL_BYTES,
+        crate::observation::trace::TRACE_DETAIL_BYTES,
     )
     .ok_or_else(|| {
         RuntimeClientError::observation_store_error(
@@ -107,8 +106,7 @@ pub(crate) fn canonical_selection(domain: &str) -> bool {
         .and_then(|tail| {
             let (position, collection) = tail.split_once('.')?;
             position.parse::<u64>().ok().filter(|position| {
-                *position > 0
-                    && *position <= crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX
+                *position > 0 && *position <= crate::observation::content::CONTENT_SAFE_INTEGER_MAX
             })?;
             matches!(collection, "blocks" | "tools").then_some(())
         })
@@ -126,8 +124,7 @@ pub(crate) fn messages_page(
         messages_selection(domain).ok_or_else(|| RuntimeClientError::InvalidRequest {
             message: "invalid native Trace canonical collection".into(),
         })?;
-    if limit == 0 || limit > 32 || offset > crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX
-    {
+    if limit == 0 || limit > 32 || offset > crate::observation::content::CONTENT_SAFE_INTEGER_MAX {
         return Err(RuntimeClientError::InvalidRequest {
             message: "invalid native Trace canonical page bounds".into(),
         });

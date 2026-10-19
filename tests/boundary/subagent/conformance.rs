@@ -3118,7 +3118,7 @@ async fn mixed_child_interactions_route_by_full_identity_without_cross_talk() {
                                     || subagent_id.as_str() == second.accepted.subagent_id.as_str()
                         )
                     {
-                        assert!(interactions.iter().all(|known: &crate::runtime_client::snapshot::RuntimeClientInteractionHeader| known.interaction != interaction.interaction));
+                        assert!(interactions.iter().all(|known: &crate::observation::interaction::RuntimeClientInteractionHeader| known.interaction != interaction.interaction));
                         interactions.push(interaction.clone());
                     }
                     }
@@ -3148,7 +3148,7 @@ async fn mixed_child_interactions_route_by_full_identity_without_cross_talk() {
         .find(|interaction| {
             matches!(
                 interaction.kind,
-                rustx::runtime_client::snapshot::RuntimeClientInteractionKind::Questionnaire
+                rustx::observation::interaction::RuntimeClientInteractionKind::Questionnaire
             )
         })
         .cloned()
@@ -3158,7 +3158,7 @@ async fn mixed_child_interactions_route_by_full_identity_without_cross_talk() {
         .find(|interaction| {
             matches!(
                 interaction.kind,
-                rustx::runtime_client::snapshot::RuntimeClientInteractionKind::Approval
+                rustx::observation::interaction::RuntimeClientInteractionKind::Approval
             )
         })
         .cloned()
@@ -3395,7 +3395,7 @@ async fn child_death_removes_only_its_routed_interactions() {
                                     || subagent_id.as_str() == second_wired.accepted.subagent_id.as_str()
                         )
                     {
-                        assert!(interactions.iter().all(|known: &crate::runtime_client::snapshot::RuntimeClientInteractionHeader| known.interaction != interaction.interaction));
+                        assert!(interactions.iter().all(|known: &crate::observation::interaction::RuntimeClientInteractionHeader| known.interaction != interaction.interaction));
                         interactions.push(interaction.clone());
                     }
                     }
@@ -5134,7 +5134,7 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
     .await;
     assert!(matches!(
         progress_occurrence.locator,
-        rustx::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { .. }
+        rustx::observation::content::CanonicalContentLocator::ByLedgerPosition { .. }
     ));
 
     // Gate A: the tool reports "phase 1" and parks again — provably
@@ -5282,7 +5282,7 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
             execution.call_id == Some(ToolCallId::new("call-phased"))
                 && matches!(
                     &execution.state,
-                    rustx::runtime_client::ForegroundToolState::Running {
+                    rustx::observation::tool::ForegroundToolState::Running {
                         progress: Some(progress),
                         ..
                     } if progress.message.as_deref() == Some("phase 1")

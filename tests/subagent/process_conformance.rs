@@ -261,8 +261,8 @@ async fn run_real_child_inherits_the_frozen_timeout_policy_and_retries_locally()
         .records
         .iter()
         .find(|record| {
-            record.kind == rustx::runtime_client::trace::TraceKind::Request
-                && record.state == rustx::runtime_client::trace::TraceState::TimedOut
+            record.kind == rustx::observation::trace::TraceKind::Request
+                && record.state == rustx::observation::trace::TraceState::TimedOut
         })
         .expect("actual child request timeout fact");
     let source = request
@@ -271,14 +271,14 @@ async fn run_real_child_inherits_the_frozen_timeout_policy_and_retries_locally()
         .find(|field| {
             matches!(
                 field,
-                rustx::runtime_client::trace::TraceFieldSource::Value {
-                    field: rustx::runtime_client::trace::TraceFieldKind::Failure,
+                rustx::observation::trace::TraceFieldSource::Value {
+                    field: rustx::observation::trace::TraceFieldKind::Failure,
                     ..
                 }
             )
         })
         .expect("original child failure selector");
-    let rustx::runtime_client::trace::TraceFieldSource::Value {
+    let rustx::observation::trace::TraceFieldSource::Value {
         domain,
         item_offset,
         path,
@@ -289,13 +289,12 @@ async fn run_real_child_inherits_the_frozen_timeout_policy_and_retries_locally()
         unreachable!()
     };
     assert!(*encoded_bytes > 0);
-    let original: rustx::model::ModelError =
-        rustx::runtime_client::checkpoint::decode_domain_value(
-            process
-                .selected_value(Some(agent_id), cut, domain, *item_offset, path)
-                .await,
-        )
-        .expect("original typed timeout reason");
+    let original: rustx::model::ModelError = rustx::observation::bounded::decode_domain_value(
+        process
+            .selected_value(Some(agent_id), cut, domain, *item_offset, path)
+            .await,
+    )
+    .expect("original typed timeout reason");
     assert_eq!(original.kind, rustx::model::ModelErrorKind::Timeout);
     assert_eq!(
         original.timeout_phase,

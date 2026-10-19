@@ -1,9 +1,7 @@
 //! Identity-preserving resource display source for one native generation.
-use super::snapshot::{RuntimeClientContextFile, RuntimeClientResourcesView};
-use serde::{
-    Serialize,
-    ser::{SerializeSeq, SerializeStruct},
-};
+use crate::runtime::identity::RuntimeResourceRevision;
+use serde::ser::{SerializeSeq, SerializeStruct};
+use serde::{Deserialize, Serialize};
 use std::sync::{Arc, OnceLock};
 #[derive(Clone, Debug)]
 pub(crate) struct ResourceReadSource {
@@ -11,7 +9,7 @@ pub(crate) struct ResourceReadSource {
     header: Arc<
         OnceLock<(
             RuntimeClientResourcesView,
-            Vec<super::checkpoint::CollectionFrontier>,
+            Vec<super::cut::CollectionFrontier>,
         )>,
     >,
 }
@@ -41,7 +39,7 @@ impl ResourceReadSource {
                         bytes: file.content.len() as u64,
                     };
                     let result =
-                        super::checkpoint::bounded_item_bytes(&value, 2048).and_then(|bytes| {
+                        super::bounded::bounded_item_bytes(&value, 2048).and_then(|bytes| {
                             serde_json::from_slice::<RuntimeClientContextFile>(&bytes).ok()
                         });
                     omitted |= result.is_none();
@@ -49,14 +47,14 @@ impl ResourceReadSource {
                 })
                 .collect::<Vec<_>>();
             let frontiers = vec![
-                super::checkpoint::CollectionFrontier {
+                super::cut::CollectionFrontier {
                     domain: "resources.inspection".into(),
                     revision: 0,
                     total: 1,
                     loaded: u64::from(inspection.is_some()),
                     next_offset: inspection.is_none().then_some(0),
                 },
-                super::checkpoint::CollectionFrontier {
+                super::cut::CollectionFrontier {
                     domain: "resources.context_files".into(),
                     revision: 0,
                     total: self.source.project_context_files().len() as u64,
@@ -87,7 +85,7 @@ impl ResourceReadSource {
             .0
             .clone()
     }
-    pub(crate) fn frontiers(&self) -> Vec<super::checkpoint::CollectionFrontier> {
+    pub(crate) fn frontiers(&self) -> Vec<super::cut::CollectionFrontier> {
         self.header.get().expect("source prepared").1.clone()
     }
 }
@@ -611,4 +609,42 @@ fn metadata_child<'a>(
         },
         _ => None,
     }
+}
+
+/// The client-visible projection of one immutable runtime resource
+/// generation.
+///
+/// It carries identity and provenance, never content: a client that wants
+/// the text of a project context file reads the file, exactly as it would
+/// read a `SKILL.md`. Publishing the bytes here would create a second copy
+/// of request input inside a conversation projection.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
+pub struct RuntimeClientResourcesView {
+    /// Facts copied from the same immutable generation as this revision.
+    /// Deferred inspection facts are loaded through finite native field pages.
+    pub inspection: Option<Box<crate::runtime::capability_inspection::CapabilityInspection>>,
+    /// The monotonic process-local resource generation.
+    #[serde(default)]
+    pub revision: RuntimeResourceRevision,
+    /// The runtime-loaded project instruction files, root-most to
+    /// workspace, in the exact order the runtime concatenated them.
+    #[serde(default)]
+    pub context_files: Vec<RuntimeClientContextFile>,
+    /// Whether an immutable agent profile/persona is frozen into this
+    /// generation. The persona text itself is runtime-owned request input.
+    #[serde(default)]
+    pub agent_profile: bool,
+}
+/// One runtime-loaded project instruction file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
+pub struct RuntimeClientContextFile {
+    /// The canonical absolute host path the runtime read.
+    pub path: String,
+    /// The exact byte length of the loaded content.
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
+    pub bytes: u64,
 }

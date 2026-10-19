@@ -146,7 +146,7 @@ struct Fact {
     name: Option<String>,
 }
 fn bounded<T: Serialize>(value: &T, max: usize) -> Result<Vec<u8>, ConversationStoreError> {
-    crate::runtime_client::checkpoint::bounded_bytes(value, max)
+    crate::observation::bounded::bounded_bytes(value, max)
         .ok_or_else(|| storage("composed observation metadata exceeds bound"))
 }
 fn hash(bytes: &[u8]) -> index::Hash {
@@ -195,7 +195,7 @@ pub(super) fn index_selection(
         let _timer = crate::agent::execution::attribution::Timer::new(
             crate::agent::execution::attribution::Phase::SourceScalar,
         );
-        let value = crate::runtime_client::trace::frozen_request_detail(
+        let value = crate::observation::trace::frozen_request_detail(
             snapshot,
             std::iter::empty::<u8>().collect::<Vec<_>>(),
         );

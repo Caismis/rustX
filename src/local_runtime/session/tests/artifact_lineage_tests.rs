@@ -322,7 +322,7 @@ fn verify_copy(copy: &PreparedLineage, expected: &LineageSeed, artifact: bool, c
             assert_eq!(window.target.as_ref(), Some(&turn.id));
             assert_eq!(window.target_cursor, turn.cursor);
             let mut page =
-                crate::runtime_client::snapshot::transcript_page_view(window.page).unwrap();
+                crate::observation::transcript::transcript_page_view(window.page).unwrap();
             crate::runtime_client::response::native_oracle_decorate(&store, &mut page).unwrap();
             let process = page.entries[0].turn_process.as_ref().unwrap();
             assert_eq!(

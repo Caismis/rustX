@@ -5,21 +5,23 @@
 //! detail loads immutable snapshots and canonical messages and changes no
 //! native state whatsoever.
 
-use super::bounds::identity_fits;
-use super::content::{assistant_blocks, tool_result_block, user_blocks, user_source_label};
-use super::record::generation_metrics;
 use super::request::{RequestOutcome, request_detail};
 use super::tool::{historical_definition, tool_detail};
-use super::types::{
-    TraceDetail, TraceKind, TraceMessageDetail, TraceMessageRole, TraceRequestDetail,
-    TraceRequestFailure,
-};
 use super::{ADOPTED_MESSAGE_LIMIT, STEP_JOIN_LIMIT, TraceProjection};
 use crate::durable::ConversationStoreError;
 use crate::durable::presentation::FactScope;
 use crate::events::types::{RuntimeEvent as E, RuntimeEventEnvelope};
 use crate::message::types::{AssistantContentBlock, MessageBlock};
 use crate::model::snapshot::RequestSnapshot;
+use crate::observation::trace::bounds::identity_fits;
+use crate::observation::trace::content::{
+    assistant_blocks, tool_result_block, user_blocks, user_source_label,
+};
+use crate::observation::trace::generation::generation_metrics;
+use crate::observation::trace::types::{
+    TraceDetail, TraceKind, TraceMessageDetail, TraceMessageRole, TraceRequestDetail,
+    TraceRequestFailure,
+};
 use crate::runtime::identity::{MessageId, RequestId, ToolCallId, ToolId};
 use crate::tools::types::ToolCall;
 
@@ -100,21 +102,21 @@ impl TraceProjection<'_> {
                         .candidate
                         .items
                         .iter()
-                        .take(super::bounds::TRACE_DETAIL_BLOCKS)
+                        .take(crate::observation::trace::bounds::TRACE_DETAIL_BLOCKS)
                     {
                         let input = match &item.message {
                             crate::context::checkpoint::CheckpointMessage::Original(source) => crate::model::ModelInputMessage::Canonical(self.store.load_messages(std::slice::from_ref(&source.message_id))?.into_iter().next().ok_or_else(||crate::durable::ConversationStoreError::InvalidReference("missing projection Original".into()))?),
                             crate::context::checkpoint::CheckpointMessage::Derived(derived) => crate::model::ModelInputMessage::Derived(derived.as_ref().clone()),
                         };
-                        detail
-                            .projected_messages
-                            .push(super::request::request_message(
+                        detail.projected_messages.push(
+                            crate::observation::trace::request::request_message(
                                 &input,
                                 self.store.conversation_id(),
-                            ));
+                            ),
+                        );
                     }
-                    detail.truncated |=
-                        checkpoint.candidate.items.len() > super::bounds::TRACE_DETAIL_BLOCKS;
+                    detail.truncated |= checkpoint.candidate.items.len()
+                        > crate::observation::trace::bounds::TRACE_DETAIL_BLOCKS;
                 }
             }
             E::ToolExecutionStarted {
@@ -161,7 +163,8 @@ impl TraceProjection<'_> {
         call_id: &ToolCallId,
         tool_id: &ToolId,
         started: bool,
-    ) -> Result<Option<super::types::TraceToolDetail>, ConversationStoreError> {
+    ) -> Result<Option<crate::observation::trace::types::TraceToolDetail>, ConversationStoreError>
+    {
         let proposal = self.step_tool_call(anchor, call_id, tool_id)?;
         // The historical schema belongs to the request that carried the
         // proposal, not to the current capability set. Resolving it through
@@ -316,7 +319,7 @@ fn request_outcome(end: Option<&RuntimeEventEnvelope>) -> RequestOutcome {
             usage: usage.clone(),
             failure: Some(TraceRequestFailure {
                 kind: error.kind.clone(),
-                message: super::bounds::TraceText::detail(&error.message),
+                message: crate::observation::trace::bounds::TraceText::detail(&error.message),
             }),
             generation: generation.map(|evidence| generation_metrics(evidence, usage.as_ref())),
         },
