@@ -1,5 +1,5 @@
 import {interactionBody,readInteractionBody} from '../../../protocol/app-server/interaction';
-import { ObservationChain, validateObservationCut, validateRootCheckpoint, validateRootEvent } from '../../../protocol/app-server/observation';
+import { ObservationChain, validateRootCheckpoint, validateRootEvent } from '../../../protocol/app-server/observation';
 import { SessionLifecycles } from './session-lifecycle/system';
 import { emptyFacts, type Observation, type LifecycleFacts, type SessionLifecyclePort } from './session-lifecycle/port';
 import { lifecycleAvailability, type LifecycleContext } from './session-lifecycle/machine';
@@ -12,10 +12,11 @@ import { SessionCatalog } from './session-catalog';
 import { SessionReads } from './session-reads';
 import { ReadingNavigation } from './reading';
 import { ColdReads } from './cold-reads';
+import { TraceReads } from './trace-reads';
 import { ConfigurationObservations } from './configuration-observations';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { SessionExportController } from "./session-export";
-import { standaloneTraceCut,inlineTraceDetail,retainedTraceDetailPage,bindTraceDetailReader,TRACE_LIMIT, TRACE_PAGE_SIZE, beginTraceDetail, completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterestBatches,traceInterests, type TraceCache,type TraceFieldReader } from './trace';
+import { refreshTrace, replaceTrace, traceInterestBatches, traceInterests } from './trace';
 import type {
   TraceToolLocator, PendingInboundRef, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request, Request1, Response, RuntimeClientSnapshot, RuntimeClientEvent,
@@ -279,7 +280,7 @@ export class AppServerClient {
         this.setSession(id,{snapshot:observed,checkpoint,cursor:checkpoint.cursor,observationState:'subscribePending',
           ...(!resumable&&this.state.views[id]?.modelMutation?.generation!==this.state.generation?{modelMutation:undefined}:{}),
           history:replaceTranscript(observed.transcript,this.state.views[id]?.history),
-          trace:this.supersedeTrace(id,({...replaceTrace(observed.trace,this.state.views[id]?.trace,checkpoint.read_cut),fields:this.liveTraceFields(result.target)}))});
+          trace:this.traces.supersede(id,({...replaceTrace(observed.trace,this.state.views[id]?.trace,checkpoint.read_cut),fields:this.traces.liveFields(result.target)}))});
         chain.beginSubscription(checkpoint.cursor);
         try {
           const receipt=await this.request({method:'session/subscribe',params:{target:result.target,after_cursor:chain.applied!}},'subscribed',undefined,current);
@@ -304,7 +305,7 @@ export class AppServerClient {
         void this.catalog.refreshDisplaySummary(id).catch(() => {});
       },
       refresh: () => this.refresh(id),
-      cold: current => { void this.cold.readHistoryPreview(id, current); void this.cold.readMetadata(id, current); void this.readTracePreview(id, current); },
+      cold: current => { void this.cold.readHistoryPreview(id, current); void this.cold.readMetadata(id, current); void this.traces.readPreview(id, current); },
       classify: error => error instanceof RequestNotDispatched ? 'unsent' : isOutcomeUncertain(error) ? 'uncertain'
         : error instanceof RpcFailure ? error.error.data?.kind === 'stale_attachment' ? 'stale-route' : 'refused' : 'local',
     };
@@ -491,7 +492,7 @@ export class AppServerClient {
     for (const pending of this.modelPreparations.values()) pending.retire();
     this.modelPreparations.clear();
     for (const chain of this.observationChains.values()) chain.retire(); this.observationChains.clear();
-    this.refreshes.clear(); this.traceReads.clear(); this.traceAuthorities.clear(); this.acquiring.clear(); this.dirty.clear(); this.resubscribe.clear();
+    this.refreshes.clear(); this.traces.disconnect(); this.acquiring.clear(); this.dirty.clear(); this.resubscribe.clear();
     const operations = { ...this.state.interactionOperations };
     for (const [key, operation] of Object.entries(operations)) if (operation.status === 'in-flight') delete operations[key];
     for (const item of uncertain) if (item.interactionKey) operations[item.interactionKey] = { sessionId: item.sessionId!, status: 'uncertain' };
@@ -797,7 +798,7 @@ export class AppServerClient {
     const snapshot = foldRuntimeEvent(view.snapshot, event);
     const checkpointAdvanced = transitionFacts(event).some(fact => fact.type === 'checkpoint_advanced');
     const traceAdvanced = checkpointAdvanced || transitionFacts(event).some(fact => fact.type === 'read_domains_updated');
-    this.setSession(id, { snapshot, ...(traceAdvanced ? {trace:this.supersedeTrace(id,refreshTrace(view.trace,snapshot.trace,snapshot.trace_updates,observationCheckpoint(snapshot,cursor)?.read_cut))} : {}), checkpoint: observationCheckpoint(snapshot, cursor) ?? view.checkpoint, cursor, observationState: 'following',
+    this.setSession(id, { snapshot, ...(traceAdvanced ? {trace:this.traces.supersede(id,refreshTrace(view.trace,snapshot.trace,snapshot.trace_updates,observationCheckpoint(snapshot,cursor)?.read_cut))} : {}), checkpoint: observationCheckpoint(snapshot, cursor) ?? view.checkpoint, cursor, observationState: 'following',
       history: snapshot.transcript === view.snapshot.transcript ? this.state.views[id].history : refreshTranscript(this.state.views[id].history, snapshot.transcript) });
     const settled=transitionFacts(event).filter(fact=>fact.type==='interaction_settled'||fact.type==='interaction_removed');
     if(settled.length){
@@ -807,7 +808,7 @@ export class AppServerClient {
     }
     this.reconcileInteractions(id); this.settleSubmissions(id);
     if (checkpointAdvanced) void this.catalog.refreshDisplaySummary(id);
-    if (transitionFacts(event).some(fact=>fact.type==='trace_changed')) void this.refreshTraceDomain(id).catch(() => {});
+    if (transitionFacts(event).some(fact=>fact.type==='trace_changed')) void this.traces.refreshDomain(id).catch(() => {});
   }
 
   /** Bounded native Session, model, settings and content reads. */
@@ -834,6 +835,23 @@ export class AppServerClient {
     readSettings: (id, current) => this.reads.readSettings(id, current),
     setSession: (id, patch) => this.setSession(id, patch),
   });
+  private readonly traces = new TraceReads({
+    request: (...args) => this.request(...args),
+    state: () => this.state,
+    setSession: (id, patch) => this.setSession(id, patch),
+    observe: id => this.lifecycles.observe(id),
+    admit: (id, current) => this.admitSessionOperation(id, current),
+    coldScope: (id, admitted) => this.cold.scope(id, admitted),
+    readContent: (...args) => this.reads.readContent(...args),
+  });
+  loadEarlierTrace(id: string) { return this.traces.loadEarlierTrace(id); }
+  locateToolTrace(id: string, locator: TraceToolLocator) { return this.traces.locateToolTrace(id, locator); }
+  returnToLatestTrace(id: string) { return this.traces.returnToLatestTrace(id); }
+  selectTrace(id: string, record?: string) { this.traces.selectTrace(id, record); }
+  loadTraceDetail(id: string, record: string) { return this.traces.loadTraceDetail(id, record); }
+  projections(id: string, after?: string) { return this.traces.projections(id, after); }
+  projectionDetail(id: string, checkpointId: string, offset?: number) { return this.traces.projectionDetail(id, checkpointId, offset); }
+  projectionDetailReader(detail: import('../../../protocol/app-server/v50').ProjectionDetail) { return this.traces.projectionDetailReader(detail); }
   /** A new navigation or an explicit reload retires the previous jump's landing. */
   invalidateReading(id: string) { return this.reading.invalidateReading(id); }
   refreshTurns(id: string) { return this.reading.refreshTurns(id); }
@@ -887,57 +905,6 @@ export class AppServerClient {
     if (!navigationCurrent()) return;
     await this.lifecycles.command(id, { kind: 'open', node: nodeId, current: navigationCurrent, attached });
   }
-  /** Read-only trace is independent of slow runtime/resource initialization. */
-  private async readTracePreview(id: string, admitted: () => boolean, older = false) {
-    const view = this.state.views[id], previous = older ? view?.tracePreview : undefined;
-    if (older && (!previous || previous.cache.loading || previous.cache.page.next_cursor == null)) return;
-    const scope = this.cold.scope(id, admitted); if (!scope) return;
-    const { node, conversation, current } = scope;
-    if (previous && previous.conversationId !== conversation) return;
-    const cache = previous?.cache ?? replaceTrace({ records: [], next_cursor: null });
-    const limit = Math.min(TRACE_PAGE_SIZE, TRACE_LIMIT - cache.page.records.length);
-    if (limit < 1 || !current()) return;
-    if (previous) this.setSession(id, { tracePreview: { ...previous, cache: { ...cache, loading: true, error: undefined } } });
-    try {
-      const admission = older ? await this.admitSessionOperation(id, current) : current;
-      if (!admission) return;
-      const result = await this.request({ method: 'session/traceHistory', params: { session_id: id, node_id: node, before: older ? cache.page.next_cursor : null, limit } }, 'session_trace_history', undefined, admission);
-      if (!current()) return;
-      if (result.conversation_id !== conversation) throw new Error('Trace conversation changed.');
-      standaloneTraceCut(result.page,conversation);
-      this.setSession(id, { tracePreview: { conversationId: result.conversation_id, cache:{...(older ? prependTrace(this.state.views[id].tracePreview!.cache, result.page) : replaceTrace(result.page)),fields:this.coldTraceFields(id,node,conversation,current)} } });
-    } catch (error) {
-      if (current()) this.setSession(id, { tracePreview: { conversationId: previous?.conversationId ?? '', cache: { ...(this.state.views[id]?.tracePreview?.cache ?? cache), loading: false, error: String(error) } } });
-    }
-  }
-  private async readTracePreviewDetail(id: string, record: string) {
-    const preview = this.state.views[id]?.tracePreview;
-    if (!preview || preview.cache.details[record]?.loading || preview.cache.details[record]?.detail || preview.cache.details[record]?.page) return;
-    const scope = this.cold.scope(id); if (!scope || preview.conversationId !== scope.conversation) return;
-    const node = scope.node;
-    const pending = beginTraceDetail(preview.cache, record);
-    const current = () => scope.current() && this.state.views[id]?.tracePreview?.conversationId === scope.conversation
-      && this.state.views[id]?.tracePreview?.cache.details[record] === pending.details[record];
-    this.setSession(id, { tracePreview: { ...preview, cache: pending } });
-    try {
-      const admission = await this.admitSessionOperation(id, current);
-      if (!admission) return;
-      const result = await this.request({ method: 'session/traceHistoryDetail', params: { session_id: id, node_id: node, record_id: record } }, 'session_trace_history_detail', undefined, admission);
-      if (!current()) return;
-      if (result.conversation_id !== preview.conversationId) throw new Error('Trace conversation changed.');
-      const detail=inlineTraceDetail(result.page,record),page=retainedTraceDetailPage(result.page,record);
-      if(page&&(page.read_cut.conversation_id!==scope.conversation||page.read_cut.activation_id!=null))throw new Error('Historical Trace detail source changed.');
-      if(!current())return;
-      const reader=page&&preview.cache.fields?bindTraceDetailReader(preview.cache.fields,page,()=>scope.current()&&this.state.views[id]?.tracePreview?.cache.epoch===pending.epoch&&this.state.views[id]?.tracePreview?.cache.details[record]?.page===page):undefined;
-      this.setSession(id, { tracePreview: { ...preview, cache: completeTraceDetail(this.state.views[id].tracePreview!.cache,record,pending.epoch,detail,undefined,result.page.items.flatMap(item=>item.content),async(ref,offset,ownsView)=>{
-        const valid=()=>ownsView()&&scope.current()&&this.state.views[id]?.tracePreview?.cache.epoch===pending.epoch;
-        if(!valid())throw new Error('Trace content view was replaced.');
-        return (await this.request({method:'session/traceContentRead',params:{session_id:id,node_id:node,cut:result.page.read_cut,content_ref:ref,offset,max_bytes:65536}},'content_chunk',undefined,valid)).chunk;
-      },page,reader) } });
-    } catch (error) {
-      if (current()) this.setSession(id, { tracePreview: { ...preview, cache: completeTraceDetail(this.state.views[id].tracePreview!.cache, record, pending.epoch, undefined, String(error)) } });
-    }
-  }
   /** Explicit reconciliation/recovery only. Native bounded replay owns overlap. */
   refresh(id: string): Promise<void> {
     const observation = this.lifecycles.observe(id);
@@ -964,7 +931,7 @@ export class AppServerClient {
           this.lifecycles.event(id, { type: 'OBSERVATION', proof, status: 'resynchronizing' });
           if (!current()) return;
           this.setSession(id, {
-            trace: this.supersedeTrace(id, replaceTrace({ records: [], next_cursor: null }, this.state.views[id]?.trace)),
+            trace: this.traces.supersede(id, replaceTrace({ records: [], next_cursor: null }, this.state.views[id]?.trace)),
             history: replaceTranscript({ entries: [] }, this.state.views[id]?.history), turnOutline: undefined, turnNavigation: undefined,
           });
         }
@@ -983,7 +950,7 @@ export class AppServerClient {
         this.setSession(id, { snapshot: checkpointSnapshot(checkpoint), checkpoint, preview: undefined, statisticsPreview: undefined, tracePreview: undefined,
           cursor:checkpoint.cursor,observationState:'subscribePending',
           ...(this.state.views[id]?.modelMutation?.generation!==this.state.generation?{modelMutation:undefined}:{}),history: refreshTranscript(this.state.views[id]?.history, checkpoint.snapshot.transcript),
-          trace: this.supersedeTrace(id, ({...refreshTrace(this.state.views[id]?.trace, checkpoint.snapshot.trace, checkpoint.snapshot.trace_updates,checkpoint.read_cut),fields:this.liveTraceFields(target)})), error: undefined });
+          trace: this.traces.supersede(id, ({...refreshTrace(this.state.views[id]?.trace, checkpoint.snapshot.trace, checkpoint.snapshot.trace_updates,checkpoint.read_cut),fields:this.traces.liveFields(target)})), error: undefined });
         this.reconcileInteractions(id); this.settleSubmissions(id);
         this.acquiring.delete(id);
         this.resubscribe.delete(id);
@@ -999,7 +966,7 @@ export class AppServerClient {
           } else throw error;
         }
         if (current() && !this.dirty.has(id)) {this.lifecycles.event(id, { type: 'OBSERVATION', proof, status: 'attached' });void this.catalog.refreshDisplaySummary(id);
-          if(traceInterestBatches(this.state.views[id]?.trace).length>1)void this.refreshTraceDomain(id).catch(error=>{if(current()&&this.state.views[id]?.trace)this.setSession(id,{trace:{...this.state.views[id].trace!,error:String(error)}});});
+          if(traceInterestBatches(this.state.views[id]?.trace).length>1)void this.traces.refreshDomain(id).catch(error=>{if(current()&&this.state.views[id]?.trace)this.setSession(id,{trace:{...this.state.views[id].trace!,error:String(error)}});});
         }
       }
     } catch (error) {
@@ -1012,179 +979,6 @@ export class AppServerClient {
         this.lifecycles.event(id, { type: 'OBSERVATION', proof, status: 'stale', error: String(error) });
       }
       throw error;
-    }
-  }
-  // Trace authority is independent of Runtime Client cursors and cache interval
-  // epochs (an overlapping snapshot can preserve the latter).
-  private readonly traceFieldScopes=new WeakMap<TraceFieldReader,{generation:number;target:AttachmentTarget}>();
-  private liveTraceFields(target:AttachmentTarget):TraceFieldReader {
-    const existing=this.state.views[target.session_id]?.trace?.fields,scope=existing&&this.traceFieldScopes.get(existing);
-    if(existing&&scope?.generation===this.state.generation&&sameTarget(scope.target,target))return existing;
-    const generation=this.state.generation;
-    const current=()=>generation===this.state.generation&&sameTarget(this.lifecycles.observe(target.session_id)?.target,target);
-    const valid=(cut:import('../../../protocol/app-server/v50').CheckpointReadCut,owns:()=>boolean)=>{
-      if(!current()||!owns()||cut.conversation_id!==target.conversation_id||cut.activation_id!=null)throw new Error('Trace field source was replaced.');
-    };
-    const reader:TraceFieldReader={
-      value:async(cut,field,offset,owns)=>{valid(cut,owns);const result=await this.request({method:'conversation/checkpointValueRead',params:{target,agent_id:null,cut,domain:field.domain,item_offset:field.item_offset,path:field.path,offset,max_bytes:65536}},'checkpoint_value_chunk',undefined,()=>current()&&owns());valid(cut,owns);return result.chunk;},
-      content:async(cut,reference,offset,owns)=>{valid(cut,owns);if(reference.conversation_id!==cut.conversation_id)throw new Error('Trace content source changed.');return this.reads.readContent(target,undefined,reference,offset,()=>current()&&owns());},
-      page:async(cut,domain,offset,owns)=>{valid(cut,owns);const result=await this.request({method:'conversation/checkpointPage',params:{target,agent_id:null,cut,domain,offset,limit:32}},'checkpoint_page',undefined,()=>current()&&owns());valid(cut,owns);return result.page;},
-    };
-    this.traceFieldScopes.set(reader,{generation:this.state.generation,target});
-    return reader;
-  }
-  private coldTraceFields(id:string,node:string|null|undefined,conversation:string,current:()=>boolean):TraceFieldReader {
-    const valid=(cut:import('../../../protocol/app-server/v50').CheckpointReadCut,owns:()=>boolean)=>{
-      if(!current()||!owns()||cut.conversation_id!==conversation||cut.activation_id!=null)throw new Error('Historical Trace field source was replaced.');
-    };
-    return {
-      value:async(cut,field,offset,owns)=>{valid(cut,owns);const result=await this.request({method:'session/traceValueRead',params:{session_id:id,node_id:node,cut,domain:field.domain,item_offset:field.item_offset,path:field.path,offset,max_bytes:65536}},'checkpoint_value_chunk',undefined,()=>current()&&owns());valid(cut,owns);return result.chunk;},
-      content:async(cut,reference,offset,owns)=>{valid(cut,owns);if(reference.conversation_id!==conversation)throw new Error('Historical Trace content source changed.');return (await this.request({method:'session/traceContentRead',params:{session_id:id,node_id:node,cut,content_ref:reference,offset,max_bytes:65536}},'content_chunk',undefined,()=>current()&&owns())).chunk;},
-      page:async(cut,domain,offset,owns)=>{valid(cut,owns);return (await this.request({method:'session/tracePage',params:{session_id:id,node_id:node,cut,domain,offset,limit:32}},'checkpoint_page',undefined,()=>current()&&owns())).page;},
-    };
-  }
-  private traceAuthorities = new Map<string, number>();
-  private supersedeTrace(id: string, trace: TraceCache): TraceCache {
-    this.traceAuthorities.set(id, (this.traceAuthorities.get(id) ?? 0) + 1);
-    // Old paging/detail requests may no longer complete. Release their loading
-    // markers and reader-owned evidence with the new authority so explicit reads remain available.
-    return { ...trace, loading: false, details: Object.fromEntries(
-      Object.entries(trace.details).filter(([, entry]) => !entry.loading&&!entry.page&&!entry.content?.length),
-    ) };
-  }
-  private traceReads = new Map<string, { dirty: boolean; work: Promise<void> }>();
-  private refreshTraceDomain(id: string): Promise<void> {
-    const existing = this.traceReads.get(id);
-    if (existing) { existing.dirty = true; return existing.work; }
-    const observation = this.lifecycles.observe(id);
-    if (!observation) return Promise.resolve();
-    const { target, current } = observation;
-    const read = { dirty: true, work: Promise.resolve() };
-    read.work = (async () => {
-      try {
-        while (read.dirty && current()) {
-          // Consume only the obligation admitting this iteration. A call made
-          // while it awaits owns a separate, coalesced follow-up obligation.
-          read.dirty = false;
-          const authority = this.traceAuthorities.get(id);
-          const batches=traceInterestBatches(this.state.views[id]?.trace);
-          for(const [index,records] of batches.entries()) {
-            if(!current()||this.traceAuthorities.get(id)!==authority)break;
-            let result;
-            try {
-              result=await this.request({method:'session/trace',params:{target,before:null,limit:index?1:TRACE_PAGE_SIZE,records}},'trace',undefined,current);
-            }catch(error){if(!read.dirty||!current())throw error;break;}
-            standaloneTraceCut(result.page,target.conversation_id);
-            if(current()&&this.traceAuthorities.get(id)===authority)this.setSession(id,{trace:{...refreshTrace(this.state.views[id]?.trace,result.page,result.page.updates??[],undefined,index>0),fields:this.liveTraceFields(target)}});
-          }
-        }
-      } finally {
-        // Retire in the same continuation that decides to exit, so a new call
-        // cannot coalesce onto a stopped worker before promise cleanup runs.
-        if (this.traceReads.get(id) === read) this.traceReads.delete(id);
-      }
-    })();
-    this.traceReads.set(id, read);
-    return read.work;
-  }
-  /** Older reads are fenced by attachment, connection and read-window epoch.
-   * Ordinary live refreshes preserve the epoch only with a durable overlap. */
-  /** One older page, as Harness's loadOlder. */
-  async loadEarlierTrace(id: string) {
-    if (this.state.views[id]?.attachment === 'attaching') return this.readTracePreview(id, () => true, true);
-    const observation = this.lifecycles.observe(id);
-    if (!observation) return;
-    const { target } = observation;
-    const cache = this.state.views[id].trace;
-    const authority = this.traceAuthorities.get(id);
-    if (!cache || cache.loading || cache.page.next_cursor == null) return;
-    const limit = Math.min(TRACE_PAGE_SIZE, TRACE_LIMIT - cache.page.records.length);
-    if (limit < 1) throw new Error('Trace window is full. Return to latest first.');
-    const current = () => observation.current()
-      && this.traceAuthorities.get(id) === authority
-      && this.state.views[id]?.trace?.epoch === cache.epoch;
-    this.setSession(id, { trace: { ...cache, loading: true, error: undefined } });
-    try {
-      const result = await this.request({ method: 'session/trace', params: { target, before: cache.page.next_cursor, limit } }, 'trace', undefined, current);
-      standaloneTraceCut(result.page,target.conversation_id);
-      if (current()) {
-        this.setSession(id, { trace: prependTrace(this.state.views[id].trace!, result.page) });
-        // Include newly loaded identities in a repair even if their terminal
-        // notification raced this pending historical read.
-        await this.refreshTraceDomain(id);
-      }
-    } catch (error) {
-      if (current()) this.setSession(id, { trace: { ...this.state.views[id].trace!, loading: false, error: String(error) } });
-      throw error;
-    }
-  }
-  /** Locate the canonical Tool occurrence across the native Journal, never the loaded browser window. */
-  async locateToolTrace(id: string, locator: TraceToolLocator): Promise<boolean> {
-    const observation = this.lifecycles.observe(id);
-    if (!observation) return false;
-    const previous = this.state.views[id]?.trace;
-    this.setSession(id, { trace: this.supersedeTrace(id, previous ?? replaceTrace({ records: [], next_cursor: null })) });
-    const authority = this.traceAuthorities.get(id);
-    const current = () => observation.current() && this.traceAuthorities.get(id) === authority;
-    const result = await this.request({ method: 'session/traceLocateTool', params: { target: observation.target, locator } }, 'trace_tool_location', undefined, current);
-    if (!current()) return false;
-    if (!result.location) throw new Error('This tool occurrence has no native execution record.');
-    standaloneTraceCut(result.location.page,observation.target.conversation_id);
-    const cache = {...replaceTrace(result.location.page, this.state.views[id]?.trace),fields:this.liveTraceFields(observation.target)};
-    this.setSession(id, { trace: selectTrace({ ...cache, located: true }, result.location.record_id) });
-    return true;
-  }
-  async returnToLatestTrace(id: string) {
-    const trace = this.state.views[id]?.trace, observation = this.lifecycles.observe(id);
-    if (!trace || !observation) return;
-    this.setSession(id, { trace: this.supersedeTrace(id, replaceTrace({ records: [], next_cursor: null }, trace)) });
-    const authority = this.traceAuthorities.get(id);
-    try { await this.refreshTraceDomain(id); }
-    catch (cause) {
-      if (observation.current() && this.traceAuthorities.get(id) === authority) this.setSession(id, { trace: { ...this.state.views[id].trace!, error: String(cause), loading: false } });
-    }
-  }
-  selectTrace(id: string, record?: string) {
-    const preview = this.state.views[id]?.tracePreview;
-    if (this.state.views[id]?.attachment === 'attaching' && preview) { this.setSession(id, { tracePreview: { ...preview, cache: selectTrace(preview.cache, record) } }); return; }
-    const trace = this.state.views[id]?.trace;
-    if (trace) this.setSession(id, { trace: selectTrace(trace, record) });
-  }
-  /**
-   * Fetches the heavy detail of one record on demand.
-   *
-   * Every relevant identity fences the reply: the connection generation, the
-   * exact attachment target, Trace authority generation and cache interval.
-   * A reply that survives those fences still belongs to the record it was asked
-   * for; anything else is dropped rather than attached to a newer window.
-   */
-  async loadTraceDetail(id: string, record: string) {
-    if (this.state.views[id]?.attachment === 'attaching') return this.readTracePreviewDetail(id, record);
-    const observation = this.lifecycles.observe(id);
-    if (!observation) return;
-    const { target } = observation;
-    const cache = this.state.views[id]?.trace;
-    if (!cache) return;
-    const epoch = cache.epoch;
-    const authority = this.traceAuthorities.get(id);
-    const existing = cache.details[record];
-    if (existing && (existing.loading || existing.detail || existing.page)) return;
-    const pending = beginTraceDetail(cache, record);
-    const current = () => observation.current()
-      && this.traceAuthorities.get(id) === authority
-      && this.state.views[id]?.trace?.epoch === epoch
-      && this.state.views[id]?.trace?.details[record] === pending.details[record];
-    this.setSession(id, { trace: pending });
-    try {
-      const result = await this.request({ method: 'session/traceDetail', params: { target, record_id: record } }, 'domain_page', undefined, current);
-      if (!current()) return;
-      const detail=inlineTraceDetail(result.page,record),page=retainedTraceDetailPage(result.page,record);
-      if(page&&(page.read_cut.conversation_id!==target.conversation_id||page.read_cut.activation_id!=null))throw new Error('Trace detail source changed.');
-      if(!current())return;
-      const reader=page?bindTraceDetailReader(this.liveTraceFields(target),page,()=>observation.current()&&this.traceAuthorities.get(id)===authority&&this.state.views[id]?.trace?.epoch===epoch&&this.state.views[id]?.trace?.details[record]?.page===page):undefined;
-      this.setSession(id, { trace: completeTraceDetail(this.state.views[id].trace!,record,epoch,detail,undefined,result.page.items.flatMap(item=>item.content),(ref,offset,ownsView)=>this.reads.readContent(target,undefined,ref,offset,()=>ownsView()&&observation.current()&&this.traceAuthorities.get(id)===authority&&this.state.views[id]?.trace?.epoch===epoch),page,reader) });
-    } catch (error) {
-      if (current()) this.setSession(id, { trace: completeTraceDetail(this.state.views[id].trace!, record, epoch, undefined, String(error)) });
     }
   }
   private reconcileInteractions(id: string) {
@@ -1232,21 +1026,6 @@ export class AppServerClient {
       if (operations[key].sessionId === id && !pending.has(key)) delete operations[key];
     }
     this.publish({ uncertain: this.state.uncertain.filter(item => !resolved.includes(item)), interactionOperations: operations });
-  }
-  async projections(id: string, after = '0') {
-    const observation = this.lifecycles.observe(id);
-    if (!observation) throw new Error('Session is not attached.');
-    return (await this.request({ method: 'session/projections', params: { target: observation.target, after, limit: 16 } }, 'projections', undefined, () => observation.current())).page;
-  }
-  private readonly projectionReaders = new WeakMap<import('../../../protocol/app-server/v50').ProjectionDetail, TraceFieldReader>();
-  projectionDetailReader(detail: import('../../../protocol/app-server/v50').ProjectionDetail) { return this.projectionReaders.get(detail); }
-  async projectionDetail(id: string, checkpointId: string, offset = 0) {
-    const observation = this.lifecycles.observe(id);
-    if (!observation) throw new Error('Session is not attached.');
-    const detail = (await this.request({ method: 'session/projectionDetail', params: { target: observation.target, checkpoint_id: checkpointId, offset, limit: 16 } }, 'projection_detail', undefined, () => observation.current())).detail;
-    validateObservationCut(detail.read_cut, observation.target.conversation_id, null, detail.read_cut.revision);
-    this.projectionReaders.set(detail, this.liveTraceFields(observation.target));
-    return detail;
   }
   target(id: string) {
     return this.lifecycles.target(id);
@@ -1680,8 +1459,7 @@ export class AppServerClient {
   private retireObservationWork(id: string) {
     this.acquiring.delete(id);
     this.reading.retire(id);
-    this.traceReads.delete(id);
-    this.traceAuthorities.delete(id);
+    this.traces.retire(id);
     this.refreshes.delete(id); this.dirty.delete(id); this.resubscribe.delete(id);
   }
   private retireAttachmentWork(id: string) {

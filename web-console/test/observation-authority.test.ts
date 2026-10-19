@@ -62,7 +62,7 @@ it.each(['latest', 'earlier', 'detail'] as const)('held Trace %s cannot publish 
   const s = await setup(), before = view(s).trace!;
   const method = kind === 'detail' ? 'session/traceDetail' : 'session/trace'; s.held.add(method);
   const work = kind === 'detail' ? s.client.loadTraceDetail('A', 'trace:10') : kind === 'earlier' ? s.client.loadEarlierTrace('A')
-    : (s.client as unknown as { refreshTraceDomain(id: string): Promise<void> }).refreshTraceDomain('A');
+    : (s.client as unknown as { traces: { refreshDomain(id: string): Promise<void> } }).traces.refreshDomain('A');
   const read = await s.waitFor(method, 1), closing = await revoke(s, 'release');
   s.handlers.set('session/trace', request => ({ type: 'trace', page: tracePage(request, [traceRecord(9)]) }));
   s.held.delete(method);
