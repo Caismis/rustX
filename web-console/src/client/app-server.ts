@@ -14,6 +14,8 @@ import { AgentMeters } from './agent-meters';
 import { UploadFailure, AttachmentIntakes } from './uploads';
 import { checkpointSnapshot, foldRuntimeEvent, observationCheckpoint, transitionFacts } from '../../../protocol/app-server/projection';
 import { hasResponseDeadline, requestEffect, requestLane } from '../../../protocol/app-server/method-policy';
+import { laterRepairSequence, olderRepairSequence, retainSourceRepair, sourceRepairDecision, sourceRepairKey } from '../../../protocol/app-server/source-repair';
+import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { FirstSubmissions } from '../app/new-conversation/first-submit';
 import { SessionExportController } from "./session-export";
 import { standaloneTraceCut,inlineTraceDetail,retainedTraceDetailPage,bindTraceDetailReader,TRACE_LIMIT, TRACE_PAGE_SIZE, beginTraceDetail, completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterestBatches,traceInterests, type TraceCache,type TraceFieldReader } from './trace';
@@ -147,36 +149,11 @@ export interface SourceRepairObservation {
   receipt?: ConfigRepairReceipt;
   sequence: string;
 }
-/** The stable client key of one configuration source. */
-export function sourceRepairKey(target: SourceTarget): string {
-  return target.kind === 'user' ? 'user' : `workspace:${target.directory}`;
-}
-/** Workspaces whose repair observations the client keeps: as many as native
- * repair interest and the native ledger retain. The User has its own slot. */
-export const SOURCE_REPAIR_WORKSPACES = 64;
-/** The client's one retention policy for per-source repair state: `value`
- * becomes `key`'s entry, most recently observed last; beyond
- * `SOURCE_REPAIR_WORKSPACES` Workspaces the least recently observed Workspace
- * is forgotten, whether or not the User has an entry, and the User never is.
- * `sources` is never modified. Returns the retained entries and the forgotten
- * one. */
-export function retainSourceRepair<V>(sources: Readonly<Record<string, V>>, key: string, value: V): [Record<string, V>, V | undefined] {
-  const entries = Object.entries(sources).filter(([source]) => source !== key);
-  entries.push([key, value]);
-  const workspaces = entries.filter(([source]) => source !== 'user').length;
-  const at = workspaces > SOURCE_REPAIR_WORKSPACES ? entries.findIndex(([source]) => source !== 'user') : -1;
-  const forgotten = at < 0 ? undefined : entries.splice(at, 1)[0][1];
-  return [Object.fromEntries(entries), forgotten];
-}
-/** Whether native ledger sequence `a` is older than `b`; both are exact
- * decimal sequences of one App Server authority. */
-function olderSequence(a: string, b: string): boolean {
-  return BigInt(a) < BigInt(b);
-}
-/** Whether two observations of one source state the same level: the same
- * receipt occurrence, or no receipt on either side. */
-function sameLevel(a: SourceRepairObservation, b: SourceRepairObservation): boolean {
-  return a.receipt?.id === b.receipt?.id;
+/** Retained per-source observations are records ordered least recently
+ * observed first; the retention rule itself is the protocol's. */
+function retainRepair<V>(sources: Readonly<Record<string, V>>, key: string, value: V): [Record<string, V>, V | undefined] {
+  const { retained, forgotten } = retainSourceRepair(Object.entries(sources), key, value);
+  return [Object.fromEntries(retained), forgotten];
 }
 export interface ClientView {
   configuration?: Readonly<Record<string, ConfigurationApplication>>;
@@ -311,9 +288,6 @@ const VALIDATION_CAPACITY = 2;
 
 const dispatchCurrent = ({ dispatchCurrent: proof }: Pending) => !proof || (typeof proof === 'function' ? proof() : proof.current());
 export const interactionKey = (ref: InteractionRef) => JSON.stringify([ref.conversation_id, ref.interaction_id]);
-export const sameTarget = (a?: AttachmentTarget, b?: AttachmentTarget) => !!a && !!b &&
-  a.session_id === b.session_id && a.conversation_id === b.conversation_id &&
-  a.runtime_incarnation === b.runtime_incarnation && a.attachment_id === b.attachment_id;
 
 /** One native rustX connection. All retained snapshots are replaceable read caches.
  * Runtime events fold below React; snapshots initialize or repair exact attachments. */
@@ -745,26 +719,18 @@ export class AppServerClient {
    * recovered by reading its source again. */
   private observeRepair(observation: SourceRepairObservation, forgotten?: string) {
     const key = sourceRepairKey(observation.target);
-    const known = this.state.sourceRepairs?.[key];
-    if (known) {
-      if (olderSequence(observation.sequence, known.sequence)) return;
-      if (!olderSequence(known.sequence, observation.sequence)) {
-        if (!sameLevel(observation, known) && forgotten === undefined) this.recoverRepairs(observation.target);
-        return;
-      }
-    } else if (key !== 'user' && olderSequence(observation.sequence, forgotten ?? this.repairsForgottenThrough)) {
-      if (forgotten === undefined) this.recoverRepairs(observation.target);
-      return;
-    }
-    const [sourceRepairs, evicted] = retainSourceRepair(this.state.sourceRepairs ?? {}, key, observation);
+    const decision = sourceRepairDecision(this.state.sourceRepairs?.[key], observation, forgotten, this.repairsForgottenThrough);
+    if (decision === 'recover') this.recoverRepairs(observation.target);
+    if (decision !== 'apply') return;
+    const [sourceRepairs, evicted] = retainRepair(this.state.sourceRepairs ?? {}, key, observation);
     if (evicted) this.forgetRepairs(evicted);
     this.publish({ sourceRepairs });
   }
   /** Records that this connection no longer holds `evicted`'s source. */
   private forgetRepairs({ target, sequence }: SourceRepairObservation) {
-    if (olderSequence(this.repairsForgottenThrough, sequence)) this.repairsForgottenThrough = sequence;
+    this.repairsForgottenThrough = laterRepairSequence(this.repairsForgottenThrough, sequence);
     const key = sourceRepairKey(target);
-    for (const read of this.repairReads) if (read.key === key && olderSequence(read.forgotten, sequence)) read.forgotten = sequence;
+    for (const read of this.repairReads) if (read.key === key) read.forgotten = laterRepairSequence(read.forgotten, sequence);
   }
   /** Reads `target`'s repair observations authoritatively and folds them in:
    * `configuration/sourcesRead` is read-only on the server and answers for
@@ -800,7 +766,7 @@ export class AppServerClient {
    * that read may predate the reason. A failed read proves nothing, and
    * nothing is read once the connection ended. */
   private recoverRepairs(target: SourceTarget) {
-    [this.repairRecoveries] = retainSourceRepair(this.repairRecoveries, sourceRepairKey(target), target);
+    [this.repairRecoveries] = retainRepair(this.repairRecoveries, sourceRepairKey(target), target);
     if (this.recoveringRepairs) return;
     this.recoveringRepairs = true;
     const generation = this.state.generation;
@@ -824,7 +790,7 @@ export class AppServerClient {
    * so never announces again, and it is read rather than assumed healthy. */
   private visitRepairs(directory: string) {
     const target: SourceTarget = { kind: 'workspace', directory };
-    if (olderSequence('0', this.repairsForgottenThrough) && !this.state.sourceRepairs?.[sourceRepairKey(target)]) this.recoverRepairs(target);
+    if (olderRepairSequence('0', this.repairsForgottenThrough) && !this.state.sourceRepairs?.[sourceRepairKey(target)]) this.recoverRepairs(target);
   }
   private lose(generation: number) {
     if (this.current(generation)) this.endConnection('stale');
@@ -1104,7 +1070,7 @@ export class AppServerClient {
       else {
         const key = sourceRepairKey(target);
         const held = this.unattributedRepairs[key];
-        if (!held || olderSequence(held.sequence, sequence)) [this.unattributedRepairs] = retainSourceRepair<Omit<SourceRepairObservation, 'authorityId'>>(this.unattributedRepairs, key, { target, receipt, sequence });
+        if (!held || olderRepairSequence(held.sequence, sequence)) [this.unattributedRepairs] = retainRepair<Omit<SourceRepairObservation, 'authorityId'>>(this.unattributedRepairs, key, { target, receipt, sequence });
       }
       return;
     }

@@ -38,7 +38,8 @@
 import { truncateToWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 
 import type { ConfigRepairReceipt, SourceTarget } from "../../protocol/app-server.ts";
-import { SourceRepairAnnouncements, olderSequence, repairNotice, retainSource, sourceKey, type SourceRepairObservation } from "../../presentation/source-repairs.ts";
+import { SourceRepairAnnouncements, repairNotice, type SourceRepairObservation } from "../../presentation/source-repairs.ts";
+import { olderRepairSequence, retainSourceRepair, sourceRepairKey } from "../../../../protocol/app-server/source-repair.ts";
 import { role } from "../theme.ts";
 
 const MAX_ROWS = 2;
@@ -55,7 +56,7 @@ interface SourceState {
 export class SourceRepairStatus implements Component {
   /** The App Server authority whose observations this line presents. */
   #authorityId: string | undefined;
-  /** Per source, least recently observed first; finite (`retainSource`). */
+  /** Per source, least recently observed first; finite (`retainSourceRepair`). */
   #sources = new Map<string, SourceState>();
   readonly #announced = new SourceRepairAnnouncements();
 
@@ -81,13 +82,14 @@ export class SourceRepairStatus implements Component {
    */
   observe(authorityId: string, { target, receipt, sequence }: SourceRepairObservation): boolean {
     if (authorityId !== this.#authorityId) return false;
-    const key = sourceKey(target);
+    const key = sourceRepairKey(target);
     const known = this.#sources.get(key);
-    if (known !== undefined && !olderSequence(known.sequence, sequence)) return false;
+    if (known !== undefined && !olderRepairSequence(known.sequence, sequence)) return false;
     const pending = receipt === undefined ? undefined
       : known?.pending?.id === receipt.id ? known.pending
       : this.#announced.announce(authorityId, receipt) ? receipt : undefined;
-    const forgotten = retainSource(this.#sources, key, { target, sequence, pending });
+    const { retained, forgotten } = retainSourceRepair(this.#sources, key, { target, sequence, pending });
+    this.#sources = new Map(retained);
     return known?.pending?.id !== pending?.id || forgotten?.pending !== undefined;
   }
 

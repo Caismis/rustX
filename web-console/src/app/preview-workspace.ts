@@ -1,5 +1,6 @@
 import type { AttachmentTarget } from '../../../protocol/app-server/v50';
-import { sameTarget, type AppServerClient } from '../client/app-server';
+import { type AppServerClient } from '../client/app-server';
+import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { FilePreviewCoordinator, samePreviewSource, type FilePreviewLease, type PreviewSource } from '../client/session-files';
 import { PREVIEW_POLICY } from '../client/preview-policy';
 import type { WorkspaceAuthority } from '../workspaces/authority';

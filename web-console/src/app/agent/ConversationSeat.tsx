@@ -1,7 +1,8 @@
 import { useTranslation } from '../../locale/react';
 import { useState } from 'react';
 import { UploadFailure } from '../../client/uploads';
-import { sameTarget, type AppServerClient } from '../../client/app-server';
+import { type AppServerClient } from '../../client/app-server';
+import { sameTarget } from '../../../../protocol/app-server/attachment-identity';
 import { useClientSelector, sameValue, transportSelection } from '../../client/selectors';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
 import type { WorkspaceAuthority } from '../../workspaces/authority';

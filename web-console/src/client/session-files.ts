@@ -3,7 +3,7 @@ import type { CanonicalContentLocator } from '../../../protocol/app-server/v50';
 import { sameSessionFile } from '../../shared/session-file-identity.ts';
 import { validateRaster } from './raster';
 import type { AppServerClient } from './app-server';
-import { sameTarget } from './app-server';
+import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { ArtifactResources, isTextMime, safeArtifactMime } from './artifacts';
 import type { SessionFileReference } from '../../../protocol/app-server/v50';
 import type { ProductHostWorkspaces } from '../workspaces/host';

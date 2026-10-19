@@ -58,7 +58,6 @@ import { uploadOperationId } from '../../../protocol/app-server/upload.ts';
 
 import {
   compareExact,
-  sameTarget,
   type ConfigurationApplication,
   type AvailableConfiguration,
   type AttachmentTarget,
@@ -104,6 +103,7 @@ import {
 } from "../presentation/deliveries.ts";
 import { AppServerClient, isResyncRequired, isUncertainOutcome } from "./client.ts";
 import { requestEffect } from "../../../protocol/app-server/method-policy.ts";
+import { sameTarget } from "../../../protocol/app-server/attachment-identity.ts";
 import type { Request1 } from "../../../protocol/app-server/v50.ts";
 
 /** Native owner bound for one bounded page. */

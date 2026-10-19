@@ -45,7 +45,7 @@ import type { Request1 } from '../../../protocol/app-server/v50.ts';
  * never to resend.
  */
 
-import { retainSource, sourceKey } from "../presentation/source-repairs.ts";
+import { retainSourceRepair, sourceRepairKey } from "../../../protocol/app-server/source-repair.ts";
 import { decodeProtocolMessage } from "../protocol/decoder.ts";
 
 import {
@@ -53,7 +53,6 @@ import {
   isFailure,
   isNotification,
   isResponse,
-  sameTarget,
   type AttachmentTarget,
   type ClientIdentity,
   type MethodName,
@@ -197,7 +196,7 @@ export class AppServerClient {
    * crowds them out. The server advances its per-source delivery cursor as
    * it sends one and never sends it again, so a dropped observation would be
    * lost for good; the latest per source is all a subscriber needs. Bounded
-   * by `retainSource`: the least recently observed Workspace goes beyond 64,
+   * by `retainSourceRepair`: the least recently observed Workspace goes beyond 64,
    * as the native ledger forgets it; the User never does. A source dropped
    * here was never observed by a subscriber, so nothing it held can go stale.
    */
@@ -445,7 +444,7 @@ export class AppServerClient {
     if (isNotification(record)) {
       if (this.#unrouted !== undefined) {
         if (record.method === "configuration/sourceRepairChanged") {
-          retainSource(this.#unrouted.sourceRepairs, sourceKey(record.params.target), record);
+          this.#unrouted.sourceRepairs = new Map(retainSourceRepair(this.#unrouted.sourceRepairs, sourceRepairKey(record.params.target), record).retained);
         } else if (this.#unrouted.notifications.length < UNROUTED_NOTIFICATIONS) {
           this.#unrouted.notifications.push(record);
         }
@@ -576,5 +575,4 @@ export function isControllerInUse(error: unknown): boolean {
 }
 
 /** Whether two targets address the same attachment in every identity domain. */
-export { sameTarget };
 export type { AttachmentTarget };

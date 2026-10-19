@@ -565,27 +565,6 @@ export function describeRpcError(error: RpcError): string {
   }
 }
 
-/** Whether two attachment targets name the same attachment in every domain. */
-export function sameTarget(
-  left: AttachmentTarget,
-  right: AttachmentTarget,
-): boolean {
-  return (
-    left.session_id === right.session_id &&
-    left.conversation_id === right.conversation_id &&
-    left.runtime_incarnation === right.runtime_incarnation &&
-    left.attachment_id === right.attachment_id
-  );
-}
-
-/** Session identity alone, ignoring incarnation and attachment. */
-export function sameSession(
-  left: AttachmentTarget,
-  right: AttachmentTarget,
-): boolean {
-  return left.session_id === right.session_id;
-}
-
 export type { SessionNode as SessionNodeView };
 export type { SessionSnapshot as SessionView };
 export type SessionSummaryView = SessionSummary;

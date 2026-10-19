@@ -4,7 +4,8 @@ import type { TraceDetail } from '../../protocol/app-server/v50';
 import type { AttachmentTarget, MethodResult, Notification, Request, Response, RoutedInteraction, RuntimeClientSnapshot, SessionSummary, ServerCapabilities } from '../../protocol/app-server/v50';
 import { fixtures } from '../../protocol/app-server/fixtures';
 import { cfg3Source } from './cfg3-data';
-import { AppServerClient, RpcFailure, sameTarget, type Socket } from '../src/client/app-server';
+import { AppServerClient, RpcFailure, type Socket } from '../src/client/app-server';
+import { sameTarget } from '../../protocol/app-server/attachment-identity';
 
 export const TOKEN = 'fixture-transport-token-'.padEnd(43, 'x');
 export const endpoint = 'ws://127.0.0.1:8080/';
