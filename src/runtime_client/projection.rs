@@ -391,7 +391,7 @@ struct ForegroundResultContent {
 
 #[derive(Clone)]
 pub(crate) struct CheckpointSeed {
-    read_domains_dirty: bool,
+    read_domains: Option<ReadDomainCut>,
     snapshot: RuntimeClientSnapshot,
     capability_head: super::capability_source::PreparedCapabilityHead,
     trace_head: super::checkpoint::PreparedTraceHead,
@@ -520,6 +520,9 @@ impl PublicationDraft {
             .ok_or(RuntimeClientError::ProjectionExhausted)?;
         self.seed.cursor = RuntimeClientCursor::new(next);
         self.seed.read_cut.revision = next;
+        if let Some(cut) = &mut self.seed.read_domains {
+            cut.revision = next;
+        }
         stamp_trace_cut(&mut self.seed.snapshot.trace, &self.seed.read_cut);
         for event in &mut self.events {
             stamp_event_trace_cut(event, &self.seed.read_cut);
@@ -717,24 +720,25 @@ impl CheckpointSeed {
             })
     }
 
-    /// A closed host cannot restart its cancelled projection reader. Explicit
-    /// inspection instead hydrates a request-owned seed at the already frozen
-    /// shutdown cut. It neither changes the seed/cursor nor publishes a repair.
-    pub(crate) fn checkpoint_with_shutdown_domains(
+    pub(crate) fn native_read_cut(
+        &self,
+    ) -> Option<&crate::durable::observation::ObservationReadCut> {
+        self.read_cut.source_cut.as_ref()
+    }
+
+    /// Hydrate only this request's retained published cut. Concurrent native
+    /// publication may retire the live head, but cannot change this seed's
+    /// dependencies. Inspection neither installs domains nor publishes a repair.
+    pub(crate) fn checkpoint_with_read_domains(
         &self,
         store: &dyn crate::durable::ConversationStore,
     ) -> Result<super::checkpoint::RuntimeClientCheckpoint, RuntimeClientError> {
-        if !self.snapshot.shutting_down
-            || !self.read_domains_dirty
-            || self.exhausted
-            || self.journal_failure
-        {
+        let Some(cut) = self
+            .read_domains
+            .as_ref()
+            .filter(|_| !self.exhausted && !self.journal_failure)
+        else {
             return self.checkpoint_candidate();
-        }
-        let cut = ReadDomainCut {
-            revision: self.read_cut.revision,
-            through: self.read_cut.through,
-            source_cut: self.read_cut.source_cut.clone(),
         };
         let ReadDomainValues {
             projection_head,
@@ -6163,13 +6167,18 @@ impl RuntimeClientProjection {
     }
 
     fn capture_working_seed(&self) -> CheckpointSeed {
+        let read_cut = self.working_read_cut();
         CheckpointSeed {
-            read_domains_dirty: self.read_domains_dirty,
+            read_domains: self.read_domains_dirty.then(|| ReadDomainCut {
+                revision: read_cut.revision,
+                through: read_cut.through,
+                source_cut: read_cut.source_cut.clone(),
+            }),
             snapshot: self.snapshot.clone(),
             capability_head: self.capability_head.clone(),
             trace_head: self.trace_head.clone(),
             cursor: self.cursor,
-            read_cut: self.working_read_cut(),
+            read_cut,
             exhausted: self.exhausted,
             journal_failure: self.source_state.journal_failure,
             source_pending: !self.source_state.source_layout_failure
@@ -6980,7 +6989,14 @@ impl RuntimeClientProjection {
         self.read_domain_cut()
     }
 
-    /// Request hydration for an explicit checkpoint even without subscribers.
+    /// A published Source failure requires a successful worker-owned repair.
+    /// An ordinary dirty view is materialized from the checkpoint's own seed.
+    pub(crate) fn request_failed_read_domains(&mut self) -> Option<(ReadDomainCut, bool)> {
+        self.read_failure.as_ref()?;
+        self.request_read_domains()
+    }
+
+    /// Request a worker-owned hydration without requiring a subscriber.
     /// The worker still owns physical reads and their publication fence.
     pub(crate) fn request_read_domains(&mut self) -> Option<(ReadDomainCut, bool)> {
         if self.exhausted

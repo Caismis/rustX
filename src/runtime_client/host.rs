@@ -1643,6 +1643,10 @@ pub(crate) struct ClientInner {
     #[cfg(test)]
     snapshot_read_hook: Mutex<Option<Box<dyn FnMut() + Send>>>,
     #[cfg(test)]
+    checkpoint_read_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    #[cfg(test)]
+    checkpoint_source_wait_hook: Mutex<Option<Box<dyn FnMut() + Send>>>,
+    #[cfg(test)]
     cancellation_receipt_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     #[cfg(test)]
     manual_compaction_response_gate: Mutex<Option<ManualCompactionResponseGate>>,
@@ -3895,15 +3899,33 @@ impl ClientInner {
             if std::time::Instant::now() >= deadline {
                 break;
             }
+            let mut captured_seed = None;
             let result = self
                 .hydrate_read_domains_for_checkpoint(deadline)
-                .and_then(|()| self.materialize_checkpoint(records, deadline));
+                .and_then(|()| {
+                    let seed = {
+                        let state = self.lock_published_state();
+                        #[cfg(test)]
+                        state.projection.probe_snapshot_enter();
+                        state.projection.validate_published_source()?;
+                        state.projection.checkpoint_seed()
+                    };
+                    let result = self.materialize_checkpoint(&seed, records, deadline);
+                    captured_seed = Some(seed);
+                    result
+                });
             match result {
                 Ok(checkpoint) => return Ok(checkpoint),
                 Err(RuntimeClientError::ReadCutExpired) => {
                     last = RuntimeClientError::ReadCutExpired;
                     if attempt + 1 < super::checkpoint::CHECKPOINT_ATTEMPTS {
-                        self.publication_gate.wait_after(progress, deadline);
+                        self.wait_checkpoint_retry(
+                            captured_seed
+                                .as_ref()
+                                .and_then(|seed| seed.native_read_cut()),
+                            progress,
+                            deadline,
+                        )?;
                     }
                 }
                 Err(error) => return Err(error),
@@ -3912,7 +3934,45 @@ impl ClientInner {
         Err(last)
     }
 
-    /// Hydrate a dirty display view or retry a failed read on explicit demand.
+    /// A native pending mutation can invalidate physical reads before its
+    /// owner publishes the replacement cut. Other publications do not make
+    /// that same expired epoch readable and must not spend the second attempt.
+    fn wait_checkpoint_retry(
+        &self,
+        cut: Option<&crate::durable::observation::ObservationReadCut>,
+        progress: u64,
+        deadline: std::time::Instant,
+    ) -> Result<(), RuntimeClientError> {
+        if let Some(cut) = cut {
+            let actual = self
+                .store
+                .observation_read_cut()
+                .map_err(RuntimeClientError::observation_store_error)?;
+            if actual.read.mutation_revision > cut.read.mutation_revision {
+                loop {
+                    let progress = self.publication_gate.generation();
+                    let published = self.lock_published_state().projection.checkpoint_read_cut();
+                    if published.source_cut.as_ref().is_some_and(|source| {
+                        source.read.mutation_revision >= actual.read.mutation_revision
+                    }) {
+                        return Ok(());
+                    }
+                    if self.pending.is_closed() || std::time::Instant::now() >= deadline {
+                        return Err(RuntimeClientError::ReadCutExpired);
+                    }
+                    #[cfg(test)]
+                    if let Some(hook) = self.checkpoint_source_wait_hook.lock().unwrap().as_mut() {
+                        hook();
+                    }
+                    self.publication_gate.wait_after(progress, deadline);
+                }
+            }
+        }
+        self.publication_gate.wait_after(progress, deadline);
+        Ok(())
+    }
+
+    /// Retry a failed Source read on explicit demand.
     /// Request one read on the existing worker and await its exact fence.
     /// The worker retains/cancels/joins physical Source work during shutdown.
     fn hydrate_read_domains_for_checkpoint(
@@ -3930,7 +3990,7 @@ impl ClientInner {
             {
                 return Ok(());
             }
-            state.projection.request_read_domains()
+            state.projection.request_failed_read_domains()
         };
         let Some((cut, newly_requested)) = cut else {
             return Ok(());
@@ -3940,14 +4000,16 @@ impl ClientInner {
                 .push(ConversationObservation::JournalSourceReady);
         }
         #[cfg(test)]
-        if let Some(hook) = self
-            .publication_gate
-            .repair_request_hook
-            .lock()
-            .unwrap()
-            .take()
         {
-            hook();
+            let hook = self
+                .publication_gate
+                .repair_request_hook
+                .lock()
+                .unwrap()
+                .take();
+            if let Some(hook) = hook {
+                hook();
+            }
         }
         loop {
             let progress = self.publication_gate.generation();
@@ -3990,17 +4052,18 @@ impl ClientInner {
 
     fn materialize_checkpoint(
         &self,
+        seed: &super::projection::CheckpointSeed,
         records: &[super::trace::TraceCursor],
         deadline: std::time::Instant,
     ) -> Result<super::checkpoint::RuntimeClientCheckpoint, RuntimeClientError> {
-        let seed = {
-            let state = self.state.lock().expect("published checkpoint state");
-            #[cfg(test)]
-            state.projection.probe_snapshot_enter();
-            state.projection.validate_published_source()?;
-            state.projection.checkpoint_seed()
-        };
-        let mut checkpoint = seed.checkpoint_with_shutdown_domains(self.store.as_ref())?;
+        #[cfg(test)]
+        {
+            let hook = self.checkpoint_read_hook.lock().unwrap().take();
+            if let Some(hook) = hook {
+                hook();
+            }
+        }
+        let mut checkpoint = seed.checkpoint_with_read_domains(self.store.as_ref())?;
         self.materialize_content_bindings(&mut checkpoint.content)?;
         self.materialize_trace(&mut checkpoint.snapshot, &checkpoint.read_cut, records)?;
         if !records.is_empty() {
@@ -5409,6 +5472,10 @@ impl RuntimeClientHost {
             #[cfg(test)]
             snapshot_read_hook: Mutex::new(None),
             #[cfg(test)]
+            checkpoint_read_hook: Mutex::new(None),
+            #[cfg(test)]
+            checkpoint_source_wait_hook: Mutex::new(None),
+            #[cfg(test)]
             cancellation_receipt_hook: Mutex::new(None),
             #[cfg(test)]
             manual_compaction_response_gate: Mutex::new(None),
@@ -5506,6 +5573,10 @@ impl RuntimeClientHost {
             audit_commit_hook: Mutex::new(None),
             #[cfg(test)]
             snapshot_read_hook: Mutex::new(None),
+            #[cfg(test)]
+            checkpoint_read_hook: Mutex::new(None),
+            #[cfg(test)]
+            checkpoint_source_wait_hook: Mutex::new(None),
             #[cfg(test)]
             cancellation_receipt_hook: Mutex::new(None),
             #[cfg(test)]
@@ -9497,6 +9568,179 @@ mod tests {
         fixture.runtime.shutdown().await.unwrap();
     }
 
+    #[derive(Debug)]
+    enum CheckpointRetryStep {
+        Waiting,
+        Returned(bool),
+    }
+
+    #[tokio::test]
+    async fn checkpoint_epoch_retry_respects_deadline_and_closed_owner_on_current_thread() {
+        let (_release, parked) = model_release();
+        let (_, fixture) = gated_pending_fixture(parked).await;
+        let sequence = fixture
+            .runtime
+            .tool_runtime()
+            .mailbox()
+            .enqueue(inbound_text("bounded-retry", "before edit"))
+            .unwrap();
+        await_pending_fixture_publication(&fixture.host).await;
+        let inner = fixture.host.weak_inner().upgrade().unwrap();
+        inner.park_projection_worker();
+        let before = inner
+            .lock_published_state()
+            .projection
+            .checkpoint_read_cut();
+        let edited = inner
+            .store
+            .edit_pending(
+                &crate::durable::inbox::PendingInboundRef {
+                    sequence,
+                    revision: 0,
+                },
+                "after edit",
+            )
+            .unwrap();
+        *inner.checkpoint_source_wait_hook.lock().unwrap() = Some(Box::new(|| {
+            panic!("expired or closed owner must not wait for worker progress");
+        }));
+        let progress = inner.publication_gate.generation();
+        assert!(matches!(
+            inner.wait_checkpoint_retry(
+                before.source_cut.as_ref(),
+                progress,
+                std::time::Instant::now(),
+            ),
+            Err(RuntimeClientError::ReadCutExpired)
+        ));
+        inner.pending.close();
+        assert!(matches!(
+            inner.wait_checkpoint_retry(
+                before.source_cut.as_ref(),
+                progress,
+                std::time::Instant::now() + STREAM_LIVENESS_GUARD,
+            ),
+            Err(RuntimeClientError::ReadCutExpired)
+        ));
+        assert_eq!(inner.publication_gate.generation(), progress);
+        assert_eq!(
+            inner
+                .lock_published_state()
+                .projection
+                .checkpoint_read_cut(),
+            before
+        );
+        inner.checkpoint_source_wait_hook.lock().unwrap().take();
+        publish_pending_mutation(&inner, edited);
+        fixture.runtime.shutdown().await.unwrap();
+        inner.drain_projection().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn checkpoint_retry_waits_for_the_native_mutation_owner() {
+        let (_release, parked) = model_release();
+        let (_, fixture) = gated_pending_fixture(parked).await;
+        let mailbox = fixture.runtime.tool_runtime().mailbox();
+        let sequence = mailbox
+            .enqueue(inbound_text("edited-pending", "before edit"))
+            .unwrap();
+        await_pending_fixture_publication(&fixture.host).await;
+        let inner = fixture.host.weak_inner().upgrade().unwrap();
+        inner.park_projection_worker();
+        mailbox
+            .enqueue(inbound_text("second-pending", "unchanged"))
+            .unwrap();
+        let before = inner
+            .lock_published_state()
+            .projection
+            .checkpoint_read_cut();
+        assert!(
+            inner
+                .lock_published_state()
+                .projection
+                .read_domain_cut()
+                .is_some()
+        );
+        let edited = inner
+            .store
+            .edit_pending(
+                &crate::durable::inbox::PendingInboundRef {
+                    sequence,
+                    revision: 0,
+                },
+                "after native edit",
+            )
+            .unwrap();
+        let (step, steps) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let waiting = step.clone();
+        *inner.checkpoint_source_wait_hook.lock().unwrap() = Some(Box::new(move || {
+            let _ = waiting.send(CheckpointRetryStep::Waiting);
+            let _ = released.recv();
+        }));
+        let reader = inner.clone();
+        let checkpoint = std::thread::spawn(move || {
+            let result = reader.checkpoint();
+            let _ = step.send(CheckpointRetryStep::Returned(result.is_ok()));
+            result
+        });
+        assert!(matches!(
+            steps.recv_timeout(STREAM_LIVENESS_GUARD).unwrap(),
+            CheckpointRetryStep::Waiting
+        ));
+        // An unrelated display publication is real progress, but does
+        // not install the edited pending owner's replacement Source epoch.
+        super::commit_display(&inner.state, &inner.publication_gate, |projection| {
+            projection.apply(ConversationObservation::Event {
+                attempt_id: AttemptId::new("unrelated-publication"),
+                event: RuntimeEvent::TurnStarted,
+            });
+        });
+        release.send(()).unwrap();
+        let second = steps.recv_timeout(STREAM_LIVENESS_GUARD).unwrap();
+        // Release the actual owner even on the red path, then assert the
+        // observed ordering after physical cleanup rather than leaking a gate.
+        publish_pending_mutation(&inner, edited);
+        let _ = release.send(());
+        if matches!(second, CheckpointRetryStep::Waiting) {
+            assert!(matches!(
+                steps.recv_timeout(STREAM_LIVENESS_GUARD).unwrap(),
+                CheckpointRetryStep::Returned(true)
+            ));
+        }
+        let result = checkpoint.join().unwrap();
+        inner.checkpoint_source_wait_hook.lock().unwrap().take();
+        fixture.runtime.shutdown().await.unwrap();
+        inner.drain_projection().await.unwrap();
+        assert!(
+            matches!(second, CheckpointRetryStep::Waiting),
+            "unrelated publication consumed the last attempt: {second:?}"
+        );
+        let checkpoint = result.unwrap();
+        assert!(
+            checkpoint
+                .read_cut
+                .source_cut
+                .as_ref()
+                .unwrap()
+                .read
+                .mutation_revision
+                > before.source_cut.as_ref().unwrap().read.mutation_revision
+        );
+        let edited = checkpoint
+            .snapshot
+            .inbound
+            .pending
+            .iter()
+            .find(|item| item.sequence == sequence)
+            .unwrap();
+        assert_eq!(edited.revision, 1);
+        assert_eq!(
+            edited.message.content,
+            inbound_text("unused", "after native edit").content
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn pending_snapshot_and_reattach_repair_a_committed_unpublished_mutation() {
         let (release_tx, release_rx) = model_release();
@@ -10784,6 +11028,77 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn checkpoint_retains_cut_across_two_native_admissions() {
+        let (_release, parked) = model_release();
+        let (adapter, fixture) = host_fixture(
+            vec![vec![GatedStep::ParkUntilReleased(parked)]],
+            ToolRegistry::new(),
+            status_engine(),
+        )
+        .await;
+        let mut requests = adapter.request_count();
+        fixture
+            .runtime
+            .submit_inbound(submit_content("active native turn"))
+            .unwrap();
+        requests.wait_for(|count| *count == 1).await.unwrap();
+        let inner = fixture.host.weak_inner().upgrade().unwrap();
+        inner.park_projection_worker();
+        let (frozen, cut) = {
+            let state = inner.lock_published_state();
+            (
+                state.projection.checkpoint_read_cut(),
+                state.projection.read_domain_fence(),
+            )
+        };
+        let expected = cut.read(inner.store.as_ref()).unwrap();
+        let native = fixture.runtime.clone();
+        let observed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls = observed.clone();
+        *inner.checkpoint_read_hook.lock().unwrap() = Some(Box::new(move || {
+            native
+                .submit_inbound(submit_content("first concurrent admission"))
+                .unwrap();
+            native
+                .submit_inbound(submit_content("second concurrent admission"))
+                .unwrap();
+            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }));
+        let reader = inner.clone();
+        let checkpoint = tokio::task::spawn_blocking(move || reader.checkpoint())
+            .await
+            .unwrap()
+            .unwrap();
+        inner.checkpoint_read_hook.lock().unwrap().take();
+        assert_eq!(observed.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(checkpoint.read_cut, frozen);
+        assert_eq!(checkpoint.cursor.get(), frozen.revision);
+        assert_eq!(checkpoint.snapshot.transcript, expected.transcript);
+        assert_eq!(checkpoint.snapshot.context.occupancy, expected.occupancy);
+        assert_eq!(
+            checkpoint.snapshot.context.projection_head,
+            expected.projection_head
+        );
+        let current = inner.lock_published_state().projection.cursor();
+        assert!(current.get() >= checkpoint.cursor.get() + 2);
+        let (attachment, _) = fixture
+            .host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .unwrap();
+        let replay = attachment.subscribe_events(checkpoint.cursor).unwrap();
+        let mut consumed = checkpoint.cursor;
+        while consumed < current {
+            let EventDelivery::Event(event) = replay.try_next() else {
+                panic!("captured checkpoint must retain every concurrent native publication");
+            };
+            assert_eq!(event.cursor.get(), consumed.get() + 1);
+            consumed = event.cursor;
+        }
+        fixture.runtime.shutdown().await.unwrap();
+        inner.drain_projection().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn dormant_shutdown_checkpoint_materializes_the_frozen_native_cut() {
         let scripts = [113, 229]
             .into_iter()
@@ -10816,22 +11131,6 @@ mod tests {
         }
         fixture.runtime.shutdown().await.unwrap();
         let inner = fixture.host.weak_inner().upgrade().unwrap();
-        let mut turns = inner.worker_turns.subscribe();
-        loop {
-            turns.borrow_and_update();
-            if inner
-                .lock_published_state()
-                .projection
-                .snapshot_ref()
-                .shutting_down
-            {
-                break;
-            }
-            tokio::time::timeout(STREAM_LIVENESS_GUARD, turns.changed())
-                .await
-                .unwrap()
-                .unwrap();
-        }
         inner.drain_projection().await.unwrap();
         let (cut, cursor, frozen) = {
             let state = inner.lock_published_state();
@@ -10960,12 +11259,11 @@ mod tests {
         let read_calls = Arc::clone(&calls);
         let (entered, entered_rx) = tokio::sync::oneshot::channel();
         let (release, release_rx) = std::sync::mpsc::channel();
-        *inner.read_domain_hook.lock().unwrap() = Some(Box::new(move || {
+        *inner.checkpoint_read_hook.lock().unwrap() = Some(Box::new(move || {
             read_calls.fetch_add(1, Ordering::SeqCst);
             let _ = entered.send(());
             // Sender ownership makes panic unwinding release this gate as well.
             let _ = release_rx.recv();
-            Ok(())
         }));
         super::commit_display(&inner.state, &inner.publication_gate, |projection| {
             projection.apply(ConversationObservation::Event {
@@ -10986,6 +11284,10 @@ mod tests {
             .unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 0);
         assert!(inner.lock_state().projection.read_domain_cut().is_some());
+        let frozen = inner
+            .lock_published_state()
+            .projection
+            .checkpoint_read_cut();
         let reader = Arc::clone(&inner);
         let checkpoint = tokio::task::spawn_blocking(move || reader.checkpoint());
         tokio::time::timeout(STREAM_LIVENESS_GUARD, entered_rx)
@@ -11003,7 +11305,10 @@ mod tests {
             .unwrap()
             .unwrap()
             .unwrap();
-        assert!(inner.lock_state().projection.read_domain_cut().is_none());
+        assert!(inner.lock_state().projection.read_domain_cut().is_some());
+        assert_eq!(current.read_cut, frozen);
+        assert_eq!(current.cursor.get(), frozen.revision);
+        inner.checkpoint_read_hook.lock().unwrap().take();
         assert!(current.cursor > before.cursor);
         let (attachment, _) = fixture
             .host
