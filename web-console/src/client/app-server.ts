@@ -1,10 +1,9 @@
-import {interactionBody,readInteractionBody} from '../../../protocol/app-server/interaction';
 import { ObservationChain, validateRootCheckpoint, validateRootEvent } from '../../../protocol/app-server/observation';
 import { SessionLifecycles } from './session-lifecycle/system';
 import { emptyFacts, type Observation, type LifecycleFacts, type SessionLifecyclePort } from './session-lifecycle/port';
 import { lifecycleAvailability, type LifecycleContext } from './session-lifecycle/machine';
 import { AgentMeters } from './agent-meters';
-import { UploadFailure, AttachmentIntakes } from './uploads';
+import { AttachmentIntakes } from './uploads';
 import { checkpointSnapshot, foldRuntimeEvent, observationCheckpoint, transitionFacts } from '../../../protocol/app-server/projection';
 import { hasResponseDeadline, requestEffect, requestLane } from '../../../protocol/app-server/method-policy';
 import { SourceRepairObserver } from './source-repairs';
@@ -13,6 +12,10 @@ import { SessionReads } from './session-reads';
 import { ReadingNavigation } from './reading';
 import { ColdReads } from './cold-reads';
 import { TraceReads } from './trace-reads';
+import { SessionControls } from './session-controls';
+import { ModelSelection } from './model-selection';
+import { Interactions } from './interactions';
+import { SessionUploads } from './session-uploads';
 import { ConfigurationObservations } from './configuration-observations';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { SessionExportController } from "./session-export";
@@ -20,13 +23,13 @@ import { refreshTrace, replaceTrace, traceInterestBatches, traceInterests } from
 import type {
   TraceToolLocator, PendingInboundRef, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request, Request1, Response, RuntimeClientSnapshot, RuntimeClientEvent,
-  UserInputBlock, UploadReceipt, UploadedFile,
+  UserInputBlock, UploadReceipt, UploadedFile, SessionModelConfig, CatalogModelSelection, RuntimeClientInteractionHeader,
 } from '../../../protocol/app-server/v50';
-import { transferUpload, uploadOperationId } from '../../../protocol/app-server/upload';
+import { transferUpload } from '../../../protocol/app-server/upload';
 import { refreshTranscript, replaceTranscript, type TurnSelection } from './transcript';
 import { ProtocolLog, type WireContext } from './protocol-log';
 import { OutcomeUncertain, RequestAdmissionDeferred, RequestNotDispatched, RpcFailure, isOutcomeUncertain } from './errors';
-import { interactionKey, type CancellationTarget, type ClientView, type CompactionRequestEvidence, type ConnectionState, type GoalControlOutcome, type InboundControlOutcome, type OperationAdmission, type SessionView, type Submission } from './contracts';
+import { interactionKey, type CancellationTarget, type ClientView, type ConnectionState, type OperationAdmission, type SessionView, type Submission } from './contracts';
 
 
 export interface Socket {
@@ -58,16 +61,6 @@ interface Pending {
   resolve: (result: MethodResult) => void;
   reject: (error: Error) => void;
   timer?: ReturnType<typeof setTimeout>;
-}
-/** GoalDomain serializes its bounded rejection into the error message. Only the
- * reason is displayed; its embedded `current` is never adopted as authority. */
-function goalRefusal(error: unknown) {
-  if (!(error instanceof RpcFailure)) return error instanceof Error ? error.message : String(error);
-  try {
-    const rejection: unknown = JSON.parse(error.error.message);
-    if (rejection && typeof rejection === 'object' && 'reason' in rejection && typeof rejection.reason === 'string') return rejection.reason;
-  } catch { /* Non-Goal refusal: show the transport message. */ }
-  return error.message;
 }
 /** Shared method semantics; this transport keeps its own queue, backpressure
  * and lifetime implementation. Only a side-effecting request may have
@@ -297,7 +290,7 @@ export class AppServerClient {
           throw error;
         }
         this.setSession(id, { observationState: chain.phase });
-        this.reconcileInteractions(id); this.settleSubmissions(id);
+        this.reconcile(id); this.settleSubmissions(id);
         const settings=await this.reads.readSettings(id,current);
         if(!current())return;
         this.setSession(id,{settings:settings.settings});
@@ -489,8 +482,7 @@ export class AppServerClient {
         : new RequestNotDispatched('Disconnected before a response. Unsent operations were discarded.'));
     }
     this.pending.clear();
-    for (const pending of this.modelPreparations.values()) pending.retire();
-    this.modelPreparations.clear();
+    this.models.disconnect();
     for (const chain of this.observationChains.values()) chain.retire(); this.observationChains.clear();
     this.refreshes.clear(); this.traces.disconnect(); this.acquiring.clear(); this.dirty.clear(); this.resubscribe.clear();
     const operations = { ...this.state.interactionOperations };
@@ -803,10 +795,9 @@ export class AppServerClient {
     const settled=transitionFacts(event).filter(fact=>fact.type==='interaction_settled'||fact.type==='interaction_removed');
     if(settled.length){
       const keys=new Set(settled.map(fact=>interactionKey((fact as Extract<RuntimeClientEvent,{type:'interaction_settled'|'interaction_removed'}>).interaction)));
-      this.publish({interactionOperations:Object.fromEntries(Object.entries(this.state.interactionOperations).filter(([key])=>!keys.has(key))),
-        uncertain:this.state.uncertain.filter(value=>!value.interactionKey||!keys.has(value.interactionKey))});
+      this.interactions.settled(keys);
     }
-    this.reconcileInteractions(id); this.settleSubmissions(id);
+    this.reconcile(id); this.settleSubmissions(id);
     if (checkpointAdvanced) void this.catalog.refreshDisplaySummary(id);
     if (transitionFacts(event).some(fact=>fact.type==='trace_changed')) void this.traces.refreshDomain(id).catch(() => {});
   }
@@ -852,6 +843,71 @@ export class AppServerClient {
   projections(id: string, after?: string) { return this.traces.projections(id, after); }
   projectionDetail(id: string, checkpointId: string, offset?: number) { return this.traces.projectionDetail(id, checkpointId, offset); }
   projectionDetailReader(detail: import('../../../protocol/app-server/v50').ProjectionDetail) { return this.traces.projectionDetailReader(detail); }
+  private readonly controls = new SessionControls({
+    request: (...args) => this.request(...args),
+    state: () => this.state,
+    current: generation => this.current(generation),
+    controlReady: () => this.initialized && this.state.connection === 'connected',
+    setSession: (id, patch) => this.setSession(id, patch),
+    publish: patch => this.publish(patch),
+    target: id => this.target(id),
+    observe: id => this.lifecycles.observe(id),
+    observes: (id, admission) => this.lifecycles.observes(id, admission),
+    observesAttachment: (id, admission) => this.isAttachmentObservationCurrent(id, admission),
+    observationPhase: id => this.observationChains.get(id)?.phase,
+    refresh: id => this.refresh(id),
+  });
+  goalObjective(id: string, expected: GoalRef) { return this.controls.goalObjective(id, expected); }
+  controlGoal(id: string, expected: GoalRef, mutation: GoalMutation) { return this.controls.controlGoal(id, expected, mutation); }
+  editInbound(id: string, expected: PendingInboundRef, text: string) { return this.controls.editInbound(id, expected, text); }
+  removeInbound(id: string, expected: PendingInboundRef) { return this.controls.removeInbound(id, expected); }
+  /** Claims the local gesture synchronously. Native maintenance owns admission. */
+  compact(id: string, consume?: () => void) { return this.controls.compact(id, consume); }
+  cancellationTarget(id: string) { return this.controls.cancellationTarget(id); }
+  cancelTurn(expected: CancellationTarget) { return this.controls.cancelTurn(expected); }
+  private readonly models = new ModelSelection({
+    request: (...args) => this.request(...args),
+    state: () => this.state,
+    current: generation => this.current(generation),
+    setSession: (id, patch) => this.setSession(id, patch),
+    target: id => this.target(id),
+    observe: id => this.lifecycles.observe(id),
+    epoch: id => this.lifecycles.epoch(id),
+    waitForAttachment: (id, current) => this.waitForAttachment(id, current),
+    refresh: id => this.refresh(id),
+  });
+  prepareAgentModel(id: string, config: SessionModelConfig) { return this.models.prepareAgentModel(id, config); }
+  selectCatalogModel(id: string, choice: CatalogModelSelection, owned?: () => boolean) { return this.models.selectCatalogModel(id, choice, owned); }
+  setAgentModel(id: string, config: SessionModelConfig) { return this.models.setAgentModel(id, config); }
+  repairAgentModel(id: string) { return this.models.repairAgentModel(id); }
+  private readonly interactions = new Interactions({
+    request: (...args) => this.request(...args),
+    state: () => this.state,
+    current: generation => this.current(generation),
+    setSession: (id, patch) => this.setSession(id, patch),
+    publish: patch => this.publish(patch),
+    target: id => this.target(id),
+    observe: id => this.lifecycles.observe(id),
+    domainReader: (...args) => this.reads.domainReader(...args),
+    refresh: id => this.refresh(id),
+  });
+  pendingInteractions(id: string) { return this.interactions.pendingInteractions(id); }
+  interactionBody(id: string, header: RuntimeClientInteractionHeader) { return this.interactions.interactionBody(id, header); }
+  loadInteractionBody(id: string, index: number, ownsView?: () => boolean) { return this.interactions.loadInteractionBody(id, index, ownsView); }
+  interactionValueChunk(id: string, index: number, path: string[], offset: number, ownsView: () => boolean) { return this.interactions.interactionValueChunk(id, index, path, offset, ownsView); }
+  interactionPage(id: string, offset: number) { return this.interactions.interactionPage(id, offset); }
+  answer(id: string, interaction: InteractionRef, response?: InteractionResponse) { return this.interactions.answer(id, interaction, response); }
+  private readonly uploads = new SessionUploads({
+    request: (...args) => this.request(...args),
+    state: () => this.state,
+    current: generation => this.current(generation),
+    publish: patch => this.publish(patch),
+    target: id => this.target(id),
+    controls: (id, admission) => this.isAttachmentControlCurrent(id, admission),
+    carrier: (...args) => this.uploadCarrier(...args),
+  });
+  uploadStatus(id: string, operationId: string) { return this.uploads.uploadStatus(id, operationId); }
+  upload(id: string, files: readonly File[], evidence?: { current: () => boolean; acknowledged: (files: UploadedFile[]) => void }, operationId?: string) { return this.uploads.upload(id, files, evidence, operationId); }
   /** A new navigation or an explicit reload retires the previous jump's landing. */
   invalidateReading(id: string) { return this.reading.invalidateReading(id); }
   refreshTurns(id: string) { return this.reading.refreshTurns(id); }
@@ -951,7 +1007,7 @@ export class AppServerClient {
           cursor:checkpoint.cursor,observationState:'subscribePending',
           ...(this.state.views[id]?.modelMutation?.generation!==this.state.generation?{modelMutation:undefined}:{}),history: refreshTranscript(this.state.views[id]?.history, checkpoint.snapshot.transcript),
           trace: this.traces.supersede(id, ({...refreshTrace(this.state.views[id]?.trace, checkpoint.snapshot.trace, checkpoint.snapshot.trace_updates,checkpoint.read_cut),fields:this.traces.liveFields(target)})), error: undefined });
-        this.reconcileInteractions(id); this.settleSubmissions(id);
+        this.reconcile(id); this.settleSubmissions(id);
         this.acquiring.delete(id);
         this.resubscribe.delete(id);
         chain.beginSubscription(checkpoint.cursor);
@@ -981,51 +1037,13 @@ export class AppServerClient {
       throw error;
     }
   }
-  private reconcileInteractions(id: string) {
+  /** One authoritative snapshot reconciles every local operation it can settle. */
+  private reconcile(id: string) {
     if (!this.lifecycles.observe(id)) return;
-    const snapshot = this.state.views[id].snapshot!;
-    const request = this.state.views[id].compactionRequest;
-    const target = this.state.views[id].target;
-    if (request) {
-      if (request.authorityId !== this.state.authorityId || (request.generation === this.state.generation && !sameTarget(request.target, target)) || request.target.conversation_id !== target?.conversation_id
-        || request.target.runtime_incarnation !== target?.runtime_incarnation) {
-        this.setSession(id, { compactionRequest: undefined });
-      } else if (snapshot.context?.compaction_in_progress && ['succeeded', 'failed'].includes(request.status)) {
-        this.setSession(id, { compactionRequest: undefined });
-      } else {
-        const evidence = snapshot.context?.manual_compaction;
-        if (evidence?.request_id === request.requestId && evidence.released) {
-          // Native release ends gesture ownership independently of the RPC reply.
-          if (this.compactionRequests.get(id)?.requestId === request.requestId) this.compactionRequests.delete(id);
-          if (request.status !== 'succeeded') this.setSession(id, { compactionRequest: { ...request, status: evidence.error ? 'failed' : 'succeeded', diagnostic: evidence.error ?? undefined } });
-          if (this.state.uncertain.some(item => item.compactionRequestId === request.requestId && item.sessionId === id)) {
-            this.publish({ uncertain: this.state.uncertain.filter(item => item.compactionRequestId !== request.requestId || item.sessionId !== id) });
-          }
-        }
-      }
-    }
-    const mutation = this.state.views[id].modelMutation;
-    if (mutation && mutation.generation !== this.state.generation) this.setSession(id, { modelMutation: undefined });
-    const cancellation = this.state.views[id].cancellation;
-    // Until acknowledgement the retained display Attempt is not the operation's
-    // native target, so even its observed settlement cannot resolve this request.
-    if (cancellation?.status === 'acknowledged' && cancellation.attemptId !== undefined
-      && snapshot.attempt?.attempt_id === cancellation.attemptId && snapshot.attempt.phase.type === 'settled') {
-      this.setSession(id, { cancellation: undefined });
-    }
-    const frontier=observationCheckpoint(snapshot,this.state.views[id].cursor??'0')?.collections.find(value=>value.domain==='pending_interactions');
-    // A bounded head cannot establish absence from the complete native set.
-    if(frontier&&BigInt(frontier.total)>BigInt(snapshot.pending_interactions?.length??0))return;
-    const pending = new Set(snapshot.pending_interactions?.map(item => interactionKey(item.interaction)));
-    const operations = { ...this.state.interactionOperations };
-    // Only an authoritative fresh snapshot can establish absence. Include routed
-    // children by using the recorded Session route, not just root ConversationId.
-    const resolved = this.state.uncertain.filter(item => item.sessionId === id && item.interactionKey && !pending.has(item.interactionKey));
-    for (const item of resolved) delete operations[item.interactionKey!];
-    for (const key of Object.keys(operations)) {
-      if (operations[key].sessionId === id && !pending.has(key)) delete operations[key];
-    }
-    this.publish({ uncertain: this.state.uncertain.filter(item => !resolved.includes(item)), interactionOperations: operations });
+    this.controls.reconcileCompaction(id);
+    this.models.reconcile(id);
+    this.controls.reconcileCancellation(id);
+    this.interactions.reconcile(id);
   }
   target(id: string) {
     return this.lifecycles.target(id);
@@ -1036,51 +1054,6 @@ export class AppServerClient {
     const view = this.state.views[target.session_id];
     if (!sameTarget(view?.target, target) || view?.attachmentNodeId !== nodeId) throw new Error('Node does not own the current attachment.');
   }
-  async uploadStatus(id: string, operationId: string) {
-    const target = this.target(id), generation = this.state.generation;
-    const { outcome } = await this.request({ method: 'session/uploadStatus', params: { target, operation_id: operationId } }, 'upload_status');
-    if (outcome.state !== 'unresolved' && this.current(generation) && sameTarget(this.state.views[id]?.target, target)
-      && this.state.uncertain.some(item => item.sessionId === id && item.uploadOperationId === operationId)) {
-      this.publish({ uncertain: this.state.uncertain.filter(item => item.sessionId !== id || item.uploadOperationId !== operationId) });
-    }
-    return outcome;
-  }
-  async upload(id: string, files: readonly File[], evidence?: { current: () => boolean; acknowledged: (files: UploadedFile[]) => void }, operationId = uploadOperationId()): Promise<UploadedFile[]> {
-    let target: AttachmentTarget;
-    try { target = this.target(id); } catch (error) { throw new UploadFailure('failed', error); }
-    const policy = this.state.capabilities?.upload_policy;
-    if (!policy) throw new UploadFailure('failed', 'Upload policy unavailable');
-    if (!files.length || files.length > policy.max_files_per_transfer || files.some(file => file.size > policy.max_file_bytes) || files.reduce((sum, file) => sum + file.size, 0) > policy.max_transfer_bytes) throw new UploadFailure('failed', 'Selection exceeds native upload policy');
-    const admission = this.state.views[id]?.attachmentObservation;
-    const current = () => (!evidence || evidence.current()) && this.isAttachmentControlCurrent(id, admission) && sameTarget(admission?.target, target);
-    if (!current()) throw new UploadFailure('failed', 'Upload authority changed');
-    const read = async () => {
-      const outcome = await this.uploadStatus(id, operationId).catch(error => { throw new UploadFailure('uncertain', error); });
-      if (outcome.state !== 'ready') throw new UploadFailure(outcome.state === 'unresolved' ? 'uncertain' : 'failed');
-      evidence?.acknowledged(outcome.files);
-      if (!current()) throw new UploadFailure('uncertain', 'Upload belongs to a retired view');
-      return outcome.files;
-    };
-    let transfer;
-    try {
-      ({ transfer } = await this.request({ method: 'session/uploadPrepare', params: { target, operation_id: operationId, files: files.map(file => ({ name: file.name, size: file.size })) } }, 'upload_prepared', undefined, current));
-    } catch (error) {
-      if (error instanceof RequestNotDispatched) throw new UploadFailure('failed', error);
-      // A server refusal published no new preparation, but the exact operation
-      // may already exist. Read its authority before permitting a fresh Retry.
-      if (error instanceof RpcFailure && !isOutcomeUncertain(error) && current()) return read();
-      throw new UploadFailure('uncertain', error);
-    }
-    try {
-      if (!current()) throw new Error('Upload authority changed');
-      await this.uploadCarrier(transfer, files, policy, this.state.endpoint);
-    } catch {
-      // No retransmission: the authoritative read below repairs carrier loss.
-    }
-    if (!current()) throw new UploadFailure('uncertain', 'Upload authority changed');
-    return read();
-  }
-
   async send(id: string, text: string, receipts: readonly UploadReceipt[] = [], delivery: 'send' | 'steer' = 'send', acknowledged?: (result: Extract<MethodResult, { type: 'inbound_accepted' }>) => void, dispatchCurrent?: () => boolean) {
     if (receipts.some(receipt => receipt.session_id !== id)) throw new Error('Invalid Session upload receipts.');
     const content: UserInputBlock[] = [
@@ -1091,8 +1064,8 @@ export class AppServerClient {
   }
   async sendContent(id: string, content: UserInputBlock[], delivery: 'send' | 'steer' = 'send', acknowledged?: (result: Extract<MethodResult, { type: 'inbound_accepted' }>) => void, dispatchCurrent?: () => boolean) {
     const generation = this.state.generation;
-    const preparation = this.modelPreparations.get(id);
-    if (preparation) await preparation.work;
+    const preparation = this.models.preparation(id);
+    if (preparation) await preparation;
     if (!this.current(generation)) throw new Error('Connection changed before sending.');
     if (this.state.views[id]?.modelIntent) throw new Error(this.state.views[id].modelIntent?.error ?? 'Model selection is not ready.');
     if (this.state.views[id].modelMutation) throw new Error('Reread native model state before sending.');
@@ -1127,330 +1100,9 @@ export class AppServerClient {
     const remaining = view.submissions.filter(item => !observed.has(item.messageId));
     if (remaining.length !== view.submissions.length) this.setSession(id, { submissions: remaining });
   }
-  /** One CAS-bound Goal control. `expected` is the authoritative GoalRef the caller
-   * rendered. A known outcome (applied or refused) is not projection convergence:
-   * `observed` is true only when a snapshot read requested after the outcome
-   * succeeded for this attachment. A lost response stays uncertain. Nothing is
-   * retried and no newer revision is ever substituted. */
-  /** Load the original typed Goal objective at one exact native read cut. */
-  async goalObjective(id: string, expected: GoalRef): Promise<string> {
-    const view = this.state.views[id], target = view?.target, cut = view?.checkpoint?.read_cut, generation = this.state.generation;
-    const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target)
-      && this.state.views[id]?.snapshot?.goal?.current?.reference.id === expected.id
-      && this.state.views[id]?.snapshot?.goal?.current?.reference.revision === expected.revision;
-    if (!target || !cut || !current()) throw new Error('Goal observation was replaced.');
-    const path = ['current', 'objective'];
-    const { chunk } = await this.request({ method: 'conversation/checkpointValueRead', params: {
-      target, agent_id: null, cut, domain: 'goal', item_offset: 0, path, offset: 0, max_bytes: 65_536,
-    } }, 'checkpoint_value_chunk', undefined, current);
-    if (!current()) throw new Error('Goal observation was replaced.');
-    if(chunk.bytes_base64.length>87_384 || chunk.bytes_base64.length%4!==0 || chunk.bytes_base64.length/4*3-(chunk.bytes_base64.endsWith('==')?2:chunk.bytes_base64.endsWith('=')?1:0)>65_536)throw new Error('Encoded native range exceeds the decoded byte bound.');
-    const bytes = Uint8Array.from(atob(chunk.bytes_base64), value => value.charCodeAt(0));
-    if (JSON.stringify(chunk.cut) !== JSON.stringify(cut) || chunk.domain !== 'goal' || chunk.item_offset !== 0
-      || JSON.stringify(chunk.path) !== JSON.stringify(path) || chunk.offset !== 0 || chunk.next_offset != null
-      || !Number.isSafeInteger(chunk.readable_end) || chunk.readable_end !== bytes.length || bytes.length > 65_536) throw new Error('Goal objective range changed.');
-    const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-    const original: unknown = chunk.representation === 'utf8_text' ? text : chunk.representation === 'canonical_json_v1' ? JSON.parse(text) : undefined;
-    if (typeof original !== 'string' || new TextEncoder().encode(original).length > 8192) throw new Error('Goal objective exceeds its native bound.');
-    return original;
-  }
-  async controlGoal(id: string, expected: GoalRef, mutation: GoalMutation): Promise<GoalControlOutcome> {
-    const generation = this.state.generation;
-    let target: AttachmentTarget;
-    try { target = this.target(id); } catch (error) { return { status: 'rejected', reason: error instanceof Error ? error.message : String(error), observed: false }; }
-    const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);
-    try {
-      await this.request({ method: 'goal/control', params: { target, control: { action: 'mutate', expected, mutation } } }, 'goal_mutation');
-    } catch (error) {
-      if (error instanceof OutcomeUncertain) return { status: 'uncertain' };
-      if (!current()) return { status: 'obsolete' };
-      return { status: 'rejected', reason: goalRefusal(error), observed: await this.reread(id, current) };
-    }
-    if (!current()) return { status: 'obsolete' };
-    return { status: 'applied', observed: await this.reread(id, current) };
-  }
-  /** `refresh` re-marks the view dirty, so even a coalesced in-flight refresh
-   * completes a snapshot request issued after this call before resolving. */
-  private async reread(id: string, current: () => boolean) {
-    const observation = this.lifecycles.observe(id);
-    if (!observation || !current()) return false;
-    try { await this.refresh(id); } catch { return false; }
-    return current() && observation.current() && this.state.views[id]?.attachment === 'attached';
-  }
-  async editInbound(id: string, expected: PendingInboundRef, text: string): Promise<InboundControlOutcome> {
-    return this.controlInbound(id, target => ({ method: 'inbound/edit', params: { target, expected, text } }));
-  }
-  async removeInbound(id: string, expected: PendingInboundRef): Promise<InboundControlOutcome> {
-    return this.controlInbound(id, target => ({ method: 'inbound/remove', params: { target, expected } }));
-  }
-  private async controlInbound(id: string, operation: (target: AttachmentTarget) => Request1): Promise<InboundControlOutcome> {
-    const generation = this.state.generation;
-    let target: AttachmentTarget;
-    try { target = this.target(id); } catch (error) { return { status: 'rejected', reason: String(error), observed: false }; }
-    const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);
-    try {
-      const result = await this.request(operation(target), 'inbound_mutation');
-      if (!current()) return { status: 'obsolete' };
-      if (result.outcome.status === 'durability_uncertain') return { status: 'uncertain' };
-      return { status: 'known', outcome: result.outcome, observed: await this.rereadPending(id, current) };
-    } catch (error) {
-      if (!current()) return isOutcomeUncertain(error) ? { status: 'uncertain' } : { status: 'obsolete' };
-      if (isOutcomeUncertain(error)) return { status: 'uncertain' };
-      return { status: 'rejected', reason: String(error), observed: await this.rereadPending(id, current) };
-    }
-  }
-  /** Pending edits/removals invalidate historical windows too. Replace after
-   * the final coalesced read, so an older in-flight response cannot restore a
-   * removed row through the normal append-only transcript merge. */
-  private async rereadPending(id: string, current: () => boolean) {
-    const observation = this.lifecycles.observe(id);
-    const observed = await this.reread(id, current) && !!observation?.current();
-    const view = this.state.views[id];
-    if (observed && view?.snapshot) this.setSession(id, { history: replaceTranscript(view.snapshot.transcript, view.history) });
-    return observed;
-  }
-  private modelPreparations = new Map<string, { work: Promise<import('../../../protocol/app-server/v50').SessionModelConfig>; retire: () => void }>();
-  /** Client-owned selection while native resources initialize. Last unsent choice
-   * wins; the existing native mutation and authoritative reread still own apply. */
-  prepareAgentModel(id: string, config: import('../../../protocol/app-server/v50').SessionModelConfig) {
-    const view = this.state.views[id];
-    if (view?.attachment !== 'attaching' || view.attachmentIntent !== 'wanted' || view.deleting)
-      return Promise.reject(new Error('Conversation is no longer connecting.'));
-    this.setSession(id, { modelIntent: { config, phase: 'waiting' } });
-    const previous = this.modelPreparations.get(id);
-    if (previous) return previous.work;
-    let live = true;
-    const generation = this.state.generation, epoch = this.lifecycles.epoch(id);
-    const current = () => live && this.current(generation) && this.lifecycles.epoch(id) === epoch
-      && this.state.views[id]?.attachmentIntent === 'wanted' && !this.state.views[id]?.deleting;
-    const work = (async () => {
-      try {
-        await this.waitForAttachment(id, current);
-        if (!current()) throw new Error('Model selection retired with its connection.');
-        const selection = this.state.views[id].modelIntent!.config;
-        this.setSession(id, { modelIntent: { config: selection, phase: 'applying' } });
-        await this.setAgentModel(id, selection);
-        if (!current()) throw new Error('Model selection retired with its connection.');
-        await this.repairAgentModel(id);
-        if (!current()) throw new Error('Model selection retired with its connection.');
-        const observed = this.state.views[id].snapshot?.model?.configured;
-        if (observed?.model !== selection.model || (observed.profile ?? undefined) !== (selection.profile ?? undefined))
-          throw new Error('Selected model has not been confirmed. Reread model configuration before sending.');
-        this.setSession(id, { modelIntent: undefined });
-        return selection;
-      } catch (error) {
-        const intent = this.state.views[id]?.modelIntent;
-        if (current() && intent) this.setSession(id, { modelIntent: { ...intent, phase: 'failed', error: String(error) } });
-        throw error;
-      }
-    })();
-    this.modelPreparations.set(id, { work, retire: () => { live = false; } });
-    void work.finally(() => { if (this.modelPreparations.get(id)?.work === work) this.modelPreparations.delete(id); }).catch(() => {});
-    return work;
-  }
-  /** Native catalog defaults at the exact generation whose ordinals were read. */
-  async selectCatalogModel(id:string,choice:import('../../../protocol/app-server/v50').CatalogModelSelection,owned:()=>boolean=()=>true) {
-    const target=this.target(id),generation=this.state.generation;
-    if(this.state.views[id].modelMutation)throw new Error('Reread native model state before another mutation.');
-    const current=()=>owned()&&this.current(generation)&&sameTarget(this.state.views[id]?.target,target);
-    if(!current())return;
-    const operation={generation,status:'in-flight' as const};this.setSession(id,{modelMutation:operation});
-    try {
-      await this.request({method:'session/selectModel',params:{target,choice}},'model_set',undefined,current);
-      if(this.current(generation)&&sameTarget(this.state.views[id]?.target,target))this.setSession(id,{modelMutation:{generation,status:'acknowledged'}});
-    }catch(error){
-      if(this.state.views[id]?.modelMutation===operation)this.setSession(id,{modelMutation:error instanceof RequestNotDispatched?undefined:{generation,status:isOutcomeUncertain(error)?'uncertain':'acknowledged'}});
-      throw error;
-    }
-  }
-
-  /** Transport continuation guard, not Session model authority. A successful
-   * mutation response alone cannot enable a dependent Send. */
-  async setAgentModel(id: string, config: import('../../../protocol/app-server/v50').SessionModelConfig) {
-    const target = this.target(id), generation = this.state.generation;
-    if (this.state.views[id].modelMutation) throw new Error('Reread native model state before another mutation.');
-    const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);
-    const operation = { generation, status: 'in-flight' as const };
-    this.setSession(id, { modelMutation: operation });
-    try {
-      await this.request({ method: 'session/setModel', params: { target, config } }, 'model_set');
-      if (!current()) return;
-      this.setSession(id, { modelMutation: { generation, status: 'acknowledged' }, ...(this.state.views[id]?.modelIntent?.phase === 'failed' ? { modelIntent: undefined } : {}) });
-    } catch (error) {
-      if (this.getSnapshot().views[id]?.modelMutation === operation) this.setSession(id, { modelMutation: { generation, status: isOutcomeUncertain(error) ? 'uncertain' : 'acknowledged' } });
-      throw error;
-    }
-  }
-  private compactionRequests = new Map<string, CompactionRequestEvidence>();
-  /** Claims the local gesture synchronously. Native maintenance owns admission. */
-  compact(id: string, consume: () => void = () => {}): boolean {
-    const attachment = this.lifecycles.observe(id);
-    if (!attachment) throw new RequestNotDispatched('Attachment control authority was revoked.');
-    const target = attachment.target, generation = this.state.generation;
-    const pending = this.compactionRequests.get(id);
-    if (pending?.generation === generation && sameTarget(pending.target, target)) return false;
-    const operation: CompactionRequestEvidence = { baselineCount: this.state.views[id]?.snapshot?.context?.compaction_count ?? 0, generation, requestId: crypto.randomUUID(), authorityId: this.state.authorityId, target, status: 'submitting' };
-    this.compactionRequests.set(id, operation);
-    this.setSession(id, { compactionRequest: operation });
-    consume();
-    const current = () => this.current(generation) && attachment.current() && sameTarget(this.state.views[id]?.target, target)
-      && this.state.views[id]?.compactionRequest?.requestId === operation.requestId;
-    const release = () => { if (this.compactionRequests.get(id) === operation) this.compactionRequests.delete(id); };
-    void this.request({ method: 'context/compact', params: { target, request_id: operation.requestId } }, 'context_compacted', undefined, current)
-      .then(result => {
-        release();
-        if (!current()) return;
-        // The response follows native release. Read failure cannot erase this fact.
-        this.setSession(id, { compactionRequest: { ...operation, status: 'succeeded', receipt: result.compaction } });
-      }, error => {
-        release();
-        if (this.state.views[id]?.compactionRequest !== operation) return;
-        if (!current() && (this.state.views[id]?.target || this.state.authorityId !== operation.authorityId)) return;
-        this.setSession(id, { compactionRequest: { ...operation, status: isOutcomeUncertain(error) ? 'uncertain' : 'failed', diagnostic: String(error) } });
-      });
-    return true;
-  }
-
-  async repairAgentModel(id: string) {
-    const view = this.state.views[id], target = view?.target;
-    if (!target || !this.lifecycles.observe(id)) return;
-    const generation = this.state.generation, operation = view.modelMutation, intent = view.modelIntent;
-    if (operation?.status === 'in-flight') return;
-    await this.refresh(id);
-    const latest = this.state.views[id];
-    // Recovery installs a fresh observation proof. Fence this reconciliation
-    // by its connection, attachment and exact operation, rather than the proof
-    // that the authoritative checkpoint necessarily replaced.
-    if (!this.current(generation) || !sameTarget(latest?.target, target)
-      || latest.modelMutation !== operation || latest.modelIntent !== intent
-      || latest.observationState !== 'following') return;
-    const observed = latest.snapshot?.model?.configured;
-    const confirmed = intent?.phase === 'failed' && observed?.model === intent.config.model
-      && (observed.profile ?? undefined) === (intent.config.profile ?? undefined);
-    if (operation || confirmed) this.setSession(id, { modelMutation: undefined, ...(confirmed ? { modelIntent: undefined } : {}) });
-  }
-  cancellationTarget(id: string): CancellationTarget | undefined {
-    const view = this.state.views[id], attempt = view?.snapshot?.attempt;
-    // This proof owns the live attachment even when its observation source is
-    // unavailable. The coordinator selects the current Attempt at dispatch.
-    if (!this.isAttachmentObservationCurrent(id, view?.attachmentObservation) || !this.initialized || this.state.connection !== 'connected' || view?.attachmentIntent !== 'wanted'
-      || !view.target || view.deleting || this.cancellationPending(id)) return;
-    if (this.observationChains.get(id)?.phase === 'following' && (!attempt || attempt.attempt_id == null || !['admitted','running'].includes(attempt.phase.type)
-      || view.snapshot?.shutting_down || view.snapshot?.durability_failure || view.snapshot?.pending_interactions?.length)) return;
-    return { generation: this.state.generation, target: view.target, attemptId: attempt?.attempt_id ?? undefined, attachment: view.attachmentObservation };
-  }
-  private cancellationPending(id: string): boolean {
-    const view = this.state.views[id], cancellation = view?.cancellation;
-    // An acknowledgement cannot establish that its Attempt is still current
-    // while observation is unavailable. A later explicit gesture selects anew.
-    return !!cancellation && (cancellation.status !== 'acknowledged'
-      || this.observationChains.get(id)?.phase === 'following' && cancellation.attemptId === view.snapshot?.attempt?.attempt_id);
-  }
-  async cancelTurn(expected: CancellationTarget) {
-    const { target, generation, attemptId, attachment } = expected, id = target.session_id;
-    const current = () => this.current(generation) && this.initialized && this.state.connection === 'connected'
-      && this.lifecycles.observes(id, attachment) && sameTarget(this.state.views[id]?.target, target);
-    if (!current() || this.cancellationPending(id)) return;
-    const operation = { attemptId, status: 'in-flight' as const };
-    this.setSession(id, { cancellation: operation });
-    try {
-      const accepted = await this.request({ method: 'turn/cancel', params: { target } }, 'cancellation_accepted', undefined,
-        () => current() && this.state.views[id]?.cancellation === operation);
-      if (current() && this.state.views[id].cancellation === operation) {
-        this.setSession(id, { cancellation: { attemptId: accepted.attempt_id, status: 'acknowledged' } });
-      }
-    } catch (error) {
-      // The exact operation owns cleanup even if its unsent transport was retired.
-      // Acknowledgement or a successor operation replaces this marker.
-      if (this.state.views[id]?.cancellation === operation) {
-        this.setSession(id, { cancellation: isOutcomeUncertain(error) ? { attemptId, status: 'uncertain' } : undefined });
-      }
-      throw error;
-    }
-  }
-  pendingInteractions(id:string) {
-    const view=this.state.views[id],loaded=view?.interactionPage;
-    if(loaded&&sameTarget(view.target,loaded.target)&&this.interactionCutCurrent(view,loaded.page.read_cut))return loaded.rows;
-    return view?.snapshot?.pending_interactions??[];
-  }
-  interactionBody(id:string,header:import('../../../protocol/app-server/v50').RuntimeClientInteractionHeader) {
-    const view=this.state.views[id],detail=view?.interactionDetail;
-    if(detail&&sameTarget(view.target,detail.target)&&this.interactionCutCurrent(view,detail.cut)&&interactionKey(detail.body.interaction)===interactionKey(header.interaction))return detail.body;
-    return interactionBody(header);
-  }
-  async loadInteractionBody(id:string,index:number,ownsView:()=>boolean=()=>true) {
-    const view=this.state.views[id],observation=this.lifecycles.observe(id),header=this.pendingInteractions(id)[index];
-    if(!observation||!header||!view.checkpoint)throw new Error('Interaction observation is unavailable.');
-    const viewport=view.interactionPage;
-    const selected=viewport&&sameTarget(view.target,viewport.target)&&this.interactionCutCurrent(view,viewport.page.read_cut)?viewport:undefined;
-    const cut=selected?.page.read_cut??view.checkpoint.read_cut,target=observation.target;
-    const offset=Number(header.source_offset);
-    if(!Number.isSafeInteger(offset)||offset<0)throw new Error("Invalid native interaction source offset.");
-    const current=()=>ownsView()&&observation.current()&&!!this.state.views[id]&&this.interactionCutCurrent(this.state.views[id],cut)
-      &&this.pendingInteractions(id)[index]?.request_id===header.request_id;
-    const {page}=await this.request({method:'conversation/checkpointPage',params:{target,agent_id:null,cut,domain:'pending_interactions',offset,limit:1}},'checkpoint_page',undefined,current);
-    if(page.items.length!==1)throw new Error('Interaction body is unavailable.');
-    const body=await readInteractionBody(page,page.items[0]!,header,this.reads.domainReader(target,current));
-    if(current())this.setSession(id,{interactionDetail:{target,cut,body}});
-  }
-  async interactionValueChunk(id:string,index:number,path:string[],offset:number,ownsView:()=>boolean) {
-    const view=this.state.views[id],observation=this.lifecycles.observe(id),header=this.pendingInteractions(id)[index];
-    if(!observation||!header||!view.checkpoint)throw new Error('Interaction observation is unavailable.');
-    const selected=view.interactionPage&&sameTarget(view.target,view.interactionPage.target)&&this.interactionCutCurrent(view,view.interactionPage.page.read_cut)?view.interactionPage:undefined;
-    const cut=selected?.page.read_cut??view.checkpoint.read_cut,item_offset=Number(header.source_offset);
-    if(!Number.isSafeInteger(item_offset)||item_offset<0)throw new Error("Invalid native interaction source offset.");
-    const current=()=>ownsView()&&observation.current()&&!!this.state.views[id]&&this.interactionCutCurrent(this.state.views[id],cut)&&this.pendingInteractions(id)[index]?.request_id===header.request_id;
-    const {chunk}=await this.request({method:'conversation/checkpointValueRead',params:{target:observation.target,agent_id:null,cut,domain:'pending_interactions',item_offset,path,offset,max_bytes:65536}},'checkpoint_value_chunk',undefined,current);
-    if(!current()||JSON.stringify(chunk.cut)!==JSON.stringify(cut)||chunk.domain!=='pending_interactions'||chunk.item_offset!==item_offset||JSON.stringify(chunk.path)!==JSON.stringify(path)||chunk.offset!==offset)throw new Error('Interaction range identity changed.');
-    if(chunk.bytes_base64.length>87_384 || chunk.bytes_base64.length%4!==0 || chunk.bytes_base64.length/4*3-(chunk.bytes_base64.endsWith('==')?2:chunk.bytes_base64.endsWith('=')?1:0)>65_536)throw new Error('Encoded native range exceeds the decoded byte bound.');
-    const bytes=Uint8Array.from(atob(chunk.bytes_base64),value=>value.charCodeAt(0));
-    if(bytes.length>65536||!Number.isSafeInteger(chunk.readable_end)||offset+bytes.length>chunk.readable_end||offset<chunk.readable_end&&!bytes.length||(chunk.next_offset??null)!==(offset+bytes.length<chunk.readable_end?offset+bytes.length:null))throw new Error('Interaction range failed to advance exactly.');
-    return {bytes,next:chunk.next_offset??undefined,readableEnd:chunk.readable_end};
-  }
-  private interactionCutCurrent(view:SessionView,cut:import('../../../protocol/app-server/v50').CheckpointReadCut) {
-    const current=view.checkpoint?.read_cut;
-    return !!current&&current.conversation_id===cut.conversation_id&&current.activation_id===cut.activation_id
-      &&(cut.domain_revisions.pending_interactions!==undefined
-        ?current.domain_revisions.pending_interactions===cut.domain_revisions.pending_interactions:current.revision===cut.revision);
-  }
-  async interactionPage(id:string,offset:number) {
-    const view=this.state.views[id],observation=this.lifecycles.observe(id),checkpoint=view?.checkpoint;
-    if(!observation||!checkpoint||!Number.isSafeInteger(offset)||offset<0)throw new Error('Interaction observation is unavailable.');
-    const cut=checkpoint.read_cut,target=observation.target;
-    const current=()=>observation.current()&&!!this.state.views[id]&&this.interactionCutCurrent(this.state.views[id],cut);
-    const {page}=await this.request({method:'conversation/checkpointPage',params:{target,agent_id:null,cut,domain:'pending_interactions',offset,limit:32}},'checkpoint_page',undefined,current);
-    if(page.items.length>32)throw new Error('Interaction page exceeds its item bound.');
-    const rows=page.items.map(item=>{if(item.value==null)throw new Error('Interaction descriptor is missing.');return item.value as import('../../../protocol/app-server/v50').RuntimeClientInteractionHeader;});
-    if(!current())throw new Error('Interaction observation was replaced.');
-    this.setSession(id,{interactionPage:{target,page,rows,offset}});
-  }
-  async answer(id: string, interaction: InteractionRef, response?: InteractionResponse) {
-    const key = interactionKey(interaction);
-    if (this.state.interactionOperations[key]) throw new Error('Response already in flight or uncertain. Refresh authoritative state.');
-    const target = this.target(id);
-    if (!this.pendingInteractions(id).some(item => interactionKey(item.interaction) === key)) throw new Error('Interaction is no longer pending.');
-    const generation = this.state.generation;
-    this.publish({ interactionOperations: { ...this.state.interactionOperations, [key]: { sessionId: id, status: 'in-flight' } } });
-    let acknowledged = false;
-    try {
-      await this.request(response ? { method: 'interaction/respond', params: { target, interaction, response } }
-        : { method: 'interaction/cancel', params: { target, interaction } }, 'interaction_settled');
-      if (!this.current(generation) || !sameTarget(this.state.views[id]?.target, target)) return;
-      acknowledged = true;
-      this.publish({ interactionOperations: { ...this.state.interactionOperations, [key]: { sessionId: id, status: 'acknowledged' } } });
-      await this.refresh(id);
-    } catch (error) {
-      if (this.current(generation) && !(error instanceof OutcomeUncertain) && !acknowledged) {
-        const operations = { ...this.state.interactionOperations }; delete operations[key];
-        this.publish({ interactionOperations: operations });
-        await this.refresh(id).catch(() => {});
-      }
-      throw error;
-    }
-  }
   /** Intent events are synchronously admitted and projected by the Session actor. */
   async release(id: string): Promise<void> {
-    this.modelPreparations.get(id)?.retire(); this.modelPreparations.delete(id);
+    this.models.release(id);
     await this.lifecycles.command(id, { kind: 'release', current: () => true });
   }
   switchNode(id: string, nodeId: string, current: () => boolean = () => true): Promise<void> {
