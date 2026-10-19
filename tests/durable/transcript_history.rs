@@ -635,7 +635,7 @@ fn initialized_snapshot(
 }
 
 async fn await_native_activation(attachment: &rustx::runtime_client::RuntimeAttachment) {
-    use rustx::local_runtime::configuration::application::AdoptionEligibility;
+    use rustx::runtime::adoption::AdoptionEligibility;
     use rustx::runtime_client::{EventDelivery, RuntimeClientCursor, RuntimeClientEvent};
     let subscription = attachment
         .subscribe_events(RuntimeClientCursor::new(0))

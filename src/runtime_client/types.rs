@@ -1008,7 +1008,7 @@ pub struct InteractionFieldItem {
 pub enum RuntimeClientError {
     /// Native Session adoption/model fence refusal.
     ConfigurationAdoption {
-        rejection: crate::local_runtime::configuration::application::AdoptionError,
+        rejection: crate::runtime::adoption::AdoptionError,
     },
     /// The negotiated protocol version is not supported by this runtime.
     UnsupportedProtocolVersion {

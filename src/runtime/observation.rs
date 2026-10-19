@@ -360,7 +360,7 @@ pub(crate) enum ConversationObservation {
     /// differs from its previous publication, so ordinary streaming never
     /// emits it. `session/adoptConfiguration` still revalidates the real gate
     /// at its commit boundary.
-    AdoptionEligibility(crate::local_runtime::configuration::application::AdoptionEligibility),
+    AdoptionEligibility(crate::runtime::adoption::AdoptionEligibility),
 }
 
 /// Streaming traversal of the complete native transition. No payload or

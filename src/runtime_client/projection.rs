@@ -1952,7 +1952,7 @@ fn initial_client_snapshot(
         // has no live runtime: neither can adopt until the runtime
         // publishes otherwise.
         configuration_adoption_eligibility:
-            crate::local_runtime::configuration::application::AdoptionEligibility::Unavailable,
+            crate::runtime::adoption::AdoptionEligibility::Unavailable,
         durability_failure: None,
         messages: initial_messages,
         message_descriptors: Vec::new(),
@@ -8121,7 +8121,7 @@ mod tests {
     /// domain, because it is not conversation history.
     #[test]
     fn adoption_eligibility_publishes_only_changes() {
-        use crate::local_runtime::configuration::application::AdoptionEligibility;
+        use crate::runtime::adoption::AdoptionEligibility;
         let mut projection = projection();
         let (snapshot, cursor) = projection.snapshot().unwrap();
         assert_eq!(

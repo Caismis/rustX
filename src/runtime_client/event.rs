@@ -89,7 +89,7 @@ pub enum RuntimeClientEvent {
     /// ordinary streaming. Advisory: `session/adoptConfiguration` revalidates
     /// the real gate at its commit boundary.
     ConfigurationAdoptionEligibilityChanged {
-        eligibility: crate::local_runtime::configuration::application::AdoptionEligibility,
+        eligibility: crate::runtime::adoption::AdoptionEligibility,
     },
     /// Bounded authoritative durable Goal view. Every emission follows a
     /// committed durable transition; there is no activation-only form.

@@ -404,35 +404,26 @@ pub struct PreparedCapabilityCandidate {
 }
 
 impl PreparedCapabilityCandidate {
+    /// Rebinds the candidate's root context profile to `agent`'s instructions
+    /// and project-instruction policy and its resolved root project files.
     pub(crate) fn set_context_profile(
         &mut self,
-        capture: &crate::local_runtime::configuration::ProspectiveSessionConfig,
+        agent: &crate::local_runtime::config::AgentProfileDocument,
+        root_agent_project_files: &[crate::runtime::resources::ProjectContextFile],
     ) {
         if let Some(profile) = &mut self.resolved_profile {
             let profile = Arc::make_mut(profile);
-            profile
-                .instructions
-                .clone_from(&capture.config.agent.instructions);
-            profile.project_instructions.inherit = capture.config.agent.agents_md.inherit;
-            profile
-                .project_instructions
-                .files
-                .clone_from(&capture.root_agent_project_files);
+            profile.instructions.clone_from(&agent.instructions);
+            profile.project_instructions.inherit = agent.agents_md.inherit;
+            profile.project_instructions.files = root_agent_project_files.to_vec();
         }
-        self.resource_inputs
-            .agent_activation
+        let activation = &mut self.resource_inputs.agent_activation;
+        activation
             .profile
             .instructions
-            .clone_from(&capture.config.agent.instructions);
-        self.resource_inputs
-            .agent_activation
-            .profile
-            .agents_md
-            .clone_from(&capture.config.agent.agents_md);
-        self.resource_inputs
-            .agent_activation
-            .project_files
-            .clone_from(&capture.root_agent_project_files);
+            .clone_from(&agent.instructions);
+        activation.profile.agents_md.clone_from(&agent.agents_md);
+        activation.project_files = root_agent_project_files.to_vec();
     }
     /// An admission-local view; the caller retains this candidate until the
     /// child has frozen its materialization or the Workflow has settled.
@@ -604,22 +595,6 @@ impl PreparedCapabilityCandidate {
     #[must_use]
     pub fn node_environment(&self) -> Option<&crate::skills::environments::NodeEnvironment> {
         self.node.as_ref()
-    }
-
-    /// Installs a deterministic close probe on every MCP runtime prepared by
-    /// this candidate. Test loaders use this before deliberately failing
-    /// after capability preparation, so candidate-only physical cleanup is
-    /// observable without exposing ownership internals to production code.
-    #[cfg(test)]
-    pub(crate) fn install_mcp_close_probe(
-        &self,
-        probe: &Arc<crate::tools::mcp::test_sync::CloseProbe>,
-    ) {
-        for generation in &self.mcp_runtimes {
-            if let Some(runtime) = generation.connection().published_runtime() {
-                runtime.install_close_probe(probe.clone());
-            }
-        }
     }
 }
 

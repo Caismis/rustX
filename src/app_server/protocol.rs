@@ -871,7 +871,7 @@ pub enum ErrorData {
         reason: crate::tools::session_files::SessionFileReadFailure,
     },
     ConfigurationAdoption {
-        rejection: crate::local_runtime::configuration::application::AdoptionError,
+        rejection: crate::runtime::adoption::AdoptionError,
     },
     /// The Session's published Model Catalog does not admit its configured
     /// selection, so no work is accepted until `session/setModel` commits a
@@ -937,7 +937,7 @@ pub enum ErrorData {
         node_id: SessionNodeId,
     },
     SourceConflict {
-        scope: crate::local_runtime::configuration::settings::SourceScope,
+        scope: crate::runtime::resources::SourceScope,
         expected: String,
         actual: String,
     },

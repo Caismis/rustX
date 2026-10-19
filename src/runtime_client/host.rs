@@ -4699,8 +4699,7 @@ impl ClientInner {
                     message: "Session model selection requires the native Session owner".to_owned(),
                 },
                 ModelUpdateError::Conflict => RuntimeClientError::ConfigurationAdoption {
-                    rejection:
-                        crate::local_runtime::configuration::application::AdoptionError::Conflict,
+                    rejection: crate::runtime::adoption::AdoptionError::Conflict,
                 },
                 ModelUpdateError::Inactive => RuntimeClientError::InvalidState {
                     message: "the conversation runtime is not activated".to_owned(),
@@ -6322,14 +6321,6 @@ mod tests {
         ))
     }
 
-    fn test_resource_loader(
-        capability: &crate::capabilities::CapabilityCoordinator,
-    ) -> Arc<dyn crate::runtime::RuntimeResourceLoader> {
-        Arc::new(crate::runtime::FilesystemRuntimeResourceLoader::new(
-            capability.current_snapshot().workspace_root(),
-        ))
-    }
-
     fn request_snapshots(history: &RequestHistory) -> Vec<crate::model::RequestSnapshot> {
         let mut snapshots = Vec::new();
         let mut cursor = None;
@@ -6659,7 +6650,7 @@ mod tests {
                     let state = inner.lock_published_state();
                     (state.projection.snapshot_ref().configuration_adoption_eligibility.clone(), state.projection.cursor())
                 };
-                if eligibility == crate::local_runtime::configuration::application::AdoptionEligibility::Eligible {
+                if eligibility == crate::runtime::adoption::AdoptionEligibility::Eligible {
                     assert!(cursor.get() > 0, "activation eligibility is actually published");
                     break;
                 }
@@ -6816,7 +6807,6 @@ mod tests {
             },
             tool_runtime,
             resources: test_resources(&coordinator),
-            resource_loader: test_resource_loader(&coordinator),
             capability: coordinator.clone(),
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
@@ -6917,7 +6907,6 @@ mod tests {
                 },
                 tool_runtime,
                 resources: test_resources(&coordinator),
-                resource_loader: test_resource_loader(&coordinator),
                 capability: coordinator.clone(),
                 clock: Some(Arc::new(FixedRuntimeClock)),
                 initial_messages: Vec::new(),
@@ -10490,10 +10479,12 @@ mod tests {
         // can advance the cursor while this test expects an unchanged cut.
         receive_until(&subscription, |event| {
             event.event.facts().iter().any(|fact| {
-                matches!(fact, RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged {
-                    eligibility:
-                        crate::local_runtime::configuration::application::AdoptionEligibility::Busy
-                })
+                matches!(
+                    fact,
+                    RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged {
+                        eligibility: crate::runtime::adoption::AdoptionEligibility::Busy
+                    }
+                )
             })
         })
         .await;
@@ -12954,7 +12945,6 @@ mod tests {
             },
             tool_runtime,
             resources: test_resources(&coordinator),
-            resource_loader: test_resource_loader(&coordinator),
             capability: coordinator.clone(),
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
@@ -13058,7 +13048,6 @@ mod tests {
                 },
                 tool_runtime,
                 resources: test_resources(&coordinator),
-                resource_loader: test_resource_loader(&coordinator),
                 capability: coordinator.clone(),
                 clock: Some(Arc::new(FixedRuntimeClock)),
                 initial_messages: Vec::new(),
@@ -13181,7 +13170,6 @@ mod tests {
             },
             tool_runtime,
             resources: test_resources(&coordinator),
-            resource_loader: test_resource_loader(&coordinator),
             capability: coordinator.clone(),
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
@@ -13603,7 +13591,6 @@ mod tests {
             },
             tool_runtime: fixture.tool_runtime.clone(),
             resources: test_resources(&fixture.coordinator),
-            resource_loader: test_resource_loader(&fixture.coordinator),
             capability: fixture.coordinator.clone(),
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),

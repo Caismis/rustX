@@ -360,7 +360,7 @@ async fn snapshot_dto_round_trips() {
     // The baseline is the actual published bootstrap cut, never a guessed ordinal.
     assert_eq!(
         snapshot.configuration_adoption_eligibility,
-        rustx::local_runtime::configuration::application::AdoptionEligibility::Eligible
+        rustx::runtime::adoption::AdoptionEligibility::Eligible
     );
     let json = serde_json::to_string(&snapshot).expect("serialize snapshot");
     let decoded: rustx::runtime_client::RuntimeClientSnapshot =

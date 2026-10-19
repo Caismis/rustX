@@ -183,8 +183,7 @@ pub struct RuntimeClientSnapshot {
     /// candidate and is never configuration application state. `unavailable` until the runtime runs, after it stops, and for a
     /// durable inspection projection. `session/adoptConfiguration` revalidates
     /// the real gate at its commit boundary.
-    pub configuration_adoption_eligibility:
-        crate::local_runtime::configuration::application::AdoptionEligibility,
+    pub configuration_adoption_eligibility: crate::runtime::adoption::AdoptionEligibility,
     /// The runtime's durable-authority failure, when it has entered the
     /// explicit degraded state. While set, no new durable admission/execution
     /// work may begin.

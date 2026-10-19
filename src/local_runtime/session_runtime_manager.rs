@@ -271,7 +271,10 @@ impl ConfigurationObservationSource {
         }
         let application = manager.applications.lock();
         let composition = resident.composition.lock().expect("composition mutex");
-        let mut view = composition.as_ref()?.runtime().configuration_view()?;
+        let mut view =
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &composition.as_ref()?.runtime(),
+            )?;
         view.application = application.view(session.as_ref());
         view.process_bindings = Some(manager.process_policy());
         Some(view)
@@ -984,6 +987,32 @@ impl SessionRuntimeManager {
         Ok(result)
     }
 
+    /// The resident runtime together with the resource preparation of the
+    /// same composition, read under one composition lock.
+    pub(super) fn configuration_preparation(
+        &self,
+        id: &SessionId,
+    ) -> Option<(
+        ConversationRuntime,
+        Arc<crate::local_runtime::composition::LocalRuntimeResourceLoader>,
+    )> {
+        let resident = {
+            let state = self.registry.0.lock().expect("registry mutex");
+            state.by_session.get(id).and_then(|conversation| {
+                match state.entries.get(conversation) {
+                    Some(Entry::Loaded(resident)) => Some(resident.clone()),
+                    _ => None,
+                }
+            })
+        }?;
+        let composition = resident.composition.lock().expect("composition mutex");
+        let composition = composition.as_ref()?;
+        Some((
+            composition.runtime().clone(),
+            Arc::clone(composition.resource_loader()?),
+        ))
+    }
+
     pub(super) fn configuration_runtime(&self, id: &SessionId) -> Option<ConversationRuntime> {
         let resident = {
             let state = self.registry.0.lock().expect("registry mutex");
@@ -1063,7 +1092,10 @@ impl SessionRuntimeManager {
         id: &SessionId,
     ) -> Option<super::configuration::settings::EffectiveConfiguration> {
         let application = self.applications.lock();
-        let mut view = self.configuration_runtime(id)?.configuration_view()?;
+        let mut view =
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &self.configuration_runtime(id)?,
+            )?;
         view.application = application.view(id.as_ref());
         view.process_bindings = Some(self.process_policy());
         Some(view)
@@ -1239,7 +1271,7 @@ impl SessionRuntimeManager {
         expected_binding: u64,
     ) -> Result<
         super::configuration::application::ConfigurationApplication,
-        super::configuration::application::AdoptionError,
+        crate::runtime::adoption::AdoptionError,
     > {
         self.applications
             .adopt(self, session, identity, expected_binding)

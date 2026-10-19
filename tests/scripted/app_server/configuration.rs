@@ -3,9 +3,10 @@
 #![allow(clippy::large_futures)] // bounded fixture futures; no recursive or unbounded stack growth
 use super::*;
 use crate::local_runtime::configuration::application::{
-    AdoptionEligibility, AdoptionError, ApplyUnit, ConfigurationApplication, UnitApplication,
+    ApplyUnit, ConfigurationApplication, UnitApplication,
 };
 use crate::local_runtime::configuration::settings::{ConfigMutation, SourceMutation};
+use crate::runtime::adoption::{AdoptionEligibility, AdoptionError};
 
 /// Captures the native execution frontier before admitting or releasing work.
 /// The coordinator retains that exact receipt, so no late Notify waiter can
@@ -592,8 +593,10 @@ async fn issue383_disabled_extension_keeps_admitted_configuration_until_settleme
         let runtime = fixture.manager.configuration_runtime(id).unwrap();
         runtime.submit_inbound(input("request-A")).unwrap();
         fixture.gates[0].wait_entered().await;
-        let admitted = runtime
-            .configuration_view()
+        let admitted =
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime,
+            )
             .unwrap()
             .admitted_attempt
             .unwrap();
@@ -607,11 +610,12 @@ async fn issue383_disabled_extension_keeps_admitted_configuration_until_settleme
         .await;
         let disabled = settled(&fixture, 0).await;
         assert_eq!(
-            runtime
-                .configuration_view()
-                .unwrap()
-                .admitted_attempt
-                .unwrap(),
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime
+            )
+            .unwrap()
+            .admitted_attempt
+            .unwrap(),
             admitted
         );
         let mut settlement = SettlementReceiptWait::capture(&runtime);
@@ -738,7 +742,11 @@ async fn t04_session_relative_prefix_and_t09_policy_noop() {
     );
     for runtime in &runtimes {
         assert_eq!(
-            runtime.configuration_view().unwrap().approval_mode,
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime
+            )
+            .unwrap()
+            .approval_mode,
             crate::runtime::ApprovalMode::FullAccess
         );
     }
@@ -899,8 +907,10 @@ async fn t01_new_attempt_captures_automatic_policy_old_attempt_retains_capture()
         let runtime = fixture.manager.configuration_runtime(id).unwrap();
         runtime.submit_inbound(input("request-A")).unwrap();
         fixture.gates[0].wait_entered().await;
-        let captured = runtime
-            .configuration_view()
+        let captured =
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime,
+            )
             .unwrap()
             .admitted_attempt
             .unwrap();
@@ -930,15 +940,20 @@ async fn t01_new_attempt_captures_automatic_policy_old_attempt_retains_capture()
         );
         assert!(applied.candidate.is_none());
         assert_eq!(
-            runtime.configuration_view().unwrap().approval_mode,
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime
+            )
+            .unwrap()
+            .approval_mode,
             crate::runtime::ApprovalMode::FullAccess
         );
         assert_eq!(
-            runtime
-                .configuration_view()
-                .unwrap()
-                .admitted_attempt
-                .unwrap(),
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime
+            )
+            .unwrap()
+            .admitted_attempt
+            .unwrap(),
             captured
         );
         let mut settlement = SettlementReceiptWait::capture(&runtime);
@@ -946,11 +961,12 @@ async fn t01_new_attempt_captures_automatic_policy_old_attempt_retains_capture()
         settlement.wait().await;
         runtime.submit_inbound(input("request-B")).unwrap();
         fixture.gates[1].wait_entered().await;
-        let later = runtime
-            .configuration_view()
-            .unwrap()
-            .admitted_attempt
-            .unwrap();
+        let later = crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+            &runtime,
+        )
+        .unwrap()
+        .admitted_attempt
+        .unwrap();
         assert_eq!(
             later.approval_mode,
             crate::runtime::ApprovalMode::FullAccess
@@ -1082,11 +1098,12 @@ async fn t11_admission_gate_orders_busy_adoption_without_cancelling_attempt() {
         assert_eq!(adoption.await.unwrap(), Err(AdoptionError::Busy));
         fixture.gates[0].wait_entered().await;
         assert!(
-            runtime
-                .configuration_view()
-                .unwrap()
-                .admitted_attempt
-                .is_some()
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime
+            )
+            .unwrap()
+            .admitted_attempt
+            .is_some()
         );
         // The admitted attempt makes the runtime publish Busy; the
         // configuration application is untouched by it.
@@ -1493,7 +1510,9 @@ async fn t03_mixed_application_and_true_process_binding_restart() {
     assert_eq!(fixture.host.policy().shutdown_deadline_ms, 30_000);
     let runtime = fixture.manager.configuration_runtime(id).unwrap();
     assert_eq!(
-        runtime.configuration_view().unwrap().approval_mode,
+        crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(&runtime)
+            .unwrap()
+            .approval_mode,
         crate::runtime::ApprovalMode::FullAccess
     );
     assert_ne!(
@@ -1564,8 +1583,7 @@ async fn t05_complete_policy_registry_publishes_while_instructions_remain_pendin
         crate::tools::types::ToolApprovalPolicy::Always
     );
     assert_eq!(
-        runtime
-            .configuration_view()
+        crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(&runtime)
             .unwrap()
             .available_tools
             .iter()
@@ -1623,7 +1641,11 @@ async fn t08_model_baseline_change_recaptures_prepared_context() {
         assert_eq!(recaptured.identity, application.desired);
         assert_eq!(
             recaptured.expected_binding,
-            runtime.configuration_view().unwrap().adopted_binding
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime
+            )
+            .unwrap()
+            .adopted_binding
         );
         assert!(matches!(
             application.units[&ApplyUnit::Instructions],
@@ -1737,8 +1759,10 @@ async fn t02_later_tool_batch_and_model_step_keep_admitted_registry_policy() {
         let runtime = fixture.manager.configuration_runtime(id).unwrap();
         runtime.submit_inbound(input("request-A")).unwrap();
         fixture.gates[0].wait_entered().await;
-        let captured = runtime
-            .configuration_view()
+        let captured =
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime,
+            )
             .unwrap()
             .admitted_attempt
             .unwrap();
@@ -1830,6 +1854,7 @@ async fn t09_unselected_model_and_default_edits_publish_without_adoption_t15_new
         published
             .configuration()
             .unwrap()
+            .authored
             .effective
             .models
             .as_ref()
@@ -2063,11 +2088,11 @@ async fn t03_t05_mixed_instructions_publication_rejects_rebound_project_path() {
         let retained = fixture.manager.sessions.configuration_bindings.lock().unwrap()[&second].clone();
         assert_eq!(retained.config.agent.instructions, "I1");
         assert_eq!(retained.config.agent.agents_md.files, vec![old_path]);
-        assert_eq!(retained.effective.agent, old.effective.agent);
-        assert_eq!(retained.effective.context, old.effective.context);
+        assert_eq!(retained.effective.agent, old.authored.effective.agent);
+        assert_eq!(retained.effective.context, old.authored.effective.context);
         assert_eq!(retained.root_agent_project_files, before.root_profile().unwrap().project_instructions.files);
-        assert_eq!(retained.component_revisions, old.component_revisions);
-        assert_eq!(retained.source_revisions, old.source_revisions);
+        assert_eq!(retained.component_revisions, old.authored.component_revisions);
+        assert_eq!(retained.source_revisions, old.authored.source_revisions);
         retained.validate_resource_authority().unwrap();
         fixture.manager.load(&second, None).await.unwrap();
         let loaded = fixture.manager.configuration_runtime(&second).unwrap().runtime_resources();
@@ -2195,12 +2220,12 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adop
         after.capability().skills()
     ));
     assert_eq!(
-        before.configuration().unwrap().component_revisions[&ApplyUnit::Capabilities],
-        after.configuration().unwrap().component_revisions[&ApplyUnit::Capabilities]
+        before.configuration().unwrap().authored.component_revisions[&ApplyUnit::Capabilities],
+        after.configuration().unwrap().authored.component_revisions[&ApplyUnit::Capabilities]
     );
     assert_ne!(
-        before.configuration().unwrap().component_revisions[&ApplyUnit::Instructions],
-        after.configuration().unwrap().component_revisions[&ApplyUnit::Instructions]
+        before.configuration().unwrap().authored.component_revisions[&ApplyUnit::Instructions],
+        after.configuration().unwrap().authored.component_revisions[&ApplyUnit::Instructions]
     );
     assert!(Arc::ptr_eq(
         before.capability().tool_registry(),
@@ -2274,13 +2299,13 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adop
         );
         assert_eq!(
             c1i2.component_revisions[&unit],
-            after.configuration().unwrap().component_revisions[&unit]
+            after.configuration().unwrap().authored.component_revisions[&unit]
         );
     }
 
     assert!(fixture.manager.applications.is_deferred(second.as_str()));
     assert!(matches!(
-        before.configuration().unwrap().provenance["agent.instructions"],
+        before.configuration().unwrap().authored.provenance["agent.instructions"],
         crate::local_runtime::configuration::Origin::User { .. }
     ));
     assert!(matches!(
@@ -2288,7 +2313,7 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adop
         crate::local_runtime::configuration::Origin::Workspace { .. }
     ));
     assert!(matches!(
-        after.configuration().unwrap().provenance["agent.instructions"],
+        after.configuration().unwrap().authored.provenance["agent.instructions"],
         crate::local_runtime::configuration::Origin::Workspace { .. }
     ));
     assert_eq!(
@@ -2302,15 +2327,15 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adop
     );
     assert_eq!(
         c1i2.component_revisions[&ApplyUnit::Instructions],
-        after.configuration().unwrap().component_revisions[&ApplyUnit::Instructions]
+        after.configuration().unwrap().authored.component_revisions[&ApplyUnit::Instructions]
     );
     assert_eq!(
         c1i2.source_revisions,
-        before.configuration().unwrap().source_revisions
+        before.configuration().unwrap().authored.source_revisions
     );
     assert_eq!(
-        after.configuration().unwrap().source_revisions,
-        before.configuration().unwrap().source_revisions
+        after.configuration().unwrap().authored.source_revisions,
+        before.configuration().unwrap().authored.source_revisions
     );
     assert_eq!(
         c1i2.config.agent.instructions,
@@ -2318,7 +2343,7 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adop
     );
     assert_eq!(
         c1i2.component_revisions[&ApplyUnit::Capabilities],
-        before.configuration().unwrap().component_revisions[&ApplyUnit::Capabilities]
+        before.configuration().unwrap().authored.component_revisions[&ApplyUnit::Capabilities]
     );
     assert_eq!(
         c1i2.config.native_tools,
@@ -2365,6 +2390,7 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adop
         second_resources
             .configuration()
             .unwrap()
+            .authored
             .component_revisions,
         c1i2.component_revisions
     );
@@ -3056,7 +3082,9 @@ async fn t03_t06_t09_t15_t16_healthy_registration_preserves_complete_policy_auth
     )
     .await;
     let application = settled(&fixture, 0).await;
-    let independent = runtime.configuration_view().unwrap();
+    let independent =
+        crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(&runtime)
+            .unwrap();
     assert_eq!(
         independent.approval_mode,
         crate::runtime::ApprovalMode::FullAccess
@@ -3140,7 +3168,10 @@ async fn t03_t06_t09_t15_t16_healthy_registration_preserves_complete_policy_auth
     fixture.manager.load(second, None).await.unwrap();
     let second_runtime = fixture.manager.configuration_runtime(second).unwrap();
     let second_resources = second_runtime.runtime_resources();
-    let view = second_runtime.configuration_view().unwrap();
+    let view = crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+        &second_runtime,
+    )
+    .unwrap();
     assert_eq!(view.approval_mode, crate::runtime::ApprovalMode::FullAccess);
     assert_eq!(adopted.config.approval_mode, view.approval_mode);
     assert_eq!(view.document.approval_mode, Some(view.approval_mode));
@@ -3193,7 +3224,7 @@ async fn t03_t06_t09_t15_t16_healthy_registration_preserves_complete_policy_auth
         assert_eq!(view.provenance[field], adopted.provenance[field]);
         assert_eq!(
             view.provenance[field],
-            resources.configuration().unwrap().provenance[field]
+            resources.configuration().unwrap().authored.provenance[field]
         );
     }
     for unit in [
@@ -3206,6 +3237,7 @@ async fn t03_t06_t09_t15_t16_healthy_registration_preserves_complete_policy_auth
             second_resources
                 .configuration()
                 .unwrap()
+                .authored
                 .component_revisions[&unit]
         );
     }
@@ -7030,11 +7062,11 @@ async fn issue459_catalog_publication_metadata_names_what_was_published() {
         // The Provider unit is published with its own component revision; the
         // adopted-source baseline and every other unit keep theirs.
         assert_eq!(
-            new.component_revisions[&ApplyUnit::Provider],
+            new.authored.component_revisions[&ApplyUnit::Provider],
             published_revision
         );
         assert_ne!(
-            old.component_revisions[&ApplyUnit::Provider],
+            old.authored.component_revisions[&ApplyUnit::Provider],
             published_revision
         );
         for unit in [
@@ -7044,17 +7076,20 @@ async fn issue459_catalog_publication_metadata_names_what_was_published() {
             ApplyUnit::SharedCapacity,
         ] {
             assert_eq!(
-                new.component_revisions[&unit], old.component_revisions[&unit],
+                new.authored.component_revisions[&unit], old.authored.component_revisions[&unit],
                 "{unit:?}"
             );
         }
-        assert_eq!(new.source_revisions, old.source_revisions);
+        assert_eq!(new.authored.source_revisions, old.authored.source_revisions);
         assert_eq!(
-            new.effective.models.as_ref().unwrap()["local/b"].max_output_tokens,
+            new.authored.effective.models.as_ref().unwrap()["local/b"].max_output_tokens,
             1024
         );
         // The restart-bound process field is neither in the generation nor live.
-        assert_eq!(new.effective.app_server, old.effective.app_server);
+        assert_eq!(
+            new.authored.effective.app_server,
+            old.authored.effective.app_server
+        );
         assert_eq!(
             fixture.manager.process_policy().shutdown_deadline_ms,
             process.shutdown_deadline_ms
@@ -7062,11 +7097,17 @@ async fn issue459_catalog_publication_metadata_names_what_was_published() {
         // The retained binding carries the same facts, so a reload composes
         // exactly this generation's metadata.
         let binding = retained();
-        assert_eq!(binding.component_revisions, new.component_revisions);
-        assert_eq!(binding.source_revisions, old.source_revisions);
+        assert_eq!(
+            binding.component_revisions,
+            new.authored.component_revisions
+        );
+        assert_eq!(binding.source_revisions, old.authored.source_revisions);
         // The wire projection keeps the adopted-source baseline.
-        let view = runtime.configuration_view().unwrap();
-        assert_eq!(view.source_revisions, old.source_revisions);
+        let view = crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+            &runtime,
+        )
+        .unwrap();
+        assert_eq!(view.source_revisions, old.authored.source_revisions);
         assert_eq!(
             view.document.models.as_ref().unwrap()["local/b"].max_output_tokens,
             1024
@@ -7101,13 +7142,19 @@ async fn issue459_catalog_publication_metadata_names_what_was_published() {
             .unwrap();
         let adopted = runtime.runtime_resources().configuration().unwrap().clone();
         let binding = retained();
-        assert_ne!(adopted.source_revisions, old.source_revisions);
-        assert_eq!(adopted.source_revisions, binding.source_revisions);
+        assert_ne!(
+            adopted.authored.source_revisions,
+            old.authored.source_revisions
+        );
+        assert_eq!(adopted.authored.source_revisions, binding.source_revisions);
         // A context adoption composes the Instructions and Provider units at
         // its revision; units it did not compose keep theirs.
         let revision = candidate.identity.input_revision.unwrap();
         for unit in [ApplyUnit::Instructions, ApplyUnit::Provider] {
-            assert_eq!(adopted.component_revisions[&unit], revision, "{unit:?}");
+            assert_eq!(
+                adopted.authored.component_revisions[&unit], revision,
+                "{unit:?}"
+            );
         }
         for unit in [
             ApplyUnit::Capabilities,
@@ -7115,12 +7162,13 @@ async fn issue459_catalog_publication_metadata_names_what_was_published() {
             ApplyUnit::SharedCapacity,
         ] {
             assert_eq!(
-                adopted.component_revisions[&unit], old.component_revisions[&unit],
+                adopted.authored.component_revisions[&unit],
+                old.authored.component_revisions[&unit],
                 "{unit:?}"
             );
         }
         assert_eq!(
-            adopted.effective.models.as_ref().unwrap()["local/b"].max_output_tokens,
+            adopted.authored.effective.models.as_ref().unwrap()["local/b"].max_output_tokens,
             1024
         );
         // Adoption re-resolves through its own registry; the invocation's
@@ -7349,7 +7397,12 @@ async fn issue459_removed_model_with_instructions_change_recovers_before_adoptio
         let before = runtime.runtime_resources();
         let old = before.configuration().unwrap().clone();
         let selected = runtime.model_view();
-        let binding = runtime.configuration_view().unwrap().adopted_binding;
+        let binding =
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime,
+            )
+            .unwrap()
+            .adopted_binding;
         assert_eq!(retained().binding_revision, binding);
         let mut eligibility = EligibilityStream::open(&fixture, &id);
 
@@ -7399,24 +7452,29 @@ async fn issue459_removed_model_with_instructions_change_recovers_before_adoptio
             "issue459 adopted instructions"
         );
         assert_eq!(
-            runtime
-                .configuration_view()
-                .unwrap()
-                .root_agent
-                .instructions,
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime
+            )
+            .unwrap()
+            .root_agent
+            .instructions,
             "issue459 adopted instructions"
         );
-        assert_eq!(new.source_revisions, old.source_revisions);
+        assert_eq!(new.authored.source_revisions, old.authored.source_revisions);
         assert_eq!(
-            new.component_revisions[&ApplyUnit::Provider],
+            new.authored.component_revisions[&ApplyUnit::Provider],
             published_revision
         );
         assert_eq!(
-            new.component_revisions[&ApplyUnit::Instructions],
-            old.component_revisions[&ApplyUnit::Instructions]
+            new.authored.component_revisions[&ApplyUnit::Instructions],
+            old.authored.component_revisions[&ApplyUnit::Instructions]
         );
         assert_eq!(
-            runtime.configuration_view().unwrap().adopted_binding,
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime
+            )
+            .unwrap()
+            .adopted_binding,
             binding + 1
         );
         let binding_now = retained();
@@ -7425,7 +7483,7 @@ async fn issue459_removed_model_with_instructions_change_recovers_before_adoptio
             binding_now.config().agent.instructions,
             "issue459 adopted instructions"
         );
-        assert_eq!(binding_now.source_revisions, old.source_revisions);
+        assert_eq!(binding_now.source_revisions, old.authored.source_revisions);
         assert!(matches!(
             runtime.submit_inbound(issue459_text("refused")),
             Err(InboundAdmissionError::ModelUnavailable { .. })
@@ -7487,7 +7545,10 @@ async fn issue459_removed_model_with_instructions_change_recovers_before_adoptio
             adopted.config.agent.instructions,
             "issue459 new instructions"
         );
-        assert_ne!(adopted.source_revisions, old.source_revisions);
+        assert_ne!(
+            adopted.authored.source_revisions,
+            old.authored.source_revisions
+        );
         let mut settlement = SettlementReceiptWait::capture(&runtime);
         runtime
             .submit_inbound(issue459_text("after adoption"))
@@ -7594,11 +7655,12 @@ async fn issue459_cold_session_receives_mixed_publication_on_residency() {
         assert_eq!(published.binding_revision, before.binding_revision + 1);
         assert_eq!(published.source_revisions, before.source_revisions);
         assert_eq!(
-            runtime
-                .configuration_view()
-                .unwrap()
-                .root_agent
-                .instructions,
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime
+            )
+            .unwrap()
+            .root_agent
+            .instructions,
             "issue459 adopted instructions"
         );
         assert!(matches!(
@@ -7740,7 +7802,12 @@ async fn issue459_new_inherited_agent_does_not_hold_back_catalog_publication() {
         let old = before.configuration().unwrap().clone();
         assert!(old.config.agent.agents.is_empty() && old.config.agent.workflows.is_empty());
         let selected = runtime.model_view();
-        let binding = runtime.configuration_view().unwrap().adopted_binding;
+        let binding =
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime,
+            )
+            .unwrap()
+            .adopted_binding;
         let mut eligibility = EligibilityStream::open(&fixture, &id);
         let probe = fixture
             .manager
@@ -7792,23 +7859,31 @@ async fn issue459_new_inherited_agent_does_not_hold_back_catalog_publication() {
         assert!(Arc::ptr_eq(before.capability(), published.capability()));
         let new = published.configuration().unwrap().clone();
         assert!(new.config.agent.agents.is_empty() && new.config.agent.workflows.is_empty());
-        assert_eq!(new.source_revisions, old.source_revisions);
+        assert_eq!(new.authored.source_revisions, old.authored.source_revisions);
         assert_eq!(
-            new.component_revisions[&ApplyUnit::Provider],
+            new.authored.component_revisions[&ApplyUnit::Provider],
             published_revision
         );
         assert_eq!(
-            new.component_revisions.get(&ApplyUnit::Capabilities),
-            old.component_revisions.get(&ApplyUnit::Capabilities)
+            new.authored
+                .component_revisions
+                .get(&ApplyUnit::Capabilities),
+            old.authored
+                .component_revisions
+                .get(&ApplyUnit::Capabilities)
         );
         assert_eq!(
-            runtime.configuration_view().unwrap().adopted_binding,
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime
+            )
+            .unwrap()
+            .adopted_binding,
             binding + 1
         );
         let binding_now = retained();
         assert_eq!(binding_now.binding_revision, binding + 1);
         assert!(binding_now.config().agent.agents.is_empty());
-        assert_eq!(binding_now.source_revisions, old.source_revisions);
+        assert_eq!(binding_now.source_revisions, old.authored.source_revisions);
         assert!(matches!(
             runtime.submit_inbound(issue459_text("refused")),
             Err(InboundAdmissionError::ModelUnavailable { .. })
@@ -8559,7 +8634,11 @@ async fn issue459_removed_profile_with_capability_change_recovers_before_adoptio
         assert_eq!(binding.session_model(), &issue459_pinned(Some("deep")));
         assert_eq!(
             binding.component_revisions,
-            adopted.configuration().unwrap().component_revisions
+            adopted
+                .configuration()
+                .unwrap()
+                .authored
+                .component_revisions
         );
         // The older closure is retired: no runtime owner holds its tools.
         let registry = capability.tool_registry().clone();
@@ -8933,7 +9012,11 @@ async fn issue459_publication_selection_race(selection_first: bool) {
         assert_eq!(stale.expected_binding, binding + 2);
         assert_eq!(retained(), binding + 2);
         assert_eq!(
-            runtime.configuration_view().unwrap().adopted_binding,
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime
+            )
+            .unwrap()
+            .adopted_binding,
             binding + 2
         );
         assert_eq!(runtime.runtime_resources().revision(), revision.next());
@@ -9148,7 +9231,11 @@ async fn issue459_failed_mixed_generations_keep_last_good_authority() {
                 runtime.model_view(),
                 runtime.model_catalog(),
                 runtime.runtime_resources().revision(),
-                runtime.configuration_view().unwrap().adopted_binding,
+                crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                    &runtime,
+                )
+                .unwrap()
+                .adopted_binding,
                 binding,
             )
         };
@@ -9202,11 +9289,12 @@ async fn issue459_failed_mixed_generations_keep_last_good_authority() {
         assert!(diagnostic.contains("model catalog"), "{diagnostic}");
         assert_eq!(ledger(), good);
         assert_eq!(
-            runtime
-                .configuration_view()
-                .unwrap()
-                .root_agent
-                .instructions,
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime
+            )
+            .unwrap()
+            .root_agent
+            .instructions,
             "issue459 adopted instructions"
         );
 
@@ -9480,11 +9568,12 @@ async fn issue459_older_candidates_and_overtaken_generations_never_restore_autho
                 .contains("fast")
         );
         assert_eq!(
-            runtime
-                .configuration_view()
-                .unwrap()
-                .root_agent
-                .instructions,
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime
+            )
+            .unwrap()
+            .root_agent
+            .instructions,
             "issue459 first instructions"
         );
 
@@ -9529,11 +9618,12 @@ async fn issue459_older_candidates_and_overtaken_generations_never_restore_autho
             .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
             .unwrap();
         assert_eq!(
-            runtime
-                .configuration_view()
-                .unwrap()
-                .root_agent
-                .instructions,
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime
+            )
+            .unwrap()
+            .root_agent
+            .instructions,
             "issue459 newest instructions"
         );
         assert!(fixture.provider.request_bodies().is_empty());
@@ -9693,11 +9783,12 @@ async fn issue459_mixed_generations_keep_the_summary_policy_and_clients_agree() 
             .unwrap();
         assert_eq!(runtime.model_view(), view);
         assert_eq!(
-            runtime
-                .configuration_view()
-                .unwrap()
-                .root_agent
-                .instructions,
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime
+            )
+            .unwrap()
+            .root_agent
+            .instructions,
             "issue459 summary instructions 2"
         );
         assert!(fixture.provider.request_bodies().is_empty());
@@ -9808,18 +9899,21 @@ async fn issue462_agent_control_group_follows_one_admitted_generation() {
         // call) is held while a nonempty-to-nonempty publication lands.
         runtime.submit_inbound(input("request-B held")).unwrap();
         fixture.gates[1].wait_entered().await;
-        let admitted = runtime
-            .configuration_view()
+        let admitted =
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime,
+            )
             .unwrap()
             .admitted_attempt
             .unwrap();
         let replacement = issue462_admit(&fixture, &["explorer"]).await;
         assert_eq!(
-            runtime
-                .configuration_view()
-                .unwrap()
-                .admitted_attempt
-                .unwrap(),
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime
+            )
+            .unwrap()
+            .admitted_attempt
+            .unwrap(),
             admitted
         );
         let mut settlement = SettlementReceiptWait::capture(&runtime);

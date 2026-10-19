@@ -117,7 +117,7 @@ async fn t08_t11_t12_t14_t19_numeric_delivery_carrier_keeps_real_stdio_and_webso
             let checkpoint = loop {
                 let MethodResult::Checkpoint { checkpoint } = call(&client, 46_790, Method::SessionCheckpoint { target: target.clone(), trace_records: vec![] }).await else { panic!("checkpoint"); };
                 if checkpoint.snapshot.configuration_adoption_eligibility
-                    == crate::local_runtime::configuration::application::AdoptionEligibility::Eligible
+                    == crate::runtime::adoption::AdoptionEligibility::Eligible
                 {
                     break checkpoint;
                 }

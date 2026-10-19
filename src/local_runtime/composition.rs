@@ -122,8 +122,7 @@ use crate::runtime::conversation_runtime::{
 use crate::runtime::identity::ConversationId;
 use crate::runtime::interaction::InteractionRoute;
 use crate::runtime::resources::{
-    PreparedRuntimeResources, RuntimeResourceLoadError, RuntimeResourceLoader,
-    RuntimeResourceSnapshot,
+    PreparedRuntimeResources, RuntimeResourceLoadError, RuntimeResourceSnapshot,
 };
 use crate::runtime::subagent::{
     ResolvedSubagentTool, SubagentResolver, child_conversation_store_path,
@@ -205,7 +204,11 @@ impl std::fmt::Debug for LocalRuntimeDependencies {
 }
 
 /// Off-side resource composition from the configuration owner’s immutable input capture.
-struct LocalRuntimeResourceLoader {
+///
+/// Owned by the application composition next to the runtime it composed; the
+/// configuration owner hands its preparation to
+/// [`ConversationRuntime::prepare_configuration`].
+pub(crate) struct LocalRuntimeResourceLoader {
     paths: AdmittedSessionConfig,
     native_resources: NativeToolResources,
     workflow_runtime: WorkflowRuntime,
@@ -226,20 +229,16 @@ impl LocalRuntimeResourceLoader {
             credentials,
         }
     }
-}
 
-impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
+    /// Builds one complete candidate off-side from an immutable capture.
     #[allow(clippy::too_many_lines)] // one atomic candidate construction pipeline
-    fn prepare<'a>(
+    pub(crate) fn prepare<'a>(
         &'a self,
         capability: &'a CapabilityCoordinator,
-        capture: Option<crate::local_runtime::configuration::ProspectiveSessionConfig>,
+        capture: crate::local_runtime::configuration::ProspectiveSessionConfig,
         preparation_cancellation: &'a crate::runtime::cancellation::CancellationSignal,
     ) -> BoxFuture<'a, Result<PreparedRuntimeResources, RuntimeResourceLoadError>> {
         Box::pin(async move {
-            let capture = capture.ok_or_else(|| {
-                RuntimeResourceLoadError::new("configuration preparation requires captured inputs")
-            })?;
             let config = capture.config.as_ref();
             let models = ModelBindingRegistry::new(
                 capture
@@ -336,17 +335,7 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
             // selection, or the active generation — has been published yet,
             // so the previous complete generation stays authoritative.
             validate_subagent_catalog(&prepared, &models)?;
-            let prepared =
-                prepared.with_configuration(crate::runtime::resources::RuntimeConfiguration {
-                    component_revisions: capture.component_revisions.clone(),
-                    resource_definitions: capture.inspection.definitions.clone(),
-                    resource_diagnostics: capture.inspection.resource_diagnostics.clone(),
-                    source_revisions: capture.source_revisions.clone(),
-                    effective: super::configuration::settings::redact(capture.effective.clone()),
-                    config: capture.config.clone(),
-                    models,
-                    provenance: capture.provenance.clone(),
-                });
+            let prepared = prepared.with_configuration(capture.runtime_configuration(models));
             #[cfg(test)]
             super::agent_resources::test_support::before_publication(
                 capability.current_snapshot().workspace_root(),
@@ -851,42 +840,6 @@ fn subagent_child_registry(
     Ok(registry)
 }
 
-/// The subagent child's resource loader.
-///
-/// A child never discovers resources: its whole generation was frozen by the
-/// invoking parent generation. The loader therefore replays exactly the
-/// frozen project instruction chain, instruction document, and Skill catalog
-/// alongside a fresh base-only capability candidate, and reads no
-/// configuration file, no `AGENTS.md` ancestor chain, and no Skill root. The
-/// structure is the guarantee: there is no filesystem discovery path here to
-/// be reached.
-struct FrozenSubagentResourceLoader {
-    resources: Arc<RuntimeResourceSnapshot>,
-}
-
-impl RuntimeResourceLoader for FrozenSubagentResourceLoader {
-    fn prepare<'a>(
-        &'a self,
-        capability: &'a CapabilityCoordinator,
-        _capture: Option<crate::local_runtime::configuration::ProspectiveSessionConfig>,
-        _preparation_cancellation: &'a crate::runtime::cancellation::CancellationSignal,
-    ) -> BoxFuture<'a, Result<PreparedRuntimeResources, RuntimeResourceLoadError>> {
-        Box::pin(async move {
-            let candidate = capability.prepare_base_only_candidate().map_err(|error| {
-                RuntimeResourceLoadError::new(format!(
-                    "cannot prepare base capability resources: {error}"
-                ))
-            })?;
-            Ok(PreparedRuntimeResources::new(
-                self.resources.project_context_files().to_vec(),
-                self.resources.agent_profile().map(str::to_owned),
-                self.resources.context_assembly().clone(),
-                candidate,
-            ))
-        })
-    }
-}
-
 /// Root sources and explicitly admitted Workflow programs create startup demand.
 /// Named Agent profiles are inert until child admission.
 pub(super) fn admitted_source_demand(
@@ -1014,6 +967,10 @@ pub struct LocalConversationCore {
     tool_runtime: ConversationToolRuntime,
     capability: CapabilityCoordinator,
     workflow_output: Option<Arc<WorkflowOutputLatch>>,
+    /// The configuration-owner resource preparation of a root Session
+    /// composition. A subagent child's generation is frozen by its parent and
+    /// is never prepared again, so it has none.
+    resource_loader: Option<Arc<LocalRuntimeResourceLoader>>,
 }
 
 impl std::fmt::Debug for LocalConversationCore {
@@ -1396,14 +1353,11 @@ impl LocalConversationCore {
             .with_workflow_catalog(workflows)
             .with_managed_python_catalog(paths.managed_python.clone())
             .with_configuration(crate::runtime::resources::RuntimeConfiguration {
-                component_revisions: paths.component_revisions.clone(),
-                resource_definitions: paths.inspection.definitions.clone(),
-                resource_diagnostics: paths.inspection.resource_diagnostics.clone(),
-                source_revisions: paths.source_revisions.clone(),
-                effective: super::configuration::settings::redact(paths.effective.clone()),
                 config: Arc::new(runtime_config.clone()),
                 models: registry.clone(),
-                provenance: paths.provenance.clone(),
+                resource_definitions: paths.inspection.definitions.clone(),
+                resource_diagnostics: paths.inspection.resource_diagnostics.clone(),
+                authored: paths.authored(),
             });
             validate_subagent_catalog(&prepared, &registry).map_err(|error| {
                 LocalRuntimeError::Capability {
@@ -1426,16 +1380,15 @@ impl LocalConversationCore {
                 resource_data,
                 capability_snapshot,
             ));
-            let resource_loader: Arc<dyn RuntimeResourceLoader> =
-                Arc::new(LocalRuntimeResourceLoader::new(
-                    paths.clone(),
-                    native_resources,
-                    dependencies
-                        .credentials
-                        .clone()
-                        .unwrap_or_else(|| Arc::new(paths.credentials.clone())),
-                    workflow_runtime,
-                ));
+            let resource_loader = Arc::new(LocalRuntimeResourceLoader::new(
+                paths.clone(),
+                native_resources,
+                dependencies
+                    .credentials
+                    .clone()
+                    .unwrap_or_else(|| Arc::new(paths.credentials.clone())),
+                workflow_runtime,
+            ));
 
             // Reopening a selected lineage must re-supply only its immutable
             // bootstrap prefix to ConversationRuntime. Later canonical turns are
@@ -1472,7 +1425,6 @@ impl LocalConversationCore {
                 tool_runtime: tool_runtime.clone(),
                 capability: capability.clone(),
                 resources,
-                resource_loader,
                 clock: None,
                 initial_messages,
                 subagents: Some(subagents),
@@ -1484,6 +1436,7 @@ impl LocalConversationCore {
                 tool_runtime,
                 capability,
                 workflow_output: None,
+                resource_loader: Some(resource_loader),
             })
         })
         .await
@@ -1799,10 +1752,6 @@ impl LocalConversationCore {
             let workflow_output = workflow_output_latch.clone().map(
                 |latch| -> Arc<dyn crate::runtime::workflow::WorkflowOutputTerminal> { latch },
             );
-            let resource_loader: Arc<dyn RuntimeResourceLoader> =
-                Arc::new(FrozenSubagentResourceLoader {
-                    resources: Arc::clone(&resources),
-                });
 
             // 12-13. The one child conversation runtime. The definition's
             // instructions enter the request-time AgentProfile System section,
@@ -1829,7 +1778,6 @@ impl LocalConversationCore {
                 tool_runtime: tool_runtime.clone(),
                 capability: capability.clone(),
                 resources,
-                resource_loader,
                 clock: None,
                 initial_messages: Vec::new(),
                 // A child runtime has no subagent registry: recursive
@@ -1843,6 +1791,7 @@ impl LocalConversationCore {
                 tool_runtime,
                 capability,
                 workflow_output: workflow_output_latch,
+                resource_loader: None,
             })
         })
         .await
@@ -2032,6 +1981,11 @@ impl LocalConversationRuntime {
     #[must_use]
     pub const fn runtime(&self) -> &ConversationRuntime {
         &self.core.runtime
+    }
+
+    /// The resource preparation this Session composition was built with.
+    pub(crate) fn resource_loader(&self) -> Option<&Arc<LocalRuntimeResourceLoader>> {
+        self.core.resource_loader.as_ref()
     }
 
     /// The one Runtime Client host (projection/control adapter) of this

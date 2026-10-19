@@ -706,7 +706,7 @@ pub async fn await_model_parked(model: &FakeModel) {
 /// `initialize` admits the attachment with its finite native identity receipt;
 /// a separate checkpoint supplies the complete captured read cut.
 pub async fn initialize_admits_the_attachment(factory: &dyn DriverFactory) {
-    use rustx::local_runtime::configuration::application::AdoptionEligibility;
+    use rustx::runtime::adoption::AdoptionEligibility;
 
     let fixture = ConformanceFixture::builder(&conversation(factory, "init"))
         .build()

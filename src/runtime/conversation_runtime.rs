@@ -316,6 +316,10 @@ use crate::model::session::{
 };
 use crate::model::{ModelRequest, RequestIdentity, invocation::ModelInvocationError};
 use crate::publication::{PublicationAudit, PublicationFrame, PublicationStreamStart};
+use crate::runtime::adoption::{
+    AdmittedConfiguration, AdoptionEligibility, AdoptionError, ConfigurationCut,
+    PreparedConfiguration, configuration_cache_impact,
+};
 use crate::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, ToolExecutionId};
 use crate::runtime::inbound::{
     ConversationInboundMailbox, FreshInboundTurn, InboundItem, InboundObserver, InboundSequence,
@@ -330,7 +334,9 @@ use crate::runtime::observation::{
     ConversationObservation, ObservationFanout, PendingObservations,
 };
 use crate::runtime::request_history::RequestHistory;
-use crate::runtime::resources::{RuntimeResourceLoader, RuntimeResourceSnapshot};
+use crate::runtime::resources::{
+    ContextBinding, PreparedRuntimeResources, RuntimeConfiguration, RuntimeResourceSnapshot,
+};
 use crate::runtime::types::{
     ApprovalMode, CancellationReason, ConversationLifecycle, ConversationLifecycleState,
     DurabilityFailureCommit, DurabilityGate, DurableOperation, RuntimeClock, SystemClock,
@@ -633,8 +639,6 @@ pub struct RuntimeConversationConfig {
     /// The complete immutable process-local resource generation initially
     /// active for this runtime.
     pub resources: Arc<RuntimeResourceSnapshot>,
-    /// The resource preparer invoked off-side by native configuration coordination.
-    pub resource_loader: Arc<dyn RuntimeResourceLoader>,
     /// The runtime clock stamping submitted inbound messages; the system
     /// clock is used when omitted.
     pub clock: Option<Arc<dyn RuntimeClock>>,
@@ -658,7 +662,7 @@ pub struct RuntimeConversationConfig {
 /// second cancellation state machine and never decides a terminal outcome;
 /// [`AgentExecution`] remains the attempt execution/terminal authority.
 struct CurrentAttempt {
-    configuration: crate::local_runtime::configuration::settings::AdmittedConfiguration,
+    configuration: AdmittedConfiguration,
     /// The attempt identity.
     attempt_id: AttemptId,
     /// The attempt cancellation trigger observed by the loop.
@@ -1417,7 +1421,6 @@ pub(crate) struct RuntimeInner {
     /// `capability` cannot advance a claimed runtime; configuration publication must present
     /// this token so capability and resource snapshots share one boundary.
     capability_publication: crate::capabilities::RuntimeCapabilityPublication,
-    resource_loader: Arc<dyn RuntimeResourceLoader>,
     /// The conversation-owned subagent registry (Issue #60), when this
     /// runtime may delegate to child runtimes.
     subagents: Option<crate::runtime::subagent::SubagentRegistry>,
@@ -1476,8 +1479,7 @@ pub(crate) struct RuntimeInner {
     /// The configuration-adoption eligibility this runtime last published. Its
     /// lock orders every derivation with its publication (taken before the
     /// coordinator lock, never after it).
-    published_eligibility:
-        Mutex<Option<crate::local_runtime::configuration::application::AdoptionEligibility>>,
+    published_eligibility: Mutex<Option<AdoptionEligibility>>,
     /// The one shared semantic drain completion.
     drain: std::sync::OnceLock<Arc<DrainCompletion>>,
     /// Guards creation of the one drain task.
@@ -1618,10 +1620,7 @@ impl RuntimeInner {
     /// rule over its in-memory owners (see [`IdleProbe::InMemory`]); it says
     /// nothing about any candidate, and the gate still evaluates the exact rule
     /// at its commit boundary.
-    fn adoption_eligibility(
-        &self,
-    ) -> crate::local_runtime::configuration::application::AdoptionEligibility {
-        use crate::local_runtime::configuration::application::AdoptionEligibility;
+    fn adoption_eligibility(&self) -> AdoptionEligibility {
         let state = self.lock_state();
         if !self.lifecycle.is_running() {
             AdoptionEligibility::Unavailable
@@ -2152,6 +2151,34 @@ impl RuntimeInner {
                 _ => observation.publish_journal_source(self.store.as_ref(), pending),
             }
         }
+    }
+
+    /// Publishes the adopted generation, Session model and approval mode of
+    /// `state` as one resource observation. Called inside the coordinator
+    /// critical section that installed them, so observers see the same cut.
+    fn observe_resources(
+        &self,
+        state: &CoordinatorState,
+        availability: crate::capabilities::CapabilityAvailability,
+    ) {
+        let resources = &state.resources;
+        let model = state
+            .model
+            .read_source()
+            .at_binding_revision(state.binding_revision);
+        self.observe(ConversationObservation::Resources {
+            capability: crate::runtime_client::capability_source::CapabilityReadSource::new(
+                Arc::clone(resources.capability()),
+                availability,
+                model.capabilities().cloned(),
+            ),
+            model,
+            approval_mode: state.effective_approval_mode,
+            display: crate::runtime_client::resource_source::ResourceReadSource::new(Arc::clone(
+                resources,
+            )),
+            snapshot: Arc::clone(resources),
+        });
     }
 
     /// Records a durable-authority failure without silently swallowing it
@@ -3532,7 +3559,7 @@ impl RuntimeInner {
             let _ = cancellation.request_cancel(reason);
         }
         state.current_attempt = Some(CurrentAttempt {
-            configuration: crate::local_runtime::configuration::settings::AdmittedConfiguration {
+            configuration: AdmittedConfiguration {
                 approval_mode: state.effective_approval_mode,
                 model_timeout: state
                     .resources
@@ -4196,7 +4223,6 @@ impl ConversationRuntime {
             store,
             capability: config.capability,
             capability_publication,
-            resource_loader: config.resource_loader,
             subagents: config.subagents,
             workflow_output: config.workflow_output,
             interaction,
@@ -4864,13 +4890,22 @@ impl ConversationRuntime {
     /// Prepare a source binding for its explicit selection without holding
     /// execution admission. Availability uses the captured default; rebinding
     /// to an existing Session is a separate preparation step.
-    pub(crate) async fn prepare_configuration(
-        &self,
-        capture: crate::local_runtime::configuration::ProspectiveSessionConfig,
-        selection: crate::model::session::SessionModelConfig,
-        cancellation: &crate::runtime::cancellation::CancellationSignal,
-    ) -> Result<crate::local_runtime::configuration::application::PreparedConfiguration, String>
-    {
+    ///
+    /// The Session binding revision, current generation and model are read
+    /// before `prepare` runs, so a candidate prepared across a concurrent
+    /// adoption is stale at its own commit boundary. `prepare` is the
+    /// application's off-side resource preparation over this runtime's
+    /// capability coordinator; it owns its own cancellation.
+    pub(crate) async fn prepare_configuration<'c>(
+        &'c self,
+        prepare: impl FnOnce(
+            &'c CapabilityCoordinator,
+        ) -> futures_util::future::BoxFuture<
+            'c,
+            Result<PreparedRuntimeResources, crate::runtime::resources::RuntimeResourceLoadError>,
+        >,
+        selection: SessionModelConfig,
+    ) -> Result<PreparedConfiguration, String> {
         let (baseline, old, old_model) = {
             let state = self.inner.lock_state();
             (
@@ -4879,10 +4914,7 @@ impl ConversationRuntime {
                 state.model.clone(),
             )
         };
-        let prepared = self
-            .inner
-            .resource_loader
-            .prepare(&self.inner.capability, Some(capture), cancellation)
+        let prepared = prepare(&self.inner.capability)
             .await
             .map_err(|error| error.message)?;
         let (capability, resources) = prepared.into_parts();
@@ -4899,94 +4931,62 @@ impl ConversationRuntime {
             resources.clone(),
             capability.configuration_snapshot(old.capability()),
         ));
-        let mut impact = match (old.request_shape(&old_model), preview.request_shape(&model)) {
-            (Ok(old_shape), Ok(candidate)) => old_shape.compare(&candidate),
-            (Err(error), _) | (_, Err(error)) => {
-                #[cfg(test)]
-                eprintln!("configuration shape unavailable: {error}");
-                let _ = error;
-                crate::model::request_shape::CacheImpact::Unproven
-            }
-        };
-        if old
-            .configuration()
-            .map(|configuration| configuration.config.context)
-            != preview
-                .configuration()
-                .map(|configuration| configuration.config.context)
-            && impact == crate::model::request_shape::CacheImpact::Preserved
-        {
-            impact = crate::model::request_shape::CacheImpact::Unproven;
-        }
-        Ok(
-            crate::local_runtime::configuration::application::PreparedConfiguration {
-                owner: self.inner.configuration_owner.clone(),
-                baseline,
-                preview,
-                model,
-                capability: Some(capability),
-                resources: Some(resources),
-                impact,
-            },
-        )
+        let impact = configuration_cache_impact(&old, &old_model, &preview, &model);
+        Ok(PreparedConfiguration {
+            owner: self.inner.configuration_owner.clone(),
+            baseline,
+            preview,
+            model,
+            capability: Some(capability),
+            resources: Some(resources),
+            impact,
+        })
     }
 
+    /// Binds a prepared candidate to its complete context. The Session's own
+    /// `selection` is carried, never re-chosen: a catalog that no longer
+    /// admits it yields an unavailable candidate.
     pub(crate) fn complete_candidate_context(
         &self,
-        candidate: &mut crate::local_runtime::configuration::application::PreparedConfiguration,
-        capture: &crate::local_runtime::configuration::ProspectiveSessionConfig,
-        models: crate::model::invocation::ModelBindingRegistry,
+        candidate: &mut PreparedConfiguration,
+        binding: &ContextBinding,
+        selection: SessionModelConfig,
     ) -> Result<(), String> {
-        // The Session's own selection is carried, never re-chosen: a catalog
-        // that no longer admits it yields an unavailable candidate.
         let current = self.inner.lock_state().model.clone();
         let model = current
-            .carry(models.clone(), capture.session_model().clone())
+            .carry(binding.configuration.models.clone(), selection)
             .map_err(|error| error.to_string())?;
-        validate_model_context(&capture.config.context_policy(), &model)
+        validate_model_context(&binding.configuration.config.context_policy(), &model)
             .map_err(|error| error.message)?;
         if let Some(capability) = &mut candidate.capability {
-            capability.set_context_profile(capture);
+            capability.set_context_profile(
+                &binding.configuration.config.agent,
+                &binding.root_agent_project_files,
+            );
         }
         if let Some(resources) = &mut candidate.resources {
-            resources.set_context_binding(capture, models.clone());
+            resources.set_context_binding(binding);
         }
-        candidate.preview = Arc::new(candidate.preview.with_context_binding(capture, models)?);
+        candidate.preview = Arc::new(candidate.preview.with_context_binding(binding)?);
         candidate.model = model;
         let state = self.inner.lock_state();
-        candidate.impact = match (
-            state.resources.request_shape(&state.model),
-            candidate.preview.request_shape(&candidate.model),
-        ) {
-            (Ok(old), Ok(new)) => old.compare(&new),
-            (Err(error), _) | (_, Err(error)) => {
-                #[cfg(test)]
-                eprintln!("configuration shape unavailable: {error}");
-                let _ = error;
-                crate::model::request_shape::CacheImpact::Unproven
-            }
-        };
-        if state
-            .resources
-            .configuration()
-            .map(|config| config.config.context)
-            != candidate
-                .preview
-                .configuration()
-                .map(|config| config.config.context)
-            && candidate.impact == crate::model::request_shape::CacheImpact::Preserved
-        {
-            candidate.impact = crate::model::request_shape::CacheImpact::Unproven;
-        }
+        candidate.impact = configuration_cache_impact(
+            &state.resources,
+            &state.model,
+            &candidate.preview,
+            &candidate.model,
+        );
         Ok(())
     }
 
+    /// Prepares a context-only candidate over the exact adopted generation
+    /// this call selects. `compose` is the application's composition of its
+    /// context units over that generation's configuration. Context adoption
+    /// carries Session intent; it cannot choose a model.
     pub(crate) fn prepare_context_configuration(
         &self,
-        capture: &crate::local_runtime::configuration::ProspectiveSessionConfig,
-        models: crate::model::invocation::ModelBindingRegistry,
-    ) -> Result<crate::local_runtime::configuration::application::PreparedConfiguration, String>
-    {
+        compose: impl FnOnce(&RuntimeConfiguration) -> ContextBinding,
+    ) -> Result<PreparedConfiguration, String> {
         let (baseline, old, old_model) = {
             let state = self.inner.lock_state();
             (
@@ -4995,44 +4995,31 @@ impl ConversationRuntime {
                 state.model.clone(),
             )
         };
-        // Context adoption carries Session intent; it cannot choose a model.
+        let binding = compose(old.configuration().ok_or("missing configuration")?);
         let model = old_model
-            .carry(models.clone(), old_model.config().clone())
+            .carry(
+                binding.configuration.models.clone(),
+                old_model.config().clone(),
+            )
             .map_err(|error| error.to_string())?;
-        validate_model_context(&capture.config.context_policy(), &model)
+        validate_model_context(&binding.configuration.config.context_policy(), &model)
             .map_err(|error| error.message)?;
-        let preview = Arc::new(old.with_context_binding(capture, models)?);
-        let mut impact = match (old.request_shape(&old_model), preview.request_shape(&model)) {
-            (Ok(old_shape), Ok(candidate)) => old_shape.compare(&candidate),
-            (Err(error), _) | (_, Err(error)) => {
-                #[cfg(test)]
-                eprintln!("configuration shape unavailable: {error}");
-                let _ = error;
-                crate::model::request_shape::CacheImpact::Unproven
-            }
-        };
-        if old.configuration().map(|config| config.config.context)
-            != preview.configuration().map(|config| config.config.context)
-            && impact == crate::model::request_shape::CacheImpact::Preserved
-        {
-            impact = crate::model::request_shape::CacheImpact::Unproven;
-        }
-        Ok(
-            crate::local_runtime::configuration::application::PreparedConfiguration {
-                owner: self.inner.configuration_owner.clone(),
-                baseline,
-                preview,
-                model,
-                capability: None,
-                resources: None,
-                impact,
-            },
-        )
+        let preview = Arc::new(old.with_context_binding(&binding)?);
+        let impact = configuration_cache_impact(&old, &old_model, &preview, &model);
+        Ok(PreparedConfiguration {
+            owner: self.inner.configuration_owner.clone(),
+            baseline,
+            preview,
+            model,
+            capability: None,
+            resources: None,
+            impact,
+        })
     }
 
     pub(crate) fn configuration_allocation_matches(
         &self,
-        candidate: &crate::local_runtime::configuration::application::PreparedConfiguration,
+        candidate: &PreparedConfiguration,
     ) -> bool {
         Arc::ptr_eq(&candidate.owner, &self.inner.configuration_owner)
     }
@@ -5041,7 +5028,7 @@ impl ConversationRuntime {
     /// and Attempt admission. The caller holds the source/application fence.
     pub(crate) fn with_configuration_baseline(
         &self,
-        candidate: &crate::local_runtime::configuration::application::PreparedConfiguration,
+        candidate: &PreparedConfiguration,
         publish: impl FnOnce(),
     ) -> bool {
         let state = self.inner.lock_state();
@@ -5059,9 +5046,7 @@ impl ConversationRuntime {
     /// derived from its native owners. Advisory only: adoption revalidates
     /// the real gate at its commit boundary.
     #[cfg(test)]
-    pub(crate) fn configuration_adoption_eligibility(
-        &self,
-    ) -> crate::local_runtime::configuration::application::AdoptionEligibility {
+    pub(crate) fn configuration_adoption_eligibility(&self) -> AdoptionEligibility {
         self.inner.adoption_eligibility()
     }
 
@@ -5070,17 +5055,11 @@ impl ConversationRuntime {
     /// gate. A refusal leaves the ready candidate available to inspect/retry.
     pub(crate) fn adopt_configuration(
         &self,
-        prepared: &mut Option<
-            crate::local_runtime::configuration::application::PreparedConfiguration,
-        >,
+        prepared: &mut Option<PreparedConfiguration>,
         expected_binding: u64,
         explicit: bool,
-        retain: impl FnOnce() -> Result<
-            (),
-            crate::local_runtime::configuration::application::AdoptionError,
-        >,
-    ) -> Result<u64, crate::local_runtime::configuration::application::AdoptionError> {
-        use crate::local_runtime::configuration::application::AdoptionError;
+        retain: impl FnOnce() -> Result<(), AdoptionError>,
+    ) -> Result<u64, AdoptionError> {
         let mut state = self.inner.lock_state();
         if explicit
             && (self.inner.idle_epoch_locked(&state).is_err()
@@ -5098,8 +5077,7 @@ impl ConversationRuntime {
             || state.binding_revision != expected_binding
             || candidate.baseline != expected_binding
             || !Arc::ptr_eq(&candidate.owner, &self.inner.configuration_owner)
-            || (!explicit
-                && candidate.impact != crate::model::request_shape::CacheImpact::Preserved)
+            || (!explicit && !candidate.adopts_implicitly())
         {
             return Err(AdoptionError::Conflict);
         }
@@ -5136,32 +5114,12 @@ impl ConversationRuntime {
             .map_or(state.effective_approval_mode, |generation| {
                 generation.config.approval_mode
             });
-        state.resources = resources.clone();
+        state.resources = resources;
         state.binding_revision = state
             .binding_revision
             .checked_add(1)
             .expect("Session binding revision exhausted");
-        self.inner.observe(ConversationObservation::Resources {
-            model: state
-                .model
-                .read_source()
-                .at_binding_revision(state.binding_revision),
-            approval_mode: state.effective_approval_mode,
-            display: crate::runtime_client::resource_source::ResourceReadSource::new(Arc::clone(
-                &resources,
-            )),
-            capability: crate::runtime_client::capability_source::CapabilityReadSource::new(
-                Arc::clone(resources.capability()),
-                availability,
-                state
-                    .model
-                    .read_source()
-                    .at_binding_revision(state.binding_revision)
-                    .capabilities()
-                    .cloned(),
-            ),
-            snapshot: resources,
-        });
+        self.inner.observe_resources(&state, availability);
         if reopens {
             // Work accepted before the selection became unavailable was held,
             // not dropped; this commit is what admits it.
@@ -5170,16 +5128,21 @@ impl ConversationRuntime {
         Ok(state.binding_revision)
     }
 
+    /// Publish the shared child capacity unit. `capacity` is the desired
+    /// configuration whose child limit the subagent registry adopts; `compose`
+    /// is the application's composition of that unit over the adopted
+    /// generation's configuration (`None` when nothing it carries changes).
     pub(crate) fn apply_shared_capacity(
         &self,
-        desired: &crate::local_runtime::configuration::IndependentPolicy,
+        capacity: &crate::local_runtime::config::CurrentRuntimeConfig,
+        compose: impl FnOnce(&RuntimeConfiguration) -> Option<RuntimeConfiguration>,
     ) {
         if let Some(subagents) = &self.inner.subagents {
-            subagents.publish_configuration(desired);
+            subagents.publish_configuration(capacity);
         }
         let mut state = self.inner.lock_state();
-        if let Some(resources) = state.resources.with_shared_capacity(desired) {
-            state.resources = Arc::new(resources);
+        if let Some(configuration) = state.resources.configuration().and_then(|c| compose(c)) {
+            state.resources = Arc::new(state.resources.with_configuration(configuration));
         }
     }
 
@@ -5212,7 +5175,9 @@ impl ConversationRuntime {
     /// blocking publication. The binding revision advances so no candidate
     /// prepared against the older catalog can adopt over this one, and
     /// `retain` commits the retained binding at that revision inside the same
-    /// critical section. The caller holds the source/application fence.
+    /// critical section. `compose` is the application's composition of the
+    /// Provider unit over the adopted generation's configuration. The caller
+    /// holds the source/application fence.
     ///
     /// Returns `Ok(false)`, changing nothing, when the current configuration
     /// would resolve to different invocations against `models`: that change
@@ -5224,20 +5189,26 @@ impl ConversationRuntime {
     /// configuration, with nothing committed.
     pub(crate) fn publish_model_catalog(
         &self,
-        capture: &crate::local_runtime::configuration::ProspectiveSessionConfig,
         models: crate::model::invocation::ModelBindingRegistry,
+        compose: impl FnOnce(&RuntimeConfiguration) -> RuntimeConfiguration,
         retain: impl FnOnce(u64) -> Result<(), String>,
     ) -> Result<bool, String> {
         let mut state = self.inner.lock_state();
         let mut model = state.model.clone();
-        if !model.publish_catalog(models.clone()) {
+        if !model.publish_catalog(models) {
             return Ok(false);
         }
+        let configuration = compose(
+            state
+                .resources
+                .configuration()
+                .ok_or("the adopted generation carries no configuration")?,
+        );
         let resources = Arc::new(
             state
                 .resources
-                .with_model_catalog(capture, models)
-                .ok_or("the adopted generation carries no configuration")?,
+                .with_configuration(configuration)
+                .with_revision(state.resources.revision().next()),
         );
         let revision = state
             .binding_revision
@@ -5246,114 +5217,63 @@ impl ConversationRuntime {
         retain(revision)?;
         state.binding_revision = revision;
         state.model = model;
-        state.resources = resources.clone();
-        self.inner.observe(ConversationObservation::Resources {
-            model: state
-                .model
-                .read_source()
-                .at_binding_revision(state.binding_revision),
-            approval_mode: state.effective_approval_mode,
-            display: crate::runtime_client::resource_source::ResourceReadSource::new(Arc::clone(
-                &resources,
-            )),
-            capability: crate::runtime_client::capability_source::CapabilityReadSource::new(
-                Arc::clone(resources.capability()),
-                resources.capability_availability().clone(),
-                state
-                    .model
-                    .read_source()
-                    .at_binding_revision(state.binding_revision)
-                    .capabilities()
-                    .cloned(),
-            ),
-            snapshot: resources,
-        });
+        let availability = resources.capability_availability().clone();
+        state.resources = resources;
+        self.inner.observe_resources(&state, availability);
         Ok(true)
     }
 
-    /// Publish independent policy without changing the adopted context or any
-    /// admitted Attempt. The native configuration owner holds its input fence
-    /// across this call; this lock orders the swap against Attempt capture.
+    /// Publish independent execution policy without changing the adopted
+    /// context or any admitted Attempt. `compose` is the application's
+    /// composition of that unit over the adopted generation's configuration
+    /// (`None` when nothing it carries changes). The native configuration owner
+    /// holds its input fence across this call; this lock orders the swap
+    /// against Attempt capture.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic when the runtime is not running.
     pub(crate) fn apply_execution_policy(
         &self,
-        desired: &crate::local_runtime::configuration::IndependentPolicy,
+        compose: impl FnOnce(&RuntimeConfiguration) -> Option<RuntimeConfiguration>,
     ) -> Result<bool, String> {
-        desired.timeout_policy().map_err(|e| e.to_string())?;
-        desired.tool_deadline_policy().map_err(|e| e.to_string())?;
         let mut state = self.inner.lock_state();
         if !self.inner.lifecycle.is_running() {
             return Err("runtime is not running".into());
         }
-        let Some(resources) = state.resources.with_execution_policy(desired) else {
+        let Some(configuration) = state.resources.configuration().and_then(|c| compose(c)) else {
             return Ok(false);
         };
-        let resources = Arc::new(resources);
-        state.effective_approval_mode = desired.approval_mode;
-        state.resources = resources.clone();
-        self.inner.observe(ConversationObservation::Resources {
-            model: state
-                .model
-                .read_source()
-                .at_binding_revision(state.binding_revision),
-            approval_mode: state.effective_approval_mode,
-            display: crate::runtime_client::resource_source::ResourceReadSource::new(Arc::clone(
-                &resources,
-            )),
-            capability: crate::runtime_client::capability_source::CapabilityReadSource::new(
-                Arc::clone(resources.capability()),
-                resources.capability_availability().clone(),
-                state
-                    .model
-                    .read_source()
-                    .at_binding_revision(state.binding_revision)
-                    .capabilities()
-                    .cloned(),
-            ),
-            snapshot: resources,
-        });
+        let approval_mode = configuration.config.approval_mode;
+        let resources = Arc::new(
+            state
+                .resources
+                .with_configuration(configuration)
+                .with_revision(state.resources.revision().next()),
+        );
+        state.effective_approval_mode = approval_mode;
+        let availability = resources.capability_availability().clone();
+        state.resources = resources;
+        self.inner.observe_resources(&state, availability);
         Ok(true)
     }
 
-    /// Read configuration, Session intent and admitted work in one coherent cut.
+    /// Reads the adopted generation, Session intent and admitted work in one
+    /// coherent cut of the coordinator state.
     #[must_use]
-    pub fn configuration_view(
-        &self,
-    ) -> Option<crate::local_runtime::configuration::settings::EffectiveConfiguration> {
+    pub(crate) fn configuration_cut(&self) -> ConfigurationCut {
         let state = self.inner.lock_state();
-        let resources = &state.resources;
-        let generation = resources.configuration()?;
-        let config = &generation.config;
-        Some(
-            crate::local_runtime::configuration::settings::EffectiveConfiguration {
-                process_bindings: None,
-                application: None,
-                adopted_binding: state.binding_revision,
-                source_revisions: generation.source_revisions.clone(),
-                generation: resources.revision(),
-                document: generation.effective.clone(),
-                root_agent: config.agent.clone(),
-                context: config.context,
-                model_timeout: config.model_timeout_policy,
-                tool_deadline: config.tool_deadline_policy,
-                child_capacity: config.subagents.clone(),
-                approval_mode: state.effective_approval_mode,
-                provenance: generation.provenance.clone(),
-                resources: resources.inspection().clone(),
-                available_tools: resources
-                    .capability()
-                    .available_tools()
-                    .tools()
-                    .iter()
-                    .map(|tool| tool.definition.clone())
-                    .collect(),
-                session_model: state.explicit_model.then(|| state.model.view().configured),
-                effective_model: state.model.view(),
-                admitted_attempt: state
-                    .current_attempt
-                    .as_ref()
-                    .map(|attempt| attempt.configuration.clone()),
-            },
-        )
+        ConfigurationCut {
+            binding_revision: state.binding_revision,
+            resources: state.resources.clone(),
+            approval_mode: state.effective_approval_mode,
+            session_model: state.explicit_model.then(|| state.model.view().configured),
+            effective_model: state.model.view(),
+            admitted_attempt: state
+                .current_attempt
+                .as_ref()
+                .map(|attempt| attempt.configuration.clone()),
+        }
     }
 
     /// The complete generation future attempts currently acquire.
@@ -8212,112 +8132,6 @@ mod tests {
         ))
     }
 
-    fn test_resource_loader(
-        capability: &crate::capabilities::CapabilityCoordinator,
-    ) -> Arc<dyn crate::runtime::RuntimeResourceLoader> {
-        Arc::new(crate::runtime::FilesystemRuntimeResourceLoader::new(
-            capability.current_snapshot().workspace_root(),
-        ))
-    }
-
-    struct MutableResourceLoader {
-        project_files: std::sync::Mutex<
-            Result<
-                Vec<crate::runtime::ProjectContextFile>,
-                crate::runtime::RuntimeResourceLoadError,
-            >,
-        >,
-        capability_inputs: std::sync::Mutex<Option<crate::capabilities::CapabilityResourceInputs>>,
-        context_assembly: std::sync::Mutex<crate::context::ContextAssembly>,
-        workflow_catalog: std::sync::Mutex<crate::runtime::WorkflowCatalog>,
-        candidate_close_probe:
-            std::sync::Mutex<Option<Arc<crate::tools::mcp::test_sync::CloseProbe>>>,
-        prepare_count: std::sync::atomic::AtomicU64,
-    }
-
-    impl MutableResourceLoader {
-        fn new(project_files: Vec<crate::runtime::ProjectContextFile>) -> Self {
-            Self {
-                project_files: std::sync::Mutex::new(Ok(project_files)),
-                capability_inputs: std::sync::Mutex::new(None),
-                context_assembly: std::sync::Mutex::new(crate::context::ContextAssembly::new()),
-                workflow_catalog: std::sync::Mutex::new(crate::runtime::WorkflowCatalog::empty()),
-                candidate_close_probe: std::sync::Mutex::new(None),
-                prepare_count: std::sync::atomic::AtomicU64::new(0),
-            }
-        }
-
-        fn set_capability_inputs(&self, inputs: crate::capabilities::CapabilityResourceInputs) {
-            *self.capability_inputs.lock().expect("capability inputs") = Some(inputs);
-        }
-
-        fn prepare_count(&self) -> u64 {
-            self.prepare_count
-                .load(std::sync::atomic::Ordering::Acquire)
-        }
-    }
-
-    impl crate::runtime::RuntimeResourceLoader for MutableResourceLoader {
-        fn prepare<'a>(
-            &'a self,
-            capability: &'a crate::capabilities::CapabilityCoordinator,
-            _capture: Option<crate::local_runtime::configuration::ProspectiveSessionConfig>,
-            _preparation_cancellation: &'a crate::runtime::cancellation::CancellationSignal,
-        ) -> BoxFuture<
-            'a,
-            Result<
-                crate::runtime::PreparedRuntimeResources,
-                crate::runtime::RuntimeResourceLoadError,
-            >,
-        > {
-            Box::pin(async move {
-                self.prepare_count
-                    .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-                let inputs = self
-                    .capability_inputs
-                    .lock()
-                    .expect("capability inputs")
-                    .clone();
-                let context_assembly = self
-                    .context_assembly
-                    .lock()
-                    .expect("context assembly")
-                    .clone();
-                let candidate = match inputs {
-                    Some(inputs) => capability.prepare_candidate_with_inputs(inputs).await,
-                    None => capability.prepare_candidate().await,
-                }
-                .map_err(|error| {
-                    crate::runtime::RuntimeResourceLoadError::new(error.to_string())
-                })?;
-                if let Some(probe) = self
-                    .candidate_close_probe
-                    .lock()
-                    .expect("candidate close probe")
-                    .clone()
-                {
-                    candidate.install_mcp_close_probe(&probe);
-                }
-                // Candidate preparation deliberately precedes project-context
-                // loading so a later project-file failure exercises the same
-                // candidate-retirement path as the production loader.
-                let project_files = self.project_files.lock().expect("project files").clone()?;
-                let workflow_catalog = self
-                    .workflow_catalog
-                    .lock()
-                    .expect("workflow catalog")
-                    .clone();
-                Ok(crate::runtime::PreparedRuntimeResources::new(
-                    project_files,
-                    None,
-                    context_assembly,
-                    candidate,
-                )
-                .with_workflow_catalog(workflow_catalog))
-            })
-        }
-    }
-
     fn request_snapshots(history: &RequestHistory) -> Vec<crate::model::RequestSnapshot> {
         let mut snapshots = Vec::new();
         let mut cursor = None;
@@ -8422,7 +8236,6 @@ mod tests {
         initial_messages: Vec<MessageBlock>,
         project_context_files: Vec<crate::runtime::ProjectContextFile>,
         agent_profile: Option<String>,
-        resource_loader: Option<Arc<dyn crate::runtime::RuntimeResourceLoader>>,
         workflow_catalog: crate::runtime::WorkflowCatalog,
         mcp_servers: std::collections::BTreeMap<
             crate::runtime::identity::McpServerId,
@@ -8445,7 +8258,6 @@ mod tests {
                 initial_messages: Vec::new(),
                 project_context_files: Vec::new(),
                 agent_profile: None,
-                resource_loader: None,
                 workflow_catalog: crate::runtime::WorkflowCatalog::empty(),
                 mcp_servers: std::collections::BTreeMap::new(),
                 pre_activation_mcp_close_probe: None,
@@ -8577,9 +8389,6 @@ mod tests {
             )
             .with_workflow_catalog(options.workflow_catalog),
         );
-        let resource_loader = options
-            .resource_loader
-            .unwrap_or_else(|| test_resource_loader(&coordinator));
         let config = RuntimeConversationConfig {
             explicit_model: true,
             agent_id: AgentId::new("agent-a"),
@@ -8594,7 +8403,6 @@ mod tests {
             },
             tool_runtime,
             resources,
-            resource_loader,
             capability: coordinator,
             clock: None,
             initial_messages: options.initial_messages,
@@ -8708,7 +8516,6 @@ mod tests {
             },
             tool_runtime,
             resources: test_resources(&coordinator),
-            resource_loader: test_resource_loader(&coordinator),
             capability: coordinator,
             clock: None,
             initial_messages: Vec::new(),
@@ -8817,7 +8624,6 @@ mod tests {
             },
             tool_runtime,
             resources: test_resources(&coordinator),
-            resource_loader: test_resource_loader(&coordinator),
             capability: coordinator,
             clock: None,
             initial_messages: Vec::new(),
@@ -8933,7 +8739,6 @@ mod tests {
             },
             tool_runtime,
             resources: test_resources(&coordinator),
-            resource_loader: test_resource_loader(&coordinator),
             capability: coordinator,
             clock: None,
             initial_messages: Vec::new(),
@@ -10815,11 +10620,6 @@ mod tests {
         )
         .expect("Skill generation A");
 
-        let loader = Arc::new(MutableResourceLoader::new(vec![project_file(
-            &project_path,
-            "project authority generation B",
-        )]));
-        let loader_trait: Arc<dyn crate::runtime::RuntimeResourceLoader> = loader.clone();
         let (release, release_rx) = model_release();
         let overflow_script = vec![
             FakeStep::ParkUntilReleased(release_rx),
@@ -10861,7 +10661,6 @@ mod tests {
                     &project_path,
                     "project authority generation A",
                 )],
-                resource_loader: Some(loader_trait),
                 ..HeadlessRuntimeOptions::default()
             },
         )
@@ -10883,24 +10682,6 @@ mod tests {
             "---\nname: pinned-skill\ndescription: Skill generation B.\n---\n\nBody B.\n",
         )
         .expect("edit Skill metadata");
-        loader.set_capability_inputs(crate::capabilities::CapabilityResourceInputs {
-            source_demand: crate::capabilities::source::ToolSourceDemand::default(),
-            base_tool_registry: Arc::new(tool_registry(
-                "tool-generation-b",
-                "tool_generation_b",
-                "Tool generation B",
-            )),
-            agent_activation: {
-                let mut activation = fixture_activation(runtime.tool_runtime());
-                activation.profile.tools.builtin = vec!["tool_generation_b".into()];
-                activation
-            },
-            skill_discovery: crate::skills::SkillDiscoveryConfig::workspace_root(
-                skill.parent().unwrap(),
-            ),
-            mcp_servers: std::collections::BTreeMap::new(),
-            base_environment: runtime.tool_runtime().environment().clone(),
-        });
         release
             .send(true)
             .expect("release the first provider request");
@@ -10960,11 +10741,6 @@ mod tests {
                 .tools
                 .iter()
                 .all(|tool| tool.name != "tool_generation_b")
-        );
-        assert_eq!(
-            loader.prepare_count(),
-            0,
-            "no configuration application occurred during compaction"
         );
     }
 
@@ -11460,7 +11236,6 @@ mod tests {
             },
             tool_runtime,
             resources: test_resources(&coordinator),
-            resource_loader: test_resource_loader(&coordinator),
             capability: coordinator,
             clock: None,
             initial_messages: Vec::new(),
@@ -11547,7 +11322,6 @@ mod tests {
             },
             tool_runtime,
             resources: test_resources(&coordinator),
-            resource_loader: test_resource_loader(&coordinator),
             capability: coordinator,
             clock: None,
             initial_messages: Vec::new(),
@@ -13177,8 +12951,8 @@ mod tests {
     /// wake permit makes the drain/wait pair lossless, so nothing polls.
     async fn published_eligibility_until(
         pending: &PendingObservations,
-        latest: &mut Option<crate::local_runtime::configuration::application::AdoptionEligibility>,
-        expected: crate::local_runtime::configuration::application::AdoptionEligibility,
+        latest: &mut Option<crate::runtime::adoption::AdoptionEligibility>,
+        expected: crate::runtime::adoption::AdoptionEligibility,
     ) {
         within_liveness_guard("published adoption eligibility", async {
             loop {
@@ -13209,9 +12983,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[allow(clippy::too_many_lines)] // scenario bodies are deliberately linear
     async fn subagent_settlement_restores_configuration_adoption_eligibility() {
-        use crate::local_runtime::configuration::application::{
-            AdoptionEligibility, AdoptionError, PreparedConfiguration,
-        };
+        use crate::runtime::adoption::{AdoptionEligibility, AdoptionError, PreparedConfiguration};
         let dir = tempfile::tempdir().expect("temp dir");
         let store = Arc::new(
             crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
@@ -15311,7 +15083,6 @@ mod tests {
             },
             tool_runtime,
             resources: test_resources(&coordinator),
-            resource_loader: test_resource_loader(&coordinator),
             capability: coordinator,
             clock: None,
             initial_messages: Vec::new(),
@@ -16123,7 +15894,6 @@ mod tests {
             },
             tool_runtime,
             resources: test_resources(&coordinator),
-            resource_loader: test_resource_loader(&coordinator),
             capability: coordinator,
             clock: None,
             initial_messages: Vec::new(),
@@ -17919,7 +17689,6 @@ mod tests {
             tool_runtime: crate::tools::runtime::ConversationToolRuntime,
             capability: crate::capabilities::CapabilityCoordinator,
             resources: Arc<crate::runtime::RuntimeResourceSnapshot>,
-            resource_loader: Arc<dyn crate::runtime::RuntimeResourceLoader>,
             _dir: tempfile::TempDir,
         }
 
@@ -17948,7 +17717,6 @@ mod tests {
                     tool_runtime: self.tool_runtime.clone(),
                     capability: self.capability.clone(),
                     resources: self.resources.clone(),
-                    resource_loader: self.resource_loader.clone(),
                     clock: None,
                     initial_messages: Vec::new(),
                     subagents: None,
@@ -17993,7 +17761,6 @@ mod tests {
         capability.commit(candidate).expect("candidate commit");
         let fixture = Fixture {
             resources: test_resources(&capability),
-            resource_loader: test_resource_loader(&capability),
             tool_runtime,
             capability,
             _dir: dir,
@@ -18041,7 +17808,6 @@ mod tests {
             tool_runtime: crate::tools::runtime::ConversationToolRuntime,
             capability: crate::capabilities::CapabilityCoordinator,
             resources: Arc<crate::runtime::RuntimeResourceSnapshot>,
-            resource_loader: Arc<dyn crate::runtime::RuntimeResourceLoader>,
             _dir: tempfile::TempDir,
         }
 
@@ -18069,7 +17835,6 @@ mod tests {
                     tool_runtime: self.tool_runtime.clone(),
                     capability: self.capability.clone(),
                     resources: self.resources.clone(),
-                    resource_loader: self.resource_loader.clone(),
                     clock: None,
                     initial_messages: Vec::new(),
                     subagents: None,
@@ -18114,7 +17879,6 @@ mod tests {
         capability.commit(candidate).expect("candidate commit");
         let fixture = Fixture {
             resources: test_resources(&capability),
-            resource_loader: test_resource_loader(&capability),
             tool_runtime,
             capability,
             _dir: dir,
@@ -18219,7 +17983,6 @@ mod tests {
             },
             tool_runtime,
             resources: test_resources(&coordinator),
-            resource_loader: test_resource_loader(&coordinator),
             capability: coordinator,
             clock: None,
             initial_messages,

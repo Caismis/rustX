@@ -2164,11 +2164,6 @@ fn conversation_runtime_over_model(
                 rustx::context::ContextAssembly::new(),
                 coordinator.current_snapshot(),
             )),
-            resource_loader: std::sync::Arc::new(
-                rustx::runtime::FilesystemRuntimeResourceLoader::new(
-                    coordinator.current_snapshot().workspace_root(),
-                ),
-            ),
             capability: coordinator,
             clock: None,
             initial_messages: Vec::new(),

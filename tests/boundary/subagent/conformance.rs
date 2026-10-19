@@ -319,9 +319,6 @@ async fn child_fixture_scoped_at(
                 rustx::context::ContextAssembly::new(),
                 capability.current_snapshot(),
             )),
-            resource_loader: Arc::new(rustx::runtime::FilesystemRuntimeResourceLoader::new(
-                &workspace,
-            )),
             clock: None,
             initial_messages,
             // A child has no subagent registry: recursion is absent by
@@ -658,9 +655,6 @@ async fn compose_parent_runtime_plane(
             None,
             rustx::context::ContextAssembly::new(),
             capability.current_snapshot(),
-        )),
-        resource_loader: Arc::new(rustx::runtime::FilesystemRuntimeResourceLoader::new(
-            &workspace,
         )),
         clock: None,
         initial_messages: Vec::new(),

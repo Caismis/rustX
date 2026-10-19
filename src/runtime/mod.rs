@@ -20,6 +20,9 @@
 //! is coordination infrastructure, not a generic process manager and not a
 //! public runtime API.
 
+/// Native configuration-adoption contracts: prepared candidates, adoption
+/// eligibility/refusal, admitted Attempt configuration, and cache impact.
+pub mod adoption;
 pub mod agent_profile;
 pub mod cancellation;
 pub mod capability_inspection;
@@ -167,9 +170,8 @@ pub use recovery::{
 };
 pub use request_history::{RequestHistory, RequestHistoryError};
 pub use resources::{
-    FilesystemRuntimeResourceLoader, PreparedRuntimeResources, ProjectContextFile,
-    RuntimeResourceLoadError, RuntimeResourceLoader, RuntimeResourceSnapshot,
-    load_project_context_files,
+    PreparedRuntimeResources, ProjectContextFile, RuntimeResourceLoadError,
+    RuntimeResourceSnapshot, load_project_context_files,
 };
 pub use types::{
     ApprovalMode, CancellationReason, ConversationLifecycle, ConversationLifecycleState,

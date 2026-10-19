@@ -1,7 +1,7 @@
 //! Inert canonical Python identities. Package parsing and materialization remain
 //! owned by the source lifecycle; directory discovery never enters those owners.
-use super::configuration::settings::SourceScope;
 use crate::capabilities::ToolSourceId;
+use crate::runtime::resources::SourceScope;
 use crate::runtime::resources::{
     ManagedPythonCatalog, RuntimeResourceLoadError, validate_project_resource_path,
 };

@@ -31,8 +31,8 @@ const WORKFLOW: &str = "description: Return a literal\nblock:\n  input: {type: o
 
 #[test]
 fn workflow_shadowing_preserves_the_complete_winning_identity_and_native_origin() {
-    use rustx::local_runtime::configuration::settings::SourceScope;
     use rustx::runtime::capability_inspection::ResourceFamily;
+    use rustx::runtime::resources::SourceScope;
     let root = tempfile::tempdir().unwrap();
     let (host, request) = sources(root.path(), &format!("{PROVIDER}{MODEL}{ROOT}"), "");
     let user = host
@@ -98,8 +98,8 @@ fn workflow_shadowing_preserves_the_complete_winning_identity_and_native_origin(
 #[tokio::test]
 async fn python_shadowing_is_inert_and_a_malformed_higher_file_blocks_selected_admission() {
     use rustx::local_runtime::composition::{LocalConversationCore, LocalRuntimeDependencies};
-    use rustx::local_runtime::configuration::settings::SourceScope;
     use rustx::runtime::capability_inspection::ResourceFamily;
+    use rustx::runtime::resources::SourceScope;
     let root = tempfile::tempdir().unwrap();
     let (host, request) = sources(
         root.path(),
@@ -851,13 +851,13 @@ async fn malformed_workspace_mcp_reserves_shadow_and_unused_definition_warns() {
             .unwrap();
         core.runtime().activate();
         assert!(
-            !core
-                .runtime()
-                .configuration_view()
-                .unwrap()
-                .resources
-                .resource_diagnostics
-                .is_empty()
+            !rustx::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &core.runtime()
+            )
+            .unwrap()
+            .resources
+            .resource_diagnostics
+            .is_empty()
         );
         core.shutdown().await.unwrap();
         std::fs::write(

@@ -8,42 +8,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 mod worker;
 use crate::model::request_shape::CacheImpact;
-
-#[derive(
-    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
-)]
-#[serde(tag = "status", rename_all = "snake_case")]
-pub enum AdoptionError {
-    Busy,
-    NotReady,
-    Conflict,
-    Failed { diagnostic: String },
-}
-
-/// Whether a live runtime could adopt a prepared configuration now.
-///
-/// Runtime-domain advisory state, published by the runtime through its Runtime
-/// Client projection; it is never part of a `ConfigurationApplication`.
-/// Adoption always revalidates the native admission gate.
-#[derive(
-    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
-)]
-#[serde(tag = "status", rename_all = "snake_case")]
-pub enum AdoptionEligibility {
-    Eligible,
-    Busy,
-    Unavailable,
-}
-
-pub(crate) struct PreparedConfiguration {
-    pub(crate) owner: Arc<()>,
-    pub(crate) baseline: u64,
-    pub(crate) preview: Arc<crate::runtime::RuntimeResourceSnapshot>,
-    pub(crate) model: crate::model::session::SessionModelState,
-    pub(crate) capability: Option<crate::capabilities::PreparedCapabilityCandidate>,
-    pub(crate) resources: Option<crate::runtime::resources::PreparedRuntimeResourceData>,
-    pub(crate) impact: CacheImpact,
-}
+use crate::runtime::adoption::PreparedConfiguration;
 
 #[derive(
     Debug,
@@ -297,7 +262,7 @@ impl ApplicationState {
         credentials: &crate::credentials::CredentialSnapshot,
         persisted: bool,
     ) -> Result<super::AdmittedSessionConfig, String> {
-        let key = super::canonical_directory(&input.cwd)?;
+        let key = super::capture::canonical_directory(&input.cwd)?;
         let mut capture = match self.creation_capture(configuration, &key, credentials)? {
             std::borrow::Cow::Borrowed(capture) => capture.clone(),
             std::borrow::Cow::Owned(capture) => {
@@ -350,7 +315,7 @@ impl ApplicationState {
         ),
         String,
     > {
-        let key = super::canonical_directory(cwd)?;
+        let key = super::capture::canonical_directory(cwd)?;
         let capture = self.creation_capture(configuration, &key, credentials)?;
         let catalog = capture
             .models

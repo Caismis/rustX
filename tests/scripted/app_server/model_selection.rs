@@ -110,7 +110,9 @@ async fn assert_authority(fixture: &Fixture, expected: &SessionModelConfig) {
     let runtime = fixture.manager.configuration_runtime(id).unwrap();
     assert_eq!(runtime.model_view().configured, *expected);
     assert_eq!(
-        runtime.configuration_view().unwrap().adopted_binding,
+        crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(&runtime)
+            .unwrap()
+            .adopted_binding,
         retained.binding_revision
     );
     let projected = fixture
@@ -155,7 +157,12 @@ async fn t13_t15_catalog_selection_resolves_original_large_identities_at_exact_g
         };
         original.summary_model = summary.clone();
         f.manager.set_model(id, original).await.unwrap();
-        let before = runtime.configuration_view().unwrap().adopted_binding;
+        let before =
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime,
+            )
+            .unwrap()
+            .adopted_binding;
         let source = f
             .manager
             .source_settings(&SourceTarget::User)
@@ -211,7 +218,12 @@ async fn t13_t15_catalog_selection_resolves_original_large_identities_at_exact_g
         let mut retained = runtime.model_view().configured;
         retained.summary_model = summary.clone();
         f.manager.set_model(id, retained).await.unwrap();
-        let binding = runtime.configuration_view().unwrap().adopted_binding;
+        let binding =
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime,
+            )
+            .unwrap()
+            .adopted_binding;
         assert_ne!(
             before,
             binding,
@@ -273,7 +285,13 @@ async fn t13_t15_catalog_selection_resolves_original_large_identities_at_exact_g
             Some(crate::runtime_client::snapshot::RuntimeClientModelStatus {
                 available: true,
                 body_deferred: true,
-                binding_revision: Some(runtime.configuration_view().unwrap().adopted_binding)
+                binding_revision: Some(
+                    crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                        &runtime
+                    )
+                    .unwrap()
+                    .adopted_binding
+                )
             })
         );
         assert!(crate::runtime_client::checkpoint::bounded_bytes(&checkpoint, 786_432).is_some());
@@ -344,7 +362,12 @@ async fn r04_manager_selection_and_attempt_admission_have_both_complete_orders()
                 ..selection("local/b")
             };
             let resources = runtime.runtime_resources();
-            let binding = runtime.configuration_view().unwrap().adopted_binding;
+            let binding =
+                crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                    &runtime,
+                )
+                .unwrap()
+                .adopted_binding;
             let settings_revision = f.manager.sessions.read_settings(id).await.unwrap().0;
             let (attachment, _) = host
                 .attach_read_only(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
@@ -411,7 +434,11 @@ async fn r04_manager_selection_and_attempt_admission_have_both_complete_orders()
                 settings_revision + 1
             );
             assert_eq!(
-                runtime.configuration_view().unwrap().adopted_binding,
+                crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                    &runtime
+                )
+                .unwrap()
+                .adopted_binding,
                 binding + 1
             );
             assert!(Arc::ptr_eq(&resources, &runtime.runtime_resources()));
@@ -632,7 +659,7 @@ async fn r06_policy_publication_at_same_binding_fences_prepared_selection_resour
             let id = &f.sessions[0].id;
             let runtime = f.manager.configuration_runtime(id).unwrap();
             let before = runtime.runtime_resources();
-            let binding = runtime.configuration_view().unwrap().adopted_binding;
+            let binding = crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(&runtime).unwrap().adopted_binding;
             let settings = f.manager.sessions.read_settings(id).await.unwrap();
             let mut policy_gate = SelectionGate::at(&f, "configuration_policy_prepared");
             let probe = f.manager.probe(&f.id(0).await);
@@ -654,13 +681,13 @@ async fn r06_policy_publication_at_same_binding_fences_prepared_selection_resour
             drop(policy_gate);
             probe.before_catalog_publication.entered().await;
             assert_eq!(f.manager.configuration_application(id).unwrap().desired, identity);
-            assert_eq!(runtime.configuration_view().unwrap().adopted_binding, binding);
+            assert_eq!(crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(&runtime).unwrap().adopted_binding, binding);
             assert!(!Arc::ptr_eq(&runtime.runtime_resources(), &before));
             if shared_capacity {
                 assert_eq!(runtime.runtime_resources().revision(), before.revision());
-                assert_eq!(runtime.configuration_view().unwrap().child_capacity.max_concurrent, 3);
+                assert_eq!(crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(&runtime).unwrap().child_capacity.max_concurrent, 3);
             } else {
-                assert_eq!(runtime.configuration_view().unwrap().model_timeout.response_start_timeout_ms, 12345);
+                assert_eq!(crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(&runtime).unwrap().model_timeout.response_start_timeout_ms, 12345);
             }
             drop(selection_gate);
             let result = pending.await.unwrap();
@@ -708,7 +735,12 @@ async fn r07_catalog_failure_before_and_after_visibility_preserves_coherent_auth
             let id = &f.sessions[0].id;
             let runtime = f.manager.configuration_runtime(id).unwrap();
             let resources = runtime.runtime_resources();
-            let binding = runtime.configuration_view().unwrap().adopted_binding;
+            let binding =
+                crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                    &runtime,
+                )
+                .unwrap()
+                .adopted_binding;
             let (revision, _) = f.manager.sessions.read_settings(id).await.unwrap();
             let host = f.manager.configuration_host(id).unwrap();
             let checkpoint = host.checkpoint().unwrap();
@@ -740,7 +772,11 @@ async fn r07_catalog_failure_before_and_after_visibility_preserves_coherent_auth
                 revision + u64::from(after_visibility)
             );
             assert_eq!(
-                runtime.configuration_view().unwrap().adopted_binding,
+                crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                    &runtime
+                )
+                .unwrap()
+                .adopted_binding,
                 binding + u64::from(after_visibility)
             );
             assert!(Arc::ptr_eq(&resources, &runtime.runtime_resources()));

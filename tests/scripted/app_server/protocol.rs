@@ -4277,14 +4277,15 @@ async fn issue459_removed_selected_model_is_replaced_explicitly_in_place() {
         assert_eq!(published.revision(), resources.revision().next());
         // The new-Session default travels with the catalog it is valid in.
         assert_eq!(
-            runtime
-                .configuration_view()
-                .unwrap()
-                .root_agent
-                .model
-                .unwrap()
-                .model
-                .to_string(),
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime
+            )
+            .unwrap()
+            .root_agent
+            .model
+            .unwrap()
+            .model
+            .to_string(),
             "local/c"
         );
 

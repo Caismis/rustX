@@ -1,5 +1,6 @@
 //! CFG-01 filesystem and real native composition regressions (Linux and macOS CI).
 #![allow(clippy::needless_pass_by_value, clippy::too_many_lines)] // linear fixture scenarios
+use super::configuration::capture::workspace_identity;
 use super::configuration::*;
 use super::launch::*;
 use super::{LocalConversationRuntime, LocalRuntimeDependencies, LocalRuntimeError};
@@ -2345,7 +2346,7 @@ fn cfg270_every_checked_in_toml_example_uses_its_production_authoring_owner() {
                             crate::toml_authoring::parse(&bytes).unwrap();
                     }
                     "rustx.toml" => {
-                        super::configuration::parse_layer(
+                        super::configuration::capture::parse_layer(
                             &path,
                             &bytes,
                             path.file_name().unwrap() == "rustx.toml",

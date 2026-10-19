@@ -1383,7 +1383,7 @@ async fn capability_projection_carries_builtin_tools_and_revision() {
 /// eligibility never re-reads configuration because output streamed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn streamed_deltas_publish_no_adoption_eligibility_change() {
-    use rustx::local_runtime::configuration::application::AdoptionEligibility;
+    use rustx::runtime::adoption::AdoptionEligibility;
     const DELTAS: usize = 200;
     let (release_tx, release_rx) = support::fake::model_release();
     let mut steps = vec![

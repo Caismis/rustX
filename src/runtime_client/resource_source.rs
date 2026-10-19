@@ -573,10 +573,8 @@ fn metadata_child<'a>(
             0 => Some((
                 Some("scope"),
                 Node::Text(match v.scope {
-                    crate::local_runtime::configuration::settings::SourceScope::User => "user",
-                    crate::local_runtime::configuration::settings::SourceScope::Workspace => {
-                        "workspace"
-                    }
+                    crate::runtime::resources::SourceScope::User => "user",
+                    crate::runtime::resources::SourceScope::Workspace => "workspace",
                 }),
             )),
             1 => Some((Some("path"), Node::Path(&v.path))),

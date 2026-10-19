@@ -501,7 +501,7 @@ fn as_response(record: &str) -> RuntimeClientResponse {
 
 /// Joins activation's actual eligibility publication before opening test I/O.
 async fn await_initial_eligibility(host: &RuntimeClientHost) {
-    use rustx::local_runtime::configuration::application::AdoptionEligibility;
+    use rustx::runtime::adoption::AdoptionEligibility;
     use rustx::runtime_client::EventDelivery;
 
     let (attachment, _) = host

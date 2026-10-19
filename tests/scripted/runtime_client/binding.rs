@@ -125,9 +125,6 @@ fn try_config(
             rustx::context::ContextAssembly::new(),
             coordinator.current_snapshot(),
         )),
-        resource_loader: Arc::new(rustx::runtime::FilesystemRuntimeResourceLoader::new(
-            coordinator.current_snapshot().workspace_root(),
-        )),
         capability: coordinator,
         clock: None,
         initial_messages: Vec::new(),
