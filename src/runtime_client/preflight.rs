@@ -2,6 +2,23 @@
 use serde::ser::{self, SerializeMap, SerializeSeq, SerializeStruct};
 use serde::{Serialize, Serializer};
 
+#[cfg(test)]
+thread_local! {
+    static STRUCTURAL_ONLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(crate) fn with_structural_admission_only<T>(work: impl FnOnce() -> T) -> T {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            STRUCTURAL_ONLY.with(|flag| flag.set(self.0));
+        }
+    }
+    let _restore = Restore(STRUCTURAL_ONLY.with(|flag| flag.replace(true)));
+    work()
+}
+
 pub(crate) fn fits(value: &(impl Serialize + ?Sized), limit: usize) -> bool {
     bounded_fit(value, limit).unwrap_or(true)
 }
@@ -17,6 +34,10 @@ pub(crate) fn bounded_safe_integer_fit(
     value: &(impl Serialize + ?Sized),
     limit: usize,
 ) -> Option<bool> {
+    #[cfg(test)]
+    if STRUCTURAL_ONLY.with(std::cell::Cell::get) {
+        return None;
+    }
     checked_fit(value, limit, true)
 }
 fn checked_fit(value: &(impl Serialize + ?Sized), limit: usize, opaque_json: bool) -> Option<bool> {
