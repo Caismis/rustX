@@ -395,7 +395,7 @@ impl AppServerConnection {
         &self,
         id: &RequestId,
         target: &AttachmentTarget,
-        locator: crate::runtime_client::content::CanonicalContentLocator,
+        locator: crate::observation::content::CanonicalContentLocator,
         delivery_index: usize,
         access: super::delivery_access::Access,
     ) -> (
@@ -1805,8 +1805,8 @@ impl AppServerConnection {
         &self,
         session_id: crate::local_runtime::session::SessionId,
         node_id: Option<crate::local_runtime::session::SessionNodeId>,
-        cut: crate::runtime_client::checkpoint::CheckpointReadCut,
-        content_ref: crate::runtime_client::content::ContentRef,
+        cut: crate::observation::cut::CheckpointReadCut,
+        content_ref: crate::observation::content::ContentRef,
         range: (u64, u32),
     ) -> Result<MethodResult, RpcError> {
         let (offset, max_bytes) = range;
@@ -1815,7 +1815,7 @@ impl AppServerConnection {
             || max_bytes > 65_536
             || matches!(
                 content_ref.source,
-                crate::runtime_client::content::ContentSource::LivePublicationPrefix { .. }
+                crate::observation::content::ContentSource::LivePublicationPrefix { .. }
             )
         {
             return Err(domain(ErrorData::InvalidParams));
@@ -1851,11 +1851,11 @@ impl AppServerConnection {
         &self,
         session: &crate::local_runtime::session::SessionId,
         node: Option<&crate::local_runtime::session::SessionNodeId>,
-        requested: Option<&crate::runtime_client::checkpoint::CheckpointReadCut>,
+        requested: Option<&crate::observation::cut::CheckpointReadCut>,
     ) -> Result<
         (
             crate::local_runtime::session::SessionNodeId,
-            Option<crate::runtime_client::checkpoint::CheckpointReadCut>,
+            Option<crate::observation::cut::CheckpointReadCut>,
         ),
         RpcError,
     > {
@@ -3168,8 +3168,8 @@ fn source_error(error: crate::local_runtime::configuration::settings::SettingsEr
 
 fn history_checkpoint_cut(
     cut: crate::durable::observation::ObservationReadCut,
-) -> crate::runtime_client::checkpoint::CheckpointReadCut {
-    crate::runtime_client::checkpoint::CheckpointReadCut {
+) -> crate::observation::cut::CheckpointReadCut {
+    crate::observation::cut::CheckpointReadCut {
         canonical_foreground: None,
         live_publication: None,
         conversation_id: cut.read.conversation_id.clone(),
@@ -3184,10 +3184,10 @@ fn history_checkpoint_cut(
 
 fn history_anchor(
     at: crate::durable::reading::ConversationWindowAt,
-    upper: Option<&crate::runtime_client::checkpoint::CheckpointReadCut>,
+    upper: Option<&crate::observation::cut::CheckpointReadCut>,
 ) -> Result<crate::durable::reading::ConversationWindowAt, RpcError> {
     use crate::durable::reading::ConversationWindowAt as At;
-    if matches!(&at, At::Canonical { locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId { message_id }, .. } if message_id.as_str().len()>256)
+    if matches!(&at, At::Canonical { locator: crate::observation::content::CanonicalContentLocator::ByMessageId { message_id }, .. } if message_id.as_str().len()>256)
     {
         return Err(domain(ErrorData::InvalidParams));
     }
@@ -3356,7 +3356,7 @@ mod capacity_tests {
         let page = crate::runtime_client::checkpoint::CheckpointPage {
             collections: Vec::new(),
             cursor: crate::runtime_client::types::RuntimeClientCursor::new(0),
-            read_cut: crate::runtime_client::checkpoint::CheckpointReadCut {
+            read_cut: crate::observation::cut::CheckpointReadCut {
                 canonical_foreground: None,
                 live_publication: None,
                 collection_cuts: std::collections::BTreeMap::new(),

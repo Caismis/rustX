@@ -278,7 +278,7 @@ fn page(
     before: Option<crate::durable::TranscriptCursor>,
     limit: usize,
 ) -> RuntimeClientTranscriptPage {
-    let mut page = super::super::snapshot::transcript_page_view(
+    let mut page = crate::observation::transcript::transcript_page_view(
         store.load_transcript_page(before, limit).unwrap(),
     )
     .unwrap();
@@ -845,7 +845,7 @@ fn process_membership_uses_exact_attempts_across_steering_and_pages() {
                 assert_eq!(
                     process.final_message_locator,
                     Some(
-                        super::super::content::CanonicalContentLocator::ByLedgerPosition {
+                        crate::observation::content::CanonicalContentLocator::ByLedgerPosition {
                             position: final_position,
                         }
                     )
@@ -1099,8 +1099,8 @@ fn terminal_cases() -> [(&'static str, RuntimeEvent, TurnProcessOutcome); 4] {
 
 fn assert_original_tool_view(
     store: &dyn ConversationStore,
-    bounded: &crate::runtime_client::snapshot::ForegroundToolExecution,
-    original: &crate::runtime_client::snapshot::ForegroundToolExecution,
+    bounded: &crate::observation::tool::ForegroundToolExecution,
+    original: &crate::observation::tool::ForegroundToolExecution,
 ) {
     assert_eq!(
         bounded.committed_result, original.committed_result,
@@ -1122,8 +1122,7 @@ fn assert_original_tool_view(
     else {
         panic!("the actual original Tool occurrence");
     };
-    let crate::runtime_client::snapshot::ForegroundToolState::Assembled { arguments } =
-        &bounded.state
+    let crate::observation::tool::ForegroundToolState::Assembled { arguments } = &bounded.state
     else {
         panic!("canonical C without a native Tool terminal must stay Assembled");
     };
@@ -1135,7 +1134,7 @@ fn assert_original_tool_view(
     assert_eq!(bounded.tool_id.as_ref(), Some(&call.tool_id));
     assert_eq!(
         bounded.occurrence.locator,
-        crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition {
+        crate::observation::content::CanonicalContentLocator::ByLedgerPosition {
             position: store
                 .message_ledger_position(original_message_id)
                 .unwrap()
@@ -1171,7 +1170,7 @@ fn exact_window_decoration_keeps_attempt_tool_occurrences_and_response_identity(
         )
         .unwrap();
     let frozen_cut = selected.cut.read.clone();
-    let mut expected = crate::runtime_client::snapshot::transcript_header_view(selected.page);
+    let mut expected = crate::observation::transcript::transcript_header_view(selected.page);
     super::decorate_window(&store, &mut expected, selected.cut.read.journal).unwrap();
     assert_original_tool_view(
         &store,
@@ -1212,7 +1211,7 @@ fn exact_window_decoration_keeps_attempt_tool_occurrences_and_response_identity(
             4,
         )
         .unwrap();
-    let mut retained = crate::runtime_client::snapshot::transcript_header_view(old.page);
+    let mut retained = crate::observation::transcript::transcript_header_view(old.page);
     super::decorate_window(&store, &mut retained, old.cut.read.journal).unwrap();
     assert_eq!(
         retained, expected,
@@ -1228,7 +1227,7 @@ fn exact_window_decoration_keeps_attempt_tool_occurrences_and_response_identity(
             4,
         )
         .unwrap();
-    let mut window = crate::runtime_client::snapshot::transcript_header_view(read.page);
+    let mut window = crate::observation::transcript::transcript_header_view(read.page);
     super::decorate_window(&store, &mut window, read.cut.read.journal).unwrap();
     assert_eq!(window.entries, expected.entries);
     assert_eq!(
@@ -1293,7 +1292,7 @@ fn model_failure_keeps_normalized_diagnostics_without_provider_fields() {
 
 #[test]
 fn agent_statistics_replays_incrementally_with_full_native_metrics() {
-    use crate::runtime_client::agent_statistics::StatisticsFold;
+    use crate::observation::statistics::StatisticsFold;
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("agent.sqlite");
     let id = ConversationId::generate();
@@ -1333,7 +1332,7 @@ fn agent_statistics_replays_incrementally_with_full_native_metrics() {
             .is_some_and(|value| value.model.len() <= 512)
     );
     let expected_occupancy = native_occupancy.as_ref().map(|value| {
-        crate::runtime_client::occupancy::RuntimeClientContextOccupancy::from_native(value, None)
+        crate::observation::occupancy::RuntimeClientContextOccupancy::from_native(value, None)
     });
     assert_eq!(first.occupancy, expected_occupancy);
     assert!(
@@ -1517,7 +1516,8 @@ fn occupancy_reopens_and_inherits_without_local_requests_or_events() {
     let selected_window = child
         .read_window_headers(&crate::durable::reading::ConversationWindowAt::Latest, 8)
         .unwrap();
-    let mut copied_page = super::super::snapshot::transcript_header_view(selected_window.page);
+    let mut copied_page =
+        crate::observation::transcript::transcript_header_view(selected_window.page);
     super::decorate_window(&child, &mut copied_page, selected_window.cut.read.journal).unwrap();
     assert_eq!(
         tails(&copied_page)[0].origin.conversation_id,
@@ -1601,14 +1601,14 @@ fn window_decoration_empty_human_only_and_before_local_ownership_remain_exact() 
     let read = store
         .read_window_headers(&crate::durable::reading::ConversationWindowAt::Latest, 8)
         .unwrap();
-    let mut empty = super::super::snapshot::transcript_header_view(read.page);
+    let mut empty = crate::observation::transcript::transcript_header_view(read.page);
     super::decorate_window(&store, &mut empty, read.cut.read.journal).unwrap();
     assert!(empty.entries.is_empty());
     user(&store, "human-only");
     let read = store
         .read_window_headers(&crate::durable::reading::ConversationWindowAt::Latest, 8)
         .unwrap();
-    let mut human = super::super::snapshot::transcript_header_view(read.page);
+    let mut human = crate::observation::transcript::transcript_header_view(read.page);
     super::decorate_window(&store, &mut human, read.cut.read.journal).unwrap();
     assert!(human.entries[0].turn_process.is_none());
     assert!(human.entries[0].completed_response.is_none());
@@ -1625,7 +1625,7 @@ fn window_decoration_empty_human_only_and_before_local_ownership_remain_exact() 
     let read = store
         .read_window_headers(&crate::durable::reading::ConversationWindowAt::Latest, 8)
         .unwrap();
-    let mut historical = super::super::snapshot::transcript_header_view(read.page);
+    let mut historical = crate::observation::transcript::transcript_header_view(read.page);
     let mut old_window = frozen.clone();
     super::decorate_window(&store, &mut old_window, 0).unwrap();
     assert_eq!(old_window, frozen, "the genuine old native cut stays exact");
@@ -1654,9 +1654,10 @@ fn cutless_response_decoration_is_rejected_without_changing_native_page() {
     ))
     .unwrap();
     store.initialize(&[]).unwrap();
-    let mut page =
-        super::super::snapshot::transcript_page_view(store.load_transcript_page(None, 1).unwrap())
-            .unwrap();
+    let mut page = crate::observation::transcript::transcript_page_view(
+        store.load_transcript_page(None, 1).unwrap(),
+    )
+    .unwrap();
     let original = page.clone();
     for window in [false, true] {
         let result = if window {

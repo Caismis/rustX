@@ -3,9 +3,9 @@ use crate::runtime_client::RuntimeClientError;
 // Exact immutable native occupancy origins, independent of newer display readings.
 fn occupancy_origin_cut(
     store: &SqliteConversationStore,
-) -> crate::runtime_client::checkpoint::CheckpointReadCut {
+) -> crate::observation::cut::CheckpointReadCut {
     let source = store.observation_read_cut().unwrap();
-    crate::runtime_client::checkpoint::CheckpointReadCut {
+    crate::observation::cut::CheckpointReadCut {
         canonical_foreground: None,
         live_publication: None,
         conversation_id: store.conversation_id().clone(),
@@ -20,7 +20,7 @@ fn occupancy_origin_cut(
 
 fn occupancy_origin_read_model(
     store: &SqliteConversationStore,
-    cut: &crate::runtime_client::checkpoint::CheckpointReadCut,
+    cut: &crate::observation::cut::CheckpointReadCut,
     domain: &str,
 ) -> String {
     use base64::Engine as _;

@@ -361,7 +361,7 @@ mod tests {
         );
         assert_eq!(bounded_fit(value, first - 1), Some(false));
         assert_eq!(
-            super::super::checkpoint::bounded_bytes(value, first).unwrap(),
+            crate::observation::bounded::bounded_bytes(value, first).unwrap(),
             bytes
         );
     }
@@ -426,11 +426,11 @@ mod tests {
         let compound = std::collections::BTreeMap::from([((1_u8, 2_u8), 3_u8)]);
         assert_eq!(bounded_fit(&compound, 4096), None);
         assert!(fits(&compound, 4096));
-        assert!(super::super::checkpoint::bounded_bytes(&compound, 4096).is_none());
+        assert!(crate::observation::bounded::bounded_bytes(&compound, 4096).is_none());
         let optional = std::collections::BTreeMap::from([(Some("key"), "value")]);
         assert_eq!(bounded_fit(&optional, 4096), None);
         assert_eq!(
-            super::super::checkpoint::bounded_bytes(&optional, 4096).unwrap(),
+            crate::observation::bounded::bounded_bytes(&optional, 4096).unwrap(),
             serde_json::to_vec(&optional).unwrap()
         );
     }
@@ -445,8 +445,8 @@ mod tests {
             revision: u64::MAX,
             domains: std::collections::BTreeMap::from([("quoted\"\n".into(), u64::MAX)]),
         };
-        let schema = super::super::structural_json::root::<Native>();
-        let encoded = super::super::structural_json::Encoded {
+        let schema = crate::observation::structural_json::root::<Native>();
+        let encoded = crate::observation::structural_json::Encoded {
             value: &value,
             schema: &schema,
             root: &schema,

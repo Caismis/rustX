@@ -248,7 +248,7 @@ pub struct PendingObservationReceipt {
 /// One finite Goal installation and its exact native transaction evidence.
 #[derive(Debug, Clone)]
 pub struct GoalObservationReceipt {
-    pub view: crate::runtime_client::goal::RuntimeClientGoalView,
+    pub view: crate::observation::goal::RuntimeClientGoalView,
     /// Missing derived evidence fences observation without refusing the Goal write.
     pub native: Option<std::sync::Arc<super::observation::NativeObservationBatch>>,
     pub pending: Option<std::sync::Arc<PendingObservationReceipt>>,
@@ -274,11 +274,11 @@ impl PartialEq for GoalObservationReceipt {
 pub struct StatusObservationSource {
     pub contribution_ordinal: u64,
     pub request_id: crate::runtime::identity::RequestId,
-    pub locator: crate::runtime_client::content::CanonicalContentLocator,
-    pub rendered_ref: Option<crate::runtime_client::content::ContentRef>,
-    pub target_locator: Option<crate::runtime_client::content::CanonicalContentLocator>,
+    pub locator: crate::observation::content::CanonicalContentLocator,
+    pub rendered_ref: Option<crate::observation::content::ContentRef>,
+    pub target_locator: Option<crate::observation::content::CanonicalContentLocator>,
     pub target_transcript: Option<TranscriptCursor>,
-    pub target_metadata_ref: Option<crate::runtime_client::content::ContentRef>,
+    pub target_metadata_ref: Option<crate::observation::content::ContentRef>,
 }
 
 /// The committed result of one successful acceptance.
@@ -1600,10 +1600,7 @@ pub trait ConversationStore: Send + Sync + 'static {
         &self,
         cut: &crate::durable::observation::ObservationReadCut,
         source_sequence: u64,
-    ) -> Result<
-        Option<crate::runtime_client::content::CanonicalContentLocator>,
-        ConversationStoreError,
-    >;
+    ) -> Result<Option<crate::observation::content::CanonicalContentLocator>, ConversationStoreError>;
     fn observation_request_summary_at(
         &self,
         start_sequence: u64,
@@ -1640,7 +1637,7 @@ pub trait ConversationStore: Send + Sync + 'static {
         &self,
         cut: &super::observation::ObservationReadCut,
         occurrence: &crate::events::types::ToolObservationOccurrence,
-    ) -> Result<Option<crate::runtime_client::trace::TraceFieldSource>, ConversationStoreError>;
+    ) -> Result<Option<crate::observation::trace::TraceFieldSource>, ConversationStoreError>;
     /// Advancing original adoption ordinal membership at the exact J/C cut.
     fn observation_trace_adoption(
         &self,
@@ -1757,14 +1754,14 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// Validates immutable content against the server's observed native cut.
     fn validate_content_source_cut(
         &self,
-        reference: &crate::runtime_client::content::ContentRef,
+        reference: &crate::observation::content::ContentRef,
         cut: &super::observation::ObservationReadCut,
     ) -> Result<(), ConversationStoreError>;
     /// Original immutable owner field, selected by native provenance ordinal.
     fn observation_inherited_attempt_read(
         &self,
         cut: &super::observation::ObservationReadCut,
-        kind: crate::runtime_client::response::InheritedAttemptIdentityKind,
+        kind: crate::observation::turn::InheritedAttemptIdentityKind,
         ordinal: u64,
         offset: u64,
         max_bytes: u32,
@@ -1921,10 +1918,7 @@ pub trait ConversationStore: Send + Sync + 'static {
         &self,
         source_sequence: u64,
         through: u64,
-    ) -> Result<
-        Option<crate::runtime_client::content::CanonicalContentLocator>,
-        ConversationStoreError,
-    >;
+    ) -> Result<Option<crate::observation::content::CanonicalContentLocator>, ConversationStoreError>;
     fn observation_request_retry_at(
         &self,
         source_sequence: u64,
@@ -1933,10 +1927,7 @@ pub trait ConversationStore: Send + Sync + 'static {
     fn observation_request_retry_locator(
         &self,
         request_id: &RequestId,
-    ) -> Result<
-        Option<crate::runtime_client::content::CanonicalContentLocator>,
-        ConversationStoreError,
-    >;
+    ) -> Result<Option<crate::observation::content::CanonicalContentLocator>, ConversationStoreError>;
     fn observation_request_retry(
         &self,
         request_id: &RequestId,
@@ -1957,7 +1948,7 @@ pub trait ConversationStore: Send + Sync + 'static {
         &self,
         cut: &super::observation::ObservationReadCut,
         transcript: u64,
-    ) -> Result<Option<crate::runtime_client::response::TurnProcessView>, ConversationStoreError>;
+    ) -> Result<Option<crate::observation::turn::TurnProcessView>, ConversationStoreError>;
     fn audit_block_header_page(
         &self,
         cut: &super::observation::ObservationReadCut,
@@ -1970,7 +1961,7 @@ pub trait ConversationStore: Send + Sync + 'static {
         &self,
         cut: &super::observation::ObservationReadCut,
     ) -> Result<
-        Vec<crate::runtime_client::snapshot::RuntimeClientPublicationSettlementRecord>,
+        Vec<crate::observation::transcript::RuntimeClientPublicationSettlementRecord>,
         ConversationStoreError,
     >;
     fn observation_trace_total(&self, through: u64) -> Result<u64, ConversationStoreError>;
@@ -1979,7 +1970,7 @@ pub trait ConversationStore: Send + Sync + 'static {
         &self,
         through: u64,
     ) -> Result<
-        Option<crate::runtime_client::occupancy::RuntimeClientContextOccupancy>,
+        Option<crate::observation::occupancy::RuntimeClientContextOccupancy>,
         ConversationStoreError,
     >;
     /// One immutable compaction or inherited reading's original model field.
@@ -1994,12 +1985,12 @@ pub trait ConversationStore: Send + Sync + 'static {
     fn observation_statistics(
         &self,
         through: u64,
-    ) -> Result<crate::runtime_client::response::ConversationStatistics, ConversationStoreError>;
+    ) -> Result<crate::observation::statistics::ConversationStatistics, ConversationStoreError>;
     /// Local child statistics and exact working intervals from same-J headers.
     fn observation_agent_statistics(
         &self,
         through: u64,
-    ) -> Result<crate::runtime_client::agent_statistics::AgentStatistics, ConversationStoreError>;
+    ) -> Result<crate::observation::statistics::AgentStatistics, ConversationStoreError>;
     /// Mutable pending headers at one exact native mutation cut, by exclusive sequence.
     fn pending_header_page(
         &self,
@@ -2080,7 +2071,7 @@ pub trait ConversationStore: Send + Sync + 'static {
     fn tool_association_headers_by_locator(
         &self,
         cut: &super::observation::ObservationReadCut,
-        locator: &crate::runtime_client::content::CanonicalContentLocator,
+        locator: &crate::observation::content::CanonicalContentLocator,
         offset: u64,
         limit: usize,
     ) -> Result<super::observation::ToolAssociationHeaderPage, ConversationStoreError>;
@@ -2088,7 +2079,7 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// independent of optional display headers and body range indexes.
     fn ordinary_user_message(
         &self,
-        locator: &crate::runtime_client::content::CanonicalContentLocator,
+        locator: &crate::observation::content::CanonicalContentLocator,
     ) -> Result<bool, ConversationStoreError>;
     fn message_ledger_position(
         &self,
@@ -2109,7 +2100,7 @@ pub trait ConversationStore: Send + Sync + 'static {
     fn message_block_header_page_by_locator(
         &self,
         cut: &super::observation::ObservationReadCut,
-        locator: &crate::runtime_client::content::CanonicalContentLocator,
+        locator: &crate::observation::content::CanonicalContentLocator,
         offset: u64,
         limit: usize,
     ) -> Result<super::observation::MessageBlockHeaderPage, ConversationStoreError>;
@@ -2184,24 +2175,24 @@ pub trait ConversationStore: Send + Sync + 'static {
         &self,
         offset: Option<u64>,
         limit: usize,
-    ) -> Result<crate::runtime_client::turn::ObservedTurnPage, ConversationStoreError>;
+    ) -> Result<crate::observation::turn::ObservedTurnPage, ConversationStoreError>;
     /// Select one committed successful Tool delivery without loading its body.
     fn observation_file_delivery(
         &self,
-        locator: &crate::runtime_client::content::CanonicalContentLocator,
+        locator: &crate::observation::content::CanonicalContentLocator,
         index: u64,
     ) -> Result<super::observation::NativeFileDelivery, ConversationStoreError>;
     fn observation_deliveries(
         &self,
         cut: &super::observation::ObservationReadCut,
-        locator: &crate::runtime_client::content::CanonicalContentLocator,
+        locator: &crate::observation::content::CanonicalContentLocator,
         offset: u64,
         limit: usize,
-    ) -> Result<crate::runtime_client::delivery::RuntimeClientDeliveryHead, ConversationStoreError>;
+    ) -> Result<crate::observation::delivery::RuntimeClientDeliveryHead, ConversationStoreError>;
     fn observation_delivery_read(
         &self,
         cut: &super::observation::ObservationReadCut,
-        locator: &crate::runtime_client::content::CanonicalContentLocator,
+        locator: &crate::observation::content::CanonicalContentLocator,
         index: u64,
         offset: u64,
         max_bytes: u32,
@@ -2278,7 +2269,7 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// Finite same-transaction Goal display header, without reading original body.
     fn goal_observation_view(
         &self,
-    ) -> Result<crate::runtime_client::goal::RuntimeClientGoalView, ConversationStoreError>;
+    ) -> Result<crate::observation::goal::RuntimeClientGoalView, ConversationStoreError>;
 
     /// One authoritative Goal mutation, validated and revisioned atomically.
     fn write_goal(
@@ -2556,13 +2547,13 @@ pub trait ConversationStore: Send + Sync + 'static {
     fn transcript_tool_headers(
         &self,
         cut: &super::observation::ObservationReadCut,
-        locator: &crate::runtime_client::content::CanonicalContentLocator,
+        locator: &crate::observation::content::CanonicalContentLocator,
         offset: u64,
         limit: usize,
     ) -> Result<super::observation::NativeToolObservationPage, ConversationStoreError>;
     fn message_append_revision_by_locator(
         &self,
-        locator: &crate::runtime_client::content::CanonicalContentLocator,
+        locator: &crate::observation::content::CanonicalContentLocator,
     ) -> Result<Option<SurfaceRevision>, ConversationStoreError>;
     fn message_append_revision(
         &self,
@@ -2604,7 +2595,7 @@ pub trait ConversationStore: Send + Sync + 'static {
     fn surface_boundary_message_id(
         &self,
         boundary_revision: SurfaceRevision,
-        locator: &crate::runtime_client::content::CanonicalContentLocator,
+        locator: &crate::observation::content::CanonicalContentLocator,
     ) -> Result<MessageId, ConversationStoreError>;
     /// Resolves a canonical boundary of any role from the original Ledger at
     /// the selected Surface revision, independently of display read indexes.
@@ -2612,7 +2603,7 @@ pub trait ConversationStore: Send + Sync + 'static {
     fn canonical_boundary_message_id(
         &self,
         boundary_revision: SurfaceRevision,
-        locator: &crate::runtime_client::content::CanonicalContentLocator,
+        locator: &crate::observation::content::CanonicalContentLocator,
     ) -> Result<MessageId, ConversationStoreError>;
     fn load_user_message_boundaries(
         &self,
@@ -2722,7 +2713,7 @@ pub trait ConversationStore: Send + Sync + 'static {
         &self,
         through: u64,
     ) -> Result<
-        Option<crate::runtime_client::snapshot::RuntimeClientProjectionHeadView>,
+        Option<crate::observation::head::RuntimeClientProjectionHeadView>,
         ConversationStoreError,
     >;
     fn projection_at_journal_cut(
@@ -3024,37 +3015,37 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// Reads a native P-indexed block page at an explicitly observed release revision.
     fn live_block_header_page(
         &self,
-        source: &crate::runtime_client::content::ContentSource,
+        source: &crate::observation::content::ContentSource,
         through_revision: u64,
         offset: u64,
         limit: usize,
-    ) -> Result<crate::runtime_client::content::LiveBlockHeaderPage, ConversationStoreError>;
+    ) -> Result<crate::observation::content::LiveBlockHeaderPage, ConversationStoreError>;
     fn content_descriptor_at(
         &self,
-        source: &crate::runtime_client::content::ContentSource,
-        representation: crate::runtime_client::content::ContentRepresentation,
+        source: &crate::observation::content::ContentSource,
+        representation: crate::observation::content::ContentRepresentation,
         revision: u64,
-    ) -> Result<Option<crate::runtime_client::content::ContentRef>, ConversationStoreError>;
+    ) -> Result<Option<crate::observation::content::ContentRef>, ConversationStoreError>;
     fn content_descriptor(
         &self,
-        source: &crate::runtime_client::content::ContentSource,
-        representation: crate::runtime_client::content::ContentRepresentation,
-    ) -> Result<Option<crate::runtime_client::content::ContentRef>, ConversationStoreError>;
+        source: &crate::observation::content::ContentSource,
+        representation: crate::observation::content::ContentRepresentation,
+    ) -> Result<Option<crate::observation::content::ContentRef>, ConversationStoreError>;
 
     fn live_tool_header_page(
         &self,
-        source: &crate::runtime_client::content::ContentSource,
+        source: &crate::observation::content::ContentSource,
         through_revision: u64,
         offset: u64,
         limit: usize,
-    ) -> Result<crate::runtime_client::content::LiveBlockHeaderPage, ConversationStoreError>;
+    ) -> Result<crate::observation::content::LiveBlockHeaderPage, ConversationStoreError>;
     /// Pure bounded physical range read. Target authorization belongs to the caller.
     fn content_read(
         &self,
-        reference: &crate::runtime_client::content::ContentRef,
+        reference: &crate::observation::content::ContentRef,
         offset: u64,
         max_bytes: u32,
-    ) -> Result<crate::runtime_client::content::ContentChunk, ConversationStoreError>;
+    ) -> Result<crate::observation::content::ContentChunk, ConversationStoreError>;
 
     // ---------------------------------------------------------------------
     // The durable publication plane (Issue #108, FND-03).

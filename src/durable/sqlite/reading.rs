@@ -488,7 +488,7 @@ fn require_message_target(
     }
 }
 pub(super) struct WindowSelection {
-    pub observed_target: Option<crate::runtime_client::turn::ObservedTurnIdentity>,
+    pub observed_target: Option<crate::observation::turn::ObservedTurnIdentity>,
     pub cut: ConversationReadCut,
     pub before: Option<crate::durable::TranscriptCursor>,
     pub target: Option<ConversationTurnId>,

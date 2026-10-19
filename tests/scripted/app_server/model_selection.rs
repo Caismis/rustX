@@ -261,7 +261,7 @@ async fn t13_t15_catalog_selection_resolves_original_large_identities_at_exact_g
             "resolved native identities and independent Summary exceed one complete record"
         );
         assert!(
-            crate::runtime_client::checkpoint::bounded_bytes(&model_view, 1_048_576).is_none(),
+            crate::observation::bounded::bounded_bytes(&model_view, 1_048_576).is_none(),
             "native model body exceeds the complete transport record budget"
         );
         let configured = model_view.configured;
@@ -294,7 +294,7 @@ async fn t13_t15_catalog_selection_resolves_original_large_identities_at_exact_g
                 )
             })
         );
-        assert!(crate::runtime_client::checkpoint::bounded_bytes(&checkpoint, 786_432).is_some());
+        assert!(crate::observation::bounded::bounded_bytes(&checkpoint, 786_432).is_some());
     })
     .await;
 }

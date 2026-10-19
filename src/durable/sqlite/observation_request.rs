@@ -28,7 +28,7 @@ impl SourceWriter<'_> {
             self.written = self
                 .written
                 .checked_add(self.buffer.len() as u64)
-                .filter(|value| *value <= crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX)
+                .filter(|value| *value <= crate::observation::content::CONTENT_SAFE_INTEGER_MAX)
                 .ok_or_else(|| {
                     std::io::Error::other("native structural source exceeds safe offsets")
                 })?;
@@ -141,7 +141,7 @@ fn stored_preview(
     } else {
         None
     };
-    Ok(crate::runtime_client::checkpoint::bounded_bytes(
+    Ok(crate::observation::bounded::bounded_bytes(
         original_message.as_ref().unwrap_or(preview),
         16_384,
     )
@@ -197,9 +197,9 @@ fn provenance_source(
     sequence: u64,
     item: u64,
     encoded_bytes: u64,
-) -> crate::runtime_client::trace::TraceFieldSource {
-    crate::runtime_client::trace::TraceFieldSource::Value {
-        field: crate::runtime_client::trace::TraceFieldKind::Provenance,
+) -> crate::observation::trace::TraceFieldSource {
+    crate::observation::trace::TraceFieldSource::Value {
+        field: crate::observation::trace::TraceFieldKind::Provenance,
         domain: format!("trace.records.{sequence}.detail.request.messages"),
         item_offset: item,
         path: vec!["provenance".into()],
@@ -219,7 +219,7 @@ fn input_view(
     frozen: &crate::model::projected::FrozenModelInput,
 ) -> Result<
     (
-        crate::runtime_client::trace::TraceRequestMessage,
+        crate::observation::trace::TraceRequestMessage,
         Option<crate::durable::observation::MessageHeader>,
     ),
     ConversationStoreError,
@@ -230,7 +230,7 @@ fn input_view(
         crate::model::projected::FrozenModelInput::Original(original) => Some(original),
         _ => None,
     };
-    let mut view = crate::runtime_client::trace::frozen::input_message(scope, message, original);
+    let mut view = crate::observation::trace::frozen::input_message(scope, message, original);
     let header = message
         .canonical_id()
         .map(|id| {
@@ -239,7 +239,7 @@ fn input_view(
         })
         .transpose()?;
     if let Some(header) = &header {
-        crate::runtime_client::trace::request::bind_original_provenance(&mut view, header)?;
+        crate::observation::trace::request::bind_original_provenance(&mut view, header)?;
     }
     Ok((view, header))
 }
@@ -260,7 +260,7 @@ pub(super) fn legacy_request_source_bytes(
     snapshot: &crate::model::RequestSnapshot,
 ) -> Result<Vec<u8>, ConversationStoreError> {
     let capture = |_ordinal: u64, _bytes: &[u8]| Ok(());
-    let value = crate::runtime_client::trace::frozen_request_detail(
+    let value = crate::observation::trace::frozen_request_detail(
         snapshot,
         FrozenMessages {
             connection,
@@ -302,7 +302,7 @@ pub(super) fn legacy_field_headers_oracle(
         headers.borrow_mut().push(bytes.to_vec());
         Ok(())
     };
-    let value = crate::runtime_client::trace::frozen_request_detail(
+    let value = crate::observation::trace::frozen_request_detail(
         snapshot,
         FrozenMessages {
             connection,
@@ -325,7 +325,7 @@ pub(super) fn legacy_field_headers_oracle(
                         .map_err(|_| "legacy message ordinal invalid")?]
                     .clone()
                 } else {
-                    crate::runtime_client::checkpoint::bounded_bytes(preview, 16_384)
+                    crate::observation::bounded::bounded_bytes(preview, 16_384)
                         .unwrap_or_else(|| b"null".to_vec())
                 };
                 fields.push((path.to_vec(), start, end, children, bytes));
@@ -372,7 +372,7 @@ impl serde::Serialize for FrozenMessages<'_> {
             view.provenance_source = Some(provenance_source(self.sequence, ordinal as u64, bytes));
             if let Some(header) = header {
                 let (value, _) = message_value_capture(&header, &view).map_err(S::Error::custom)?;
-                let bytes = crate::runtime_client::checkpoint::bounded_bytes(&value, 16_384)
+                let bytes = crate::observation::bounded::bounded_bytes(&value, 16_384)
                     .ok_or_else(|| S::Error::custom("request item header exceeds bound"))?;
                 (self.capture_header)(ordinal as u64, &bytes).map_err(S::Error::custom)?;
                 sequence.serialize_element(&provenance::Canonical {
@@ -382,7 +382,7 @@ impl serde::Serialize for FrozenMessages<'_> {
             } else {
                 let header = bounded_message_descriptor(&view, view.blocks.len(), false)
                     .map_err(S::Error::custom)?;
-                let bytes = crate::runtime_client::checkpoint::bounded_bytes(&header, 16_384)
+                let bytes = crate::observation::bounded::bounded_bytes(&header, 16_384)
                     .ok_or_else(|| S::Error::custom("request item header exceeds bound"))?;
                 (self.capture_header)(ordinal as u64, &bytes).map_err(S::Error::custom)?;
                 sequence.serialize_element(&input::Input {
@@ -441,7 +441,7 @@ pub(super) fn field_coordinates(
             ConversationStoreError::InvalidReference("request field is unavailable".into())
         })?;
     if coordinates.0 > coordinates.1
-        || coordinates.1 > crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX
+        || coordinates.1 > crate::observation::content::CONTENT_SAFE_INTEGER_MAX
     {
         return Err(storage("native field coordinates unavailable"));
     }
@@ -463,8 +463,7 @@ impl StoredField {
         })
     }
     fn materialize(self) -> Result<(u64, u64, u64, Vec<u8>), ConversationStoreError> {
-        if self.start > self.end
-            || self.end > crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX
+        if self.start > self.end || self.end > crate::observation::content::CONTENT_SAFE_INTEGER_MAX
         {
             return Err(storage("native field coordinates unavailable"));
         }
@@ -602,7 +601,7 @@ pub(super) fn header_at(
         value: serde_json::from_slice(&bytes)
             .map_err(|_| storage("native request field header corrupt"))?,
         content: Vec::new(),
-        collections: vec![crate::runtime_client::checkpoint::CollectionFrontier {
+        collections: vec![crate::observation::cut::CollectionFrontier {
             revision: sequence,
             domain: "messages".into(),
             total: count,
@@ -720,7 +719,7 @@ pub(super) fn page_from(
             })
         })
         .collect::<Result<Vec<_>, ConversationStoreError>>()?;
-    while crate::runtime_client::checkpoint::bounded_bytes(&fields, 524_288).is_none() {
+    while crate::observation::bounded::bounded_bytes(&fields, 524_288).is_none() {
         if fields.len() <= 1 {
             return Err(storage("native field descriptor cannot fit bounded page"));
         }
@@ -795,7 +794,7 @@ pub(super) fn read_from(
     }
     let relative_end = offset
         .checked_add(u64::from(max_bytes))
-        .filter(|value| *value <= crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX)
+        .filter(|value| *value <= crate::observation::content::CONTENT_SAFE_INTEGER_MAX)
         .ok_or(ConversationStoreError::InvalidContentRange)?
         .min(readable_end);
     let bytes = super::content::range_bytes(
@@ -804,7 +803,7 @@ pub(super) fn read_from(
             kind,
             id,
             0,
-            crate::runtime_client::content::ContentRepresentation::CanonicalJsonV1,
+            crate::observation::content::ContentRepresentation::CanonicalJsonV1,
         ),
         start
             .checked_add(offset)
@@ -867,8 +866,8 @@ pub(super) fn field_header(
 fn typed_value<T: serde::Serialize + schemars::JsonSchema>(
     value: &T,
 ) -> Result<serde_json::Value, ConversationStoreError> {
-    let root = crate::runtime_client::structural_json::root::<T>();
-    serde_json::to_value(crate::runtime_client::structural_json::Encoded {
+    let root = crate::observation::structural_json::root::<T>();
+    serde_json::to_value(crate::observation::structural_json::Encoded {
         value,
         schema: &root,
         root: &root,
@@ -907,7 +906,7 @@ pub(super) fn terminal(
     }
     let source_sequence = started(connection, request, event.sequence)?;
     let source_key = source_sequence.to_string();
-    let source = crate::runtime_client::trace::frozen_request_outcome(&event.event)
+    let source = crate::observation::trace::frozen_request_outcome(&event.event)
         .expect("matched native request terminal");
     let encode = |field, value: &_| {
         super::content::index_structural_value(
@@ -934,7 +933,7 @@ pub(super) fn terminal(
         &source
             .failure
             .as_ref()
-            .map(crate::runtime_client::trace::frozen::BorrowedFailure::message),
+            .map(crate::observation::trace::frozen::BorrowedFailure::message),
     )?;
     super::content::index_structural_value(
         connection,
@@ -957,7 +956,7 @@ pub(super) fn terminal(
     let failure = source
         .failure
         .as_ref()
-        .map(crate::runtime_client::trace::frozen::BorrowedFailure::header);
+        .map(crate::observation::trace::frozen::BorrowedFailure::header);
     let header = crate::durable::observation::RequestObservationOutcome {
         terminal_sequence: event.sequence,
         event_id: (event.event_id.as_str().len() <= 512).then(|| event.event_id.clone()),
@@ -967,7 +966,7 @@ pub(super) fn terminal(
         failure_deferred,
         encoded_bytes,
     };
-    let bytes = crate::runtime_client::checkpoint::bounded_bytes(&header, 16_384)
+    let bytes = crate::observation::bounded::bounded_bytes(&header, 16_384)
         .ok_or_else(|| storage("native request outcome header exceeds bound"))?;
     let changed=connection.execute("UPDATE request_snapshots SET observation_terminal_sequence=?2,observation_terminal_header=?3 WHERE request_id=?1 AND observation_terminal_sequence IS NULL",params![request.as_str(),event.sequence,bytes]).map_err(|error|storage(error.to_string()))?;
     if changed != 1 {
@@ -1091,14 +1090,14 @@ fn metadata_list<T: serde::de::DeserializeOwned + schemars::JsonSchema>(
         .get(name)
         .cloned()
         .map(|value| {
-            crate::runtime_client::checkpoint::decode_domain_value(value)
+            crate::observation::bounded::decode_domain_value(value)
                 .map_err(|error| storage(error.to_string()))
         })
         .transpose()
         .map(Option::unwrap_or_default)
 }
 fn bounded_message_descriptor(
-    message: &crate::runtime_client::trace::TraceRequestMessage,
+    message: &crate::observation::trace::TraceRequestMessage,
     mut loaded: usize,
     deferred: bool,
 ) -> Result<serde_json::Value, ConversationStoreError> {
@@ -1108,21 +1107,20 @@ fn bounded_message_descriptor(
     #[derive(serde::Serialize)]
     struct Descriptor<'a> {
         request_occurrence: &'a Option<crate::context::checkpoint::RequestMessageOccurrence>,
-        provenance: &'a crate::runtime_client::trace::TraceInputProvenance,
-        provenance_source: &'a Option<crate::runtime_client::trace::TraceFieldSource>,
-        role: &'a crate::runtime_client::trace::TraceMessageRole,
+        provenance: &'a crate::observation::trace::TraceInputProvenance,
+        provenance_source: &'a Option<crate::observation::trace::TraceFieldSource>,
+        role: &'a crate::observation::trace::TraceMessageRole,
         message_id: &'a Option<crate::runtime::identity::MessageId>,
         source: &'a Option<String>,
-        blocks: &'a [crate::runtime_client::trace::TraceContentBlock],
+        blocks: &'a [crate::observation::trace::TraceContentBlock],
         truncated: bool,
     }
     impl schemars::JsonSchema for Descriptor<'_> {
         fn schema_name() -> std::borrow::Cow<'static, str> {
-            <crate::runtime_client::trace::TraceRequestMessage as schemars::JsonSchema>::schema_name(
-            )
+            <crate::observation::trace::TraceRequestMessage as schemars::JsonSchema>::schema_name()
         }
         fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-            <crate::runtime_client::trace::TraceRequestMessage as schemars::JsonSchema>::json_schema(
+            <crate::observation::trace::TraceRequestMessage as schemars::JsonSchema>::json_schema(
                 generator,
             )
         }
@@ -1138,7 +1136,7 @@ fn bounded_message_descriptor(
             blocks: &message.blocks[..loaded],
             truncated: message.truncated || loaded < message.blocks.len() || deferred,
         };
-        if let Some(value) = crate::runtime_client::checkpoint::structural_value(&descriptor) {
+        if let Some(value) = crate::observation::bounded::structural_value(&descriptor) {
             break value;
         }
         loaded = loaded
@@ -1149,7 +1147,7 @@ fn bounded_message_descriptor(
 }
 fn message_value_capture(
     header: &crate::durable::observation::MessageHeader,
-    message: &crate::runtime_client::trace::TraceRequestMessage,
+    message: &crate::observation::trace::TraceRequestMessage,
 ) -> Result<(serde_json::Value, bool), ConversationStoreError> {
     let initial = if header.display.is_some() {
         message.blocks.len()
@@ -1174,7 +1172,7 @@ fn message_value_capture(
     } else {
         value["blocks"].as_array().map_or(0, Vec::len)
     } as u64;
-    let collections = vec![crate::runtime_client::checkpoint::CollectionFrontier {
+    let collections = vec![crate::observation::cut::CollectionFrontier {
         revision: 1,
         domain,
         total: header.block_count,
@@ -1184,7 +1182,7 @@ fn message_value_capture(
     value["content"] = typed_value(&content)?;
     value["collections"] = typed_value(&collections)?;
     value["deferred"] = serde_json::Value::Bool(header.deferred || pretrimmed);
-    while crate::runtime_client::checkpoint::bounded_bytes(&value, 16_384).is_none() {
+    while crate::observation::bounded::bounded_bytes(&value, 16_384).is_none() {
         untrimmed = false;
         value["truncated"] = serde_json::Value::Bool(true);
         value["deferred"] = serde_json::Value::Bool(true);
@@ -1214,8 +1212,8 @@ fn message_value_capture(
 }
 fn message_bindings(
     header: &crate::durable::observation::MessageHeader,
-) -> Result<Vec<crate::runtime_client::checkpoint::ContentBinding>, ConversationStoreError> {
-    use crate::runtime_client::content::{CanonicalContentComponent, ContentSource};
+) -> Result<Vec<crate::observation::cut::ContentBinding>, ConversationStoreError> {
+    use crate::observation::content::{CanonicalContentComponent, ContentSource};
     let mut content = Vec::new();
     for binding in &header.content {
         if matches!(
@@ -1226,7 +1224,7 @@ fn message_bindings(
             }
         ) {
             if header.identity.is_none() {
-                content.push(crate::runtime_client::checkpoint::ContentBinding {
+                content.push(crate::observation::cut::ContentBinding {
                     path: vec!["message_id".into()],
                     source_path: Some(vec!["id".into()]),
                     content_ref: binding.content_ref.clone(),
@@ -1286,7 +1284,7 @@ fn message_bindings(
         for (suffix, source_path) in selections {
             let mut target = path.clone();
             target.extend(suffix);
-            content.push(crate::runtime_client::checkpoint::ContentBinding {
+            content.push(crate::observation::cut::ContentBinding {
                 source_path,
                 path: target,
                 content_ref: binding.content_ref.clone(),

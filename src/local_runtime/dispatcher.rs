@@ -1472,11 +1472,11 @@ mod tests {
             questionnaire.conversation_id.clone(),
             questionnaire.id.clone(),
         );
-        let approval = crate::runtime_client::checkpoint::interaction_request_header(
+        let approval = crate::observation::interaction::interaction_request_header(
             &approval,
             crate::runtime::interaction::InteractionSource::Primary,
         );
-        let questionnaire = crate::runtime_client::checkpoint::interaction_request_header(
+        let questionnaire = crate::observation::interaction::interaction_request_header(
             &questionnaire,
             crate::runtime::interaction::InteractionSource::Primary,
         );

@@ -16,9 +16,10 @@
 //! by the same code rather than by two copies that could drift.
 
 use super::anchor::AnchorFacts;
-use super::types::{TraceKind, TraceRecord, TraceState};
+use crate::observation::tool::ForegroundToolState;
+use crate::observation::trace::types::{TraceKind, TraceRecord, TraceState};
 use crate::runtime::identity::{AttemptId, MessageId, ToolCallId, ToolId};
-use crate::runtime_client::snapshot::{ForegroundToolState, RuntimeClientAttemptPhase};
+use crate::runtime_client::snapshot::RuntimeClientAttemptPhase;
 
 /// The exact facts current lifecycle repair reads, and the one it writes.
 ///
@@ -32,7 +33,7 @@ pub(super) struct LiveTarget<'a> {
     attempt_id: Option<&'a AttemptId>,
     /// The provisional Assistant identity this request itself froze.
     assistant_message_id: Option<&'a MessageId>,
-    tool_occurrence: Option<&'a crate::runtime_client::snapshot::RuntimeClientToolOccurrence>,
+    tool_occurrence: Option<&'a crate::observation::tool::RuntimeClientToolOccurrence>,
     tool_call: Option<(&'a ToolCallId, &'a ToolId)>,
 }
 

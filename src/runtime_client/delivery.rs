@@ -1,43 +1,18 @@
 //! Positive successful-C delivery descriptors and selected original metadata.
-use super::{
-    RuntimeClientError,
-    checkpoint::{CheckpointReadCut, CheckpointValueChunk, CheckpointValueRepresentation},
-    content::CanonicalContentLocator,
-};
+use super::RuntimeClientError;
+use super::checkpoint::{CheckpointValueChunk, CheckpointValueRepresentation};
 use crate::durable::ConversationStore;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct RuntimeClientDeliveryItem {
-    #[schemars(range(max = 9_007_199_254_740_991_u64))]
-    pub index: u64,
-    pub locator: CanonicalContentLocator,
-    pub file: Option<crate::tools::session_files::SessionFileReference>,
-    pub metadata_deferred: bool,
-    pub encoded_bytes: u64,
-    pub metadata_domain: String,
-}
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct RuntimeClientDeliveryHead {
-    pub domain: String,
-    pub total: u64,
-    #[schemars(length(max = 8))]
-    pub items: Vec<RuntimeClientDeliveryItem>,
-    #[schemars(range(max = 9_007_199_254_740_991_u64))]
-    pub next_offset: Option<u64>,
-}
+use crate::observation::content::CanonicalContentLocator;
+use crate::observation::cut::CheckpointReadCut;
 pub(crate) fn selection(domain: &str) -> Option<(u64, Option<u64>)> {
     if domain.len() > 256 {
         return None;
     }
     let source = domain.strip_prefix("messages.ledger:")?;
     let (position, tail) = source.split_once(".deliveries")?;
-    let position = position
-        .parse::<u64>()
-        .ok()
-        .filter(|value| *value > 0 && *value <= super::content::CONTENT_SAFE_INTEGER_MAX)?;
+    let position = position.parse::<u64>().ok().filter(|value| {
+        *value > 0 && *value <= crate::observation::content::CONTENT_SAFE_INTEGER_MAX
+    })?;
     let index = if tail.is_empty() {
         None
     } else {
@@ -145,13 +120,13 @@ pub(crate) fn page(
     let items = head
         .items
         .iter()
-        .map(|item| super::checkpoint::CheckpointPageItem {
+        .map(|item| crate::observation::cut::CheckpointPageItem {
             body_complete: None,
             key: None,
             content: Vec::new(),
             offset: item.index,
             identity: format!("delivery:{position}:{}", item.index),
-            value: super::checkpoint::structural_value(item),
+            value: crate::observation::bounded::structural_value(item),
             deferred: item.metadata_deferred,
         })
         .collect();
@@ -161,7 +136,7 @@ pub(crate) fn page(
         domain: domain.into(),
         total: head.total,
         next_offset: head.next_offset,
-        collections: vec![super::checkpoint::CollectionFrontier {
+        collections: vec![crate::observation::cut::CollectionFrontier {
             domain: domain.into(),
             revision: 1,
             total: head.total,
@@ -170,14 +145,4 @@ pub(crate) fn page(
         }],
         items,
     })
-}
-
-pub(crate) fn frontier(head: &RuntimeClientDeliveryHead) -> super::checkpoint::CollectionFrontier {
-    super::checkpoint::CollectionFrontier {
-        domain: head.domain.clone(),
-        revision: 1,
-        total: head.total,
-        loaded: u64::try_from(head.items.len()).expect("bounded delivery head"),
-        next_offset: head.next_offset,
-    }
 }

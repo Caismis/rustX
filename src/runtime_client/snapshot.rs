@@ -21,31 +21,32 @@
 //! finite descriptors for its unloaded ranges. Continuous complete transitions
 //! after `C` converge with the endpoint checkpoint; a gap requires explicit
 //! recovery. Neither observation nor transport delivery owns execution.
+use crate::observation::capability_source::CapabilityView;
+use crate::observation::head::{RuntimeClientCompactionView, RuntimeClientProjectionHeadView};
+use crate::observation::interaction::RuntimeClientInteractionHeader;
+use crate::observation::resource_source::RuntimeClientResourcesView;
+use crate::observation::status::AgentStatusView;
+use crate::observation::tool::{ForegroundToolExecution, JournalFieldRef};
+use crate::observation::transcript::{
+    RuntimeClientMessageDescriptor, RuntimeClientPublicationSettlementRecord,
+    RuntimeClientTranscriptCursor, RuntimeClientTranscriptPage,
+};
 
 use chrono::{DateTime, Utc};
-use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 
 use super::event::RuntimeClientOutcome;
-use crate::events::interaction::{InteractionSettlement, InteractionSubject};
-use crate::events::types::RuntimeEventEnvelope;
 use crate::message::types::{ContentBlockIndex, MessageBlock, UserMessageBlock};
 use crate::model::session::{AttemptModelView, SessionModelView};
 use crate::model::types::ModelUsage;
-use crate::publication::PublicationAudit;
 use crate::runtime::identity::{
-    AttemptId, CapabilityRevision, ConversationId, EventId, InteractionId, MessageId,
-    RuntimeResourceRevision, SkillId, SkillVersionId, ToolCallId, ToolExecutionId, ToolId, TurnId,
+    AttemptId, ConversationId, MessageId, ToolCallId, ToolExecutionId, ToolId,
 };
 use crate::runtime::inbound::InboundSequence;
-use crate::runtime::interaction::{InteractionRef, InteractionRequest, InteractionSource};
-use crate::runtime::types::{ApprovalMode, TokenMeasurement};
+use crate::runtime::types::ApprovalMode;
 use crate::tools::background::BackgroundLifecycle;
-use crate::tools::todo::{TodoSnapshot, TodoStatus};
-use crate::tools::types::{
-    ToolConcurrencyPolicy, ToolExecutionPolicy, ToolExecutionResult, ToolOrigin, ToolProgress,
-    ToolReplayPolicy,
-};
+use crate::tools::todo::TodoSnapshot;
+use crate::tools::types::{ToolExecutionResult, ToolProgress};
 
 /// The client-visible durable-authority failure state of a conversation
 /// runtime (Issue #63).
@@ -57,82 +58,6 @@ pub struct RuntimeDurabilityFailure {
     pub operation: String,
     /// The human-readable failure diagnostic.
     pub diagnostic: String,
-}
-
-/// Finite display identity of an actionable native request. A missing body is
-/// an explicit deferred source, never an empty or reconstructed Questionnaire.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct RuntimeClientInteractionHeader {
-    /// Exact native source offset, stable for this pending lifetime.
-    #[schemars(range(max = 9_007_199_254_740_991_u64))]
-    pub source_offset: u64,
-    pub interaction: InteractionRef,
-    pub source: InteractionSource,
-    pub request_id: crate::runtime::identity::InteractionId,
-    pub conversation_id: ConversationId,
-    pub attempt_id: AttemptId,
-    pub turn: u32,
-    pub kind: RuntimeClientInteractionKind,
-    pub approval: Option<RuntimeClientApprovalSummary>,
-    pub body: Option<InteractionRequest>,
-    pub body_complete: bool,
-    pub workflow_node: Option<Box<crate::runtime::workflow::WorkflowNodeInstance>>,
-    pub workflow_node_deferred: bool,
-    pub workflow_node_path: Option<Vec<String>>,
-}
-/// Finite decision metadata; business arguments remain an exact deferred native source.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct RuntimeClientApprovalSummary {
-    pub tool_id: Option<ToolId>,
-    pub tool_name: String,
-    pub reason: String,
-    pub mode: crate::tools::types::ToolInvocationMode,
-    pub deferred_fields: Vec<Vec<String>>,
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum RuntimeClientInteractionKind {
-    Approval,
-    Questionnaire,
-    Review,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct RuntimeClientMessageDescriptor {
-    pub deliveries: Option<super::delivery::RuntimeClientDeliveryHead>,
-    pub identity: Option<MessageId>,
-    pub locator: super::content::CanonicalContentLocator,
-    pub role: String,
-    pub kind: String,
-    pub block_count: u64,
-    pub tool_call_count: u64,
-    /// Finite native Tool occurrences; remaining calls use the advertised frontier.
-    pub tool_calls: Vec<ForegroundToolExecution>,
-    pub turn_process: Option<super::response::TurnProcessView>,
-    pub completed_response: Option<super::response::CompletedResponseView>,
-    pub content: Vec<super::checkpoint::ContentBinding>,
-    pub collections: Vec<super::checkpoint::CollectionFrontier>,
-}
-impl RuntimeClientMessageDescriptor {
-    pub(crate) fn from_header(header: &crate::durable::observation::MessageHeader) -> Option<Self> {
-        Some(Self {
-            deliveries: header.deliveries.clone(),
-            identity: header.identity.clone(),
-            locator: header.locator.clone()?,
-            role: header.role.clone(),
-            kind: header.kind.clone(),
-            block_count: header.block_count,
-            tool_call_count: header.tool_call_count,
-            tool_calls: header.tool_calls.clone(),
-            turn_process: None,
-            completed_response: None,
-            content: header.content.clone(),
-            collections: header.collections.clone(),
-        })
-    }
 }
 
 /// The authoritative Runtime Client snapshot of one conversation runtime.
@@ -207,10 +132,10 @@ pub struct RuntimeClientSnapshot {
     /// from the model projection. Older pages are fetched through `transcript_page_get`.
     pub transcript: RuntimeClientTranscriptPage,
     /// Bounded native Trace read window; independent from transcript and live cursors.
-    pub trace: super::trace::TracePage,
+    pub trace: crate::observation::trace::TracePage,
     /// Lifecycle repairs for explicitly requested loaded Trace identities.
     #[schemars(length(max = 512))]
-    pub trace_updates: Vec<super::trace::TraceLifecycle>,
+    pub trace_updates: Vec<crate::observation::trace::TraceLifecycle>,
     /// The current/latest attempt view, when any attempt exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attempt: Option<RuntimeClientAttempt>,
@@ -323,474 +248,7 @@ pub struct RuntimeClientSnapshot {
     pub todos: Option<TodoSnapshot>,
     /// Durable Goal read model at this projection cursor; absent when the
     /// extension is not composed. Journal facts never reconstruct it.
-    pub goal: Option<crate::runtime_client::goal::RuntimeClientGoalView>,
-}
-
-/// One bounded newest-or-older page of derived transcript history.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
-pub struct RuntimeClientTranscriptPage {
-    /// The exact native source cut from which bodies and evidence were read.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_cut: Option<crate::durable::observation::ObservationReadCut>,
-    /// Deferred bytes remain explicitly recoverable on older historical pages.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub content: Vec<super::checkpoint::ContentBinding>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub collections: Vec<super::checkpoint::CollectionFrontier>,
-    /// Native items whose structural display requires bounded further reading.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub deferred_entries: Vec<super::checkpoint::CheckpointPageItem>,
-
-    /// Last native transcript position inherited by this lineage; zero for an empty prefix.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub inherited_through: Option<RuntimeClientTranscriptCursor>,
-    /// Native whole-conversation totals, independent of this page.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub statistics: Option<super::response::ConversationStatistics>,
-    /// Items in chronological order within this page.
-    #[serde(default)]
-    pub entries: Vec<RuntimeClientTranscriptEntry>,
-    /// The exclusive cursor for the next older page.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub next_cursor: Option<RuntimeClientTranscriptCursor>,
-}
-
-/// One derived transcript item and its stable durable cursor.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct RuntimeClientTranscriptEntry {
-    /// Exact native Attempt process membership, derived by native owners.
-    /// Absence is not permission for a client to infer a process boundary.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub turn_process: Option<super::response::TurnProcessView>,
-    /// The native Attempt has not yet settled this accepted Assistant candidate.
-    /// A client retaining this row outside a refresh must reread it, not freeze absence.
-    #[serde(default)]
-    pub response_pending: bool,
-    /// Exact completed-response evidence, never inferred by clients.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub completed_response: Option<super::response::CompletedResponseView>,
-    /// Canonical calls in block order with their native committed results.
-    /// A missing result means no committed result, never success or cancellation.
-    #[serde(default)]
-    pub tool_calls: Vec<ForegroundToolExecution>,
-    /// The durable transcript position, not the Runtime Client event cursor.
-    pub cursor: RuntimeClientTranscriptCursor,
-    /// The typed item resolved from a canonical durable owner.
-    pub item: RuntimeClientTranscriptItem,
-}
-
-/// One live-published requested interaction audit projection.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct RuntimeClientTranscriptInteractionRequested {
-    /// Durable Event Journal event identity.
-    pub event_id: EventId,
-    /// Event timestamp.
-    pub timestamp: DateTime<Utc>,
-    /// Owning attempt.
-    pub attempt_id: AttemptId,
-    /// Owning turn.
-    pub turn_id: TurnId,
-    /// Interaction identity.
-    pub interaction_id: InteractionId,
-    /// Bounded durable subject.
-    pub subject: InteractionSubject,
-}
-
-/// One live-published settled interaction audit projection.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct RuntimeClientTranscriptInteractionSettled {
-    /// Durable Event Journal event identity.
-    pub event_id: EventId,
-    /// Event timestamp.
-    pub timestamp: DateTime<Utc>,
-    /// Owning attempt.
-    pub attempt_id: AttemptId,
-    /// Owning turn.
-    pub turn_id: TurnId,
-    /// Interaction identity.
-    pub interaction_id: InteractionId,
-    /// Bounded durable settlement.
-    pub settlement: InteractionSettlement,
-}
-
-/// The explicit Runtime Client transcript vocabulary.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
-pub enum RuntimeClientTranscriptItem {
-    /// Journal-owned terminal execution history, including attempts without messages.
-    AttemptTerminal {
-        turn: super::response::TurnProcessView,
-    },
-    /// A user, Assistant, or Tool message body from Pending Inbound or Ledger.
-    Message {
-        /// The canonical or durably accepted message.
-        message: MessageBlock,
-    },
-    /// A noncanonical Assistant publication audit.
-    PublicationAudit {
-        /// The bounded immutable publication audit.
-        audit: PublicationAudit,
-    },
-    /// A historical interaction request audit. It is never a live waiter.
-    InteractionRequested {
-        /// Durable Event Journal event identity.
-        event_id: EventId,
-        /// Event timestamp.
-        timestamp: DateTime<Utc>,
-        /// Owning attempt.
-        attempt_id: AttemptId,
-        /// Owning turn.
-        turn_id: TurnId,
-        /// Interaction identity.
-        interaction_id: InteractionId,
-        /// Bounded durable subject.
-        subject: InteractionSubject,
-    },
-    /// A historical interaction settlement audit. It is never actionable.
-    InteractionSettled {
-        /// Durable Event Journal event identity.
-        event_id: EventId,
-        /// Event timestamp.
-        timestamp: DateTime<Utc>,
-        /// Owning attempt.
-        attempt_id: AttemptId,
-        /// Owning turn.
-        turn_id: TurnId,
-        /// Interaction identity.
-        interaction_id: InteractionId,
-        /// Bounded durable settlement.
-        settlement: InteractionSettlement,
-    },
-}
-
-/// The cursor domain of durable transcript paging.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-#[derive(schemars::JsonSchema)]
-pub struct RuntimeClientTranscriptCursor(u64);
-
-impl RuntimeClientTranscriptCursor {
-    /// Creates a transcript cursor from its wire value.
-    #[must_use]
-    pub const fn new(value: u64) -> Self {
-        Self(value)
-    }
-
-    /// Returns the wire value.
-    #[must_use]
-    pub const fn get(self) -> u64 {
-        self.0
-    }
-}
-
-impl From<crate::durable::TranscriptCursor> for RuntimeClientTranscriptCursor {
-    fn from(cursor: crate::durable::TranscriptCursor) -> Self {
-        Self::new(cursor.get())
-    }
-}
-
-impl From<RuntimeClientTranscriptCursor> for crate::durable::TranscriptCursor {
-    fn from(cursor: RuntimeClientTranscriptCursor) -> Self {
-        Self::new(cursor.get())
-    }
-}
-
-/// Converts one durable transcript page into the explicit Runtime Client
-/// read model. Invalid durable interaction shapes are rejected rather than
-/// fabricated into a display item.
-pub(crate) fn transcript_page_view(
-    page: crate::durable::TranscriptPage,
-) -> Result<RuntimeClientTranscriptPage, String> {
-    let entries = page
-        .entries
-        .into_iter()
-        .map(transcript_entry_view)
-        .collect::<Result<Vec<_>, String>>()?;
-    Ok(RuntimeClientTranscriptPage {
-        source_cut: None,
-        content: Vec::new(),
-        collections: Vec::new(),
-        deferred_entries: Vec::new(),
-        inherited_through: Some(page.inherited_through.into()),
-        statistics: None,
-        entries,
-        next_cursor: page.next_cursor.map(Into::into),
-    })
-}
-
-/// Converts indexed native headers without loading canonical, audit, or event bodies.
-pub(crate) fn transcript_header_view(
-    page: crate::durable::observation::TranscriptHeaderPage,
-) -> RuntimeClientTranscriptPage {
-    let mut result = RuntimeClientTranscriptPage {
-        source_cut: Some(page.cut.clone()),
-        inherited_through: Some(page.cut.inherited_through.into()),
-        next_cursor: page.next_cursor.map(Into::into),
-        ..RuntimeClientTranscriptPage::default()
-    };
-    for header in page.headers {
-        if let Some(mut display) = header.display {
-            display.tool_calls = header.tool_calls;
-            let index = result.entries.len();
-            result.entries.push(display);
-            for mut binding in header.content {
-                if binding
-                    .path
-                    .first()
-                    .is_some_and(|segment| segment == "display")
-                {
-                    binding.path.remove(0);
-                }
-                let mut path = vec!["entries".to_owned(), index.to_string()];
-                path.append(&mut binding.path);
-                binding.path = path;
-                result.content.push(binding);
-            }
-            result.collections.extend(header.collections);
-        } else {
-            result.collections.extend(header.collections);
-            result
-                .deferred_entries
-                .push(super::checkpoint::CheckpointPageItem {
-                    body_complete: None,
-                    key: None,
-                    offset: header.cursor.get(),
-                    identity: header.reference_id,
-                    value: header
-                        .message
-                        .as_ref()
-                        .and_then(RuntimeClientMessageDescriptor::from_header)
-                        .map(|mut descriptor| {
-                            descriptor.tool_calls = header.tool_calls;
-                            descriptor
-                        })
-                        .as_ref()
-                        .and_then(super::checkpoint::structural_value)
-                        .or_else(|| {
-                            header
-                                .publication_settlement
-                                .as_ref()
-                                .and_then(super::checkpoint::structural_value)
-                        }),
-                    content: header.content,
-                    deferred: true,
-                });
-        }
-    }
-    result
-        .collections
-        .push(super::checkpoint::CollectionFrontier {
-            domain: "transcript.entries".into(),
-            revision: page.cut.read.journal,
-            total: page.total,
-            loaded: result.entries.len() as u64,
-            next_offset: page.next_cursor.map(crate::durable::TranscriptCursor::get),
-        });
-    result
-}
-
-fn transcript_entry_view(
-    entry: crate::durable::TranscriptEntry,
-) -> Result<RuntimeClientTranscriptEntry, String> {
-    let item = match entry.item {
-        crate::durable::TranscriptItem::InheritedTurn { provenance } => {
-            RuntimeClientTranscriptItem::AttemptTerminal {
-                turn: inherited_terminal(provenance, entry.cursor.into())?,
-            }
-        }
-        crate::durable::TranscriptItem::AttemptTerminal { event } => {
-            RuntimeClientTranscriptItem::AttemptTerminal {
-                turn: super::response::terminal_turn(event, entry.cursor.into())?,
-            }
-        }
-
-        crate::durable::TranscriptItem::Message { message } => {
-            RuntimeClientTranscriptItem::Message { message }
-        }
-        crate::durable::TranscriptItem::PublicationAudit { audit } => {
-            RuntimeClientTranscriptItem::PublicationAudit { audit }
-        }
-        crate::durable::TranscriptItem::InteractionRequested { event } => {
-            let RuntimeEventEnvelope {
-                event_id,
-                timestamp,
-                attempt_id: Some(attempt_id),
-                turn_id: Some(turn_id),
-                event:
-                    crate::events::types::RuntimeEvent::InteractionRequested {
-                        interaction_id,
-                        subject,
-                    },
-                ..
-            } = event
-            else {
-                return Err(
-                    "durable transcript requested interaction has an invalid envelope".to_owned(),
-                );
-            };
-            RuntimeClientTranscriptItem::InteractionRequested {
-                event_id,
-                timestamp,
-                attempt_id,
-                turn_id,
-                interaction_id,
-                subject,
-            }
-        }
-        crate::durable::TranscriptItem::InteractionSettled { event } => {
-            let RuntimeEventEnvelope {
-                event_id,
-                timestamp,
-                attempt_id: Some(attempt_id),
-                turn_id: Some(turn_id),
-                event:
-                    crate::events::types::RuntimeEvent::InteractionSettled {
-                        interaction_id,
-                        settlement,
-                    },
-                ..
-            } = event
-            else {
-                return Err(
-                    "durable transcript settled interaction has an invalid envelope".to_owned(),
-                );
-            };
-            RuntimeClientTranscriptItem::InteractionSettled {
-                event_id,
-                timestamp,
-                attempt_id,
-                turn_id,
-                interaction_id,
-                settlement,
-            }
-        }
-    };
-    Ok(RuntimeClientTranscriptEntry {
-        turn_process: None,
-        completed_response: None,
-        response_pending: false,
-        cursor: entry.cursor.into(),
-        tool_calls: entry
-            .tool_calls
-            .into_iter()
-            .map(transcript_tool_view)
-            .collect(),
-        item,
-    })
-}
-
-fn transcript_tool_view(tool: crate::durable::inbox::TranscriptTool) -> ForegroundToolExecution {
-    ForegroundToolExecution {
-        committed_result_deferred: false,
-        committed_result: tool.result,
-        result_source: None,
-        result_metadata_ref: None,
-        occurrence: RuntimeClientToolOccurrence {
-            locator: super::content::CanonicalContentLocator::ByMessageId {
-                message_id: tool.message_id.clone(),
-            },
-            block_index: tool.block_index,
-        },
-        message_id: inline_message_id(&tool.message_id),
-        block_index: tool.block_index,
-        call_id: inline_call_id(&tool.call.id),
-        metadata_ref: None,
-        assembly_complete: true,
-        tool_id: inline_tool_id(&tool.call.tool_id),
-        name: tool.call.name,
-        state: ForegroundToolState::Assembled {
-            arguments: String::new(),
-        },
-    }
-}
-
-fn inherited_terminal(
-    provenance: crate::durable::reading::TurnReadingProvenance,
-    cursor: RuntimeClientTranscriptCursor,
-) -> Result<super::response::TurnProcessView, String> {
-    if provenance.id.attempt_id.as_str().len() > 512 {
-        return Err("inherited turn requires its native owner field source".into());
-    }
-    Ok(super::response::TurnProcessView {
-        conversation_id: provenance.id.conversation_id,
-        attempt_id: Some(provenance.id.attempt_id),
-        attempt_id_source: None,
-        event_id: None,
-        control_cursor: cursor,
-        final_message_id: None,
-        final_message_locator: None,
-        final_message_id_deferred: false,
-        final_message_id_source: None,
-        message_count: 0,
-        tool_call_count: 0,
-        outcome: provenance.outcome.into(),
-        failure: None,
-        started_at: provenance.started_at,
-        ended_at: provenance.ended_at,
-    })
-}
-
-/// Converts one live requested interaction audit envelope into its client
-/// transcript view.
-pub(crate) fn interaction_requested_view(
-    event: RuntimeEventEnvelope,
-) -> Result<RuntimeClientTranscriptInteractionRequested, String> {
-    let RuntimeEventEnvelope {
-        event_id,
-        timestamp,
-        attempt_id: Some(attempt_id),
-        turn_id: Some(turn_id),
-        event:
-            crate::events::types::RuntimeEvent::InteractionRequested {
-                interaction_id,
-                subject,
-            },
-        ..
-    } = event
-    else {
-        return Err("interaction requested audit has an invalid envelope".to_owned());
-    };
-    Ok(RuntimeClientTranscriptInteractionRequested {
-        event_id,
-        timestamp,
-        attempt_id,
-        turn_id,
-        interaction_id,
-        subject,
-    })
-}
-
-/// Converts one live settled interaction audit envelope into its client
-/// transcript view.
-pub(crate) fn interaction_settled_view(
-    event: RuntimeEventEnvelope,
-) -> Result<RuntimeClientTranscriptInteractionSettled, String> {
-    let RuntimeEventEnvelope {
-        event_id,
-        timestamp,
-        attempt_id: Some(attempt_id),
-        turn_id: Some(turn_id),
-        event:
-            crate::events::types::RuntimeEvent::InteractionSettled {
-                interaction_id,
-                settlement,
-            },
-        ..
-    } = event
-    else {
-        return Err("interaction settled audit has an invalid envelope".to_owned());
-    };
-    Ok(RuntimeClientTranscriptInteractionSettled {
-        event_id,
-        timestamp,
-        attempt_id,
-        turn_id,
-        interaction_id,
-        settlement,
-    })
+    pub goal: Option<crate::observation::goal::RuntimeClientGoalView>,
 }
 
 /// The context diagnostics carried by the Runtime Client snapshot.
@@ -810,7 +268,7 @@ pub struct RuntimeClientContextView {
     pub compaction_error: Option<String>,
     /// Latest native measured request or committed compacted-context estimate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub occupancy: Option<super::occupancy::RuntimeClientContextOccupancy>,
+    pub occupancy: Option<crate::observation::occupancy::RuntimeClientContextOccupancy>,
     /// Whether the runtime currently owns a context-compaction operation.
     /// This is live operation state, not inferred from token usage.
     pub compaction_in_progress: bool,
@@ -824,42 +282,6 @@ pub struct RuntimeClientContextView {
     pub latest_compaction: Option<RuntimeClientCompactionView>,
 }
 
-/// Projection ownership is independent of the local execution trajectory.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct RuntimeClientProjectionHeadView {
-    pub checkpoint_id: crate::runtime::identity::CheckpointId,
-    pub activation_id: crate::context::checkpoint::ProjectionActivationId,
-    pub base_frontier: crate::context::resources::LedgerFrontier,
-    pub activation_ledger: crate::context::resources::LedgerFrontier,
-    pub origin: crate::context::checkpoint::OriginActivation,
-    pub destination_installation: Option<crate::runtime::identity::LineageInstallationId>,
-    pub original_items: u32,
-    pub derived_items: u32,
-    pub summary_preview: Option<super::trace::TraceText>,
-}
-
-/// Public metadata for one committed compaction.
-///
-/// Every field is derived from an actual local checkpoint commit. The
-/// independent projection disclosure carries summary content; canonical
-/// execution rows never acquire a fabricated summary identity.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
-pub struct RuntimeClientCompactionView {
-    /// The local committed projection generation.
-    pub generation: u64,
-    /// The independently durable checkpoint identity.
-    pub checkpoint_id: crate::runtime::identity::CheckpointId,
-    /// The activation coordinate, independent of canonical and Journal order.
-    pub activation_id: crate::context::checkpoint::ProjectionActivationId,
-    /// The pre-compaction input measurement and its provenance.
-    pub tokens_before: TokenMeasurement,
-    /// The deterministic estimate of the rebuilt request context.
-    pub estimated_tokens_after: u64,
-}
-
 /// The external attempt view of the Runtime Client projection.
 ///
 /// The view folds attempt lifecycle, turn progress, in-flight agent
@@ -871,7 +293,7 @@ pub struct RuntimeClientAttempt {
     /// Exact inline display identity, when bounded.
     pub attempt_id: Option<AttemptId>,
     /// Original native owner evidence when the inline alias is deferred.
-    pub attempt_id_source: Option<super::response::AttemptIdentitySource>,
+    pub attempt_id_source: Option<crate::observation::turn::AttemptIdentitySource>,
     /// The externally meaningful attempt phase.
     pub phase: RuntimeClientAttemptPhase,
     /// The number of completed turns.
@@ -976,7 +398,7 @@ pub enum InFlightBlock {
         block_index: ContentBlockIndex,
         /// The tool-call identity.
         call_id: Option<ToolCallId>,
-        metadata_ref: Option<super::content::ContentRef>,
+        metadata_ref: Option<crate::observation::content::ContentRef>,
         /// The canonical tool identity.
         tool_id: Option<ToolId>,
         /// The model-facing tool name.
@@ -996,99 +418,7 @@ pub struct RuntimeClientToolCall {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arguments: Option<serde_json::Value>,
-    pub metadata_ref: Option<super::content::ContentRef>,
-}
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct RuntimeClientToolOccurrence {
-    pub locator: super::content::CanonicalContentLocator,
-    pub block_index: ContentBlockIndex,
-}
-pub(crate) fn inline_tool_id(id: &ToolId) -> Option<ToolId> {
-    (id.as_str().len() <= 256).then(|| id.clone())
-}
-pub(crate) fn inline_message_id(identity: &MessageId) -> Option<MessageId> {
-    (identity.as_str().len() <= 256).then(|| identity.clone())
-}
-
-pub(crate) fn inline_call_id(id: &ToolCallId) -> Option<ToolCallId> {
-    (id.as_str().len() <= 256).then(|| id.clone())
-}
-
-/// An exact immutable native Journal field authorized by the checkpoint read cut.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct JournalFieldRef {
-    #[schemars(range(max = 9_007_199_254_740_991_u64))]
-    pub sequence: u64,
-    pub path: Vec<String>,
-    #[schemars(range(max = 9_007_199_254_740_991_u64))]
-    pub encoded_bytes: u64,
-}
-
-/// The foreground tool execution read model of one logical tool call.
-///
-/// Keyed by the canonical logical tool-call identity, so parallel physical
-/// completion timing can never corrupt logical identities or canonical
-/// ordering. Native, MCP, and Python foreground executions converge through
-/// this one shape.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
-pub struct ForegroundToolExecution {
-    pub occurrence: RuntimeClientToolOccurrence,
-    /// Exact inline Assistant identity when bounded; `occurrence` remains authoritative.
-    pub message_id: Option<MessageId>,
-    /// Canonical Assistant content block (also used by live publication frames).
-    pub block_index: ContentBlockIndex,
-    /// The logical tool-call identity.
-    pub call_id: Option<ToolCallId>,
-    pub metadata_ref: Option<super::content::ContentRef>,
-    pub assembly_complete: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub result_source: Option<JournalFieldRef>,
-    /// Canonical-only settlement metadata, including before-Start outcomes.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub result_metadata_ref: Option<super::content::ContentRef>,
-    /// A committed canonical result is independent of execution-terminal Journal publication.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub committed_result: Option<ToolExecutionResult>,
-    /// The committed C result body is available through its exact metadata/payload sources.
-    pub committed_result_deferred: bool,
-    /// The canonical tool identity.
-    pub tool_id: Option<ToolId>,
-    /// The model-facing tool name at call time.
-    pub name: String,
-    /// The externally meaningful execution state.
-    pub state: ForegroundToolState,
-}
-
-/// The externally meaningful state of one foreground tool execution.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
-pub enum ForegroundToolState {
-    /// The call is known and its arguments are assembled; execution has
-    /// not started.
-    Assembled {
-        /// The assembled JSON arguments.
-        arguments: String,
-    },
-    /// The execution is running.
-    Running {
-        /// The assembled JSON arguments.
-        arguments: String,
-        /// The latest bounded progress, when any.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        progress: Option<ToolProgress>,
-    },
-    /// The execution settled with its normalized result.
-    Settled {
-        /// The assembled JSON arguments.
-        arguments: String,
-        /// The normalized execution result.
-        result: ToolExecutionResult,
-    },
+    pub metadata_ref: Option<crate::observation::content::ContentRef>,
 }
 
 /// The inbound mailbox diagnostics of the Runtime Client projection.
@@ -1134,43 +464,6 @@ pub struct InboundDrainView {
     pub watermark: InboundSequence,
     /// The number of drained items.
     pub count: usize,
-}
-
-/// Positive native audit settlement when its retained content is deferred.
-/// This is Publication Plane authority, not canonical C or execution settlement.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct RuntimeClientPublicationSettlement {
-    pub stream_id: Option<crate::runtime::identity::PublicationStreamId>,
-    pub message_id: Option<MessageId>,
-    pub attempt_id: Option<AttemptId>,
-    pub turn_id: Option<TurnId>,
-    pub request_id: Option<crate::runtime::identity::RequestId>,
-    pub kind: crate::publication::PublicationAuditKind,
-    pub settled_at: chrono::DateTime<chrono::Utc>,
-    pub block_count: u64,
-}
-/// Exact source placement and native cut of one positive publication settlement.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct RuntimeClientPublicationSettlementRecord {
-    pub settlement: RuntimeClientPublicationSettlement,
-    pub transcript_cursor: RuntimeClientTranscriptCursor,
-    pub read_cut: crate::durable::observation::ObservationReadCut,
-}
-impl From<crate::durable::inbox::PublicationAuditSummary> for RuntimeClientPublicationSettlement {
-    fn from(summary: crate::durable::inbox::PublicationAuditSummary) -> Self {
-        Self {
-            stream_id: summary.stream_id,
-            message_id: summary.message_id,
-            attempt_id: summary.attempt_id,
-            turn_id: summary.turn_id,
-            request_id: summary.request_id,
-            kind: summary.kind,
-            settled_at: summary.settled_at,
-            block_count: summary.block_count,
-        }
-    }
 }
 
 /// The external background execution read model.
@@ -1289,356 +582,6 @@ pub struct RuntimeClientAgent {
 /// place, and no already-connected client can disagree with the change.
 pub const AGENT_STATUS_WINDOW: usize = 64;
 
-/// The structured Agent Status view of one composition.
-///
-/// Derived from the exact composed status the model path consumed: the
-/// structured sections and the canonical rendered representation originate
-/// from the same composition, so a client never parses the rendered text
-/// to recover structure and never triggers a second composition.
-///
-/// The view also carries the runtime facts that place the composition in
-/// conversation order: the eligible
-/// [`opportunities`](Self::opportunities), each with the durable identity it
-/// was established against. Placement is a runtime fact because only the
-/// runtime knows it, and it is frozen where it is determined rather than
-/// reconstructed downstream; how a client draws a status at that place is
-/// presentation and stays entirely outside this type.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
-pub struct AgentStatusView {
-    /// The attempt that composed the status.
-    pub attempt_id: AttemptId,
-    /// The turn number of the request preparation.
-    pub turn: u32,
-    /// The canonical Agent Status User message described by this view. It is
-    /// the stable identity of the composition: observing the same
-    /// `status_message_id` twice describes one composition, never two.
-    pub status_message_id: Option<MessageId>,
-    pub source_locator: Option<super::content::CanonicalContentLocator>,
-    pub request_id: Option<crate::runtime::identity::RequestId>,
-    pub rendered_ref: Option<super::content::ContentRef>,
-    /// The delivery opportunities that made this generation eligible, each
-    /// carrying its own placement fact.
-    ///
-    /// The Agent Status Context message is request-scoped model history: it
-    /// carries no transcript cursor of its own and never becomes a transcript
-    /// item, so placement has to be published or it cannot be known. Each
-    /// opportunity publishes the identity it was established against —
-    /// `FreshInbound` the exact inbound message, `PostToolBatch` the durable
-    /// position of its settled tool batch — and both were frozen by the
-    /// semantic owner at that establishment, not sampled when this
-    /// observation was folded.
-    pub opportunities: AgentStatusOpportunityView,
-    /// The ordered structured sections.
-    pub sections: Vec<RuntimeClientStatusSection>,
-    /// The canonical rendered representation, derived from the same
-    /// composition as the sections.
-    ///
-    /// It exists for diagnostics and for proving that a client and the model
-    /// saw one composition. It is **not** a presentation source: a client
-    /// renders [`sections`](Self::sections) and never parses this text back
-    /// into structure.
-    pub rendered: String,
-}
-
-/// One structured Agent Status section of the external view.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
-pub enum RuntimeClientStatusSection {
-    /// The typed Time payload.
-    Temporal {
-        /// The runtime clock value sampled at composition time.
-        current_time: DateTime<Utc>,
-        /// The Time status timezone, when configured.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[schemars(with = "Option<String>")]
-        timezone: Option<Tz>,
-    },
-    /// The runtime-owned background-execution section.
-    BackgroundExecutions {
-        /// The active background executions in allocation order.
-        executions: Vec<RuntimeClientStatusBackgroundExecution>,
-        /// Active executions omitted by the module-local bound.
-        omitted_count: usize,
-    },
-    /// The bounded conversation-owned Todo reminder.
-    Todo {
-        /// The first committed in-progress task, when any.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        current: Option<RuntimeClientTodoStatusTask>,
-        /// Remaining committed active tasks in creation order.
-        #[serde(default)]
-        tasks: Vec<RuntimeClientTodoStatusTask>,
-        /// Number of committed active tasks.
-        active_count: usize,
-        /// Number of active tasks blocked by active dependencies.
-        blocked_count: usize,
-        /// Number of committed completed tasks.
-        completed_count: usize,
-        /// Number of committed deleted tasks.
-        deleted_count: usize,
-        /// Number of active tasks omitted from the bounded view.
-        omitted_count: usize,
-    },
-}
-
-/// Exactly the bounded Background presentation accepted by the Status owner.
-/// Job invocation bodies and terminal results remain in the native Job read domain.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct RuntimeClientStatusBackgroundExecution {
-    pub job_id: ToolExecutionId,
-    pub tool_name: String,
-    pub state: BackgroundLifecycle,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub progress: Option<ToolProgress>,
-}
-
-/// One bounded Todo task in the Agent Status client view.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
-pub struct RuntimeClientTodoStatusTask {
-    /// The conversation-owned task id.
-    pub id: u64,
-    /// The bounded task subject.
-    pub subject: String,
-    /// The bounded in-progress label, when present.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub active_form: Option<String>,
-    /// The committed lifecycle status.
-    pub status: TodoStatus,
-    /// Whether an active dependency still blocks this task.
-    pub blocked: bool,
-}
-
-/// The external view of the Agent Status opportunity set.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
-pub struct AgentStatusOpportunityView {
-    /// The `FreshInbound` opportunity that produced this status, when one is
-    /// present. Future delivery opportunities can be added alongside it
-    /// without making this member structurally mandatory.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fresh_inbound: Option<FreshInboundOpportunityView>,
-    /// The complete settled tool batch that made this existing primary step
-    /// eligible, when present.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub post_tool_batch: Option<PostToolBatchOpportunityView>,
-}
-
-/// The external view of one `FreshInbound` status opportunity.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
-pub struct FreshInboundOpportunityView {
-    /// The inbound message that made status generation eligible.
-    pub target_message_id: Option<MessageId>,
-    pub target_locator: Option<super::content::CanonicalContentLocator>,
-    pub transcript_anchor: Option<RuntimeClientTranscriptCursor>,
-    pub target_metadata_ref: Option<super::content::ContentRef>,
-}
-
-/// The external view of one `PostToolBatch` status opportunity.
-///
-/// The opportunity itself remains a marker with no durable or scheduling
-/// metadata. What it carries here is the one ordering fact that places a
-/// composition made from it: the durable transcript position of the canonical
-/// `ToolResult` batch that established it, frozen by the Agent Loop at that
-/// batch's commit.
-///
-/// The freeze point matters and is the whole reason this is a published fact
-/// rather than something a client or the projection reconstructs. A status is
-/// composed at the primary-step preparation that consumes this opportunity,
-/// but it is not observed until the durable model-turn-start commit lands,
-/// and inbound acceptance is an independent durable boundary that may commit
-/// in between. Anything that read "the newest durable position" at fold time
-/// would place the status after an unrelated inbound turn.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
-pub struct PostToolBatchOpportunityView {
-    /// The durable position of the settled `ToolResult` batch this
-    /// opportunity belongs to.
-    ///
-    /// `None` only when that batch committed no visible transcript item, in
-    /// which case the composition carries no transcript-position placement
-    /// and a client draws no annotation for it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub transcript_anchor: Option<RuntimeClientTranscriptCursor>,
-}
-
-/// The deterministic capability projection.
-///
-/// Projected from the active [`CapabilitySnapshot`]
-/// ([`crate::capabilities::CapabilitySnapshot`]) plus the
-/// coordinator-owned availability state (Issue #81): the revision, the
-/// active Tool catalog, the complete available Tool catalog, the deterministic
-/// model-visible Skill catalog, and the typed per-source availability. No
-/// executors, environment paths, package-manager state, or private dependency
-/// internals appear.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
-pub struct CapabilityView {
-    /// Configured Tool intent before effective model gating.
-    pub configured_tools: Vec<RuntimeClientTool>,
-    /// The active monotonic capability revision.
-    pub revision: CapabilityRevision,
-    /// The deterministic active Tool catalog in registry order. Model
-    /// requests and execution use exactly this set.
-    #[serde(default)]
-    pub tools: Vec<RuntimeClientTool>,
-    /// The complete available Tool catalog, including inactive Tools. The
-    /// active set above is an explicit subset; availability never implies
-    /// model activation.
-    #[serde(default)]
-    pub available_tools: Vec<RuntimeClientTool>,
-    /// The deterministic model-visible Skill catalog ordered by Skill name.
-    /// Skills hidden by `disable-model-invocation` remain runtime-owned but
-    /// are omitted here. Every entry includes the canonical absolute host
-    /// path of its `SKILL.md`.
-    #[serde(default)]
-    pub skills: Vec<RuntimeClientSkill>,
-    /// The typed availability of every evaluated optional capability
-    /// source, in deterministic source-identity order (Issue #81).
-    #[serde(default)]
-    pub sources: Vec<CapabilitySourceView>,
-}
-
-/// The client-visible identity of one optional capability source (Issue
-/// #81).
-///
-/// Native tools never appear here: their construction is part of the core
-/// runtime and remains fatal at composition.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
-pub enum CapabilitySourceDescriptor {
-    /// Canonical Managed Python source.
-    ManagedPython { package: String },
-    /// One MCP server, configured or synthesized from a managed Python
-    /// tool package (`python:<folder>`, Issue #174).
-    Mcp {
-        /// The authoritative server identity.
-        server_id: crate::runtime::identity::McpServerId,
-    },
-}
-
-/// The client-visible availability of one optional capability source.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
-pub enum CapabilitySourceStateView {
-    /// Prospective coordinator state before first preparation. Normal Session
-    /// composition completes preparation before publishing this projection.
-    Unprepared,
-    /// The source initialized; its capabilities are usable.
-    Ready,
-    /// Preparation failed. External failure payloads are private owner data.
-    Unavailable,
-}
-
-/// One optional capability source's availability projection.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
-pub struct CapabilitySourceView {
-    /// The stable source identity.
-    pub source: CapabilitySourceDescriptor,
-    /// The authoritative availability state.
-    pub state: CapabilitySourceStateView,
-}
-
-/// One external tool catalog entry.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
-pub struct RuntimeClientTool {
-    /// The canonical tool identity.
-    pub id: ToolId,
-    /// The stable model-facing tool name.
-    pub name: String,
-    /// The human-readable description.
-    pub description: String,
-    /// The canonical JSON Schema of accepted arguments.
-    pub input_schema: serde_json::Value,
-    /// Who owns an invocation: attempt (foreground) or conversation
-    /// (background).
-    pub execution_policy: ToolExecutionPolicy,
-    /// How calls within one batch are scheduled.
-    pub concurrency_policy: ToolConcurrencyPolicy,
-    /// Whether execution requires a native approval interaction.
-    pub approval_policy: crate::tools::types::ToolApprovalPolicy,
-    /// The replay policy.
-    pub replay_policy: ToolReplayPolicy,
-    /// Where the tool comes from.
-    pub origin: ToolOrigin,
-}
-
-/// The client-visible projection of one immutable runtime resource
-/// generation.
-///
-/// It carries identity and provenance, never content: a client that wants
-/// the text of a project context file reads the file, exactly as it would
-/// read a `SKILL.md`. Publishing the bytes here would create a second copy
-/// of request input inside a conversation projection.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
-pub struct RuntimeClientResourcesView {
-    /// Facts copied from the same immutable generation as this revision.
-    /// Deferred inspection facts are loaded through finite native field pages.
-    pub inspection: Option<Box<crate::runtime::capability_inspection::CapabilityInspection>>,
-    /// The monotonic process-local resource generation.
-    #[serde(default)]
-    pub revision: RuntimeResourceRevision,
-    /// The runtime-loaded project instruction files, root-most to
-    /// workspace, in the exact order the runtime concatenated them.
-    #[serde(default)]
-    pub context_files: Vec<RuntimeClientContextFile>,
-    /// Whether an immutable agent profile/persona is frozen into this
-    /// generation. The persona text itself is runtime-owned request input.
-    #[serde(default)]
-    pub agent_profile: bool,
-}
-
-/// One runtime-loaded project instruction file.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
-pub struct RuntimeClientContextFile {
-    /// The canonical absolute host path the runtime read.
-    pub path: String,
-    /// The exact byte length of the loaded content.
-    #[schemars(range(max = 9_007_199_254_740_991_u64))]
-    pub bytes: u64,
-}
-
-/// One external Skill catalog entry.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
-pub struct RuntimeClientSkill {
-    /// The validated standard Skill identity.
-    pub id: SkillId,
-    /// The immutable Skill version identity.
-    pub version_id: SkillVersionId,
-    /// The validated standard Skill name.
-    pub name: String,
-    /// The validated standard Skill description.
-    pub description: String,
-    /// The canonical absolute host path of the package's `SKILL.md`.
-    ///
-    /// This is a real filesystem path, not a runtime-owned virtual locator:
-    /// a Skill package is an ordinary host directory, and the same path
-    /// serves Read, Bash, Grep, and Glob alike.
-    pub location: String,
-}
-
 impl RuntimeClientSnapshot {
     /// The conversation identity the snapshot belongs to.
     #[must_use]
@@ -1653,7 +596,7 @@ pub struct ConversationWindow {
     pub cut: crate::durable::reading::ConversationReadCut,
     pub page: RuntimeClientTranscriptPage,
     pub newer_cursor: Option<RuntimeClientTranscriptCursor>,
-    pub target: Option<crate::runtime_client::turn::ObservedTurnIdentity>,
+    pub target: Option<crate::observation::turn::ObservedTurnIdentity>,
     pub target_cursor: Option<RuntimeClientTranscriptCursor>,
 }
 

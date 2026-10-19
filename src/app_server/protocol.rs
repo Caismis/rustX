@@ -126,7 +126,7 @@ pub enum Method {
     AgentDeliveryRead {
         target: AttachmentTarget,
         agent_id: crate::runtime::identity::AgentId,
-        locator: crate::runtime_client::content::CanonicalContentLocator,
+        locator: crate::observation::content::CanonicalContentLocator,
         #[schemars(range(max = 9_007_199_254_740_991_u64))]
         delivery_index: usize,
     },
@@ -134,7 +134,7 @@ pub enum Method {
     AgentDeliveryLocate {
         target: AttachmentTarget,
         agent_id: crate::runtime::identity::AgentId,
-        locator: crate::runtime_client::content::CanonicalContentLocator,
+        locator: crate::observation::content::CanonicalContentLocator,
         #[schemars(range(max = 9_007_199_254_740_991_u64))]
         delivery_index: usize,
     },
@@ -152,7 +152,7 @@ pub enum Method {
     #[serde(rename = "delivery/read")]
     DeliveryRead {
         target: AttachmentTarget,
-        locator: crate::runtime_client::content::CanonicalContentLocator,
+        locator: crate::observation::content::CanonicalContentLocator,
         #[schemars(range(max = 9_007_199_254_740_991_u64))]
         delivery_index: usize,
     },
@@ -163,7 +163,7 @@ pub enum Method {
     #[serde(rename = "delivery/locate")]
     DeliveryLocate {
         target: AttachmentTarget,
-        locator: crate::runtime_client::content::CanonicalContentLocator,
+        locator: crate::observation::content::CanonicalContentLocator,
         #[schemars(range(max = 9_007_199_254_740_991_u64))]
         delivery_index: usize,
     },
@@ -212,8 +212,8 @@ pub enum Method {
         target: AttachmentTarget,
         #[serde(default)]
         #[schemars(length(max = 8))]
-        records: Vec<crate::runtime_client::trace::TraceCursor>,
-        before: Option<crate::runtime_client::trace::TraceCursor>,
+        records: Vec<crate::observation::trace::TraceCursor>,
+        before: Option<crate::observation::trace::TraceCursor>,
         limit: usize,
     },
     /// Heavy inspection detail for one exact Trace record identity.
@@ -334,11 +334,11 @@ pub enum Method {
     AgentTrace {
         target: AttachmentTarget,
         agent_id: crate::runtime::identity::AgentId,
-        before: Option<crate::runtime_client::trace::TraceCursor>,
+        before: Option<crate::observation::trace::TraceCursor>,
         limit: usize,
         #[serde(default)]
         #[schemars(length(max = 8))]
-        records: Vec<crate::runtime_client::trace::TraceCursor>,
+        records: Vec<crate::observation::trace::TraceCursor>,
     },
     #[serde(rename = "agent/traceDetail")]
     AgentTraceDetail {
@@ -403,7 +403,7 @@ pub enum Method {
     SessionTraceHistory {
         session_id: SessionId,
         node_id: Option<SessionNodeId>,
-        before: Option<crate::runtime_client::trace::TraceCursor>,
+        before: Option<crate::observation::trace::TraceCursor>,
         limit: usize,
     },
     #[serde(rename = "session/traceHistoryDetail")]
@@ -416,7 +416,7 @@ pub enum Method {
     SessionTracePage {
         session_id: SessionId,
         node_id: Option<SessionNodeId>,
-        cut: crate::runtime_client::checkpoint::CheckpointReadCut,
+        cut: crate::observation::cut::CheckpointReadCut,
         domain: String,
         #[schemars(range(max = 9_007_199_254_740_991_u64))]
         offset: u64,
@@ -427,7 +427,7 @@ pub enum Method {
     SessionTraceValueRead {
         session_id: SessionId,
         node_id: Option<SessionNodeId>,
-        cut: crate::runtime_client::checkpoint::CheckpointReadCut,
+        cut: crate::observation::cut::CheckpointReadCut,
         domain: String,
         #[schemars(range(max = 9_007_199_254_740_991_u64))]
         item_offset: u64,
@@ -442,8 +442,8 @@ pub enum Method {
     SessionTraceContentRead {
         session_id: SessionId,
         node_id: Option<SessionNodeId>,
-        cut: crate::runtime_client::checkpoint::CheckpointReadCut,
-        content_ref: crate::runtime_client::content::ContentRef,
+        cut: crate::observation::cut::CheckpointReadCut,
+        content_ref: crate::observation::content::ContentRef,
         #[schemars(range(max = 9_007_199_254_740_991_u64))]
         offset: u64,
         #[schemars(range(min = 1, max = 65_536))]
@@ -454,7 +454,7 @@ pub enum Method {
         session_id: SessionId,
         node_id: Option<SessionNodeId>,
         cut: crate::durable::observation::ObservationReadCut,
-        content_ref: crate::runtime_client::content::ContentRef,
+        content_ref: crate::observation::content::ContentRef,
         #[schemars(range(max = 9_007_199_254_740_991_u64))]
         offset: u64,
         #[schemars(range(min = 1, max = 65_536))]
@@ -541,7 +541,7 @@ pub enum Method {
         session_id: SessionId,
         node_id: Option<SessionNodeId>,
         surface_revision: crate::conversation::SurfaceRevision,
-        boundary: Option<crate::runtime_client::content::CanonicalContentLocator>,
+        boundary: Option<crate::observation::content::CanonicalContentLocator>,
         side: crate::local_runtime::session::LineageSide,
     },
     #[serde(rename = "session/branch")]
@@ -549,7 +549,7 @@ pub enum Method {
         session_id: SessionId,
         node_id: SessionNodeId,
         surface_revision: crate::conversation::SurfaceRevision,
-        boundary: crate::runtime_client::content::CanonicalContentLocator,
+        boundary: crate::observation::content::CanonicalContentLocator,
         side: crate::local_runtime::session::LineageSide,
     },
     #[serde(rename = "session/deletePreview")]
@@ -584,7 +584,7 @@ pub enum Method {
         target: AttachmentTarget,
         #[serde(default)]
         agent_id: Option<crate::runtime::identity::AgentId>,
-        content_ref: crate::runtime_client::content::ContentRef,
+        content_ref: crate::observation::content::ContentRef,
         #[schemars(range(max = 9_007_199_254_740_991_u64))]
         offset: u64,
         #[schemars(range(min = 1, max = 65_536))]
@@ -594,7 +594,7 @@ pub enum Method {
     ConversationCheckpointValueRead {
         target: AttachmentTarget,
         agent_id: Option<crate::runtime::identity::AgentId>,
-        cut: crate::runtime_client::checkpoint::CheckpointReadCut,
+        cut: crate::observation::cut::CheckpointReadCut,
         domain: String,
         #[schemars(range(max = 9_007_199_254_740_991_u64))]
         item_offset: u64,
@@ -610,7 +610,7 @@ pub enum Method {
         target: AttachmentTarget,
         #[serde(default)]
         agent_id: Option<crate::runtime::identity::AgentId>,
-        cut: crate::runtime_client::checkpoint::CheckpointReadCut,
+        cut: crate::observation::cut::CheckpointReadCut,
         domain: String,
         #[schemars(range(max = 9_007_199_254_740_991_u64))]
         offset: u64,
@@ -622,7 +622,7 @@ pub enum Method {
         /// Bounded loaded Trace identities to repair at the same snapshot cut.
         #[serde(default)]
         #[schemars(length(max = 8))]
-        trace_records: Vec<crate::runtime_client::trace::TraceCursor>,
+        trace_records: Vec<crate::observation::trace::TraceCursor>,
     },
     #[serde(rename = "session/subscribe")]
     SessionSubscribe {
@@ -1041,7 +1041,7 @@ pub enum MethodResult {
         snapshot: crate::app_server::host::ServerDiagnostics,
     },
     ContextCompacted {
-        compaction: Option<crate::runtime_client::snapshot::RuntimeClientCompactionView>,
+        compaction: Option<crate::observation::head::RuntimeClientCompactionView>,
     },
     Projections {
         page: crate::runtime_client::projection_history::ProjectionPage,
@@ -1050,7 +1050,7 @@ pub enum MethodResult {
         detail: Box<crate::runtime_client::projection_history::ProjectionDetail>,
     },
     Trace {
-        page: crate::runtime_client::trace::TracePage,
+        page: crate::observation::trace::TracePage,
     },
     TraceToolLocation {
         location: Option<crate::runtime_client::trace::TraceToolLocation>,
@@ -1061,13 +1061,13 @@ pub enum MethodResult {
     },
     SessionStatistics {
         conversation_id: ConversationId,
-        read_cut: crate::runtime_client::checkpoint::CheckpointReadCut,
-        statistics: crate::runtime_client::response::ConversationStatistics,
-        occupancy: Option<crate::runtime_client::occupancy::RuntimeClientContextOccupancy>,
+        read_cut: crate::observation::cut::CheckpointReadCut,
+        statistics: crate::observation::statistics::ConversationStatistics,
+        occupancy: Option<crate::observation::occupancy::RuntimeClientContextOccupancy>,
     },
     SessionTraceHistory {
         conversation_id: ConversationId,
-        page: crate::runtime_client::trace::TracePage,
+        page: crate::observation::trace::TracePage,
     },
     SessionTraceHistoryDetail {
         conversation_id: ConversationId,
@@ -1077,7 +1077,7 @@ pub enum MethodResult {
         window: crate::runtime_client::snapshot::ConversationWindow,
     },
     ConversationTurns {
-        page: crate::runtime_client::turn::ObservedTurnPage,
+        page: crate::observation::turn::ObservedTurnPage,
     },
     GoalMutation {
         reference: Option<crate::goal::GoalRef>,
@@ -1095,7 +1095,7 @@ pub enum MethodResult {
         observation: crate::runtime_client::agent_observation::AgentObservation,
     },
     AgentStatistics {
-        metrics: crate::runtime_client::agent_statistics::AgentStatistics,
+        metrics: crate::observation::statistics::AgentStatistics,
     },
     AgentMessage {
         agent_id: crate::runtime::identity::AgentId,
@@ -1162,7 +1162,7 @@ pub enum MethodResult {
         configuration_revision: Option<u64>,
     },
     ContentChunk {
-        chunk: crate::runtime_client::content::ContentChunk,
+        chunk: crate::observation::content::ContentChunk,
     },
     DomainPage {
         page: crate::runtime_client::checkpoint::CheckpointPage,

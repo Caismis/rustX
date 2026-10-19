@@ -222,16 +222,14 @@ fn v3_questionnaire_pending_response_decline_and_settlement_round_trip() {
     let pending = RuntimeClientProtocolEvent {
         cursor: RuntimeClientCursor::new(20),
         event: RuntimeClientEvent::InteractionPending {
-            interaction: crate::runtime_client::checkpoint::interaction_header(
-                &RoutedInteraction {
-                    interaction: InteractionRef::new(
-                        request.conversation_id.clone(),
-                        request.id.clone(),
-                    ),
-                    source: InteractionSource::Primary,
-                    request: request.clone().into(),
-                },
-            ),
+            interaction: crate::observation::interaction::interaction_header(&RoutedInteraction {
+                interaction: InteractionRef::new(
+                    request.conversation_id.clone(),
+                    request.id.clone(),
+                ),
+                source: InteractionSource::Primary,
+                request: request.clone().into(),
+            }),
         },
     };
     let submitted_settled = RuntimeClientProtocolEvent {

@@ -1,6 +1,8 @@
 use super::*;
-use crate::runtime_client::capability_source::{CapabilityReadSource, PreparedCapabilityHead};
-use crate::runtime_client::snapshot::{CapabilityView, RuntimeClientTool};
+use crate::observation::bounded::prepare_capture_item;
+use crate::observation::capability_source::{CapabilityReadSource, PreparedCapabilityHead};
+use crate::observation::capability_source::{CapabilityView, RuntimeClientTool};
+use crate::observation::capture::Capture;
 use crate::tools::types::{
     ToolApprovalPolicy, ToolConcurrencyPolicy, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
 };
@@ -60,7 +62,7 @@ fn prepared_capability_matches_original_capture_at_every_remaining_item_budget()
     let prepared = PreparedCapabilityHead::new(&header, Vec::new());
     let bytes = bounded_item_bytes(&header.tools[0], CHECKPOINT_ITEM_BYTES).unwrap();
     let required =
-        crate::runtime_client::preflight::required_budget(&header.tools[0], CHECKPOINT_ITEM_BYTES)
+        crate::observation::preflight::required_budget(&header.tools[0], CHECKPOINT_ITEM_BYTES)
             .unwrap();
     assert!(
         required > bytes.len(),

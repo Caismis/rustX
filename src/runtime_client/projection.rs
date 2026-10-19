@@ -98,21 +98,23 @@ use std::sync::Arc;
 
 use tokio::sync::Notify;
 
-use super::event::{RuntimeClientAttemptFailure, RuntimeClientEvent, RuntimeClientOutcome};
+use crate::observation::failure::RuntimeClientAttemptFailure;
+
+use super::event::{RuntimeClientEvent, RuntimeClientOutcome};
 use super::snapshot::{
-    AGENT_STATUS_WINDOW, AgentStatusOpportunityView, AgentStatusView, CapabilityView,
-    ForegroundToolExecution, ForegroundToolState, FreshInboundOpportunityView,
-    InFlightAssistantMessage, InFlightBlock, InboundDiagnostics, InboundDrainView, InboundItemView,
-    PostToolBatchOpportunityView, RuntimeClientAttempt, RuntimeClientAttemptPhase,
-    RuntimeClientCompactionView, RuntimeClientContextView, RuntimeClientJob, RuntimeClientSnapshot,
-    RuntimeClientStatusSection, RuntimeClientTodoStatusTask, RuntimeClientTranscriptCursor,
+    AGENT_STATUS_WINDOW, InFlightAssistantMessage, InFlightBlock, InboundDiagnostics,
+    InboundDrainView, InboundItemView, RuntimeClientAttempt, RuntimeClientAttemptPhase,
+    RuntimeClientContextView, RuntimeClientJob, RuntimeClientSnapshot,
 };
 use super::types::{RuntimeClientCursor, RuntimeClientError, RuntimeClientProtocolEvent};
-use crate::agent::observer::AgentStatusObservation;
-use crate::context::status::{AgentStatusSectionData, render_agent_status};
 use crate::events::types::{AttemptFailure, RuntimeEvent};
 use crate::message::types::{ContentBlockIndex, MessageBlock};
 use crate::model::session::{AttemptModelView, SessionModelView};
+use crate::observation::capability_source::CapabilityView;
+use crate::observation::head::RuntimeClientCompactionView;
+use crate::observation::status::AgentStatusView;
+use crate::observation::tool::{ForegroundToolExecution, ForegroundToolState};
+use crate::observation::transcript::RuntimeClientTranscriptCursor;
 use crate::publication::{PublicationFrame, PublicationPayload};
 use crate::runtime::identity::{AttemptId, ConversationId, MessageId, ToolCallId, ToolId};
 use crate::runtime::inbound::InboundItem;
@@ -218,8 +220,10 @@ enum ForegroundSettlement {
 // The working owner and an issued cut share immutable map nodes. Updating a
 // single source copies only its tree path; published roots remain unchanged.
 type DomainSources = imbl::OrdMap<String, (Arc<super::domain::DomainSource>, usize, u64)>;
-type ContentMetadata =
-    imbl::OrdMap<(&'static str, String, u32, &'static str), Arc<super::content::ContentRef>>;
+type ContentMetadata = imbl::OrdMap<
+    (&'static str, String, u32, &'static str),
+    Arc<crate::observation::content::ContentRef>,
+>;
 
 #[derive(Default)]
 struct ObservationSourceState {
@@ -258,7 +262,8 @@ pub(crate) struct RuntimeClientProjection {
     /// Trace-only progress must not starve a Session snapshot candidate.
     read_through: u64,
     source_cut: Option<crate::durable::observation::ObservationReadCut>,
-    head_bindings: std::collections::BTreeMap<MessageId, Vec<super::checkpoint::ContentBinding>>,
+    head_bindings:
+        std::collections::BTreeMap<MessageId, Vec<crate::observation::cut::ContentBinding>>,
     foreground_content: Vec<ForegroundResultContent>,
     prepared_messages: std::collections::BTreeMap<
         MessageId,
@@ -280,9 +285,11 @@ pub(crate) struct RuntimeClientProjection {
     #[cfg(test)]
     prepared_pending: Option<Vec<InboundItemView>>,
     deferred_events: (Vec<RuntimeClientEvent>, usize, bool),
-    canonical_foreground: Option<super::checkpoint::CanonicalForegroundReadCut>,
-    native_tool_occurrences:
-        std::collections::BTreeMap<ToolCallId, super::snapshot::RuntimeClientToolOccurrence>,
+    canonical_foreground: Option<crate::observation::cut::CanonicalForegroundReadCut>,
+    native_tool_occurrences: std::collections::BTreeMap<
+        ToolCallId,
+        crate::observation::tool::RuntimeClientToolOccurrence,
+    >,
     live_revision: u64,
     live_block_total: u64,
     live_tool_total: u64,
@@ -295,16 +302,16 @@ pub(crate) struct RuntimeClientProjection {
         u64,
         (
             bool,
-            Option<super::snapshot::JournalFieldRef>,
+            Option<crate::observation::tool::JournalFieldRef>,
             bool,
-            Option<super::snapshot::JournalFieldRef>,
+            Option<crate::observation::tool::JournalFieldRef>,
         ),
     >,
     prepared_journal: std::collections::BTreeMap<
         u64,
         (
             Option<RuntimeClientAttemptFailure>,
-            Option<super::snapshot::JournalFieldRef>,
+            Option<crate::observation::tool::JournalFieldRef>,
         ),
     >,
     live_frontiers: std::collections::BTreeMap<
@@ -314,7 +321,7 @@ pub(crate) struct RuntimeClientProjection {
             &'static str,
             &'static str,
         ),
-        super::content::ContentRef,
+        crate::observation::content::ContentRef,
     >,
     read_domains_dirty: bool,
     /// Failure of the current read-domain fence; cleared by matching success
@@ -323,11 +330,14 @@ pub(crate) struct RuntimeClientProjection {
     read_revision: u64,
     domain_sources: DomainSources,
     domain_source_bytes: usize,
-    source_frontiers: std::collections::BTreeMap<String, super::checkpoint::CollectionFrontier>,
+    source_frontiers:
+        std::collections::BTreeMap<String, crate::observation::cut::CollectionFrontier>,
     collection_cuts:
         std::collections::BTreeMap<String, crate::runtime::identity::ObservationCollectionCut>,
-    pending_heads:
-        std::collections::BTreeMap<String, Vec<super::snapshot::RuntimeClientInteractionHeader>>,
+    pending_heads: std::collections::BTreeMap<
+        String,
+        Vec<crate::observation::interaction::RuntimeClientInteractionHeader>,
+    >,
     collection_ordinal: Option<u64>,
     tool_occurrence: Option<crate::events::types::ToolObservationOccurrence>,
     domain_revisions: std::collections::BTreeMap<&'static str, u64>,
@@ -338,14 +348,14 @@ pub(crate) struct RuntimeClientProjection {
     exhausted: bool,
     /// The deterministic snapshot read model.
     snapshot: RuntimeClientSnapshot,
-    capability_head: super::capability_source::PreparedCapabilityHead,
+    capability_head: crate::observation::capability_source::PreparedCapabilityHead,
     trace_head: super::checkpoint::PreparedTraceHead,
     /// The bounded projection replay ring, oldest first.
     replay: VecDeque<(RuntimeClientCursor, RuntimeClientEvent)>,
     /// Scalar cut-to-cursor lookup, bounded by the same replay retention.
     replay_cut_cursors: HashMap<u64, RuntimeClientCursor>,
     /// Genuine constructor cut, retained only while replay after cursor zero is serviceable.
-    initial_read_cut: Option<super::checkpoint::CheckpointReadCut>,
+    initial_read_cut: Option<crate::observation::cut::CheckpointReadCut>,
     replay_sizes: VecDeque<usize>,
     replay_bytes: usize,
     /// The explicit bounded retention limit.
@@ -359,10 +369,14 @@ pub(crate) struct RuntimeClientProjection {
     probe: Option<crate::runtime_client::test_sync::ProjectionProbe>,
 }
 
-fn canonical_locator_position(locator: &super::content::CanonicalContentLocator) -> u64 {
+fn canonical_locator_position(
+    locator: &crate::observation::content::CanonicalContentLocator,
+) -> u64 {
     match locator {
-        super::content::CanonicalContentLocator::ByLedgerPosition { position } => *position,
-        super::content::CanonicalContentLocator::ByMessageId { .. } => u64::MAX,
+        crate::observation::content::CanonicalContentLocator::ByLedgerPosition { position } => {
+            *position
+        }
+        crate::observation::content::CanonicalContentLocator::ByMessageId { .. } => u64::MAX,
     }
 }
 
@@ -372,33 +386,35 @@ fn canonical_header_position(header: &crate::durable::observation::MessageHeader
 
 /// One constructor-prepared finite Tool reading with its immutable sources.
 pub(crate) struct PreparedDurableToolReading {
-    pub occurrence: super::snapshot::RuntimeClientToolOccurrence,
-    pub content: Vec<super::checkpoint::ContentBinding>,
-    pub collections: Vec<super::checkpoint::CollectionFrontier>,
+    pub occurrence: crate::observation::tool::RuntimeClientToolOccurrence,
+    pub content: Vec<crate::observation::cut::ContentBinding>,
+    pub collections: Vec<crate::observation::cut::CollectionFrontier>,
 }
 
 #[derive(Clone)]
 struct ForegroundResultContent {
-    occurrence: super::snapshot::RuntimeClientToolOccurrence,
-    metadata: super::content::ContentRef,
-    content: Vec<super::checkpoint::ContentBinding>,
-    frontier: super::checkpoint::CollectionFrontier,
+    occurrence: crate::observation::tool::RuntimeClientToolOccurrence,
+    metadata: crate::observation::content::ContentRef,
+    content: Vec<crate::observation::cut::ContentBinding>,
+    frontier: crate::observation::cut::CollectionFrontier,
 }
 
 #[derive(Clone)]
 pub(crate) struct CheckpointSeed {
     snapshot: RuntimeClientSnapshot,
-    capability_head: super::capability_source::PreparedCapabilityHead,
+    capability_head: crate::observation::capability_source::PreparedCapabilityHead,
     trace_head: super::checkpoint::PreparedTraceHead,
     cursor: RuntimeClientCursor,
-    read_cut: super::checkpoint::CheckpointReadCut,
+    read_cut: crate::observation::cut::CheckpointReadCut,
     exhausted: bool,
     journal_failure: bool,
     source_pending: bool,
     source_cut: Option<crate::durable::observation::ObservationReadCut>,
-    head_bindings: std::collections::BTreeMap<MessageId, Vec<super::checkpoint::ContentBinding>>,
+    head_bindings:
+        std::collections::BTreeMap<MessageId, Vec<crate::observation::cut::ContentBinding>>,
     foreground_content: Vec<ForegroundResultContent>,
-    source_frontiers: std::collections::BTreeMap<String, super::checkpoint::CollectionFrontier>,
+    source_frontiers:
+        std::collections::BTreeMap<String, crate::observation::cut::CollectionFrontier>,
     collection_cuts:
         std::collections::BTreeMap<String, crate::runtime::identity::ObservationCollectionCut>,
     domain_revisions: std::collections::BTreeMap<&'static str, u64>,
@@ -411,11 +427,11 @@ pub(crate) struct CheckpointSeed {
             &'static str,
             &'static str,
         ),
-        super::content::ContentRef,
+        crate::observation::content::ContentRef,
     >,
     live_block_total: u64,
     live_tool_total: u64,
-    canonical_foreground: Option<super::checkpoint::CanonicalForegroundReadCut>,
+    canonical_foreground: Option<crate::observation::cut::CanonicalForegroundReadCut>,
 }
 
 pub(crate) struct PublicationDraft {
@@ -459,9 +475,9 @@ pub(crate) struct EncodedPublication {
 }
 
 fn encoded_event_bytes(event: &RuntimeClientEvent, limit: usize) -> Option<Vec<u8>> {
-    let schema = super::structural_json::root::<RuntimeClientEvent>();
-    super::checkpoint::bounded_bytes(
-        &super::structural_json::Encoded {
+    let schema = crate::observation::structural_json::root::<RuntimeClientEvent>();
+    crate::observation::bounded::bounded_bytes(
+        &crate::observation::structural_json::Encoded {
             value: event,
             schema: &schema,
             root: &schema,
@@ -471,8 +487,8 @@ fn encoded_event_bytes(event: &RuntimeClientEvent, limit: usize) -> Option<Vec<u
 }
 
 fn stamp_trace_cut(
-    trace: &mut super::trace::TracePage,
-    cut: &super::checkpoint::CheckpointReadCut,
+    trace: &mut crate::observation::trace::TracePage,
+    cut: &crate::observation::cut::CheckpointReadCut,
 ) {
     if trace.read_cut.is_none() && (!trace.records.is_empty() || !trace.updates.is_empty()) {
         trace.read_cut = Some(cut.clone());
@@ -481,7 +497,7 @@ fn stamp_trace_cut(
 
 fn stamp_event_trace_cut(
     event: &mut RuntimeClientEvent,
-    cut: &super::checkpoint::CheckpointReadCut,
+    cut: &crate::observation::cut::CheckpointReadCut,
 ) {
     match event {
         RuntimeClientEvent::ReadDomainsUpdated { trace, .. } => stamp_trace_cut(trace, cut),
@@ -542,7 +558,7 @@ impl PublicationDraft {
         let encoded = if fitted || captured_eviction || self.replacement {
             None
         } else {
-            encoded_event_bytes(&event, super::checkpoint::CHECKPOINT_TARGET_BYTES)
+            encoded_event_bytes(&event, crate::observation::bounded::CHECKPOINT_TARGET_BYTES)
         };
         if encoded.is_none() {
             let transition = event_kind(&event).to_owned();
@@ -562,7 +578,9 @@ impl PublicationDraft {
             profile.probe_us += elapsed;
         });
         let encoded = encoded
-            .or_else(|| encoded_event_bytes(&event, super::checkpoint::CHECKPOINT_TARGET_BYTES))
+            .or_else(|| {
+                encoded_event_bytes(&event, crate::observation::bounded::CHECKPOINT_TARGET_BYTES)
+            })
             .ok_or_else(|| RuntimeClientError::ObservationUnavailable {
                 message: "finite display transition exceeds its encoded budget".into(),
             })?;
@@ -587,7 +605,7 @@ impl PublicationDraft {
 }
 
 impl CheckpointSeed {
-    fn checkpoint_read_cut(&self) -> super::checkpoint::CheckpointReadCut {
+    fn checkpoint_read_cut(&self) -> crate::observation::cut::CheckpointReadCut {
         self.read_cut.clone()
     }
     pub(crate) fn retain_foreground_progress(
@@ -606,9 +624,11 @@ impl CheckpointSeed {
             let Some(value) = item.value.take() else {
                 continue;
             };
-            let mut source: ForegroundToolExecution = super::checkpoint::decode_domain_value(value)
-                .map_err(|_| RuntimeClientError::ObservationUnavailable {
-                    message: "native foreground source header unavailable".into(),
+            let mut source: ForegroundToolExecution =
+                crate::observation::bounded::decode_domain_value(value).map_err(|_| {
+                    RuntimeClientError::ObservationUnavailable {
+                        message: "native foreground source header unavailable".into(),
+                    }
                 })?;
             if let ForegroundToolState::Running { progress, .. } = &mut source.state
                 && let Some(current) = attempt
@@ -619,11 +639,13 @@ impl CheckpointSeed {
             {
                 progress.clone_from(live);
             }
-            item.value = Some(super::checkpoint::structural_value(&source).ok_or_else(|| {
-                RuntimeClientError::ObservationUnavailable {
-                    message: "finite foreground source header unavailable".into(),
-                }
-            })?);
+            item.value = Some(
+                crate::observation::bounded::structural_value(&source).ok_or_else(|| {
+                    RuntimeClientError::ObservationUnavailable {
+                        message: "finite foreground source header unavailable".into(),
+                    }
+                })?,
+            );
         }
         Ok(())
     }
@@ -634,7 +656,7 @@ impl CheckpointSeed {
     }
     fn capture_context(
         &self,
-        capture: &mut super::checkpoint::Capture,
+        capture: &mut crate::observation::capture::Capture,
     ) -> RuntimeClientContextView {
         let mut context = RuntimeClientContextView {
             projection_head: self.snapshot.context.projection_head.clone(),
@@ -672,7 +694,7 @@ impl CheckpointSeed {
     }
     fn capture_attempt(
         &self,
-        capture: &mut super::checkpoint::Capture,
+        capture: &mut crate::observation::capture::Capture,
     ) -> Option<super::snapshot::RuntimeClientAttempt> {
         self.snapshot
             .attempt
@@ -725,7 +747,8 @@ impl CheckpointSeed {
     fn checkpoint_unfitted(
         &self,
     ) -> Result<(super::checkpoint::RuntimeClientCheckpoint, bool), RuntimeClientError> {
-        use super::checkpoint::{Capture, RuntimeClientCheckpoint};
+        use super::checkpoint::RuntimeClientCheckpoint;
+        use crate::observation::capture::Capture;
         if self.exhausted {
             return Err(RuntimeClientError::ProjectionExhausted);
         }
@@ -762,7 +785,7 @@ impl CheckpointSeed {
             message_descriptors: self.capture_message_descriptors(&mut capture),
             publication_settlements: source.publication_settlements.clone(),
             transcript: self.capture_transcript(&mut capture),
-            trace: super::trace::TracePage {
+            trace: crate::observation::trace::TracePage {
                 read_cut: source.trace.read_cut.clone(),
                 records: self.trace_head.capture(&source.trace.records, &mut capture),
                 updates: capture.page("trace.updates", &source.trace.updates),
@@ -782,7 +805,7 @@ impl CheckpointSeed {
             statuses: capture.page("statuses", &source.statuses),
             context,
             capabilities: self.capture_capabilities(&mut capture),
-            resources: super::snapshot::RuntimeClientResourcesView {
+            resources: crate::observation::resource_source::RuntimeClientResourcesView {
                 revision: source.resources.revision,
                 inspection: capture
                     .item("resources.inspection", &source.resources.inspection)
@@ -817,21 +840,21 @@ impl CheckpointSeed {
 
     fn capture_capabilities(
         &self,
-        capture: &mut super::checkpoint::Capture,
-    ) -> super::snapshot::CapabilityView {
+        capture: &mut crate::observation::capture::Capture,
+    ) -> crate::observation::capability_source::CapabilityView {
         self.capability_head.capture(capture)
     }
 
     fn capture_message_descriptors(
         &self,
-        capture: &mut super::checkpoint::Capture,
-    ) -> Vec<super::snapshot::RuntimeClientMessageDescriptor> {
+        capture: &mut crate::observation::capture::Capture,
+    ) -> Vec<crate::observation::transcript::RuntimeClientMessageDescriptor> {
         self.snapshot
             .message_descriptors
             .iter()
             .map(|source| {
                 let mut descriptor = source.clone();
-                while super::checkpoint::bounded_bytes(&descriptor, 16_384).is_none() {
+                while crate::observation::bounded::bounded_bytes(&descriptor, 16_384).is_none() {
                     let Some(removed) = descriptor.tool_calls.pop() else {
                         break;
                     };
@@ -865,10 +888,10 @@ impl CheckpointSeed {
 
     fn capture_transcript(
         &self,
-        capture: &mut super::checkpoint::Capture,
-    ) -> super::snapshot::RuntimeClientTranscriptPage {
+        capture: &mut crate::observation::capture::Capture,
+    ) -> crate::observation::transcript::RuntimeClientTranscriptPage {
         let source = &self.snapshot;
-        super::snapshot::RuntimeClientTranscriptPage {
+        crate::observation::transcript::RuntimeClientTranscriptPage {
             source_cut: source.transcript.source_cut.clone(),
             content: source.transcript.content.clone(),
             collections: source.transcript.collections.clone(),
@@ -888,7 +911,7 @@ impl CheckpointSeed {
     fn capture_evidence(
         &self,
         snapshot: &RuntimeClientSnapshot,
-        capture: &mut super::checkpoint::Capture,
+        capture: &mut crate::observation::capture::Capture,
     ) {
         for (index, message) in snapshot.messages.iter().enumerate() {
             if let Some(bindings) = self.head_bindings.get(message.id()) {
@@ -940,7 +963,7 @@ impl CheckpointSeed {
         self.capture_collection_frontiers(capture);
     }
 
-    fn capture_collection_frontiers(&self, capture: &mut super::checkpoint::Capture) {
+    fn capture_collection_frontiers(&self, capture: &mut crate::observation::capture::Capture) {
         self.resolve_captured_content(&mut capture.content);
         for frontier in &mut capture.collections {
             frontier.revision = self.domain_revision(&frontier.domain);
@@ -1007,12 +1030,12 @@ impl CheckpointSeed {
 
     fn capture_foreground(
         &self,
-        capture: &mut super::checkpoint::Capture,
+        capture: &mut crate::observation::capture::Capture,
         foreground: &[ForegroundToolExecution],
     ) -> Vec<ForegroundToolExecution> {
         let head: Vec<_> = foreground
             .iter()
-            .take(super::checkpoint::CHECKPOINT_PAGE_ITEMS)
+            .take(crate::observation::bounded::CHECKPOINT_PAGE_ITEMS)
             .map(|tool| {
                 let mut bounded = tool.clone();
                 if !capture.reserve(&bounded) {
@@ -1051,7 +1074,7 @@ impl CheckpointSeed {
 
     fn capture_foreground_evidence(
         &self,
-        capture: &mut super::checkpoint::Capture,
+        capture: &mut crate::observation::capture::Capture,
         head: &[ForegroundToolExecution],
     ) {
         for (index, tool) in head.iter().enumerate() {
@@ -1059,7 +1082,7 @@ impl CheckpointSeed {
                 self.live_frontiers.get(&(
                     start.stream_id.clone(),
                     tool.block_index,
-                    super::content::ContentRepresentation::RawJsonUtf8.key(),
+                    crate::observation::content::ContentRepresentation::RawJsonUtf8.key(),
                     "live",
                 ))
             });
@@ -1069,7 +1092,7 @@ impl CheckpointSeed {
                     "canonical",
                     tool.occurrence.locator.key().into_owned(),
                     tool.block_index.get(),
-                    super::content::ContentRepresentation::RawJsonUtf8.key(),
+                    crate::observation::content::ContentRepresentation::RawJsonUtf8.key(),
                 ))
                 .map(Arc::as_ref);
             if let Some(reference) = live_arguments.or(canonical_arguments) {
@@ -1078,18 +1101,20 @@ impl CheckpointSeed {
                     | ForegroundToolState::Running { arguments, .. }
                     | ForegroundToolState::Settled { arguments, .. } => arguments,
                 };
-                capture.content.push(super::checkpoint::ContentBinding {
-                    source_path: None,
-                    path: vec![
-                        "attempt".into(),
-                        "foreground".into(),
-                        index.to_string(),
-                        "state".into(),
-                        "arguments".into(),
-                    ],
-                    content_ref: reference.clone(),
-                    deferred: arguments.len() as u64 != reference.readable_end,
-                });
+                capture
+                    .content
+                    .push(crate::observation::cut::ContentBinding {
+                        source_path: None,
+                        path: vec![
+                            "attempt".into(),
+                            "foreground".into(),
+                            index.to_string(),
+                            "state".into(),
+                            "arguments".into(),
+                        ],
+                        content_ref: reference.clone(),
+                        deferred: arguments.len() as u64 != reference.readable_end,
+                    });
             }
             if let Some(source) = self
                 .foreground_content
@@ -1115,30 +1140,32 @@ impl CheckpointSeed {
                 }
             }
             if let Some(reference) = &tool.result_metadata_ref {
-                capture.content.push(super::checkpoint::ContentBinding {
-                    source_path: Some(vec!["result".into()]),
-                    path: vec![
-                        "attempt".into(),
-                        "foreground".into(),
-                        index.to_string(),
-                        "committed_result".into(),
-                    ],
-                    content_ref: reference.clone(),
-                    deferred: tool.committed_result_deferred,
-                });
+                capture
+                    .content
+                    .push(crate::observation::cut::ContentBinding {
+                        source_path: Some(vec!["result".into()]),
+                        path: vec![
+                            "attempt".into(),
+                            "foreground".into(),
+                            index.to_string(),
+                            "committed_result".into(),
+                        ],
+                        content_ref: reference.clone(),
+                        deferred: tool.committed_result_deferred,
+                    });
             }
         }
     }
 
     fn capture_live_blocks(
         &self,
-        capture: &mut super::checkpoint::Capture,
+        capture: &mut crate::observation::capture::Capture,
         blocks: &[InFlightBlock],
     ) -> Vec<InFlightBlock> {
         let mut result = Vec::new();
         for (index, block) in blocks
             .iter()
-            .take(super::checkpoint::CHECKPOINT_PAGE_ITEMS)
+            .take(crate::observation::bounded::CHECKPOINT_PAGE_ITEMS)
             .enumerate()
         {
             let (block_index, representation, field) = match block {
@@ -1146,17 +1173,19 @@ impl CheckpointSeed {
                 | InFlightBlock::Reasoning { block_index, .. }
                 | InFlightBlock::Refusal { block_index, .. } => (
                     *block_index,
-                    super::content::ContentRepresentation::Utf8Text,
+                    crate::observation::content::ContentRepresentation::Utf8Text,
                     "text",
                 ),
                 InFlightBlock::ToolCall { block_index, .. } => (
                     *block_index,
-                    super::content::ContentRepresentation::RawJsonUtf8,
+                    crate::observation::content::ContentRepresentation::RawJsonUtf8,
                     "arguments",
                 ),
             };
-            let copied =
-                super::checkpoint::bounded_clone(block, super::checkpoint::CHECKPOINT_ITEM_BYTES);
+            let copied = crate::observation::bounded::bounded_clone(
+                block,
+                crate::observation::bounded::CHECKPOINT_ITEM_BYTES,
+            );
             let copied = copied.filter(|value| capture.reserve(value));
             let deferred = copied.is_none();
             let bounded = copied.unwrap_or_else(|| deferred_live_block(block));
@@ -1178,44 +1207,48 @@ impl CheckpointSeed {
                                 self.live_frontiers.get(&(
                                     start.stream_id.clone(),
                                     block_index,
-                                    super::content::ContentRepresentation::CanonicalJsonV1.key(),
+                                    crate::observation::content::ContentRepresentation::CanonicalJsonV1.key(),
                                     "live",
                                 ))
                             })
                             .flatten()
                     });
                 if let Some(reference) = reference {
-                    capture.content.push(super::checkpoint::ContentBinding {
-                        source_path: None,
-                        path: vec![
-                            "attempt".into(),
-                            "in_flight".into(),
-                            "blocks".into(),
-                            index.to_string(),
-                            field.into(),
-                        ],
-                        content_ref: reference.clone(),
-                        deferred: deferred
-                            || reference.readable_end > inline_block_bytes(&bounded, field),
-                    });
+                    capture
+                        .content
+                        .push(crate::observation::cut::ContentBinding {
+                            source_path: None,
+                            path: vec![
+                                "attempt".into(),
+                                "in_flight".into(),
+                                "blocks".into(),
+                                index.to_string(),
+                                field.into(),
+                            ],
+                            content_ref: reference.clone(),
+                            deferred: deferred
+                                || reference.readable_end > inline_block_bytes(&bounded, field),
+                        });
                 }
                 if let Some(reference) = self.live_frontiers.get(&(
                     start.stream_id.clone(),
                     block_index,
-                    super::content::ContentRepresentation::CanonicalJsonV1.key(),
+                    crate::observation::content::ContentRepresentation::CanonicalJsonV1.key(),
                     "live_block_metadata",
                 )) {
-                    capture.content.push(super::checkpoint::ContentBinding {
-                        source_path: Some(vec!["name".into()]),
-                        path: vec![
-                            "attempt".into(),
-                            "in_flight".into(),
-                            "blocks".into(),
-                            index.to_string(),
-                        ],
-                        content_ref: reference.clone(),
-                        deferred: true,
-                    });
+                    capture
+                        .content
+                        .push(crate::observation::cut::ContentBinding {
+                            source_path: Some(vec!["name".into()]),
+                            path: vec![
+                                "attempt".into(),
+                                "in_flight".into(),
+                                "blocks".into(),
+                                index.to_string(),
+                            ],
+                            content_ref: reference.clone(),
+                            deferred: true,
+                        });
                 }
             }
             result.push(bounded);
@@ -1229,9 +1262,9 @@ impl CheckpointSeed {
         result
     }
 
-    fn resolve_captured_content(&self, bindings: &mut [super::checkpoint::ContentBinding]) {
+    fn resolve_captured_content(&self, bindings: &mut [crate::observation::cut::ContentBinding]) {
         for binding in bindings {
-            if let super::content::ContentSource::CanonicalMessageBlock {
+            if let crate::observation::content::ContentSource::CanonicalMessageBlock {
                 component,
                 locator,
                 block_index,
@@ -1243,7 +1276,7 @@ impl CheckpointSeed {
                         component.key(),
                         locator.key().into_owned(),
                         block_index.get(),
-                        super::content::ContentRepresentation::RawJsonUtf8.key(),
+                        crate::observation::content::ContentRepresentation::RawJsonUtf8.key(),
                     ))
                     .map(Arc::as_ref);
                 let native = self
@@ -1273,7 +1306,7 @@ impl CheckpointSeed {
 
     pub(crate) fn checkpoint_page(
         &self,
-        cut: &super::checkpoint::CheckpointReadCut,
+        cut: &crate::observation::cut::CheckpointReadCut,
         domain: &str,
         offset: u64,
         limit: usize,
@@ -1315,11 +1348,12 @@ impl CheckpointSeed {
             ),
             "capabilities" => list!(
                 std::slice::from_ref(&source.capabilities),
-                |_item: &super::snapshot::CapabilityView| "capabilities".into()
+                |_item: &crate::observation::capability_source::CapabilityView| "capabilities"
+                    .into()
             ),
             "goal" => list!(
                 &source.goal.iter().collect::<Vec<_>>(),
-                |_item: &&crate::runtime_client::goal::RuntimeClientGoalView| "goal".into()
+                |_item: &&crate::observation::goal::RuntimeClientGoalView| "goal".into()
             ),
             "todos.tasks" => list!(
                 source
@@ -1331,7 +1365,7 @@ impl CheckpointSeed {
             "messages" => self.checkpoint_messages_page(cut, domain, offset, limit),
             "transcript.entries" => list!(
                 &source.transcript.entries,
-                |entry: &super::snapshot::RuntimeClientTranscriptEntry| entry
+                |entry: &crate::observation::transcript::RuntimeClientTranscriptEntry| entry
                     .cursor
                     .get()
                     .to_string()
@@ -1346,7 +1380,7 @@ impl CheckpointSeed {
                 .to_string()),
             "statuses" => list!(
                 &source.statuses,
-                |status: &super::snapshot::AgentStatusView| status
+                |status: &crate::observation::status::AgentStatusView| status
                     .source_locator
                     .as_ref()
                     .map(|locator| locator.key().into_owned())
@@ -1365,7 +1399,7 @@ impl CheckpointSeed {
     }
     fn checkpoint_attempt_page(
         &self,
-        cut: &super::checkpoint::CheckpointReadCut,
+        cut: &crate::observation::cut::CheckpointReadCut,
         domain: &str,
         offset: u64,
         limit: usize,
@@ -1415,7 +1449,7 @@ impl CheckpointSeed {
 
     fn checkpoint_messages_page(
         &self,
-        cut: &super::checkpoint::CheckpointReadCut,
+        cut: &crate::observation::cut::CheckpointReadCut,
         domain: &str,
         offset: u64,
         limit: usize,
@@ -1432,15 +1466,15 @@ impl CheckpointSeed {
         )?;
         for item in &mut result.items {
             if item.deferred {
-                let mut capture = super::checkpoint::Capture::new(self.cursor.get());
+                let mut capture = crate::observation::capture::Capture::new(self.cursor.get());
                 let message = capture.message(
                     &source.messages[usize::try_from(item.offset).expect("validated page offset")],
                     &source.conversation_id,
                     &[],
                 );
-                item.value = super::checkpoint::bounded_bytes(
+                item.value = crate::observation::bounded::bounded_bytes(
                     &message,
-                    super::checkpoint::CHECKPOINT_ITEM_BYTES,
+                    crate::observation::bounded::CHECKPOINT_ITEM_BYTES,
                 )
                 .and_then(|bytes| serde_json::from_slice(&bytes).ok());
                 item.content = capture.content;
@@ -1451,7 +1485,7 @@ impl CheckpointSeed {
 
     fn checkpoint_pending_page(
         &self,
-        cut: &super::checkpoint::CheckpointReadCut,
+        cut: &crate::observation::cut::CheckpointReadCut,
         domain: &str,
         offset: u64,
         limit: usize,
@@ -1464,7 +1498,7 @@ impl CheckpointSeed {
             &source.pending_interactions,
             offset,
             limit,
-            |interaction: &super::snapshot::RuntimeClientInteractionHeader| {
+            |interaction: &crate::observation::interaction::RuntimeClientInteractionHeader| {
                 interaction.interaction.to_string()
             },
         )?;
@@ -1473,10 +1507,12 @@ impl CheckpointSeed {
                 [usize::try_from(item.offset).expect("validated interaction offset")];
             item.body_complete = Some(header.body_complete);
             item.deferred = !header.body_complete;
-            if header.kind == super::snapshot::RuntimeClientInteractionKind::Approval {
+            if header.kind
+                == crate::observation::interaction::RuntimeClientInteractionKind::Approval
+            {
                 result
                     .collections
-                    .push(super::checkpoint::CollectionFrontier {
+                    .push(crate::observation::cut::CollectionFrontier {
                         domain: format!(
                             "pending_interactions.{}.request.kind.arguments",
                             item.offset
@@ -1493,7 +1529,7 @@ impl CheckpointSeed {
 
     fn checkpoint_auxiliary_page(
         &self,
-        cut: &super::checkpoint::CheckpointReadCut,
+        cut: &crate::observation::cut::CheckpointReadCut,
         domain: &str,
         offset: u64,
         limit: usize,
@@ -1516,27 +1552,39 @@ impl CheckpointSeed {
         match domain {
             "capabilities.tools" => list!(
                 &source.capabilities.tools,
-                |tool: &super::snapshot::RuntimeClientTool| tool.id.to_string()
+                |tool: &crate::observation::capability_source::RuntimeClientTool| tool
+                    .id
+                    .to_string()
             ),
             "capabilities.configured_tools" => list!(
                 &source.capabilities.configured_tools,
-                |tool: &super::snapshot::RuntimeClientTool| tool.id.to_string()
+                |tool: &crate::observation::capability_source::RuntimeClientTool| tool
+                    .id
+                    .to_string()
             ),
             "capabilities.available_tools" => list!(
                 &source.capabilities.available_tools,
-                |tool: &super::snapshot::RuntimeClientTool| tool.id.to_string()
+                |tool: &crate::observation::capability_source::RuntimeClientTool| tool
+                    .id
+                    .to_string()
             ),
             "capabilities.skills" => list!(
                 &source.capabilities.skills,
-                |skill: &super::snapshot::RuntimeClientSkill| skill.id.to_string()
+                |skill: &crate::observation::capability_source::RuntimeClientSkill| skill
+                    .id
+                    .to_string()
             ),
             "capabilities.sources" => list!(
                 &source.capabilities.sources,
-                |_: &super::snapshot::CapabilitySourceView| String::from("source")
+                |_: &crate::observation::capability_source::CapabilitySourceView| String::from(
+                    "source"
+                )
             ),
             "resources.context_files" => list!(
                 &source.resources.context_files,
-                |file: &super::snapshot::RuntimeClientContextFile| bounded_diagnostic(&file.path)
+                |file: &crate::observation::resource_source::RuntimeClientContextFile| {
+                    bounded_diagnostic(&file.path)
+                }
             ),
             "workflows.runs" => list!(
                 &source.workflows.runs,
@@ -1563,10 +1611,10 @@ pub(crate) struct ReadDomainCut {
 
 #[derive(Clone)]
 pub(crate) struct ReadDomainValues {
-    pub(crate) projection_head: Option<super::snapshot::RuntimeClientProjectionHeadView>,
-    pub(crate) transcript: super::snapshot::RuntimeClientTranscriptPage,
-    pub(crate) occupancy: Option<super::occupancy::RuntimeClientContextOccupancy>,
-    pub(crate) trace: super::trace::TracePage,
+    pub(crate) projection_head: Option<crate::observation::head::RuntimeClientProjectionHeadView>,
+    pub(crate) transcript: crate::observation::transcript::RuntimeClientTranscriptPage,
+    pub(crate) occupancy: Option<crate::observation::occupancy::RuntimeClientContextOccupancy>,
+    pub(crate) trace: crate::observation::trace::TracePage,
     pub(crate) trace_total: u64,
 }
 
@@ -1576,7 +1624,7 @@ fn projection_head_view(
     store: &dyn crate::durable::ConversationStore,
     through: u64,
 ) -> Result<
-    Option<super::snapshot::RuntimeClientProjectionHeadView>,
+    Option<crate::observation::head::RuntimeClientProjectionHeadView>,
     crate::durable::ConversationStoreError,
 > {
     store.observation_projection_head(through)
@@ -1584,7 +1632,7 @@ fn projection_head_view(
 
 pub(crate) fn checkpoint_view(
     checkpoint: crate::durable::projection::ProjectionCheckpoint,
-) -> super::snapshot::RuntimeClientProjectionHeadView {
+) -> crate::observation::head::RuntimeClientProjectionHeadView {
     let original_items = checkpoint
         .candidate
         .items
@@ -1611,7 +1659,7 @@ pub(crate) fn checkpoint_view(
                     crate::model::projected::ProjectedMessage::User { content, .. } => {
                         content.iter().find_map(|block| match block {
                             crate::message::types::UserContentBlock::Text(text) => {
-                                Some(super::trace::TraceText::detail(&text.text))
+                                Some(crate::observation::trace::TraceText::detail(&text.text))
                             }
                             _ => None,
                         })
@@ -1621,7 +1669,7 @@ pub(crate) fn checkpoint_view(
             }
             _ => None,
         });
-    super::snapshot::RuntimeClientProjectionHeadView {
+    crate::observation::head::RuntimeClientProjectionHeadView {
         checkpoint_id: checkpoint.candidate.checkpoint_id,
         activation_id: checkpoint.activation.activation,
         base_frontier: checkpoint.candidate.base_frontier,
@@ -1639,7 +1687,7 @@ pub(crate) fn checkpoint_view(
 impl ReadDomainCut {
     pub(crate) fn read(&self, store: &dyn crate::durable::ConversationStore) -> ReadDomains {
         let mut page = if let Some(cut) = &self.source_cut {
-            super::snapshot::transcript_header_view(store.transcript_header_page(
+            crate::observation::transcript::transcript_header_view(store.transcript_header_page(
                 cut,
                 None,
                 super::checkpoint::CHECKPOINT_NATIVE_HEAD_ITEMS,
@@ -1650,7 +1698,7 @@ impl ReadDomainCut {
             ));
         };
         super::response::decorate_through(store, &mut page, self.through)?;
-        let occupancy = super::occupancy::read(store, self.through)?;
+        let occupancy = crate::observation::occupancy::read(store, self.through)?;
         let trace_cut = self
             .source_cut
             .as_ref()
@@ -1747,14 +1795,18 @@ fn inline_label(value: &str) -> String {
 }
 
 fn inline_prefix(value: &str) -> String {
-    let mut end = value.len().min(super::checkpoint::CHECKPOINT_ITEM_BYTES);
+    let mut end = value
+        .len()
+        .min(crate::observation::bounded::CHECKPOINT_ITEM_BYTES);
     while !value.is_char_boundary(end) {
         end -= 1;
     }
     value[..end].to_owned()
 }
 fn append_inline_prefix(prefix: &mut String, suffix: &str) {
-    if suffix.len() <= super::checkpoint::CHECKPOINT_ITEM_BYTES.saturating_sub(prefix.len()) {
+    if suffix.len()
+        <= crate::observation::bounded::CHECKPOINT_ITEM_BYTES.saturating_sub(prefix.len())
+    {
         prefix.push_str(suffix);
     }
 }
@@ -1957,8 +2009,8 @@ fn initial_client_snapshot(
         messages: initial_messages,
         message_descriptors: Vec::new(),
         publication_settlements: Vec::new(),
-        transcript: super::snapshot::RuntimeClientTranscriptPage::default(),
-        trace: super::trace::TracePage::default(),
+        transcript: crate::observation::transcript::RuntimeClientTranscriptPage::default(),
+        trace: crate::observation::trace::TracePage::default(),
         trace_updates: Vec::new(),
         attempt: None,
         inbound: InboundDiagnostics {
@@ -1971,7 +2023,7 @@ fn initial_client_snapshot(
         statuses: Vec::new(),
         context: RuntimeClientContextView::default(),
         capabilities: initial_capabilities,
-        resources: super::snapshot::RuntimeClientResourcesView::default(),
+        resources: crate::observation::resource_source::RuntimeClientResourcesView::default(),
         model: initial_model,
         model_status: None,
         todos: None,
@@ -2047,7 +2099,7 @@ impl RuntimeClientProjection {
             cursor: RuntimeClientCursor::new(0),
             exhausted: false,
             trace_head: super::checkpoint::PreparedTraceHead::default(),
-            capability_head: super::capability_source::PreparedCapabilityHead::new(
+            capability_head: crate::observation::capability_source::PreparedCapabilityHead::new(
                 &initial_capabilities,
                 Vec::new(),
             ),
@@ -2147,8 +2199,9 @@ impl RuntimeClientProjection {
         self.journal_through = seed.journal_through;
         self.native_journal_highwater = seed.journal_through;
         self.read_through = seed.journal_through;
-        self.snapshot.transcript = super::snapshot::transcript_page_view(seed.transcript.clone())
-            .expect("runtime bootstrap transcript is valid");
+        self.snapshot.transcript =
+            crate::observation::transcript::transcript_page_view(seed.transcript.clone())
+                .expect("runtime bootstrap transcript is valid");
         self.bootstrap_transcript_through =
             seed.transcript.entries.last().map_or(0, |e| e.cursor.get());
         #[cfg(test)]
@@ -2308,22 +2361,22 @@ impl RuntimeClientProjection {
                 committed_result_deferred: false,
                 result_source: None,
                 result_metadata_ref: None,
-                occurrence: super::snapshot::RuntimeClientToolOccurrence {
-                    locator: super::content::CanonicalContentLocator::ByMessageId {
+                occurrence: crate::observation::tool::RuntimeClientToolOccurrence {
+                    locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
                         message_id: assistant.id.clone(),
                     },
                     block_index: ContentBlockIndex::new(
                         u32::try_from(index).expect("canonical block index"),
                     ),
                 },
-                message_id: super::snapshot::inline_message_id(&assistant.id),
+                message_id: crate::observation::tool::inline_message_id(&assistant.id),
                 block_index: ContentBlockIndex::new(
                     u32::try_from(index).expect("canonical block index"),
                 ),
-                call_id: super::snapshot::inline_call_id(&call.id),
+                call_id: crate::observation::tool::inline_call_id(&call.id),
                 metadata_ref: None,
                 assembly_complete: true,
-                tool_id: super::snapshot::inline_tool_id(&call.tool_id),
+                tool_id: crate::observation::tool::inline_tool_id(&call.tool_id),
                 name: inline_label(&call.name),
                 state: ForegroundToolState::Assembled {
                     arguments: String::new(),
@@ -2471,7 +2524,7 @@ impl RuntimeClientProjection {
             attempt.attempt_id.as_ref() == witness.attempt_id.as_ref()
                 && attempt.foreground.iter().any(|slot| {
                     slot.occurrence.locator
-                        == super::content::CanonicalContentLocator::ByLedgerPosition {
+                        == crate::observation::content::CanonicalContentLocator::ByLedgerPosition {
                             position: native.ledger_position,
                         }
                         && slot.occurrence.block_index == native.block_index
@@ -2707,18 +2760,19 @@ impl RuntimeClientProjection {
                 unreachable!("pending receipt has a finite source fold")
             }
             ConversationObservation::NativeToolResultCommit(tool) => {
-                let occurrence = super::snapshot::RuntimeClientToolOccurrence {
-                    locator: super::content::CanonicalContentLocator::ByLedgerPosition {
-                        position: tool.occurrence.ledger_position,
-                    },
+                let occurrence = crate::observation::tool::RuntimeClientToolOccurrence {
+                    locator:
+                        crate::observation::content::CanonicalContentLocator::ByLedgerPosition {
+                            position: tool.occurrence.ledger_position,
+                        },
                     block_index: tool.occurrence.block_index,
                 };
                 update_stored_tool_slots(&mut self.snapshot, &occurrence, |slot| {
                     let mut result = tool.result.clone();
-                    super::tool_observation::defer_result(&mut result);
+                    crate::observation::tool::defer_result(&mut result);
                     slot.committed_result = Some(result.clone());
                     slot.committed_result_deferred = tool.result_deferred
-                        || super::tool_observation::has_result_body(&tool.result);
+                        || crate::observation::tool::has_result_body(&tool.result);
                     slot.result_metadata_ref = Some(tool.metadata.clone());
                     if let ForegroundToolState::Settled {
                         result: settled, ..
@@ -2754,7 +2808,7 @@ impl RuntimeClientProjection {
                     occurrence: occurrence.clone(),
                     metadata: tool.metadata.clone(),
                     content: tool.content.iter().take(4).cloned().collect(),
-                    frontier: super::checkpoint::CollectionFrontier {
+                    frontier: crate::observation::cut::CollectionFrontier {
                         domain: format!("messages.ledger:{}.blocks", tool.result_ledger_position),
                         revision: 0,
                         total: tool.content_total,
@@ -2832,7 +2886,8 @@ impl RuntimeClientProjection {
                     .get(block.id())
                     .and_then(|(header, _)| header.display.clone())
                     .unwrap_or_else(|| {
-                        let mut capture = super::checkpoint::Capture::new(self.cursor.get());
+                        let mut capture =
+                            crate::observation::capture::Capture::new(self.cursor.get());
                         capture.message(&block, &self.snapshot.conversation_id, &[])
                     });
                 let mut events = Vec::with_capacity(2);
@@ -2868,8 +2923,8 @@ impl RuntimeClientProjection {
                             .as_ref()
                             .map(|(occurrence, _)| occurrence.clone()),
                         metadata_ref: settled_witness.and_then(|(_, reference)| reference),
-                        tool_call_id: super::snapshot::inline_call_id(&tool.tool_call_id),
-                        tool_id: super::snapshot::inline_tool_id(&tool.tool_id),
+                        tool_call_id: crate::observation::tool::inline_call_id(&tool.tool_call_id),
+                        tool_id: crate::observation::tool::inline_tool_id(&tool.tool_id),
                         result: tool.result.clone(),
                     });
                 }
@@ -2915,9 +2970,9 @@ impl RuntimeClientProjection {
                     if let Some(position) = header.ledger_position {
                         if let MessageBlock::Assistant(assistant) = &block {
                             self.canonical_foreground =
-                                Some(super::checkpoint::CanonicalForegroundReadCut {
+                                Some(crate::observation::cut::CanonicalForegroundReadCut {
                                     locator:
-                                        super::content::CanonicalContentLocator::ByLedgerPosition {
+                                        crate::observation::content::CanonicalContentLocator::ByLedgerPosition {
                                             position,
                                         },
                                     total: header.tool_call_count,
@@ -2934,7 +2989,7 @@ impl RuntimeClientProjection {
                                         ),
                                     ) = assistant.content.get(slot.block_index.get() as usize)
                                     {
-                                        self.native_tool_occurrences.insert(call.id.clone(),super::snapshot::RuntimeClientToolOccurrence {locator:super::content::CanonicalContentLocator::ByLedgerPosition {position},block_index:slot.block_index});
+                                        self.native_tool_occurrences.insert(call.id.clone(),crate::observation::tool::RuntimeClientToolOccurrence {locator:crate::observation::content::CanonicalContentLocator::ByLedgerPosition {position},block_index:slot.block_index});
                                     }
                                 }
                             }
@@ -2947,11 +3002,11 @@ impl RuntimeClientProjection {
                             {
                                 let previous_locator = slot.occurrence.locator.clone();
                                 slot.occurrence.locator =
-                                    super::content::CanonicalContentLocator::ByLedgerPosition {
+                                    crate::observation::content::CanonicalContentLocator::ByLedgerPosition {
                                         position,
                                     };
-                                slot.metadata_ref=self.content_metadata.get(&("canonical_block_metadata",format!("ledger:{position}"),slot.block_index.get(),super::content::ContentRepresentation::CanonicalJsonV1.key())).map(Arc::as_ref).cloned().or_else(||header.content.iter().find_map(|binding|match &binding.content_ref.source {
-                                    super::content::ContentSource::CanonicalMessageBlock {component:super::content::CanonicalContentComponent::BlockMetadata,block_index,..} if *block_index==slot.block_index=>Some(binding.content_ref.clone()),
+                                slot.metadata_ref=self.content_metadata.get(&("canonical_block_metadata",format!("ledger:{position}"),slot.block_index.get(),crate::observation::content::ContentRepresentation::CanonicalJsonV1.key())).map(Arc::as_ref).cloned().or_else(||header.content.iter().find_map(|binding|match &binding.content_ref.source {
+                                    crate::observation::content::ContentSource::CanonicalMessageBlock {component:crate::observation::content::CanonicalContentComponent::BlockMetadata,block_index,..} if *block_index==slot.block_index=>Some(binding.content_ref.clone()),
                                     _=>None,
                                 }));
                                 events.push(RuntimeClientEvent::ToolOccurrenceRebound {
@@ -2970,9 +3025,9 @@ impl RuntimeClientProjection {
                         .insert(block.id().clone(), header.content.clone());
                 }
 
-                let descriptor = header
-                    .as_ref()
-                    .and_then(super::snapshot::RuntimeClientMessageDescriptor::from_header);
+                let descriptor = header.as_ref().and_then(
+                    crate::observation::transcript::RuntimeClientMessageDescriptor::from_header,
+                );
                 let descriptor_only = header
                     .as_ref()
                     .is_some_and(|header| header.display.is_none());
@@ -3117,7 +3172,7 @@ impl RuntimeClientProjection {
                 self.snapshot.inbound.pending = self.prepared_pending.take().unwrap_or_else(|| {
                     items
                         .iter()
-                        .take(super::checkpoint::CHECKPOINT_PAGE_ITEMS)
+                        .take(crate::observation::bounded::CHECKPOINT_PAGE_ITEMS)
                         .map(inbound_item_view)
                         .collect()
                 });
@@ -3138,7 +3193,7 @@ impl RuntimeClientProjection {
                     self.snapshot
                         .inbound
                         .pending
-                        .truncate(super::checkpoint::CHECKPOINT_PAGE_ITEMS);
+                        .truncate(crate::observation::bounded::CHECKPOINT_PAGE_ITEMS);
                     vec![RuntimeClientEvent::InboundEnqueued {
                         sequence: item.sequence(),
                         message: view.message,
@@ -3196,8 +3251,9 @@ impl RuntimeClientProjection {
                     interaction: header,
                 }];
                 if let Some((audit, transcript_cursor)) = audit {
-                    let audit_view = super::snapshot::interaction_requested_view(audit)
-                        .expect("runtime interaction requested audit is valid");
+                    let audit_view =
+                        crate::observation::transcript::interaction_requested_view(audit)
+                            .expect("runtime interaction requested audit is valid");
                     let transcript_cursor = RuntimeClientTranscriptCursor::from(transcript_cursor);
                     events.push(RuntimeClientEvent::InteractionAuditRequested {
                         audit: Box::new(audit_view),
@@ -3220,8 +3276,9 @@ impl RuntimeClientProjection {
                 }];
                 if let Some(audit) = audit {
                     let (audit, transcript_cursor) = audit;
-                    let audit_view = super::snapshot::interaction_settled_view(audit)
-                        .expect("runtime interaction settled audit is valid");
+                    let audit_view =
+                        crate::observation::transcript::interaction_settled_view(audit)
+                            .expect("runtime interaction settled audit is valid");
                     let transcript_cursor = RuntimeClientTranscriptCursor::from(transcript_cursor);
                     events.push(RuntimeClientEvent::InteractionAuditSettled {
                         audit: Box::new(audit_view),
@@ -3295,8 +3352,8 @@ impl RuntimeClientProjection {
                     occurrence,
                     metadata_ref,
                     attempt_id,
-                    tool_call_id: super::snapshot::inline_call_id(&tool_call_id),
-                    tool_id: super::snapshot::inline_tool_id(&tool_id),
+                    tool_call_id: crate::observation::tool::inline_call_id(&tool_call_id),
+                    tool_id: crate::observation::tool::inline_tool_id(&tool_id),
                     execution_id: None,
                     progress,
                 }]
@@ -3419,7 +3476,7 @@ impl RuntimeClientProjection {
                 // sit at the first one holding the new capability
                 // generation beside the retired resource generation.
                 // Adjacent is not atomic; one event is.
-                self.install_source_frontiers(vec![super::checkpoint::CollectionFrontier {
+                self.install_source_frontiers(vec![crate::observation::cut::CollectionFrontier {
                     domain: "model_catalog.models".into(),
                     revision: 0,
                     total: model.catalog_source().model_count() as u64,
@@ -3467,7 +3524,7 @@ impl RuntimeClientProjection {
                 {
                     self.foreground_content.clear();
                 }
-                self.install_source_frontiers(vec![super::checkpoint::CollectionFrontier {
+                self.install_source_frontiers(vec![crate::observation::cut::CollectionFrontier {
                     domain: "attempt.model".into(),
                     revision: 0,
                     total: 1,
@@ -3616,7 +3673,7 @@ impl RuntimeClientProjection {
                     *block_index,
                     suffix,
                     "text",
-                    super::content::ContentRepresentation::Utf8Text,
+                    crate::observation::content::ContentRepresentation::Utf8Text,
                 )]
             }
             PublicationPayload::ReasoningSuffix {
@@ -3631,7 +3688,7 @@ impl RuntimeClientProjection {
                     *block_index,
                     suffix,
                     "reasoning",
-                    super::content::ContentRepresentation::Utf8Text,
+                    crate::observation::content::ContentRepresentation::Utf8Text,
                 )]
             }
             PublicationPayload::RefusalSuffix {
@@ -3646,7 +3703,7 @@ impl RuntimeClientProjection {
                     *block_index,
                     suffix,
                     "refusal",
-                    super::content::ContentRepresentation::Utf8Text,
+                    crate::observation::content::ContentRepresentation::Utf8Text,
                 )]
             }
             PublicationPayload::ProposedToolCallStarted { block_index, call } => {
@@ -3664,7 +3721,7 @@ impl RuntimeClientProjection {
                     *block_index,
                     suffix,
                     "tool_call_arguments",
-                    super::content::ContentRepresentation::RawJsonUtf8,
+                    crate::observation::content::ContentRepresentation::RawJsonUtf8,
                 )]
             }
             PublicationPayload::ProposedToolCallCompleted { block_index, call } => {
@@ -3688,7 +3745,7 @@ impl RuntimeClientProjection {
             attempt_id,
             frame,
             block_index,
-            super::content::PublicationContentComponent::BlockMetadata,
+            crate::observation::content::PublicationContentComponent::BlockMetadata,
         );
         self.ensure_attempt(attempt_id);
         let attempt = self.snapshot.attempt.as_mut().expect("attempt view exists");
@@ -3700,18 +3757,18 @@ impl RuntimeClientProjection {
                 committed_result_deferred: false,
                 result_source: None,
                 result_metadata_ref: None,
-                occurrence: super::snapshot::RuntimeClientToolOccurrence {
-                    locator: super::content::CanonicalContentLocator::ByMessageId {
+                occurrence: crate::observation::tool::RuntimeClientToolOccurrence {
+                    locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
                         message_id: message_id.clone(),
                     },
                     block_index,
                 },
                 message_id: Some(message_id.clone()),
                 block_index,
-                call_id: super::snapshot::inline_call_id(&call.id),
+                call_id: crate::observation::tool::inline_call_id(&call.id),
                 metadata_ref: metadata_ref.clone(),
                 assembly_complete: false,
-                tool_id: super::snapshot::inline_tool_id(&call.tool_id),
+                tool_id: crate::observation::tool::inline_tool_id(&call.tool_id),
                 name: inline_label(&call.name),
                 state: ForegroundToolState::Assembled {
                     arguments: String::new(),
@@ -3723,9 +3780,9 @@ impl RuntimeClientProjection {
                 &mut attempt.in_flight,
                 InFlightBlock::ToolCall {
                     block_index,
-                    call_id: super::snapshot::inline_call_id(&call.id),
+                    call_id: crate::observation::tool::inline_call_id(&call.id),
                     metadata_ref: metadata_ref.clone(),
-                    tool_id: super::snapshot::inline_tool_id(&call.tool_id),
+                    tool_id: crate::observation::tool::inline_tool_id(&call.tool_id),
                     name: inline_label(&call.name),
                     arguments: String::new(),
                 },
@@ -3740,8 +3797,8 @@ impl RuntimeClientProjection {
             message_id,
             block_index,
             call: super::snapshot::RuntimeClientToolCall {
-                id: super::snapshot::inline_call_id(&call.id),
-                tool_id: super::snapshot::inline_tool_id(&call.tool_id),
+                id: crate::observation::tool::inline_call_id(&call.id),
+                tool_id: crate::observation::tool::inline_tool_id(&call.tool_id),
                 name: inline_label(&call.name),
                 arguments: None,
                 metadata_ref,
@@ -3761,13 +3818,13 @@ impl RuntimeClientProjection {
             attempt_id,
             frame,
             block_index,
-            super::content::PublicationContentComponent::Payload,
+            crate::observation::content::PublicationContentComponent::Payload,
         );
         let metadata_ref = self.observed_structural_content(
             attempt_id,
             frame,
             block_index,
-            super::content::PublicationContentComponent::BlockMetadata,
+            crate::observation::content::PublicationContentComponent::BlockMetadata,
         );
         let arguments_json = self.live_arguments_prefix(frame, block_index);
         let arguments_ref = self
@@ -3775,7 +3832,7 @@ impl RuntimeClientProjection {
             .get(&(
                 frame.stream_id.clone(),
                 block_index,
-                super::content::ContentRepresentation::RawJsonUtf8.key(),
+                crate::observation::content::ContentRepresentation::RawJsonUtf8.key(),
                 "live",
             ))
             .cloned();
@@ -3805,12 +3862,13 @@ impl RuntimeClientProjection {
             message_id,
             block_index,
             call: super::snapshot::RuntimeClientToolCall {
-                id: super::snapshot::inline_call_id(&call.id),
-                tool_id: super::snapshot::inline_tool_id(&call.tool_id),
+                id: crate::observation::tool::inline_call_id(&call.id),
+                tool_id: crate::observation::tool::inline_tool_id(&call.tool_id),
                 name: inline_label(&call.name),
-                arguments: super::checkpoint::bounded_json_value(&call.arguments, 1024).filter(
-                    |value| !value.is_null() || canonical_length.is_none_or(|length| length == 4),
-                ),
+                arguments: crate::observation::bounded::bounded_json_value(&call.arguments, 1024)
+                    .filter(|value| {
+                        !value.is_null() || canonical_length.is_none_or(|length| length == 4)
+                    }),
                 metadata_ref,
             },
         }]
@@ -3866,11 +3924,11 @@ impl RuntimeClientProjection {
         self.live_block_ordinal = receipt.block_ordinal;
         self.live_tool_ordinal = receipt.tool_ordinal;
     }
-    fn current_live_cut(&self) -> Option<super::checkpoint::LivePublicationReadCut> {
+    fn current_live_cut(&self) -> Option<crate::observation::cut::LivePublicationReadCut> {
         let start = self.publication_start.as_ref()?;
-        Some(super::checkpoint::LivePublicationReadCut {
-            source: super::content::ContentSource::LivePublicationPrefix {
-                component: super::content::PublicationContentComponent::Payload,
+        Some(crate::observation::cut::LivePublicationReadCut {
+            source: crate::observation::content::ContentSource::LivePublicationPrefix {
+                component: crate::observation::content::PublicationContentComponent::Payload,
                 stream_id: start.stream_id.clone(),
                 message_id: start.message_id.clone(),
                 attempt_id: start.attempt_id.clone(),
@@ -3895,8 +3953,8 @@ impl RuntimeClientProjection {
         attempt: &AttemptId,
         frame: &PublicationFrame,
         block_index: ContentBlockIndex,
-        component: super::content::PublicationContentComponent,
-    ) -> Option<super::content::ContentRef> {
+        component: crate::observation::content::PublicationContentComponent,
+    ) -> Option<crate::observation::content::ContentRef> {
         let index = self
             .prepared_publication_content
             .iter()
@@ -3909,9 +3967,9 @@ impl RuntimeClientProjection {
             })?;
         let evidence = self.prepared_publication_content.remove(index);
         let start = self.publication_start.as_ref()?;
-        let reference = super::content::ContentRef {
+        let reference = crate::observation::content::ContentRef {
             conversation_id: self.snapshot.conversation_id.clone(),
-            source: super::content::ContentSource::LivePublicationPrefix {
+            source: crate::observation::content::ContentSource::LivePublicationPrefix {
                 component,
                 stream_id: frame.stream_id.clone(),
                 message_id: frame.message_id.clone(),
@@ -3947,7 +4005,7 @@ impl RuntimeClientProjection {
         block_index: ContentBlockIndex,
         suffix: &str,
         kind: &str,
-        representation: super::content::ContentRepresentation,
+        representation: crate::observation::content::ContentRepresentation,
     ) -> RuntimeClientEvent {
         let start = self
             .publication_start
@@ -3998,10 +4056,10 @@ impl RuntimeClientProjection {
         let suffix_bytes = end_length
             .checked_sub(base_length)
             .expect("publication suffix range");
-        let content_ref = super::content::ContentRef {
+        let content_ref = crate::observation::content::ContentRef {
             conversation_id: self.snapshot.conversation_id.clone(),
-            source: super::content::ContentSource::LivePublicationPrefix {
-                component: crate::runtime_client::content::PublicationContentComponent::Payload,
+            source: crate::observation::content::ContentSource::LivePublicationPrefix {
+                component: crate::observation::content::PublicationContentComponent::Payload,
                 stream_id: frame.stream_id.clone(),
                 message_id: frame.message_id.clone(),
                 attempt_id: attempt_id.clone(),
@@ -4035,7 +4093,7 @@ impl RuntimeClientProjection {
             end_length,
             content_revision: content_ref.content_revision,
             inline_delta: (suffix_bytes == suffix.len() as u64
-                && suffix.len() <= super::checkpoint::CHECKPOINT_ITEM_BYTES)
+                && suffix.len() <= crate::observation::bounded::CHECKPOINT_ITEM_BYTES)
                 .then(|| suffix.to_owned()),
             content_ref,
         }
@@ -4101,7 +4159,7 @@ impl RuntimeClientProjection {
                     .fields
                     .iter()
                     .find(|entry| entry.path == ["event", field])
-                    .map(|entry| super::snapshot::JournalFieldRef {
+                    .map(|entry| crate::observation::tool::JournalFieldRef {
                         sequence: witness.sequence,
                         path: entry.path.clone(),
                         encoded_bytes: entry.encoded_bytes,
@@ -4115,20 +4173,19 @@ impl RuntimeClientProjection {
                     batch
                         .failure_sequence
                         .filter(|_| batch.failure_deferred && batch.failure_readable_end > 0)
-                        .map(|sequence| super::snapshot::JournalFieldRef {
+                        .map(|sequence| crate::observation::tool::JournalFieldRef {
                             sequence,
                             path: vec!["normalized_failure".into()],
                             encoded_bytes: batch.failure_readable_end,
                         }),
                     batch.finish_reason_deferred,
-                    batch
-                        .finish_reason
-                        .as_ref()
-                        .map(|source| super::snapshot::JournalFieldRef {
+                    batch.finish_reason.as_ref().map(|source| {
+                        crate::observation::tool::JournalFieldRef {
                             sequence: source.sequence,
                             path: source.path.clone(),
                             encoded_bytes: source.encoded_bytes,
-                        }),
+                        }
+                    }),
                 ),
             );
             observations.push(ConversationObservation::JournalFact(witness.clone()));
@@ -4270,7 +4327,7 @@ impl RuntimeClientProjection {
         &mut self,
         sequence: u64,
         failure: Option<RuntimeClientAttemptFailure>,
-        result: Option<super::snapshot::JournalFieldRef>,
+        result: Option<crate::observation::tool::JournalFieldRef>,
     ) {
         self.prepared_journal.insert(sequence, (failure, result));
     }
@@ -4309,7 +4366,8 @@ impl RuntimeClientProjection {
             return Vec::new();
         }
         let Some(attempt) = witness.attempt_id.as_ref() else {
-            if let Ok(event) = super::structural_json::decode::<RuntimeEvent>(witness.value)
+            if let Ok(event) =
+                crate::observation::structural_json::decode::<RuntimeEvent>(witness.value)
                 && matches!(
                     event,
                     RuntimeEvent::CompactionStarted { .. }
@@ -4340,7 +4398,9 @@ impl RuntimeClientProjection {
         ) {
             return self.fold_tool_witness(attempt, &witness, prepared.1);
         }
-        if let Ok(event) = super::structural_json::decode::<RuntimeEvent>(witness.value) {
+        if let Ok(event) =
+            crate::observation::structural_json::decode::<RuntimeEvent>(witness.value)
+        {
             if matches!(
                 event,
                 RuntimeEvent::CompactionStarted { .. }
@@ -4368,7 +4428,7 @@ impl RuntimeClientProjection {
     fn start_tool_witness(
         &mut self,
         attempt: &AttemptId,
-        occurrence: Option<&super::snapshot::RuntimeClientToolOccurrence>,
+        occurrence: Option<&crate::observation::tool::RuntimeClientToolOccurrence>,
     ) {
         if let Some(occurrence) = occurrence {
             update_stored_tool_slots(&mut self.snapshot, occurrence, |slot| {
@@ -4404,7 +4464,7 @@ impl RuntimeClientProjection {
         &mut self,
         attempt: &AttemptId,
         witness: &crate::durable::observation::ObservationEventWitness,
-        source: Option<super::snapshot::JournalFieldRef>,
+        source: Option<crate::observation::tool::JournalFieldRef>,
     ) -> Vec<RuntimeClientEvent> {
         let value = &witness.value;
         let tool_call_id = value
@@ -4429,7 +4489,7 @@ impl RuntimeClientProjection {
                 tool_id,
             }];
         }
-        let Some(mut result) = tool_witness_result(witness) else {
+        let Some(mut result) = crate::observation::tool::tool_witness_result(witness) else {
             return Vec::new();
         };
         let mut result_metadata_ref = None;
@@ -4473,7 +4533,7 @@ impl RuntimeClientProjection {
                     settled.workflow.clone_from(&committed.workflow);
                     settled.managed_output.clone_from(&committed.managed_output);
                 }
-                super::tool_observation::defer_result(&mut settled);
+                crate::observation::tool::defer_result(&mut settled);
                 slot.state = ForegroundToolState::Settled {
                     arguments: arguments_of(&slot.state),
                     result: settled,
@@ -4639,8 +4699,8 @@ impl RuntimeClientProjection {
                     attempt_id: attempt_id.clone(),
                     occurrence: self.tool_display_occurrence(),
                     metadata_ref: self.tool_display_metadata(),
-                    tool_call_id: super::snapshot::inline_call_id(tool_call_id),
-                    tool_id: super::snapshot::inline_tool_id(tool_id),
+                    tool_call_id: crate::observation::tool::inline_call_id(tool_call_id),
+                    tool_id: crate::observation::tool::inline_tool_id(tool_id),
                 }]
             }
             RuntimeEvent::ToolExecutionProgress {
@@ -4670,8 +4730,8 @@ impl RuntimeClientProjection {
                     attempt_id: attempt_id.clone(),
                     occurrence: self.tool_display_occurrence(),
                     metadata_ref: self.tool_display_metadata(),
-                    tool_call_id: super::snapshot::inline_call_id(tool_call_id),
-                    tool_id: super::snapshot::inline_tool_id(tool_id),
+                    tool_call_id: crate::observation::tool::inline_call_id(tool_call_id),
+                    tool_id: crate::observation::tool::inline_tool_id(tool_id),
                     execution_id: execution_id.clone(),
                     progress: progress.clone(),
                 }]
@@ -4702,8 +4762,8 @@ impl RuntimeClientProjection {
                     attempt_id: attempt_id.clone(),
                     occurrence: self.tool_display_occurrence(),
                     metadata_ref: self.tool_display_metadata(),
-                    tool_call_id: super::snapshot::inline_call_id(tool_call_id),
-                    tool_id: super::snapshot::inline_tool_id(tool_id),
+                    tool_call_id: crate::observation::tool::inline_call_id(tool_call_id),
+                    tool_id: crate::observation::tool::inline_tool_id(tool_id),
                     result: result.clone(),
                 }]
             }
@@ -4736,8 +4796,8 @@ impl RuntimeClientProjection {
                     attempt_id: attempt_id.clone(),
                     occurrence: self.tool_display_occurrence(),
                     metadata_ref: self.tool_display_metadata(),
-                    tool_call_id: super::snapshot::inline_call_id(tool_call_id),
-                    tool_id: super::snapshot::inline_tool_id(tool_id),
+                    tool_call_id: crate::observation::tool::inline_call_id(tool_call_id),
+                    tool_id: crate::observation::tool::inline_tool_id(tool_id),
                     result,
                 }]
             }
@@ -4794,16 +4854,18 @@ impl RuntimeClientProjection {
         }
     }
 
-    fn tool_display_occurrence(&self) -> Option<super::snapshot::RuntimeClientToolOccurrence> {
+    fn tool_display_occurrence(
+        &self,
+    ) -> Option<crate::observation::tool::RuntimeClientToolOccurrence> {
         let native = self.tool_occurrence.as_ref()?;
-        Some(super::snapshot::RuntimeClientToolOccurrence {
-            locator: super::content::CanonicalContentLocator::ByLedgerPosition {
+        Some(crate::observation::tool::RuntimeClientToolOccurrence {
+            locator: crate::observation::content::CanonicalContentLocator::ByLedgerPosition {
                 position: native.ledger_position,
             },
             block_index: native.block_index,
         })
     }
-    fn tool_display_metadata(&self) -> Option<super::content::ContentRef> {
+    fn tool_display_metadata(&self) -> Option<crate::observation::content::ContentRef> {
         let occurrence = self.tool_display_occurrence()?;
         self.snapshot
             .attempt
@@ -4861,7 +4923,9 @@ impl RuntimeClientProjection {
                 occupancy
                     .as_ref()
                     .map(|value| {
-                        super::occupancy::RuntimeClientContextOccupancy::from_native(value, None)
+                        crate::observation::occupancy::RuntimeClientContextOccupancy::from_native(
+                            value, None,
+                        )
                     })
                     .as_ref(),
             ),
@@ -4885,7 +4949,7 @@ impl RuntimeClientProjection {
         &mut self,
         attempt_id: Option<&AttemptId>,
         compaction: &RuntimeClientCompactionView,
-        occupancy: Option<&super::occupancy::RuntimeClientContextOccupancy>,
+        occupancy: Option<&crate::observation::occupancy::RuntimeClientContextOccupancy>,
     ) -> Vec<RuntimeClientEvent> {
         self.snapshot.context.compaction_in_progress = false;
         self.snapshot.context.occupancy = occupancy.cloned();
@@ -4980,7 +5044,7 @@ impl RuntimeClientProjection {
         self.snapshot.todos = Some(todos.snapshot.clone());
         self.source_frontiers.insert(
             "todos.tasks".into(),
-            super::checkpoint::CollectionFrontier {
+            crate::observation::cut::CollectionFrontier {
                 domain: "todos.tasks".into(),
                 revision: todos.source_ledger_position,
                 total: todos.total,
@@ -5072,7 +5136,7 @@ impl RuntimeClientProjection {
 
     fn retain_descriptor_execution(
         &self,
-        descriptor: &mut super::snapshot::RuntimeClientMessageDescriptor,
+        descriptor: &mut crate::observation::transcript::RuntimeClientMessageDescriptor,
     ) {
         if let Some(existing) = self
             .snapshot
@@ -5095,7 +5159,7 @@ impl RuntimeClientProjection {
     fn canonical_header_unchanged(
         &self,
         header: &crate::durable::observation::MessageHeader,
-        descriptor: &super::snapshot::RuntimeClientMessageDescriptor,
+        descriptor: &crate::observation::transcript::RuntimeClientMessageDescriptor,
     ) -> bool {
         self.snapshot
             .message_descriptors
@@ -5119,7 +5183,7 @@ impl RuntimeClientProjection {
 
     fn install_canonical_descriptor(
         &mut self,
-        descriptor: &super::snapshot::RuntimeClientMessageDescriptor,
+        descriptor: &crate::observation::transcript::RuntimeClientMessageDescriptor,
     ) -> Option<MessageId> {
         if let Some(existing) = self
             .snapshot
@@ -5159,7 +5223,7 @@ impl RuntimeClientProjection {
     ) -> Vec<RuntimeClientEvent> {
         let mut events = Vec::new();
         let Some(mut descriptor) =
-            super::snapshot::RuntimeClientMessageDescriptor::from_header(&header)
+            crate::observation::transcript::RuntimeClientMessageDescriptor::from_header(&header)
         else {
             return events;
         };
@@ -5225,10 +5289,11 @@ impl RuntimeClientProjection {
     ) {
         if header.role == "assistant" {
             if let Some(locator) = header.locator.clone() {
-                self.canonical_foreground = Some(super::checkpoint::CanonicalForegroundReadCut {
-                    locator: locator.clone(),
-                    total: header.tool_call_count,
-                });
+                self.canonical_foreground =
+                    Some(crate::observation::cut::CanonicalForegroundReadCut {
+                        locator: locator.clone(),
+                        total: header.tool_call_count,
+                    });
             }
             if let Some(attempt) = self.snapshot.attempt.as_mut() {
                 for slot in &mut attempt.foreground {
@@ -5252,8 +5317,8 @@ impl RuntimeClientProjection {
                         .content
                         .iter()
                         .find_map(|binding| match &binding.content_ref.source {
-                            super::content::ContentSource::CanonicalMessageBlock {
-                                component: super::content::CanonicalContentComponent::BlockMetadata,
+                            crate::observation::content::ContentSource::CanonicalMessageBlock {
+                                component: crate::observation::content::CanonicalContentComponent::BlockMetadata,
                                 block_index,
                                 ..
                             } if *block_index == slot.block_index => {
@@ -5267,7 +5332,7 @@ impl RuntimeClientProjection {
                                     "canonical_block_metadata",
                                     locator.key().into_owned(),
                                     slot.block_index.get(),
-                                    super::content::ContentRepresentation::CanonicalJsonV1.key(),
+                                    crate::observation::content::ContentRepresentation::CanonicalJsonV1.key(),
                                 ))
                                 .map(Arc::as_ref)
                                 .cloned()
@@ -5351,11 +5416,12 @@ impl RuntimeClientProjection {
                 && summary.turn_id.as_ref() == Some(&start.turn_id)
                 && start.attempt_id == attempt_id
         });
-        let settlement_record = super::snapshot::RuntimeClientPublicationSettlementRecord {
-            settlement: receipt.summary.clone().into(),
-            transcript_cursor: receipt.transcript_cursor.into(),
-            read_cut: receipt.read_cut.clone(),
-        };
+        let settlement_record =
+            crate::observation::transcript::RuntimeClientPublicationSettlementRecord {
+                settlement: receipt.summary.clone().into(),
+                transcript_cursor: receipt.transcript_cursor.into(),
+                read_cut: receipt.read_cut.clone(),
+            };
         self.snapshot
             .publication_settlements
             .retain(|record| record.transcript_cursor != settlement_record.transcript_cursor);
@@ -5388,8 +5454,9 @@ impl RuntimeClientProjection {
             }
         }
         let audit = receipt.header.display.map(|entry| {
-            let super::snapshot::RuntimeClientTranscriptItem::PublicationAudit { audit } =
-                entry.item
+            let crate::observation::transcript::RuntimeClientTranscriptItem::PublicationAudit {
+                audit,
+            } = entry.item
             else {
                 unreachable!("native audit receipt source")
             };
@@ -5432,7 +5499,7 @@ impl RuntimeClientProjection {
                 self.live_frontiers.get(&(
                     start.stream_id.clone(),
                     block_index,
-                    super::content::ContentRepresentation::Utf8Text.key(),
+                    crate::observation::content::ContentRepresentation::Utf8Text.key(),
                     "live",
                 ))
             })
@@ -5489,7 +5556,7 @@ impl RuntimeClientProjection {
                 self.live_frontiers.get(&(
                     start.stream_id.clone(),
                     block_index,
-                    super::content::ContentRepresentation::RawJsonUtf8.key(),
+                    crate::observation::content::ContentRepresentation::RawJsonUtf8.key(),
                     "live",
                 ))
             })
@@ -5613,13 +5680,13 @@ impl RuntimeClientProjection {
                 continue;
             };
             let reason = match pending.kind {
-                super::snapshot::RuntimeClientInteractionKind::Review => {
+                crate::observation::interaction::RuntimeClientInteractionKind::Review => {
                     crate::runtime::workflow::read_model::WorkflowWait::Review
                 }
-                super::snapshot::RuntimeClientInteractionKind::Approval => {
+                crate::observation::interaction::RuntimeClientInteractionKind::Approval => {
                     crate::runtime::workflow::read_model::WorkflowWait::Approval
                 }
-                super::snapshot::RuntimeClientInteractionKind::Questionnaire => {
+                crate::observation::interaction::RuntimeClientInteractionKind::Questionnaire => {
                     crate::runtime::workflow::read_model::WorkflowWait::Questionnaire
                 }
             };
@@ -5862,13 +5929,14 @@ impl RuntimeClientProjection {
     fn fixture_batch_event(&mut self, event: RuntimeClientEvent) -> Option<RuntimeClientEvent> {
         if let Some((events, bytes, overflow)) = &mut self.batch_events {
             if !*overflow {
-                let encoded = super::checkpoint::bounded_bytes(
+                let encoded = crate::observation::bounded::bounded_bytes(
                     &event,
-                    super::checkpoint::CHECKPOINT_TARGET_BYTES / 2,
+                    crate::observation::bounded::CHECKPOINT_TARGET_BYTES / 2,
                 );
                 if let Some(encoded) = encoded
-                    && events.len() < super::checkpoint::CHECKPOINT_PAGE_ITEMS
-                    && *bytes + encoded.len() <= super::checkpoint::CHECKPOINT_TARGET_BYTES / 2
+                    && events.len() < crate::observation::bounded::CHECKPOINT_PAGE_ITEMS
+                    && *bytes + encoded.len()
+                        <= crate::observation::bounded::CHECKPOINT_TARGET_BYTES / 2
                 {
                     *bytes += encoded.len();
                     match event {
@@ -5937,9 +6005,9 @@ impl RuntimeClientProjection {
         stamp_trace_cut(&mut self.snapshot.trace, &cut);
         let mut event = event;
         stamp_event_trace_cut(&mut event, &cut);
-        let mut event = if super::checkpoint::bounded_bytes(
+        let mut event = if crate::observation::bounded::bounded_bytes(
             &event,
-            super::checkpoint::CHECKPOINT_TARGET_BYTES / 2,
+            crate::observation::bounded::CHECKPOINT_TARGET_BYTES / 2,
         )
         .is_some()
         {
@@ -5969,34 +6037,34 @@ impl RuntimeClientProjection {
                 metadata,
             },
         };
-        let event =
-            if super::checkpoint::bounded_bytes(&event, super::checkpoint::CHECKPOINT_TARGET_BYTES)
-                .is_some()
-            {
-                event
-            } else {
-                let transition = event_kind(&event).to_owned();
-                let Ok(mut checkpoint) = self.checkpoint_candidate() else {
-                    self.mark_observation_unavailable(
-                        "native display replacement unavailable".into(),
-                    );
-                    return;
-                };
-                checkpoint.cursor = RuntimeClientCursor::new(next_value);
-                checkpoint.read_cut.revision = next_value;
-                let mut metadata = self.projection_metadata();
-                metadata.read_cut.revision = next_value;
-                // The complete transition carries this evidence once, in its metadata.
-                checkpoint.content.clear();
-                checkpoint.collections.clear();
-                RuntimeClientEvent::ProjectionTransition {
-                    events: vec![RuntimeClientEvent::CheckpointAdvanced {
-                        transition,
-                        checkpoint: Box::new(checkpoint),
-                    }],
-                    metadata,
-                }
+        let event = if crate::observation::bounded::bounded_bytes(
+            &event,
+            crate::observation::bounded::CHECKPOINT_TARGET_BYTES,
+        )
+        .is_some()
+        {
+            event
+        } else {
+            let transition = event_kind(&event).to_owned();
+            let Ok(mut checkpoint) = self.checkpoint_candidate() else {
+                self.mark_observation_unavailable("native display replacement unavailable".into());
+                return;
             };
+            checkpoint.cursor = RuntimeClientCursor::new(next_value);
+            checkpoint.read_cut.revision = next_value;
+            let mut metadata = self.projection_metadata();
+            metadata.read_cut.revision = next_value;
+            // The complete transition carries this evidence once, in its metadata.
+            checkpoint.content.clear();
+            checkpoint.collections.clear();
+            RuntimeClientEvent::ProjectionTransition {
+                events: vec![RuntimeClientEvent::CheckpointAdvanced {
+                    transition,
+                    checkpoint: Box::new(checkpoint),
+                }],
+                metadata,
+            }
+        };
         self.cursor = RuntimeClientCursor::new(next_value);
         // Count without allocating a second serialized copy. Stop at one byte
         // beyond the ring budget: such an entry is unserviceable and evicts the
@@ -6008,7 +6076,7 @@ impl RuntimeClientProjection {
 
     fn retained_event_cut(
         event: &RuntimeClientEvent,
-    ) -> Option<&super::checkpoint::CheckpointReadCut> {
+    ) -> Option<&crate::observation::cut::CheckpointReadCut> {
         match event {
             RuntimeClientEvent::ProjectionTransition { metadata, .. } => Some(&metadata.read_cut),
             RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } => Some(&checkpoint.read_cut),
@@ -6044,7 +6112,7 @@ impl RuntimeClientProjection {
             if self.replay_cut_cursors.get(&cut.revision) == Some(&RuntimeClientCursor::new(0)) {
                 self.replay_cut_cursors.remove(&cut.revision);
             }
-            self.replay_bytes -= super::checkpoint::CHECKPOINT_TARGET_BYTES;
+            self.replay_bytes -= crate::observation::bounded::CHECKPOINT_TARGET_BYTES;
         }
     }
 
@@ -6100,7 +6168,7 @@ impl RuntimeClientProjection {
             // Reserve the complete bounded checkpoint allowance for its cut metadata.
             // Immutable source handles already belong to the charged published workset;
             // unchanged owner revisions permit reuse, while changed owners still expire.
-            self.replay_bytes += super::checkpoint::CHECKPOINT_TARGET_BYTES;
+            self.replay_bytes += crate::observation::bounded::CHECKPOINT_TARGET_BYTES;
         }
         self.published_seed = Some(seed);
         self.published_sources = Some(self.domain_sources.clone());
@@ -6140,14 +6208,14 @@ impl RuntimeClientProjection {
         self.checkpoint_seed().checkpoint_candidate()
     }
 
-    pub(crate) fn checkpoint_read_cut(&self) -> super::checkpoint::CheckpointReadCut {
+    pub(crate) fn checkpoint_read_cut(&self) -> crate::observation::cut::CheckpointReadCut {
         self.published_seed
             .as_ref()
             .map_or_else(|| self.working_read_cut(), |seed| seed.read_cut.clone())
     }
 
-    fn working_read_cut(&self) -> super::checkpoint::CheckpointReadCut {
-        super::checkpoint::CheckpointReadCut {
+    fn working_read_cut(&self) -> crate::observation::cut::CheckpointReadCut {
+        crate::observation::cut::CheckpointReadCut {
             canonical_foreground: self.canonical_foreground.clone(),
             live_publication: self.current_live_cut(),
             conversation_id: self.snapshot.conversation_id.clone(),
@@ -6175,9 +6243,12 @@ impl RuntimeClientProjection {
         }
     }
 
-    pub(crate) fn install_content_metadata(&mut self, references: Vec<super::content::ContentRef>) {
+    pub(crate) fn install_content_metadata(
+        &mut self,
+        references: Vec<crate::observation::content::ContentRef>,
+    ) {
         for reference in references {
-            if let super::content::ContentSource::CanonicalMessageBlock {
+            if let crate::observation::content::ContentSource::CanonicalMessageBlock {
                 component,
                 locator,
                 block_index,
@@ -6203,7 +6274,7 @@ impl RuntimeClientProjection {
                         .snapshot
                         .messages
                         .iter()
-                        .take(super::checkpoint::CHECKPOINT_PAGE_ITEMS)
+                        .take(crate::observation::bounded::CHECKPOINT_PAGE_ITEMS)
                         .any(|block| block.id().as_str() == message)
                 })
                 .cloned();
@@ -6245,14 +6316,15 @@ impl RuntimeClientProjection {
         self.snapshot.message_descriptors = messages
             .headers
             .iter()
-            .filter_map(super::snapshot::RuntimeClientMessageDescriptor::from_header)
+            .filter_map(crate::observation::transcript::RuntimeClientMessageDescriptor::from_header)
             .collect();
         self.snapshot.messages = messages
             .headers
             .iter()
             .filter_map(|header| header.display.clone())
             .collect();
-        self.snapshot.transcript = super::snapshot::transcript_header_view(transcript);
+        self.snapshot.transcript =
+            crate::observation::transcript::transcript_header_view(transcript);
         self.snapshot.publication_settlements = store
             .publication_settlement_head(&cut)
             .map_err(RuntimeClientError::observation_store_error)?;
@@ -6418,7 +6490,7 @@ impl RuntimeClientProjection {
         let loaded = self.snapshot.inbound.pending.len() as u64;
         self.source_frontiers.insert(
             "inbound.pending".into(),
-            super::checkpoint::CollectionFrontier {
+            crate::observation::cut::CollectionFrontier {
                 domain: "inbound.pending".into(),
                 revision: self.read_revision,
                 total: receipt.total,
@@ -6669,7 +6741,7 @@ impl RuntimeClientProjection {
     }
     pub(crate) fn current_capability_source(
         &self,
-    ) -> Option<super::capability_source::CapabilityReadSource> {
+    ) -> Option<crate::observation::capability_source::CapabilityReadSource> {
         self.domain_sources
             .get("capabilities")
             .and_then(|(source, _, _)| match source.as_ref() {
@@ -6689,13 +6761,13 @@ impl RuntimeClientProjection {
     }
     pub(crate) fn install_resource_header(
         &mut self,
-        header: super::snapshot::RuntimeClientResourcesView,
+        header: crate::observation::resource_source::RuntimeClientResourcesView,
     ) {
         self.snapshot.resources = header;
     }
     pub(crate) fn install_source_frontiers(
         &mut self,
-        frontiers: Vec<super::checkpoint::CollectionFrontier>,
+        frontiers: Vec<crate::observation::cut::CollectionFrontier>,
     ) {
         for frontier in frontiers {
             assert!(
@@ -6719,7 +6791,7 @@ impl RuntimeClientProjection {
         }
     }
     fn install_model_frontier(&mut self, inline: bool) {
-        self.install_source_frontiers(vec![super::checkpoint::CollectionFrontier {
+        self.install_source_frontiers(vec![crate::observation::cut::CollectionFrontier {
             domain: "model".into(),
             revision: 0,
             total: 1,
@@ -6729,7 +6801,7 @@ impl RuntimeClientProjection {
     }
     pub(crate) fn validate_domain_version(
         &self,
-        cut: &super::checkpoint::CheckpointReadCut,
+        cut: &crate::observation::cut::CheckpointReadCut,
         domain: &str,
     ) -> Result<(), RuntimeClientError> {
         let owner = domain.split('.').next().unwrap_or(domain);
@@ -6788,7 +6860,7 @@ impl RuntimeClientProjection {
 
     pub(crate) fn validate_checkpoint_cut(
         &self,
-        cut: &super::checkpoint::CheckpointReadCut,
+        cut: &crate::observation::cut::CheckpointReadCut,
     ) -> Result<(), RuntimeClientError> {
         if self.checkpoint_read_cut() == *cut {
             return Ok(());
@@ -6831,13 +6903,13 @@ impl RuntimeClientProjection {
     pub(crate) fn publication_source(
         &self,
         block_index: ContentBlockIndex,
-    ) -> super::content::ContentSource {
+    ) -> crate::observation::content::ContentSource {
         let start = self
             .publication_start
             .as_ref()
             .expect("opened native stream");
-        super::content::ContentSource::LivePublicationPrefix {
-            component: super::content::PublicationContentComponent::Payload,
+        crate::observation::content::ContentSource::LivePublicationPrefix {
+            component: crate::observation::content::PublicationContentComponent::Payload,
             stream_id: start.stream_id.clone(),
             message_id: start.message_id.clone(),
             attempt_id: start.attempt_id.clone(),
@@ -6850,7 +6922,7 @@ impl RuntimeClientProjection {
     #[cfg(test)]
     pub(crate) fn checkpoint_page(
         &self,
-        cut: &super::checkpoint::CheckpointReadCut,
+        cut: &crate::observation::cut::CheckpointReadCut,
         domain: &str,
         offset: u64,
         limit: usize,
@@ -6861,9 +6933,9 @@ impl RuntimeClientProjection {
 
     pub(crate) fn validate_live_content_ref(
         &self,
-        reference: &super::content::ContentRef,
+        reference: &crate::observation::content::ContentRef,
     ) -> Result<(), RuntimeClientError> {
-        use super::content::ContentSource;
+        use crate::observation::content::ContentSource;
         let ContentSource::LivePublicationPrefix { .. } = &reference.source else {
             return Ok(());
         };
@@ -7329,7 +7401,7 @@ fn foreground_slot_for_event<'a>(
         return slots.iter_mut().find(|slot| {
             slot.occurrence.block_index == native.block_index
                 && slot.occurrence.locator
-                    == super::content::CanonicalContentLocator::ByLedgerPosition {
+                    == crate::observation::content::CanonicalContentLocator::ByLedgerPosition {
                         position: native.ledger_position,
                     }
         });
@@ -7348,8 +7420,8 @@ fn foreground_slot_mut<'a>(
 
 fn update_stored_tool_slots(
     snapshot: &mut RuntimeClientSnapshot,
-    occurrence: &super::snapshot::RuntimeClientToolOccurrence,
-    mut update: impl FnMut(&mut super::snapshot::ForegroundToolExecution),
+    occurrence: &crate::observation::tool::RuntimeClientToolOccurrence,
+    mut update: impl FnMut(&mut crate::observation::tool::ForegroundToolExecution),
 ) {
     for slot in snapshot
         .message_descriptors
@@ -7367,52 +7439,6 @@ fn update_stored_tool_slots(
             update(slot);
         }
     }
-}
-
-pub(crate) fn tool_witness_result(
-    witness: &crate::durable::observation::ObservationEventWitness,
-) -> Option<ToolExecutionResult> {
-    let value = &witness.value;
-    let status = if witness.event_kind == "tool_execution_failed" {
-        ToolExecutionStatus::Failed {
-            error: value
-                .get("error")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("deferred tool diagnostic")
-                .to_owned(),
-        }
-    } else {
-        value
-            .get("result")
-            .and_then(|result| result.get("status"))
-            .and_then(|status| {
-                super::structural_json::decode::<ToolExecutionStatus>(status.clone()).ok()
-            })?
-    };
-    let result_value = value.get("result");
-    let scalar_u64 = |field: &str| {
-        result_value
-            .and_then(|result| result.get(field))
-            .and_then(|value| value.as_u64().or_else(|| value.as_str()?.parse().ok()))
-    };
-    Some(ToolExecutionResult {
-        status,
-        content: Vec::new(),
-        duration_ms: scalar_u64("duration_ms").unwrap_or(0),
-        exit_code: result_value
-            .and_then(|result| result.get("exit_code"))
-            .and_then(serde_json::Value::as_i64)
-            .and_then(|code| i32::try_from(code).ok()),
-        artifacts: Vec::new(),
-        deliveries: Vec::new(),
-        truncation: result_value
-            .and_then(|result| result.get("truncation"))
-            .and_then(|value| super::structural_json::decode(value.clone()).ok()),
-        workflow: None,
-        managed_output: result_value
-            .and_then(|result| result.get("managed_output"))
-            .and_then(|value| super::structural_json::decode(value.clone()).ok()),
-    })
 }
 
 fn deferred_live_block(block: &InFlightBlock) -> InFlightBlock {
@@ -7480,7 +7506,7 @@ fn accumulate_finite_facts(
         RuntimeClientEvent::ProjectionTransition { events, .. } => events,
         event => vec![event],
     };
-    if buffer.0.len() + events.len() > super::checkpoint::CHECKPOINT_PAGE_ITEMS {
+    if buffer.0.len() + events.len() > crate::observation::bounded::CHECKPOINT_PAGE_ITEMS {
         buffer.0.clear();
         buffer.2 = true;
     } else {
@@ -7500,11 +7526,13 @@ fn accumulate_transition(
         RuntimeClientEvent::ProjectionTransition { events, .. } => events.len(),
         _ => 1,
     };
-    let bytes =
-        super::checkpoint::bounded_bytes(&event, super::checkpoint::CHECKPOINT_TARGET_BYTES / 2);
+    let bytes = crate::observation::bounded::bounded_bytes(
+        &event,
+        crate::observation::bounded::CHECKPOINT_TARGET_BYTES / 2,
+    );
     if let Some(bytes) = bytes
-        && buffer.0.len() + count <= super::checkpoint::CHECKPOINT_PAGE_ITEMS
-        && buffer.1 + bytes.len() <= super::checkpoint::CHECKPOINT_TARGET_BYTES / 2
+        && buffer.0.len() + count <= crate::observation::bounded::CHECKPOINT_PAGE_ITEMS
+        && buffer.1 + bytes.len() <= crate::observation::bounded::CHECKPOINT_TARGET_BYTES / 2
     {
         buffer.1 += bytes.len();
         match event {
@@ -7544,16 +7572,18 @@ fn inline_block_bytes(block: &InFlightBlock, field: &str) -> u64 {
 }
 
 pub(crate) fn client_failure(failure: &AttemptFailure) -> RuntimeClientAttemptFailure {
-    super::event::finite_attempt_failure(failure).0
+    crate::observation::failure::finite_attempt_failure(failure).0
 }
 
 /// One pending inbound item of the diagnostics view.
 fn inbound_item_view(item: &InboundItem) -> InboundItemView {
-    let copied =
-        super::checkpoint::bounded_clone(item.message(), super::checkpoint::CHECKPOINT_ITEM_BYTES);
+    let copied = crate::observation::bounded::bounded_clone(
+        item.message(),
+        crate::observation::bounded::CHECKPOINT_ITEM_BYTES,
+    );
     let deferred = copied.is_none();
     let message = copied.unwrap_or_else(|| {
-        let mut capture = super::checkpoint::Capture::new(0);
+        let mut capture = crate::observation::capture::Capture::new(0);
         let MessageBlock::User(message) = capture.user_message(
             item.message(),
             &ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
@@ -7577,11 +7607,11 @@ pub(crate) fn background_view(snapshot: &BackgroundExecutionSnapshot) -> Runtime
     let bash = snapshot
         .bash
         .as_deref()
-        .and_then(|value| super::checkpoint::bounded_clone(value, 1024));
+        .and_then(|value| crate::observation::bounded::bounded_clone(value, 1024));
     let result = snapshot
         .result
         .as_deref()
-        .and_then(|value| super::checkpoint::bounded_clone(value, 4096));
+        .and_then(|value| crate::observation::bounded::bounded_clone(value, 4096));
     let mut deferred_fields = Vec::new();
     if snapshot.bash.is_some() && bash.is_none() {
         deferred_fields.push(vec!["bash".into()]);
@@ -7592,7 +7622,7 @@ pub(crate) fn background_view(snapshot: &BackgroundExecutionSnapshot) -> Runtime
     if snapshot.tool_name.len() > 256 {
         deferred_fields.push(vec!["tool_name".into()]);
     }
-    let tool_id = super::snapshot::inline_tool_id(&snapshot.tool_id);
+    let tool_id = crate::observation::tool::inline_tool_id(&snapshot.tool_id);
     if tool_id.is_none() {
         deferred_fields.push(vec!["tool_id".into()]);
     }
@@ -7613,13 +7643,13 @@ pub(crate) fn background_source_view(
 ) -> RuntimeClientJob {
     let bash = value
         .bash
-        .and_then(|value| super::checkpoint::bounded_clone(value, 1024));
+        .and_then(|value| crate::observation::bounded::bounded_clone(value, 1024));
     let result = value
         .result
-        .and_then(|value| super::checkpoint::bounded_clone(value, 4096));
+        .and_then(|value| crate::observation::bounded::bounded_clone(value, 4096));
     let progress = value
         .progress
-        .and_then(|value| super::checkpoint::bounded_clone(value, 1024));
+        .and_then(|value| crate::observation::bounded::bounded_clone(value, 1024));
     let mut deferred_fields = Vec::new();
     if value.bash.is_some() && bash.is_none() {
         deferred_fields.push(vec!["bash".into()]);
@@ -7633,7 +7663,7 @@ pub(crate) fn background_source_view(
     if value.tool_name.len() > 256 {
         deferred_fields.push(vec!["tool_name".into()]);
     }
-    let tool_id = super::snapshot::inline_tool_id(value.tool_id);
+    let tool_id = crate::observation::tool::inline_tool_id(value.tool_id);
     if tool_id.is_none() {
         deferred_fields.push(vec!["tool_id".into()]);
     }
@@ -7654,8 +7684,8 @@ pub(crate) fn agent_source_view(
 ) -> super::snapshot::RuntimeClientAgent {
     let profile = value
         .execution_profile
-        .and_then(|profile| super::checkpoint::bounded_clone(profile, 2048));
-    let observation = super::checkpoint::bounded_clone(value.observation, 1024);
+        .and_then(|profile| crate::observation::bounded::bounded_clone(profile, 2048));
+    let observation = crate::observation::bounded::bounded_clone(value.observation, 1024);
     let mut deferred_fields = Vec::new();
     if value.title.len() > 256 {
         deferred_fields.push(vec!["title".into()]);
@@ -7705,7 +7735,7 @@ pub(crate) fn capability_view(
     availability: &crate::capabilities::CapabilityAvailability,
     model: Option<&crate::model::catalog::ModelCapabilities>,
 ) -> CapabilityView {
-    let source = super::capability_source::CapabilityReadSource::new(
+    let source = crate::observation::capability_source::CapabilityReadSource::new(
         Arc::new(snapshot.clone()),
         availability.clone(),
         model.cloned(),
@@ -7765,11 +7795,9 @@ pub(crate) fn activation_view(
             {
                 fields.push(vec!["detail".into()]);
             }
-            if snapshot
-                .profile
-                .as_deref()
-                .is_some_and(|profile| super::checkpoint::bounded_bytes(profile, 2048).is_none())
-            {
+            if snapshot.profile.as_deref().is_some_and(|profile| {
+                crate::observation::bounded::bounded_bytes(profile, 2048).is_none()
+            }) {
                 fields.push(vec!["execution_profile".into()]);
             }
             fields
@@ -7790,7 +7818,7 @@ pub(crate) fn activation_view(
         execution_profile: snapshot
             .profile
             .as_deref()
-            .and_then(|profile| super::checkpoint::bounded_clone(profile, 2048)),
+            .and_then(|profile| crate::observation::bounded::bounded_clone(profile, 2048)),
         started_at: snapshot.started_at,
         workspace: snapshot.workspace.clone(),
     }
@@ -7826,8 +7854,8 @@ fn upsert_subagent(
 /// Inserts or replaces one live native interaction projection, preserving
 /// coordinator publication order. Identity never determines presentation order.
 fn upsert_interaction(
-    interactions: &mut Vec<super::snapshot::RuntimeClientInteractionHeader>,
-    request: super::snapshot::RuntimeClientInteractionHeader,
+    interactions: &mut Vec<crate::observation::interaction::RuntimeClientInteractionHeader>,
+    request: crate::observation::interaction::RuntimeClientInteractionHeader,
 ) {
     if let Some(existing) = interactions
         .iter_mut()
@@ -7836,118 +7864,6 @@ fn upsert_interaction(
         *existing = request;
     } else {
         interactions.push(request);
-    }
-}
-
-/// Builds the structured external status view from the exact composed
-/// status observation; the rendered representation derives from the same
-/// composition through the one canonical renderer.
-#[cfg(test)]
-pub(crate) fn status_view(observation: &AgentStatusObservation) -> AgentStatusView {
-    prepared_status_view(observation, None)
-}
-/// Prepare finite display metadata before entering the projection synchronization boundary.
-pub(crate) fn prepared_status_view(
-    observation: &AgentStatusObservation,
-    source: Option<&crate::durable::inbox::StatusObservationSource>,
-) -> AgentStatusView {
-    prepared_status(
-        &observation.attempt_id,
-        observation.turn,
-        &observation.status_message_id,
-        &observation.opportunities,
-        observation.post_tool_batch_anchor,
-        &observation.status,
-        source,
-    )
-}
-pub(crate) fn prepared_status(
-    attempt_id: &crate::runtime::identity::AttemptId,
-    turn: u32,
-    status_message_id: &crate::runtime::identity::MessageId,
-    opportunities: &crate::context::ContributionOpportunities,
-    post_tool_batch_anchor: Option<crate::durable::TranscriptCursor>,
-    status: &crate::context::AgentStatus,
-    source: Option<&crate::durable::inbox::StatusObservationSource>,
-) -> AgentStatusView {
-    let sections = status
-        .sections
-        .iter()
-        .map(|section| match &section.data {
-            AgentStatusSectionData::Temporal {
-                current_time,
-                timezone,
-            } => RuntimeClientStatusSection::Temporal {
-                current_time: *current_time,
-                timezone: *timezone,
-            },
-            AgentStatusSectionData::BackgroundExecution {
-                executions,
-                omitted_count,
-            } => RuntimeClientStatusSection::BackgroundExecutions {
-                executions: executions
-                    .iter()
-                    .map(
-                        |execution| super::snapshot::RuntimeClientStatusBackgroundExecution {
-                            job_id: execution.execution_id.clone(),
-                            tool_name: execution.tool_name.to_string(),
-                            state: execution.state,
-                            progress: execution.progress.clone(),
-                        },
-                    )
-                    .collect(),
-                omitted_count: *omitted_count,
-            },
-            AgentStatusSectionData::Todo { presentation } => RuntimeClientStatusSection::Todo {
-                current: presentation.current.as_ref().map(todo_status_task_view),
-                tasks: presentation
-                    .tasks
-                    .iter()
-                    .map(todo_status_task_view)
-                    .collect(),
-                active_count: presentation.active_count,
-                blocked_count: presentation.blocked_count,
-                completed_count: presentation.completed_count,
-                deleted_count: presentation.deleted_count,
-                omitted_count: presentation.omitted_count,
-            },
-        })
-        .collect();
-    let fresh_inbound =
-        opportunities
-            .fresh_inbound
-            .as_ref()
-            .map(|fresh| FreshInboundOpportunityView {
-                target_message_id: (fresh.target_message_id.as_str().len() <= 256)
-                    .then(|| fresh.target_message_id.clone()),
-                target_locator: source.and_then(|source| source.target_locator.clone()),
-                transcript_anchor: source
-                    .and_then(|source| source.target_transcript)
-                    .map(Into::into),
-                target_metadata_ref: source.and_then(|source| source.target_metadata_ref.clone()),
-            });
-    // The placement fact of a `PostToolBatch` composition is carried by the
-    // observation, frozen by the Agent Loop at the tool batch's own commit.
-    // It is copied, never derived.
-    let post_tool_batch = opportunities
-        .post_tool_batch
-        .map(|_| PostToolBatchOpportunityView {
-            transcript_anchor: post_tool_batch_anchor.map(RuntimeClientTranscriptCursor::from),
-        });
-    AgentStatusView {
-        attempt_id: attempt_id.clone(),
-        turn,
-        status_message_id: (status_message_id.as_str().len() <= 256)
-            .then(|| status_message_id.clone()),
-        source_locator: source.map(|source| source.locator.clone()),
-        request_id: source.map(|source| source.request_id.clone()),
-        rendered_ref: source.and_then(|source| source.rendered_ref.clone()),
-        opportunities: AgentStatusOpportunityView {
-            fresh_inbound,
-            post_tool_batch,
-        },
-        rendered: render_agent_status(status),
-        sections,
     }
 }
 
@@ -7982,16 +7898,6 @@ fn admit_status(
         return Some(statuses.remove(0));
     }
     None
-}
-
-fn todo_status_task_view(task: &crate::tools::todo::TodoStatusTask) -> RuntimeClientTodoStatusTask {
-    RuntimeClientTodoStatusTask {
-        id: task.id,
-        subject: task.subject.clone(),
-        active_form: task.active_form.clone(),
-        status: task.status,
-        blocked: task.blocked,
-    }
 }
 
 /// A complete canonical view refines C independently of the installed J state.
@@ -8035,6 +7941,11 @@ mod tests {
     use crate::model::event::ModelEvent;
     use crate::model::finish::ModelFinishReason;
     use crate::model::types::ModelUsage;
+    use crate::observation::status::{
+        AgentStatusOpportunityView, AgentStatusView, RuntimeClientStatusSection,
+    };
+    use crate::observation::tool::ForegroundToolState;
+    use crate::observation::transcript::RuntimeClientTranscriptCursor;
     use crate::publication::{PublicationFrame, PublicationPayload};
     use crate::runtime::identity::{
         AgentId, AttemptId, ConversationId, EventId, InteractionId, MessageId, RequestId,
@@ -8049,9 +7960,7 @@ mod tests {
     use crate::runtime::types::{CancellationReason, TokenMeasurement, TokenMeasurementSource};
     use crate::runtime_client::event::{RuntimeClientEvent, RuntimeClientOutcome};
     use crate::runtime_client::snapshot::{
-        AGENT_STATUS_WINDOW, AgentStatusOpportunityView, AgentStatusView, ForegroundToolState,
-        InFlightBlock, RuntimeClientAttemptPhase, RuntimeClientStatusSection,
-        RuntimeClientTranscriptCursor,
+        AGENT_STATUS_WINDOW, InFlightBlock, RuntimeClientAttemptPhase,
     };
     use crate::runtime_client::types::RuntimeClientCursor;
     use crate::scripted_suites::support::context::{
@@ -8102,7 +8011,7 @@ mod tests {
         RuntimeClientProjection::new(
             ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
             Vec::new(),
-            crate::runtime_client::snapshot::CapabilityView {
+            crate::observation::capability_source::CapabilityView {
                 configured_tools: Vec::new(),
                 revision: crate::runtime::identity::CapabilityRevision::new(1),
                 tools: Vec::new(),
@@ -8183,8 +8092,9 @@ mod tests {
         let (subscriber, _) = projection.subscribe(initial.cursor).unwrap();
         for revision in [37, 41] {
             workflows.revision.0 = revision;
-            let source =
-                super::super::workflow_source::WorkflowReadSource::new(Arc::new(workflows.clone()));
+            let source = crate::observation::workflow_source::WorkflowReadSource::new(Arc::new(
+                workflows.clone(),
+            ));
             source.prepare();
             publish_source_fact(&mut projection, |projection| {
                 projection.apply(ConversationObservation::Workflow(vec![source]));
@@ -8250,8 +8160,9 @@ mod tests {
             panic!("original native Workflow fixture");
         };
         assert!(!original.runs.is_empty());
-        let source =
-            super::super::workflow_source::WorkflowReadSource::new(Arc::new(original.clone()));
+        let source = crate::observation::workflow_source::WorkflowReadSource::new(Arc::new(
+            original.clone(),
+        ));
         source.prepare();
         let (mut projection, _store) = initialized_source_projection();
         publish_source_fact(&mut projection, |projection| {
@@ -8294,13 +8205,15 @@ mod tests {
             .unwrap();
         assert_eq!(u64::try_from(bytes.len()).unwrap(), chunk.readable_end);
         let run: crate::runtime::workflow::read_model::WorkflowRunView =
-            super::super::checkpoint::decode_domain_value(serde_json::from_slice(&bytes).unwrap())
-                .unwrap();
+            crate::observation::bounded::decode_domain_value(
+                serde_json::from_slice(&bytes).unwrap(),
+            )
+            .unwrap();
         assert_eq!(run, original.runs[0]);
 
         let mut later = original;
         later.revision.0 += 1;
-        let source = super::super::workflow_source::WorkflowReadSource::new(Arc::new(later));
+        let source = crate::observation::workflow_source::WorkflowReadSource::new(Arc::new(later));
         source.prepare();
         publish_source_fact(&mut projection, |projection| {
             projection.apply(ConversationObservation::Workflow(vec![source]));
@@ -8334,12 +8247,11 @@ mod tests {
         workflows.runs[0].id.clone_from(&node.block.run);
         workflows.runs[0].instances[0].block = node.block;
         workflows.runs[0].instances[0].node = Some(node.node);
-        client
-            .snapshot
-            .pending_interactions
-            .push(super::super::checkpoint::interaction_header(
+        client.snapshot.pending_interactions.push(
+            crate::observation::interaction::interaction_header(
                 &crate::runtime::interaction::RoutedInteraction::primary(request),
-            ));
+            ),
+        );
         client.fold_workflows(workflows);
         let row = &client.snapshot.workflows.runs[0].instances[0];
         assert!(matches!(
@@ -8526,9 +8438,11 @@ mod tests {
             },
         );
         commit_at(&mut projection, "user-1", 7);
-        projection.apply(ConversationObservation::Status(super::status_view(
-            &(fresh_inbound_status("status-1", 1, "user-1")),
-        )));
+        projection.apply(ConversationObservation::Status(
+            crate::observation::status::status_view(
+                &(fresh_inbound_status("status-1", 1, "user-1")),
+            ),
+        ));
 
         let (snapshot, _) = projection.snapshot().expect("snapshot");
         assert_eq!(snapshot.statuses.len(), 1);
@@ -8586,9 +8500,11 @@ mod tests {
         // observation reaches the projection.
         commit_at(&mut projection, "unrelated-inbound", 6);
 
-        projection.apply(ConversationObservation::Status(super::status_view(
-            &(post_tool_batch_status("status-post-batch", 2, 5)),
-        )));
+        projection.apply(ConversationObservation::Status(
+            crate::observation::status::status_view(
+                &(post_tool_batch_status("status-post-batch", 2, 5)),
+            ),
+        ));
 
         let (snapshot, _) = projection.snapshot().expect("snapshot");
         let status = snapshot.statuses.last().expect("composed status");
@@ -8606,9 +8522,11 @@ mod tests {
     fn a_later_attempt_neither_removes_nor_relocates_an_earlier_status() {
         let mut projection = projection();
         commit_at(&mut projection, "user-1", 1);
-        projection.apply(ConversationObservation::Status(super::status_view(
-            &(fresh_inbound_status("status-1", 1, "user-1")),
-        )));
+        projection.apply(ConversationObservation::Status(
+            crate::observation::status::status_view(
+                &(fresh_inbound_status("status-1", 1, "user-1")),
+            ),
+        ));
         apply_event(
             &mut projection,
             RuntimeEvent::AttemptStarted {
@@ -8616,9 +8534,9 @@ mod tests {
             },
         );
         commit_at(&mut projection, "tool-result", 4);
-        projection.apply(ConversationObservation::Status(super::status_view(
-            &(post_tool_batch_status("status-2", 1, 4)),
-        )));
+        projection.apply(ConversationObservation::Status(
+            crate::observation::status::status_view(&(post_tool_batch_status("status-2", 1, 4))),
+        ));
 
         let (snapshot, _) = projection.snapshot().expect("snapshot");
         assert_eq!(
@@ -8657,12 +8575,12 @@ mod tests {
         let mut projection = projection();
         let mut client = LiveStatusClient::attach(&mut projection);
         let observation = post_tool_batch_status("status-1", 1, 1);
-        projection.apply(ConversationObservation::Status(super::status_view(
-            &(observation.clone()),
-        )));
-        projection.apply(ConversationObservation::Status(super::status_view(
-            &(observation),
-        )));
+        projection.apply(ConversationObservation::Status(
+            crate::observation::status::status_view(&(observation.clone())),
+        ));
+        projection.apply(ConversationObservation::Status(
+            crate::observation::status::status_view(&(observation)),
+        ));
         client.drain(&mut projection);
         assert_eq!(
             client.evictions,
@@ -8673,13 +8591,15 @@ mod tests {
         assert_eq!(snapshot.statuses.len(), 1);
 
         for index in 0..AGENT_STATUS_WINDOW + 5 {
-            projection.apply(ConversationObservation::Status(super::status_view(
-                &(post_tool_batch_status(
-                    &format!("status-fill-{index}"),
-                    1,
-                    u64::try_from(index).expect("test index fits a cursor") + 2,
-                )),
-            )));
+            projection.apply(ConversationObservation::Status(
+                crate::observation::status::status_view(
+                    &(post_tool_batch_status(
+                        &format!("status-fill-{index}"),
+                        1,
+                        u64::try_from(index).expect("test index fits a cursor") + 2,
+                    )),
+                ),
+            ));
         }
         let (snapshot, _) = projection.snapshot().expect("snapshot");
         assert_eq!(snapshot.statuses.len(), AGENT_STATUS_WINDOW);
@@ -8772,9 +8692,11 @@ mod tests {
 
         for index in 0..AGENT_STATUS_WINDOW + overshoot {
             let cursor = u64::try_from(index).expect("test index fits a cursor") + 1;
-            projection.apply(ConversationObservation::Status(super::status_view(
-                &(post_tool_batch_status(&format!("status-{index}"), 1, cursor)),
-            )));
+            projection.apply(ConversationObservation::Status(
+                crate::observation::status::status_view(
+                    &(post_tool_batch_status(&format!("status-{index}"), 1, cursor)),
+                ),
+            ));
             live.drain(&mut projection);
         }
         let client = live.statuses;
@@ -8837,9 +8759,9 @@ mod tests {
             let cursor = u64::try_from(index).expect("test index fits a cursor") + 1;
             let observation = post_tool_batch_status(&format!("status-{index}"), 1, cursor);
             observations.push(observation.clone());
-            projection.apply(ConversationObservation::Status(super::status_view(
-                &(observation),
-            )));
+            projection.apply(ConversationObservation::Status(
+                crate::observation::status::status_view(&(observation)),
+            ));
             live.drain(&mut projection);
         }
         let (before, _) = projection.snapshot().expect("snapshot");
@@ -8850,9 +8772,9 @@ mod tests {
             observations.last().expect("newest").clone(),
             observations[AGENT_STATUS_WINDOW].clone(),
         ] {
-            projection.apply(ConversationObservation::Status(super::status_view(
-                &(observation),
-            )));
+            projection.apply(ConversationObservation::Status(
+                crate::observation::status::status_view(&(observation)),
+            ));
             live.drain(&mut projection);
         }
         assert_eq!(
@@ -9002,9 +8924,9 @@ mod tests {
                 let _ = self.release.lock().expect("release lock").recv();
                 *self.released.lock().expect("release flag lock") = true;
             }
-            self.apply(ConversationObservation::Status(super::status_view(
-                &(observation.clone()),
-            )));
+            self.apply(ConversationObservation::Status(
+                crate::observation::status::status_view(&(observation.clone())),
+            ));
         }
 
         fn observe_publication_opened(
@@ -9334,7 +9256,7 @@ mod tests {
             },
         };
 
-        let view = super::status_view(&observation);
+        let view = crate::observation::status::status_view(&observation);
         assert!(view.opportunities.fresh_inbound.is_none());
 
         let encoded = serde_json::to_value(&view.opportunities).expect("serialize opportunity");
@@ -9364,7 +9286,7 @@ mod tests {
             },
         };
 
-        let view = super::status_view(&observation);
+        let view = crate::observation::status::status_view(&observation);
         assert_eq!(view.status_message_id, Some(status_message_id));
         assert_eq!(
             view.opportunities
@@ -9480,7 +9402,7 @@ mod tests {
             let mut projection = RuntimeClientProjection::new(
                 ConversationId::new("conv_d8b669b8-1b38-797b-8db2-c56430c1741d"),
                 initial_messages,
-                crate::runtime_client::snapshot::CapabilityView {
+                crate::observation::capability_source::CapabilityView {
                     configured_tools: Vec::new(),
                     revision: crate::runtime::identity::CapabilityRevision::new(1),
                     tools: Vec::new(),
@@ -9624,7 +9546,7 @@ mod tests {
         ) {
             let mut projection = self.projection.lock().expect("projection lock");
             projection.apply(ConversationObservation::Status(
-                super::prepared_status_view(observation, source),
+                crate::observation::status::prepared_status_view(observation, source),
             ));
             self.drain_client_events(&mut projection);
         }
@@ -10136,9 +10058,9 @@ mod tests {
             &cut,
             Ok(super::ReadDomainValues {
                 projection_head: None,
-                transcript: super::super::snapshot::RuntimeClientTranscriptPage::default(),
+                transcript: crate::observation::transcript::RuntimeClientTranscriptPage::default(),
                 occupancy: None,
-                trace: super::super::trace::TracePage::default(),
+                trace: crate::observation::trace::TracePage::default(),
                 trace_total: 0,
             }),
             true
@@ -10279,7 +10201,7 @@ mod tests {
             projection_head: projection.snapshot.context.projection_head.clone(),
             transcript: projection.snapshot.transcript.clone(),
             occupancy: None,
-            trace: super::super::trace::TracePage::default(),
+            trace: crate::observation::trace::TracePage::default(),
             trace_total: 0,
         };
         assert!(!projection.install_read_domains(&failed, Ok(domains.clone()), true));
@@ -10315,9 +10237,9 @@ mod tests {
             &old,
             Ok(super::ReadDomainValues {
                 projection_head: None,
-                transcript: super::super::snapshot::RuntimeClientTranscriptPage::default(),
+                transcript: crate::observation::transcript::RuntimeClientTranscriptPage::default(),
                 occupancy: None,
-                trace: super::super::trace::TracePage::default(),
+                trace: crate::observation::trace::TracePage::default(),
                 trace_total: 0,
             }),
             true
@@ -11470,7 +11392,7 @@ mod tests {
         let mut projection = RuntimeClientProjection::new(
             ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
             Vec::new(),
-            crate::runtime_client::snapshot::CapabilityView {
+            crate::observation::capability_source::CapabilityView {
                 configured_tools: Vec::new(),
                 revision: crate::runtime::identity::CapabilityRevision::new(1),
                 tools: Vec::new(),
@@ -11530,7 +11452,7 @@ mod tests {
         let mut projection = RuntimeClientProjection::new(
             ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
             Vec::new(),
-            crate::runtime_client::snapshot::CapabilityView {
+            crate::observation::capability_source::CapabilityView {
                 configured_tools: Vec::new(),
                 revision: crate::runtime::identity::CapabilityRevision::new(1),
                 tools: Vec::new(),
@@ -11732,7 +11654,7 @@ mod tests {
             },
         );
         projection.apply(ConversationObservation::InteractionPending {
-            interaction: super::super::checkpoint::interaction_request_header(
+            interaction: crate::observation::interaction::interaction_request_header(
                 &request,
                 InteractionSource::Primary,
             ),
@@ -11741,7 +11663,7 @@ mod tests {
         let (snapshot, cursor) = projection.snapshot().expect("snapshot");
         assert_eq!(
             snapshot.pending_interactions,
-            vec![super::super::checkpoint::interaction_request_header(
+            vec![crate::observation::interaction::interaction_request_header(
                 &request,
                 InteractionSource::Primary
             )]
@@ -11846,7 +11768,7 @@ mod tests {
 
         for interaction in [primary.clone(), child_a.clone(), child_b.clone()] {
             projection.apply(ConversationObservation::InteractionPending {
-                interaction: super::super::checkpoint::interaction_header(&interaction),
+                interaction: crate::observation::interaction::interaction_header(&interaction),
                 audit: None,
             });
         }
@@ -11890,7 +11812,9 @@ mod tests {
         let (snapshot, _) = projection.snapshot().expect("snapshot after settlement");
         assert_eq!(
             snapshot.pending_interactions,
-            vec![super::super::checkpoint::interaction_header(&primary)]
+            vec![crate::observation::interaction::interaction_header(
+                &primary
+            )]
         );
         assert!(snapshot.messages.is_empty());
     }
@@ -12454,10 +12378,10 @@ mod tests {
             end_length: bytes as u64,
             content_revision: 1,
             inline_delta: Some("x".repeat(bytes)),
-            content_ref: crate::runtime_client::content::ContentRef {
+            content_ref: crate::observation::content::ContentRef {
                 conversation_id: ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
-                source: crate::runtime_client::content::ContentSource::LivePublicationPrefix {
-                    component: crate::runtime_client::content::PublicationContentComponent::Payload,
+                source: crate::observation::content::ContentSource::LivePublicationPrefix {
+                    component: crate::observation::content::PublicationContentComponent::Payload,
                     stream_id: crate::runtime::identity::PublicationStreamId::new("stream"),
                     message_id: MessageId::new("message"),
                     attempt_id: attempt(),
@@ -12465,7 +12389,7 @@ mod tests {
                     publication_request_id: crate::runtime::identity::RequestId::new("request"),
                     block_index: ContentBlockIndex::new(0),
                 },
-                representation: crate::runtime_client::content::ContentRepresentation::Utf8Text,
+                representation: crate::observation::content::ContentRepresentation::Utf8Text,
                 version: 1,
                 content_revision: 1,
                 readable_end: bytes as u64,
@@ -12503,9 +12427,9 @@ mod tests {
         );
         assert!(projection.replay_bytes <= RUNTIME_CLIENT_REPLAY_BYTES);
         assert!(projection.replay.iter().all(|(_, event)| {
-            super::super::checkpoint::bounded_bytes(
+            crate::observation::bounded::bounded_bytes(
                 event,
-                super::super::checkpoint::CHECKPOINT_TARGET_BYTES,
+                crate::observation::bounded::CHECKPOINT_TARGET_BYTES,
             )
             .is_some()
         }));
@@ -12589,7 +12513,7 @@ mod tests {
             transcript_cursor: receipt.transcript_cursor.map(Into::into),
         }];
         let encoded = draft.encode().unwrap();
-        assert!(encoded.bytes <= super::super::checkpoint::CHECKPOINT_TARGET_BYTES);
+        assert!(encoded.bytes <= crate::observation::bounded::CHECKPOINT_TARGET_BYTES);
         projection.install_publication(encoded);
         assert_eq!(projection.cursor.get(), initial.cursor.get() + 1);
         let (cursor, event) = projection.replay.back().unwrap();
@@ -12617,9 +12541,9 @@ mod tests {
             "complete replacement preserves all cut, domain, identity, frontier, and settlement fields"
         );
         assert!(
-            super::super::checkpoint::bounded_bytes(
+            crate::observation::bounded::bounded_bytes(
                 event,
-                super::super::checkpoint::CHECKPOINT_TARGET_BYTES
+                crate::observation::bounded::CHECKPOINT_TARGET_BYTES
             )
             .is_some()
         );
@@ -12629,8 +12553,8 @@ mod tests {
             .find(|binding| {
                 matches!(
                     binding.content_ref.source,
-                    super::super::content::ContentSource::CanonicalMessageBlock {
-                        component: super::super::content::CanonicalContentComponent::Payload,
+                    crate::observation::content::ContentSource::CanonicalMessageBlock {
+                        component: crate::observation::content::CanonicalContentComponent::Payload,
                         ..
                     }
                 )
@@ -12764,7 +12688,7 @@ mod tests {
         let initial = projection.checkpoint_candidate().unwrap().read_cut;
         assert_eq!(
             projection.replay_bytes,
-            super::super::checkpoint::CHECKPOINT_TARGET_BYTES
+            crate::observation::bounded::CHECKPOINT_TARGET_BYTES
         );
         for ordinal in 1..=2 {
             let receipt = store
@@ -12816,7 +12740,7 @@ mod tests {
             };
             let bytes = super::encoded_event_bytes(
                 &event,
-                super::super::checkpoint::CHECKPOINT_TARGET_BYTES,
+                crate::observation::bounded::CHECKPOINT_TARGET_BYTES,
             )
             .unwrap()
             .len();
@@ -12828,7 +12752,7 @@ mod tests {
             });
             assert!(projection.replay_bytes <= super::RUNTIME_CLIENT_REPLAY_BYTES);
             let reservation = usize::from(projection.initial_read_cut.is_some())
-                * super::super::checkpoint::CHECKPOINT_TARGET_BYTES;
+                * crate::observation::bounded::CHECKPOINT_TARGET_BYTES;
             assert_eq!(
                 projection.replay_bytes,
                 projection.replay_sizes.iter().sum::<usize>() + reservation
@@ -13018,16 +12942,16 @@ mod tests {
         )
         .unwrap();
         historical.retain_foreground_progress(&mut page).unwrap();
-        let durable: super::super::snapshot::ForegroundToolExecution =
-            super::super::checkpoint::decode_domain_value(page.items[0].value.clone().unwrap())
+        let durable: crate::observation::tool::ForegroundToolExecution =
+            crate::observation::bounded::decode_domain_value(page.items[0].value.clone().unwrap())
                 .unwrap();
         assert!(matches!(
             durable.state,
             ForegroundToolState::Running { progress: None, .. }
         ));
         seed.retain_foreground_progress(&mut page).unwrap();
-        let live: super::super::snapshot::ForegroundToolExecution =
-            super::super::checkpoint::decode_domain_value(page.items[0].value.clone().unwrap())
+        let live: crate::observation::tool::ForegroundToolExecution =
+            crate::observation::bounded::decode_domain_value(page.items[0].value.clone().unwrap())
                 .unwrap();
         assert_eq!(live, *slot);
         let terminal = store
@@ -13485,7 +13409,7 @@ mod tests {
         value: &T,
     ) -> serde_json::Value {
         let mut bytes = Vec::new();
-        crate::runtime_client::structural_json::to_writer(&mut bytes, value).unwrap();
+        crate::observation::structural_json::to_writer(&mut bytes, value).unwrap();
         serde_json::from_slice(&bytes).unwrap()
     }
 
@@ -13964,9 +13888,9 @@ mod tests {
         let checkpoint = projection.checkpoint_candidate().unwrap();
         assert!(checkpoint.snapshot.messages.len() <= 32);
         assert!(
-            super::super::checkpoint::bounded_bytes(
+            crate::observation::bounded::bounded_bytes(
                 &checkpoint,
-                super::super::checkpoint::CHECKPOINT_TARGET_BYTES
+                crate::observation::bounded::CHECKPOINT_TARGET_BYTES
             )
             .is_some()
         );
@@ -13978,9 +13902,9 @@ mod tests {
                 .unwrap();
             assert!(page.items.len() <= 32);
             assert!(
-                super::super::checkpoint::bounded_bytes(
+                crate::observation::bounded::bounded_bytes(
                     &page,
-                    super::super::checkpoint::CHECKPOINT_TARGET_BYTES
+                    crate::observation::bounded::CHECKPOINT_TARGET_BYTES
                 )
                 .is_some()
             );
@@ -14068,8 +13992,8 @@ mod tests {
 
     fn assert_raw_publication_range(
         store: &dyn crate::durable::ConversationStore,
-        reference: &crate::runtime_client::content::ContentRef,
-        forged: &crate::runtime_client::content::ContentRef,
+        reference: &crate::observation::content::ContentRef,
+        forged: &crate::observation::content::ContentRef,
         raw: &str,
     ) {
         use base64::Engine as _;
@@ -14212,7 +14136,7 @@ mod tests {
             }],
         };
         let count = std::sync::Arc::strong_count(&result);
-        let view = super::prepared_status(
+        let view = crate::observation::status::prepared_status(
             &attempt(),
             1,
             &MessageId::new("status-source"),
@@ -14229,7 +14153,7 @@ mod tests {
                 .unwrap()
                 .contains("private hidden")
         );
-        let crate::runtime_client::snapshot::RuntimeClientStatusSection::BackgroundExecutions {
+        let crate::observation::status::RuntimeClientStatusSection::BackgroundExecutions {
             executions,
             omitted_count,
         } = &view.sections[0]

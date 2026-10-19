@@ -2167,14 +2167,14 @@ impl RuntimeInner {
             .read_source()
             .at_binding_revision(state.binding_revision);
         self.observe(ConversationObservation::Resources {
-            capability: crate::runtime_client::capability_source::CapabilityReadSource::new(
+            capability: crate::observation::capability_source::CapabilityReadSource::new(
                 Arc::clone(resources.capability()),
                 availability,
                 model.capabilities().cloned(),
             ),
             model,
             approval_mode: state.effective_approval_mode,
-            display: crate::runtime_client::resource_source::ResourceReadSource::new(Arc::clone(
+            display: crate::observation::resource_source::ResourceReadSource::new(Arc::clone(
                 resources,
             )),
             snapshot: Arc::clone(resources),
@@ -2482,9 +2482,7 @@ impl RuntimeInner {
                         observation: Box::new(ConversationObservation::Workflow(
                             snapshot
                                 .into_iter()
-                                .map(
-                                    crate::runtime_client::workflow_source::WorkflowReadSource::new,
-                                )
+                                .map(crate::observation::workflow_source::WorkflowReadSource::new)
                                 .collect(),
                         )),
                     });
@@ -6014,8 +6012,8 @@ impl ConversationRuntime {
             .map_err(|error| error.to_string())?
             .map_err(|error| error.to_string())?
             .map_err(|rejection| {
-                let refusal=serde_json::json!({"reason":rejection.reason,"current":crate::runtime_client::goal::RuntimeClientGoalView::from_native(rejection.current.as_ref()).current});
-                crate::runtime_client::checkpoint::bounded_bytes(&refusal,16_384).and_then(|bytes|String::from_utf8(bytes).ok()).unwrap_or_else(||"Goal control refused; read the current Goal state".into())
+                let refusal=serde_json::json!({"reason":rejection.reason,"current":crate::observation::goal::RuntimeClientGoalView::from_native(rejection.current.as_ref()).current});
+                crate::observation::bounded::bounded_bytes(&refusal,16_384).and_then(|bytes|String::from_utf8(bytes).ok()).unwrap_or_else(||"Goal control refused; read the current Goal state".into())
             })?;
         let phase = committed.phase;
         let view = crate::goal::GoalView {
@@ -6773,7 +6771,7 @@ pub(crate) struct RuntimeBootstrapSnapshot {
     pub observation_cut: Option<crate::durable::observation::ObservationReadCut>,
     pub source_failure: Option<String>,
     pub journal_through: u64,
-    pub goal: Option<crate::runtime_client::goal::RuntimeClientGoalView>,
+    pub goal: Option<crate::observation::goal::RuntimeClientGoalView>,
     /// The conversation identity.
     pub conversation_id: ConversationId,
     /// Whether runtime drain has begun and new admission is closed.
@@ -6822,7 +6820,7 @@ pub(crate) struct RuntimeBootstrapSnapshot {
     /// Live process-owned native interactions at the bootstrap cut.
     pub pending_primary_cut: crate::runtime::identity::ObservationCollectionCut,
     pub pending_children_cut: crate::runtime::identity::ObservationCollectionCut,
-    pub pending_interactions: Vec<crate::runtime_client::snapshot::RuntimeClientInteractionHeader>,
+    pub pending_interactions: Vec<crate::observation::interaction::RuntimeClientInteractionHeader>,
     /// The conversation's committed task list at the cut, when this runtime
     /// composes the Todo extension (Issue #259).
     ///
@@ -7462,7 +7460,7 @@ impl AgentExecutionObserver for RuntimeObserver {
         source: Option<&crate::durable::inbox::StatusObservationSource>,
     ) {
         self.push(ConversationObservation::Status(
-            crate::runtime_client::projection::prepared_status_view(observation, source),
+            crate::observation::status::prepared_status_view(observation, source),
         ));
     }
 
@@ -7693,7 +7691,7 @@ impl crate::runtime::subagent::SubagentObserver for RuntimeObserver {
 
     fn on_interaction_pending(
         &self,
-        interaction: &crate::runtime_client::snapshot::RuntimeClientInteractionHeader,
+        interaction: &crate::observation::interaction::RuntimeClientInteractionHeader,
         proof: &crate::runtime::subagent::ChildPendingHeadProof,
     ) {
         self.push(ConversationObservation::ObservationBatch(vec![
@@ -7737,7 +7735,7 @@ impl CapabilityObserver for RuntimeObserver {
         availability: &crate::capabilities::CapabilityAvailability,
     ) {
         self.push(ConversationObservation::Capability {
-            source: crate::runtime_client::capability_source::CapabilityReadSource::new(
+            source: crate::observation::capability_source::CapabilityReadSource::new(
                 Arc::clone(snapshot),
                 availability.clone(),
                 None,
@@ -9497,12 +9495,9 @@ mod tests {
             .unwrap()
             .records
             .into_iter()
-            .find(|record| record.kind == crate::runtime_client::trace::TraceKind::Compaction)
+            .find(|record| record.kind == crate::observation::trace::TraceKind::Compaction)
             .expect("manual compaction is retained in the trajectory");
-        assert_eq!(
-            row.state,
-            crate::runtime_client::trace::TraceState::Completed
-        );
+        assert_eq!(row.state, crate::observation::trace::TraceState::Completed);
         assert!(row.message_id.is_none());
         let start = runtime
             .inner
@@ -9535,7 +9530,7 @@ mod tests {
         assert_eq!(detail.checkpoint.activation_id, outcome.activation_id);
         assert_eq!(detail.items.len(), 1);
         assert!(matches!(&detail.items[0].content.blocks[0],
-            crate::runtime_client::trace::TraceContentBlock::Text { text }
+            crate::observation::trace::TraceContentBlock::Text { text }
                 if text.text == "compact factual summary"));
 
         let completed = host.checkpoint().expect("native compaction completion cut");
@@ -9912,9 +9907,9 @@ mod tests {
             .unwrap()
             .records
             .into_iter()
-            .find(|record| record.kind == crate::runtime_client::trace::TraceKind::Compaction)
+            .find(|record| record.kind == crate::observation::trace::TraceKind::Compaction)
             .expect("failed maintenance keeps its own trajectory row");
-        assert_eq!(row.state, crate::runtime_client::trace::TraceState::Failed);
+        assert_eq!(row.state, crate::observation::trace::TraceState::Failed);
         assert!(row.message_id.is_none());
         runtime
             .submit_inbound(text_content("works after rejected compaction"))

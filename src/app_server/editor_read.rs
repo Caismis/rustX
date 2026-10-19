@@ -4,14 +4,10 @@ use super::{
     connection::{client_error, domain},
     protocol::{ErrorData, MethodResult, RpcError},
 };
-use crate::{
-    durable::ConversationStore,
-    local_runtime::{
-        session::{LineageSide, SessionId, SessionNodeId},
-        session_controller::SessionController,
-    },
-    runtime_client::content::{ContentChunk, ContentRepresentation, ContentSource},
-};
+use crate::durable::ConversationStore;
+use crate::local_runtime::session::{LineageSide, SessionId, SessionNodeId};
+use crate::local_runtime::session_controller::SessionController;
+use crate::observation::content::{ContentChunk, ContentRepresentation, ContentSource};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -62,8 +58,8 @@ pub(super) async fn read(
     max_bytes: u32,
 ) -> Result<MethodResult, RpcError> {
     if max_bytes == 0
-        || max_bytes > crate::runtime_client::content::CONTENT_READ_MAX_BYTES
-        || offset > crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX
+        || max_bytes > crate::observation::content::CONTENT_READ_MAX_BYTES
+        || offset > crate::observation::content::CONTENT_SAFE_INTEGER_MAX
     {
         return Err(domain(ErrorData::InvalidParams));
     }
@@ -81,7 +77,7 @@ pub(super) async fn read(
     let source_locator = origin.source_locator;
     if !matches!(
         source_locator,
-        crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { .. }
+        crate::observation::content::CanonicalContentLocator::ByLedgerPosition { .. }
     ) {
         return Err(domain(ErrorData::InvalidParams));
     }
@@ -99,7 +95,7 @@ pub(super) async fn read(
         .with_lifecycle(source.allocation);
         let index = crate::message::types::ContentBlockIndex::new(block_index);
         let content_source = ContentSource::CanonicalMessageBlock {
-            component: crate::runtime_client::content::CanonicalContentComponent::Payload,
+            component: crate::observation::content::CanonicalContentComponent::Payload,
             locator: source_locator.clone(),
             block_index: index,
         };
@@ -155,14 +151,14 @@ pub(super) async fn read(
 
 fn next_block(
     store: &dyn crate::durable::ConversationStore,
-    locator: &crate::runtime_client::content::CanonicalContentLocator,
+    locator: &crate::observation::content::CanonicalContentLocator,
     block_index: u32,
 ) -> Result<Option<u32>, crate::runtime_client::RuntimeClientError> {
     let Some(index) = block_index.checked_add(1) else {
         return Ok(None);
     };
     let source = ContentSource::CanonicalMessageBlock {
-        component: crate::runtime_client::content::CanonicalContentComponent::Payload,
+        component: crate::observation::content::CanonicalContentComponent::Payload,
         locator: locator.clone(),
         block_index: crate::message::types::ContentBlockIndex::new(index),
     };
@@ -194,7 +190,7 @@ fn read_upload(
                 message: "editor block unavailable".into(),
             },
         )?;
-    if reference.readable_end > u64::from(crate::runtime_client::content::CONTENT_READ_MAX_BYTES) {
+    if reference.readable_end > u64::from(crate::observation::content::CONTENT_READ_MAX_BYTES) {
         return Err(
             crate::runtime_client::types::RuntimeClientError::ObservationUnavailable {
                 message: "editor upload descriptor exceeds bounded read".into(),
@@ -205,7 +201,7 @@ fn read_upload(
         .content_read(
             &reference,
             0,
-            crate::runtime_client::content::CONTENT_READ_MAX_BYTES,
+            crate::observation::content::CONTENT_READ_MAX_BYTES,
         )
         .map_err(store_error)?;
     let bytes = base64::engine::general_purpose::STANDARD

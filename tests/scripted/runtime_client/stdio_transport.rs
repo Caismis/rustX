@@ -1112,7 +1112,7 @@ async fn t04_large_canonical_source_has_bounded_stdio_initialize_and_checkpoint(
     let items = stdio_original_message_items(&fixture.host, &checkpoint.read_cut, frontier).await;
     assert_eq!(items.len(), originals.len());
     for (index, item) in items.iter().enumerate() {
-        let message: MessageBlock = rustx::runtime_client::checkpoint::decode_domain_value(
+        let message: MessageBlock = rustx::observation::bounded::decode_domain_value(
             item.value
                 .clone()
                 .expect("finite original canonical metadata"),
@@ -1130,7 +1130,7 @@ async fn t04_large_canonical_source_has_bounded_stdio_initialize_and_checkpoint(
             item.content.iter().any(|binding| {
                 binding.deferred
                     && binding.content_ref.representation
-                        == rustx::runtime_client::content::ContentRepresentation::Utf8Text
+                        == rustx::observation::content::ContentRepresentation::Utf8Text
                     && binding.content_ref.readable_end == body.len() as u64
             }),
             "every complete original content frontier remains readable"
@@ -1149,9 +1149,9 @@ async fn t04_large_canonical_source_has_bounded_stdio_initialize_and_checkpoint(
 /// Follow original canonical metadata through the actual stdio Page method.
 async fn stdio_original_message_items(
     host: &RuntimeClientHost,
-    cut: &rustx::runtime_client::checkpoint::CheckpointReadCut,
-    frontier: &rustx::runtime_client::checkpoint::CollectionFrontier,
-) -> Vec<rustx::runtime_client::checkpoint::CheckpointPageItem> {
+    cut: &rustx::observation::cut::CheckpointReadCut,
+    frontier: &rustx::observation::cut::CollectionFrontier,
+) -> Vec<rustx::observation::cut::CheckpointPageItem> {
     let mut items = Vec::new();
     let mut offset = 0;
     loop {

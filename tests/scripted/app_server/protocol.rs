@@ -3,21 +3,20 @@
 use super::{Fixture, FixturePhase, bounded, input};
 use crate::app_server::connection::AppServerConnection;
 use crate::app_server::protocol::*;
-use crate::runtime_client::content::CanonicalContentLocator;
+use crate::observation::content::CanonicalContentLocator;
 use crate::runtime_client::event::RuntimeClientEvent;
 
 use super::app_server_conformance as conformance;
 
 fn trace_content_references(
     value: &serde_json::Value,
-    output: &mut Vec<crate::runtime_client::content::ContentRef>,
+    output: &mut Vec<crate::observation::content::ContentRef>,
 ) {
     match value {
         serde_json::Value::Object(fields) => {
             if let Some(reference) = fields.get("content_ref") {
-                output.push(
-                    crate::runtime_client::structural_json::decode(reference.clone()).unwrap(),
-                );
+                output
+                    .push(crate::observation::structural_json::decode(reference.clone()).unwrap());
             }
             for field in fields.values() {
                 trace_content_references(field, output);
@@ -66,7 +65,7 @@ async fn t08_t11_t15_cold_trace_pages_read_exact_deferred_request_and_fence_fore
         let record = page
             .records
             .iter()
-            .find(|record| record.kind == crate::runtime_client::trace::TraceKind::Request)
+            .find(|record| record.kind == crate::observation::trace::TraceKind::Request)
             .unwrap();
         let MethodResult::SessionTraceHistoryDetail {
             page,
@@ -140,7 +139,7 @@ async fn t08_t11_t15_cold_trace_pages_read_exact_deferred_request_and_fence_fore
             .into_iter()
             .find(|reference| {
                 reference.representation
-                    == crate::runtime_client::content::ContentRepresentation::Utf8Text
+                    == crate::observation::content::ContentRepresentation::Utf8Text
                     && reference.readable_end == text.len() as u64
             })
             .expect("frozen canonical input content descriptor");
@@ -584,8 +583,7 @@ async fn materialize_source_fixture(
             assert!(object.insert(name, value).is_none());
         }
         projection.inline = Some(Box::new(
-            crate::runtime_client::structural_json::decode(serde_json::Value::Object(object))
-                .unwrap(),
+            crate::observation::structural_json::decode(serde_json::Value::Object(object)).unwrap(),
         ));
         // This is loaded client fixture state. Only the original bounded
         // server response above is serialized and schema-validated.
@@ -653,8 +651,7 @@ async fn materialize_configuration_fixture(
             assert!(object.insert(name, value).is_none());
         }
         projection.inline = Some(Box::new(
-            crate::runtime_client::structural_json::decode(serde_json::Value::Object(object))
-                .unwrap(),
+            crate::observation::structural_json::decode(serde_json::Value::Object(object)).unwrap(),
         ));
     }
     MethodResult::EffectiveConfiguration { projection }
@@ -729,7 +726,7 @@ pub(super) async fn read_model_result(
         }
     }
     Box::new(
-        crate::runtime_client::structural_json::decode(serde_json::from_slice(&bytes).unwrap())
+        crate::observation::structural_json::decode(serde_json::from_slice(&bytes).unwrap())
             .unwrap(),
     )
 }
@@ -798,7 +795,7 @@ pub(super) async fn read_native_model_result(
             break;
         }
     }
-    crate::runtime_client::structural_json::decode(serde_json::from_slice(&bytes).unwrap()).unwrap()
+    crate::observation::structural_json::decode(serde_json::from_slice(&bytes).unwrap()).unwrap()
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -860,7 +857,7 @@ pub(super) fn read_catalog_result(result: MethodResult) -> ModelCatalogObservati
         .items
         .into_iter()
         .map(|item| {
-            let model: CatalogModelObservation = crate::runtime_client::structural_json::decode(
+            let model: CatalogModelObservation = crate::observation::structural_json::decode(
                 item.value.expect("finite inline catalog fixture header"),
             )
             .expect("current typed catalog header");
@@ -2679,7 +2676,7 @@ async fn trace_reads_are_read_only_and_reconnect_repairs_the_same_native_facts()
         assert!(
             page.records
                 .iter()
-                .any(|entry| entry.kind == crate::runtime_client::trace::TraceKind::Request)
+                .any(|entry| entry.kind == crate::observation::trace::TraceKind::Request)
         );
         assert!(matches!(
             rejected(
@@ -4941,7 +4938,7 @@ async fn completed_response_cut_is_shared_by_branch_and_fork_and_distinct_from_r
             let copied = SqliteConversationStore::open_existing(session.active_conversation_id, &destination.database_path).unwrap();
             let messages = copied.load_canonical().unwrap(); assert_eq!(messages.len(), 4);
             assert!(matches!(&messages[3], MessageBlock::Assistant(a) if a.content == match &original[3] { MessageBlock::Assistant(a) => a.content.clone(), _ => unreachable!() }));
-            let mut projected = crate::runtime_client::snapshot::transcript_page_view(copied.load_transcript_page(None, 64).unwrap()).unwrap();
+            let mut projected = crate::observation::transcript::transcript_page_view(copied.load_transcript_page(None, 64).unwrap()).unwrap();
             crate::runtime_client::response::native_oracle_decorate(&copied, &mut projected).unwrap();
             let tail = projected.entries.last().unwrap().completed_response.clone().unwrap();
             assert_eq!(tail.closing_message_id, Some(crate::conversation::message_id_of(&messages[3])));
@@ -4980,7 +4977,7 @@ async fn completed_response_cut_is_shared_by_branch_and_fork_and_distinct_from_r
             let child = controller.acquire_session(&child_id, Some(&child_node)).await.unwrap();
             let reopened = SqliteConversationStore::open_existing(child.node.conversation_id.clone(), &child.database_path).unwrap();
             assert_eq!(reopened.load_canonical().unwrap(), messages);
-            let mut reopened_page = crate::runtime_client::snapshot::transcript_page_view(reopened.load_transcript_page(None, 64).unwrap()).unwrap();
+            let mut reopened_page = crate::observation::transcript::transcript_page_view(reopened.load_transcript_page(None, 64).unwrap()).unwrap();
             crate::runtime_client::response::native_oracle_decorate(&reopened, &mut reopened_page).unwrap();
             assert_eq!(reopened_page.entries.last().unwrap().completed_response.as_ref(), Some(&tail));
             rejected(&connection, Method::SessionBranch { session_id: child_id, node_id: child_node, surface_revision: crate::conversation::SurfaceRevision::new(tail.surface_revision.get() + 1), boundary: tail.closing_locator, side: LineageSide::After }).await;
@@ -4995,7 +4992,7 @@ async fn completed_response_cut_is_shared_by_branch_and_fork_and_distinct_from_r
         let retry = SqliteConversationStore::open_existing(session.active_conversation_id, &destination.database_path).unwrap();
         assert_eq!(retry.load_canonical().unwrap().len(), 2);
         // Regenerate keeps only the prefix before the retried input: one turn.
-        let mut retried = crate::runtime_client::snapshot::transcript_page_view(retry.load_transcript_page(None, 64).unwrap()).unwrap();
+        let mut retried = crate::observation::transcript::transcript_page_view(retry.load_transcript_page(None, 64).unwrap()).unwrap();
         crate::runtime_client::response::native_oracle_decorate(&retry, &mut retried).unwrap();
         let totals = retried.statistics.unwrap();
         assert_eq!((totals.turns, totals.model_requests, totals.completed_responses), (1, 1, 1));
@@ -6372,7 +6369,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
         let target = attach(&browser, &f, 0).await;
         let read = |message_id| crate::app_server::product_host::FileRead {
             target: target.clone(),
-            source: crate::app_server::product_host::ReadSource::SessionFile { agent_id: None, locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId { message_id }, delivery_index: 0 },
+            source: crate::app_server::product_host::ReadSource::SessionFile { agent_id: None, locator: crate::observation::content::CanonicalContentLocator::ByMessageId { message_id }, delivery_index: 0 },
             roots: vec![f.workspaces[0].clone()],
         };
         phases.enter("pre-turn file refusal");
@@ -6462,8 +6459,8 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
             }, limit: 64,
         }).await else { panic!() };
         let older_reference = older.page.content.iter().find(|binding| matches!(&binding.content_ref.source,
-            crate::runtime_client::content::ContentSource::CanonicalMessageBlock {
-                component: crate::runtime_client::content::CanonicalContentComponent::MessageMetadata,
+            crate::observation::content::ContentSource::CanonicalMessageBlock {
+                component: crate::observation::content::CanonicalContentComponent::MessageMetadata,
                 locator: CanonicalContentLocator::ByMessageId { message_id }, ..
             } if message_id == &tool.id)).expect("older exact canonical Tool metadata source");
         let older_tool = read_delivery_metadata(&browser, &target, &older_reference.content_ref).await;
@@ -6487,7 +6484,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
         assert_eq!(inherited.result.deliveries.as_slice(), std::slice::from_ref(&file));
         assert_ne!(fork_target.conversation_id, file.scope.conversation_id);
         let MethodResult::SessionFileBytes { file: inherited_file, data } = product_host.success( crate::app_server::product_host::FileRead {
-            target: fork_target, source: crate::app_server::product_host::ReadSource::SessionFile { agent_id: None, locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId { message_id: inherited.id.clone() }, delivery_index: 0 }, roots: vec![f.workspaces[0].clone()],
+            target: fork_target, source: crate::app_server::product_host::ReadSource::SessionFile { agent_id: None, locator: crate::observation::content::CanonicalContentLocator::ByMessageId { message_id: inherited.id.clone() }, delivery_index: 0 }, roots: vec![f.workspaces[0].clone()],
         }).await else { panic!() };
         assert_eq!(inherited_file, file);
         assert_eq!(base64::engine::general_purpose::STANDARD.decode(data).unwrap(), original);
@@ -6495,7 +6492,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
         std::fs::write(f.workspaces[1].join(&file.path), b"UNRELATED").unwrap();
         let unrelated = attach_session(&browser, &f.sessions[1]).await;
         assert_eq!(product_host.rejected( crate::app_server::product_host::FileRead {
-            target: unrelated, source: crate::app_server::product_host::ReadSource::SessionFile { agent_id: None, locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId { message_id: tool.id.clone() }, delivery_index: 0 }, roots: vec![f.workspaces[1].clone()],
+            target: unrelated, source: crate::app_server::product_host::ReadSource::SessionFile { agent_id: None, locator: crate::observation::content::CanonicalContentLocator::ByMessageId { message_id: tool.id.clone() }, delivery_index: 0 }, roots: vec![f.workspaces[1].clone()],
         }).await, ErrorData::SessionFileRead { reason: FileFailure::Unavailable });
         let mut denied = read(tool.id.clone());
         denied.roots = vec![f.workspaces[1].clone()];
@@ -6696,7 +6693,7 @@ pub(crate) async fn delivery_access_boundary_scenario() {
                 &ordinary,
                 Method::DeliveryRead {
                     target: target.clone(),
-                    locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                    locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
                         message_id: crate::runtime::identity::MessageId::new("invented")
                     },
                     delivery_index: 0,
@@ -6742,14 +6739,14 @@ pub(crate) async fn delivery_access_boundary_scenario() {
         for method in [
             Method::DeliveryRead {
                 target: target.clone(),
-                locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
                     message_id: tool.id.clone(),
                 },
                 delivery_index: 0,
             },
             Method::DeliveryLocate {
                 target: target.clone(),
-                locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
                     message_id: tool.id.clone(),
                 },
                 delivery_index: 0,
@@ -6768,7 +6765,7 @@ pub(crate) async fn delivery_access_boundary_scenario() {
                 &trusted,
                 Method::DeliveryRead {
                     target: target.clone(),
-                    locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                    locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
                         message_id: tool.id.clone()
                     },
                     delivery_index: 0,
@@ -6789,7 +6786,7 @@ pub(crate) async fn delivery_access_boundary_scenario() {
         let read = |message_id: crate::runtime::identity::MessageId, delivery_index| {
             Method::DeliveryRead {
                 target: own.clone(),
-                locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
                     message_id,
                 },
                 delivery_index,
@@ -6819,7 +6816,7 @@ pub(crate) async fn delivery_access_boundary_scenario() {
             4304,
             Method::DeliveryLocate {
                 target: own.clone(),
-                locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
                     message_id: tool.id.clone(),
                 },
                 delivery_index: 0,
@@ -6865,7 +6862,7 @@ pub(crate) async fn delivery_access_boundary_scenario() {
             assert_eq!(rejected(&trusted, read(message_id, index)).await, expected);
         }
         if let Ok(index) =
-            usize::try_from(crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX + 1)
+            usize::try_from(crate::observation::content::CONTENT_SAFE_INTEGER_MAX + 1)
         {
             assert_eq!(
                 rejected(&trusted, read(tool.id.clone(), index)).await,
@@ -6916,7 +6913,7 @@ pub(crate) async fn delivery_access_boundary_scenario() {
             4306,
             Method::DeliveryRead {
                 target: fork_target.clone(),
-                locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
                     message_id: copied.id,
                 },
                 delivery_index: 0,
@@ -6940,7 +6937,7 @@ pub(crate) async fn delivery_access_boundary_scenario() {
                 &trusted,
                 Method::DeliveryRead {
                     target: unrelated.clone(),
-                    locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                    locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
                         message_id: tool.id.clone()
                     },
                     delivery_index: 0
@@ -6970,7 +6967,7 @@ pub(crate) async fn delivery_access_boundary_scenario() {
                 4307,
                 Method::DeliveryLocate {
                     target: own.clone(),
-                    locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                    locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
                         message_id: tool.id.clone()
                     },
                     delivery_index: 0
@@ -7068,7 +7065,7 @@ pub(crate) async fn delivery_access_boundary_scenario() {
 async fn delivery_response_boundary(
     connection: &AppServerConnection,
     target: &AttachmentTarget,
-) -> crate::runtime_client::response::CompletedResponseView {
+) -> crate::observation::turn::CompletedResponseView {
     let MethodResult::TranscriptWindow { window } = call(
         connection,
         45_001,
@@ -7109,13 +7106,13 @@ struct DeliveryResultMetadata {
 async fn read_delivery_metadata(
     connection: &AppServerConnection,
     target: &AttachmentTarget,
-    reference: &crate::runtime_client::content::ContentRef,
+    reference: &crate::observation::content::ContentRef,
 ) -> DeliveryToolMetadata {
     use base64::Engine as _;
     assert!(matches!(
         &reference.source,
-        crate::runtime_client::content::ContentSource::CanonicalMessageBlock {
-            component: crate::runtime_client::content::CanonicalContentComponent::MessageMetadata,
+        crate::observation::content::ContentSource::CanonicalMessageBlock {
+            component: crate::observation::content::CanonicalContentComponent::MessageMetadata,
             ..
         }
     ));
@@ -7166,8 +7163,8 @@ async fn read_delivery_metadata(
 }
 
 fn delivery_metadata_reference(
-    descriptor: &crate::runtime_client::snapshot::RuntimeClientMessageDescriptor,
-) -> &crate::runtime_client::content::ContentRef {
+    descriptor: &crate::observation::transcript::RuntimeClientMessageDescriptor,
+) -> &crate::observation::content::ContentRef {
     assert_eq!(descriptor.role, "tool");
     &descriptor
         .content
@@ -7175,9 +7172,9 @@ fn delivery_metadata_reference(
         .find(|binding| {
             matches!(
                 &binding.content_ref.source,
-                crate::runtime_client::content::ContentSource::CanonicalMessageBlock {
+                crate::observation::content::ContentSource::CanonicalMessageBlock {
                     component:
-                        crate::runtime_client::content::CanonicalContentComponent::MessageMetadata,
+                        crate::observation::content::CanonicalContentComponent::MessageMetadata,
                     ..
                 }
             )
@@ -7266,7 +7263,7 @@ pub(super) fn delivery_request(
         call: if locate {
             Method::DeliveryLocate {
                 target,
-                locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
                     message_id,
                 },
                 delivery_index: 0,
@@ -7274,7 +7271,7 @@ pub(super) fn delivery_request(
         } else {
             Method::DeliveryRead {
                 target,
-                locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
                     message_id,
                 },
                 delivery_index: 0,
@@ -9525,10 +9522,8 @@ async fn t15_source_fields_and_many_small_revisions_page_with_exact_cut_evidence
             assert!(reconstructed.insert(name, value).is_none());
         }
         let reconstructed: crate::local_runtime::configuration::settings::SourceSettings =
-            crate::runtime_client::structural_json::decode(serde_json::Value::Object(
-                reconstructed,
-            ))
-            .unwrap();
+            crate::observation::structural_json::decode(serde_json::Value::Object(reconstructed))
+                .unwrap();
         assert_eq!(reconstructed, native);
         let response = Response::Success(Box::new(Success {
             jsonrpc: JsonRpcVersion::V2,
@@ -9693,7 +9688,7 @@ async fn t15_cold_settings_deferred_value_advances_with_exact_catalog_revision()
             offset = next;
         }
         assert_eq!(
-            crate::runtime_client::structural_json::decode::<
+            crate::observation::structural_json::decode::<
                 crate::local_runtime::session::SessionPersistentState,
             >(serde_json::from_slice(&bytes).unwrap())
             .unwrap(),
@@ -9781,10 +9776,8 @@ async fn t15_effective_configuration_preserves_all_fields_and_advancing_pages() 
             assert!(reconstructed.insert(name, value).is_none());
         }
         let reconstructed: crate::local_runtime::configuration::settings::EffectiveConfiguration =
-            crate::runtime_client::structural_json::decode(serde_json::Value::Object(
-                reconstructed,
-            ))
-            .unwrap();
+            crate::observation::structural_json::decode(serde_json::Value::Object(reconstructed))
+                .unwrap();
         assert_eq!(reconstructed, native);
         phases.enter("source revisions pages");
         let mut offset = 0;
@@ -9895,7 +9888,7 @@ async fn t08_t13_t15_editor_and_origin_history_use_finite_native_ledger_identity
             session_id:session.id.clone(), node_id:session.active_node.clone(), limit:32,
         }).await else { panic!("finite original history anchor"); };
         assert!(serde_json::to_vec(&window).unwrap().len() <= 786_432);
-        assert!(window.page.content.iter().chain(window.page.deferred_entries.iter().flat_map(|entry| entry.content.iter())).any(|entry| matches!(&entry.content_ref.source, crate::runtime_client::content::ContentSource::CanonicalMessageBlock { locator: found, .. } if found == &locator)));
+        assert!(window.page.content.iter().chain(window.page.deferred_entries.iter().flat_map(|entry| entry.content.iter())).any(|entry| matches!(&entry.content_ref.source, crate::observation::content::ContentSource::CanonicalMessageBlock { locator: found, .. } if found == &locator)));
         let mut foreign = editor;
         foreign.source_node = session.active_node;
         rejected(&connection, Method::SessionEditorRead { locator:foreign, block_index:0, offset:0, max_bytes:1 }).await;

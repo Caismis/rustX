@@ -262,7 +262,7 @@ fn selected_delivery_fixture(store: &SqliteConversationStore, identity: &str) ->
 }
 #[test]
 fn t08_t12_t14_t19_selected_delivery_uses_numeric_giant_c_without_body_reads() {
-    use crate::runtime_client::content::CanonicalContentLocator;
+    use crate::observation::content::CanonicalContentLocator;
     let store = store();
     let original = "selected-result🙂水".repeat(70_000);
     let message = selected_delivery_fixture(&store, &original);
@@ -309,7 +309,7 @@ fn t10_t14_t19_selected_delivery_auxiliary_failure_preserves_original_successful
     store.append_canonical(&message).unwrap();
     assert_eq!(store.load_canonical().unwrap()[1], message);
     let locator =
-        crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { position: 2 };
+        crate::observation::content::CanonicalContentLocator::ByLedgerPosition { position: 2 };
     let error = store.observation_file_delivery(&locator, 0).unwrap_err();
     assert!(matches!(
         crate::runtime_client::RuntimeClientError::observation_store_error(error),
@@ -366,8 +366,8 @@ fn escaped_delivery_file(
 }
 fn read_selected_delivery_bytes(
     store: &SqliteConversationStore,
-    cut: &crate::runtime_client::checkpoint::CheckpointReadCut,
-    item: &crate::runtime_client::delivery::RuntimeClientDeliveryItem,
+    cut: &crate::observation::cut::CheckpointReadCut,
+    item: &crate::observation::delivery::RuntimeClientDeliveryItem,
 ) -> Vec<u8> {
     use base64::Engine as _;
     let mut bytes = Vec::new();
@@ -401,8 +401,8 @@ fn read_selected_delivery_bytes(
 }
 fn assert_delivery_metadata_coordinates(
     store: &SqliteConversationStore,
-    cut: &crate::runtime_client::checkpoint::CheckpointReadCut,
-    item: &crate::runtime_client::delivery::RuntimeClientDeliveryItem,
+    cut: &crate::observation::cut::CheckpointReadCut,
+    item: &crate::observation::delivery::RuntimeClientDeliveryItem,
 ) {
     assert!(
         crate::runtime_client::history_observation::value_read(
@@ -449,7 +449,7 @@ fn t08_t12_t14_t19_escaped_delivery_metadata_advances_beyond_inline_budget() {
         .next()
         .unwrap();
     let descriptor =
-        crate::runtime_client::snapshot::RuntimeClientMessageDescriptor::from_header(&header)
+        crate::observation::transcript::RuntimeClientMessageDescriptor::from_header(&header)
             .unwrap();
     let head = descriptor.deliveries.as_ref().unwrap();
     assert_eq!((head.total, head.items.len()), (1, 1));
@@ -512,7 +512,7 @@ fn t08_t12_t14_t19_escaped_delivery_metadata_advances_beyond_inline_budget() {
 
 #[test]
 fn t08_t12_t14_t19_original_nine_deliveries_advance_and_select_last_index() {
-    use crate::runtime_client::content::CanonicalContentLocator;
+    use crate::observation::content::CanonicalContentLocator;
     let store = store();
     let root = tempfile::tempdir().unwrap();
     let root_path = root.path().canonicalize().unwrap();
@@ -585,7 +585,7 @@ fn t08_t12_t14_t19_original_nine_deliveries_advance_and_select_last_index() {
 
 #[test]
 fn t08_t12_t14_t19_giant_delivery_alias_is_rejected_before_original_id_lookup() {
-    use crate::runtime_client::content::CanonicalContentLocator;
+    use crate::observation::content::CanonicalContentLocator;
     let store = store();
     let original = "delivery-owner🙂水".repeat(70_000);
     let message = selected_delivery_fixture(&store, &original);

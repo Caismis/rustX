@@ -16,8 +16,10 @@ use std::sync::Arc;
 
 use rustx::local_runtime::composition::{LocalConversationRuntime, LocalRuntimeDependencies};
 use rustx::model::catalog::MapCredentialEnvironment;
+use rustx::observation::capability_source::{
+    CapabilitySourceDescriptor, CapabilitySourceStateView,
+};
 use rustx::runtime::identity::ConversationId;
-use rustx::runtime_client::snapshot::{CapabilitySourceDescriptor, CapabilitySourceStateView};
 use rustx::runtime_client::{RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientResult};
 
 /// A catalog whose only model is never invoked: these tests compose the
@@ -440,7 +442,9 @@ async fn core_and_base_plane_failures_remain_fatal() {
 /// MCP-level regressions driving the real self-spawned fixture servers.
 #[cfg(all(unix, feature = "mcp-fixture"))]
 mod mcp {
-    use rustx::runtime_client::snapshot::{CapabilitySourceDescriptor, CapabilitySourceStateView};
+    use rustx::observation::capability_source::{
+        CapabilitySourceDescriptor, CapabilitySourceStateView,
+    };
     use rustx::tools::mcp::fixture::{self, FixtureServer, PROTOCOL_VERSIONS_ENV};
 
     use super::{
