@@ -21,6 +21,7 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
  const [sourceCatalog,setSourceCatalog] = useState<ModelCatalogView>();
  const [catalogPage,setCatalogPage] = useState<CheckpointPage>();
  const [catalog, setCatalog] = useState<ModelCatalogView>();
+ const [originalModel, setOriginalModel] = useState<{scope:object;revision?:string|null;value:Awaited<ReturnType<AppServerClient['modelRead']>>}>();
  const [busy, setBusy] = useState(false), [error, setError] = useNotice(), [blocked, setBlocked] = useState(true);
  const [selectionError, setSelectionError] = useNotice(), [toastSequence, setToastSequence] = useState(0);
  const root = useRef<HTMLDivElement>(null);
@@ -47,6 +48,12 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
      const result = await client.modelCatalogRead(target,()=>current(at),previous);
      if (!current(at)) return;
      const observed = client.getSnapshot().views[view!.id];
+     if (observed?.snapshot?.model_status?.body_deferred) {
+       const revision = observed.snapshot.model_status.binding_revision;
+       const value = await client.modelRead(target, () => current(at));
+       if (!current(at)) return;
+       setOriginalModel({scope,revision,value});
+     }
      if (observed?.modelMutation && observed.modelMutation.status !== 'in-flight') {
        await client.repairAgentModel(view!.id);
      }
@@ -79,8 +86,9 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
    catch (cause) { if (current(at)) { const notice = isOutcomeUncertain(cause) ? message('agent:copy.outcome-uncertain-no-replay-reconnect-and-reread-authority-before-continuing') : message('agent:copy.value-reread-authority-before-continuing', { p0: String(cause) }); setError(notice); setSelectionError(notice); setToastSequence(sequence => sequence + 1); } }
    finally { if (selection.current === owner) selection.current = undefined; if (epoch.current === at) { guard.current = false; setBusy(false); } }
  };
- const model = view?.snapshot?.model;
  const modelStatus = view?.snapshot?.model_status;
+ const hasOriginalModel = !!modelStatus?.body_deferred && originalModel?.scope === scope && originalModel.revision === modelStatus?.binding_revision;
+ const model = hasOriginalModel ? originalModel.value : view?.snapshot?.model;
  const configured = (queued?.phase !== 'failed' ? queued?.config : undefined) ?? (model?.configured ?? (view?.settings ? view.settings.model ?? (coldSource?.session_models?.kind === 'available' ? coldSource.session_models.default_model : undefined) : undefined));
  const source = draft?.source ?? coldSource;
  const sourceChoices = draft?.source?.session_models?.kind === 'available' ? draft.source.session_models.catalog : coldCatalog?.catalog;
@@ -99,7 +107,7 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
    if (!catalogAdmits(choices, intent.model, intentProfile(intent))) return false;
    // A partial primary gesture must carry the independently configured Summary
    // and overrides. Deferred native configuration is not an empty configuration.
-   if (!draft && attached && modelStatus?.body_deferred && !selected) return false;
+   if (!draft && attached && modelStatus?.body_deferred && !hasOriginalModel) return false;
    // A Draft compares local intent. Existing Sessions, including a queued
    // choice during attachment, let native authority decide whether equal
    // values persist inherited intent or are already an explicit, durable NoOp.

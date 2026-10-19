@@ -1,4 +1,4 @@
-import {act,cleanup,fireEvent,render} from '@testing-library/react';
+import {act,cleanup,fireEvent,render,waitFor} from '@testing-library/react';
 import {afterEach,expect,it,vi} from 'vitest';
 import {DeliveryHead} from '../src/app/agent/DeliveryHead';
 import {JournalSourceProvider} from '../src/app/agent/ObservationSource';
@@ -28,11 +28,15 @@ it('successful C ninth-item discovery reads only selected original metadata and 
  });
  const source={client:server.client,target,cut:()=>cut,owned:()=>true};
  const ui=render(<JournalSourceProvider source={source}><PreviewContext.Provider value={{openPreview,download}}><DeliveryHead head={head}/></PreviewContext.Provider></JournalSourceProvider>);
- await act(async()=>fireEvent.click(ui.getByRole('button',{name:'Read next page'})));
- expect(ui.queryByRole('button',{name:'Read next page'})).toBeNull();
- await act(async()=>fireEvent.click(ui.getByRole('button',{name:'Preview 9/9'})));
+ await act(async()=>fireEvent.click(ui.getByRole('button',{name:'Show more'})));
+ expect(ui.queryByRole('button',{name:'Show more'})).toBeNull();
+ await waitFor(()=>expect(ui.getByRole('button',{name:'Show all 9 delivered files'})).toBeTruthy());
+ fireEvent.click(ui.getByRole('button',{name:'Show all 9 delivered files'}));
+ expect(ui.getAllByRole('button',{name:'Preview report.md in sidebar'})).toHaveLength(9);
+ expect(ui.queryByRole('button',{name:'Preview 9/9'})).toBeNull();
+ fireEvent.click(ui.getAllByRole('button',{name:'Preview report.md in sidebar'}).at(-1)!);
  expect(openPreview).toHaveBeenCalledWith(expect.objectContaining({source:expect.objectContaining({conversationId:target.conversation_id,locator,index:8,file}),name:file.name}));
- await act(async()=>fireEvent.click(ui.getByRole('button',{name:'Download 9/9'})));
+ fireEvent.click(ui.getAllByRole('button',{name:'Download report.md'}).at(-1)!);
  expect(download).toHaveBeenCalledWith(expect.objectContaining({source:expect.objectContaining({locator,index:8,file})}));
  expect(server.requests.some(row=>['conversation/contentRead','session/modelGet'].includes(row.request.method))).toBe(false);
  expect(server.client.getSnapshot().views.A.cursor).toBe('0');
@@ -41,10 +45,10 @@ it('a metadata response after exact owner retirement cannot dispatch Preview or 
  server=new Server();await server.attached('A');const cut=checkpoint(snapshot()).read_cut,target=server.target('A'),openPreview=vi.fn(),download=vi.fn(),selected=item(0);let owned=true;
  server.held.add('conversation/checkpointValueRead');
  const ui=render(<JournalSourceProvider source={{client:server.client,target,cut:()=>cut,owned:()=>owned}}><PreviewContext.Provider value={{openPreview,download}}><DeliveryHead head={{...head,items:[selected],next_offset:null}}/></PreviewContext.Provider></JournalSourceProvider>);
- await act(async()=>fireEvent.click(ui.getByRole('button',{name:'Preview 1/9'})));
+ expect(ui.queryByRole('button',{name:'Preview 1/9'})).toBeNull();
  const request=await server.waitFor('conversation/checkpointValueRead',1);owned=false;
  await act(async()=>server.socket.success(request,{type:'checkpoint_value_chunk',chunk:{representation:'canonical_json_v1',cut,domain:selected.metadata_domain,item_offset:0,path:[],offset:0,bytes_base64:btoa(JSON.stringify(file)),readable_end:Number(selected.encoded_bytes),next_offset:null}}));
- expect(openPreview).not.toHaveBeenCalled();expect(download).not.toHaveBeenCalled();
+ expect(openPreview).not.toHaveBeenCalled();expect(download).not.toHaveBeenCalled();expect(ui.queryByText('report.md')).toBeNull();
 });
 it('selected ranges reject oversized scalar evidence before reads and collection pages preserve exact u64 totals',async()=>{
  const cut=checkpoint(snapshot()).read_cut,read=vi.fn();

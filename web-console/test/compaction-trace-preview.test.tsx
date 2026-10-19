@@ -34,10 +34,10 @@ it('a newer projection cannot replace the selected historical compaction preview
  view.rerender(<TrajectoryInspector {...properties} facet="raw" records={[first,second]}/>);
  expect(view.container.querySelector('pre')?.textContent).toBe(original);
 });
-it.each(['overview','raw'] as const)('a truncated original compaction remains explicitly deferred in %s',facet=>{
+it.each(['overview','raw'] as const)('a truncated native summary uses the established preview without a permanent loader in %s',facet=>{
  const prefix='# Long original\n\n水🙂 exact prefix',selected=record(31,prefix,true);
  const view=render(<TrajectoryInspector {...props(selected)} facet={facet}/>);
- expect(screen.getByRole('status').textContent).toBe('Loading…');
+ expect(screen.queryByRole('status')).toBeNull();
  expect(view.container.textContent).not.toContain('unread original remainder');
  if(facet==='raw')expect(view.container.querySelector('pre')?.textContent).toBe(prefix);
  else expect(screen.getByRole('heading',{name:'Long original'})).toBeTruthy();

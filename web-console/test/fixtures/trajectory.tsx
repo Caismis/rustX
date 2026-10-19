@@ -1,3 +1,4 @@
+import { nativeTraceFixture } from '../native-trace-fixture';
 import { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Trajectory } from '../../src/app/trajectory/Trajectory';
@@ -98,6 +99,19 @@ function Fixture() {
           if (detail.tool) {
             detail.tool.source!.text = text('git diff --stat');
             detail.tool.result!.blocks = [{ type: 'json', value: { value: { files: 3, insertions: 28 }, truncated: false } }, { type: 'text', text: text('Review complete.') }];
+          }
+          if (params.has('parity')) {
+            if (record.kind === 'assistant') detail.messages = [{ message_id: record.message_id!, role: 'assistant', truncated: false, blocks: [
+              {type:'reasoning',text:text('I will **inspect the working tree**, then check the implementation.\n\nThis keeps the review focused.')},
+              {type:'text',text:text('I’ll inspect the **working tree**.\n\n- Read the changes\n- Run the relevant checks')},
+              {type:'tool_call',call_id:'call-5',tool_id:'tool-bash',name:'bash',arguments:{value:{command:'git diff --stat'},truncated:false}},
+            ] }];
+            if (record.kind === 'user') detail.messages = [{message_id:'original-user',role:'user',truncated:false,blocks:[{type:'text',text:record.preview!}]}];
+            if (detail.tool?.source && detail.tool.arguments) detail.tool.arguments.value={command:detail.tool.source.text.text};
+            if (params.has('native') && ['request','tool','assistant','user','context'].includes(record.kind)) {
+              const native=nativeTraceFixture(record,detail);
+              return completeTraceDetail(current,id,current.epoch,undefined,undefined,undefined,undefined,native.page,native.reader);
+            }
           }
           return completeTraceDetail(current, id, current.epoch, detail);
         });

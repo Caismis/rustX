@@ -1,3 +1,4 @@
+import { useComposerContent } from './useComposerContent';
 import { JournalSourceProvider } from './ObservationSource';
 import { contentBindings } from '../../../../protocol/app-server/projection';
 import { useSubagents } from './subagent-context';
@@ -112,12 +113,14 @@ export function ConversationDocks({ client, sessionId, disabled }: { client: App
     return frontier && JSON.stringify([frontier.revision, frontier.total, frontier.loaded, frontier.next_offset]);
   };
   const view = useClientSelector(client, state => state.views[sessionId], (a, b) => a === b || !!a && !!b &&
-    a.target === b.target && a.submissions === b.submissions && a.snapshot?.goal === b.snapshot?.goal && a.snapshot?.todos === b.snapshot?.todos &&
+    a.target === b.target && a.attachmentObservation === b.attachmentObservation && a.submissions === b.submissions && a.snapshot?.goal === b.snapshot?.goal && a.snapshot?.todos === b.snapshot?.todos &&
     a.snapshot?.inbound === b.snapshot?.inbound && activeAttempt(a.snapshot) === activeAttempt(b.snapshot) && todoEvidence(a) === todoEvidence(b));
+  const content = useComposerContent(client, view);
   if (!view) return null;
   return <>
-    <TodoDock state={todoDock(view.snapshot, view.checkpoint?.collections.find(value => value.domain === 'todos.tasks'))}/>
-    <GoalDock state={goalDock(view.snapshot)} observation={view.snapshot?.goal ?? undefined} disabled={disabled} mutate={(expected, mutation) => client.controlGoal(view.id, expected, mutation)} loadObjective={expected => client.goalObjective(view.id, expected)}/>
+    {content.error && <p role="alert">{content.error}</p>}
+    <TodoDock state={todoDock(content.snapshot, content.todoLoaded ? undefined : view.checkpoint?.collections.find(value => value.domain === 'todos.tasks'))}/>
+    <GoalDock state={goalDock(content.snapshot)} observation={view.snapshot?.goal ?? undefined} disabled={disabled} mutate={(expected, mutation) => client.controlGoal(view.id, expected, mutation)} loadObjective={expected => client.goalObjective(view.id, expected)}/>
     <QueueDock disabled={disabled} observation={view.snapshot?.inbound} edit={(expected, text) => client.editInbound(view.id, expected, text)} remove={expected => client.removeInbound(view.id, expected)} rows={queueRows(view.snapshot)} submissions={view.submissions ?? []} running={activeAttempt(view.snapshot)}/>
   </>;
 }

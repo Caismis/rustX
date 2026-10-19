@@ -1,4 +1,5 @@
-import {traceAttemptKey,traceStepKey,traceFields} from '../../../../protocol/app-server/trace-identity';
+import {traceAttemptKey,traceStepKey} from '../../../../protocol/app-server/trace-identity';
+import { useTraceContexts } from './useTraceContexts';
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/TrajectoryTable.tsx and TrajectoryToolbar.tsx; see PROVENANCE.md. */
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
@@ -60,7 +61,8 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLates
   const ledger = useRef<LedgerHandle>(null);
   const focusedDisplay = useRef<string | undefined>(undefined);
   const [pendingFocus, setPendingFocus] = useState<string | undefined>(() => selection?.display_key);
-  const records = cache.page.records;
+  const context = useTraceContexts(cache, selection?.owner_record_id);
+  const records = context.records;
   const projection = useMemo(() => projectTrajectory(tx, records), [tx, records]);
   const allItems = useMemo(() => trajectoryItems(tx, projection, cache.page.next_cursor), [tx, projection, cache.page.next_cursor]);
   const matches = useMemo(() => searchItems(projection, query), [projection, query]);
@@ -161,7 +163,7 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLates
     return { turn: turn?.label, group: group?.label };
   })();
   const inspector = selected && selection && selectedItem
-    ? <TrajectoryInspector key={selection.display_key} item={selectedItem} detail={selectedDetail?.detail} onLoadEarlier={loadEarlier} detailPage={selectedDetail?.page} detailReader={selectedDetail?.reader} loading={selectedDetail?.loading} error={selectedDetail?.error} fieldSources={selectedItem.type==='ContextRow'?selectedItem.context.fields:traceFields(selected)} fieldCut={cache.readCuts?.[selected.id]} fieldReader={cache.fields}
+    ? <TrajectoryInspector key={selection.display_key} item={selectedItem} detail={selectedDetail?.detail} onLoadEarlier={loadEarlier} detailPage={selectedDetail?.page} detailReader={selectedDetail?.reader} loading={selectedDetail?.loading} error={selectedDetail?.error}
       facet={selection.facet} onFacet={setFacet} onLoadDetail={onLoadDetail} onClose={close} location={location}
       records={records} executions={executions} requestNumbers={requestNumbers} completeHistory={!cache.page.next_cursor} onOpen={openRecord} />
     : null;
@@ -197,7 +199,7 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLates
         <input type="search" className={css.searchInput} aria-label={tx('trajectory:toolbar.search')} value={query} onChange={event => setQuery(event.target.value)} placeholder={tx('trajectory:toolbar.search-placeholder')} />
       </div>
     </div>
-    {cache.error && <p role="alert" className={css.error}>{cache.error}</p>}
+    {(cache.error || context.error) && <p role="alert" className={css.error}>{cache.error || context.error}</p>}
     {/* Epoch retires read-domain ownership; the Timeline separately fences
         coordinate interactions by its semantic projection revision. */}
     <TrajectoryTimeline key={cache.epoch} model={timelineModel} mode={mode} range={range}

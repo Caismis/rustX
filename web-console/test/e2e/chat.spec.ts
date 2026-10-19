@@ -261,21 +261,31 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     // identity, not human-facing Inspector labels.
     await expect(inspector).toContainText('render_image');
     await expect(inspector.getByRole('button', { name: 'Preview artifact_1', exact: true })).toBeVisible();
+    // The actual canonical Assistant goes through the same Harness preview as the reference fixtures.
+    const originalAssistant=inspector.getByRole('button',{name:'Assistant Message',exact:true});
+    await expect(originalAssistant).toBeVisible();await originalAssistant.click();
+    await expect(inspector.getByRole('combobox')).toHaveCount(0);
+    const originalCall=inspector.getByRole('button',{name:/render_image/});
+    await expect(originalCall).toBeVisible();
+    await page.screenshot({path:'/tmp/rustx-dsh-native-assistant.png',fullPage:true});
+    await originalCall.click();
+    await expect(inspector).toContainText('render_image');
     // Opening the normal detail tab owns automatic bounded reads at its retained cut.
     await inspector.getByRole('tab', { name: 'Payload', exact: true }).click();
     let selectedField = inspector.getByRole('tabpanel');
-    await expect(selectedField.locator('pre').last()).toHaveText('{}');
+    // Empty trees have no rows; their visible braces belong to the surrounding JSON view.
+    await expect(selectedField.getByRole('tree',{name:'Payload JSON'})).toBeAttached();
+    await expect(selectedField).toHaveText(/^\{\s*\}$/);
     await inspector.getByRole('tab', { name: 'Result', exact: true }).click();
     selectedField = inspector.getByRole('tabpanel');
-    await expect(selectedField).toContainText('"tool_call_id":"chat-image"');
-    await expect(selectedField).toContainText('"artifacts":[]');
-    await expect(selectedField).toContainText('"type":"success"');
-    await expect(selectedField).toContainText('"artifact_id":"artifact_1"');
+    await expect(selectedField.getByRole('button',{name:'Preview artifact_1',exact:true})).toBeVisible();
+    await expect(selectedField).not.toContainText('tool_call_id');
     await expect(selectedField).not.toContainText('iVBORw0KGgo');
     await expect(selectedField.getByRole('combobox', { name: 'Collection', exact: true })).toHaveCount(0);
     await inspector.getByRole('tab', { name: 'Schema', exact: true }).click();
     selectedField = inspector.getByRole('tabpanel');
-    await expect(selectedField.locator('pre').last()).toContainText('"name":"render_image"');
+    await expect(selectedField.getByRole('heading',{name:'render_image',exact:true})).toBeVisible();
+    await expect(selectedField.getByRole('tree',{name:'render_image parameters JSON'})).toBeVisible();
     await expect(page.getByRole('button', { name: /Read content|Read original value|Read next chunk|Read first page/ })).toHaveCount(0);
     await expect(page.getByText('Content deferred', { exact: true })).toHaveCount(0);
     await page.screenshot({ path: 'test-results/trajectory-inspector.png', fullPage: true });

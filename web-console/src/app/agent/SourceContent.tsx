@@ -1,21 +1,12 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { AttachmentTarget, ContentBinding, ContentChunk, ContentRef } from '../../../../protocol/app-server/v50';
 import { ContentCache } from '../../../../protocol/app-server/content-cache';
 import { contentRefKey } from '../../../../protocol/app-server/content-identity';
 import type { AppServerClient } from '../../client/app-server';
 import { useTranslation } from '../../locale/react';
 
-export async function readContentText(cache: ContentCache, reference: ContentRef, current: () => boolean) {
-  const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }), parts: string[] = [];
-  let offset: number | undefined = 0;
-  do {
-    if (!current()) throw Error('Content view was replaced.');
-    const chunk = await cache.read(reference, offset, current);
-    parts.push(reference.representation === 'binary_bytes' ? Array.from(chunk.bytes, byte => String.fromCharCode(byte)).join('') : decoder.decode(chunk.bytes, { stream: chunk.next !== undefined }));
-    offset = chunk.next;
-  } while (offset !== undefined);
-  return reference.representation === 'binary_bytes' ? btoa(parts.join('')) : parts.join('');
-}
+export { readContentText } from '../../client/content-text';
+import { readContentText } from '../../client/content-text';
 
 /** Transport chunks are assembled inside the selected content's normal view. */
 export function SourceContent({ client, target, agentId, bindings, owned, read, explicit = false, children, fallback }: {
@@ -46,6 +37,6 @@ export function SourceContent({ client, target, agentId, bindings, owned, read, 
   }, [identity, client, read, active]);
   if (!selected.length) return null;
   if (loaded?.error) return <p role="alert">{loaded.error}</p>;
-  return loaded?.text ? <>{loaded.text.map((text, index) => <div key={index}>{children ? children(text) : <pre>{text}</pre>}</div>)}</>
+  return loaded?.text ? <>{loaded.text.map((text, index) => <Fragment key={index}>{children ? children(text) : <pre>{text}</pre>}</Fragment>)}</>
     : fallback ?? <p role="status">{tx('trajectory:details.loading')}</p>;
 }

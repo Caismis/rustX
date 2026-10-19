@@ -110,8 +110,7 @@ export function SubagentSurface({ children, mode = 'chat' }: { children: ReactNo
   const scope = useSubagents(), tx = useTranslation();
   return <>{scope?.full && <p role="status">{tx('common:subagents.view-capacity')}</p>}{scope?.headerError && <p role="alert">{scope.headerError}</p>}<div className={css.parentSurface} hidden={!!scope?.selected}>{children}</div>
     {scope?.opened.map(agent => <div key={`${scope.sessionId}:${agent.agent_id}`} hidden={scope.selected?.agent_id !== agent.agent_id} className={`${conversationCss.scrollBody} ${css.childSurface}`} data-conversation-scroll>
-      <button type="button" onClick={() => scope.close(agent.agent_id)}>{tx('common:subagents.close-view')}</button>
-      <AgentCard onMode={scope.onMode} mode={mode} visible={scope.selected?.agent_id === agent.agent_id} agent={agent} metrics={scope.metrics[agent.agent_id]} metricsError={scope.metricErrors[agent.agent_id]} client={scope.client} sessionId={scope.sessionId}/>
+      <AgentCard close={() => scope.close(agent.agent_id)} onMode={scope.onMode} mode={mode} visible={scope.selected?.agent_id === agent.agent_id} agent={agent} metrics={scope.metrics[agent.agent_id]} metricsError={scope.metricErrors[agent.agent_id]} client={scope.client} sessionId={scope.sessionId}/>
     </div>)}</>;
 }
 

@@ -113,9 +113,7 @@ test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy gate, exact adoption 
     await boundary.click();
     await page.getByRole('tab', { name: 'Diff', exact: true }).click();
     const inspector = page.getByRole('complementary', { name: 'Event details' });
-    const selectedField = inspector.getByRole('combobox', { name: 'Request options JSON' });
-    await expect(selectedField).toBeVisible();
-    await selectedField.selectOption('effective_system_prompt');
+    await expect(inspector.getByRole('combobox', { name: 'Request options JSON' })).toHaveCount(0);
     await expect(inspector.getByRole('button', { name: 'Read original value', exact: true })).toHaveCount(0);
     await expect(page.getByRole('complementary', { name: 'Event details' }).getByRole('tabpanel')).toContainText('TRACE_NEW_INSTRUCTIONS');
     await page.screenshot({ path: 'test-results/trajectory-native-adoption.png' });

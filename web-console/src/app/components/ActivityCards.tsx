@@ -24,7 +24,7 @@ import { SubagentTrajectory, type SubagentTraceHandle } from '../agent/SubagentT
 import { ComposerSeat } from '../agent/ComposerSeat';
 import { AgentComposer } from '../agent/AgentComposer';
 import { ArtifactResources } from '../../client/artifacts';
-import { IconRefreshOutline14, IconClockOutline16 } from '../../presentation/primitives/icons';
+import { IconRefreshOutline14, IconClockOutline16, IconCloseOutline16 } from '../../presentation/primitives/icons';
 
 const detail = (value: string) => value.length > 1024 ? `${value.slice(0, 1024)}…` : value;
 export const workflowKey = (id: WorkflowRunId) => JSON.stringify([id.conversation_id, id.attempt_id, id.invocation]);
@@ -67,7 +67,7 @@ function useActivityRequest({ client, sessionId }: Controls) {
 }
 
 /** Durable identity is the React key; the selected transcript survives resume. */
-export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible = true, embedded = false, onMode, ...controls }: { agent: RuntimeClientAgent; metrics?: AgentStatistics; metricsError?: string; mode?: 'chat' | 'trajectory'; visible?: boolean; embedded?: boolean; onMode?: (mode: 'chat' | 'trajectory') => void } & Controls) {
+export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible = true, embedded = false, onMode, close, ...controls }: { agent: RuntimeClientAgent; metrics?: AgentStatistics; metricsError?: string; mode?: 'chat' | 'trajectory'; visible?: boolean; embedded?: boolean; onMode?: (mode: 'chat' | 'trajectory') => void; close?: () => void } & Controls) {
   const tx = useTranslation();
   const trace = useRef<SubagentTraceHandle>(null);
   const [headerHost, setHeaderHost] = useState<HTMLElement | null>(null);
@@ -131,7 +131,6 @@ export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible
   const acceptsMessage = agent.state === 'active' || agent.state === 'inactive';
   return <AgentConversationContext.Provider value={agent}><ArtifactContext.Provider value={artifacts}><PreviewContext.Provider value={scopedPreview}><section className={css.agentConversation} data-agent-id={agent.agent_id} data-agent-state={agent.state} data-view={mode} data-activation-id={agent.current_activation ?? undefined} aria-label={tx('common:activity.agent-label', { name: agent.agent })}>
     <div hidden={mode !== 'chat'} className={css.agentChat}><JournalSourceProvider content={conversation?.content} messages={conversation?.snapshot?.messages} transcript={conversation?.snapshot?.transcript} source={client&&admission&&conversation?.checkpoint ? {client,target:admission.target,agentId:agent.agent_id,cut:()=>conversation.checkpoint?.read_cut,owned:ownsContent} : undefined}><ToolInspectionContext value={inspect}><SubagentChat client={client} sessionId={sessionId} admission={admission} agent={agent} snapshot={conversation?.snapshot} visible={visible && mode === 'chat'}>
-      {conversation?.phase === 'durableOnly' && <p role="status">{tx('common:activity.durable-only')}</p>}
       {transcriptLoading && !conversation && <p role="status">{tx('common:activity.reading')}</p>}
       {metricsError && <p role="alert">{metricsError}</p>}
       {transcriptError && <p role="alert">{transcriptError}</p>}
@@ -144,6 +143,7 @@ export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible
       <span className={css.headerStatus} role="status"><StateDot state={agentDot(agent)}/>{agentStatus(agent, tx)}{request.pending && <span>{tx('common:activity.waiting-runtime')}</span>}</span>
       <button type="button" aria-label={tx('common:activity.transcript')} title={tx('common:activity.transcript')} disabled={request.disabled} onClick={() => refreshTranscript(value => value + 1)}><IconRefreshOutline14/></button>
       <button type="button" aria-label={tx('common:activity.wait-activation')} title={tx('common:activity.wait-activation')} disabled={waitRequest.disabled || unavailable} onClick={() => void waitRequest.run(async (client, target, current) => { const result = await client.request({ method: 'agent/wait', params: { target, agent_id: agent.agent_id } }, 'agent_wait', undefined, current); if (current()) observeSettlement(result, current); })}><IconClockOutline16/></button>
+      {close && <button type="button" aria-label={tx('common:subagents.close-view')} title={tx('common:subagents.close-view')} onClick={close}><IconCloseOutline16/></button>}
     </div>, headerHost)}
     <ComposerSeat>
       {!client && <div role="status"><StateDot state={agentDot(agent)}/>{agentStatus(agent, tx)}</div>}

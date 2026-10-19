@@ -608,6 +608,7 @@
         "./layout",
         "./search",
         "./timeline",
+        "./useTraceContexts",
         "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -667,7 +668,7 @@
           "treatment": "Toolbar markup adapted; Actual time stays a visible rustX switch."
         }
       ],
-      "local_sha256": "cc97b7ef342a38dbb016379a03c470f14bb13b5dec5c6b0e0ca290a3f5533254"
+      "local_sha256": "f8f6ffc58f7c42ef40c84dc594175234a99af30f7442b418283d2770e34080b1"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
@@ -678,23 +679,22 @@
         "../../../../protocol/app-server/trace-identity",
         "../../../../protocol/app-server/v50",
         "../../client/trace",
+        "../../client/trace-content",
         "../../locale/react",
         "../../locale/translation",
         "../../presentation/markdown/CodeBlock",
         "../../presentation/markdown/MarkdownText",
+        "../../presentation/primitives/Button",
         "../../presentation/primitives/JsonTree",
         "../../presentation/primitives/clipboard",
         "../../presentation/primitives/icons",
+        "../../presentation/primitives/json",
         "../components/Artifact",
-        "./TraceContexts",
-        "./TraceFields",
-        "./TraceMessages",
-        "./TraceRequestFields",
-        "./TraceToolFields",
         "./Trajectory.module.css",
         "./TrajectoryCell",
         "./layout",
         "./timeline",
+        "./useTraceContent",
         "diff",
         "react"
       ],
@@ -732,7 +732,7 @@
           "treatment": "Details header (role tag, section/group location, icon close) adapted."
         }
       ],
-      "local_sha256": "0ab8756a46d285ecd21c8d080db31d8ce47a3555be107a41c7d398cd9eff2cbd"
+      "local_sha256": "976d8613501aaa77834dd2b4879a63f53ffd50c928974f845e09474f30d05235"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.module.css",
@@ -1832,6 +1832,7 @@
         "./JsonTree.module.css",
         "./Menu",
         "./icons",
+        "./json",
         "clsx",
         "react"
       ],
@@ -1845,7 +1846,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "de80316bff8bfa77c620580cd33320835423dca1e16a4d9827ea62ea916aafb6"
+      "local_sha256": "1569bf5d2c27acc952f9ba09893b331f6b7a30cea45357d5eeb76b164b162038"
     },
     {
       "upstream": "packages/client/ui-primitives/src/Menu.module.css",
@@ -5700,7 +5701,7 @@
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "9a4d39d5bf5d3e1fc4ee9ff6f3d7692156b3b2a858a8de1d399b693be2665c16"
+      "local_sha256": "beca9a803e438912d02c3e2dd77282ae5547eb369d988a63332b09937f14ff6b"
     },
     {
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",

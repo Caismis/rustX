@@ -852,3 +852,16 @@ it('T13/T19 a deferred Audit shows positive publication settlement without inven
  expect(s.attempt!.phase.type).toBe('running');
  expect(s.messages).toEqual([]);
 });
+
+it('automatically reads a deferred model configuration before selection and keeps its independent Summary policy', async () => {
+ const summaryModel = { mode: 'explicit' as const, model: 'example/summary', request_params: { temperature: 0.1 }, max_output_tokens: 64 };
+ profileFixture({ model: 'example/chat', profile: 'fast', summaryModel }, ['example/chat', 'example/other']);
+ await server.attached('A');
+ const observed = server.client.getSnapshot().views.A.snapshot!;
+ observed.model = undefined; observed.model_status = { available: true, body_deferred: true, binding_revision: '1' };
+ render(<Control/>); await openModels();
+ expect(count('session/model')).toBeGreaterThan(0);
+ fireEvent.click(screen.getByRole('menuitem', { name: 'Model' })); await chooseRow('example/other');
+ expect(sent()).toEqual([{ model: 'example/other', summaryModel }]);
+ expect(screen.queryByText('Loading…', { exact: true })).toBeNull();
+});
