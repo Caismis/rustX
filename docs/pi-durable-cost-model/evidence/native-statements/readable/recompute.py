@@ -40,6 +40,14 @@ def derive(value,scope,case):
  result['max_sampled_anon_pss_mib']=max(counters(r)[2] for r in points)
  return result
 raw={};statuses={};checked=0
+metadata_names={str(Path(name).parent/'manifest.json') for name in wanted}
+if a.root:
+ metadata={name:json.loads((a.root/name).read_text()) for name in metadata_names}
+else:
+ with tarfile.open(a.archive,'r:xz') as archive:
+  metadata={name:json.load(archive.extractfile(name)) for name in metadata_names}
+# These retained reports were produced at 100 Hz; reject a differing layout.
+assert metadata and all(type(value['clock_ticks']) is int and value['clock_ticks']==100 for value in metadata.values())
 if a.root:
  for name in wanted:
   data=(a.root/name).read_bytes();assert hashlib.sha256(data).hexdigest()==hashes[name];scope,case=wanted[name];raw[name]=derive(json.loads(data),scope,case)

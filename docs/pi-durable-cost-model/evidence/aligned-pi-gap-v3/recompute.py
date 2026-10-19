@@ -52,6 +52,9 @@ def derive(data):
 
 with tarfile.open(a.archive, 'r:xz') as archive:
     manifest = json.load(archive.extractfile('MANIFEST.json'))
+    for mode in ['no-live-subscriber','live-subscriber']:
+        metadata = json.load(archive.extractfile(f'{prefix}/{mode}/manifest.json'))
+        assert type(metadata['clock_ticks']) is int and metadata['clock_ticks'] == 100
 checked = 0
 with tarfile.open(a.archive, 'r|xz') as archive:
     for member in archive:
