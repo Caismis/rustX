@@ -304,8 +304,8 @@ use crate::context::{
 use crate::conversation::ConversationState;
 use crate::conversation::SurfaceRevision;
 use crate::durable::{
-    ConversationStore, ConversationStoreError, InboundDraft, SurfaceUserMessageBoundary,
-    SurfaceUserMessageBoundaryPage, TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT, TranscriptPage,
+    ConversationStore, ConversationStoreError, InboundDraft, TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT,
+    TranscriptPage,
 };
 use crate::events::types::RuntimeEvent;
 use crate::message::types::{InboundKind, MessageBlock, UserContentBlock, UserSource};
@@ -331,7 +331,6 @@ use crate::runtime::observation::{
 };
 use crate::runtime::request_history::RequestHistory;
 use crate::runtime::resources::{RuntimeResourceLoader, RuntimeResourceSnapshot};
-use crate::runtime::transcript_history::TranscriptHistory;
 use crate::runtime::types::{
     ApprovalMode, CancellationReason, ConversationLifecycle, ConversationLifecycleState,
     DurabilityFailureCommit, DurabilityGate, DurableOperation, RuntimeClock, SystemClock,
@@ -6521,16 +6520,6 @@ impl ConversationRuntime {
         RequestHistory::new(self.inner.store.clone())
     }
 
-    /// Returns a durable read handle for the derived transcript.
-    ///
-    /// The handle retains no transcript rows. Each page resolves references
-    /// through Pending Inbound, the Message Ledger, the publication plane, or
-    /// the Event Journal at read time.
-    #[must_use]
-    pub fn transcript_history(&self) -> TranscriptHistory {
-        TranscriptHistory::new(self.inner.store.clone())
-    }
-
     /// Reads one bounded page of the derived transcript.
     ///
     /// `before` is an exclusive durable transcript cursor. With no cursor the
@@ -6546,94 +6535,6 @@ impl ConversationRuntime {
         limit: usize,
     ) -> Result<TranscriptPage, ConversationStoreError> {
         self.inner.store.load_transcript_page(before, limit)
-    }
-
-    /// Reads one exact historical canonical Surface revision through the
-    /// durable `ConversationStore`. This is a materialization seam for the
-    /// native Session layer: it returns evidence of the selected revision and
-    /// never recomputes history with today's context or provider rules.
-    ///
-    /// The returned messages are a snapshot of the selected linear lineage;
-    /// they carry no runtime lifecycle facts such as attempts, requests, or
-    /// Event Journal ownership.
-    ///
-    /// # Errors
-    ///
-    /// Returns the durable store error when the requested revision is not
-    /// retained or its canonical facts cannot be read.
-    pub fn historical_surface_snapshot(
-        &self,
-        revision: SurfaceRevision,
-    ) -> Result<Vec<MessageBlock>, ConversationStoreError> {
-        self.inner.store.load_surface_snapshot(revision)
-    }
-
-    /// Reads the retained Surface operations through the selected revision,
-    /// in revision order.
-    ///
-    /// This is the third part of a lineage copy. A Surface snapshot says what
-    /// the model can see and the canonical history says what the conversation
-    /// is; this says how the one became the other. A copy that dropped it
-    /// would show the right Surface over a history that never happened, and
-    /// the copy's *own* fork and tree boundaries are read out of that history
-    /// — see [`crate::durable::LineageSeed`].
-    ///
-    /// # Errors
-    ///
-    /// Returns the durable store error when the selected revision is not
-    /// retained or its operation history cannot be read.
-    pub fn historical_surface_history(
-        &self,
-        through: SurfaceRevision,
-    ) -> Result<Vec<crate::conversation::SurfaceOp>, ConversationStoreError> {
-        self.inner.store.load_surface_history(through)
-    }
-
-    /// Reads the first retained Surface revision for each ordinary inbound
-    /// user message through the selected revision. This is the native Session
-    /// boundary read and avoids replaying and materializing every revision.
-    ///
-    /// # Errors
-    ///
-    /// Returns the durable store error when the selected revision or its
-    /// canonical facts cannot be read.
-    pub fn historical_user_message_boundaries(
-        &self,
-        through: SurfaceRevision,
-    ) -> Result<Vec<SurfaceUserMessageBoundary>, ConversationStoreError> {
-        self.inner.store.load_user_message_boundaries(through)
-    }
-
-    /// Reads one bounded page of historical user-message boundaries for the
-    /// native Session tree projection.
-    ///
-    /// # Errors
-    ///
-    /// Returns the durable store error when the selected revision is not
-    /// retained, its canonical facts cannot be read, or the page limit is
-    /// invalid.
-    pub fn historical_user_message_boundaries_page(
-        &self,
-        through: SurfaceRevision,
-        offset: usize,
-        limit: usize,
-    ) -> Result<SurfaceUserMessageBoundaryPage, ConversationStoreError> {
-        self.inner
-            .store
-            .load_user_message_boundaries_page(through, offset, limit)
-    }
-
-    /// Reads the current committed Surface head revision alone.
-    ///
-    /// A boundary page is selected against the head the reader is looking at,
-    /// and materializing every Surface message to learn that one number would
-    /// be a durable read the caller never uses.
-    ///
-    /// # Errors
-    ///
-    /// Returns the durable store error when the head cannot be read.
-    pub fn historical_head_revision(&self) -> Result<SurfaceRevision, ConversationStoreError> {
-        Ok(self.inner.store.load_head()?.revision)
     }
 
     /// Selects the current committed Surface head and materializes that exact
