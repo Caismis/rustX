@@ -1,3 +1,4 @@
+import { registrationId } from "./support/app-server-peer.ts";
 import { domainReceipt } from './support/fixtures.ts';
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -61,7 +62,7 @@ test("wait-agent retains the returned captured activation while an Agent has res
   const waiting = h.session.waitAgent("agent-child");
   const request = await nextRequest(h, "agent/wait");
   const resumed = subagent("worker", "frozen", "active", { activation_id: "activation-b", current_activation: "activation-b" });
-  h.session.updateState(state => ({ ...state, agents: [resumed] }));
+  h.session.applyNotification({ jsonrpc: "2.0", method: "session/event", params: { registration_id: registrationId(h.target), target: h.target, cursor: "1", event: { type: "agent_updated", position: 0, agent: resumed } } });
   h.transport.respond(request.id, { type: "agent_wait", agent_id: "agent-child", activation_id: "activation-a", outcome: "succeeded" });
   const settled = await waiting;
   assert.equal(settled.activation_id, "activation-a");
@@ -116,7 +117,7 @@ for (const outcome of ["cancelled", "succeeded"] as const) {
     const interrupting = h.session.interruptAgent(first.agent_id);
     const request = await nextRequest(h, "agent/interrupt");
     const resumed = { ...first, activation_id: "activation-b", current_activation: "activation-b" };
-    h.session.updateState(state => ({ ...state, agents: [resumed] }));
+    h.session.applyNotification({ jsonrpc: "2.0", method: "session/event", params: { registration_id: registrationId(h.target), target: h.target, cursor: "1", event: { type: "agent_updated", position: 0, agent: resumed } } });
     h.transport.respond(request.id, { type: "agent_interruption_accepted", agent_id: first.agent_id, activation_id: "activation-a" });
     h.transport.respond(wait.id, { type: "agent_wait", agent_id: first.agent_id, activation_id: "activation-a", outcome });
     const result = await interrupting;

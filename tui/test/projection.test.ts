@@ -1,4 +1,4 @@
-import { checkpointSnapshot } from '../../protocol/app-server/projection.ts';
+import { checkpointSnapshot, foldRuntimeEvent } from '../../protocol/app-server/projection.ts';
 import { checkpoint } from './support/fixtures.ts';
 import { nativeInteraction } from './support/fixtures.ts';
 import { contentAdvance, utf8Length } from './support/fixtures.ts';
@@ -13,6 +13,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  historyPresentation,
   mergeTranscriptPage,
   presentationCheckpoint,
   reduce,
@@ -354,6 +355,43 @@ describe("presentation projection", () => {
       "13",
     );
     assert.equal(state.pendingInteractions.length, 0, "historical audit is not a waiter");
+  });
+
+  it("reads every native-owned fact of a batch from one shared fold, not a second terminal fold", () => {
+    const seed = snapshot();
+    const state = replaceFromSnapshot(seed, runtimeCursor(0));
+    const message = { id: "queued", content: [{ type: "text" as const, text: "first" }], source: "human" as const, kind: "message" as const };
+    const transition: RuntimeClientEvent = {
+      type: "projection_transition",
+      metadata: { read_cut: checkpoint(seed).read_cut, content: [], collections: [] },
+      events: [
+        { type: "inbound_enqueued", sequence: "1", message, transcript_cursor: transcriptCursor(1) },
+        { type: "pending_inbound_changed", pending: [{ sequence: "1", revision: "1", message: { ...message, content: [{ type: "text", text: "edited" }] } }] },
+        { type: "job_updated", position: 0, job: backgroundExecution("job-1", "running") },
+      ],
+    };
+    const next = reduce(state, { cursor: runtimeCursor(1), event: transition });
+    // The authoritative repair from the same native fold agrees on every
+    // native-owned fact; only the terminal transcript adaptation differs.
+    const repaired = replaceFromSnapshot(foldRuntimeEvent(checkpointSnapshot(checkpoint(seed)), transition), runtimeCursor(1));
+    const { transcript: _t, transcriptNextCursor: _n, statistics: _s, deferredTranscriptEntries: _d, ...owned } = next;
+    const { transcript: _rt, transcriptNextCursor: _rn, statistics: _rs, deferredTranscriptEntries: _rd, ...repairedOwned } = repaired;
+    assert.deepEqual(owned, repairedOwned);
+    assert.deepEqual(next.inbound.pending?.map(item => item.revision), ["1"]);
+    // The edit inside the batch rewrites exactly the row the enqueue displayed.
+    assert.deepEqual(
+      next.transcript.map(entry => entry.kind === "committed" && entry.message.role === "user" && entry.message.content),
+      [[{ type: "text", text: "edited" }]],
+    );
+    const removed = reduce(next, { cursor: runtimeCursor(2), event: { type: "pending_inbound_changed", pending: [] } });
+    assert.deepEqual(removed.transcript, []);
+  });
+
+  it("refuses an observation that has no native checkpoint to fold into", () => {
+    assert.throws(
+      () => reduce(historyPresentation("conversation", { entries: [], statistics: undefined } as never), { cursor: runtimeCursor(1), event: { type: "runtime_shutdown" } }),
+      /No authoritative checkpoint/,
+    );
   });
 
   it("adds a user transcript row only when the durable acceptance event arrives", () => {
@@ -1134,7 +1172,8 @@ describe("presentation projection", () => {
           cursor: runtimeCursor(42),
           event: { type: "future_variant" } as unknown as RuntimeClientEvent,
         }),
-      /unreachable Runtime Client event/,
+      // The shared native fold is the first authority to see the variant.
+      /Unknown Runtime Client event/,
     );
   });
 

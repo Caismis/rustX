@@ -1240,12 +1240,6 @@ export class AppServerSession {
     await this.#call("session/switchNode", { target: this.#target, node_id: nodeId }, "session");
   }
 
-  /** Applies a pure local transformation of transient client state. */
-  updateState(update: (state: PresentationState) => PresentationState): void {
-    this.#state = update(this.#state);
-    this.#publish();
-  }
-
   // -------------------------------------------------------------------------
   // Internals
   // -------------------------------------------------------------------------
