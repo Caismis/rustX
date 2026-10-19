@@ -33,6 +33,10 @@ concurrency:
   group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  # Prepared inputs require an identical Node patch on producer and consumers.
+  RUSTX_CI_BROWSER_NODE: "24.21.0"
+
 jobs:
   plan:
     name: Verification plan
@@ -887,7 +891,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: "${{ env.RUSTX_CI_BROWSER_NODE }}"
       - name: Install pinned browser toolchain
         working-directory: web-console
         run: |
@@ -954,7 +958,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: "${{ env.RUSTX_CI_BROWSER_NODE }}"
       - name: Install pinned Web dependencies
         working-directory: web-console
         run: |
@@ -1014,7 +1018,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: "${{ env.RUSTX_CI_BROWSER_NODE }}"
       - name: Install pinned browser toolchain
         working-directory: web-console
         run: |
@@ -1084,7 +1088,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: "${{ env.RUSTX_CI_BROWSER_NODE }}"
       - name: Install pinned browser toolchain
         working-directory: web-console
         run: |
