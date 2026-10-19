@@ -50,6 +50,24 @@ async function mount(host = hostFixture()) {
   return host;
 }
 const methods = () => server.requests.map(row => row.request.method);
+it('new conversations can browse their selected workspace without allocating or attaching a Session', async () => {
+  const host = hostFixture(false);
+  host.workbench = vi.fn(async (_scope, { target, request }) => {
+    if (!('workspace_id' in target)) throw new Error('Expected the selected workspace');
+    return request.kind === 'files' ? { entries: [{ name: `${target.workspace_id}.txt`, directory: false, link: false }] } : { terminals: [], shells: ['/bin/sh'] };
+  });
+  await mount(host);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Select Workspace Workspace A' })));
+  await act(async () => fireEvent.click(document.querySelector('[data-preview-toggle]')!));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: /Workspace files/ })));
+  expect(await screen.findByRole('button', { name: 'wA.txt' })).toBeTruthy();
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Select Workspace Workspace B' })));
+  expect(screen.queryByRole('button', { name: 'wA.txt' })).toBeNull();
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: /Workspace files/ })));
+  expect(await screen.findByRole('button', { name: 'wB.txt' })).toBeTruthy();
+  expect(methods().filter(method => ['session/create', 'session/attach', 'turn/start'].includes(method))).toEqual([]);
+  expect(server.loaded.size).toBe(0);
+});
 it('cold grouping and Workspace selection issue no attach, cancel, unload, settings write, or trust operation', async () => {
   const host = await mount(hostFixture(false));
   expect(screen.queryByLabelText('Session cwd')).toBeNull();

@@ -51,6 +51,13 @@ if (new URL(location.href).searchParams.has('composer-layout')) {
     return {type:'model_set',settings_revision:'1'};
   });
 }
-await server.attached('A');
-localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
+if (new URL(location.href).searchParams.has('draft')) {
+  server.workspaceHost.resolveWorkspace = async id => ({ cwd: catalog.workspaces.find(workspace => workspace.id === id)!.displayPath });
+  server.workspaceHost.configureWorkspace = async id => ({ kind: 'read', projection: { ...cfg3Source(), prospective_approval_mode: 'full_access', target: { kind: 'workspace', directory: catalog.workspaces.find(workspace => workspace.id === id)!.displayPath } } });
+  await server.connect();
+  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: [] }));
+} else {
+  await server.attached('A');
+  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
+}
 createRoot(document.getElementById('root')!).render(<App client={server.client} workspaceHost={server.workspaceHost}/>);

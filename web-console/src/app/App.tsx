@@ -14,6 +14,7 @@ import { ConversationSeat, ConversationStatus } from './agent/ConversationSeat';
 import { readTheme, applyTheme } from './appearance';
 import { Settings } from './settings/Settings';
 import type { ProductHostWorkspaces } from '../workspaces/host';
+import type { WorkbenchTarget } from '../workspaces/workbench';
 import { HttpWorkspaceHost } from '../workspaces/http-host';
 import { WorkspaceAuthority } from '../workspaces/authority';
 import { WorkspaceAssociations } from '../workspaces/associations';
@@ -162,6 +163,9 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
 
   const selectedView = selected ? state.views[selected] : center.kind === 'new-conversation' && routeState.context.draftSession ? state.views[routeState.context.draftSession.sessionId] : undefined;
   const view = selectedView?.deleting && !selectedView.target ? undefined : selectedView;
+  const workbenchTarget: WorkbenchTarget | undefined = view?.summary
+    ? { session_id: view.id, active_node: view.summary.active_node }
+    : center.kind === 'new-conversation' && workspace ? { workspace_id: workspace } : undefined;
   useLayoutEffect(() => previewOwner.selectSession(selected), [previewOwner, selected]);
   const artifacts = useMemo(() => selected && view?.target ? new ArtifactResources(client, selected) : undefined, [client, selected, view?.target, state.generation, state.authorityRevision, fileAuthority]);
   useEffect(() => () => artifacts?.dispose(), [artifacts]);
@@ -275,7 +279,7 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
       forkSession={id => open(id, { id: 'fork' }, geometry)} />}
     settings={wide => <SettingsTrigger wide={wide} onClick={() => { openSettings(userSettingsTarget); geometry.dismissSidebar(); }} />} />}
     rightOpen={previews.mode !== 'collapsed'} rightPanel={geometry => <RightPanel docked={previews.mode !== 'preview'} {...geometry} fullscreen={previews.mode === 'workbench' ? workbenchFullscreen : previews.mode === 'preview' && previews.workspace?.fullscreen} open={previews.mode !== 'collapsed'} title={previews.mode === 'preview' ? tx('artifacts:workspace.title') : tx('artifacts:workbench.start')}>
-      <Workbench renderAgent={(id, visible) => <SubagentAside id={id} visible={visible}/>} fileRef={fileWorkbench} key={JSON.stringify([state.generation, selected, view?.summary?.active_node, workspaceAuthority.getRevision()])} closePanel={collapsePanel} host={workspaceHost} scope={workspaceAuthority.getCatalog()} target={view?.summary ? { session_id: view.id, active_node: view.summary.active_node } : undefined} visible={previews.mode === 'workbench'} floatingVisible={previews.mode === 'workbench' || previews.mode === 'collapsed'} fullscreen={workbenchFullscreen || !geometry.canShow} toggleFullscreen={() => { if (!geometry.canShow) collapsePanel(); else setWorkbenchFullscreen(value => !value); }}/>
+      <Workbench renderAgent={(id, visible) => <SubagentAside id={id} visible={visible}/>} fileRef={fileWorkbench} key={JSON.stringify([state.generation, selected, workbenchTarget, fileAuthority])} closePanel={collapsePanel} host={workspaceHost} scope={workspaceAuthority.getCatalog()} target={workbenchTarget} visible={previews.mode === 'workbench'} floatingVisible={previews.mode === 'workbench' || previews.mode === 'collapsed'} fullscreen={workbenchFullscreen || !geometry.canShow} toggleFullscreen={() => { if (!geometry.canShow) collapsePanel(); else setWorkbenchFullscreen(value => !value); }}/>
       <PreviewWorkspace openWorkbench={() => previewOwner.showWorkbench()} owner={previewOwner} snapshot={previews} focusRequest={previewFocus} returnFocus={returnPreviewFocus}/>
     </RightPanel>}
     overlay={<>

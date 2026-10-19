@@ -3377,7 +3377,7 @@
           "upstream_sha256": "4840dc1d554a4f2457b51339e9195041b6230822c72fc5b10c8f3c2aad971cdb"
         }
       ],
-      "local_sha256": "876d80f01e352387a4419bc2f41fdb594dce3da2526b5b4564be4ce3bcdc4677"
+      "local_sha256": "32d691be5c096c3dc4a7f6c8a951502eaf82ba24377dd7be03f78dc18cfb90e8"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/locales.ts",
@@ -3816,7 +3816,7 @@
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream_sha256": "1edeb3ea847d7e37b8f443741e3e270e6fcad2fd25458a20e2f1c36e967cb75b",
       "classification": "B",
-      "treatment": "Harness start-page capsule layout adapted to native Session-scoped Product Host file browsing and PTY tabs; no upstream stores, RPC or execution authority retained. Restored tab-strip navigation, guide replacement, shell menu and bounded two-pane controls.",
+      "treatment": "Harness start-page capsule layout adapted to registered Workspace or native Session-scoped Product Host file browsing and PTY tabs; no upstream stores, RPC or execution authority retained. Restored tab-strip navigation, guide replacement, shell menu and bounded two-pane controls.",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../locale/react",
@@ -3829,7 +3829,6 @@
         "../../presentation/primitives/Menu",
         "../../presentation/primitives/icons",
         "../../presentation/right-panel/Workbench.module.css",
-        "../../workspaces/desktop",
         "../../workspaces/host",
         "../../workspaces/workbench",
         "./WorkbenchFiles",
@@ -3842,7 +3841,7 @@
         "Harness slot registry",
         "Harness terminal Host and Session store"
       ],
-      "local_sha256": "96571c0b17d055570cf0be34d5b0c02fd2627db5bf1665c5d3cf55da085c71fc",
+      "local_sha256": "283d1e5103b3353b54e7b64b5cd0485e9843dd549c123db3d714ead0de0bdda6",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-sidebar-terminal/src/client/TerminalGuide.tsx",
