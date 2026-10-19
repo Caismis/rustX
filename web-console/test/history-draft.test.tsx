@@ -6,6 +6,7 @@ import { ComposerDraft } from '../src/app/composer/draft';
 import { App } from '../src/app/App';
 import { Server, snapshot } from './fixture';
 import { routeFixture } from './shell-navigation-fixture';
+import { firstSubmissions } from '../src/app/new-conversation/first-submit';
 
 let server: Server;
 afterEach(() => { cleanup(); server?.client.disconnect(); localStorage.clear(); vi.restoreAllMocks(); });
@@ -339,11 +340,11 @@ it('First Submission native acceptance consumes its stable revision while its Co
   await act(async () => f.intake.add([{ file }], server.client.getSnapshot().capabilities!.upload_policy));
   server.held.add('turn/start'); await act(async () => fireEvent.keyDown(f.editor(), { key: 'Enter' }));
   const sent = await server.waitFor('turn/start', 1);
-  expect(server.client.firstSubmissions.draft('0')?.phase).toBe('admitting');
+  expect(firstSubmissions(server.client).draft('0')?.phase).toBe('admitting');
   await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'View source' })));
   await waitFor(() => expect(f.ui.getByText('Exact historical source')).toBeTruthy());
   await act(async () => server.reply(sent));
-  expect(server.client.firstSubmissions.draft('0')?.phase).toBe('admitted');
+  expect(firstSubmissions(server.client).draft('0')?.phase).toBe('admitted');
   await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Return to conversation' })));
   expect(f.editor().value).toBe(''); expect(f.intake.snapshot()).toEqual([]); expect(f.editor().readOnly).toBe(false);
   expect(server.requests.filter(row => row.request.method === 'session/uploadPrepare')).toHaveLength(1);
@@ -355,17 +356,17 @@ it('a late native reply after terminal uncertain First Submission Discard cannot
   await act(async () => f.intake.add([{ file }], server.client.getSnapshot().capabilities!.upload_policy));
   server.held.add('turn/start'); await act(async () => fireEvent.keyDown(f.editor(), { key: 'Enter' }));
   const sent = await server.waitFor('turn/start', 1);
-  expect(server.client.firstSubmissions.draft('0')?.phase).toBe('admitting');
+  expect(firstSubmissions(server.client).draft('0')?.phase).toBe('admitting');
   // A settled uncertain response permits Discard; the in-flight phase did not.
   expect(f.ui.queryByRole('button', { name: /Discard/i })).toBeNull();
   await act(async () => server.socket.deliver({ jsonrpc: '2.0', id: sent.id, error: { code: -32000, message: 'Committed durability unknown', data: { kind: 'committed_durability_uncertain' } } }));
-  expect(server.client.firstSubmissions.draft('0')?.phase).toBe('uncertain');
+  expect(firstSubmissions(server.client).draft('0')?.phase).toBe('uncertain');
   await act(async () => fireEvent.click(f.ui.getByRole('button', { name: /Discard/i })));
-  const discarded = server.client.firstSubmissions.draft('0');
+  const discarded = firstSubmissions(server.client).draft('0');
   fireEvent.change(f.editor(), { target: { value: 'Replacement E2' } });
   const incarnation = f.ui.container.querySelector('[data-editor-incarnation]')!.getAttribute('data-editor-incarnation');
   await act(async () => { server.reply(sent); await server.client.request({ method: 'server/info', params: {} }, 'server_info'); });
-  expect(server.client.firstSubmissions.draft('0')).toBe(discarded);
+  expect(firstSubmissions(server.client).draft('0')).toBe(discarded);
   expect(f.editor().value).toBe('Replacement E2'); expect(f.intake.snapshot()).toEqual([]);
   expect(f.ui.container.querySelector('[data-editor-incarnation]')!.getAttribute('data-editor-incarnation')).toBe(incarnation);
   expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);

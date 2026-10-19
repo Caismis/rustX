@@ -1,6 +1,6 @@
 import { UploadFailure } from '../../client/uploads';
 import { modelPreferences } from '../model-preference';
-import { type AppServerClient } from '../../client/app-server';
+import type { AppServerClient } from '../../client/app-server';
 import { sameTarget } from '../../../../protocol/app-server/attachment-identity';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
 import type { AttachmentTarget } from '../../../../protocol/app-server/v50';

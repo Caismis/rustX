@@ -1,6 +1,8 @@
 import { assign, fromPromise, raise, setup, stateIn, type SnapshotFrom } from 'xstate';
 import type { AvailableConfiguration, ConfigurationApplication } from '../../../../../protocol/app-server/v50';
-import { isOutcomeUncertain, type AppServerClient, type ClientView, type ConnectionState } from '../../../client/app-server';
+import { isOutcomeUncertain } from '../../../client/errors';
+import type { AppServerClient } from '../../../client/app-server';
+import type { ClientView, ConnectionState } from '../../../client/contracts';
 
 /** The native Session configuration authority of exactly one Session. */
 export interface SessionConfigurationPort {

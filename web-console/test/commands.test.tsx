@@ -14,7 +14,7 @@ import { routeFixture } from './shell-navigation-fixture';
 import { CommandSession } from '../src/app/commands/native';
 import { CommandPanel } from '../src/app/commands/CommandPanel';
 import { App } from '../src/app/App';
-import { OutcomeUncertain, RpcFailure } from '../src/client/app-server';
+import { OutcomeUncertain, RpcFailure } from '../src/client/errors';
 import type { MethodResult, Request, SessionNodeObservation, SessionUserMessageBoundaryObservation, UserInputBlock } from '../../protocol/app-server/v50';
 import { Server, snapshot } from './fixture';
 

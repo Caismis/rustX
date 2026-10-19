@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { OutcomeUncertain, RequestNotDispatched } from '../src/client/app-server';
+import { OutcomeUncertain, RequestNotDispatched } from '../src/client/errors';
 import { Server } from './fixture';
 const servers: Server[] = [];
 afterEach(() => { servers.forEach(s => s.client.disconnect()); vi.restoreAllMocks(); });

@@ -16,19 +16,20 @@ import { checkpointSnapshot, foldRuntimeEvent, observationCheckpoint, transition
 import { hasResponseDeadline, requestEffect, requestLane } from '../../../protocol/app-server/method-policy';
 import { laterRepairSequence, olderRepairSequence, retainSourceRepair, sourceRepairDecision, sourceRepairKey } from '../../../protocol/app-server/source-repair';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
-import { FirstSubmissions } from '../app/new-conversation/first-submit';
 import { SessionExportController } from "./session-export";
 import { standaloneTraceCut,inlineTraceDetail,retainedTraceDetailPage,bindTraceDetailReader,TRACE_LIMIT, TRACE_PAGE_SIZE, beginTraceDetail, completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterestBatches,traceInterests, type TraceCache,type TraceFieldReader } from './trace';
 import type {
-  TraceToolLocator, ConfigurationApplication, PendingInboundRef, PendingMutationOutcome, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
-  Request, Request1, Response, RuntimeClientCursor, RuntimeClientSnapshot, RuntimeClientEvent,
-  SessionPersistentState, SessionSummary, ServerCapabilities, UserInputBlock, UploadReceipt, UploadedFile,
-  ConfigRepairReceipt, SourceTarget,
+  TraceToolLocator, ConfigurationApplication, PendingInboundRef, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
+  Request, Request1, Response, RuntimeClientSnapshot, RuntimeClientEvent,
+  UserInputBlock, UploadReceipt, UploadedFile,
+  SourceTarget,
 } from '../../../protocol/app-server/v50';
 import { transferUpload, uploadOperationId } from '../../../protocol/app-server/upload';
-import { HISTORY_PAGE_SIZE, TURN_PAGE_SIZE, sameReadCut, extendTranscriptWindow, installTranscriptWindow, prependTranscript, refreshTranscript, replaceTranscript, turnKey, turnPageCount, type TranscriptCache, type TurnSelection } from './transcript';
+import { HISTORY_PAGE_SIZE, TURN_PAGE_SIZE, sameReadCut, extendTranscriptWindow, installTranscriptWindow, prependTranscript, refreshTranscript, replaceTranscript, turnKey, turnPageCount, type TurnSelection } from './transcript';
 import type { ObservedTurn, ObservedTurnPage } from '../../../protocol/app-server/v50';
 import { ProtocolLog, type WireContext } from './protocol-log';
+import { OutcomeUncertain, RequestAdmissionDeferred, RequestNotDispatched, RpcFailure, isOutcomeUncertain } from './errors';
+import { interactionKey, type CancellationTarget, type ClientView, type CompactionRequestEvidence, type ConnectionState, type GoalControlOutcome, type InboundControlOutcome, type OperationAdmission, type OutlinePagingIntent, type SessionView, type SourceRepairObservation, type Submission } from './contracts';
 
 
 interface OutlineDemand {
@@ -47,145 +48,11 @@ interface OutlineRead {
   refresh: boolean;
 }
 
-/** Exact attachment for a current-Attempt command; attemptId is presentation only. */
-export interface CancellationTarget {
-  readonly generation: number;
-  readonly target: AttachmentTarget;
-  readonly attemptId?: string;
-  readonly attachment: SessionView['attachmentObservation'];
-}
-export type InboundControlOutcome =
-  | { status: 'known'; outcome: PendingMutationOutcome; observed: boolean }
-  | { status: 'uncertain' }
-  | { status: 'obsolete' }
-  | { status: 'rejected'; reason: string; observed: boolean };
-
-export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'resynchronizing' | 'stale' | 'incompatible' | 'error';
-export type OutlinePagingIntent = { type: 'latest' } | { type: 'page'; offset: number };
-export interface CompactionRequestEvidence {
-  /** Presentation ordering only; never resolves an uncertain request. */
-  baselineCount: number;
-  generation: number;
-  requestId: string;
-  authorityId?: string;
-  target: AttachmentTarget;
-  status: 'submitting' | 'uncertain' | 'succeeded' | 'failed';
-  diagnostic?: string;
-  receipt?: Extract<MethodResult, {type:'context_compacted'}>['compaction'];
-}
-export interface SessionView extends Omit<LifecycleFacts, 'error' | 'attachmentIntentRevision'> {
-  /** Readonly actor projection; absent on catalog-only presentation rows. */
-  readonly attachmentIntentRevision?: number;
-  readonly lifecycle?: ReturnType<typeof lifecycleAvailability>;
-  compactionRequest?: CompactionRequestEvidence;
-  id: string;
-  /** Last native catalog row, retained when the Sidebar reads a different page. */
-  summary?: SessionSummary;
-  snapshot?: RuntimeClientSnapshot;
-  checkpoint?: import('../../../protocol/app-server/v50').RuntimeClientCheckpoint;
-  observationState?: import('../../../protocol/app-server/observation').ObservationPhase;
-  interactionDetail?:{target:AttachmentTarget;cut:import('../../../protocol/app-server/v50').CheckpointReadCut;body:import('../../../protocol/app-server/v50').RoutedInteraction};
-  interactionPage?:{target:AttachmentTarget;page:import('../../../protocol/app-server/v50').CheckpointPage;rows:import('../../../protocol/app-server/v50').RuntimeClientInteractionHeader[];offset:number};
-  trace?: TraceCache;
-  cursor?: RuntimeClientCursor;
-  history?: TranscriptCache;
-  /** Read-only durable history, never an execution snapshot or control claim. */
-  preview?: { conversationId: string; history: TranscriptCache };
-  statisticsPreview?: { conversationId: string; nodeId?: string; cut: import('../../../protocol/app-server/v50').CheckpointReadCut; statistics: import('../../../protocol/app-server/v50').ConversationStatistics; occupancy?: import('../../../protocol/app-server/v50').RuntimeClientContextOccupancy | null };
-  tracePreview?: { conversationId: string; cache: TraceCache };
-  turnOutline?: { paging: OutlinePagingIntent; page?: ObservedTurnPage; loading?: boolean; error?: string };
-  turnNavigation?: { intent: number; pending?: string; error?: string };
-  settings?: SessionPersistentState;
-  /** Exact acknowledged MessageIds awaiting projection reconciliation, not queue authority. */
-  submissions?: readonly Submission[];
-  /** Current-generation turn/start or turn/steer requests awaiting an outcome.
-   * Transport ownership only, including unsent requests in the bounded pipeline. */
-  inboundRequests?: number;
-  modelIntent?: { config: import('../../../protocol/app-server/v50').SessionModelConfig; phase: 'waiting' | 'applying' | 'failed'; error?: string };
-  modelMutation?: { generation: number; status: 'in-flight' | 'acknowledged' | 'uncertain' };
-  cancellation?: { attemptId?: string; status: 'in-flight' | 'acknowledged' | 'uncertain' };
-  error?: string;
-}
-/** Exists only after `inbound_accepted` names the server MessageId, which is its
- * sole identity; settles when an authoritative snapshot contains that MessageId. */
-export interface Submission {
-  messageId: string;
-  content: readonly UserInputBlock[];
-}
-/** Settled local outcome of one CAS-bound native Goal control. A known outcome is
- * not projection convergence: `observed` reports whether an authoritative snapshot
- * read after the outcome succeeded. `uncertain` means the response was lost;
- * `obsolete` means the connection or attachment changed and nothing may apply. */
-export type GoalControlOutcome =
-  | { status: 'applied'; observed: boolean }
-  | { status: 'rejected'; reason: string; observed: boolean }
-  | { status: 'uncertain' }
-  | { status: 'obsolete' };
-export interface UncertainOperation {
-  /** Known lineage commit with uncertain durability, distinct from a lost ACK. */
-  committedNode?: { sessionId: string; nodeId: string };
-  diagnostic?: string;
-  uploadOperationId?: string;
-  compactionRequestId?: string;
-  id: string;
-  method: Request1['method'];
-  sessionId?: string;
-  interactionKey?: string;
-  generation: number;
-}
-/** The latest native automatic repair receipt of one configuration source
- * (Issue #464). `receipt` is absent when native retains none for the
- * source — withdrawn, never recorded, or forgotten by its finite ledger —
- * which never says the source is valid. `authorityId` is the negotiated App Server
- * authority that announced it: a receipt id names one repair occurrence
- * within its authority only, so equal ids from distinct authorities are
- * distinct repairs. `sequence` is the native repair-ledger sequence the
- * observation is current at — a notice's `sequence` or a read's
- * `repair_sequence` — which alone orders two observations of a source; a
- * receipt id never does. */
-export interface SourceRepairObservation {
-  authorityId: string;
-  target: SourceTarget;
-  receipt?: ConfigRepairReceipt;
-  sequence: string;
-}
 /** Retained per-source observations are records ordered least recently
  * observed first; the retention rule itself is the protocol's. */
 function retainRepair<V>(sources: Readonly<Record<string, V>>, key: string, value: V): [Record<string, V>, V | undefined] {
   const { retained, forgotten } = retainSourceRepair(Object.entries(sources), key, value);
   return [Object.fromEntries(retained), forgotten];
-}
-export interface ClientView {
-  configuration?: Readonly<Record<string, ConfigurationApplication>>;
-  configurationObservation?: Readonly<Record<string,{version:string;phase:'deferred'|'loading'|'unavailable';error?:string}>>;
-  /** Source repair observations of this connection, by `sourceRepairKey`,
-   * least recently observed first. Source-scoped: never keyed by a Session or
-   * an application scope, replaced on every connection, whose server
-   * announces each latest receipt again, and finite: the User and
-   * `SOURCE_REPAIR_WORKSPACES` Workspaces (`retainSourceRepair`). Repair is
-   * not application: `configuration` reports that. */
-  sourceRepairs?: Readonly<Record<string, SourceRepairObservation>>;
-  authorityRevision?: number;
-  /** Native AppServerHost identity; unlike generation, stable across reconnect. */
-  authorityId?: string;
-  detached?: readonly DetachedEvidence[];
-  endpoint?: string;
-  connection: ConnectionState;
-  generation: number;
-  capabilities?: ServerCapabilities;
-  error?: string;
-  sessions: readonly SessionSummary[];
-  nextOffset?: number | null;
-  views: Readonly<Record<string, SessionView>>;
-  uncertain: readonly UncertainOperation[];
-  interactionOperations: Readonly<Record<string, { sessionId: string; status: 'in-flight' | 'uncertain' | 'acknowledged' }>>;
-}
-/** Read-only historical evidence. Never consulted by attachment/control admission. */
-export interface DetachedEvidence {
-  authority: string;
-  authorityId?: string;
-  operations: readonly UncertainOperation[];
-  sessions: readonly (Pick<SessionView, 'id' | 'error' | 'modelMutation' | 'cancellation'> & { deletion?: 'uncertain' | SessionView['deletionRecovery'] })[];
 }
 export interface Socket {
   readonly readyState: number;
@@ -197,15 +64,6 @@ export interface Socket {
   close(): void;
 }
 export type SocketFactory = (url: string, protocols: string[]) => Socket;
-/** An operation-owned proof, re-observed after transport backpressure and checked
- * synchronously again before send. The transport never interprets Host policy.
- * `validate` must stop its reads when `signal` aborts; the transport never waits for it. */
-export interface OperationAdmission {
-  /** Transport evidence only; called exactly when native dispatch starts. */
-  sent?: () => void;
-  current: () => boolean;
-  validate: (signal: AbortSignal) => Promise<boolean>;
-}
 type SessionAdmission = (id: string, current: () => boolean) => Promise<false | OperationAdmission>;
 /** One installation lifetime of an attachment-admission owner. Identity is the
  * object, never the callback: reinstalling the same callback is a new owner. */
@@ -225,45 +83,6 @@ interface Pending {
   resolve: (result: MethodResult) => void;
   reject: (error: Error) => void;
   timer?: ReturnType<typeof setTimeout>;
-}
-/** The request owner proves that transport dispatch never began. */
-export class RequestNotDispatched extends Error {
-  constructor(cause: unknown) {
-    super(cause instanceof Error ? cause.message : String(cause), { cause });
-  }
-}
-/** Capacity refusal carries the exact readiness cut at which nothing was sent. */
-class RequestAdmissionDeferred extends RequestNotDispatched {
-  constructor(readonly revision: number) { super('Client request capacity reached.'); }
-}
-export class OutcomeUncertain extends Error {
-  constructor() { super('Response lost after transmission. Outcome uncertain; the request was not replayed. Reconnect and inspect authoritative state.'); }
-}
-export function isOutcomeUncertain(error: unknown): boolean {
-  return error instanceof OutcomeUncertain || (error instanceof RpcFailure && ["committed_durability_uncertain", "outcome_unknown"].includes(error.error.data?.kind ?? ""));
-}
-export class RpcFailure extends Error {
-  constructor(readonly error: Extract<Response, { error: unknown }>['error']) {
-    const data = error.data;
-    let message = `${error.message} (${error.code})${data ? `: ${JSON.stringify(data)}` : ''}`;
-    switch (data?.kind) {
-      case 'agent_not_delivered':
-        message = `Agent ${data.agent_id} input was not delivered`;
-        break;
-      case 'agent_delivery_unknown':
-        message = `Agent ${data.agent_id} input acceptance was not acknowledged; delivery is unknown, do not replay automatically`;
-        break;
-      case 'job_publication_abandoned':
-        message = `Job ${data.job_id} terminal publication was abandoned; no durable terminal result is available`;
-        break;
-      case 'agent_settlement':
-        message = `Agent ${data.agent_id} is unavailable; physical settlement, publication, or workspace authority remains unresolved`;
-        break;
-      case 'archive_preparation_failed':
-        message = error.message;
-    }
-    super(message);
-  }
 }
 /** GoalDomain serializes its bounded rejection into the error message. Only the
  * reason is displayed; its embedded `current` is never adopted as authority. */
@@ -287,7 +106,7 @@ const RPC_CAPACITY = 6;
 const VALIDATION_CAPACITY = 2;
 
 const dispatchCurrent = ({ dispatchCurrent: proof }: Pending) => !proof || (typeof proof === 'function' ? proof() : proof.current());
-export const interactionKey = (ref: InteractionRef) => JSON.stringify([ref.conversation_id, ref.interaction_id]);
+
 
 /** One native rustX connection. All retained snapshots are replaceable read caches.
  * Runtime events fold below React; snapshots initialize or repair exact attachments. */
@@ -307,9 +126,14 @@ export class AppServerClient {
   });
   readonly attachmentIntakes = new AttachmentIntakes();
   readonly log = new ProtocolLog();
-  readonly firstSubmissions = new FirstSubmissions();
   /** Final client lifetime ends only explicitly, never on a component unmount. */
-  dispose() { this.attachmentIntakes.dispose(); this.firstSubmissions.dispose(); return this.disconnect(); }
+  dispose() { this.attachmentIntakes.dispose(); for (const listener of [...this.disposeListeners]) listener(); this.disposeListeners.clear(); return this.disconnect(); }
+  private disposeListeners = new Set<() => void>();
+  private authorityListeners = new Set<() => void>();
+  /** Application owners whose local intent lives exactly as long as this client. */
+  onDispose = (listener: () => void) => { this.disposeListeners.add(listener); return () => { this.disposeListeners.delete(listener); }; };
+  /** Application owners that must fence work of a replaced App Server authority. */
+  onAuthorityRetired = (listener: () => void) => { this.authorityListeners.add(listener); return () => { this.authorityListeners.delete(listener); }; };
   private socket?: Socket;
   private initialized = false;
   /** Repair observations this connection delivered before its authority was
@@ -578,7 +402,7 @@ export class AppServerClient {
   private retireAuthority() {
     this.resumeSeeds.clear();
     this.attachmentIntakes.retireAll();
-    this.firstSubmissions.retireAuthority();
+    for (const listener of [...this.authorityListeners]) listener();
     const sessions = Object.values(this.state.views).filter(view => view.deleting || view.error || view.modelMutation || view.cancellation)
       .map(({ id, error, modelMutation, cancellation, deleting, deletionCommitted }) => ({ id, error, modelMutation, cancellation,
         ...(deleting ? { deletion: deletionCommitted ?? 'uncertain' as const } : {}) }));

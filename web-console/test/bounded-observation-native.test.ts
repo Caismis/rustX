@@ -10,7 +10,8 @@ import { TempFixture } from '../../tui/test/support/temp-fixture.ts';
 import { ProviderEmulator } from '../../tui/test/support/provider-emulator.ts';
 import { AppServerHost } from '../../tui/src/app-server/host.ts';
 import type { AppServerSession } from '../../tui/src/app-server/session.ts';
-import { AppServerClient, RpcFailure, type Socket } from '../src/client/app-server';
+import { AppServerClient, type Socket } from '../src/client/app-server';
+import { RpcFailure } from '../src/client/errors';
 import type { AttachmentTarget, ContentRef, RuntimeClientCheckpoint } from '../../protocol/app-server/v50';
 
 /** Real native ownership and transport; every wait follows data or process exit. */

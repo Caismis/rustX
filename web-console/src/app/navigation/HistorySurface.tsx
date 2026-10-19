@@ -2,7 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { DeferredContent } from '../agent/DeferredContent';
 import { CollectionPages, type CollectionRead } from '../agent/CollectionPages';
 import type { ContentRef } from '../../../../protocol/app-server/v50';
-import type { AppServerClient, OperationAdmission } from '../../client/app-server';
+import type { AppServerClient } from '../../client/app-server';
+import type { OperationAdmission } from '../../client/contracts';
 import { extendTranscriptWindow, installTranscriptWindow, sameReadCut } from '../../client/transcript';
 import { ChatViewport } from '../../presentation/layout/ChatViewport';
 import { AgentTranscript } from '../agent/AgentTranscript';

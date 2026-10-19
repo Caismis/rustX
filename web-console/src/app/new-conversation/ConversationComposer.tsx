@@ -5,7 +5,8 @@ import { useClientSelector, transportSelection, sameValue } from '../../client/s
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted EmptyHero and WorkspacePicker; see PROVENANCE.md. */
 import { useEffect, useEffectEvent, useState, useSyncExternalStore, type ComponentProps, type ReactNode } from 'react';
 import type { SessionModelConfig } from '../../../../protocol/app-server/v50';
-import type { AppServerClient, SessionView } from '../../client/app-server';
+import type { AppServerClient } from '../../client/app-server';
+import type { SessionView } from '../../client/contracts';
 import { WorkspaceHostError, type ProductHostWorkspaces, type WorkspaceCatalog } from '../../workspaces/host';
 import type { WorkspaceAuthority, WorkspaceAuthorityObservation } from '../../workspaces/authority';
 import type { WorkspaceAssociations, WorkspaceMutation } from '../../workspaces/associations';
@@ -25,6 +26,7 @@ import { AgentControls } from '../agent/AgentControls';
 import { AgentComposer } from '../agent/AgentComposer';
 import { firstSubmitPort } from './port';
 import { sessionModelBlock, WorkspaceControls, WorkspacePermission } from './WorkspaceControls';
+import { firstSubmissions } from './first-submit';
 
 export function ConversationComposer({ client, host, authority, associations, initialWorkspace, workspacePicked, current, preparePublication, draftOwner, binding, active, activeView, context, consumed }: { draftOwner?: ComposerDraft; authority: WorkspaceAuthority; associations: WorkspaceAssociations; activeView?: SessionView; binding: string; active?: ComponentProps<typeof AgentComposer>; context?: ReactNode; consumed?: { id: string; sequence: number }; client: AppServerClient; host: ProductHostWorkspaces; initialWorkspace?: string; workspacePicked?: (id: string) => void; current: () => boolean; preparePublication: () => ((id: string) => (() => boolean) | void) }) {
   const tx = useTranslation();
@@ -39,7 +41,7 @@ export function ConversationComposer({ client, host, authority, associations, in
   // authority current at its own gesture, and a committed Session survives.
   const transport = useClientSelector(client, transportSelection, sameValue);
   const preference = useModelPreference(transport.endpoint ?? '');
-  const submissions = client.firstSubmissions;
+  const submissions = firstSubmissions(client);
   const flow = useSyncExternalStore(submissions.subscribe, () => submissions.draft(binding) ?? (activeView ? submissions.session(activeView.id) : undefined));
   const drafting = !flow || flow.phase === 'rejected' || flow.phase === 'discarded';
   const pending = !!flow && !['admitted', 'discarded', 'rejected'].includes(flow.phase);

@@ -1,7 +1,8 @@
 import { useTranslation } from '../../locale/react';
 import { useEffect, useRef, useState } from 'react';
-import type { AppServerClient, ClientView, SessionView } from '../../client/app-server';
-import { interactionKey } from '../../client/app-server';
+import type { AppServerClient } from '../../client/app-server';
+import type { ClientView, SessionView } from '../../client/contracts';
+import { interactionKey } from '../../client/contracts';
 import { json } from '../../bindings/projection';
 import { ApprovalTakeover } from '../../presentation/agent/ApprovalTakeover';
 import { Questionnaire } from './Questionnaire';

@@ -5,7 +5,7 @@ import { useState } from 'react';
 import { AgentComposer } from '../../src/app/agent/AgentComposer';
 import { composerPreferences } from '../../src/app/composer/preferences';
 import { createRoot } from 'react-dom/client';
-import { RpcFailure } from '../../src/client/app-server';
+import { RpcFailure } from '../../src/client/errors';
 import { App } from '../../src/app/App';
 import { Server, interaction, snapshot, projectionHead, endpoint } from '../fixture';
 import { traceRecord } from '../trace-fixture';

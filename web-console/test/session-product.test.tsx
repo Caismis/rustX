@@ -1,11 +1,11 @@
 import { translator } from '../src/locale/translation';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import type { ClientView, SessionView } from '../src/client/app-server';
+import type { ClientView, SessionView } from '../src/client/contracts';
 import { deriveSessionProductState } from '../src/bindings/session-product';
 import { App } from '../src/app/App';
 import { Server, snapshot } from './fixture';
-import { RpcFailure } from '../src/client/app-server';
+import { RpcFailure } from '../src/client/errors';
 
 const connected = { connection: 'connected' as const, uncertain: [] };
 const base = (): SessionView => ({ id: 'A', attachment: 'attached', attachmentIntent: 'wanted',

@@ -1,7 +1,7 @@
 import { jobReceipt, compactReceipt } from './fixture';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { MethodResult, Request1 } from '../../protocol/app-server/v50';
-import { OutcomeUncertain, RequestNotDispatched } from '../src/client/app-server';
+import { OutcomeUncertain, RequestNotDispatched } from '../src/client/errors';
 import { Server } from './fixture';
 const servers: Server[] = [];
 afterEach(() => { for (const s of servers.splice(0)) s.client.disconnect(); vi.useRealTimers(); });

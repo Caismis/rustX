@@ -34,7 +34,6 @@
  */
 
 import type {
-  AttachmentTarget,
   InteractionResponse as InteractionResponseValue,
   QuestionSpecification,
   QuestionnaireAnswerEntry,

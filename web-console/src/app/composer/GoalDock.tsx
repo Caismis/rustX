@@ -10,7 +10,7 @@ import { useTranslation } from '../../locale/react';
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import type { GoalMutation, GoalRef, RuntimeClientGoalSnapshot } from '../../../../protocol/app-server/v50';
 import type { GoalDockState } from '../../bindings/composer-context';
-import type { GoalControlOutcome } from '../../client/app-server';
+import type { GoalControlOutcome } from '../../client/contracts';
 import {
   IconCheckOutline14, IconCloseOutline16, IconEditOutline16, IconGoalOutline16, IconPauseOutline16, IconPlayOutline16,
 } from '../../presentation/primitives/icons';

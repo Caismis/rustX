@@ -14,7 +14,9 @@ import {
 import type { ConfigurationPort, WriteOutcome } from '../src/app/settings/machines/port';
 import { ConfigurationSystem } from '../src/app/settings/machines/system';
 import { revisionSelector, userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
-import { OutcomeUncertain, RpcFailure, type AppServerClient, type ClientView, type ConnectionState } from '../src/client/app-server';
+import { OutcomeUncertain, RpcFailure } from '../src/client/errors';
+import type { AppServerClient } from '../src/client/app-server';
+import type { ClientView, ConnectionState } from '../src/client/contracts';
 import type { ProductHostWorkspaces, WorkspaceConfigurationOperation, WorkspaceConfigurationResult } from '../src/workspaces/host';
 import { cfg3Source, cfg3SourceApplication } from './cfg3-data';
 

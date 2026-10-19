@@ -1,5 +1,6 @@
 import { assign, fromCallback, fromPromise, setup, type ActorRefFrom } from 'xstate';
-import type { AppServerClient, OperationAdmission } from '../../client/app-server';
+import type { AppServerClient } from '../../client/app-server';
+import type { OperationAdmission } from '../../client/contracts';
 import type { ConversationWindow, CompletedResponseView, UserInputBlock } from '../../../../protocol/app-server/v50';
 import type { Observation } from '../../client/session-lifecycle/port';
 import { CommandSession, type HistoricalSelection, type HistoryAction } from '../commands/native';
@@ -7,6 +8,7 @@ import type { CommandRequest } from '../commands/CommandPanel';
 import type { ForkOrigin } from '../agent/ForkPoint';
 import type { SettingsNavigationActor, SettingsNavigationEvent } from '../settings/machines/navigation';
 import { installTranscriptWindow } from '../../client/transcript';
+import { firstSubmissions } from '../new-conversation/first-submit';
 
 class RetiredPreparation extends Error {}
 export type ConversationRoute = { kind: 'new-conversation'; workspaceId?: string } | { kind: 'session'; sessionId: string } | { kind: 'session-draft'; sessionId: string };
@@ -76,11 +78,11 @@ async function prepare(input: { client: AppServerClient; pending: Pending; paren
     // attaches or executes the draft. Publication arrives as correlated CREATED.
     return await new Promise<never>((_resolve, reject) => {
       const inspect = () => {
-        const flow = client.firstSubmissions.draft(destination.binding);
+        const flow = firstSubmissions(client).draft(destination.binding);
         if (flow?.session) input.parent.send({ type: 'CREATION.KNOWN', pending, sessionId: flow.session.id });
         if (flow && ['failed', 'rejected', 'uncertain', 'discarded', 'paused'].includes(flow.phase)) { cleanup(); reject(flow.error ?? new Error('Conversation preparation stopped.')); }
       };
-      const release = client.firstSubmissions.subscribe(inspect);
+      const release = firstSubmissions(client).subscribe(inspect);
       const retired = () => { cleanup(); reject(new Error('Conversation publication retired.')); };
       const cleanup = () => { release(); signal.removeEventListener('abort', retired); };
       signal.addEventListener('abort', retired, { once: true }); inspect();
@@ -109,8 +111,8 @@ async function prepare(input: { client: AppServerClient; pending: Pending; paren
   let sessionId = destination.sessionId, content: UserInputBlock[] | undefined;
   let readyObservation: Observation | undefined;
   if (destination.kind === 'session' || destination.kind === 'restore-session') {
-    if (destination.kind === 'restore-session' && client.firstSubmissions.session(sessionId) && !['admitted', 'discarded'].includes(client.firstSubmissions.session(sessionId)!.phase)) {
-      if (client.firstSubmissions.session(sessionId)!.phase === 'attaching') await client.waitForAttachment(sessionId, current);
+    if (destination.kind === 'restore-session' && firstSubmissions(client).session(sessionId) && !['admitted', 'discarded'].includes(firstSubmissions(client).session(sessionId)!.phase)) {
+      if (firstSubmissions(client).session(sessionId)!.phase === 'attaching') await client.waitForAttachment(sessionId, current);
       if (!client.isAttachmentControlCurrent(sessionId, client.getSnapshot().views[sessionId]?.attachmentObservation)) return { pending, route: { kind: 'session-draft', sessionId } };
     } else if (!client.isAttachmentControlCurrent(sessionId, client.getSnapshot().views[sessionId]?.attachmentObservation)) {
       // Native attachment evidence admits publication; supplementary metadata
@@ -217,7 +219,7 @@ export const shellNavigationMachine = setup({
       if (event.type !== 'DRAFT' && event.type !== 'DRAFT.WORKSPACE') return {};
       // Registered Workspace metadata refines a resident draft. A completed or
       // native-owned submission is a different draft when New Conversation is chosen.
-      const flow = context.client.firstSubmissions.draft(String(context.binding));
+      const flow = firstSubmissions(context.client).draft(String(context.binding));
       const resident = context.route.kind === 'new-conversation' && !context.pending && (!flow || ['rejected', 'discarded'].includes(flow.phase));
       const preserve = event.type === 'DRAFT.WORKSPACE' || resident && context.route.kind === 'new-conversation' && context.route.workspaceId === event.workspaceId;
       const route = preserve && event.type === 'DRAFT' ? context.route : { kind: 'new-conversation' as const, workspaceId: event.workspaceId };

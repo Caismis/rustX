@@ -1,6 +1,7 @@
 import { ProjectionHistory } from "./ProjectionHistory";
 import type { RuntimeClientContextView } from '../../../../protocol/app-server/v50';
-import type { AppServerClient, CompactionRequestEvidence } from '../../client/app-server';
+import type { AppServerClient } from '../../client/app-server';
+import type { CompactionRequestEvidence } from '../../client/contracts';
 import { useClientSelector, sameValue } from '../../client/selectors';
 import { useTranslation } from '../../locale/react';
 import css from './ContextSeat.module.css';
