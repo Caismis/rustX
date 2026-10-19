@@ -319,6 +319,8 @@ pub(crate) struct RuntimeClientProjection {
         super::content::ContentRef,
     >,
     read_domains_dirty: bool,
+    /// One explicit checkpoint demand, coalesced until its bounded read completes.
+    read_domains_requested: bool,
     /// Failure of the current read-domain fence; cleared by matching success
     /// or a new invalidating revision, never by an obsolete read.
     read_failure: Option<String>,
@@ -2036,6 +2038,7 @@ impl RuntimeClientProjection {
             prepared_journal: std::collections::BTreeMap::new(),
             live_frontiers: std::collections::BTreeMap::new(),
             read_domains_dirty: false,
+            read_domains_requested: false,
             read_failure: None,
             read_revision: 0,
             domain_revisions: std::collections::BTreeMap::new(),
@@ -6922,7 +6925,25 @@ impl RuntimeClientProjection {
     }
 
     pub(crate) fn read_domain_candidate(&self) -> Option<ReadDomainCut> {
+        if self.subscribers.is_empty() && !self.read_domains_requested {
+            return None;
+        }
         self.read_domain_cut()
+    }
+
+    /// Request hydration for an explicit checkpoint even without subscribers.
+    /// The worker still owns physical reads and their publication fence.
+    pub(crate) fn request_read_domains(&mut self) -> Option<(ReadDomainCut, bool)> {
+        if self.exhausted
+            || (!self.read_domains_dirty && self.read_failure.is_none())
+            || self.validate_source_prefix().is_err()
+        {
+            return None;
+        }
+        let newly_requested = !self.read_domains_requested;
+        self.read_domains_requested = true;
+        self.read_domains_dirty = true;
+        self.read_domain_cut().map(|cut| (cut, newly_requested))
     }
 
     #[cfg(test)]
@@ -6949,18 +6970,8 @@ impl RuntimeClientProjection {
 
     #[cfg(test)]
     pub(crate) fn request_read_domains_for_test(&mut self) {
+        self.read_domains_requested = true;
         self.read_domains_dirty = true;
-    }
-
-    /// An explicit checkpoint may request one retry of a failed derived read.
-    /// Native prefix/layout failures require their own original receipt repair.
-    pub(crate) fn request_failed_read_repair(&mut self) -> Option<(ReadDomainCut, bool)> {
-        if self.exhausted || self.read_failure.is_none() || self.validate_source_prefix().is_err() {
-            return None;
-        }
-        let newly_requested = !self.read_domains_dirty;
-        self.read_domains_dirty = true;
-        self.read_domain_cut().map(|cut| (cut, newly_requested))
     }
 
     pub(crate) fn read_domain_cut(&self) -> Option<ReadDomainCut> {
@@ -6982,6 +6993,7 @@ impl RuntimeClientProjection {
         {
             return false;
         }
+        self.read_domains_requested = false;
         let ReadDomainValues {
             projection_head,
             transcript,
@@ -10233,6 +10245,75 @@ mod tests {
     }
 
     #[test]
+    fn display_reads_follow_observers_and_explicit_checkpoint_demand() {
+        let mut projection = projection();
+        projection.apply(event_observation(RuntimeEvent::TurnStarted));
+        let cut = projection.read_domain_cut().unwrap();
+        assert!(projection.read_domain_candidate().is_none());
+        let cursor = projection.cursor();
+        let (subscriber, _) = projection.subscribe(cursor).unwrap();
+        assert_eq!(projection.read_domain_candidate(), Some(cut.clone()));
+        projection.remove_subscriber(subscriber);
+        assert!(projection.read_domain_candidate().is_none());
+        assert_eq!(projection.read_domain_cut(), Some(cut.clone()));
+        assert_eq!(projection.request_read_domains(), Some((cut.clone(), true)));
+        assert_eq!(
+            projection.request_read_domains(),
+            Some((cut.clone(), false))
+        );
+        assert_eq!(projection.read_domain_candidate(), Some(cut.clone()));
+        assert_eq!(
+            projection.cursor(),
+            cursor,
+            "demand itself publishes nothing"
+        );
+        let domains = super::ReadDomainValues {
+            projection_head: projection.snapshot.context.projection_head.clone(),
+            transcript: projection.snapshot.transcript.clone(),
+            occupancy: projection.snapshot.context.occupancy.clone(),
+            trace: projection.snapshot.trace.clone(),
+            trace_total: 0,
+        };
+        assert!(projection.install_read_domains(&cut, Ok(domains), false));
+        assert!(!projection.read_domains_requested);
+        assert!(projection.read_domain_candidate().is_none());
+        projection.apply(event_observation(RuntimeEvent::TurnStarted));
+        assert!(projection.read_domain_cut().is_some());
+        assert!(
+            projection.read_domain_candidate().is_none(),
+            "a completed request is not a permanent observer"
+        );
+    }
+
+    #[test]
+    fn dormant_display_preserves_serviceable_semantic_replay() {
+        let mut projection = projection();
+        let cursor = projection.cursor();
+        projection.apply(event_observation(RuntimeEvent::AttemptStarted {
+            attempt_id: attempt(),
+        }));
+        projection.apply(event_observation(RuntimeEvent::TurnStarted));
+        projection.apply(event_observation(RuntimeEvent::TurnCompleted));
+        assert!(projection.read_domain_candidate().is_none());
+        let published = projection.cursor();
+        assert!(published > cursor);
+        let (subscriber, _) = projection.subscribe(cursor).unwrap();
+        let mut consumed = cursor;
+        while consumed < published {
+            let super::SubscriberPoll::Event(event) = projection.poll_subscriber(subscriber) else {
+                panic!("every retained semantic event must remain replayable");
+            };
+            assert_eq!(event.cursor.get(), consumed.get() + 1);
+            consumed = event.cursor;
+        }
+        assert_eq!(
+            projection.poll_subscriber(subscriber),
+            super::SubscriberPoll::Pending
+        );
+        assert!(projection.read_domain_candidate().is_some());
+    }
+
+    #[test]
     fn read_failure_requires_successful_source_read_at_the_current_dependency_revision() {
         let mut projection = projection();
         projection.apply(event_observation(RuntimeEvent::TurnStarted));
@@ -10248,11 +10329,11 @@ mod tests {
         assert!(projection.read_domain_cut().is_none());
         let cursor = projection.cursor();
         assert_eq!(
-            projection.request_failed_read_repair(),
+            projection.request_read_domains(),
             Some((failed.clone(), true))
         );
         assert_eq!(
-            projection.request_failed_read_repair(),
+            projection.request_read_domains(),
             Some((failed.clone(), false))
         );
         assert_eq!(

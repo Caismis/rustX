@@ -69,9 +69,10 @@
 //! independent body queue or history authority.
 //!
 //! The worker prepares indexed source evidence outside the Projection lock.
-//! Public checkpoint, domain, page, value and content reads capture the already
-//! published seed and perform bounded source reads after releasing that lock.
-//! They never drain queued observations or publish a cursor. Attachment and
+//! Explicit checkpoints request bounded display hydration from the worker when
+//! needed, then capture its published seed. Domain, page, value and content reads
+//! capture the published seed and perform bounded source reads outside that lock.
+//! Public reads never drain queued observations or publish a cursor themselves. Attachment and
 //! registration bookkeeping also acquires only the raw Projection lock.
 //! A checkpoint at C and replay after C share this single cursor authority.
 //!
@@ -238,6 +239,14 @@ impl ClientInner {
         *self.publication_gate.settlement_wait.lock().unwrap() = None;
         let mut turns = self.worker_turns.subscribe();
         loop {
+            let requested = self
+                .lock_published_state()
+                .projection
+                .request_read_domains();
+            if requested.is_some_and(|(_, new)| new) {
+                self.pending
+                    .push(ConversationObservation::JournalSourceReady);
+            }
             let worker_turn = *turns.borrow_and_update();
             {
                 let _preparation = self
@@ -3883,7 +3892,7 @@ impl ClientInner {
                 break;
             }
             let result = self
-                .repair_failed_source_for_checkpoint(deadline)
+                .hydrate_read_domains_for_checkpoint(deadline)
                 .and_then(|()| self.materialize_checkpoint(records, deadline));
             match result {
                 Ok(checkpoint) => return Ok(checkpoint),
@@ -3899,9 +3908,10 @@ impl ClientInner {
         Err(last)
     }
 
+    /// Hydrate a dirty display view or retry a failed read on explicit demand.
     /// Request one read on the existing worker and await its exact fence.
     /// The worker retains/cancels/joins physical Source work during shutdown.
-    fn repair_failed_source_for_checkpoint(
+    fn hydrate_read_domains_for_checkpoint(
         &self,
         deadline: std::time::Instant,
     ) -> Result<(), RuntimeClientError> {
@@ -3916,7 +3926,7 @@ impl ClientInner {
             {
                 return Ok(());
             }
-            state.projection.request_failed_read_repair()
+            state.projection.request_read_domains()
         };
         let Some((cut, newly_requested)) = cut else {
             return Ok(());
@@ -4482,6 +4492,10 @@ impl ClientInner {
                 .subscriber_id = Some(subscriber_id);
         }
         drop(state);
+        // Registration creates display demand without doing Store I/O under
+        // the attachment lock. Retained semantic replay is unchanged.
+        self.pending
+            .push(ConversationObservation::JournalSourceReady);
         Ok((
             EventSubscription {
                 inner: Arc::new(SubscriptionInner {
@@ -10743,6 +10757,80 @@ mod tests {
         );
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn dormant_display_waits_for_checkpoint_demand_and_preserves_replay() {
+        use std::sync::atomic::Ordering;
+        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
+        let inner = fixture.host.weak_inner().upgrade().unwrap();
+        inner.projection_settled().await;
+        let before = fixture.host.checkpoint().unwrap();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let read_calls = Arc::clone(&calls);
+        let (entered, entered_rx) = tokio::sync::oneshot::channel();
+        let (release, release_rx) = std::sync::mpsc::channel();
+        *inner.read_domain_hook.lock().unwrap() = Some(Box::new(move || {
+            read_calls.fetch_add(1, Ordering::SeqCst);
+            let _ = entered.send(());
+            // Sender ownership makes panic unwinding release this gate as well.
+            let _ = release_rx.recv();
+            Ok(())
+        }));
+        super::commit_display(&inner.state, &inner.publication_gate, |projection| {
+            projection.apply(ConversationObservation::Event {
+                attempt_id: AttemptId::new("dormant-display"),
+                event: RuntimeEvent::AttemptStarted {
+                    attempt_id: AttemptId::new("dormant-display"),
+                },
+            });
+        });
+        let mut turns = inner.worker_turns.subscribe();
+        turns.borrow_and_update();
+        inner
+            .pending
+            .push(ConversationObservation::JournalSourceReady);
+        tokio::time::timeout(STREAM_LIVENESS_GUARD, turns.changed())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(inner.lock_state().projection.read_domain_cut().is_some());
+        let reader = Arc::clone(&inner);
+        let checkpoint = tokio::task::spawn_blocking(move || reader.checkpoint());
+        tokio::time::timeout(STREAM_LIVENESS_GUARD, entered_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(
+            !checkpoint.is_finished(),
+            "checkpoint must await its display hydration"
+        );
+        release.send(()).unwrap();
+        let current = tokio::time::timeout(STREAM_LIVENESS_GUARD, checkpoint)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(inner.lock_state().projection.read_domain_cut().is_none());
+        assert!(current.cursor > before.cursor);
+        let (attachment, _) = fixture
+            .host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .unwrap();
+        let replay = attachment.subscribe_events(before.cursor).unwrap();
+        let mut consumed = before.cursor;
+        while consumed < current.cursor {
+            let EventDelivery::Event(event) = replay.try_next() else {
+                panic!("late observer must retain every serviceable semantic cursor");
+            };
+            assert_eq!(event.cursor.get(), consumed.get() + 1);
+            consumed = event.cursor;
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        fixture.runtime.shutdown().await.unwrap();
+        inner.drain_projection().await.unwrap();
+    }
+
     #[tokio::test]
     async fn panicked_projection_source_installs_same_cut_unavailability_without_spinning() {
         let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
@@ -11201,6 +11289,11 @@ mod tests {
             reader.park_presentation_read_until_cancelled(entered);
             Ok(())
         }));
+        // This fixture explicitly observes a physical read to test its lifetime.
+        inner
+            .lock_state()
+            .projection
+            .request_read_domains_for_test();
         inner.pending.push(ConversationObservation::Event {
             attempt_id: AttemptId::new("read-cut"),
             event: RuntimeEvent::TurnStarted,
@@ -11240,6 +11333,11 @@ mod tests {
             release_rx.recv().unwrap();
             Ok(())
         }));
+        // This fixture explicitly observes a physical read to test its lifetime.
+        inner
+            .lock_state()
+            .projection
+            .request_read_domains_for_test();
         inner.pending.push(ConversationObservation::Event {
             attempt_id: AttemptId::new("cancelled-join-waiter"),
             event: RuntimeEvent::TurnStarted,
@@ -11297,6 +11395,11 @@ mod tests {
             release_rx.recv().unwrap();
             Ok(())
         }));
+        // This fixture explicitly observes a physical read to test its lifetime.
+        inner
+            .lock_state()
+            .projection
+            .request_read_domains_for_test();
         inner.pending.push(ConversationObservation::Event {
             attempt_id: AttemptId::new("failed-worker-read"),
             event: RuntimeEvent::TurnStarted,
@@ -12604,6 +12707,7 @@ mod tests {
             )),
             "the racing inbound was consumed exactly once by the next attempt"
         );
+        fixture.host.projection_settled().await;
         let (snapshot, _) = fixture
             .host
             .checkpoint()
