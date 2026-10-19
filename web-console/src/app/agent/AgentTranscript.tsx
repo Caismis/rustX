@@ -168,7 +168,6 @@ export function AgentTranscript({ snapshot, history, loadEarlier, loadLater, onH
       </div>);
   return <div className={css.column} aria-label={tx('agent:agent-transcript.canonical-conversation')}>
     {history?.page.next_cursor != null && <Button disabled={history.loading} onClick={loadEarlier}>{history.loading ? tx('agent:agent-transcript.loading-earlier') : tx('agent:agent-transcript.load-earlier')}</Button>}
-    {history?.window && <p role="status">{tx('agent:agent-transcript.history-window')}</p>}
     {history?.window?.newer_cursor != null && <Button disabled={history.loading} onClick={loadLater}>{tx('agent:agent-transcript.load-later')}</Button>}
     {history?.error && <p role="alert">{history.error}</p>}
     {!messages.length && !entries.length && <Feedback kind="empty" title={tx('agent:agent-transcript.ready-for-a-task')}><p>{tx('agent:agent-transcript.what-would-you-like-to-work-on')}</p></Feedback>}

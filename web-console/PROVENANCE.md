@@ -1452,6 +1452,13 @@ chooser's response-anchored rows and their copy are removed. `TurnTail.tsx`,
 
 ## Turn-rail reading window (UI/UX alignment)
 
+The rustX-only history-window explanation above Chat has been removed, including
+its English and Chinese copy. Read-only inspection of Harness
+`687f282e8625c6b8d11ff58211a90524be2e4317`, `ui-chat/src/client/chat/ChatView.tsx`,
+confirms that its reading surface has history loading and a return-to-bottom
+control without this persistent banner. Native bounded reading, loaded-window
+paging and latest-tail ownership are unchanged for parent and child Chat.
+
 Reference: `/home/caismis/Documents/codes/deepseek-harness@5badb15009ae1756c3afe0ae0cef1faafc290ccc`,
 read-only. `ui-chat` `ChatView.tsx` and `use-chat-navigation.ts`, and
 `session-controller` `Session.loadOlder`/`loadThrough`, were consulted; no new

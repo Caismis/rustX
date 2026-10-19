@@ -50,7 +50,7 @@ for (const width of [1440, 390]) test(`child native turn directory locates dista
   await expect(rail.getByRole('button', { name: 'Jump to turn 130', exact: true })).toHaveAttribute('aria-current', 'true');
   await expect(page.getByRole('heading', { name: 'Child report 130', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Return to latest', exact: true }).click();
-  await expect(page.getByText('Reading a history window. Latest activity continues below; intervening history is not loaded.', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Return to latest', exact: true })).toHaveCount(0);
   const calls = await page.evaluate(() => (window as any).startupFixture.requests());
   const located = calls.filter((request: any) => request.method === 'agent/transcript' && request.params.at.type === 'turn_ordinal');
   expect(located.map((request: any) => request.params.at.ordinal)).toEqual([1, 130]);
