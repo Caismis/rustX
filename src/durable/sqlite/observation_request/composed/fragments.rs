@@ -19,6 +19,9 @@ mod metadata_tests;
 #[cfg(test)]
 #[path = "reader_tests.rs"]
 mod reader_tests;
+#[cfg(test)]
+#[path = "scalar_geometry_tests.rs"]
+mod scalar_geometry_tests;
 fn geometry(
     source: &SeekableObservationSource,
     path: &[String],
@@ -266,7 +269,9 @@ pub(super) fn scalar(
     connection: &Connection,
     source: &SeekableObservationSource,
 ) -> Result<(Fragment, u64, u64), ConversationStoreError> {
-    let (start, end, _) = geometry(source, &["messages".into()])?;
+    let (start, end, _) = source
+        .original_field_geometry(&["messages".into()])
+        .map_err(|error| storage(error.to_string()))?;
     let length = source
         .read(&[], 0, 1)
         .map_err(|error| storage(error.to_string()))?

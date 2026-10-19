@@ -1016,6 +1016,15 @@ impl SeekableObservationSource {
         }
         Ok(index)
     }
+    /// Select original coordinates from this source's existing immutable index.
+    /// This borrows neither a current semantic value nor a cached capture result.
+    pub(crate) fn original_field_geometry(
+        &self,
+        path: &[String],
+    ) -> Result<(u64, u64, u64), ObservationReadError> {
+        let node = self.layout.node(self.node(path)?)?;
+        Ok((node.start, node.end, node.children))
+    }
     /// Return a complete value only when both its bytes and member count fit.
     pub(crate) fn value(&self, path: &[String]) -> Result<Option<Value>, ObservationReadError> {
         let node = self.layout.node(self.node(path)?)?;
