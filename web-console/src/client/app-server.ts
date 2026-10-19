@@ -10,6 +10,8 @@ import { hasResponseDeadline, requestEffect, requestLane } from '../../../protoc
 import { SourceRepairObserver } from './source-repairs';
 import { SessionCatalog } from './session-catalog';
 import { SessionReads } from './session-reads';
+import { ReadingNavigation } from './reading';
+import { ColdReads } from './cold-reads';
 import { ConfigurationObservations } from './configuration-observations';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { SessionExportController } from "./session-export";
@@ -20,28 +22,11 @@ import type {
   UserInputBlock, UploadReceipt, UploadedFile,
 } from '../../../protocol/app-server/v50';
 import { transferUpload, uploadOperationId } from '../../../protocol/app-server/upload';
-import { HISTORY_PAGE_SIZE, TURN_PAGE_SIZE, sameReadCut, extendTranscriptWindow, installTranscriptWindow, prependTranscript, refreshTranscript, replaceTranscript, turnKey, turnPageCount, type TurnSelection } from './transcript';
-import type { ObservedTurn, ObservedTurnPage } from '../../../protocol/app-server/v50';
+import { refreshTranscript, replaceTranscript, type TurnSelection } from './transcript';
 import { ProtocolLog, type WireContext } from './protocol-log';
 import { OutcomeUncertain, RequestAdmissionDeferred, RequestNotDispatched, RpcFailure, isOutcomeUncertain } from './errors';
-import { interactionKey, type CancellationTarget, type ClientView, type CompactionRequestEvidence, type ConnectionState, type GoalControlOutcome, type InboundControlOutcome, type OperationAdmission, type OutlinePagingIntent, type SessionView, type Submission } from './contracts';
+import { interactionKey, type CancellationTarget, type ClientView, type CompactionRequestEvidence, type ConnectionState, type GoalControlOutcome, type InboundControlOutcome, type OperationAdmission, type SessionView, type Submission } from './contracts';
 
-
-interface OutlineDemand {
-  offset?: number;
-  /** Absent for a disposable preview; only navigation owns committed paging. */
-  paging?: OutlinePagingIntent;
-  automatic: boolean;
-  current: () => boolean;
-  work: Promise<ObservedTurnPage | undefined>;
-  resolve: (page?: ObservedTurnPage) => void;
-}
-interface OutlineRead {
-  authority: () => boolean;
-  active: OutlineDemand;
-  pending?: OutlineDemand;
-  refresh: boolean;
-}
 
 export interface Socket {
   readonly readyState: number;
@@ -158,9 +143,6 @@ export class AppServerClient {
     port: id => this.lifecyclePort(id),
     project: (id, current, previous) => this.projectLifecycle(id, current, previous),
   });
-  private readingIntents = new Map<string, number>();
-  private readingAuthorities = new Map<string, number>();
-  private outlineReads = new Map<string, OutlineRead>();
   private state: ClientView = {
     connection: 'disconnected', generation: 0, sessions: [], views: {}, uncertain: [], interactionOperations: {},
   };
@@ -322,7 +304,7 @@ export class AppServerClient {
         void this.catalog.refreshDisplaySummary(id).catch(() => {});
       },
       refresh: () => this.refresh(id),
-      cold: current => { void this.readHistoryPreview(id, current); void this.readColdMetadata(id, current); void this.readTracePreview(id, current); },
+      cold: current => { void this.cold.readHistoryPreview(id, current); void this.cold.readMetadata(id, current); void this.readTracePreview(id, current); },
       classify: error => error instanceof RequestNotDispatched ? 'unsent' : isOutcomeUncertain(error) ? 'uncertain'
         : error instanceof RpcFailure ? error.error.data?.kind === 'stale_attachment' ? 'stale-route' : 'refused' : 'local',
     };
@@ -367,7 +349,7 @@ export class AppServerClient {
     // model/cancellation continuations only update already-reserved Session rows.
     const detached = [...(this.state.detached ?? [])];
     if (this.state.uncertain.length || sessions.length) detached.push({ authority: this.state.endpoint!, authorityId: this.state.authorityId, operations: this.state.uncertain, sessions });
-    this.lifecycles.replaceAuthority(); this.readingAuthorities.clear(); for (const id of this.outlineReads.keys()) this.retireOutline(id); this.readingIntents.clear(); this.catalog.retireAuthority();
+    this.lifecycles.replaceAuthority(); this.reading.retireAuthority(); this.catalog.retireAuthority();
     this.log.clear();
     this.publish({ authorityId: undefined, views: {}, sessions: [], nextOffset: undefined, uncertain: [], interactionOperations: {}, detached,
       authorityRevision: (this.state.authorityRevision ?? 0) + 1 });
@@ -774,7 +756,7 @@ export class AppServerClient {
         const result = chain.deliver({ registrationId: value.params.registration_id, unavailable: true },
           (event, cursor) => this.applyObservation(target.session_id, target, event, cursor));
         if (result === 'unavailable' && observation.current() && this.observationChains.get(target.session_id) === chain) {
-          this.invalidateReading(target.session_id); this.retireOutline(target.session_id);
+          this.reading.invalidateReading(target.session_id); this.reading.retireOutline(target.session_id);
           this.resubscribe.delete(target.session_id); this.dirty.delete(target.session_id);
           this.setSession(target.session_id, { observationState: 'unavailable', error: value.params.message.slice(0, 512) });
           this.lifecycles.event(target.session_id, { type: 'OBSERVATION', proof, status: 'stale', error: value.params.message.slice(0, 512) });
@@ -787,7 +769,7 @@ export class AppServerClient {
         : { registrationId: value.params.registration_id, cursor: value.params.cursor, event: value.params.event },
       (event, cursor) => this.applyObservation(target.session_id, target, event, cursor));
       if ((result === 'recovery'||repairResync) && observation.current() && this.observationChains.get(target.session_id)===chain) {
-        this.invalidateReading(target.session_id);this.retireOutline(target.session_id);
+        this.reading.invalidateReading(target.session_id);this.reading.retireOutline(target.session_id);
         if(!observation.current())return;
         this.lifecycles.event(target.session_id, { type: 'OBSERVATION', proof, status: 'resynchronizing' });
         this.setSession(target.session_id, { observationState: 'resyncRequired' });
@@ -803,9 +785,9 @@ export class AppServerClient {
     if (!observation?.current() || !sameTarget(observation.proof.target, target) || !view?.snapshot) throw new Error('Observation view was replaced.');
     validateRootEvent(target, event, cursor);
     if (transitionFacts(event).some(fact=>fact.type==='pending_inbound_changed')) {
-      this.invalidateReading(id);
+      this.reading.invalidateReading(id);
       if(!observation.current())throw new Error('Observation view was replaced during invalidation.');
-      this.retireOutline(id);
+      this.reading.retireOutline(id);
       const error = 'History changed. Reload the Turn outline to navigate again.';
       this.setSession(id, { turnOutline: { paging: view.turnOutline?.paging ?? { type: 'latest' }, error },
         ...(view.history?.window ? { history: { ...replaceTranscript(view.snapshot.transcript, view.history), error } } : {}) });
@@ -836,6 +818,33 @@ export class AppServerClient {
     current: generation => this.current(generation),
     publish: patch => this.publish(patch),
   });
+  private readonly reading = new ReadingNavigation({
+    request: (...args) => this.request(...args),
+    state: () => this.state,
+    setSession: (id, patch) => this.setSession(id, patch),
+    observe: id => this.lifecycles.observe(id),
+    epoch: id => this.lifecycles.epoch(id),
+  });
+  private readonly cold = new ColdReads({
+    request: (...args) => this.request(...args),
+    state: () => this.state,
+    current: generation => this.current(generation),
+    epoch: id => this.lifecycles.epoch(id),
+    admit: (id, current) => this.admitSessionOperation(id, current),
+    readSettings: (id, current) => this.reads.readSettings(id, current),
+    setSession: (id, patch) => this.setSession(id, patch),
+  });
+  /** A new navigation or an explicit reload retires the previous jump's landing. */
+  invalidateReading(id: string) { return this.reading.invalidateReading(id); }
+  refreshTurns(id: string) { return this.reading.refreshTurns(id); }
+  readTurns(id: string, offset?: number, userCurrent?: () => boolean) { return this.reading.readTurns(id, offset, userCurrent); }
+  previewTurns(id: string, offset: number, current: () => boolean) { return this.reading.previewTurns(id, offset, current); }
+  navigateTurn(id: string, selection: TurnSelection, userCurrent?: () => boolean) { return this.reading.navigateTurn(id, selection, userCurrent); }
+  navigateMessage(id: string, messageId: string, userCurrent?: () => boolean) { return this.reading.navigateMessage(id, messageId, userCurrent); }
+  returnToLatest(id: string) { this.reading.returnToLatest(id); }
+  loadLater(id: string) { return this.reading.loadLater(id); }
+  loadEarlier(id: string) { return this.reading.loadEarlier(id); }
+  loadEarlierPreview(id: string) { return this.cold.loadEarlierPreview(id); }
   private readonly catalog = new SessionCatalog({
     request: (...args) => this.request(...args),
     state: () => this.state,
@@ -878,42 +887,11 @@ export class AppServerClient {
     if (!navigationCurrent()) return;
     await this.lifecycles.command(id, { kind: 'open', node: nodeId, current: navigationCurrent, attached });
   }
-  /** One observation scope for all cold durable reads. The Conversation is
-   * exact native Node evidence, never inferred from whichever response arrives first. */
-  private coldReadScope(id: string, admitted: () => boolean = () => true) {
-    const view = this.state.views[id];
-    if (!view?.nodeId || !view.nodeConversationId) return;
-    const node = view.nodeId, conversation = view.nodeConversationId;
-    const generation = this.state.generation, epoch = this.lifecycles.epoch(id), revision = view.attachmentIntentRevision ?? 0;
-    const current = () => admitted() && this.current(generation) && this.lifecycles.epoch(id) === epoch
-      && this.state.views[id]?.attachment === 'attaching' && this.state.views[id]?.attachmentIntent === 'wanted'
-      && (this.state.views[id]?.attachmentIntentRevision ?? 0) === revision
-      && this.state.views[id]?.nodeId === node && this.state.views[id]?.nodeConversationId === conversation;
-    return { node, conversation, current };
-  }
-  private async readHistoryPreview(id: string, admitted: () => boolean) {
-    const scope = this.coldReadScope(id, admitted); if (!scope) return;
-    const { node, conversation, current } = scope;
-    try {
-      const result = await this.request({ method: 'session/history', params: { session_id: id, node_id: node, at: { type: 'latest' }, limit: HISTORY_PAGE_SIZE } }, 'session_history', undefined, current);
-      if (current() && result.conversation_id === conversation && result.window.cut.conversation_id === conversation) this.setSession(id, { preview: { conversationId: conversation, history: replaceTranscript(result.window.page) } });
-    } catch { /* Attachment recovery owns errors; a late read cannot replace the live view. */ }
-  }
-  private async readColdMetadata(id: string, admitted: () => boolean) {
-    const scope = this.coldReadScope(id, admitted); if (!scope) return;
-    const { node, conversation, current } = scope;
-    await Promise.allSettled([
-      this.request({ method: 'session/statistics', params: { session_id: id, node_id: node } }, 'session_statistics', undefined, current)
-        .then(result => { if (current() && result.conversation_id === conversation && result.read_cut.conversation_id === conversation) this.setSession(id, { statisticsPreview: { conversationId: result.conversation_id, nodeId: node, cut: result.read_cut, statistics: result.statistics, occupancy: result.occupancy } }); }),
-      this.reads.readSettings(id, current)
-        .then(result => { if (current()) this.setSession(id, { settings: result.settings }); }),
-    ]);
-  }
   /** Read-only trace is independent of slow runtime/resource initialization. */
   private async readTracePreview(id: string, admitted: () => boolean, older = false) {
     const view = this.state.views[id], previous = older ? view?.tracePreview : undefined;
     if (older && (!previous || previous.cache.loading || previous.cache.page.next_cursor == null)) return;
-    const scope = this.coldReadScope(id, admitted); if (!scope) return;
+    const scope = this.cold.scope(id, admitted); if (!scope) return;
     const { node, conversation, current } = scope;
     if (previous && previous.conversationId !== conversation) return;
     const cache = previous?.cache ?? replaceTrace({ records: [], next_cursor: null });
@@ -935,7 +913,7 @@ export class AppServerClient {
   private async readTracePreviewDetail(id: string, record: string) {
     const preview = this.state.views[id]?.tracePreview;
     if (!preview || preview.cache.details[record]?.loading || preview.cache.details[record]?.detail || preview.cache.details[record]?.page) return;
-    const scope = this.coldReadScope(id); if (!scope || preview.conversationId !== scope.conversation) return;
+    const scope = this.cold.scope(id); if (!scope || preview.conversationId !== scope.conversation) return;
     const node = scope.node;
     const pending = beginTraceDetail(preview.cache, record);
     const current = () => scope.current() && this.state.views[id]?.tracePreview?.conversationId === scope.conversation
@@ -960,28 +938,6 @@ export class AppServerClient {
       if (current()) this.setSession(id, { tracePreview: { ...preview, cache: completeTraceDetail(this.state.views[id].tracePreview!.cache, record, pending.epoch, undefined, String(error)) } });
     }
   }
-  async loadEarlierPreview(id: string): Promise<void> {
-    const view = this.state.views[id], preview = view?.preview, before = preview?.history.page.next_cursor;
-    if (!preview || preview.history.loading || before == null || view.attachment !== 'attaching') return;
-    const scope = this.coldReadScope(id); if (!scope || preview.conversationId !== scope.conversation) return;
-    const epoch = preview.history.epoch, node = scope.node;
-    const current = () => scope.current() && this.state.views[id]?.preview?.conversationId === scope.conversation
-      && this.state.views[id]?.preview?.history.epoch === epoch;
-    this.setSession(id, { preview: { ...preview, history: { ...preview.history, loading: true, error: undefined } } });
-    try {
-      const admission = await this.admitSessionOperation(id, current);
-      if (!admission) return;
-      const result = await this.request({ method: 'session/history', params: { session_id: id, node_id: node, at: { type: 'older', before }, limit: HISTORY_PAGE_SIZE } }, 'session_history', undefined, admission);
-      if (!current()) return;
-      if (result.conversation_id !== preview.conversationId || result.window.cut.conversation_id !== preview.conversationId || result.window.page.next_cursor != null && BigInt(result.window.page.next_cursor) >= BigInt(before)) throw new Error('Invalid history page.');
-      this.setSession(id, { preview: { ...preview, history: prependTranscript(preview.history, result.window.page) } });
-    } catch (error) {
-      if (current()) this.setSession(id, { preview: { ...preview, history: { ...preview.history, error: String(error) } } });
-    } finally {
-      const latest = this.state.views[id]?.preview;
-      if (current() && latest) this.setSession(id, { preview: { ...latest, history: { ...latest.history, loading: false } } });
-    }
-  }
   /** Explicit reconciliation/recovery only. Native bounded replay owns overlap. */
   refresh(id: string): Promise<void> {
     const observation = this.lifecycles.observe(id);
@@ -1004,7 +960,7 @@ export class AppServerClient {
         this.dirty.delete(id);
         const resync = this.resubscribe.delete(id);
         if (resync) {
-          this.retireOutline(id);
+          this.reading.retireOutline(id);
           this.lifecycles.event(id, { type: 'OBSERVATION', proof, status: 'resynchronizing' });
           if (!current()) return;
           this.setSession(id, {
@@ -1134,7 +1090,6 @@ export class AppServerClient {
   /** Older reads are fenced by attachment, connection and read-window epoch.
    * Ordinary live refreshes preserve the epoch only with a durable overlap. */
   /** One older page, as Harness's loadOlder. */
-  loadEarlier(id: string) { return this.pageOlder(id); }
   async loadEarlierTrace(id: string) {
     if (this.state.views[id]?.attachment === 'attaching') return this.readTracePreview(id, () => true, true);
     const observation = this.lifecycles.observe(id);
@@ -1230,224 +1185,6 @@ export class AppServerClient {
       this.setSession(id, { trace: completeTraceDetail(this.state.views[id].trace!,record,epoch,detail,undefined,result.page.items.flatMap(item=>item.content),(ref,offset,ownsView)=>this.reads.readContent(target,undefined,ref,offset,()=>ownsView()&&observation.current()&&this.traceAuthorities.get(id)===authority&&this.state.views[id]?.trace?.epoch===epoch),page,reader) });
     } catch (error) {
       if (current()) this.setSession(id, { trace: completeTraceDetail(this.state.views[id].trace!, record, epoch, undefined, String(error)) });
-    }
-  }
-  /** A new navigation or an explicit reload retires the previous jump's landing. */
-  invalidateReading(id: string) {
-    const intent = (this.readingIntents.get(id) ?? 0) + 1;
-    this.readingIntents.set(id, intent);
-    const history = this.state.views[id]?.history;
-    if (this.state.views[id]) this.setSession(id, { turnNavigation: { intent }, ...(history?.loading ? { history: { ...history, loading: false } } : {}) });
-    return intent;
-  }
-  private readingAuthority(id: string) {
-    const observation = this.lifecycles.observe(id);
-    const authority = this.readingAuthorities.get(id), epoch = this.lifecycles.epoch(id);
-    return () => !!observation?.current() && this.readingAuthorities.get(id) === authority && this.lifecycles.epoch(id) === epoch;
-  }
-  private retireOutline(id: string) {
-    const read = this.outlineReads.get(id);
-    this.outlineReads.delete(id);
-    read?.active.resolve(); read?.pending?.resolve();
-  }
-  /** Automatic refresh preserves explicit paging; one later read discharges growth. */
-  refreshTurns(id: string) {
-    const read = this.outlineReads.get(id);
-    if (read?.authority()) { read.refresh = true; return Promise.resolve(undefined); }
-    const paging = this.state.views[id]?.turnOutline?.paging;
-    return this.demandOutline(id, paging?.type === 'page' ? paging.offset : undefined, paging ?? { type: 'latest' }, () => true, true);
-  }
-  /** One in-flight RPC plus one replaceable latest demand. A skipped demand never
-   * masquerades as a completed page. Equivalent demands share the native read. */
-  readTurns(id: string, offset?: number, userCurrent: () => boolean = () => true): Promise<ObservedTurnPage | undefined> {
-    return this.demandOutline(id, offset, offset === undefined ? { type: 'latest' } : { type: 'page', offset }, userCurrent);
-  }
-  /** Shares the bounded outline pipeline without publishing a reading destination. */
-  previewTurns(id: string, offset: number, current: () => boolean): Promise<ObservedTurnPage | undefined> {
-    const intent = this.readingIntents.get(id);
-    const valid = () => current() && this.readingIntents.get(id) === intent;
-    return this.demandOutline(id, offset, undefined, valid).then(page => valid() ? page : undefined);
-  }
-  private demandOutline(id: string, offset: number | undefined, paging: OutlinePagingIntent | undefined, userCurrent: () => boolean, automatic = false): Promise<ObservedTurnPage | undefined> {
-    const view = this.state.views[id];
-    if (!view || !userCurrent() || !this.lifecycles.observe(id)) return Promise.resolve(undefined);
-    let read = this.outlineReads.get(id);
-    if (read && !read.authority()) { this.retireOutline(id); read = undefined; }
-    if (read) {
-      // Preview may observe a matching navigation read, but never take its authority.
-      if (!paging) {
-        const committed = [read.active, read.pending].find(demand => demand?.paging && demand.offset === offset);
-        if (committed) return committed.work.then(page => userCurrent() ? page : undefined);
-        if (read.pending?.paging) return Promise.resolve(undefined);
-      }
-      const equivalent = !read.active.automatic && read.active.offset === offset ? read.active : read.pending?.offset === offset ? read.pending : undefined;
-      if (equivalent) {
-        if (equivalent === read.active) { read.pending?.resolve(); read.pending = undefined; }
-        equivalent.current = userCurrent; equivalent.paging = paging;
-        if (paging) this.setSession(id, { turnOutline: { paging: { type: 'latest' }, ...view.turnOutline, loading: true, error: undefined } });
-        return equivalent.work;
-      }
-    }
-    let resolve!: OutlineDemand['resolve'];
-    const demand: OutlineDemand = { offset, paging, automatic, current: userCurrent, work: new Promise(done => { resolve = done; }), resolve: page => resolve(page) };
-    const start = !read;
-    if (read) { read.pending?.resolve(); read.pending = demand; }
-    else {
-      read = { authority: this.readingAuthority(id), active: demand, refresh: false };
-      this.outlineReads.set(id, read);
-    }
-    if (paging) this.setSession(id, { turnOutline: { paging: { type: 'latest' }, ...view.turnOutline, loading: true, error: undefined } });
-    if (start) void this.runOutline(id, read);
-    return demand.work;
-  }
-  private async runOutline(id: string, read: OutlineRead) {
-    const demand = read.active;
-    const owned = () => this.outlineReads.get(id) === read && read.authority();
-    const current = () => owned() && !(read.pending?.paging && read.pending.current()) && demand.current() && owned();
-    let page: ObservedTurnPage | undefined;
-    try {
-      if (!current()) return;
-      const target = this.lifecycles.observe(id)!.target;
-      const result = await this.request({ method: 'session/turns', params: { target, offset: demand.offset ?? null, limit: TURN_PAGE_SIZE } }, 'conversation_turns', undefined, owned);
-      if (current()) {
-        if (result.page.cut.conversation_id !== target.conversation_id || result.page.turns.length > TURN_PAGE_SIZE) throw new Error('Invalid native turn outline.');
-        page = result.page;
-        turnPageCount(result.page);
-        if (demand.paging) this.setSession(id, { turnOutline: { paging: demand.paging, page } });
-      }
-    } catch (error) {
-      if (demand.paging && current()) this.setSession(id, { turnOutline: { paging: { type: 'latest' }, ...this.state.views[id]?.turnOutline, ...(page?{page}:{}), loading: false, error: String(error) } });
-      page=undefined;
-    } finally {
-      // A superseded automatic read still owes a refresh of the surviving presentation.
-      if (owned() && demand.automatic && !current()) read.refresh = true;
-      demand.resolve(page);
-      if (this.outlineReads.get(id) === read) {
-        const pending = read.pending;
-        if (pending?.current() && owned()) {
-          read.active = pending; read.pending = undefined;
-          void this.runOutline(id, read);
-        } else {
-          this.outlineReads.delete(id); pending?.resolve();
-          if (read.authority()) {
-            const outline = this.state.views[id]?.turnOutline;
-            if (outline?.loading) this.setSession(id, { turnOutline: { ...outline, loading: false } });
-            if (read.refresh) void this.refreshTurns(id);
-          }
-        }
-      }
-    }
-  }
-  /** Native resolves the exact Turn at its outline cut in one bounded read. */
-  async navigateTurn(id: string, selection: TurnSelection, userCurrent: () => boolean = () => true) {
-    const view = this.state.views[id];
-    if (!view?.history || !userCurrent() || !this.lifecycles.observe(id)) return false;
-    const authority = this.readingAuthority(id), intent = this.invalidateReading(id);
-    const current = () => userCurrent() && authority() && this.readingIntents.get(id) === intent;
-    let turn: ObservedTurn, cut: ObservedTurnPage['cut'] | undefined;
-    if (typeof selection === 'number') {
-      this.setSession(id, { turnNavigation: { intent, pending: `ordinal:${selection}` } });
-      if (!Number.isSafeInteger(selection) || selection < 1) { this.setSession(id,{turnNavigation:{intent,error:'Invalid native Turn ordinal.'}}); return false; }
-      const total = BigInt(view.turnOutline?.page?.total ?? '0');
-      const offset = Math.floor((selection - 1) / TURN_PAGE_SIZE) * TURN_PAGE_SIZE;
-      // Identity lookup is fixed even when presentation should continue following latest.
-      const paging: OutlinePagingIntent = BigInt(offset) >= (total - 1n) / BigInt(TURN_PAGE_SIZE) * BigInt(TURN_PAGE_SIZE) ? { type: 'latest' } : { type: 'page', offset };
-      const page = await this.demandOutline(id, offset, paging, current);
-      if (!current()) return false;
-      if (!page) { this.setSession(id, { turnNavigation: { intent } }); return false; }
-      const found = page.turns.find(row => row.ordinal === selection);
-      if (!found) { this.setSession(id, { turnNavigation: { intent, error: 'This Turn is no longer in the native outline.' } }); return false; }
-      turn = found; cut = page.cut;
-    } else {
-      turn = selection.turn; cut = selection.cut;
-      const outline = this.state.views[id]?.turnOutline;
-      if (outline?.page) {
-        const offset = Math.floor((turn.ordinal - 1) / TURN_PAGE_SIZE) * TURN_PAGE_SIZE;
-        const paging: OutlinePagingIntent = BigInt(offset) >= (BigInt(outline.page.total) - 1n) / BigInt(TURN_PAGE_SIZE) * BigInt(TURN_PAGE_SIZE) ? { type: 'latest' } : { type: 'page', offset };
-        this.setSession(id, { turnOutline: { ...outline, paging } });
-      }
-    }
-    const cursor = turn.cursor, key = turnKey(turn.id);
-    if (!current()) return false;
-    if (cursor == null) { this.setSession(id, { turnNavigation: { intent } }); return false; }
-    const anchored = () => !!this.state.views[id]?.history?.page.entries?.some(entry => entry.cursor === cursor
-      && (entry.turn_process && turnKey(entry.turn_process) === key || entry.item.type === 'attempt_terminal' && turnKey(entry.item.turn) === key));
-    if (turn.ordinal > 0 && (!cut || cut.conversation_id !== view.target!.conversation_id)) { this.setSession(id, { turnNavigation: { intent, error: 'Reload the native Turn outline before navigating.' } }); return false; }
-    if (anchored()) { this.setSession(id, { turnNavigation: { intent } }); return turn; }
-    if (!cut || !Number.isSafeInteger(turn.ordinal) || turn.ordinal < 1) { this.setSession(id, { turnNavigation: { intent, error: 'The live Turn has no loaded native anchor.' } }); return false; }
-    this.setSession(id, { turnNavigation: { intent, pending: key } });
-    try {
-      const result = await this.request({ method: 'session/transcript', params: { target: view.target!, at: { type: 'turn_ordinal', ordinal: turn.ordinal, cut }, limit: HISTORY_PAGE_SIZE } }, 'transcript_window', undefined, current);
-      if (!current()) return false;
-      if (!sameReadCut(result.window.cut, cut) || result.window.cut.conversation_id !== view.target!.conversation_id || result.window.target_cursor !== cursor || !result.window.target || turnKey(result.window.target) !== key) throw new Error('Invalid native Turn window.');
-      const history = installTranscriptWindow(result.window, this.state.views[id]?.history);
-      if (!(history.page.entries ?? []).some(entry => entry.cursor === cursor)) throw new Error('This turn is outside the readable native history.');
-      this.setSession(id, { history, turnNavigation: { intent } });
-      return anchored() && current() ? turn : false;
-    } catch (error) {
-      if (current()) this.setSession(id, { turnNavigation: { intent, error: String(error) } });
-      return false;
-    }
-  }
-  /** Native owns the exact message position; one read installs a bounded window. */
-  async navigateMessage(id: string, messageId: string, userCurrent: () => boolean = () => true) {
-    const view = this.state.views[id];
-    const observation = this.lifecycles.observe(id);
-    if (!view?.history || !observation || !userCurrent()) return false;
-    const authority = this.readingAuthority(id), intent = this.invalidateReading(id), target = observation.target;
-    const current = () => observation.current() && authority() && this.readingIntents.get(id) === intent && userCurrent();
-    const anchored = () => this.state.views[id]?.history?.page.entries?.some(entry => entry.item.type === 'message' && entry.item.message.id === messageId);
-    if (anchored()) return current();
-    this.setSession(id, { turnNavigation: { intent, pending: `message:${messageId}` } });
-    try {
-      const result = await this.request({ method: 'session/transcript', params: { target, at: { type: 'message', id: messageId, cut: null }, limit: HISTORY_PAGE_SIZE } }, 'transcript_window', undefined, current);
-      if (!current()) return false;
-      const cursor = result.window.target_cursor, entries = result.window.page.entries ?? [];
-      if (result.window.cut.conversation_id !== target.conversation_id || cursor == null || entries.length > HISTORY_PAGE_SIZE
-        || !entries.some(entry => entry.cursor === cursor && entry.item.type === 'message' && entry.item.message.id === messageId)) throw new Error('Invalid native message window.');
-      const history = installTranscriptWindow(result.window, this.state.views[id]?.history);
-      if (!history.page.entries?.some(entry => entry.item.type === 'message' && entry.item.message.id === messageId)) throw new Error('The fork source message is outside the readable native history.');
-      this.setSession(id, { history, turnNavigation: { intent } });
-      return current() && !!anchored();
-    } catch (error) {
-      if (current()) this.setSession(id, { turnNavigation: { intent, error: String(error) } });
-      return false;
-    }
-  }
-  returnToLatest(id: string) {
-    if (!this.lifecycles.observe(id)) return;
-    this.invalidateReading(id);
-    const view = this.state.views[id];
-    if (view?.snapshot) this.setSession(id, { history: replaceTranscript(view.snapshot.transcript, view.history) });
-  }
-  async loadLater(id: string) {
-    const history = this.state.views[id]?.history, window = history?.window;
-    if (!window?.newer_cursor || history?.loading) return;
-    await this.readHistoryPage(id, { type: 'newer', after: window.newer_cursor, cut: window.cut });
-  }
-  private pageOlder(id: string): Promise<void> {
-    const history = this.state.views[id]?.history;
-    if (!history || history.page.next_cursor == null || history.loading) return Promise.resolve();
-    return this.readHistoryPage(id, { type: 'older', before: history.page.next_cursor, cut: history.window?.cut ?? null });
-  }
-  /** One gesture, one read. Navigation intent fences both page and anchor reads. */
-  private async readHistoryPage(id: string, at: import('../../../protocol/app-server/v50').ConversationWindowAt) {
-    const history = this.state.views[id]?.history;
-    const observation = this.lifecycles.observe(id);
-    if (!history || !observation) return;
-    const target = observation.target, authority = this.readingAuthority(id), intent = this.invalidateReading(id);
-    const current = () => authority() && this.readingIntents.get(id) === intent && this.state.views[id]?.history?.epoch === history.epoch;
-    this.setSession(id, { history: { ...history, loading: true, error: undefined } });
-    try {
-      const result = await this.request({ method: 'session/transcript', params: { target, at, limit: HISTORY_PAGE_SIZE } }, 'transcript_window', undefined, current);
-      if (!current()) return;
-      if (result.window.cut.conversation_id !== target.conversation_id || ('cut' in at && at.cut && !sameReadCut(result.window.cut, at.cut))) throw new Error('Invalid native history cut.');
-      // Extend only the finite presentation window, trimming its opposite end.
-      if (at.type === 'older' && result.window.page.next_cursor != null && BigInt(result.window.page.next_cursor) >= BigInt(at.before)) throw new Error('Invalid native history page.');
-      const next = extendTranscriptWindow(result.window, this.state.views[id].history!, at.type === 'older');
-      this.setSession(id, { history: next });
-    } catch (error) {
-      if (current()) this.setSession(id, { history: { ...this.state.views[id].history!, loading: false, error: String(error) } });
     }
   }
   private reconcileInteractions(id: string) {
@@ -1942,7 +1679,7 @@ export class AppServerClient {
   }
   private retireObservationWork(id: string) {
     this.acquiring.delete(id);
-    this.readingIntents.delete(id); this.retireOutline(id); this.readingAuthorities.delete(id);
+    this.reading.retire(id);
     this.traceReads.delete(id);
     this.traceAuthorities.delete(id);
     this.refreshes.delete(id); this.dirty.delete(id); this.resubscribe.delete(id);
