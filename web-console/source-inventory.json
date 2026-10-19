@@ -3344,7 +3344,7 @@
       "upstream": "packages/client/ui-workspace/src/client/locales.ts",
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
       "upstream_sha256": "448cea752f9daa196284e6a8da59c7acd944b3ad05590df5bddc6e153e43c113",
-      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #410 review: layout-only Questionnaire mirror kept out of the locale; one typed context-kind/facet label owner with locale-independent search. UI/UX alignment: Harness question takeover wording (placeholder, skip/next/submit, minimize/dismiss, feedback).",
+      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #410 review: layout-only Questionnaire mirror kept out of the locale; one typed context-kind/facet label owner with locale-independent search. UI/UX alignment: Harness question takeover wording (placeholder, skip/next/submit, minimize/dismiss, feedback). Issue #487: copy for the shared protocol numeric rejection reasons; upstream reference unchanged.",
       "destination": "web-console/src/locale/dictionaries/interactions.ts",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -3355,7 +3355,7 @@
         "dynamic language registration"
       ],
       "additional_sources": [],
-      "local_sha256": "422d94af1e818d14fc0007f7f0d58d2cdb364330b6ee78f5554e5fd166ff9b83"
+      "local_sha256": "1707835968571b476d90bc14f61202f1613ddedb88f3eff87fb007540493aa1a"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
