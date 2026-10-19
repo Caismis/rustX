@@ -68,6 +68,7 @@
 //! acceptance **C** ([`ConversationStore::commit_canonical_publication`]),
 //! ordered `P < U < C` and enforced by the store as `C => U => P`.
 
+pub mod auxiliary;
 pub mod inbox;
 pub mod observation;
 pub mod presentation;
@@ -76,6 +77,10 @@ pub mod reading;
 pub mod sqlite;
 pub mod trace;
 
+pub use auxiliary::{
+    AuxiliaryCallStartCommit, AuxiliaryRequestStartCommit, AuxiliarySettlementCommit,
+    AuxiliaryWriteFailure,
+};
 pub use inbox::{
     AcceptedInbound, CanonicalMessagePage, ContributionEmissionLookup, ContributionEmissionRecord,
     ConversationInboundCapability, ConversationInteractionAudit, ConversationStore,

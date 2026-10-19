@@ -2,7 +2,7 @@
 
 ## Scope and development baseline
 
-Baseline checked: 2026-10-18. Feature stages below remain pending beyond the synchronized Agent ownership foundation.
+Baseline synchronized: 2026-10-18. AUX-01 storage and inspection are implemented and locally verified as of 2026-10-19, on top of plan commit `d46168f7e56157e2fb5bbed524ba81a80501920e`. Stages 2–4 remain planned. GitHub FULL and applicable macOS CI remain prerequisites for a merge-ready pull request.
 
 Implement the auxiliary series as four working increments: [AUX-01 #473](https://github.com/Caismis/rustX/issues/473), [AUX-02 #474](https://github.com/Caismis/rustX/issues/474), [AUX-03 #475](https://github.com/Caismis/rustX/issues/475), and [AUX-04 #476](https://github.com/Caismis/rustX/issues/476). The issues own their detailed acceptance contracts; this document defines implementation order, code ownership, integration boundaries and verification gates.
 
@@ -43,7 +43,7 @@ The premerge Git experiment compared the fork head with main 3c355f15 and draft 
 - Preserve current process-crash durability under WAL/NORMAL; introduce no machine-power-loss guarantee, remote exactly-once promise, compatibility layer, migration or replay scheduler.
 - Keep internal consumer extension points narrow. Do not add generic purpose dispatch, arbitrary prompt/plugin authority, a second provider catalog or executor branches for each business.
 
-## Stage 1: finish AUX-01
+## Stage 1: AUX-01 durable ownership and inspection
 
 ### 1.1 Inventory and freeze the transaction contract
 
@@ -64,7 +64,7 @@ Define bounded Call facts, the closed owner encoding, exact-payload identity com
 
 ### 1.2 Complete semantic persistence
 
-Implement:
+The synchronous Store transitions provide:
 1. Unique Call start with bounded trusted source attribution.
 2. Request start requiring an active Call, sequential ordinal, no open request, a unique RequestId and applicable native start permission.
 3. Atomic final physical terminal plus Call settlement.
@@ -83,11 +83,11 @@ Update original and native readers together. Expose bounded auxiliary Call/reque
 
 ### 1.4 Complete lineage, archive and formats
 
-Implement the issue's inheritance matrix: an explicitly retained Summary dependency carries its eligible source audit; temporary Classification and BTW do not become target executions merely because their input history is copied. Saved Title display metadata is separate from local execution and quota.
+The inheritance matrix carries eligible source audit only for an explicitly retained Summary-generation dependency. Temporary Classification and BTW do not become target executions merely because their input history is copied. Saved Title display metadata remains separate from local execution and quota.
 
 Inspection archives expose explicit bounded projections and omissions; they do not serialize private native types wholesale or become executable recovery formats. No later terminal may leak into an earlier export cut.
 
-Advance SQLite, event, archive, Runtime Client and App Server format domains only where actually changed; regenerate affected schemas/TypeScript/fixtures and update normative docs together. Reject obsolete and falsely current shapes without rebuilding user data. Any branch-local schema gate used during synchronization must be reassessed after #484 integration.
+The implemented formats are SQLite schema 72 and inspection archive v6, with Journal schema 4, projection/generation schemas 2, and local/inherited auxiliary-audit schemas 1. Runtime Client 71 and App Server 50 are unchanged; regenerated protocol and configuration artifacts have no content drift. Obsolete and falsely current stores are rejected without migration or reconstruction. Reassess these development-format gates when integrating #484.
 
 ### 1.5 AUX-01 acceptance gate
 
@@ -95,7 +95,20 @@ Use real SQLite and deterministic fault points for atomicity, duplicate/conflict
 
 Compare equivalent primary histories with/without auxiliary audit interleavings under controlled scheduling; primary answers, recovery, occupancy, counts and compaction eligibility must agree after excluding intentional audit coordinates. Resource contention is a separate test dimension.
 
-Before delivery, exercise the minimal supervised real-Store/scripted-adapter consumer required by #473: CallStarted -> RequestStarted -> one adapter entry -> atomic terminal/Call settlement, with cancellation before/after dispatch, optional observation failure and actual commit followed by receipt loss. Keep the seam private and carry it into AUX-02. This fixture is not a shipped production executor.
+The private supervised real-Store/scripted-adapter fixture exercises CallStarted -> RequestStarted -> one adapter entry -> atomic terminal/Call settlement, including cancellation before/after dispatch, optional observation failure and actual commit followed by receipt loss. It waits for physical writer/task exits before confirmation. Carry this seam into AUX-02; no production auxiliary executor is shipped in AUX-01.
+
+Implementation details, finite bounds, confirmation rules, lineage semantics and measured storage growth are recorded in [Auxiliary execution](auxiliary-execution.md). The native Store owns transaction/index integrity; compact observation headers preserve primary readers' existing bounded-work guarantees, and the inspection archive uses explicit projections.
+
+Local verification used Ubuntu 24.04 WSL and pinned Rust 1.98.1:
+
+- Formatting, all-target/all-feature Clippy with warnings denied, and whitespace checks passed.
+- Across the complete library run and final focused fixture checks, all 4,076 runnable non-boundary library cases were exercised successfully; four cases remain ignored. The final four-case Session paging check removes host-clock ordering assumptions while retaining its ordering, pagination and zero-Store-open assertions.
+- The 110-case auxiliary/ownership/lineage/Trace regression selection passed. Binary/example harnesses passed 27 tests; pure contracts passed 31; provider tests passed 179 with five ignored.
+- All seven external Linux boundary targets passed 457 tests with one ignored; in-crate boundary suites passed 243. Both `rust-contracts` and `rust-boundaries` lane-discovery checks passed. Composed tests required the offline provider emulator; its own pytest suite also passed.
+- Development launcher tests passed 41 cases. Web tests passed 2,881 with four skipped; TUI tests passed 1,180 with one skipped. All component typechecks, i18n, provenance and notice checks passed. Runs were separated to avoid WSL I/O contention without increasing test timeouts.
+- Schema/protocol regeneration had no content drift. The changed browser Session-export test passed against the pinned Playwright container and compared browser download with remote TUI export.
+
+These are local verification results, not a GitHub FULL/macOS CI verdict. The complete browser suite and native macOS lanes remain part of the repository's merge gate.
 
 ## Stage 2: AUX-02 supervised execution and Summary
 
@@ -144,7 +157,7 @@ Gate: real transport/browser submission, lost receipt/reconnect, revocation, can
 
 ## Work before and after #484
 
-Proceed now on this branch with AUX-01 identity, semantic transactions, recovery/reader isolation, private consumer fixtures and focused tests. Shared files require integration attention, not an idle development freeze. Do not alter Source codecs or append algorithms merely to avoid merging them.
+AUX-01 was implemented on the synchronized main baseline without incorporating draft #484. Continue later stages on this same branch. Shared files require integration attention; Source codecs and append algorithms remain owned by their existing implementations.
 
 After #484 enters main, merge that actual main commit into this same branch and:
 - retain its removed active_json layout and current authenticated page representation;

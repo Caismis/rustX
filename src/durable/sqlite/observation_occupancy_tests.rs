@@ -42,6 +42,9 @@ fn t08_t14_t19_occupancy_reads_fixed_original_request_scalars_and_model_ranges()
         "occupancy-terminal",
         Some(snapshot.identity.attempt_id.clone()),
         RuntimeEvent::ModelRequestCompleted {
+            owner: crate::model::ModelRequestOwner::Agent {
+                identity: snapshot.identity.clone(),
+            },
             request_id: snapshot.request_id.clone(),
             finish_reason: ModelFinishReason::Stop,
             usage: Some(usage),
@@ -210,6 +213,9 @@ fn t10_t14_occupancy_derived_header_failure_preserves_original_provider_terminal
         "occupancy-fault-terminal",
         Some(snapshot.identity.attempt_id.clone()),
         RuntimeEvent::ModelRequestCompleted {
+            owner: crate::model::ModelRequestOwner::Agent {
+                identity: snapshot.identity.clone(),
+            },
             request_id: snapshot.request_id.clone(),
             finish_reason: ModelFinishReason::Stop,
             usage: Some(crate::model::types::ModelUsage {
@@ -233,4 +239,276 @@ fn t10_t14_occupancy_derived_header_failure_preserves_original_provider_terminal
         store.load_request_snapshot(&snapshot.request_id).unwrap(),
         snapshot
     );
+}
+
+#[allow(clippy::too_many_lines)] // End-to-end auxiliary exclusion fixture.
+#[test]
+fn mixed_auxiliary_terminal_never_replaces_primary_occupancy_statistics_or_trace() {
+    use crate::durable::observation::{TraceFactKind, TraceFactQuery, TraceFactScope};
+    use crate::model::auxiliary::{
+        AuxiliaryCallPurpose, AuxiliaryCallTrigger, AuxiliaryCallStart, AuxiliaryFingerprint,
+        AuxiliaryRequestStart,
+    };
+    use crate::model::snapshot::ModelRequestOwner;
+    use crate::runtime::identity::{AuxiliaryCallId, RequestId};
+
+    let store = store();
+    store.initialize(&[]).unwrap();
+    let mut snapshot = progress_request_snapshot(
+        "primary-occupancy-mixed",
+        "1",
+        0,
+        store.load_head().unwrap().revision,
+        Vec::new(),
+    );
+    freeze_test_input(&store, &mut snapshot, &[]);
+    store
+        .commit_model_turn_start(&[], &snapshot, Utc::now())
+        .unwrap();
+    let primary_usage = crate::model::types::ModelUsage {
+        input_tokens: 321,
+        output_tokens: 12,
+        total_tokens: 333,
+        details: None,
+    };
+    let mut primary = envelope(
+        store.conversation_id(),
+        "primary-mixed-terminal",
+        Some(snapshot.identity.attempt_id.clone()),
+        RuntimeEvent::ModelRequestCompleted {
+            owner: ModelRequestOwner::Agent {
+                identity: snapshot.identity.clone(),
+            },
+            request_id: snapshot.request_id.clone(),
+            finish_reason: ModelFinishReason::Stop,
+            usage: Some(primary_usage),
+            generation: None,
+        },
+    );
+    primary.turn_id = Some(snapshot.identity.turn.clone());
+    let primary = store.append_event(primary).unwrap();
+    let expected_occupancy = store
+        .observation_occupancy(primary.sequence)
+        .unwrap()
+        .unwrap();
+    let expected_statistics = store
+        .observation_agent_statistics(primary.sequence)
+        .unwrap();
+    let trace_before = store
+        .observation_trace_facts(
+            &store.observation_read_cut().unwrap(),
+            &TraceFactQuery {
+                scope: TraceFactScope::Agent,
+                kinds: vec![TraceFactKind::ModelRequestStarted],
+                before: None,
+                after: 0,
+                ascending: true,
+                limit: 32,
+            },
+        )
+        .unwrap()
+        .len();
+
+    let fingerprint = AuxiliaryFingerprint::new("a".repeat(64)).unwrap();
+    let call_id = AuxiliaryCallId::generate();
+    store
+        .commit_auxiliary_call_start(
+            &AuxiliaryCallStart {
+                call_id: call_id.clone(),
+                purpose: AuxiliaryCallPurpose::Summary,
+                trigger: AuxiliaryCallTrigger::Automatic,
+                semantic_input_fingerprint: fingerprint.clone(),
+                invocation_fingerprint: fingerprint,
+                business_source: crate::model::auxiliary::AuxiliaryBusinessSource::Independent,
+                input: crate::model::auxiliary::AuxiliaryInputEvidence::Temporary,
+                selected_message_ids: Vec::new(),
+            },
+            Utc::now(),
+        )
+        .unwrap();
+    let request_id = RequestId::new("mixed-auxiliary-request");
+    let auxiliary_start = store
+        .commit_auxiliary_request_start(
+            &AuxiliaryRequestStart {
+                call_id: call_id.clone(),
+                ordinal: 0,
+                request_id: request_id.clone(),
+                model: "auxiliary".into(),
+            },
+            Utc::now(),
+        )
+        .unwrap();
+    assert!(matches!(
+        store.request_summary_header_at(
+            auxiliary_start.request.started_sequence,
+            auxiliary_start.event.sequence
+        ),
+        Err(ConversationStoreError::InvalidReference(_))
+    ));
+    let auxiliary_terminal = envelope(
+        store.conversation_id(),
+        &format!("auxiliary-request-completed:{request_id}"),
+        None,
+        RuntimeEvent::ModelRequestCompleted {
+            owner: ModelRequestOwner::Auxiliary {
+                call_id: call_id.clone(),
+                ordinal: 0,
+            },
+            request_id,
+            finish_reason: ModelFinishReason::Stop,
+            usage: Some(crate::model::types::ModelUsage {
+                input_tokens: 9_999_999,
+                output_tokens: 9_999,
+                total_tokens: 10_009_998,
+                details: None,
+            }),
+            generation: None,
+        },
+    );
+    let RuntimeEvent::ModelRequestCompleted { request_id, usage, finish_reason, .. } = &auxiliary_terminal.event else { unreachable!() };
+    let evidence = crate::model::auxiliary::AuxiliaryRequestEvidence {
+        request_id: request_id.clone(),
+        observed_provider_terminal: Some(
+            crate::model::auxiliary::AuxiliaryObservedProviderTerminal::Completed {
+                finish_reason: finish_reason.into(),
+            },
+        ),
+        usage: usage.clone(),
+        usage_completeness: crate::model::auxiliary::AuxiliaryUsageCompleteness::Complete,
+        remote_execution_uncertainty: false,
+    };
+    let auxiliary_terminal = store
+        .commit_auxiliary_request_settlement(
+            auxiliary_terminal,
+            envelope(
+                store.conversation_id(),
+                &format!("auxiliary-call-settled:{call_id}"),
+                None,
+                RuntimeEvent::AuxiliaryCallSettled {
+                    call_id,
+                    request_evidence: Some(evidence),
+                    outcome: crate::model::auxiliary::AuxiliaryCallOutcome::Completed,
+                },
+            ),
+        )
+        .unwrap()
+        .request_terminal
+        .unwrap();
+
+    assert_eq!(
+        store
+            .observation_occupancy(auxiliary_terminal.sequence)
+            .unwrap(),
+        Some(expected_occupancy)
+    );
+    assert_eq!(
+        store
+            .observation_agent_statistics(auxiliary_terminal.sequence)
+            .unwrap(),
+        expected_statistics
+    );
+    assert_eq!(
+        store
+            .observation_trace_facts(
+                &store.observation_read_cut().unwrap(),
+                &TraceFactQuery {
+                    scope: TraceFactScope::Agent,
+                    kinds: vec![TraceFactKind::ModelRequestStarted],
+                    before: None,
+                    after: 0,
+                    ascending: true,
+                    limit: 32,
+                },
+            )
+            .unwrap()
+            .len(),
+        trace_before
+    );
+    let witness = store
+        .observation_event_witness(auxiliary_terminal.sequence, auxiliary_terminal.sequence)
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        witness.owner,
+        Some(crate::durable::observation::RequestOwnerKind::Auxiliary)
+    ));
+    assert!(witness.auxiliary_call_id.is_some());
+    let owner_bytes = store
+        .event_value_read(
+            auxiliary_terminal.sequence,
+            auxiliary_terminal.sequence,
+            &["event".into(), "owner".into()],
+            0,
+            16_384,
+        )
+        .unwrap();
+    assert!(matches!(
+        serde_json::from_slice::<ModelRequestOwner>(&owner_bytes.bytes).unwrap(),
+        ModelRequestOwner::Auxiliary { .. }
+    ));
+}
+
+fn commit_primary_occupancy_terminal(
+    store: &SqliteConversationStore,
+    attempt_id: &str,
+    input_tokens: u64,
+) -> (RequestSnapshot, RuntimeEventEnvelope) {
+    let mut snapshot = progress_request_snapshot(
+        attempt_id,
+        "1",
+        0,
+        store.load_head().unwrap().revision,
+        Vec::new(),
+    );
+    freeze_test_input(store, &mut snapshot, &[]);
+    store
+        .commit_model_turn_start(&[], &snapshot, Utc::now())
+        .unwrap();
+    let mut terminal = envelope(
+        store.conversation_id(),
+        &format!("{attempt_id}-occupancy-terminal"),
+        Some(snapshot.identity.attempt_id.clone()),
+        RuntimeEvent::ModelRequestCompleted {
+            owner: crate::model::ModelRequestOwner::Agent {
+                identity: snapshot.identity.clone(),
+            },
+            request_id: snapshot.request_id.clone(),
+            finish_reason: ModelFinishReason::Stop,
+            usage: Some(crate::model::types::ModelUsage {
+                input_tokens,
+                output_tokens: 1,
+                total_tokens: input_tokens + 1,
+                details: None,
+            }),
+            generation: None,
+        },
+    );
+    terminal.turn_id = Some(snapshot.identity.turn.clone());
+    let terminal = store.append_event(terminal).unwrap();
+    (snapshot, terminal)
+}
+
+#[test]
+fn latest_primary_occupancy_requires_an_exact_mandatory_owner_row() {
+    for corruption in [
+        "DELETE FROM request_owners WHERE request_id=?1",
+        "UPDATE request_owners SET request_id='foreign-request' WHERE request_id=?1",
+        "UPDATE request_owners SET terminal_kind='failed' WHERE request_id=?1",
+    ] {
+        let store = store();
+        store.initialize(&[]).unwrap();
+        let (_older, _) = commit_primary_occupancy_terminal(&store, "occupancy-older", 10);
+        let (latest_snapshot, latest) =
+            commit_primary_occupancy_terminal(&store, "occupancy-latest", 20);
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(corruption, [latest_snapshot.request_id.as_str()])
+            .unwrap();
+        assert!(
+            store.observation_occupancy(latest.sequence).is_err(),
+            "{corruption}"
+        );
+    }
 }

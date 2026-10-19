@@ -11,6 +11,7 @@
 
 pub mod adapter;
 pub mod authoring;
+pub mod auxiliary;
 pub mod catalog;
 pub mod deadline;
 pub mod error;
@@ -34,6 +35,19 @@ pub use adapter::openai::{
 };
 pub use adapter::{
     ModelAdapter, ModelStream, ModelStreamItem, ModelStreamProgress, model_stream_of_failure,
+};
+pub use auxiliary::{
+    AUXILIARY_AUDIT_PAGE_LIMIT_MAX, AUXILIARY_AUDIT_RECORD_ENCODED_MAX,
+    AUXILIARY_CALL_START_ENCODED_MAX, AUXILIARY_FINGERPRINT_HEX_BYTES,
+    AUXILIARY_INPUT_MESSAGE_REF_LIMIT_MAX, AUXILIARY_REQUEST_ID_BYTES_MAX,
+    AUXILIARY_REQUEST_MODEL_BYTES_MAX, AUXILIARY_REQUEST_START_ENCODED_MAX,
+    AUXILIARY_TERMINAL_ENVELOPE_ENCODED_MAX, AuxiliaryAuditCut, AuxiliaryAuditFact,
+    AuxiliaryAuditPage, AuxiliaryAuditRecord, AuxiliaryBusinessSource, AuxiliaryCallAudit,
+    AuxiliaryCallOutcome, AuxiliaryCallPurpose, AuxiliaryCallStart, AuxiliaryCallTrigger,
+    AuxiliaryCommitConfirmation, AuxiliaryCommitDisposition, AuxiliaryFingerprint,
+    AuxiliaryFinishReason, AuxiliaryInputEvidence, AuxiliaryObservedProviderTerminal,
+    AuxiliaryRequestAudit, AuxiliaryRequestEvidence, AuxiliaryRequestStart,
+    AuxiliaryRequestTerminal, AuxiliaryUsageCompleteness,
 };
 pub use catalog::{
     ChatMaxTokensField, ChatReasoningReplay, ChatStreamUsage, ChatToolProtocol, CredentialSource,

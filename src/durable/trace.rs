@@ -43,7 +43,11 @@ pub enum TraceFactKind {
 #[derive(Debug, Clone)]
 pub enum TraceFactScope {
     All,
-    Owner { anchor_sequence: u64 },
+    /// Primary Agent-owned model-request facts only.
+    Agent,
+    Owner {
+        anchor_sequence: u64,
+    },
 }
 #[derive(Debug, Clone)]
 pub struct TraceFactQuery {
@@ -59,6 +63,9 @@ pub struct TraceFactHeader {
     pub sequence: u64,
     pub timestamp: chrono::DateTime<chrono::Utc>,
     pub kind: TraceFactKind,
+    /// Explicit request owner when this fact is itself a model-request fact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<super::observation::RequestOwnerKind>,
     pub owner_anchor: Option<u64>,
     pub location: TraceLocation,
     pub fields: Vec<TraceFieldSource>,

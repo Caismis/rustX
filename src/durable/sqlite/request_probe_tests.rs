@@ -14,6 +14,9 @@ fn seeded_probe_request(
         "selected-request-outcome",
         Some(snapshot.identity.attempt_id.clone()),
         RuntimeEvent::ModelRequestCompleted {
+            owner: crate::model::ModelRequestOwner::Agent {
+                identity: snapshot.identity.clone(),
+            },
             request_id: snapshot.request_id.clone(),
             finish_reason: ModelFinishReason::Stop,
             usage: None,
@@ -195,6 +198,9 @@ fn t14_t19_native_request_outcome_probe_keeps_earliest_original_success_or_failu
     failed.sequence = 3;
     failed.event_id = EventId::new("corrupt-later-request-failure");
     failed.event = RuntimeEvent::ModelRequestFailed {
+        owner: crate::model::ModelRequestOwner::Agent {
+            identity: snapshot.identity.clone(),
+        },
         request_id: snapshot.request_id.clone(),
         error: crate::model::error::ModelError::timeout(
             crate::model::ModelTimeoutPhase::ResponseStart,

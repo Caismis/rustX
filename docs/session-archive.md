@@ -1,9 +1,9 @@
 # Session archive export
 
-`rustx-session-archive/v5` is a ZIP64/DEFLATE inspection archive produced by
+`rustx-session-archive/v6` is a ZIP64/DEFLATE inspection archive produced by
 `src/session_archive.rs`. `SessionArchiveProducer` is a native library owner,
 independent of App Server, Web, TUI and Trace. This is neither a canonical log nor
-an import, recovery or persistence format. SQLite schema 70 stores the common accepted contributions; export projects those
+an import, recovery or persistence format. SQLite schema 72 stores the common accepted contributions; export projects those
 historical records without creating a second persistence authority.
 
 In v2, request snapshots expose common accepted contribution records instead of
@@ -18,16 +18,22 @@ Native reasoning replay state is omitted explicitly; neither these records nor
 lossy request records claim exact reconstruction. The archive remains an inspection
 format, with no legacy decoder or recovery/import path.
 
-V5 requires explicit request ownership in Journal start records (Journal schema 3).
-Agent ownership is retained with the source request identity; exporting it grants no
-new execution or publication authority. Request inspection records remain schema 4.
+V6 requires explicit ownership on physical request starts and terminals
+(Journal schema 4). The auxiliary audit projection retains bounded Call and request
+facts at the captured Journal cut, while primary request inspection remains
+schema 4. Generation rows carry their request owner (generation schema 2).
+Projection schema 2 records explicit Summary-generation dependencies, and
+`inherited_auxiliary_audit.jsonl` schema 1 carries their independently retained
+source audit without creating destination-local Calls or requests.
+Temporary auxiliary input and generated output are not retained or reconstructible
+from fingerprints. Export grants no new execution, quota or admission authority.
 
 ## Logical files and authority
 
-All JSON is UTF-8. JSONL entries contain one archive-v5 logical value per
+All JSON is UTF-8. JSONL entries contain one archive-v6 logical value per
 line, ordered by the corresponding native immutable append coordinate. Mixed
 historical/private native types cross explicit archive projections, not raw serde. Empty
-histories have empty entries. Journal schema = 3 and requests schema = 4 (explicit frozen-input incompleteness). Messages, surface, generations,
+histories have empty entries. Journal schema = 4 and requests schema = 4 (explicit frozen-input incompleteness). Generations use schema 2 and auxiliary_audit uses schema 1. Messages and surface,
 publication_audits and inherited_responses remain at schema version 1;
 inherited_turns starts at schema version 1;
 the manifest also identifies the rustX package version and native durable schema.
@@ -40,7 +46,8 @@ the manifest also identifies the rustX package version and native durable schema
 | `sessions/<ConversationId>/surface.jsonl` | Ordinary canonical append metadata; historical selection is owned by projections |
 | `sessions/<ConversationId>/projections.jsonl` | Historical typed checkpoints and activations, Original/Derived provenance, explicit native replay incompleteness; no fabricated destination execution |
 | `sessions/<ConversationId>/requests.jsonl` | Explicit `ArchiveRequestSnapshotV4` projection of immutable Request Snapshots |
-| `sessions/<ConversationId>/generations.jsonl` | Request ID, source Journal sequence and existing `GenerationEvidence`; a convenience index of Journal-owned facts |
+| `sessions/<ConversationId>/generations.jsonl` | Request ID, explicit owner, source Journal sequence and existing `GenerationEvidence`; a convenience index of Journal-owned facts |
+| `sessions/<ConversationId>/auxiliary_audit.jsonl` | Original bounded auxiliary Call/request audit at the captured Journal cut; no temporary input/output reconstruction |
 | `sessions/<ConversationId>/publication_audits.jsonl` | Settled noncanonical publication audit values |
 | `sessions/<ConversationId>/inherited_responses.jsonl` | Immutable native completed-response lineage provenance from bootstrap, never reconstructed destination execution |
 | `sessions/<ConversationId>/inherited_turns.jsonl` | Native `TurnReadingProvenance` from ordered `inherited_turn_provenance` rows: original Conversation/Attempt identity, remapped process members and terminal-only predecessor, frozen outcome and timestamps |

@@ -25,6 +25,107 @@ fn trace_raw_seed() -> (LineageSeed, Vec<u8>) {
         .unwrap();
     (seed, raw)
 }
+
+#[test]
+fn primary_request_predecessor_filters_auxiliary_start_before_limit() {
+    use crate::model::auxiliary::{
+        AuxiliaryCallPurpose, AuxiliaryCallTrigger, AuxiliaryCallStart, AuxiliaryFingerprint,
+        AuxiliaryRequestStart,
+    };
+    use crate::runtime::identity::{AuxiliaryCallId, RequestId};
+
+    let store = store();
+    store.initialize(&[]).unwrap();
+    let identity = crate::model::RequestIdentity {
+        attempt_id: AttemptId::new("predecessor-owner"),
+        turn: TurnId::new("1"),
+        retry_number: 0,
+    };
+    let mut first = progress_request_snapshot(
+        identity.attempt_id.as_str(),
+        identity.turn.as_str(),
+        identity.retry_number,
+        store.load_head().unwrap().revision,
+        Vec::new(),
+    );
+    freeze_test_input(&store, &mut first, &[]);
+    let first_request_id = first.request_id.clone();
+    let first_start = store
+        .commit_model_turn_start(&[], &first, Utc::now())
+        .unwrap();
+
+    let fingerprint = AuxiliaryFingerprint::new("c".repeat(64)).unwrap();
+    let call_id = AuxiliaryCallId::generate();
+    store
+        .commit_auxiliary_call_start(
+            &AuxiliaryCallStart {
+                call_id: call_id.clone(),
+                purpose: AuxiliaryCallPurpose::Summary,
+                trigger: AuxiliaryCallTrigger::Automatic,
+                semantic_input_fingerprint: fingerprint.clone(),
+                invocation_fingerprint: fingerprint,
+                business_source: crate::model::auxiliary::AuxiliaryBusinessSource::Independent,
+                input: crate::model::auxiliary::AuxiliaryInputEvidence::Temporary,
+                selected_message_ids: Vec::new(),
+            },
+            Utc::now(),
+        )
+        .unwrap();
+    store
+        .commit_auxiliary_request_start(
+            &AuxiliaryRequestStart {
+                call_id,
+                ordinal: 0,
+                request_id: RequestId::new("auxiliary-between-primary-requests"),
+                model: "auxiliary".into(),
+            },
+            Utc::now(),
+        )
+        .unwrap();
+
+    let mut second = progress_request_snapshot(
+        identity.attempt_id.as_str(),
+        identity.turn.as_str(),
+        1,
+        store.load_head().unwrap().revision,
+        Vec::new(),
+    );
+    freeze_test_input(&store, &mut second, &[]);
+    let second = store
+        .commit_model_turn_start(&[], &second, Utc::now())
+        .unwrap();
+    let starts = store
+        .observation_trace_facts(
+            &store.observation_read_cut().unwrap(),
+            &crate::durable::observation::TraceFactQuery {
+                scope: crate::durable::observation::TraceFactScope::Agent,
+                kinds: vec![crate::durable::observation::TraceFactKind::ModelRequestStarted],
+                before: None,
+                after: 0,
+                ascending: true,
+                limit: 32,
+            },
+        )
+        .unwrap();
+    assert_eq!(starts.len(), 2);
+    assert!(starts.iter().all(|fact| matches!(
+        fact.owner.as_ref(),
+        Some(crate::durable::observation::RequestOwnerKind::Agent)
+    )));
+    let predecessor = store
+        .observation_request_predecessor_at(
+            second.started.sequence,
+            store.observation_read_cut().unwrap().read.journal,
+        )
+        .unwrap()
+        .expect("the primary predecessor exists");
+    assert_eq!(predecessor.start_sequence, first_start.started.sequence);
+    assert_eq!(predecessor.request_id.as_ref(), Some(&first_request_id));
+    assert_eq!(
+        predecessor.summary.as_ref().map(|summary| &summary.request_id),
+        Some(&Some(first_request_id))
+    );
+}
 fn trace_raw_occurrence() -> crate::events::types::ToolObservationOccurrence {
     crate::events::types::ToolObservationOccurrence {
         tool_ordinal: 0,
@@ -288,6 +389,13 @@ fn trace_commit_raw_publication(
         "trace-publication-outcome",
         Some(start.attempt_id.clone()),
         RuntimeEvent::ModelRequestCompleted {
+            owner: crate::model::ModelRequestOwner::Agent {
+                identity: crate::model::RequestIdentity {
+                    attempt_id: start.attempt_id.clone(),
+                    turn: start.turn_id.clone(),
+                    retry_number: 0,
+                },
+            },
             request_id: start.request_id.clone(),
             finish_reason: ModelFinishReason::ToolCalls,
             usage: None,
@@ -554,6 +662,9 @@ fn trace_large_request(store: &SqliteConversationStore) -> (RequestSnapshot, u64
         "trace-original-terminal",
         Some(snapshot.identity.attempt_id.clone()),
         RuntimeEvent::ModelRequestCompleted {
+            owner: crate::model::ModelRequestOwner::Agent {
+                identity: snapshot.identity.clone(),
+            },
             request_id: snapshot.request_id.clone(),
             finish_reason: ModelFinishReason::Stop,
             usage: Some(crate::model::types::ModelUsage {

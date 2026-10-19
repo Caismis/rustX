@@ -86,7 +86,14 @@ pub(super) fn read_at(
         read_cut.journal,
         activation,
     )?;
+    let auxiliary_audits = super::projection::read_auxiliary_lineage_dependencies(
+        connection,
+        conversation,
+        &projections,
+        read_cut.journal,
+    )?;
     Ok(LineageReadCut {
+        auxiliary_audits,
         projections,
         raw_tool_arguments,
         read_cut,
@@ -200,7 +207,7 @@ fn responses(
             .map(|response| (response.closing_message_id.clone(), response))
             .collect();
     let mut attempts: BTreeMap<AttemptId, AttemptEvidence> = BTreeMap::new();
-    let mut statement = connection.prepare("SELECT event_json FROM events WHERE sequence<=?1 AND json_extract(event_json,'$.event.type') IN ('attempt_started','assistant_message_committed','model_request_started','model_request_completed','model_request_failed','attempt_completed','attempt_cancelled','attempt_failed','attempt_timed_out','attempt_limit_exceeded') ORDER BY sequence")
+    let mut statement = connection.prepare("SELECT event_json FROM events WHERE sequence<=?1 AND json_extract(event_json,'$.event.type') IN ('attempt_started','assistant_message_committed','model_request_started','model_request_completed','model_request_failed','attempt_completed','attempt_cancelled','attempt_failed','attempt_timed_out','attempt_limit_exceeded') AND (json_extract(event_json,'$.event.type') NOT IN ('model_request_started','model_request_completed','model_request_failed') OR json_extract(event_json,'$.event.owner.type')='agent') ORDER BY sequence")
         .map_err(|error|storage(error.to_string()))?;
     let rows = statement
         .query_map([seq_to_i64(through)?], |row| row.get::<_, String>(0))
@@ -210,6 +217,9 @@ fn responses(
             &json.map_err(|error| storage(error.to_string()))?,
             "lineage response fact",
         )?;
+        if event.event.auxiliary_call_id().is_some() {
+            continue;
+        }
         let Some(id) = event.attempt_id else {
             continue;
         };

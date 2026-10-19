@@ -1867,12 +1867,24 @@ impl<'a> AgentExecution<'a> {
                 },
             });
         };
+        let Some(owner) = self.exact_started_request_owner(&request_id) else {
+            return Some(Terminal::Failed {
+                failure: AttemptFailure::Runtime {
+                    error: RuntimeError::ContractViolation {
+                        message:
+                            "a model stream completed without the matching durable start identity"
+                                .to_owned(),
+                    },
+                },
+            });
+        };
         // P: the provider outcome of this exact request becomes durable.
         // This downstream copy is derived only after canonical assembly has
         // validated and retained the event's terminal fact.
         let finish_reason = turn_assembly.finish_reason.clone();
         let generation = self.settle_generation_evidence();
         self.emit(RuntimeEvent::ModelRequestCompleted {
+            owner,
             request_id,
             finish_reason: finish_reason.clone(),
             usage: reported_usage.clone(),
@@ -4424,11 +4436,22 @@ impl<'a> AgentExecution<'a> {
                 },
             });
         };
+        let Some(owner) = self.exact_started_request_owner(&request_id) else {
+            return Err(Terminal::Failed {
+                failure: AttemptFailure::Runtime {
+                    error: RuntimeError::ContractViolation {
+                        message: "a model failure has no matching durable start identity"
+                            .to_owned(),
+                    },
+                },
+            });
+        };
         // The stream is consumed or dropped by the caller before this path
         // returns. No late adapter terminal can re-enter the loop and create
         // a second outcome for this RequestId.
         let generation = self.settle_generation_evidence();
         self.emit(RuntimeEvent::ModelRequestFailed {
+            owner,
             request_id,
             error: error.clone(),
             usage,
@@ -4438,6 +4461,20 @@ impl<'a> AgentExecution<'a> {
             return Err(terminal);
         }
         Ok(())
+    }
+
+    /// Returns the primary owner of the in-flight request only when the
+    /// frozen start identity and request ID still describe the same physical
+    /// request. A terminal is classification evidence, not an authority of
+    /// its own, so no unrelated or reconstructed identity may stand in here.
+    fn exact_started_request_owner(
+        &self,
+        request_id: &RequestId,
+    ) -> Option<crate::model::ModelRequestOwner> {
+        let identity = self.last_started_request.as_ref()?;
+        (&identity.request_id() == request_id).then(|| crate::model::ModelRequestOwner::Agent {
+            identity: identity.clone(),
+        })
     }
 
     /// Settles the in-flight request's generation timing evidence at its
@@ -7762,6 +7799,13 @@ mod tests {
             // Assistant streaming assembly is no longer an Event Journal
             // fact (Issue #108): it lives in the durable publication plane.
             RuntimeEvent::ModelRequestCompleted {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: crate::model::RequestIdentity {
+                        attempt_id: AttemptId::new("attempt-1"),
+                        turn: crate::runtime::identity::TurnId::new("1"),
+                        retry_number: 0,
+                    },
+                },
                 request_id: RequestId::new("request:9:attempt-1:1:1:0"),
                 finish_reason: ModelFinishReason::ToolCalls,
                 usage: None,

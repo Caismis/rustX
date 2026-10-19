@@ -1,4 +1,7 @@
 //! The checkpoint transaction is the sole historical projection mutation boundary.
+#[path = "auxiliary_lineage.rs"]
+mod auxiliary_lineage;
+
 use super::{
     Connection, ConversationStoreError, OptionalExtension, Transaction, decode, encode,
     nonnegative, params, seq_to_i64, storage,
@@ -911,6 +914,7 @@ fn activation_coordinates(
     Ok((nonnegative(sequence, "completion sequence")? + 1, ledger))
 }
 
+#[allow(clippy::too_many_lines)] // Validate and commit one atomic projection transaction.
 pub(super) fn commit(
     transaction: &Transaction<'_>,
     scope: &ConversationId,
@@ -933,6 +937,12 @@ pub(super) fn commit(
     if owner(transaction, input.owner.attempt_id.as_ref())? != input.owner {
         return Err(invalid("lost execution fencing"));
     }
+    auxiliary_lineage::validate_local_reference(
+        transaction,
+        scope,
+        &input.candidate,
+        &input.operation_id,
+    )?;
     validate_dependencies(transaction, scope, &input.candidate)?;
     stage(super::CompactionFaultOperation::BeforeContentInsert)?;
     let candidate_json = encode(&input.candidate, "checkpoint")?;
@@ -1445,6 +1455,7 @@ pub(super) fn install_lineage(
     scope: &ConversationId,
     checkpoints: &[ProjectionCheckpoint],
 ) -> Result<(), ConversationStoreError> {
+    auxiliary_lineage::validate_installed_closure(transaction, checkpoints)?;
     let history: Option<String> = transaction
         .query_row(
             "SELECT CASE WHEN octet_length(history_digest)=64 THEN history_digest END FROM bootstrap_identity WHERE id=1",
@@ -1545,6 +1556,7 @@ pub(super) fn validate_current_dependencies(
     scope: &ConversationId,
     value: &CheckpointCandidate,
 ) -> Result<(), ConversationStoreError> {
+    auxiliary_lineage::validate_installed_reference(connection, scope, value)?;
     for item in &value.items {
         if let CheckpointMessage::Derived(derived) = &item.message {
             for source in &derived.checkpoint_sources {
@@ -1569,6 +1581,85 @@ pub(super) fn validate_current_dependencies(
         }
     }
     Ok(())
+}
+
+#[allow(dead_code)] // Invoked by the Store schema integration hook.
+pub(super) fn create_auxiliary_lineage_schema(
+    connection: &Connection,
+) -> Result<(), ConversationStoreError> {
+    auxiliary_lineage::create_schema(connection)
+}
+
+#[allow(dead_code)] // Invoked by the Store schema integration hook.
+pub(super) fn verify_auxiliary_lineage_schema(
+    connection: &Connection,
+) -> Result<(), ConversationStoreError> {
+    auxiliary_lineage::verify_schema(connection)
+}
+
+#[allow(dead_code)] // Invoked by the Store bootstrap integration hook.
+pub(super) fn auxiliary_lineage_bootstrap(
+    connection: &Connection,
+) -> Result<(u64, String), ConversationStoreError> {
+    auxiliary_lineage::bootstrap_coordinates(connection)
+}
+
+#[allow(dead_code)] // Invoked by the Store bootstrap integration hook.
+pub(super) fn verify_auxiliary_lineage_bootstrap(
+    connection: &Connection,
+    count: u64,
+    digest: &str,
+) -> Result<(), ConversationStoreError> {
+    auxiliary_lineage::verify_bootstrap(connection, count, digest)
+}
+
+pub(super) fn read_auxiliary_lineage_dependencies(
+    connection: &Connection,
+    conversation_id: &ConversationId,
+    checkpoints: &[ProjectionCheckpoint],
+    authority_through: u64,
+) -> Result<Vec<crate::durable::reading::AuxiliaryAuditSnapshot>, ConversationStoreError> {
+    auxiliary_lineage::read_required_snapshots(
+        connection,
+        conversation_id,
+        checkpoints,
+        authority_through,
+    )
+}
+
+#[allow(dead_code)] // Invoked by the Store lineage installation hook.
+pub(super) fn install_inherited_auxiliary_audits(
+    transaction: &Transaction<'_>,
+    snapshots: &[crate::durable::reading::AuxiliaryAuditSnapshot],
+) -> Result<(), ConversationStoreError> {
+    auxiliary_lineage::install(transaction, snapshots)
+}
+
+#[allow(dead_code)] // Invoked by the Store reopen/bootstrap hook.
+pub(super) fn load_inherited_auxiliary_audits(
+    connection: &Connection,
+) -> Result<Vec<crate::durable::reading::AuxiliaryAuditSnapshot>, ConversationStoreError> {
+    auxiliary_lineage::load_all(connection)
+}
+
+#[allow(dead_code)] // Invoked by the Store reopen/bootstrap hook.
+pub(super) fn verify_inherited_auxiliary_audits(
+    connection: &Connection,
+    expected: &[crate::durable::reading::AuxiliaryAuditSnapshot],
+) -> Result<(), ConversationStoreError> {
+    auxiliary_lineage::verify_installed_snapshots(connection, expected)
+}
+
+pub(super) fn validate_auxiliary_lineage_store(
+    connection: &Connection,
+) -> Result<(), ConversationStoreError> {
+    auxiliary_lineage::validate_store_closure(connection)
+}
+
+pub(super) fn inherited_auxiliary_archive_rows(
+    connection: &Connection,
+) -> Result<Vec<serde_json::Value>, ConversationStoreError> {
+    auxiliary_lineage::archive_rows(connection)
 }
 
 #[cfg(test)]

@@ -113,6 +113,7 @@ impl SqliteConversationStore {
         let transaction = conn.unchecked_transaction().map_err(error)?;
         super::provenance::turns(&transaction).map_err(error)?;
         super::provenance::responses(&transaction).map_err(error)?;
+        super::projection::validate_auxiliary_lineage_store(&transaction).map_err(error)?;
         super::projection::archive_history(
             &transaction,
             &self.conversation_id,
@@ -120,6 +121,15 @@ impl SqliteConversationStore {
             frontiers.projection_head.as_ref(),
         )
         .map_err(error)
+    }
+
+    /// Inspection-only inherited Summary generation records at their captured
+    /// source cuts. These are destination-owned facts, never local Call rows.
+    pub(crate) fn archive_inherited_auxiliary_audit_rows(
+        &self,
+    ) -> io::Result<Vec<serde_json::Value>> {
+        let connection = self.lock().map_err(error)?;
+        super::projection::inherited_auxiliary_archive_rows(&connection).map_err(error)
     }
 
     /// Fetch one immutable logical record; the database cursor/read snapshot is
@@ -131,6 +141,18 @@ impl SqliteConversationStore {
         through: i64,
     ) -> io::Result<Option<(i64, String)>> {
         use rusqlite::OptionalExtension;
+        if matches!(authority, Authority::Journal) {
+            // Bounds apply before copying a corrupted auxiliary payload into Rust.
+            return self.lock().map_err(error)?.query_row(
+                "SELECT sequence,CASE WHEN
+                    (json_extract(event_json,'$.event.type') IN ('auxiliary_call_started','auxiliary_call_settled')
+                     OR json_extract(event_json,'$.event.owner.type')='auxiliary')
+                    AND octet_length(event_json)>16384 THEN NULL ELSE event_json END
+                 FROM events WHERE sequence>?1 AND sequence<=?2 ORDER BY sequence LIMIT 1",
+                params![after, through],
+                |row| Ok((row.get(0)?, row.get::<_, String>(1)?)),
+            ).optional().map_err(error);
+        }
         if matches!(authority, Authority::Requests) {
             let connection = self.lock().map_err(error)?;
             let selected: Option<(i64, Option<String>)> = connection.query_row(

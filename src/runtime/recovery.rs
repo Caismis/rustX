@@ -647,7 +647,11 @@ impl RecoveryEvidence {
                 // are released only by their own `ToolMessageCommitted`.
                 self.unsettled_attempts.remove(attempt_id);
             }
-            RuntimeEvent::ModelRequestStarted { request_id, .. } => {
+            RuntimeEvent::ModelRequestStarted {
+                owner: crate::model::snapshot::ModelRequestOwner::Agent { .. },
+                request_id,
+                ..
+            } => {
                 // The adopted turn was carried to the provider. From here the
                 // external-outcome plane owns it: whether it is answered,
                 // indeterminate, or known-and-unsettled is the attempt
@@ -663,8 +667,14 @@ impl RecoveryEvidence {
                     attempt.last_started_request = Some(request_id.clone());
                 }
             }
-            RuntimeEvent::ModelRequestCompleted { .. }
-            | RuntimeEvent::ModelRequestFailed { .. } => {
+            RuntimeEvent::ModelRequestCompleted {
+                owner: crate::model::snapshot::ModelRequestOwner::Agent { .. },
+                ..
+            }
+            | RuntimeEvent::ModelRequestFailed {
+                owner: crate::model::snapshot::ModelRequestOwner::Agent { .. },
+                ..
+            } => {
                 if let Some(attempt) = self.current_attempt_mut(envelope) {
                     let completed =
                         matches!(&envelope.event, RuntimeEvent::ModelRequestCompleted { .. });
@@ -2668,6 +2678,13 @@ mod tests {
     fn request_completed(attempt_id: AttemptId) -> RuntimeEventEnvelope {
         envelope(
             RuntimeEvent::ModelRequestCompleted {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: crate::model::RequestIdentity {
+                        attempt_id: attempt_id.clone(),
+                        turn: crate::runtime::identity::TurnId::new("1"),
+                        retry_number: 0,
+                    },
+                },
                 request_id: RequestId::new("req-0"),
                 finish_reason: ModelFinishReason::Stop,
                 usage: None,
@@ -2675,6 +2692,19 @@ mod tests {
             },
             Some(attempt_id),
         )
+    }
+
+    fn auxiliary_owner() -> crate::model::ModelRequestOwner {
+        crate::model::ModelRequestOwner::Auxiliary {
+            call_id: crate::runtime::identity::AuxiliaryCallId::new(
+                "aux_36524fd8-f674-7fc2-8125-06d01fee0e18",
+            ),
+            ordinal: 0,
+        }
+    }
+
+    fn auxiliary_fact(event: RuntimeEvent) -> RuntimeEventEnvelope {
+        envelope(event, None)
     }
 
     fn completed(attempt_id: AttemptId) -> RuntimeEventEnvelope {
@@ -2685,6 +2715,86 @@ mod tests {
             },
             Some(attempt_id),
         )
+    }
+
+    #[test]
+    fn auxiliary_start_and_terminal_do_not_consume_the_adopted_answer_obligation() {
+        let fingerprint = crate::model::AuxiliaryFingerprint::new("a".repeat(64)).unwrap();
+        let call_id = match auxiliary_owner() {
+            crate::model::ModelRequestOwner::Auxiliary { call_id, .. } => call_id,
+            crate::model::ModelRequestOwner::Agent { .. } => unreachable!(),
+        };
+        let request_id = RequestId::new("aux-physical-request");
+        let mut evidence = base_evidence();
+        fold_all(
+            &mut evidence,
+            &[
+                adopted(&["msg-aux-obligation"]),
+                auxiliary_fact(RuntimeEvent::AuxiliaryCallStarted {
+                    call_id: call_id.clone(),
+                    purpose: crate::model::AuxiliaryCallPurpose::Summary,
+                    trigger: crate::model::AuxiliaryCallTrigger::Automatic,
+                    semantic_input_fingerprint: fingerprint.clone(),
+                    invocation_fingerprint: fingerprint,
+                    business_source: crate::model::auxiliary::AuxiliaryBusinessSource::Independent,
+                    input: crate::model::auxiliary::AuxiliaryInputEvidence::Temporary,
+                    selected_message_ids: Vec::new(),
+                }),
+                auxiliary_fact(RuntimeEvent::ModelRequestStarted {
+                    owner: auxiliary_owner(),
+                    request_id: request_id.clone(),
+                    model: "aux-model".into(),
+                }),
+                auxiliary_fact(RuntimeEvent::ModelRequestCompleted {
+                    owner: auxiliary_owner(),
+                    request_id,
+                    finish_reason: ModelFinishReason::Stop,
+                    usage: None,
+                    generation: None,
+                }),
+            ],
+        );
+        assert_eq!(
+            evidence.unanswered_adopted_turn,
+            Some((MessageId::new("msg-aux-obligation"), None))
+        );
+        assert!(evidence.unsettled_attempts.is_empty());
+        assert_eq!(
+            RecoveryPlan::classify(&evidence).resume(),
+            ResumeDisposition::ContinueAdoptedTurn { goal: None }
+        );
+    }
+
+    #[test]
+    fn auxiliary_facts_do_not_change_an_admitted_agents_external_lifecycle() {
+        let attempt_id = attempt(0);
+        let mut evidence = base_evidence();
+        fold_all(
+            &mut evidence,
+            &[
+                started(attempt_id.clone()),
+                adopted(&["msg-live-obligation"]),
+                auxiliary_fact(RuntimeEvent::ModelRequestStarted {
+                    owner: auxiliary_owner(),
+                    request_id: RequestId::new("aux-live-request"),
+                    model: "aux-model".into(),
+                }),
+            ],
+        );
+        assert_eq!(
+            evidence.unanswered_adopted_turn,
+            Some((MessageId::new("msg-live-obligation"), None))
+        );
+        assert_eq!(
+            evidence.unsettled_attempts[&attempt_id].request,
+            ExternalRequestLifecycle::NeverStarted
+        );
+        assert_eq!(
+            RecoveryPlan::classify(&evidence).attempt_class(),
+            &AttemptRecoveryClass::AdmittedWithoutExternalStart {
+                attempt_id: attempt_id.clone(),
+            }
+        );
     }
 
     fn cancelled(attempt_id: AttemptId) -> RuntimeEventEnvelope {
@@ -2842,6 +2952,13 @@ mod tests {
                 ),
                 envelope(
                     RuntimeEvent::ModelRequestCompleted {
+                        owner: crate::model::ModelRequestOwner::Agent {
+                            identity: crate::model::RequestIdentity {
+                                attempt_id: a.clone(),
+                                turn: crate::runtime::identity::TurnId::new("1"),
+                                retry_number: 0,
+                            },
+                        },
                         request_id: request_id.clone(),
                         finish_reason: ModelFinishReason::Stop,
                         usage: None,

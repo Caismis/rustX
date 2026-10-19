@@ -7599,14 +7599,26 @@ when required by lineage/dependency closure; no stronger global audit is implied
 
 ## Model request ownership
 
-- Every admitted Agent request start records `ModelRequestOwner::Agent` with the
-  exact Snapshot RequestIdentity in the same Context/Snapshot/start transaction.
-- Journal start facts own the relation; the request-ID/kind index only locates
-  those facts. A missing, duplicate or contradictory owner is an error, not a
-  fallback to Agent ownership. An unknown RequestId may return no owner.
-- Exact start confirmation validates the retained owner and never republishes
-  its historical events. Completion/failure and primary publication preserve
-  the same Snapshot, Attempt, Turn and request ordinal checks.
-- Auxiliary ownership has a distinct Call identity and ordinal. Until its Call
-  transactions exist, auxiliary starts are refused rather than accepted under
-  primary Snapshot validation.
+- Every physical request has one authoritative owner in its Started fact.
+  Completed/Failed repeat that owner and must agree with the original fact and
+  mandatory transactional indexes.
+- Agent starts retain their exact Snapshot/native selected-input/Context
+  transaction and P/U/C rules. Auxiliary starts require an active Call and
+  sequential request ordinal; they cannot fabricate Agent execution or primary
+  publication authority.
+- Final physical request and Call outcomes commit atomically. Zero-request
+  cancellation settles only the Call. Generic Journal append cannot bypass
+  these specialized transitions.
+- Exact confirmation compares committed facts and required indexes. Missing
+  optional observation material is independent. Ordinary absence remains
+  Unknown; definite rollback evidence must come from an actually closed write.
+- Owner filtering precedes recovery mutation, native query limits, aggregation,
+  occupancy, predecessors and subagent activity. Auxiliary facts never consume
+  an adopted Agent answer obligation.
+- Full native input cuts remain distinct from Journal-only audit cuts.
+  Fingerprints do not reconstruct missing prompts or generated output.
+- Local audit survives for the Conversation lifetime. Inherited source audit is
+  separate from local execution, admission, quota and correlation. History
+  overlap alone does not create a Summary generation dependency.
+- See [Auxiliary request facts and inspection](auxiliary-execution.md) for bounds,
+  uncertainty, source ownership and validation.

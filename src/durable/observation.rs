@@ -111,6 +111,24 @@ pub struct MessageBlockHeaderPage {
     pub next_offset: Option<u64>,
 }
 
+/// Finite ownership discriminator copied from the authoritative physical fact.
+/// Full request identities remain in the indexed original Journal fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestOwnerKind {
+    Agent,
+    Auxiliary,
+}
+
+impl From<&crate::model::snapshot::ModelRequestOwner> for RequestOwnerKind {
+    fn from(owner: &crate::model::snapshot::ModelRequestOwner) -> Self {
+        match owner {
+            crate::model::snapshot::ModelRequestOwner::Agent { .. } => Self::Agent,
+            crate::model::snapshot::ModelRequestOwner::Auxiliary { .. } => Self::Auxiliary,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ObservationEventHeader {
     pub sequence: u64,
@@ -118,6 +136,10 @@ pub struct ObservationEventHeader {
     pub event_kind: String,
     pub attempt_id: Option<crate::runtime::identity::AttemptId>,
     pub turn_id: Option<crate::runtime::identity::TurnId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<RequestOwnerKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auxiliary_call_id: Option<crate::runtime::identity::AuxiliaryCallId>,
     pub display: Option<crate::events::types::RuntimeEventEnvelope>,
     pub witness: Option<ObservationEventWitness>,
     pub deferred: bool,
@@ -142,6 +164,12 @@ pub struct ObservationEventWitness {
     pub event_id: Option<crate::runtime::identity::EventId>,
     pub attempt_id: Option<crate::runtime::identity::AttemptId>,
     pub turn_id: Option<crate::runtime::identity::TurnId>,
+    /// Explicit physical-request owner captured from the committing fact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<RequestOwnerKind>,
+    /// Explicit auxiliary Call identity for Call and auxiliary request facts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auxiliary_call_id: Option<crate::runtime::identity::AuxiliaryCallId>,
     pub timestamp: chrono::DateTime<chrono::Utc>,
     pub event_kind: String,
     pub tool_occurrence: Option<crate::events::types::ToolObservationOccurrence>,

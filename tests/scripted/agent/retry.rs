@@ -373,6 +373,32 @@ async fn transient_retry_uses_shared_identity_and_frozen_request() {
         audit.snapshot_history()[0].provisional_message_id,
         audit.snapshot_history()[1].provisional_message_id
     );
+    for snapshot in audit.snapshot_history() {
+        let expected_owner = rustx::model::ModelRequestOwner::Agent {
+            identity: snapshot.identity.clone(),
+        };
+        let start_owner = audit.event_history.iter().find_map(|event| match event {
+            RuntimeEvent::ModelRequestStarted {
+                request_id, owner, ..
+            } if request_id == &snapshot.request_id => Some(owner),
+            _ => None,
+        });
+        assert_eq!(start_owner, Some(&expected_owner));
+        let terminal_owner = audit.event_history.iter().find_map(|event| match event {
+            RuntimeEvent::ModelRequestCompleted {
+                request_id, owner, ..
+            }
+            | RuntimeEvent::ModelRequestFailed {
+                request_id, owner, ..
+            } if request_id == &snapshot.request_id => Some(owner),
+            _ => None,
+        });
+        assert_eq!(
+            terminal_owner,
+            Some(&expected_owner),
+            "each terminal identifies the exact request start it settles"
+        );
+    }
     let opened = publication.opened();
     assert_eq!(opened.len(), 2);
     assert_ne!(opened[0].stream_id, opened[1].stream_id);

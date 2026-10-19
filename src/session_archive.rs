@@ -1,4 +1,5 @@
 //! Finite, read-only packaging of native Session history. No runtime is loaded.
+mod auxiliary;
 mod prepare_error;
 mod projection;
 use crate::durable::SqliteConversationStore;
@@ -23,7 +24,7 @@ use tokio_util::sync::CancellationToken;
 pub use crate::durable::sqlite::archive::ConversationArchiveFrontiers;
 
 /// Logical archive version, independent of durable and transport schemas.
-pub const FORMAT: &str = "rustx-session-archive/v5";
+pub const FORMAT: &str = "rustx-session-archive/v6";
 /// Maximum queued byte chunks. ZIP metadata scales with entries, not bytes.
 pub const STREAM_CAPACITY: usize = 2;
 pub const CHUNK_BYTES: usize = 64 * 1024;
@@ -304,7 +305,8 @@ impl SessionArchiveCut {
             "session": self.session, "cwd": self.cwd, "nodes": self.nodes,
             "conversations": self.conversations.iter().map(|c| &c.manifest).collect::<Vec<_>>(),
             "artifacts": self.artifacts.iter().map(|a| &a.manifest).collect::<Vec<_>>(),
-            "schemas": {"journal":3,"messages":1,"surface":1,"requests":4,"projections":1,"generations":1,"publication_audits":1,"inherited_responses":1,"inherited_turns":1},
+            "schemas": {"journal":4,"messages":1,"surface":1,"requests":4,"projections":2,"generations":2,"auxiliary_audit":1,"inherited_auxiliary_audit":1,"publication_audits":1,"inherited_responses":1,"inherited_turns":1},
+            "auxiliary_reconstruction": {"input":false,"output":false,"reason":"minimal audit facts retain identities and outcomes, not temporary input or generated output"},
             "integrity": "ZIP CRC32 per entry",
             "excluded": ["provider-private continuation state", "infrastructure configuration and credentials", "opaque request parameters outside the inspection allowlist", "provider and runtime diagnostic prose/codes", "workflow recovery comparison guards"],
             "unavailable": ["historical workspace-upload bytes are not immutable durable artifacts; recorded references remain in history"]
@@ -336,8 +338,8 @@ impl SessionArchiveCut {
             conversation.each(Authority::Journal, conversation.manifest.frontiers.journal, cancel, |record| {
                 if let Record::Journal(envelope) = record {
                     match envelope.event {
-                        RuntimeEvent::ModelRequestCompleted { request_id, generation, .. } | RuntimeEvent::ModelRequestFailed { request_id, generation, .. } => {
-                            serde_json::to_writer(&mut zip, &json!({"request_id":request_id,"journal_sequence":envelope.sequence,"evidence":generation})).map_err(error)?;
+                        RuntimeEvent::ModelRequestCompleted { owner, request_id, generation, .. } | RuntimeEvent::ModelRequestFailed { owner, request_id, generation, .. } => {
+                            serde_json::to_writer(&mut zip, &json!({"request_id":request_id,"owner":owner,"journal_sequence":envelope.sequence,"evidence":generation})).map_err(error)?;
                             zip.write_all(b"\n")?;
                         }
                         _ => {}
@@ -345,6 +347,28 @@ impl SessionArchiveCut {
                 }
                 Ok(())
             })?;
+        }
+        for conversation in &self.conversations {
+            check_cancel(cancel)?;
+            zip.start_file(
+                format!(
+                    "sessions/{}/auxiliary_audit.jsonl",
+                    conversation.manifest.conversation_id
+                ),
+                options,
+            )
+            .map_err(error)?;
+            conversation.write_auxiliary_audit(&mut zip, cancel)?;
+            check_cancel(cancel)?;
+            zip.start_file(
+                format!(
+                    "sessions/{}/inherited_auxiliary_audit.jsonl",
+                    conversation.manifest.conversation_id
+                ),
+                options,
+            )
+            .map_err(error)?;
+            conversation.write_inherited_auxiliary_audit(&mut zip, cancel)?;
         }
         let mut buffer = vec![0; CHUNK_BYTES];
         for artifact in &mut self.artifacts {
@@ -439,7 +463,11 @@ impl ConversationCut {
                 break;
             };
             after = position;
-            visit(Record::decode(authority, &body)?)?;
+            let record = Record::decode(authority, &body)?;
+            if let Record::Journal(envelope) = &record {
+                self.validate_auxiliary_fact(envelope)?;
+            }
+            visit(record)?;
         }
         Ok(())
     }

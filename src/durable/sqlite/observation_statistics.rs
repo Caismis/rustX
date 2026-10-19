@@ -110,26 +110,31 @@ pub(super) fn agent_read(
 }
 
 pub(super) fn requires_statistics(event: &RuntimeEventEnvelope) -> bool {
-    event.attempt_id.is_some()
-        && matches!(
-            event.event,
-            RuntimeEvent::AttemptStarted { .. }
-                | RuntimeEvent::TurnStarted
-                | RuntimeEvent::ModelRequestStarted { .. }
-                | RuntimeEvent::ModelRequestCompleted { .. }
-                | RuntimeEvent::ModelRequestFailed { .. }
-                | RuntimeEvent::AssistantMessageCommitted { .. }
-                | RuntimeEvent::AttemptCompleted { .. }
-                | RuntimeEvent::AttemptCancelled { .. }
-                | RuntimeEvent::AttemptFailed { .. }
-                | RuntimeEvent::AttemptTimedOut { .. }
-                | RuntimeEvent::AttemptLimitExceeded { .. }
-                | RuntimeEvent::ToolExecutionStarted { .. }
-                | RuntimeEvent::ToolExecutionCompleted { .. }
-                | RuntimeEvent::ToolExecutionFailed { .. }
-                | RuntimeEvent::CompactionStarted { .. }
-                | RuntimeEvent::CompactionCompleted { .. }
-        )
+    if event.attempt_id.is_none() {
+        return false;
+    }
+    match &event.event {
+        RuntimeEvent::ModelRequestStarted { owner, .. }
+        | RuntimeEvent::ModelRequestCompleted { owner, .. }
+        | RuntimeEvent::ModelRequestFailed { owner, .. } => matches!(
+            owner,
+            crate::model::snapshot::ModelRequestOwner::Agent { .. }
+        ),
+        RuntimeEvent::AttemptStarted { .. }
+        | RuntimeEvent::TurnStarted
+        | RuntimeEvent::AssistantMessageCommitted { .. }
+        | RuntimeEvent::AttemptCompleted { .. }
+        | RuntimeEvent::AttemptCancelled { .. }
+        | RuntimeEvent::AttemptFailed { .. }
+        | RuntimeEvent::AttemptTimedOut { .. }
+        | RuntimeEvent::AttemptLimitExceeded { .. }
+        | RuntimeEvent::ToolExecutionStarted { .. }
+        | RuntimeEvent::ToolExecutionCompleted { .. }
+        | RuntimeEvent::ToolExecutionFailed { .. }
+        | RuntimeEvent::CompactionStarted { .. }
+        | RuntimeEvent::CompactionCompleted { .. } => true,
+        _ => false,
+    }
 }
 
 pub(super) fn seed(
@@ -173,20 +178,23 @@ pub(super) fn seed(
     Ok(())
 }
 pub(super) fn is_trace_anchor(event: &RuntimeEvent) -> bool {
-    matches!(
-        event,
+    match event {
+        RuntimeEvent::ModelRequestStarted { owner, .. } => matches!(
+            owner,
+            crate::model::snapshot::ModelRequestOwner::Agent { .. }
+        ),
         RuntimeEvent::AttemptStarted { .. }
-            | RuntimeEvent::TurnStarted
-            | RuntimeEvent::InboundTurnAdopted { .. }
-            | RuntimeEvent::ModelRequestStarted { .. }
-            | RuntimeEvent::AssistantMessageCommitted { .. }
-            | RuntimeEvent::ToolExecutionStarted { .. }
-            | RuntimeEvent::CompactionStarted { .. }
-            | RuntimeEvent::BackgroundExecutionCommitted { .. }
-            | RuntimeEvent::SubagentOwnershipCommitted { .. }
-            | RuntimeEvent::WorkflowStarted { .. }
-            | RuntimeEvent::InteractionRequested { .. }
-    )
+        | RuntimeEvent::TurnStarted
+        | RuntimeEvent::InboundTurnAdopted { .. }
+        | RuntimeEvent::AssistantMessageCommitted { .. }
+        | RuntimeEvent::ToolExecutionStarted { .. }
+        | RuntimeEvent::CompactionStarted { .. }
+        | RuntimeEvent::BackgroundExecutionCommitted { .. }
+        | RuntimeEvent::SubagentOwnershipCommitted { .. }
+        | RuntimeEvent::WorkflowStarted { .. }
+        | RuntimeEvent::InteractionRequested { .. } => true,
+        _ => false,
+    }
 }
 fn record_trace_anchor(
     connection: &Connection,

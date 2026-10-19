@@ -101,11 +101,13 @@ pub(super) fn event(
 ) -> Result<(), ConversationStoreError> {
     let value = match &event.event {
         RuntimeEvent::ModelRequestCompleted {
+            owner: crate::model::snapshot::ModelRequestOwner::Agent { .. },
             request_id,
             usage: Some(usage),
             ..
         }
         | RuntimeEvent::ModelRequestFailed {
+            owner: crate::model::snapshot::ModelRequestOwner::Agent { .. },
             request_id,
             usage: Some(usage),
             ..
@@ -176,10 +178,50 @@ pub(super) fn read(
         "model_request_failed",
         "compaction_completed",
     ] {
-        let row:Option<(u64,Option<Vec<u8>>)>=connection.query_row(
-            "SELECT sequence,observation_occupancy FROM events INDEXED BY events_context_reading_idx WHERE json_extract(event_json,'$.event.type')=?1 AND (json_extract(event_json,'$.event.type')='compaction_completed' OR COALESCE(json_type(event_json,'$.event.usage'),'null')!='null')=1 AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",
-            params![kind,through],|row|Ok((row.get(0)?,row.get(1)?)),
-        ).optional().map_err(|error|storage(error.to_string()))?;
+        let row: Option<(u64, Option<Vec<u8>>)> = if kind == "compaction_completed" {
+            connection
+                .query_row(
+                    "SELECT sequence,observation_occupancy
+                     FROM events INDEXED BY events_context_reading_idx
+                     WHERE json_extract(event_json,'$.event.type')=?1
+                       AND sequence<=?2
+                     ORDER BY sequence DESC LIMIT 1",
+                    params![kind, through],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()
+                .map_err(|error| storage(error.to_string()))?
+        } else {
+            let terminal_kind = if kind == "model_request_completed" {
+                "completed"
+            } else {
+                "failed"
+            };
+            let candidate: Option<(u64, Option<Vec<u8>>, bool)> = connection.query_row(
+                "SELECT e.sequence,e.observation_occupancy,
+                    EXISTS(SELECT 1 FROM request_owners o JOIN request_snapshots s
+                        ON s.request_id=o.request_id AND s.started_sequence=o.start_sequence
+                        WHERE o.terminal_sequence=e.sequence AND o.owner_kind='agent'
+                          AND o.terminal_kind=?3 AND o.attempt_id=e.attempt_id AND o.turn_id=e.turn_id
+                          AND o.request_id='request:' || octet_length(o.attempt_id) || ':' || o.attempt_id || ':' || octet_length(o.turn_id) || ':' || o.turn_id || ':' || o.retry_number)
+                 FROM events e INDEXED BY events_context_reading_idx
+                 WHERE json_extract(e.event_json,'$.event.type')=?1
+                   AND (json_extract(e.event_json,'$.event.type')='compaction_completed'
+                        OR (COALESCE(json_type(e.event_json,'$.event.usage'),'null')!='null'
+                            AND json_extract(e.event_json,'$.event.owner.type')='agent'))=1
+                   AND e.sequence<=?2 ORDER BY e.sequence DESC LIMIT 1",
+                params![kind, through, terminal_kind],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            ).optional().map_err(|error| storage(error.to_string()))?;
+            candidate.map(|(sequence, bytes, valid)| {
+                if !valid {
+                    return Err(ConversationStoreError::InvalidReference(
+                        "primary occupancy fact has missing or inconsistent mandatory ownership".into(),
+                    ));
+                }
+                Ok((sequence, bytes))
+            }).transpose()?
+        };
         #[cfg(test)]
         if let Some((_, bytes)) = &row {
             READ_WORK.with(|work| {

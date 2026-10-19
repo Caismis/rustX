@@ -5,6 +5,8 @@ use crate::runtime::identity::{AttemptId, TurnId};
 #[derive(Debug, Clone)]
 pub enum FactScope {
     All,
+    /// Physical request facts with explicit primary Agent ownership.
+    AgentRequest,
     /// Terminal request usage or a completed compaction, including an absent estimate.
     /// An expression index skips usage-free requests without scanning their history.
     ContextReading,

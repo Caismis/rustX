@@ -982,6 +982,9 @@ fn t08_t14_t15_native_attempt_summary_matches_timing_oracle_and_pages_giant_mode
         store
             .commit_model_turn_start(&[], &snapshot, start)
             .unwrap();
+        let owner = crate::model::ModelRequestOwner::Agent {
+            identity: snapshot.identity.clone(),
+        };
         let request = snapshot.request_id;
         let turn = snapshot.identity.turn;
         oracle.start(request.clone());
@@ -994,6 +997,7 @@ fn t08_t14_t15_native_attempt_summary_matches_timing_oracle_and_pages_giant_mode
         oracle.terminal(&request, Some(generation), Some(&usage));
         append(
             RuntimeEvent::ModelRequestCompleted {
+                owner,
                 request_id: request,
                 finish_reason: ModelFinishReason::Stop,
                 usage: Some(usage.clone()),

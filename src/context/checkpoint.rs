@@ -16,7 +16,9 @@ use crate::model::input::ModelInputMessage;
 use crate::model::projected::{
     CanonicalMessageRef, DerivedModelMessage, ModelMessageView, ProjectedMessage,
 };
-use crate::runtime::identity::{CheckpointId, ConversationId, RequestId, ToolCallId, ToolId};
+use crate::runtime::identity::{
+    AuxiliaryCallId, CheckpointId, ConversationId, RequestId, ToolCallId, ToolId,
+};
 
 /// Checkpoint activation order, independent of the Ledger and Journal domains.
 #[derive(
@@ -91,6 +93,21 @@ pub struct CheckpointItem {
     pub result_call: Option<CheckpointCallCoordinate>,
 }
 
+/// Exact auxiliary Summary Call that generated one retained checkpoint.
+///
+/// This is source execution provenance, not an input-identity inference. The
+/// source Conversation and original inclusive Journal cut remain stable across
+/// repeated Clone/Fork operations.
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct SummaryGenerationRef {
+    pub conversation_id: ConversationId,
+    pub call_id: AuxiliaryCallId,
+    pub through_journal: u64,
+}
+
 /// Complete historical inclusion/exclusion decision. No current execution state is stored here.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -102,6 +119,8 @@ pub struct CheckpointCandidate {
     pub items: Vec<CheckpointItem>,
     /// Trusted cumulative file facts, validated from canonical sources and earlier checkpoints.
     pub summary_metadata: Option<crate::message::types::CompactionSummaryMetadata>,
+    /// The explicitly named Summary-generation dependency, when one exists.
+    pub summary_generation: Option<SummaryGenerationRef>,
 }
 
 impl CheckpointCandidate {
@@ -596,6 +615,7 @@ mod tests {
             base_frontier: LedgerFrontier(100),
             items,
             summary_metadata: None,
+            summary_generation: None,
         }
     }
     fn canonical_item(message: &MessageBlock) -> CheckpointItem {

@@ -13,6 +13,9 @@ fn owner_fixture() -> (tempfile::TempDir, SqliteConversationStore, RequestSnapsh
 
 fn completed_request_event(snapshot: &RequestSnapshot) -> RuntimeEvent {
     RuntimeEvent::ModelRequestCompleted {
+        owner: crate::model::ModelRequestOwner::Agent {
+            identity: snapshot.identity.clone(),
+        },
         request_id: snapshot.request_id.clone(),
         finish_reason: ModelFinishReason::Stop,
         usage: None,
@@ -22,6 +25,9 @@ fn completed_request_event(snapshot: &RequestSnapshot) -> RuntimeEvent {
 
 fn failed_request_event(snapshot: &RequestSnapshot) -> RuntimeEvent {
     RuntimeEvent::ModelRequestFailed {
+        owner: crate::model::ModelRequestOwner::Agent {
+            identity: snapshot.identity.clone(),
+        },
         request_id: snapshot.request_id.clone(),
         error: crate::model::error::ModelError::timeout(
             crate::model::deadline::ModelTimeoutPhase::ResponseStart,
@@ -321,12 +327,20 @@ fn request_owner_rejects_auxiliary_start_without_call_transaction() {
         .unwrap(),
         ordinal: 0,
     };
+    started.attempt_id = None;
+    started.turn_id = None;
+    started.observation = None;
+    started.sequence = 0;
+    if let RuntimeEvent::ModelRequestStarted { request_id, .. } = &mut started.event {
+        *request_id = RequestId::generate_auxiliary(&crate::runtime::identity::SystemUuidV7Generator).unwrap();
+        started.event_id = EventId::new(format!("auxiliary-request-started:{request_id}"));
+    }
     let mut connection = store.conn.lock().unwrap();
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .unwrap();
     assert!(
-        matches!(persist_event_tx(&transaction, store.conversation_id(), started), Err(ConversationStoreError::InvalidReference(detail)) if detail.contains("durable Call transaction"))
+        matches!(persist_event_tx(&transaction, store.conversation_id(), started), Err(ConversationStoreError::InvalidReference(detail)) if detail.contains("requires active Call"))
     );
 }
 
@@ -360,5 +374,86 @@ fn falsely_current_ownerless_or_malformed_start_schema_is_rejected_without_rewri
             "{corruption}"
         );
         assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+}
+
+fn commit_primary_completion(
+    store: &SqliteConversationStore,
+    attempt_id: &str,
+) -> (RequestSnapshot, RuntimeEventEnvelope) {
+    let mut snapshot = progress_request_snapshot(
+        attempt_id,
+        "1",
+        0,
+        store.load_head().unwrap().revision,
+        Vec::new(),
+    );
+    freeze_test_input(store, &mut snapshot, &[]);
+    store
+        .commit_model_turn_start(&[], &snapshot, Utc::now())
+        .unwrap();
+    let mut terminal = outcome_envelope(store, &snapshot, completed_request_event(&snapshot));
+    terminal.event_id = EventId::new(format!("owner-outcome:{attempt_id}"));
+    let terminal = store.append_event(terminal).unwrap();
+    (snapshot, terminal)
+}
+
+#[test]
+fn agent_request_presentation_start_requires_its_mandatory_owner_row() {
+    let (_directory, store, snapshot) = owner_fixture();
+    let started = store
+        .commit_model_turn_start(&[], &snapshot, Utc::now())
+        .unwrap()
+        .started;
+    store
+        .conn
+        .lock()
+        .unwrap()
+        .execute(
+            "DELETE FROM request_owners WHERE request_id=?1",
+            [snapshot.request_id.as_str()],
+        )
+        .unwrap();
+    let query = crate::durable::presentation::FactQuery {
+        scope: crate::durable::presentation::FactScope::AgentRequest,
+        kinds: vec!["model_request_started"],
+        before: Some(started.sequence + 1),
+        after: 0,
+        ascending: false,
+        through: started.sequence,
+        limit: 1,
+    };
+    assert!(store.read_presentation_events(&query).is_err());
+}
+
+#[test]
+fn agent_request_presentation_refuses_corrupt_latest_owner_without_fallback() {
+    for corruption in [
+        "DELETE FROM request_owners WHERE request_id=?1",
+        "UPDATE request_owners SET request_id='foreign-request' WHERE request_id=?1",
+        "UPDATE request_owners SET terminal_kind='failed' WHERE request_id=?1",
+    ] {
+        let (_directory, store, _) = owner_fixture();
+        let (_older, _) = commit_primary_completion(&store, "attempt-older");
+        let (latest_snapshot, latest) = commit_primary_completion(&store, "attempt-latest");
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(corruption, [latest_snapshot.request_id.as_str()])
+            .unwrap();
+        let query = crate::durable::presentation::FactQuery {
+            scope: crate::durable::presentation::FactScope::AgentRequest,
+            kinds: vec!["model_request_completed"],
+            before: Some(latest.sequence + 1),
+            after: 0,
+            ascending: false,
+            through: latest.sequence,
+            limit: 1,
+        };
+        assert!(
+            store.read_presentation_events(&query).is_err(),
+            "{corruption}"
+        );
     }
 }

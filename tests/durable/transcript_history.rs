@@ -868,6 +868,13 @@ fn requirement_09_unaccepted_and_incomplete_publications_stay_distinct() {
             "provider-complete-unaccepted",
             "unaccepted",
             RuntimeEvent::ModelRequestCompleted {
+                owner: rustx::model::ModelRequestOwner::Agent {
+                    identity: RequestIdentity {
+                        attempt_id: attempt(),
+                        turn: TurnId::new("unaccepted"),
+                        retry_number: 0,
+                    },
+                },
                 request_id,
                 finish_reason: ModelFinishReason::Stop,
                 usage: None,

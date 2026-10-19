@@ -68,20 +68,25 @@ pub(super) fn summary(
     Ok(layout(connection, attempt, through)?.summary)
 }
 pub(super) fn required(event: &RuntimeEventEnvelope) -> bool {
-    event.attempt_id.is_some()
-        && matches!(
-            event.event,
-            RuntimeEvent::AttemptStarted { .. }
-                | RuntimeEvent::ModelRequestStarted { .. }
-                | RuntimeEvent::ModelRequestCompleted { .. }
-                | RuntimeEvent::ModelRequestFailed { .. }
-                | RuntimeEvent::AssistantMessageCommitted { .. }
-                | RuntimeEvent::AttemptCompleted { .. }
-                | RuntimeEvent::AttemptCancelled { .. }
-                | RuntimeEvent::AttemptFailed { .. }
-                | RuntimeEvent::AttemptTimedOut { .. }
-                | RuntimeEvent::AttemptLimitExceeded { .. }
-        )
+    if event.attempt_id.is_none() {
+        return false;
+    }
+    match &event.event {
+        RuntimeEvent::ModelRequestStarted { owner, .. }
+        | RuntimeEvent::ModelRequestCompleted { owner, .. }
+        | RuntimeEvent::ModelRequestFailed { owner, .. } => matches!(
+            owner,
+            crate::model::snapshot::ModelRequestOwner::Agent { .. }
+        ),
+        RuntimeEvent::AttemptStarted { .. }
+        | RuntimeEvent::AssistantMessageCommitted { .. }
+        | RuntimeEvent::AttemptCompleted { .. }
+        | RuntimeEvent::AttemptCancelled { .. }
+        | RuntimeEvent::AttemptFailed { .. }
+        | RuntimeEvent::AttemptTimedOut { .. }
+        | RuntimeEvent::AttemptLimitExceeded { .. } => true,
+        _ => false,
+    }
 }
 pub(super) fn summary_selected(
     connection: &Connection,
@@ -103,6 +108,7 @@ fn selected_layout(
     let latest:u64=connection.query_row("SELECT sequence FROM events INDEXED BY events_execution_owner_idx WHERE observation_execution_owner=?1 AND observation_execution IS NOT NULL AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",params![selected.owner_anchor,through],|row|row.get(0)).map_err(|_|storage("native execution owner header unavailable"))?;
     layout_at(connection, latest)
 }
+#[allow(clippy::too_many_lines)] // One exhaustive mapping of execution facts.
 pub(super) fn event(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
@@ -113,15 +119,24 @@ pub(super) fn event(
     if !matches!(
         event.event,
         RuntimeEvent::AttemptStarted { .. }
-            | RuntimeEvent::ModelRequestStarted { .. }
-            | RuntimeEvent::ModelRequestCompleted { .. }
-            | RuntimeEvent::ModelRequestFailed { .. }
             | RuntimeEvent::AssistantMessageCommitted { .. }
             | RuntimeEvent::AttemptCompleted { .. }
             | RuntimeEvent::AttemptCancelled { .. }
             | RuntimeEvent::AttemptFailed { .. }
             | RuntimeEvent::AttemptTimedOut { .. }
             | RuntimeEvent::AttemptLimitExceeded { .. }
+    ) && !matches!(
+        &event.event,
+        RuntimeEvent::ModelRequestStarted {
+            owner: crate::model::snapshot::ModelRequestOwner::Agent { .. },
+            ..
+        } | RuntimeEvent::ModelRequestCompleted {
+            owner: crate::model::snapshot::ModelRequestOwner::Agent { .. },
+            ..
+        } | RuntimeEvent::ModelRequestFailed {
+            owner: crate::model::snapshot::ModelRequestOwner::Agent { .. },
+            ..
+        }
     ) {
         return Ok(());
     }

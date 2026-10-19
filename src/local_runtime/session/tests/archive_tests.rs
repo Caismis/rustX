@@ -1,5 +1,15 @@
 //! Real durable fixtures; gates are completion/queue boundaries, never sleeps.
 use super::*;
+use crate::durable::{AuxiliarySettlementCommit, ConversationStore};
+use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
+use crate::model::auxiliary::{
+    AuxiliaryCallPurpose, AuxiliaryCallStart, AuxiliaryCallTrigger, AuxiliaryFingerprint,
+    AuxiliaryRequestStart,
+};
+use crate::model::error::{ModelError, ModelErrorKind, ModelRetryDisposition};
+use crate::model::generation_evidence::GenerationEvidence;
+use crate::model::{ModelFinishReason, ModelRequestOwner, ModelUsage};
+use crate::runtime::identity::{AuxiliaryCallId, EventId, RequestId};
 use crate::session_archive::{SessionArchiveCut, SessionArchiveProducer};
 use crate::tools::artifacts::ArtifactStore;
 use std::collections::BTreeMap;
@@ -39,8 +49,653 @@ fn records(
         .collect()
 }
 
+fn auxiliary_fingerprint(byte: char) -> AuxiliaryFingerprint {
+    AuxiliaryFingerprint::new(byte.to_string().repeat(64)).unwrap()
+}
+
+fn auxiliary_event(store: &SqliteConversationStore, event: RuntimeEvent) -> RuntimeEventEnvelope {
+    let event_id = EventId::new(match &event {
+        RuntimeEvent::ModelRequestCompleted { request_id, .. } => {
+            format!("auxiliary-request-completed:{request_id}")
+        }
+        RuntimeEvent::ModelRequestFailed { request_id, .. } => {
+            format!("auxiliary-request-failed:{request_id}")
+        }
+        RuntimeEvent::AuxiliaryCallSettled { call_id, .. } => {
+            format!("auxiliary-call-settled:{call_id}")
+        }
+        _ => panic!("auxiliary fixture requires a terminal"),
+    });
+    RuntimeEventEnvelope {
+        tool_occurrence: None,
+        observation: None,
+        schema_version: EVENT_SCHEMA_VERSION,
+        event_id,
+        sequence: 0,
+        conversation_id: store.conversation_id().clone(),
+        attempt_id: None,
+        turn_id: None,
+        timestamp: Utc::now(),
+        event,
+    }
+}
+
+pub(super) fn start_auxiliary(
+    store: &SqliteConversationStore,
+    purpose: AuxiliaryCallPurpose,
+    trigger: AuxiliaryCallTrigger,
+) -> (AuxiliaryCallId, RequestId) {
+    let call_id = AuxiliaryCallId::generate();
+    let request_id =
+        RequestId::generate_auxiliary(&crate::runtime::identity::SystemUuidV7Generator).unwrap();
+    store
+        .commit_auxiliary_call_start(
+            &AuxiliaryCallStart {
+                call_id: call_id.clone(),
+                purpose,
+                trigger,
+                business_source: crate::model::auxiliary::AuxiliaryBusinessSource::Independent,
+                input: crate::model::auxiliary::AuxiliaryInputEvidence::Historical {
+                    cut: store.compaction_resource_cut().unwrap(),
+                },
+                selected_message_ids: store
+                    .load_canonical()
+                    .unwrap()
+                    .iter()
+                    .take(32)
+                    .map(|message| message.id().clone())
+                    .collect(),
+                semantic_input_fingerprint: auxiliary_fingerprint('a'),
+                invocation_fingerprint: auxiliary_fingerprint('b'),
+            },
+            Utc::now(),
+        )
+        .unwrap();
+    store
+        .commit_auxiliary_request_start(
+            &AuxiliaryRequestStart {
+                call_id: call_id.clone(),
+                ordinal: 0,
+                request_id: request_id.clone(),
+                model: "fixture/auxiliary-model".into(),
+            },
+            Utc::now(),
+        )
+        .unwrap();
+    (call_id, request_id)
+}
+
+pub(super) fn settle_auxiliary(
+    store: &SqliteConversationStore,
+    call_id: AuxiliaryCallId,
+    request_id: RequestId,
+    completed: bool,
+) -> AuxiliarySettlementCommit {
+    let owner = ModelRequestOwner::Auxiliary {
+        call_id: call_id.clone(),
+        ordinal: 0,
+    };
+    let usage = ModelUsage {
+        input_tokens: 41,
+        output_tokens: 7,
+        total_tokens: 48,
+        details: None,
+    };
+    let generation = GenerationEvidence {
+        dispatch_after_start_ms: Some(3),
+        first_output_ms: Some(8),
+        last_output_ms: Some(21),
+        terminal_ms: 25,
+    };
+    let terminal = auxiliary_event(
+        store,
+        if completed {
+            RuntimeEvent::ModelRequestCompleted {
+                owner,
+                request_id,
+                finish_reason: ModelFinishReason::Stop,
+                usage: Some(usage),
+                generation: Some(generation),
+            }
+        } else {
+            RuntimeEvent::ModelRequestFailed {
+                owner,
+                request_id,
+                error: ModelError {
+                    kind: ModelErrorKind::Authentication,
+                    message: "AUX_PROVIDER_DIAGNOSTIC_SECRET".into(),
+                    provider_code: Some("AUX_PROVIDER_CODE_SECRET".into()),
+                    retry_disposition: ModelRetryDisposition::Never,
+                    retry_after_ms: None,
+                    context_overflow: None,
+                    malformed_tool_proposal: None,
+                    timeout_phase: None,
+                    generation: None,
+                },
+                usage: Some(usage),
+                generation: Some(generation),
+            }
+        },
+    );
+    let (evidence_request, evidence_usage, observed) = match &terminal.event {
+        RuntimeEvent::ModelRequestCompleted {
+            request_id,
+            usage,
+            finish_reason,
+            ..
+        } => (
+            request_id.clone(),
+            usage.clone(),
+            crate::model::auxiliary::AuxiliaryObservedProviderTerminal::Completed {
+                finish_reason: finish_reason.into(),
+            },
+        ),
+        RuntimeEvent::ModelRequestFailed {
+            request_id,
+            usage,
+            error,
+            ..
+        } => (
+            request_id.clone(),
+            usage.clone(),
+            crate::model::auxiliary::AuxiliaryObservedProviderTerminal::Failed {
+                kind: error.kind.clone(),
+            },
+        ),
+        _ => unreachable!(),
+    };
+    let request_evidence = crate::model::auxiliary::AuxiliaryRequestEvidence {
+        request_id: evidence_request,
+        observed_provider_terminal: Some(observed),
+        usage: evidence_usage,
+        usage_completeness: crate::model::auxiliary::AuxiliaryUsageCompleteness::Complete,
+        remote_execution_uncertainty: false,
+    };
+    let settled = auxiliary_event(
+        store,
+        RuntimeEvent::AuxiliaryCallSettled {
+            call_id,
+            request_evidence: Some(request_evidence),
+            outcome: if completed {
+                crate::model::auxiliary::AuxiliaryCallOutcome::Completed
+            } else {
+                crate::model::auxiliary::AuxiliaryCallOutcome::Failed
+            },
+        },
+    );
+    store
+        .commit_auxiliary_request_settlement(terminal, settled)
+        .unwrap()
+}
+
+#[allow(clippy::type_complexity)]
+fn settled_auxiliary_fixture(
+    completed: bool,
+) -> (
+    TempDir,
+    SessionCatalog,
+    crate::local_runtime::SessionId,
+    ConversationId,
+    SqliteConversationStore,
+    AuxiliaryCallId,
+    RequestId,
+) {
+    let (directory, catalog, _) = open_catalog();
+    let (conversation, session, _) = append_history(&catalog, &[]);
+    let store = store_for(&catalog, &session, &conversation);
+    let (call_id, request_id) = start_auxiliary(
+        &store,
+        AuxiliaryCallPurpose::Summary,
+        AuxiliaryCallTrigger::Automatic,
+    );
+    settle_auxiliary(&store, call_id.clone(), request_id.clone(), completed);
+    (
+        directory,
+        catalog,
+        session,
+        conversation,
+        store,
+        call_id,
+        request_id,
+    )
+}
+
+fn assert_archive_rejects_corruption(
+    root: &std::path::Path,
+    session: &crate::local_runtime::SessionId,
+) {
+    assert!(matches!(
+        SessionArchiveProducer::prepare(root, session, &CancellationToken::new()),
+        Err(crate::session_archive::SessionArchivePrepareError::CorruptAuthority)
+    ));
+}
+
 #[tokio::test]
-async fn archive_v5_contract_preserves_accepted_contributions_and_journal_vocabulary() {
+#[allow(clippy::too_many_lines)]
+async fn archive_auxiliary_audit_preserves_owner_usage_and_excludes_provider_prose() {
+    let (directory, _catalog, session, conversation, store, call_id, request_id) =
+        settled_auxiliary_fixture(false);
+    let files = decode(
+        SessionArchiveProducer::prepare(directory.path(), &session, &CancellationToken::new())
+            .unwrap(),
+    )
+    .await;
+    let manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
+    assert_eq!(manifest["format"], "rustx-session-archive/v6");
+    assert_eq!(manifest["schemas"]["journal"], 4);
+    assert_eq!(manifest["schemas"]["generations"], 2);
+    assert_eq!(manifest["schemas"]["auxiliary_audit"], 1);
+    assert_eq!(manifest["schemas"]["inherited_auxiliary_audit"], 1);
+    assert_eq!(
+        manifest["auxiliary_reconstruction"],
+        serde_json::json!({
+            "input": false,
+            "output": false,
+            "reason": "minimal audit facts retain identities and outcomes, not temporary input or generated output",
+        })
+    );
+    assert!(records(&files, &conversation, "requests").is_empty());
+
+    let audit = records(&files, &conversation, "auxiliary_audit");
+    assert_eq!(audit.len(), 4);
+    assert_eq!(
+        audit
+            .iter()
+            .map(|row| row["event"]["type"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "auxiliary_call_started",
+            "model_request_started",
+            "model_request_failed",
+            "auxiliary_call_settled",
+        ]
+    );
+    for row in &audit {
+        for field in [
+            "schema_version",
+            "event_id",
+            "sequence",
+            "conversation_id",
+            "attempt_id",
+            "turn_id",
+            "timestamp",
+            "event",
+        ] {
+            assert!(row.get(field).is_some(), "{field}");
+        }
+        assert_eq!(row["conversation_id"], serde_json::json!(conversation));
+        assert!(row["attempt_id"].is_null());
+        assert!(row["turn_id"].is_null());
+        for omitted in ["output", "messages", "prompt", "generation_content"] {
+            assert!(row["event"].get(omitted).is_none(), "{omitted}");
+        }
+    }
+    let input = &audit[0]["event"]["input"];
+    assert_eq!(input["mode"], "historical");
+    assert_eq!(input.as_object().unwrap().len(), 2);
+    assert!(input["cut"].is_object());
+    let mut sequences = audit
+        .iter()
+        .map(|row| row["sequence"].as_u64().unwrap())
+        .collect::<Vec<_>>();
+    let unique_sequences = sequences.len();
+    sequences.sort_unstable();
+    sequences.dedup();
+    assert_eq!(sequences.len(), unique_sequences);
+    let started = &audit[1]["event"];
+    assert_eq!(started["request_id"], serde_json::json!(request_id));
+    assert_eq!(
+        started["owner"],
+        serde_json::json!({"type": "auxiliary", "call_id": call_id, "ordinal": 0})
+    );
+    let failed = &audit[2]["event"];
+    assert_eq!(failed["owner"], started["owner"]);
+    assert_eq!(failed["usage"]["total_tokens"], 48);
+    assert_eq!(failed["generation"]["terminal_ms"], 25);
+    assert_eq!(failed["error"]["kind"], "authentication");
+    assert!(failed["error"].get("message").is_none());
+    assert!(failed["error"].get("provider_code").is_none());
+    assert_eq!(audit[3]["event"]["outcome"], "failed");
+
+    let generations = records(&files, &conversation, "generations");
+    assert_eq!(generations.len(), 1);
+    assert_eq!(generations[0]["request_id"], serde_json::json!(request_id));
+    assert_eq!(generations[0]["owner"], started["owner"]);
+    assert_eq!(generations[0]["evidence"]["terminal_ms"], 25);
+    let all = files
+        .values()
+        .map(|bytes| String::from_utf8_lossy(bytes))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!all.contains("AUX_PROVIDER_DIAGNOSTIC_SECRET"));
+    assert!(!all.contains("AUX_PROVIDER_CODE_SECRET"));
+    assert_eq!(
+        store
+            .load_auxiliary_call(&call_id, store.auxiliary_audit_cut().unwrap())
+            .unwrap()
+            .unwrap()
+            .outcome,
+        Some(crate::model::auxiliary::AuxiliaryCallOutcome::Failed)
+    );
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn archive_cut_before_auxiliary_settlement_does_not_leak_later_terminal() {
+    let (directory, _catalog, session, conversation, store, call_id, request_id) = {
+        let (directory, catalog, _) = open_catalog();
+        let (conversation, session, _) = append_history(&catalog, &[]);
+        let store = store_for(&catalog, &session, &conversation);
+        let (call_id, request_id) = start_auxiliary(
+            &store,
+            AuxiliaryCallPurpose::Btw,
+            AuxiliaryCallTrigger::Manual,
+        );
+        (
+            directory,
+            catalog,
+            session,
+            conversation,
+            store,
+            call_id,
+            request_id,
+        )
+    };
+    let before_settlement =
+        SessionArchiveProducer::prepare(directory.path(), &session, &CancellationToken::new())
+            .unwrap();
+    settle_auxiliary(&store, call_id.clone(), request_id.clone(), true);
+    let old_files = decode(before_settlement).await;
+    let old_audit = records(&old_files, &conversation, "auxiliary_audit");
+    assert_eq!(
+        old_audit
+            .iter()
+            .map(|row| row["event"]["type"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["auxiliary_call_started", "model_request_started"]
+    );
+    assert!(records(&old_files, &conversation, "generations").is_empty());
+    let old_journal = records(&old_files, &conversation, "journal");
+    assert!(old_journal.iter().all(|row| {
+        !matches!(
+            row["event"]["type"].as_str(),
+            Some("model_request_completed" | "model_request_failed" | "auxiliary_call_settled")
+        )
+    }));
+
+    let fresh_files = decode(
+        SessionArchiveProducer::prepare(directory.path(), &session, &CancellationToken::new())
+            .unwrap(),
+    )
+    .await;
+    let fresh_audit = records(&fresh_files, &conversation, "auxiliary_audit");
+    assert_eq!(fresh_audit.len(), 4);
+    assert_eq!(fresh_audit[2]["event"]["type"], "model_request_completed");
+    assert_eq!(
+        fresh_audit[2]["event"]["owner"]["call_id"],
+        serde_json::json!(call_id)
+    );
+    assert_eq!(fresh_audit[3]["event"]["outcome"], "completed");
+    assert_eq!(records(&fresh_files, &conversation, "generations").len(), 1);
+}
+
+#[tokio::test]
+async fn archive_exports_only_named_inherited_summary_generation_audit() {
+    let (directory, mut catalog, _) = open_catalog();
+    let (store, _) = super::artifact_lineage_tests::source(&catalog, false);
+    let (call_id, request_id, through) =
+        super::artifact_lineage_tests::link_failed_summary_generation(&store);
+    let (unrelated_call, unrelated_request) = start_auxiliary(
+        &store,
+        AuxiliaryCallPurpose::Btw,
+        AuxiliaryCallTrigger::Manual,
+    );
+    settle_auxiliary(
+        &store,
+        unrelated_call.clone(),
+        unrelated_request.clone(),
+        true,
+    );
+    let source_cut = store
+        .read_lineage_cut(store.load_head().unwrap().revision)
+        .unwrap();
+    assert_eq!(source_cut.auxiliary_audits.len(), 1);
+    let clone = catalog
+        .prepare_clone_session(&state(), &source_cut)
+        .unwrap();
+    catalog
+        .publish_session(&clone, SessionNodeOrigin::New)
+        .unwrap();
+
+    let files = decode(
+        SessionArchiveProducer::prepare(
+            directory.path(),
+            &clone.session_id,
+            &CancellationToken::new(),
+        )
+        .unwrap(),
+    )
+    .await;
+    let manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
+    assert_eq!(manifest["schemas"]["auxiliary_audit"], 1);
+    assert_eq!(manifest["schemas"]["inherited_auxiliary_audit"], 1);
+    let inherited = records(&files, &clone.conversation_id, "inherited_auxiliary_audit");
+    assert_eq!(inherited.len(), 4);
+    assert!(inherited.iter().all(|record| {
+        record["call_id"] == serde_json::json!(call_id)
+            && record["through_journal"] == serde_json::json!(through)
+            && record["origin"]["type"] == "inherited"
+            && record["completeness"] == "complete_at_cut"
+            && record["omitted_after_cut"] == serde_json::json!([])
+            && record["source_conversation_id"] == serde_json::json!(store.conversation_id())
+    }));
+    assert!(
+        inherited
+            .iter()
+            .all(|record| record["call_id"] != serde_json::json!(unrelated_call))
+    );
+    assert!(records(&files, &clone.conversation_id, "auxiliary_audit").is_empty());
+    assert!(records(&files, &clone.conversation_id, "requests").is_empty());
+    let all = files
+        .values()
+        .map(|bytes| String::from_utf8_lossy(bytes))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!all.contains("AUX_PROVIDER_DIAGNOSTIC_SECRET"));
+    assert!(!all.contains("AUX_PROVIDER_CODE_SECRET"));
+    let connection = rusqlite::Connection::open(
+        catalog.database_path(&clone.session_id, &clone.conversation_id),
+    )
+    .unwrap();
+    let mut statement = connection
+        .prepare("SELECT payload_json FROM inherited_auxiliary_audits")
+        .unwrap();
+    let payloads = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(payloads.len(), 1);
+    assert!(!payloads[0].contains("AUX_PROVIDER_DIAGNOSTIC_SECRET"));
+    assert!(!payloads[0].contains("AUX_PROVIDER_CODE_SECRET"));
+    assert!(
+        records(&files, &clone.conversation_id, "generations")
+            .iter()
+            .all(|row| row["request_id"] != serde_json::json!(request_id))
+    );
+}
+
+#[tokio::test]
+async fn archive_inherited_summary_cut_does_not_leak_later_settlement() {
+    let (directory, mut catalog, _) = open_catalog();
+    let (store, _) = super::artifact_lineage_tests::source(&catalog, false);
+    let (call_id, request_id, through) =
+        super::artifact_lineage_tests::link_open_summary_generation(&store);
+    let source_cut = store
+        .read_lineage_cut(store.load_head().unwrap().revision)
+        .unwrap();
+    assert_eq!(source_cut.auxiliary_audits[0].records.len(), 2);
+    let clone = catalog
+        .prepare_clone_session(&state(), &source_cut)
+        .unwrap();
+    catalog
+        .publish_session(&clone, SessionNodeOrigin::New)
+        .unwrap();
+    settle_auxiliary(&store, call_id.clone(), request_id.clone(), true);
+
+    let files = decode(
+        SessionArchiveProducer::prepare(
+            directory.path(),
+            &clone.session_id,
+            &CancellationToken::new(),
+        )
+        .unwrap(),
+    )
+    .await;
+    let inherited = records(&files, &clone.conversation_id, "inherited_auxiliary_audit");
+    assert_eq!(inherited.len(), 2);
+    assert!(inherited.iter().all(|record| {
+        record["call_id"] == serde_json::json!(call_id)
+            && record["through_journal"] == serde_json::json!(through)
+            && record["completeness"] == "open_at_cut"
+            && record["omitted_after_cut"]
+                == serde_json::json!(["later_call_settlement", "later_request_outcome"])
+    }));
+    assert_eq!(
+        inherited
+            .iter()
+            .map(|record| {
+                record["fact"]
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .next()
+                    .unwrap()
+                    .as_str()
+            })
+            .collect::<Vec<_>>(),
+        ["CallStarted", "RequestStarted"]
+    );
+    assert!(
+        records(&files, &clone.conversation_id, "generations")
+            .iter()
+            .all(|row| row["request_id"] != serde_json::json!(request_id))
+    );
+}
+
+#[test]
+fn archive_rejects_owner_index_disagreeing_with_auxiliary_start() {
+    let (directory, catalog, session, _conversation, store, _call_id, request_id) =
+        settled_auxiliary_fixture(true);
+    rusqlite::Connection::open(catalog.database_path(&session, store.conversation_id()))
+        .unwrap()
+        .execute(
+            "UPDATE request_owners SET auxiliary_ordinal=1 WHERE request_id=?1",
+            [request_id.as_str()],
+        )
+        .unwrap();
+    assert!(
+        store
+            .load_auxiliary_request(&request_id, store.auxiliary_audit_cut().unwrap())
+            .is_err()
+    );
+    assert_archive_rejects_corruption(directory.path(), &session);
+}
+
+#[test]
+fn archive_rejects_missing_auxiliary_call_settlement_index() {
+    let (directory, catalog, session, _conversation, store, call_id, _request_id) =
+        settled_auxiliary_fixture(true);
+    rusqlite::Connection::open(catalog.database_path(&session, store.conversation_id()))
+        .unwrap()
+        .execute(
+            "UPDATE auxiliary_calls SET settled_sequence=NULL,outcome=NULL WHERE call_id=?1",
+            [call_id.as_str()],
+        )
+        .unwrap();
+    assert!(
+        store
+            .load_auxiliary_call(&call_id, store.auxiliary_audit_cut().unwrap())
+            .is_err()
+    );
+    assert_archive_rejects_corruption(directory.path(), &session);
+}
+
+#[test]
+fn archive_rejects_missing_mandatory_auxiliary_audit_index() {
+    let (directory, catalog, session, _conversation, store, call_id, _request_id) =
+        settled_auxiliary_fixture(true);
+    rusqlite::Connection::open(catalog.database_path(&session, store.conversation_id()))
+        .unwrap()
+        .execute(
+            "DELETE FROM auxiliary_audit_facts WHERE sequence=(
+                SELECT started_sequence FROM auxiliary_calls WHERE call_id=?1
+             )",
+            [call_id.as_str()],
+        )
+        .unwrap();
+    assert!(
+        store
+            .read_auxiliary_audit(store.auxiliary_audit_cut().unwrap(), None, 32)
+            .is_err()
+    );
+    assert_archive_rejects_corruption(directory.path(), &session);
+}
+
+#[tokio::test]
+async fn archive_keeps_valid_auxiliary_audit_when_optional_request_source_is_absent() {
+    let (directory, catalog, session, conversation, store, _call_id, request_id) =
+        settled_auxiliary_fixture(true);
+    let status_id = MessageId::new("optional-source-status");
+    let mut snapshot = todo_status_start_snapshot(
+        store.load_head().unwrap().revision.next(),
+        status_id.clone(),
+        ContributionEmission {
+            key: "active_actionable".into(),
+            fingerprint: "optional-source".into(),
+        },
+    );
+    freeze_session_test_input(&store, &mut snapshot, &[todo_status(status_id.as_str())]);
+    rusqlite::Connection::open(catalog.database_path(&session, store.conversation_id()))
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER omit_optional_request_source
+             BEFORE INSERT ON request_observation_fields
+             BEGIN SELECT RAISE(FAIL,'optional request source absent'); END;",
+        )
+        .unwrap();
+    store
+        .commit_model_turn_start(&[todo_status(status_id.as_str())], &snapshot, Utc::now())
+        .unwrap();
+    let optional_rows: u64 =
+        rusqlite::Connection::open(catalog.database_path(&session, store.conversation_id()))
+            .unwrap()
+            .query_row(
+                "SELECT count(*) FROM request_observation_fields",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+    assert_eq!(optional_rows, 0);
+    let files = decode(
+        SessionArchiveProducer::prepare(directory.path(), &session, &CancellationToken::new())
+            .unwrap(),
+    )
+    .await;
+    let requests = records(&files, &conversation, "requests");
+    assert_eq!(requests.len(), 1);
+    assert!(
+        requests
+            .iter()
+            .all(|request| request["request_id"] != serde_json::json!(request_id))
+    );
+    let audit = records(&files, &conversation, "auxiliary_audit");
+    assert_eq!(audit.len(), 4);
+    assert_eq!(audit[3]["event"]["outcome"], "completed");
+}
+
+#[tokio::test]
+async fn archive_v6_contract_preserves_accepted_contributions_and_journal_vocabulary() {
     let (directory, catalog, _) = open_catalog();
     let (conversation, session, _) = append_history(&catalog, &[]);
     let store = store_for(&catalog, &session, &conversation);
@@ -62,12 +717,14 @@ async fn archive_v5_contract_preserves_accepted_contributions_and_journal_vocabu
             .unwrap();
     let files = decode(cut).await;
     let manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
-    assert_eq!(manifest["format"], "rustx-session-archive/v5");
+    assert_eq!(manifest["format"], "rustx-session-archive/v6");
     assert_eq!(
         manifest["schemas"],
         serde_json::json!({
-            "journal": 3, "messages": 1, "surface": 1, "requests": 4, "projections": 1,
-            "generations": 1, "publication_audits": 1, "inherited_responses": 1, "inherited_turns": 1,
+            "journal": 4, "messages": 1, "surface": 1, "requests": 4, "projections":2,
+            "generations": 2, "auxiliary_audit": 1, "inherited_auxiliary_audit": 1,
+            "publication_audits": 1,
+            "inherited_responses": 1, "inherited_turns": 1,
         })
     );
     let requests = records(&files, &conversation, "requests");
@@ -136,6 +793,9 @@ async fn archive_cut_excludes_live_writes_and_later_descendants() {
     terminal.event_id = crate::runtime::identity::EventId::new("archive-terminal");
     terminal.sequence = 0;
     terminal.event = crate::events::types::RuntimeEvent::ModelRequestCompleted {
+        owner: crate::model::ModelRequestOwner::Agent {
+            identity: snapshot.identity.clone(),
+        },
         request_id: snapshot.request_id.clone(),
         finish_reason: crate::model::ModelFinishReason::Stop,
         usage: None,
@@ -195,6 +855,9 @@ async fn archive_cut_excludes_live_writes_and_later_descendants() {
     later_terminal.sequence = 0;
     later_terminal.event_id = crate::runtime::identity::EventId::new("later-terminal");
     later_terminal.event = crate::events::types::RuntimeEvent::ModelRequestCompleted {
+        owner: crate::model::ModelRequestOwner::Agent {
+            identity: later_request.identity.clone(),
+        },
         request_id: later_request.request_id,
         finish_reason: crate::model::ModelFinishReason::Stop,
         usage: None,
@@ -219,7 +882,7 @@ async fn archive_cut_excludes_live_writes_and_later_descendants() {
     release.send(()).unwrap();
     let files = decode_bytes(producing.await.unwrap());
     let manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
-    assert_eq!(manifest["format"], "rustx-session-archive/v5");
+    assert_eq!(manifest["format"], "rustx-session-archive/v6");
     assert_eq!(manifest["conversations"].as_array().unwrap().len(), 2);
     assert!(files.contains_key(&format!("sessions/{child}/journal.jsonl")));
     assert!(!files.contains_key(&format!("sessions/{later}/journal.jsonl")));
@@ -509,6 +1172,9 @@ async fn archive_request_projection_excludes_infrastructure_and_preserves_author
     event.sequence = 0;
     event.event_id = crate::runtime::identity::EventId::new("safe-model-failed");
     event.event = crate::events::types::RuntimeEvent::ModelRequestFailed {
+        owner: crate::model::ModelRequestOwner::Agent {
+            identity: snapshot.identity.clone(),
+        },
         request_id: snapshot.request_id.clone(),
         error: ModelError {
             kind: ModelErrorKind::Authentication,
@@ -1174,13 +1840,22 @@ async fn inherited_turn_archive(member: bool) {
         assert_eq!(turns, vec![serde_json::json!(turn)]);
         assert_eq!(turns[0]["id"], serde_json::json!(origin));
         assert!(turns[0].get("terminal_event_id").is_none());
-        for name in ["journal", "requests", "generations", "inherited_responses"] {
+        for name in [
+            "journal",
+            "requests",
+            "generations",
+            "auxiliary_audit",
+            "inherited_auxiliary_audit",
+            "inherited_responses",
+        ] {
             assert!(
                 records(&files, &prepared.conversation_id, name).is_empty(),
                 "{name}"
             );
         }
         let manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
+        assert_eq!(manifest["schemas"]["auxiliary_audit"], 1);
+        assert_eq!(manifest["schemas"]["inherited_auxiliary_audit"], 1);
         assert_eq!(manifest["schemas"]["inherited_turns"], 1);
         assert_eq!(manifest["conversations"][0]["frontiers"]["bootstrap"], 1);
         assert!(
@@ -1257,6 +1932,9 @@ async fn lossy_archive_reports_missing_old_encrypted_input_without_invalidating_
     terminal.event_id = crate::runtime::identity::EventId::new("old-terminal");
     terminal.sequence = 0;
     terminal.event = crate::events::RuntimeEvent::ModelRequestCompleted {
+        owner: crate::model::ModelRequestOwner::Agent {
+            identity: old.identity.clone(),
+        },
         request_id: old.request_id.clone(),
         finish_reason: crate::model::ModelFinishReason::Stop,
         usage: None,

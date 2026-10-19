@@ -246,6 +246,13 @@ async fn text_execution_completes_with_exact_trace() {
         // (Issue #108); it lives in the durable publication plane, which the
         // release-trace assertion below covers.
         RuntimeEvent::ModelRequestCompleted {
+            owner: rustx::model::ModelRequestOwner::Agent {
+                identity: rustx::model::RequestIdentity {
+                    attempt_id: AttemptId::new("attempt-1"),
+                    turn: rustx::runtime::identity::TurnId::new("1"),
+                    retry_number: 0,
+                },
+            },
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             finish_reason: ModelFinishReason::Stop,
             usage: None,
@@ -374,6 +381,13 @@ async fn model_failure_before_content_fails_attempt() {
             model: "fake-model".to_owned(),
         },
         RuntimeEvent::ModelRequestFailed {
+            owner: rustx::model::ModelRequestOwner::Agent {
+                identity: rustx::model::RequestIdentity {
+                    attempt_id: AttemptId::new("attempt-1"),
+                    turn: rustx::runtime::identity::TurnId::new("1"),
+                    retry_number: 0,
+                },
+            },
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             error: error.clone(),
             usage: None,
@@ -673,6 +687,13 @@ fn expected_single_tool_trace() -> Vec<RuntimeEvent> {
         // plane; the Event Journal records only the Tool Plane execution
         // facts below.
         RuntimeEvent::ModelRequestCompleted {
+            owner: rustx::model::ModelRequestOwner::Agent {
+                identity: rustx::model::RequestIdentity {
+                    attempt_id: AttemptId::new("attempt-1"),
+                    turn: rustx::runtime::identity::TurnId::new("1"),
+                    retry_number: 0,
+                },
+            },
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             finish_reason: ModelFinishReason::ToolCalls,
             usage: None,
@@ -708,6 +729,13 @@ fn expected_single_tool_trace() -> Vec<RuntimeEvent> {
             model: "fake-model".to_owned(),
         },
         RuntimeEvent::ModelRequestCompleted {
+            owner: rustx::model::ModelRequestOwner::Agent {
+                identity: rustx::model::RequestIdentity {
+                    attempt_id: AttemptId::new("attempt-1"),
+                    turn: rustx::runtime::identity::TurnId::new("2"),
+                    retry_number: 0,
+                },
+            },
             request_id: RequestId::new("request:9:attempt-1:1:2:0"),
             finish_reason: ModelFinishReason::Stop,
             usage: None,
@@ -882,6 +910,13 @@ fn expected_unknown_tool_trace() -> Vec<RuntimeEvent> {
             model: "fake-model".to_owned(),
         },
         RuntimeEvent::ModelRequestCompleted {
+            owner: rustx::model::ModelRequestOwner::Agent {
+                identity: rustx::model::RequestIdentity {
+                    attempt_id: AttemptId::new("attempt-1"),
+                    turn: rustx::runtime::identity::TurnId::new("1"),
+                    retry_number: 0,
+                },
+            },
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             finish_reason: ModelFinishReason::ToolCalls,
             usage: None,
@@ -2337,6 +2372,46 @@ fn replay_rejects_invalid_sequences() {
     assert!(
         replay_execution_states(&completion_from_tool_phase).is_err(),
         "completion outside a running-model phase is rejected"
+    );
+}
+
+#[test]
+fn replay_ignores_auxiliary_request_facts() {
+    let attempt_id = AttemptId::new("attempt-1");
+    let auxiliary_owner = rustx::model::ModelRequestOwner::Auxiliary {
+        call_id: rustx::runtime::identity::AuxiliaryCallId::new(
+            "aux_36524fd8-f674-7fc2-8125-06d01fee0e18",
+        ),
+        ordinal: 0,
+    };
+    let events = vec![
+        RuntimeEvent::AttemptStarted {
+            attempt_id: attempt_id.clone(),
+        },
+        RuntimeEvent::AttemptCompleted {
+            attempt_id,
+            finish_reason: ModelFinishReason::Stop,
+        },
+        RuntimeEvent::ModelRequestStarted {
+            owner: auxiliary_owner.clone(),
+            request_id: RequestId::new("auxiliary-request"),
+            model: "auxiliary-model".to_owned(),
+        },
+        RuntimeEvent::ModelRequestCompleted {
+            owner: auxiliary_owner,
+            request_id: RequestId::new("auxiliary-request"),
+            finish_reason: ModelFinishReason::Stop,
+            usage: None,
+            generation: None,
+        },
+    ];
+    assert_eq!(
+        replay_execution_states(&events).expect("auxiliary facts are ignored"),
+        vec![
+            rustx::agent::ExecutionState::Idle,
+            rustx::agent::ExecutionState::RunningModel,
+            rustx::agent::ExecutionState::Completed,
+        ]
     );
 }
 

@@ -331,7 +331,10 @@ fn count_conversation_store_open() {
 /// Version 68 binds canonical binary `ContentRefs` to frozen fixed-chunk digests.
 /// Version 69 requires explicit native artifact settlement evidence.
 /// Version 70 requires explicit immutable ownership in every request-start fact.
-pub const SQLITE_SCHEMA_VERSION: i64 = 70;
+/// Version 71 adds authoritative owner/Call indexes, bounded auxiliary audit,
+/// and explicit owner evidence on physical request terminals.
+/// Version 72 retains exact Summary-generation source audit closure in lineage.
+pub const SQLITE_SCHEMA_VERSION: i64 = 72;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -3712,10 +3715,15 @@ impl ConversationStore for SqliteConversationStore {
             );
         }
         let seed = seed.with_projections(inherited)?;
+        let auxiliary_audits = {
+            let connection = self.lock()?;
+            projection::load_inherited_auxiliary_audits(&connection)?
+        };
         self.initialize_lineage(
             &seed
                 .with_completed_responses(self.load_inherited_responses()?)?
-                .with_turns(self.load_inherited_turns()?)?,
+                .with_turns(self.load_inherited_turns()?)?
+                .with_auxiliary_audits(auxiliary_audits)?,
         )
     }
 
@@ -3726,6 +3734,7 @@ impl ConversationStore for SqliteConversationStore {
                 .with_completed_responses(seed.completed_responses().to_vec())?
                 .with_turns(seed.turns().to_vec())?
                 .with_projections(seed.projections().to_vec())?
+                .with_auxiliary_audits(seed.auxiliary_audits().to_vec())?
                 .with_raw_tool_arguments(seed.raw_tool_arguments().to_vec())?;
         let seed = &validated;
         let messages = seed.canonical();
@@ -3743,19 +3752,33 @@ impl ConversationStore for SqliteConversationStore {
         // Fail closed if initialized metadata is missing or damaged. The marker
         // and identity are written in this same transaction, never independently.
         read_inherited_occupancy(&transaction)?;
-        let bootstrap: Option<(i64, String, String, String)> = transaction
+        let bootstrap: Option<(i64, String, String, String, u64, String)> = transaction
             .query_row(
-                "SELECT message_count,history_digest,occupancy_json,occupancy_digest FROM bootstrap_identity WHERE id=1",
+                "SELECT message_count,history_digest,occupancy_json,occupancy_digest,auxiliary_audit_count,auxiliary_audit_digest FROM bootstrap_identity WHERE id=1",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
             )
             .optional()
             .map_err(|error| storage(format!("bootstrap probe: {error}")))?;
-        if let Some((count, digest, retained_occupancy, retained_digest)) = bootstrap {
+        if let Some((
+            count,
+            digest,
+            retained_occupancy,
+            retained_digest,
+            auxiliary_audit_count,
+            auxiliary_audit_digest,
+        )) = bootstrap
+        {
             let bootstrap_revision = SurfaceRevision::new(
                 u64::try_from(count).map_err(|_| storage("negative bootstrap message count"))?,
             );
             projection::verify_lineage(&transaction, seed.projections())?;
+            projection::verify_inherited_auxiliary_audits(&transaction, seed.auxiliary_audits())?;
+            projection::verify_auxiliary_lineage_bootstrap(
+                &transaction,
+                auxiliary_audit_count,
+                &auxiliary_audit_digest,
+            )?;
             if replay_surface_history(&transaction, bootstrap_revision)?.1 != seed.surface_history()
             {
                 return Err(ConversationStoreError::InitialHistoryMismatch);
@@ -3876,6 +3899,14 @@ impl ConversationStore for SqliteConversationStore {
                 observation_occupancy::inherited(&transaction, occupancy.as_ref())
             });
             provenance::persist(&transaction, seed)?;
+            projection::install_inherited_auxiliary_audits(&transaction, seed.auxiliary_audits())?;
+            let (auxiliary_audit_count, auxiliary_audit_digest) =
+                projection::auxiliary_lineage_bootstrap(&transaction)?;
+            transaction.execute(
+                "UPDATE bootstrap_identity SET auxiliary_audit_count=?1,auxiliary_audit_digest=?2 WHERE id=1",
+                params![seq_to_i64(auxiliary_audit_count)?, auxiliary_audit_digest],
+            ).map_err(|error| storage(format!("install inherited auxiliary audit witness: {error}")))?;
+
             // The original identity and provenance now exist together. Derived
             // readers validate this same transaction's complete bootstrap shape;
             // no external reader sees the marker before COMMIT.
@@ -4892,21 +4923,134 @@ impl ConversationStore for SqliteConversationStore {
         let transaction = connection
             .transaction()
             .map_err(|error| storage(format!("request owner read transaction: {error}")))?;
-        let started = find_request_start_event(&transaction, request_id)?;
-        if started.is_none() && read_request_snapshot_tx(&transaction, request_id)?.is_none() {
-            if has_request_journal_fact_tx(&transaction, request_id)? {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "request {request_id} has Journal evidence without its request-start owner"
-                )));
-            }
-            return Ok(None);
-        }
-        let (_, started) =
-            verified_started_request_tx(&transaction, &self.conversation_id, request_id)?;
-        let RuntimeEvent::ModelRequestStarted { owner, .. } = started.event else {
-            unreachable!("verified request-start fact");
-        };
-        Ok(Some(owner))
+        auxiliary::load_request_owner_tx(&transaction, &self.conversation_id, request_id)
+    }
+
+    fn commit_auxiliary_call_start(
+        &self,
+        start: &crate::model::auxiliary::AuxiliaryCallStart,
+        timestamp: DateTime<Utc>,
+    ) -> Result<crate::durable::AuxiliaryCallStartCommit, crate::durable::AuxiliaryWriteFailure>
+    {
+        SqliteConversationStore::commit_auxiliary_call_start(self, start, timestamp)
+    }
+
+    fn commit_auxiliary_request_start(
+        &self,
+        start: &crate::model::auxiliary::AuxiliaryRequestStart,
+        timestamp: DateTime<Utc>,
+    ) -> Result<crate::durable::AuxiliaryRequestStartCommit, crate::durable::AuxiliaryWriteFailure>
+    {
+        SqliteConversationStore::commit_auxiliary_request_start(self, start, timestamp)
+    }
+
+    fn commit_auxiliary_request_settlement(
+        &self,
+        request_terminal: RuntimeEventEnvelope,
+        call_settled: RuntimeEventEnvelope,
+    ) -> Result<crate::durable::AuxiliarySettlementCommit, crate::durable::AuxiliaryWriteFailure>
+    {
+        SqliteConversationStore::commit_auxiliary_request_settlement(
+            self,
+            request_terminal,
+            call_settled,
+        )
+    }
+
+    fn commit_auxiliary_call_settlement(
+        &self,
+        call_settled: RuntimeEventEnvelope,
+    ) -> Result<crate::durable::AuxiliarySettlementCommit, crate::durable::AuxiliaryWriteFailure>
+    {
+        SqliteConversationStore::commit_auxiliary_call_settlement(self, call_settled)
+    }
+
+    fn confirm_auxiliary_call_start(
+        &self,
+        expected: &crate::model::auxiliary::AuxiliaryCallStart,
+    ) -> Result<
+        crate::model::auxiliary::AuxiliaryCommitConfirmation<
+            crate::durable::AuxiliaryCallStartCommit,
+        >,
+        ConversationStoreError,
+    > {
+        SqliteConversationStore::confirm_auxiliary_call_start(self, expected)
+    }
+
+    fn confirm_auxiliary_request_start(
+        &self,
+        expected: &crate::model::auxiliary::AuxiliaryRequestStart,
+    ) -> Result<
+        crate::model::auxiliary::AuxiliaryCommitConfirmation<
+            crate::durable::AuxiliaryRequestStartCommit,
+        >,
+        ConversationStoreError,
+    > {
+        SqliteConversationStore::confirm_auxiliary_request_start(self, expected)
+    }
+
+    fn confirm_auxiliary_settlement(
+        &self,
+        request_terminal: &RuntimeEventEnvelope,
+        call_settled: &RuntimeEventEnvelope,
+    ) -> Result<
+        crate::model::auxiliary::AuxiliaryCommitConfirmation<
+            crate::durable::AuxiliarySettlementCommit,
+        >,
+        ConversationStoreError,
+    > {
+        SqliteConversationStore::confirm_auxiliary_settlement(self, request_terminal, call_settled)
+    }
+
+    fn confirm_auxiliary_call_settlement(
+        &self,
+        call_settled: &RuntimeEventEnvelope,
+    ) -> Result<
+        crate::model::auxiliary::AuxiliaryCommitConfirmation<
+            crate::durable::AuxiliarySettlementCommit,
+        >,
+        ConversationStoreError,
+    > {
+        SqliteConversationStore::confirm_auxiliary_call_settlement(self, call_settled)
+    }
+
+    fn auxiliary_audit_cut(
+        &self,
+    ) -> Result<crate::model::auxiliary::AuxiliaryAuditCut, ConversationStoreError> {
+        SqliteConversationStore::auxiliary_audit_cut(self)
+    }
+
+    fn read_auxiliary_audit(
+        &self,
+        cut: crate::model::auxiliary::AuxiliaryAuditCut,
+        after_offset: Option<u64>,
+        limit: usize,
+    ) -> Result<crate::model::auxiliary::AuxiliaryAuditPage, ConversationStoreError> {
+        SqliteConversationStore::read_auxiliary_audit(self, cut, after_offset, limit)
+    }
+
+    fn auxiliary_audit_total(
+        &self,
+        cut: crate::model::auxiliary::AuxiliaryAuditCut,
+    ) -> Result<u64, ConversationStoreError> {
+        SqliteConversationStore::auxiliary_audit_total(self, cut)
+    }
+
+    fn load_auxiliary_call(
+        &self,
+        call_id: &crate::runtime::identity::AuxiliaryCallId,
+        cut: crate::model::auxiliary::AuxiliaryAuditCut,
+    ) -> Result<Option<crate::model::auxiliary::AuxiliaryCallAudit>, ConversationStoreError> {
+        SqliteConversationStore::load_auxiliary_call(self, call_id, cut)
+    }
+
+    fn load_auxiliary_request(
+        &self,
+        request_id: &RequestId,
+        cut: crate::model::auxiliary::AuxiliaryAuditCut,
+    ) -> Result<Option<crate::model::auxiliary::AuxiliaryRequestAudit>, ConversationStoreError>
+    {
+        SqliteConversationStore::load_auxiliary_request(self, request_id, cut)
     }
 
     fn latest_contribution_emission(
@@ -5086,7 +5230,14 @@ impl ConversationStore for SqliteConversationStore {
         &self,
         event: RuntimeEventEnvelope,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
-        if requires_specialized_transition(&event.event) {
+        if requires_specialized_transition(&event.event)
+            || (event.event.is_auxiliary_model_request()
+                && matches!(
+                    event.event,
+                    RuntimeEvent::ModelRequestCompleted { .. }
+                        | RuntimeEvent::ModelRequestFailed { .. }
+                ))
+        {
             return Err(ConversationStoreError::InvalidReference(
                 "this event kind must use its specialized durable transition".to_owned(),
             ));
@@ -5470,6 +5621,11 @@ impl ConversationStore for SqliteConversationStore {
             events.reverse();
         }
         events.truncate(query.limit);
+        if matches!(query.scope, super::presentation::FactScope::AgentRequest) {
+            for event in &events {
+                validate_primary_request_owner_event(&connection, event)?;
+            }
+        }
         Ok(events)
     }
 
@@ -8307,7 +8463,141 @@ fn validate_existing_schema(connection: &Connection) -> Result<(), ConversationS
 
 // This is an index discriminator, not a second occupancy fact. The Journal
 // continues to own the usage payload and the compaction's explicit absence.
-const CONTEXT_READING_PREDICATE: &str = "json_extract(event_json, '$.event.type') = 'compaction_completed' OR COALESCE(json_type(event_json, '$.event.usage'), 'null') != 'null'";
+const CONTEXT_READING_PREDICATE: &str = "json_extract(event_json, '$.event.type') = 'compaction_completed' OR (COALESCE(json_type(event_json, '$.event.usage'), 'null') != 'null' AND json_extract(event_json, '$.event.owner.type') = 'agent')";
+
+#[derive(Clone, Copy)]
+enum PrimaryRequestFactKind {
+    Started,
+    Completed,
+    Failed,
+}
+
+impl PrimaryRequestFactKind {
+    fn terminal_kind(self) -> Option<&'static str> {
+        match self {
+            Self::Started => None,
+            Self::Completed => Some("completed"),
+            Self::Failed => Some("failed"),
+        }
+    }
+}
+
+fn validate_primary_request_owner_event(
+    connection: &Connection,
+    event: &RuntimeEventEnvelope,
+) -> Result<(), ConversationStoreError> {
+    let (request_id, identity, kind) = match &event.event {
+        RuntimeEvent::ModelRequestStarted {
+            owner: ModelRequestOwner::Agent { identity },
+            request_id,
+            ..
+        } => (request_id, identity, PrimaryRequestFactKind::Started),
+        RuntimeEvent::ModelRequestCompleted {
+            owner: ModelRequestOwner::Agent { identity },
+            request_id,
+            ..
+        } => (request_id, identity, PrimaryRequestFactKind::Completed),
+        RuntimeEvent::ModelRequestFailed {
+            owner: ModelRequestOwner::Agent { identity },
+            request_id,
+            ..
+        } => (request_id, identity, PrimaryRequestFactKind::Failed),
+        _ => {
+            return Err(ConversationStoreError::InvalidReference(
+                "AgentRequest scope selected a fact without primary Agent ownership".into(),
+            ));
+        }
+    };
+    validate_primary_request_owner_fact(connection, request_id, identity, event.sequence, kind)
+}
+
+fn validate_primary_request_owner_fact(
+    connection: &Connection,
+    request_id: &RequestId,
+    identity: &crate::model::snapshot::RequestIdentity,
+    sequence: u64,
+    kind: PrimaryRequestFactKind,
+) -> Result<(), ConversationStoreError> {
+    type PrimaryOwnerRow = (
+        String,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+        i64,
+        Option<i64>,
+        Option<String>,
+    );
+    if request_id != &identity.request_id() {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "Agent request {request_id} does not match its canonical RequestIdentity"
+        )));
+    }
+    let indexed: Option<PrimaryOwnerRow> = connection
+        .query_row(
+            "SELECT owner_kind,attempt_id,turn_id,retry_number,start_sequence,
+                    terminal_sequence,terminal_kind
+             FROM request_owners WHERE request_id=?1",
+            [request_id.as_str()],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| storage(format!("primary request owner lookup: {error}")))?;
+    let Some((
+        owner_kind,
+        attempt_id,
+        turn_id,
+        retry_number,
+        start_sequence,
+        terminal_sequence,
+        terminal_kind,
+    )) = indexed
+    else {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "Agent request {request_id} fact has no mandatory owner row"
+        )));
+    };
+    if owner_kind != "agent" {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "Agent request {request_id} owner row has a foreign owner kind"
+        )));
+    }
+    if attempt_id.as_deref() != Some(identity.attempt_id.as_str())
+        || turn_id.as_deref() != Some(identity.turn.as_str())
+        || retry_number != Some(i64::from(identity.retry_number))
+    {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "Agent request {request_id} owner identity disagrees with its canonical fact"
+        )));
+    }
+    let sequence = seq_to_i64(sequence)?;
+    match kind {
+        PrimaryRequestFactKind::Started if start_sequence != sequence => {
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "Agent request {request_id} owner start sequence disagrees with its canonical fact"
+            )));
+        }
+        PrimaryRequestFactKind::Completed | PrimaryRequestFactKind::Failed
+            if terminal_sequence != Some(sequence)
+                || terminal_kind.as_deref() != kind.terminal_kind() =>
+        {
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "Agent request {request_id} owner terminal sequence or kind disagrees with its canonical fact"
+            )));
+        }
+        _ => {}
+    }
+    Ok(())
+}
 
 #[allow(clippy::too_many_lines)] // Closed indexed scope vocabulary in one place.
 /// The actual bounded SQL used by the reader and its query-plan contract tests.
@@ -8327,6 +8617,9 @@ fn presentation_statements(
     ];
     let scope = match &query.scope {
         FactScope::All => String::new(),
+        FactScope::AgentRequest => {
+            " AND json_extract(event_json, '$.event.owner.type') = 'agent'".to_owned()
+        }
         FactScope::ContextReading => format!(" AND ({CONTEXT_READING_PREDICATE}) = 1"),
         FactScope::Compaction(operation) => {
             values.push(Value::Text(operation.to_string()));
@@ -8371,6 +8664,7 @@ fn presentation_statements(
                 FactScope::Interaction(value) => ("interaction_id", value),
                 FactScope::Message(value) => ("message_id", value),
                 FactScope::All
+                | FactScope::AgentRequest
                 | FactScope::ContextReading
                 | FactScope::Step(..)
                 | FactScope::Attempt(..)
@@ -8382,6 +8676,7 @@ fn presentation_statements(
     };
     let index = match query.scope {
         FactScope::All => "events_kind_idx",
+        FactScope::AgentRequest => "events_primary_request_kind_idx",
         FactScope::ContextReading => "events_context_reading_idx",
         FactScope::Message(..) => "events_message_id_kind_idx",
         FactScope::Attempt(..) => "events_attempt_kind_idx",
@@ -8417,8 +8712,12 @@ fn presentation_statements(
 
 const PRESENTATION_INDEXES: &[(&str, &str)] = &[
     (
+        "events_primary_request_kind_idx",
+        "json_extract(event_json, '$.event.type'), json_extract(event_json, '$.event.owner.type'), sequence",
+    ),
+    (
         "events_context_reading_idx",
-        "json_extract(event_json, '$.event.type'), (json_extract(event_json, '$.event.type') = 'compaction_completed' OR COALESCE(json_type(event_json, '$.event.usage'), 'null') != 'null'), sequence",
+        "json_extract(event_json, '$.event.type'), (json_extract(event_json, '$.event.type') = 'compaction_completed' OR (COALESCE(json_type(event_json, '$.event.usage'), 'null') != 'null' AND json_extract(event_json, '$.event.owner.type') = 'agent')), sequence",
     ),
     (
         "events_message_id_kind_idx",
@@ -8640,7 +8939,9 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
                 provenance_digest TEXT NOT NULL,
                 inherited_transcript_through INTEGER NOT NULL CHECK(inherited_transcript_through >= 0),
                 projection_count INTEGER NOT NULL DEFAULT 0 CHECK(projection_count>=0),
-                projection_digest TEXT NOT NULL DEFAULT ''
+                projection_digest TEXT NOT NULL DEFAULT '',
+                auxiliary_audit_count INTEGER NOT NULL DEFAULT 0 CHECK(auxiliary_audit_count>=0),
+                auxiliary_audit_digest TEXT NOT NULL DEFAULT ''
             );
             CREATE TABLE IF NOT EXISTS inherited_turn_provenance (
                 observation_turn_display_witness BLOB CHECK(observation_turn_display_witness IS NULL OR length(observation_turn_display_witness)=32),
@@ -8943,6 +9244,9 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
     content::create_binary_schema(connection)?;
     manifest::create_schema(connection)?;
     observation_request::composed::create_schema(connection)?;
+    auxiliary::create_schema(connection)?;
+    request_owner_shape::create_schema(connection)?;
+    projection::create_auxiliary_lineage_schema(connection)?;
     connection
         .execute_batch(&projection::completion_index_sql())
         .map_err(|error| storage(error.to_string()))?;
@@ -9004,6 +9308,8 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
             "inherited_transcript_through",
             "projection_count",
             "projection_digest",
+            "auxiliary_audit_count",
+            "auxiliary_audit_digest",
         ]
     {
         return Err(ConversationStoreError::IncompatibleSchema(
@@ -9351,6 +9657,8 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
                 "inherited_transcript_through",
                 "projection_count",
                 "projection_digest",
+                "auxiliary_audit_count",
+                "auxiliary_audit_digest",
             ],
         ),
         (
@@ -9643,6 +9951,8 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
     observation::verify_schema(connection)?;
     observation_trace::verify_schema(connection)?;
     observation_request::verify_schema(connection)?;
+    auxiliary::verify_schema(connection)?;
+    projection::verify_auxiliary_lineage_schema(connection)?;
     verify_request_owner_shape(connection)?;
     Ok(())
 }
@@ -9651,37 +9961,7 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
 /// owner headers in SQL so an ownerless historical fact cannot masquerade as a
 /// current store, without decoding or materializing the conversation history.
 fn verify_request_owner_shape(connection: &Connection) -> Result<(), ConversationStoreError> {
-    let incompatible: bool = connection
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_kind_idx
-             WHERE json_extract(event_json, '$.event.type')='model_request_started'
-               AND NOT COALESCE((
-                 json_type(event_json, '$.event.owner')='object' AND (
-                   (json_extract(event_json, '$.event.owner.type')='agent'
-                    AND (SELECT count(*) FROM json_each(event_json, '$.event.owner'))=2
-                    AND json_type(event_json, '$.event.owner.identity')='object'
-                    AND (SELECT count(*) FROM json_each(event_json, '$.event.owner.identity'))=3
-                    AND json_type(event_json, '$.event.owner.identity.attempt_id')='text'
-                    AND json_type(event_json, '$.event.owner.identity.turn')='text'
-                    AND json_type(event_json, '$.event.owner.identity.retry_number')='integer'
-                    AND json_extract(event_json, '$.event.owner.identity.retry_number') BETWEEN 0 AND 4294967295)
-                   OR (json_extract(event_json, '$.event.owner.type')='auxiliary'
-                    AND (SELECT count(*) FROM json_each(event_json, '$.event.owner'))=3
-                    AND json_type(event_json, '$.event.owner.call_id')='text'
-                    AND json_type(event_json, '$.event.owner.ordinal')='integer'
-                    AND json_extract(event_json, '$.event.owner.ordinal') BETWEEN 0 AND 4294967295)
-                 )
-               ),0) LIMIT 1)",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|error| storage(format!("verify request owner shape: {error}")))?;
-    if incompatible {
-        return Err(ConversationStoreError::IncompatibleSchema(
-            "request-start facts require explicit typed ownership".into(),
-        ));
-    }
-    Ok(())
+    request_owner_shape::verify(connection)
 }
 
 fn verify_unique_column(
@@ -11448,6 +11728,7 @@ fn persist_event_tx_internal(
             ],
         )
         .map_err(|error| storage(format!("insert runtime event: {error}")))?;
+    auxiliary::index_event_tx(transaction, &event)?;
     // Missing auxiliary evidence is the fail-closed initial state. Independent
     // savepoints preserve own lifecycle facts if a different layout fails.
     // Readiness has its own recoverable missing-evidence flag. A newly
@@ -11554,7 +11835,12 @@ fn persist_event_tx_internal(
     // The **P** marker: a durable provider outcome is recorded against its
     // exact request, so the publication plane can reject U-without-P with one
     // keyed lookup instead of a Journal scan.
-    if let RuntimeEvent::ModelRequestCompleted { request_id, .. } = &event.event {
+    if let RuntimeEvent::ModelRequestCompleted {
+        owner: ModelRequestOwner::Agent { .. },
+        request_id,
+        ..
+    } = &event.event
+    {
         let updated = transaction
             .execute(
                 "UPDATE request_snapshots SET completed_sequence=?1 WHERE request_id=?2 AND completed_sequence IS NULL",
@@ -12779,35 +13065,44 @@ fn validate_event_reference(
                 )));
             }
         }
-        // A provider outcome names an actual started request. Without this
-        // the P marker could be recorded against a request that never had a
-        // durable start fact.
-        RuntimeEvent::ModelRequestCompleted { request_id, .. }
-        | RuntimeEvent::ModelRequestFailed { request_id, .. } => {
-            let Some(row) = read_request_snapshot_tx(transaction, request_id)? else {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "model request outcome references request {request_id}, which never started"
-                )));
-            };
-            let (snapshot, _, _) = validate_started_request_row_tx(
-                transaction,
-                &envelope.conversation_id,
-                request_id,
-                row,
-            )?;
-            if envelope.attempt_id.as_ref() != Some(&snapshot.identity.attempt_id)
-                || envelope.turn_id.as_ref() != Some(&snapshot.identity.turn)
-            {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "model request outcome for {request_id} has a foreign attempt or turn envelope"
-                )));
-            }
-            if find_request_outcome_event(transaction, request_id)?.is_some() {
-                return Err(ConversationStoreError::TerminalViolation(format!(
-                    "request {request_id} already has a durable provider outcome"
-                )));
-            }
+        // Provider terminal ownership is checked on the closed owner branch.
+        // Agent terminals retain every existing Snapshot/P rule; auxiliary
+        // terminals require a Call prerequisite and exactly one settlement.
+        RuntimeEvent::ModelRequestCompleted {
+            owner, request_id, ..
         }
+        | RuntimeEvent::ModelRequestFailed {
+            owner, request_id, ..
+        } => match owner {
+            ModelRequestOwner::Agent { .. } => {
+                let Some(row) = read_request_snapshot_tx(transaction, request_id)? else {
+                    return Err(ConversationStoreError::InvalidReference(format!(
+                        "model request outcome references request {request_id}, which never started"
+                    )));
+                };
+                let (snapshot, _, _) = validate_started_request_row_tx(
+                    transaction,
+                    &envelope.conversation_id,
+                    request_id,
+                    row,
+                )?;
+                if envelope.attempt_id.as_ref() != Some(&snapshot.identity.attempt_id)
+                    || envelope.turn_id.as_ref() != Some(&snapshot.identity.turn)
+                {
+                    return Err(ConversationStoreError::InvalidReference(format!(
+                        "model request outcome for {request_id} has a foreign attempt or turn envelope"
+                    )));
+                }
+                if find_request_outcome_event(transaction, request_id)?.is_some() {
+                    return Err(ConversationStoreError::TerminalViolation(format!(
+                        "request {request_id} already has a durable provider outcome"
+                    )));
+                }
+            }
+            ModelRequestOwner::Auxiliary { .. } => {
+                auxiliary::validate_request_terminal_event_tx(transaction, envelope)?;
+            }
+        },
         // Every Tool Plane transition that names a proposal uses the same
         // semantic owner. This includes execution starts/progress/outcomes
         // and detached background authorization.
@@ -13124,13 +13419,16 @@ fn validate_event_reference(
                 ));
             }
         }
-        RuntimeEvent::ModelRequestStarted { owner, .. } => {
-            if !matches!(owner, ModelRequestOwner::Agent { .. }) {
-                return Err(ConversationStoreError::InvalidReference(
-                    "auxiliary request starts require a durable Call transaction".into(),
-                ));
+        RuntimeEvent::ModelRequestStarted { owner, .. } => match owner {
+            ModelRequestOwner::Agent { .. } => {
+                let _ = reconstruct_request_start_reference(transaction, envelope, None)?;
             }
-            let _ = reconstruct_request_start_reference(transaction, envelope, None)?;
+            ModelRequestOwner::Auxiliary { .. } => {
+                auxiliary::validate_request_start_event_tx(transaction, envelope)?;
+            }
+        },
+        RuntimeEvent::AuxiliaryCallStarted { .. } | RuntimeEvent::AuxiliaryCallSettled { .. } => {
+            auxiliary::validate_call_event_tx(transaction, envelope)?;
         }
         RuntimeEvent::BackgroundTerminalPublished { message_id, .. } => {
             let notification = load_user_notification_tx(transaction, message_id, "background")?;
@@ -13423,6 +13721,8 @@ fn requires_specialized_transition(event: &RuntimeEvent) -> bool {
             | RuntimeEvent::ToolMessageCommitted { .. }
             | RuntimeEvent::CompactionCompleted { .. }
             | RuntimeEvent::ModelRequestStarted { .. }
+            | RuntimeEvent::AuxiliaryCallStarted { .. }
+            | RuntimeEvent::AuxiliaryCallSettled { .. }
             | RuntimeEvent::ContextContributionEmitted { .. }
             | RuntimeEvent::BackgroundTerminalPublished { .. }
             | RuntimeEvent::SubagentTerminalPublished { .. }
@@ -13649,6 +13949,37 @@ fn ledger_message_exists(
 #[allow(clippy::too_many_lines)] // Closed mapping from durable facts to exact terminal domains.
 fn lifecycle_keys(event: &RuntimeEventEnvelope) -> Vec<(String, bool)> {
     match &event.event {
+        RuntimeEvent::AuxiliaryCallStarted { call_id, .. } => {
+            return vec![(format!("auxiliary-call:{call_id}"), false)];
+        }
+        RuntimeEvent::AuxiliaryCallSettled { call_id, .. } => {
+            return vec![(format!("auxiliary-call:{call_id}"), true)];
+        }
+        RuntimeEvent::ModelRequestStarted {
+            owner: ModelRequestOwner::Auxiliary { call_id, ordinal },
+            request_id,
+            ..
+        } => {
+            return vec![
+                (format!("auxiliary-call:{call_id}:request:{ordinal}"), false),
+                (format!("auxiliary-request:{request_id}"), false),
+            ];
+        }
+        RuntimeEvent::ModelRequestCompleted {
+            owner: ModelRequestOwner::Auxiliary { call_id, ordinal },
+            request_id,
+            ..
+        }
+        | RuntimeEvent::ModelRequestFailed {
+            owner: ModelRequestOwner::Auxiliary { call_id, ordinal },
+            request_id,
+            ..
+        } => {
+            return vec![
+                (format!("auxiliary-call:{call_id}:request:{ordinal}"), true),
+                (format!("auxiliary-request:{request_id}"), true),
+            ];
+        }
         RuntimeEvent::CompactionStarted { operation_id } => {
             return vec![(format!("compaction:{operation_id}"), false)];
         }
@@ -14219,6 +14550,21 @@ mod tests {
     mod request_owner_tests {
         use super::*;
         include!("sqlite/request_owner_tests.rs");
+    }
+    #[allow(clippy::too_many_lines, clippy::type_complexity)]
+    mod auxiliary_tests {
+        include!("sqlite/auxiliary_tests.rs");
+    }
+    #[allow(clippy::too_many_lines)]
+    mod auxiliary_growth_tests {
+        include!("sqlite/auxiliary_growth_tests.rs");
+    }
+    #[allow(clippy::too_many_lines, clippy::type_complexity)]
+    mod auxiliary_contract_tests {
+        include!("sqlite/auxiliary_contract_tests.rs");
+    }
+    mod auxiliary_supervision_tests {
+        include!("sqlite/auxiliary_supervision_tests.rs");
     }
     use super::*;
 
@@ -19118,6 +19464,9 @@ mod tests {
             "old-request-completed",
             Some(first.identity.attempt_id.clone()),
             RuntimeEvent::ModelRequestCompleted {
+                owner: ModelRequestOwner::Agent {
+                    identity: first.identity.clone(),
+                },
                 request_id: first.request_id.clone(),
                 finish_reason: ModelFinishReason::Stop,
                 usage: None,
@@ -19583,7 +19932,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 70);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 72);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -19652,7 +20001,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 70);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 72);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
@@ -20635,6 +20984,7 @@ mod tests {
         verify_schema_shape(&connection).unwrap();
         let scopes = [
             (FactScope::All, "events_kind_idx"),
+            (FactScope::AgentRequest, "events_primary_request_kind_idx"),
             (
                 FactScope::Attempt(AttemptId::new("a")),
                 "events_attempt_kind_idx",
@@ -21472,12 +21822,14 @@ mod tests {
 
 // Finite archive readers share the concrete durable schema, never transport DTOs.
 pub(crate) mod archive;
+mod auxiliary;
 mod compaction_resources;
 mod lineage;
 mod provenance;
 mod reading;
 #[cfg(test)]
 mod reading_tests;
+mod request_owner_shape;
 
 #[cfg(test)]
 mod executor_wait_tests {
