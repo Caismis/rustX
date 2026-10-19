@@ -148,9 +148,6 @@ fn t15_t20_message_and_transcript_headers_advance_without_source_body_reads() {
     connection
         .execute("UPDATE message_ledger SET message_json='invalid JSON'", [])
         .unwrap();
-    connection
-        .execute("UPDATE surface_head SET active_json='invalid JSON'", [])
-        .unwrap();
     let store = SqliteConversationStore::open(conversation, &path).unwrap();
     let tail = store.message_header_page(&captured, None, 32).unwrap();
     assert_eq!(tail.offset, 41);
@@ -1211,9 +1208,6 @@ fn t08_t20_request_source_ranges_use_bounded_authenticated_composed_pages() {
             [],
         )
         .unwrap();
-    connection
-        .execute("UPDATE surface_head SET active_json='invalid JSON'", [])
-        .unwrap();
     assert_request_source_point_indexes(&connection, started.sequence);
     drop(connection);
     let store = SqliteConversationStore::open(conversation, &path).unwrap();
@@ -1852,9 +1846,6 @@ fn t08_t15_t20_surface_boundary_pages_read_native_headers_without_surface_or_mes
     let connection = rusqlite::Connection::open(&path).unwrap();
     connection
         .execute("UPDATE message_ledger SET message_json='invalid JSON'", [])
-        .unwrap();
-    connection
-        .execute("UPDATE surface_head SET active_json='invalid JSON'", [])
         .unwrap();
     connection
         .execute("UPDATE surface_ops SET op_json='invalid JSON'", [])

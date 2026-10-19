@@ -10,7 +10,7 @@ Each started model request has an explicit owner in its durable Journal fact.
 Agent start atomically records the Snapshot-derived owner with request Context and
 Snapshot; keyed owner reads and terminal checks reject missing or contradictory
 evidence. Ownership is not inferred from an ID prefix or absent fields. SQLite
-schema 73 rejects obsolete ownerless stores without migration.
+schema 74 rejects obsolete ownerless stores without migration.
 
 The catalog owns identity, name, timestamps, graph, Session-local `active_node`
 (the default node inside that graph), explicit settings, settings revision,

@@ -3433,9 +3433,6 @@ fn t08_t15_t20_request_detail_ranges_are_frozen_allowlisted_and_physically_bound
         )
         .unwrap();
     connection
-        .execute("UPDATE surface_head SET active_json='invalid JSON'", [])
-        .unwrap();
-    connection
         .execute("UPDATE message_ledger SET message_json='invalid JSON'", [])
         .unwrap();
     let indexed_bytes: u64 = connection
@@ -3571,9 +3568,6 @@ fn t08_t15_request_field_pages_advance_past_large_keys_without_losing_source_byt
             "UPDATE request_snapshots SET snapshot_json='invalid JSON'",
             [],
         )
-        .unwrap();
-    connection
-        .execute("UPDATE surface_head SET active_json='invalid JSON'", [])
         .unwrap();
     drop(connection);
     let store = durable.open();

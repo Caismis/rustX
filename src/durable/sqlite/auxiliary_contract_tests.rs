@@ -1082,7 +1082,7 @@ fn request_cardinality_and_call_terminal_absorbing_rules_are_enforced() {
 
 #[test]
 fn required_schema_indexes_and_constraints_are_current() {
-    assert_eq!(SQLITE_SCHEMA_VERSION, 73);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 74);
     let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
     let connection = store.lock().unwrap();
     for index in [
@@ -1412,24 +1412,20 @@ fn deleting_the_latest_open_audit_fact_is_detected_by_total_and_read() {
 }
 
 #[test]
-fn closed_attribution_store_version_is_rejected_without_rewrite() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("closed-attribution.sqlite");
-    let conversation_id = ConversationId::generate();
-    let store = SqliteConversationStore::open(conversation_id.clone(), &path).unwrap();
-    store
-        .lock()
-        .unwrap()
-        .execute_batch("UPDATE rustx_store SET schema_version=72 WHERE id=1")
-        .unwrap();
-    drop(store);
-    let before = std::fs::read(&path).unwrap();
-    assert!(matches!(
-        SqliteConversationStore::open(conversation_id, &path),
-        Err(ConversationStoreError::SchemaVersionMismatch {
-            stored: 72,
-            expected: 73
-        })
-    ));
-    assert_eq!(std::fs::read(path).unwrap(), before);
+fn pre_integration_main_and_auxiliary_versions_are_rejected_without_rewrite() {
+    for version in [71, 72, 73] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("pre-integration.sqlite");
+        let conversation_id = ConversationId::generate();
+        let store = SqliteConversationStore::open(conversation_id.clone(), &path).unwrap();
+        store.lock().unwrap().execute(
+            "UPDATE rustx_store SET schema_version=?1 WHERE id=1", [version],
+        ).unwrap();
+        drop(store);
+        let before = std::fs::read(&path).unwrap();
+        assert!(matches!(SqliteConversationStore::open(conversation_id, &path),
+            Err(ConversationStoreError::SchemaVersionMismatch { stored, expected: 74 })
+                if stored == version));
+        assert_eq!(std::fs::read(path).unwrap(), before);
+    }
 }

@@ -2,19 +2,19 @@
 
 ## Scope and development baseline
 
-Baseline synchronized: 2026-10-18. AUX-01 storage and inspection are implemented and locally verified as of 2026-10-19, on top of plan commit `d46168f7e56157e2fb5bbed524ba81a80501920e`. Stages 2–4 remain planned. GitHub FULL and applicable macOS CI remain prerequisites for a merge-ready pull request.
+Initial baseline synchronized: 2026-10-18; current upstream integration: 2026-10-19. AUX-01 storage and inspection are implemented and locally verified as of 2026-10-19, on top of plan commit `d46168f7e56157e2fb5bbed524ba81a80501920e`. Stages 2–4 remain planned. GitHub FULL and applicable macOS CI remain prerequisites for a merge-ready pull request.
 
 Implement the auxiliary series as four working increments: [AUX-01 #473](https://github.com/Caismis/rustX/issues/473), [AUX-02 #474](https://github.com/Caismis/rustX/issues/474), [AUX-03 #475](https://github.com/Caismis/rustX/issues/475), and [AUX-04 #476](https://github.com/Caismis/rustX/issues/476). The issues own their detailed acceptance contracts; this document defines implementation order, code ownership, integration boundaries and verification gates.
 
 Use one development branch, `MiNisterPaX/rustX:aux-01-request-ownership`, for all stages. Fetch dependencies from `origin` (Caismis/rustX); push development commits to `fork` (MiNisterPaX/rustX). Preserve unrelated workspace changes. Do not create parallel long-lived AUX development branches or rewrite the existing published history. Each issue remains a separately reviewable, complete product increment; do not merge a half-converted owner/schema/reader transition. Reuse this branch for successive delivery gates, integrating actual upstream main between them.
 
-The synchronization baseline is upstream commit `3c355f152d405a201482d53b6e45497df4f44a7f`, including immutable-history compaction, bounded observation, CI improvements and WAL/NORMAL. The fork's starting commit is `c26fc0d00fd1b60a7505888ef3b01893939ff88d`, containing:
+The initial synchronization baseline was upstream commit `3c355f152d405a201482d53b6e45497df4f44a7f`, including immutable-history compaction, bounded observation, CI improvements and WAL/NORMAL. The fork's starting commit is `c26fc0d00fd1b60a7505888ef3b01893939ff88d`, containing:
 - `8a4cbe8b29d861144d4d689e04b3903886843112`: auxiliary identities and closed request ownership.
 - `c26fc0d00fd1b60a7505888ef3b01893939ff88d`: Agent ownership persistence, lookup and validation.
 
 Those commits are foundations, not completed AUX-01. They do not implement Call lifecycle transactions, mixed-owner recovery/readers, or production auxiliary execution. Synchronization must retain upstream native selected-input manifests, bounded request probes, observation readers, WAL/archive cuts and optional-Source failure isolation while adapting the fork's Agent ownership checks. Do not restore the old whole-history response loop or snapshot-loading implementation to resolve conflicts.
 
-[Storage issue #481](https://github.com/Caismis/rustX/issues/481) and [PR #484](https://github.com/Caismis/rustX/pull/484) remain separate dependencies to coordinate. #484 was unmerged at planning time. Its source-page codec and canonical append certificate are not included in this synchronization. Record its actual merged SHA when integrating it later. Do not reserve final schema numbers from its draft.
+[Storage issue #481](https://github.com/Caismis/rustX/issues/481) / [PR #484](https://github.com/Caismis/rustX/pull/484) is integrated at upstream merge `6771928953a9b2815a27fd784f6d39c5ccde8b56`. This integration preserves AUX review commit `38d64578e9918d94566b839edef1730fc25aac27` and upstream bounded Source codecs, small-source navigation, and transaction-local canonical append certificates. SQLite schema 74 gates the combined layout; archive v7 and transport versions are unchanged.
 
 The synchronized ownership foundation uses SQLite development schema 70 and inspection archive v5 / Journal schema 3. Runtime Client 71 and App Server 50 retain their existing domains. These are the branch baseline, not reserved versions for subsequent AUX stages or #484 integration.
 
@@ -87,7 +87,7 @@ The inheritance matrix carries eligible source audit only for an explicitly reta
 
 Inspection archives expose explicit bounded projections and omissions; they do not serialize private native types wholesale or become executable recovery formats. No later terminal may leak into an earlier export cut.
 
-The implemented formats are SQLite schema 73 and inspection archive v7, with Journal schema 5, projection/generation schemas 2, and local/inherited auxiliary-audit schemas 2. Runtime Client 71 and App Server 50 are unchanged; regenerated protocol and configuration artifacts have no content drift. Obsolete and falsely current stores are rejected without migration or reconstruction. Reassess these development-format gates when integrating #484.
+The implemented formats are SQLite schema 74 and inspection archive v7, with Journal schema 5, projection/generation schemas 2, and local/inherited auxiliary-audit schemas 2. Runtime Client 71 and App Server 50 are unchanged; regenerated protocol and configuration artifacts have no content drift. Obsolete and falsely current stores are rejected without migration or reconstruction. Schema 74 rejects the pre-integration main and AUX layouts without rewriting either.
 
 ### 1.5 AUX-01 acceptance gate
 
@@ -178,18 +178,39 @@ Add named authorized business submissions over the same execution path.
 
 Gate: real transport/browser submission, lost receipt/reconnect, revocation, cancellation, slow consumer, expiry and restart tests. Measure a conservative full allocation/copy envelope; the 8 MiB retained-result budget is not an RSS guarantee. No output replay journal or auxiliary ContentRef compatibility path.
 
-## Work before and after #484
+## Integration with #484
 
-AUX-01 was implemented on the synchronized main baseline without incorporating draft #484. Continue later stages on this same branch. Shared files require integration attention; Source codecs and append algorithms remain owned by their existing implementations.
+The branch merges actual upstream main `67719289` after AUX review commit
+`38d64578`, preserving both published histories. The integration retains the
+Source binary codec, bounded small-source caches and spool spill limits, and
+canonical append certificate invalidation on rollback or native mutation.
+Auxiliary owner indexes and exact confirmation remain mandatory; Source capture
+remains optional. Primary Trace selection retains the review's explicit marker
+and header/owner validation, and new Summary checkpoints retain strict successful
+generation admission at their declared cut.
 
-After #484 enters main, merge that actual main commit into this same branch and:
-- retain its removed active_json layout and current authenticated page representation;
-- preserve append-certificate invalidation, rollback and post-COMMIT seating;
-- revalidate owner-aware observation at original cuts and physically bounded small/cold reads;
-- recompute actual format gates and regenerate affected contracts;
-- rerun mixed-history, primary P/U/C, native selected-input, archive/Fork and Source failure tests.
+SQLite schema 74 identifies the combined semantic layout. Main schema 71 and AUX
+schema 73 are rejected unchanged. Archive v7 / Journal 5, local and inherited
+auxiliary-audit schema 2, Runtime Client 71 and App Server 50 are unchanged by
+this integration. Further stages continue on this branch; no compatibility
+readers, reconstruction or migrations are added.
 
-If #484 remains open when AUX-01 is otherwise complete, reassess the current shared diff explicitly; do not silently treat a draft head as merged. A temporary checkout may test one pinned dependency without creating another maintained development branch.
+### Integration validation
+
+On Linux x86_64 / Rust 1.98.1, the merged code passed 584 selected library
+regressions (all SQLite, auxiliary, Source read-layout/observation, archive and
+artifact-lineage cases), all 243 in-crate boundary cases, all 147 external durable
+cases and all 63 process cases: 1,037 passed, zero failed or ignored. Boundary
+runs set `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`. All-feature binaries, all-target /
+all-feature Clippy with warnings denied, formatting and whitespace checks passed.
+Native configuration and App Server protocol regeneration produced no drift.
+Both `rust-contracts` and `rust-boundaries` test-lane coverage checks passed.
+
+The reviewed AUX parent `38d64578` passed its complete FULL workflow, including
+macOS and Merge verification, in [run 39221262290](https://github.com/Caismis/rustX/actions/runs/39221262290).
+That result is parent evidence, not a FULL verdict on this new integration.
+Browser E2E and native macOS were not rerun locally; the integrated head must
+pass its own FULL workflow before merge.
 
 ## Validation and delivery
 

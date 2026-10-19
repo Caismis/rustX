@@ -51,7 +51,7 @@ including reserved sequence digits, and derived audit records at 12 KiB. Generat
 offsets retain the common observation limit of 9,007,199,254,740,991 milliseconds;
 Usage retains exact `u64` values.
 
-The real SQLite fixture
+In the pre-#484 layout, the real SQLite fixture
 `aux_01_representative_storage_growth_of_completed_one_request_calls` measured
 100 completed Calls with fixed UUID-sized identities, a short model name and small
 Usage values on Ubuntu 24.04 with 4,096-byte pages. After WAL checkpoints, Journal
@@ -61,7 +61,7 @@ physical delta includes the existing Source and observation layouts, all indexes
 and page allocation; it is not solely auxiliary metadata overhead. This is a
 reproducible representative workload, not a maximum or a retention budget. Larger
 bounded metadata, different page packing and inherited dependencies change the
-cost. No history is pruned to meet these measurements.
+cost. These measurements are not a schema-74 cost baseline. No history is pruned to meet them.
 
 Clone/Fork canonical overlap never creates target-local auxiliary execution or reserves a local correlation. Only an explicitly retained Summary-generation dependency may carry source audit, with original source identity and the exact eligible prerequisite closure. Source audit remains distinct from target-local request ownership, quota and admission. Independent retained dependencies must survive source deletion.
 

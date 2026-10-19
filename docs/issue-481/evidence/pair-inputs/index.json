@@ -1,0 +1,560 @@
+{
+  "clock_ticks_per_second": 100,
+  "scope": "Exactly the retained cloud samples; self CPU only. Per-operation means exclude seeds; lifecycle includes initialization through cleanup. Max sampled memory is not peak. Input/status SHA-256 verified against archive manifests. Pair ratios must be computed per pair before taking their median. Native rustX/Pi tool schemas and contracts differ; no full-request parity claim.",
+  "manifests": {
+    "baseline-manifest.json": "7993cb1b1a4e7bf684456d1224cd9e02065933d9c6ee05f319240b0845f63140",
+    "source-manifest.json": "8063878c9c28fc014903d39489bf8bf70a531da58a2fe5d39b83f30e54f3f4c5",
+    "combined.tar.manifest.json": "6b34f866869bd3bc990e6ca781db040d5b37055198a174136e169d530e1f26e2",
+    "reservations.tar.manifest.json": "5b949397ade5f1baf8a5371b5764f2fadc548d646b422d0ee113f09eb709dd0f",
+    "statement-reuse.tar.manifest.json": "ca4ed153ebb30dc489d7d05f12753570984939ded68062223a677e9563604db0",
+    "continued-runtime.tar.manifest.json": "108d75fdc87aef9e6c71796b5fa9cf34367182681aca6c22fcc701051a00c93d",
+    "sql-removal-candidate.tar.manifest.json": "d8fde2b0bc9e6426dc0d5053f19544a1f955eee1ced1584fb6637c8ed8ebaa91"
+  },
+  "files": {
+    "without-sql-source-cancel.json": {
+      "pairs": 3,
+      "sha256": "73d213808185e1d5a81fc43d1b8b6c9816d1556d598d27bfbc7130216ce453d3",
+      "bytes": 6335
+    },
+    "without-sql-source-large.json": {
+      "pairs": 3,
+      "sha256": "a3a1ce6936713aa84afd47e6a892c1f896c73db10d5afa1f23bf5bcabd7411ae",
+      "bytes": 6365
+    },
+    "without-sql-source-short-large.json": {
+      "pairs": 3,
+      "sha256": "4bac92f2fc3e261ce1a52f407dcbd7c3a9c230e29c2253798c14a56bb3091909",
+      "bytes": 7650
+    },
+    "without-sql-source-short-small.json": {
+      "pairs": 3,
+      "sha256": "4edcd3af4a11e3003db1345d1b4d58a890de03afca14382e05f122b599bab90b",
+      "bytes": 7627
+    },
+    "without-sql-source-stream.json": {
+      "pairs": 3,
+      "sha256": "23085c39c4beb1eeda67b921ab8b2ddb7c95db2f32a3ff97da4f692b6baeeded",
+      "bytes": 6364
+    },
+    "without-sql-source-tool.json": {
+      "pairs": 3,
+      "sha256": "ac5c64c23b0b3ec1b36a558202ee5cb2a34fbd01a73a5bb38d62fcb0edb26925",
+      "bytes": 6328
+    },
+    "without-sql-continued-cancel.json": {
+      "pairs": 3,
+      "sha256": "5f0e7a73c813de0e78329103c618ac04ced212635d2b3f125dacd4e7b12aaa9e",
+      "bytes": 6375
+    },
+    "without-sql-continued-large.json": {
+      "pairs": 3,
+      "sha256": "914007d98f0981e43390e2afdb37667b3622b4e93f7f54dc9c07e9fb6cdaf801",
+      "bytes": 6403
+    },
+    "without-sql-continued-short-large.json": {
+      "pairs": 3,
+      "sha256": "37021ff0a0a62da9d0af1ae55724b07659098050c20692b36232629bad316cee",
+      "bytes": 7695
+    },
+    "without-sql-continued-short-small.json": {
+      "pairs": 3,
+      "sha256": "5753c8a4bfc0384ea55d29a762394719d99b30428273dc6e9f7e01eb8efaa5ab",
+      "bytes": 7661
+    },
+    "without-sql-continued-stream.json": {
+      "pairs": 3,
+      "sha256": "3f6bdaccc1522ca317e1874cdedeebfe18a0ceca799d0fe8dde0cc7ab757be76",
+      "bytes": 6405
+    },
+    "without-sql-continued-tool.json": {
+      "pairs": 3,
+      "sha256": "f0049ba897b00c271e0d1439617723216ce18168c71347f5e0987ef3008394bb",
+      "bytes": 6365
+    },
+    "without-sql-baseline-cancel.json": {
+      "pairs": 3,
+      "sha256": "88a6d6c92bad4b2fe48a135cc9b38423ca582ea98394302c4fa0e28d9ae6653d",
+      "bytes": 6361
+    },
+    "without-sql-baseline-large.json": {
+      "pairs": 3,
+      "sha256": "e504f00368a4ff7d37ec03fb00b9732987d8243d0da84b54d4c9cf450b6f5b7a",
+      "bytes": 6390
+    },
+    "without-sql-baseline-short-large.json": {
+      "pairs": 3,
+      "sha256": "af8b3c220b78d31fb818b58a619dcbe981452a857d4cbe64352b807863b74d11",
+      "bytes": 7689
+    },
+    "without-sql-baseline-short-small.json": {
+      "pairs": 3,
+      "sha256": "1e4a6afcadf8251970d70cbada38941e1ea523f5881cd0802218b21bcbc5ed92",
+      "bytes": 7649
+    },
+    "without-sql-baseline-stream.json": {
+      "pairs": 3,
+      "sha256": "b4c8e2a3d1d9dbcec937b126e639b22878ef79f03ef52eb4af07ffb5970a8ffa",
+      "bytes": 6390
+    },
+    "without-sql-baseline-tool.json": {
+      "pairs": 3,
+      "sha256": "6e88c7f5dc9d8b6bbd7c392ba39bcf2eee7852059f9032833b139f534d4c67b8",
+      "bytes": 6352
+    },
+    "without-sql-pi-cancel.json": {
+      "pairs": 3,
+      "sha256": "7718eaa317801b34a9e3dec2a6f5a898a1b06c817452409d5882c697eaa7af13",
+      "bytes": 6239
+    },
+    "without-sql-pi-large.json": {
+      "pairs": 3,
+      "sha256": "36ffca0161043c6a5e46903e530dcc5b91bfd795d78e010f50c5fd3613506d8e",
+      "bytes": 6245
+    },
+    "without-sql-pi-short-large.json": {
+      "pairs": 3,
+      "sha256": "cbf5788bfed567ffe50b01b3c410959f0e27f0f6eb51693dc20e7a56b059f91f",
+      "bytes": 7432
+    },
+    "without-sql-pi-short-small.json": {
+      "pairs": 3,
+      "sha256": "95241eaa9e3c579bf876911dbc1601a9605fae867f17e92c8b949a6c861bba15",
+      "bytes": 7400
+    },
+    "without-sql-pi-stream.json": {
+      "pairs": 3,
+      "sha256": "d5ded83b48668b374bff2802783bbc7c03d05203f1b7566f23cb0f5d5c31de82",
+      "bytes": 6267
+    },
+    "without-sql-pi-tool.json": {
+      "pairs": 3,
+      "sha256": "660affb27e0cefcfbbfc6ae52b1cb69f52fb40e454a75ad1d2d9add92493f154",
+      "bytes": 6217
+    },
+    "without-sql-append-0.json": {
+      "pairs": 3,
+      "sha256": "365f35ce49b73096d7c7bd2095dfc20087ed8fff4d065fd27c76a9c8274611ca",
+      "bytes": 7558
+    },
+    "without-sql-append-2048.json": {
+      "pairs": 3,
+      "sha256": "a883a223e3d4eb632913adeb330040d281d1b1aaaec400f7a243cff471a7beee",
+      "bytes": 7877
+    },
+    "without-sql-append-512.json": {
+      "pairs": 3,
+      "sha256": "ff938fa39944ca447cf92262b9b42debcaf351a38e5e229388aac23004874165",
+      "bytes": 7751
+    },
+    "without-sql-append-64.json": {
+      "pairs": 3,
+      "sha256": "42fd3568eb4230946b91ea885eb757874dc15a55745d31cc19f0975c1c8001d3",
+      "bytes": 7606
+    },
+    "sql-removal-six-cancel.json": {
+      "pairs": 6,
+      "sha256": "3980d55188b76c0d14aa20ad3a0f25a24b40e9b95cd3b4821a06b35804d51c1c",
+      "bytes": 12665
+    },
+    "sql-removal-six-large.json": {
+      "pairs": 6,
+      "sha256": "04fa606cf693772f4545cb9fb1ed672eb221eedb2357d5b896959a08d49be99c",
+      "bytes": 12722
+    },
+    "sql-removal-six-short-large.json": {
+      "pairs": 6,
+      "sha256": "bbf603d3a7b666344fd48f54488a3df1dfffb59cbf1a856f4f90a72de4a95662",
+      "bytes": 15287
+    },
+    "sql-removal-six-short-small.json": {
+      "pairs": 6,
+      "sha256": "154bc6cc06420d85cdb9dc81f70968782f7ded033ab5d4ffd05f2d0693e0b4d4",
+      "bytes": 15230
+    },
+    "sql-removal-six-stream.json": {
+      "pairs": 6,
+      "sha256": "02ea6749c62a62ad22af42da3fe152d031f8e10b113d41965918ba9653d5de06",
+      "bytes": 12721
+    },
+    "sql-removal-six-tool.json": {
+      "pairs": 6,
+      "sha256": "6ea24aaa16ceba93ee63781dcee523790898d7d94352a82f123420ce4de8c34a",
+      "bytes": 12638
+    },
+    "compact-source-cancel.json": {
+      "pairs": 3,
+      "sha256": "2a00f01746a0cae07093212dcb5fc35af15d655d104a213543717e43475772c2",
+      "bytes": 6320
+    },
+    "compact-source-large.json": {
+      "pairs": 3,
+      "sha256": "a2a2e0e8141c98af66e759fece9c3a52c8d9034f9bf51a14eeb88bf40309a7f7",
+      "bytes": 6346
+    },
+    "compact-source-short-large.json": {
+      "pairs": 3,
+      "sha256": "a4a4bc867287c4244bbff2d81c66db0eee95e7eee40ac81507208ba76bf8fa42",
+      "bytes": 7635
+    },
+    "compact-source-short-small.json": {
+      "pairs": 3,
+      "sha256": "98d69e534d683821a1ef60c5c9ed3f61718d71a506a842c454158084ef0a8937",
+      "bytes": 7610
+    },
+    "compact-source-stream.json": {
+      "pairs": 3,
+      "sha256": "c9c7737cbbdeb3a96aca026531a606ef50abd8ebf3efd0525bdad5f9f9da9f31",
+      "bytes": 6350
+    },
+    "compact-source-tool.json": {
+      "pairs": 3,
+      "sha256": "22db7de77cc77ba7600bd79c5dfb6626bf063fd7d11e33817ff74f736007a150",
+      "bytes": 6312
+    },
+    "continued-combined-cancel.json": {
+      "pairs": 3,
+      "sha256": "a23d7b592d20d41fc962d158879b4a5a7b1a09cd0a598d0ce1a11cef1e3f81b4",
+      "bytes": 6372
+    },
+    "continued-combined-large.json": {
+      "pairs": 3,
+      "sha256": "9dfe0135bf49459d02d4adb11933b6e8429d572d644c985e85662fc4d95e4ed1",
+      "bytes": 6401
+    },
+    "continued-combined-short-large.json": {
+      "pairs": 3,
+      "sha256": "1191cca665479ac73931a0aad052332a788126f5e933f03ceb108b442b9ddd68",
+      "bytes": 7684
+    },
+    "continued-combined-short-small.json": {
+      "pairs": 3,
+      "sha256": "dae6743f9a2fbfb250e122a018a1c9df872e786abc6236e45df58a3c2adbfc16",
+      "bytes": 7658
+    },
+    "continued-combined-stream.json": {
+      "pairs": 3,
+      "sha256": "5aec4c7662d042e3c9b8ebd4bd131be6a6279ccb1be042d347d31a491cba0876",
+      "bytes": 6400
+    },
+    "continued-combined-tool.json": {
+      "pairs": 3,
+      "sha256": "2a3b40d5fd34c83a162a982008017af75b5e0172ebd21793715ba250ae9a482e",
+      "bytes": 6362
+    },
+    "final-combined-cancel.json": {
+      "pairs": 3,
+      "sha256": "f5a053621ae3fcfb98e58fa24a3b423173717b8a321595e66cf0e38bcd82418f",
+      "bytes": 6319
+    },
+    "final-combined-large.json": {
+      "pairs": 3,
+      "sha256": "fd3bc9802d5e275282ca7374cc734ed72160f67c2d96dc2e598dfab3962612a0",
+      "bytes": 6348
+    },
+    "final-combined-short-large.json": {
+      "pairs": 3,
+      "sha256": "c6db8819253aa1a0e5a6321ec9ad76380f7602221146b7d319777e3518a03c4f",
+      "bytes": 7635
+    },
+    "final-combined-short-small.json": {
+      "pairs": 3,
+      "sha256": "00fd6bdea178427d535ac1c37963d3a7117589a737fd52200d4563eb79408fdf",
+      "bytes": 7605
+    },
+    "final-combined-stream.json": {
+      "pairs": 3,
+      "sha256": "fb2352c9698bee72713d66ba39830a2780f5ec76e736a6bcf57af1723556ef44",
+      "bytes": 6350
+    },
+    "final-combined-tool.json": {
+      "pairs": 3,
+      "sha256": "584685da7626514a76c8f77113ac4fe74c59857bc7fee595a03a922dca331bde",
+      "bytes": 6311
+    },
+    "final-pi-cancel.json": {
+      "pairs": 3,
+      "sha256": "e6f6145be7a5bea65341c996a87fb7fa5a3986ca82f8e74a4374358b7b123b97",
+      "bytes": 6194
+    },
+    "final-pi-large.json": {
+      "pairs": 3,
+      "sha256": "9e710a3bcfc217b3eca8aa80c8ca371d3eed4af4204a9166a662fd6d7788a9fe",
+      "bytes": 6204
+    },
+    "final-pi-short-large.json": {
+      "pairs": 3,
+      "sha256": "8b0053437c659bdea00f27df3d210041c37965bfff0df117c71bb3e554aadf13",
+      "bytes": 7399
+    },
+    "final-pi-short-small.json": {
+      "pairs": 3,
+      "sha256": "e12a38cee17b03b2f9d9a8113d2102494c28160bd2be50168e8d2cf0f6b050dd",
+      "bytes": 7362
+    },
+    "final-pi-stream.json": {
+      "pairs": 3,
+      "sha256": "5a64eeacd32980985d97c270c784e330d4b816baecc54ae9ab7b1311b86c29e8",
+      "bytes": 6223
+    },
+    "final-pi-tool.json": {
+      "pairs": 3,
+      "sha256": "aad83ff420645296aca7877f82c9b4920fc34173f0f3a756bb6340a4c08ae62f",
+      "bytes": 6178
+    },
+    "final-append-0.json": {
+      "pairs": 3,
+      "sha256": "336d39632ed632a090535a55484d80a60f348be877c03edeb7db4dee700a1c12",
+      "bytes": 7523
+    },
+    "final-append-2048.json": {
+      "pairs": 3,
+      "sha256": "9033146532d5acfdc7d3a8c138fa4fce59e02f31be3f2a86479478e5a656d5c5",
+      "bytes": 7832
+    },
+    "final-append-512.json": {
+      "pairs": 3,
+      "sha256": "bcaff6427b61578678af97ef719f46282a64e43773eb679ee87b904a158d6f80",
+      "bytes": 7716
+    },
+    "final-append-64.json": {
+      "pairs": 3,
+      "sha256": "246203a73372b5c822fb64e6d7b6054f09124c3fac02cba685af89f0bdf94092",
+      "bytes": 7570
+    },
+    "reservation-cancel-confirmation-cancel.json": {
+      "pairs": 12,
+      "sha256": "75ff80d41b6721eb18d0da227fc701fa0791a931112f66ffefb67699b63b48e3",
+      "bytes": 25552
+    },
+    "statement-reuse-cancel.json": {
+      "pairs": 3,
+      "sha256": "171e23b2bcf06cc15fd849216e0fd30e98272425730115621aeda832998eec2a",
+      "bytes": 6333
+    },
+    "statement-reuse-large.json": {
+      "pairs": 3,
+      "sha256": "ff7c673e6d073be37fc77e4b21646404abfd6d8fb325a7f7ff9bec2c95bdd0ae",
+      "bytes": 6362
+    },
+    "statement-reuse-short-large.json": {
+      "pairs": 3,
+      "sha256": "c69a941ae9b99ffec4049e0a98d5a36b7fd4bdf4f1b80a013fbaed9b872548dd",
+      "bytes": 7655
+    },
+    "statement-reuse-short-small.json": {
+      "pairs": 3,
+      "sha256": "675bac7dc5ab6bd4502e31d216a135ad24f5d1d4e09a04e6512c94f8e83b44d2",
+      "bytes": 7618
+    },
+    "statement-reuse-stream.json": {
+      "pairs": 3,
+      "sha256": "897831ce7e584b087c2a389fd9f2ea2df8bc50fa49bd7bba60af3ca63c5cb589",
+      "bytes": 6362
+    },
+    "statement-reuse-tool.json": {
+      "pairs": 3,
+      "sha256": "15af276c528d2dc79da966d22a0eb627070d4d0cd433aa179a6584cb6a435e91",
+      "bytes": 6324
+    },
+    "reservations-cancel.json": {
+      "pairs": 3,
+      "sha256": "ff5e8f1ed38b6871e574a507194b3d72a41799de61c972e5326c87f1c40c0c96",
+      "bytes": 6296
+    },
+    "reservations-large.json": {
+      "pairs": 3,
+      "sha256": "2b08c692df9b4b8f4e2968cffc5d9cbdd8e911a3bfade8ab4a17594702547cde",
+      "bytes": 6321
+    },
+    "reservations-short-large.json": {
+      "pairs": 3,
+      "sha256": "a2ade248ae684f58a87aaa627480ad752fbdd5ca113580453644ce5f34837db2",
+      "bytes": 7613
+    },
+    "reservations-short-small.json": {
+      "pairs": 3,
+      "sha256": "047d10698a3281e74fed2a8d30700a5a787242dcef6618ab9dfd0674a7cd3a6e",
+      "bytes": 7580
+    },
+    "reservations-stream.json": {
+      "pairs": 3,
+      "sha256": "3884efb6c6edca3aeac3ce33dcaa6e0421808bbdbcb9d47648e3b959fb3b7ab6",
+      "bytes": 6324
+    },
+    "reservations-tool.json": {
+      "pairs": 3,
+      "sha256": "91f6ac9fbd305be88527c07a7819f9ff69a2c63e36b171e64bd27fc317c4af0a",
+      "bytes": 6286
+    },
+    "source-cancel.json": {
+      "pairs": 3,
+      "sha256": "70805520363f6f82b679e50b3124e8e691ecd4ab6e1214b2636ee56fbf74faea",
+      "bytes": 6216
+    },
+    "source-large.json": {
+      "pairs": 3,
+      "sha256": "fe26a1bf31b0b1ca9b014e2786c5bae95e1524b85c5eebca104ea0ac6790c69d",
+      "bytes": 6245
+    },
+    "source-short-large.json": {
+      "pairs": 3,
+      "sha256": "1a49f9f9c9411cd79ec5343ca665789c2698802d924a21ee8df3062f7e2d2e38",
+      "bytes": 7528
+    },
+    "source-short-small.json": {
+      "pairs": 3,
+      "sha256": "bc2869eced8170e6f969ccb0ea106adac44aa303fe838595bbe69b6cdf14b335",
+      "bytes": 7507
+    },
+    "source-stream.json": {
+      "pairs": 3,
+      "sha256": "0df37609967f04c9c3246e0b9c5785bce7cb3fb2634f9a39633b7aae043b2cec",
+      "bytes": 6243
+    },
+    "source-tool.json": {
+      "pairs": 3,
+      "sha256": "f6a5e232e2641e2df5f78ff93bde6ce2f504feeb3614f2c07d93c65d2c2bb1a7",
+      "bytes": 6208
+    },
+    "canonical-runtime-cancel.json": {
+      "pairs": 6,
+      "sha256": "8bf0c7e870b0a8b8810571021be17c04db789c1b9e065684c77ac61be8900e9b",
+      "bytes": 12705
+    },
+    "canonical-runtime-large.json": {
+      "pairs": 6,
+      "sha256": "2f7c793dd43b48aea4ed84004bdcbf6b1f68070c345cd785abdfbe0d4fe9a7c3",
+      "bytes": 12761
+    },
+    "canonical-runtime-short-large.json": {
+      "pairs": 6,
+      "sha256": "7a39c256923578fc46d5d7bcc1bcc7243ca7448451119eebb4d2c36f620de5d7",
+      "bytes": 15376
+    },
+    "canonical-runtime-short-small.json": {
+      "pairs": 6,
+      "sha256": "d50e151bf6b09cf975bc37cbaef2d36b267566148ce43f1ae7d8e2d88985067a",
+      "bytes": 15315
+    },
+    "canonical-runtime-stream.json": {
+      "pairs": 6,
+      "sha256": "54b86c4b04598d50375c883a832fcaa09ab4faf3c3039579fbf51a542e1548e6",
+      "bytes": 12764
+    },
+    "canonical-runtime-tool.json": {
+      "pairs": 6,
+      "sha256": "d260b9b4ddb1655b303ea7585d373457058f4e06dd145ea85df6e1f695c9aea8",
+      "bytes": 12689
+    },
+    "combined-cancel.json": {
+      "pairs": 6,
+      "sha256": "28298a5b834391eb074a8d89cd6ab104539250bdae1b0c4fa3bd035d1f2af947",
+      "bytes": 12479
+    },
+    "combined-large.json": {
+      "pairs": 6,
+      "sha256": "8e7ea9a89de51dfd7a6218bd4f7f5e23889a3a2a0a8283154b8314f52e97de92",
+      "bytes": 12538
+    },
+    "combined-short-large.json": {
+      "pairs": 6,
+      "sha256": "0577f822eb8cbd08972af4db1f64a999725f7b590f70082e51bd9cc0bcbc384f",
+      "bytes": 15169
+    },
+    "combined-short-small.json": {
+      "pairs": 6,
+      "sha256": "62aa4d100a9b19baa7457d5a3a9a06298230a4724db015e4c7794d188c4c079c",
+      "bytes": 15101
+    },
+    "combined-stream.json": {
+      "pairs": 6,
+      "sha256": "55cf3c6780a94338cc1efc2c60ac5be886b252249f9bc1371c665b4a970b3b5a",
+      "bytes": 12538
+    },
+    "combined-tool.json": {
+      "pairs": 6,
+      "sha256": "2e4345e0219ca2b8f211fa5fb7f49261515c9a596c0733ff2a730ef38fe29df8",
+      "bytes": 12465
+    },
+    "canonical-append-0.json": {
+      "pairs": 6,
+      "sha256": "a02b8770cefa4b1def4c6140e12fd23c11d1eaba49a46e8bd506bc25ad79ca98",
+      "bytes": 15147
+    },
+    "canonical-append-2048.json": {
+      "pairs": 6,
+      "sha256": "b896522d803ac8b7a789004a63ee51812e17bdbdffa295a147e26f033ec95682",
+      "bytes": 15764
+    },
+    "canonical-append-512.json": {
+      "pairs": 6,
+      "sha256": "5d5bebff6858748ed4f63f5cfc9d7f4463c0dccb76b87980a1b24d63426ca00d",
+      "bytes": 15518
+    },
+    "canonical-append-64.json": {
+      "pairs": 6,
+      "sha256": "84871219afc5722644fea87cd9da0c93b9b44854bd2f6daaee20b9a43c30f6fb",
+      "bytes": 15239
+    },
+    "baseline-pi-cancel.json": {
+      "pairs": 3,
+      "sha256": "49505ab6b85c78f69945ebaf6bb76e086c133a5c6248bc43ddc1d6b370b8c4b0",
+      "bytes": 6197
+    },
+    "baseline-pi-large.json": {
+      "pairs": 3,
+      "sha256": "2fa07a7528839d9d7fb9475180d66261d05b103c60e878a1ab03e2027d9ee5ed",
+      "bytes": 6205
+    },
+    "baseline-pi-short-large.json": {
+      "pairs": 3,
+      "sha256": "58ded1eb2dfd11398ae1977ebcccd18f1e490e8689f91033b707eea09a458f3f",
+      "bytes": 7402
+    },
+    "baseline-pi-short-small.json": {
+      "pairs": 3,
+      "sha256": "577d7485f851d93a01f6c0def3d1ceb68080879a6c38848c60fea445431dad95",
+      "bytes": 7371
+    },
+    "baseline-pi-stream.json": {
+      "pairs": 3,
+      "sha256": "eee29eb78617a2c2ab39ad59e4da74bd872a4c3358f2096bdea2330e7c35587c",
+      "bytes": 6229
+    },
+    "baseline-pi-tool.json": {
+      "pairs": 3,
+      "sha256": "58eea4454da7f2be225c755550a48289c800b73bbe6808a94830361871719781",
+      "bytes": 6182
+    },
+    "combined-pi-cancel.json": {
+      "pairs": 3,
+      "sha256": "5d46142a29e617978da6cec1646601ff89dabc6ca3694a0600b42ddbd8b42243",
+      "bytes": 6231
+    },
+    "combined-pi-large.json": {
+      "pairs": 3,
+      "sha256": "f016fa74c89f22f8c748965f638c63745ded9f9ee26f7031fa63015e7141e0f2",
+      "bytes": 6241
+    },
+    "combined-pi-short-large.json": {
+      "pairs": 3,
+      "sha256": "279bbf1ca2d43995e97257e68a8b3402cd091697f77ef9cb901e9d95586a0e27",
+      "bytes": 7456
+    },
+    "combined-pi-short-small.json": {
+      "pairs": 3,
+      "sha256": "f8d986e92392bce89da8b719e01dcae3b944d73dfdaa404181acf7cebeda0572",
+      "bytes": 7413
+    },
+    "combined-pi-stream.json": {
+      "pairs": 3,
+      "sha256": "13f9c1e2525ed37c8db567303a5b9b42388fe56b7a2d9f918df6e9e2f908e522",
+      "bytes": 6267
+    },
+    "combined-pi-tool.json": {
+      "pairs": 3,
+      "sha256": "a61a120bcadee01dd5269f4f7b165c48a66d9b00ec7c1b4619510f8a6d12a94f",
+      "bytes": 6217
+    }
+  }
+}

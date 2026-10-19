@@ -83,6 +83,22 @@ pub struct ProviderEmulator {
 }
 
 impl ProviderEmulator {
+    /// Attach a benchmark driver to the provider owned by its external controller.
+    /// The controller alone starts, shuts down and reaps this sibling process.
+    pub fn externally_owned(ready: &serde_json::Value, scenario: &str) -> Self {
+        assert_eq!(ready["ready"], true);
+        assert_eq!(ready["scenario"], scenario);
+        assert_eq!(ready["host"], "127.0.0.1");
+        Self {
+            child: None,
+            client: reqwest::Client::new(),
+            host: "127.0.0.1".to_owned(),
+            port: u16::try_from(ready["port"].as_u64().expect("provider port")).unwrap(),
+            scenario: scenario.to_owned(),
+            stderr: Arc::new(Mutex::new(String::new())),
+        }
+    }
+
     /// Starts one scenario on an ephemeral loopback port.
     ///
     /// Returns `None` when `uv` is not installed and the harness is not

@@ -428,11 +428,11 @@ read, reattachment, node switch or user cancellation retires the result. The
 retained presentation remains bounded and later source activity cannot rewrite
 the fork seed boundary.
 
-The immutable inherited transcript boundary was introduced in SQLite schema 58 and remains part of the current schema 73 lineage bootstrap. Initialization records the final native transcript watermark in the same transaction as the seed, including terminal-only inherited Turns and excluding invisible Context messages. Repeated bounded transcript and checkpoint reads resolve this boundary through a single bootstrap primary-key lookup. Older development stores are rejected without migration.
+The immutable inherited transcript boundary was introduced in SQLite schema 58 and remains part of the current schema 74 lineage bootstrap. Initialization records the final native transcript watermark in the same transaction as the seed, including terminal-only inherited Turns and excluding invisible Context messages. Repeated bounded transcript and checkpoint reads resolve this boundary through a single bootstrap primary-key lookup. Older development stores are rejected without migration.
 
 ## Request field metadata
 
-SQLite schema 73 stores frozen Request metadata separately from the native
+SQLite schema 74 stores frozen Request metadata separately from the native
 immutable selected-input tree. The Store owns that balanced tree and its canonical
 Original/Derived provenance. Request rows bind its root identity, digest and count;
 explicit historical reconstruction loads the selected input, while publication and
@@ -452,6 +452,15 @@ optional row as authoritative. Native root identity, readable cut, representatio
 and original publication authorization remain mandatory.
 
 Fragment pages are authenticated and limited to 65,536 bytes before allocation.
+Schema 71 uses the `RXSP` version-1 binary page encoding: a typed leaf or branch,
+bounded little-endian lengths, raw value bytes and raw 32-byte child hashes.
+Decoding rejects unknown versions/types, excess count/length, invalid UTF-8 keys,
+truncation, trailing bytes and inconsistent ordering/depth. There is no JSON-page
+fallback or migration. Both leaves and branches have at most 64 entries and obey
+the same byte limit; byte limits can force earlier splits. Producers sort up to
+256 facts with at most 65,536 bytes of owned key/value buffer capacity, then spill
+to the existing SQLite temporary spool. Vec metadata is additionally bounded by
+that count; large inputs never accumulate an unbounded in-memory fact list.
 Their BLOBs occupy an ordinary rowid table with a separate unique, non-null
 32-byte hash index. Lookup searches that index and then the table; rowids never
 enter Source identity or authorization. Physical measurements include both
@@ -516,3 +525,21 @@ ContentRead still reads at most two segments; lineage verification does not add 
 whole-file scan to range reads. Session archive streaming also verifies each
 existing 64 KiB source buffer before compression and checks the seal aggregate
 before successful completion; it does not prescan bodies under the capture barrier.
+
+## Canonical append frontier
+
+Upstream schema 70 removed `surface_head.active_json`; the integrated schema 74 retains that layout.
+The immutable Ledger and selected checkpoint remain the active-identity authorities.
+Cold/invalidated append validates the same bounded suffix and Original dependencies.
+Warm append may reuse a disposable connection-local validation count, checked
+inside its write transaction against mutation/data/schema versions and the live
+frontier/publication. Native duplicate/order checks remain; only successful COMMIT
+seats advanced evidence. Tracked identity/checkpoint mutations, external writes,
+schema changes and rollback invalidate it. Arbitrary out-of-band historical disk
+corruption need not be rediscovered immediately on every append; actual reads and
+explicit full validation retain their checks. Context construction and checkpoint
+publication validation remain separate work, so whole requests are not O(1).
+See [append validation boundaries](issue-481/append-validation.md).
+Canonical acceptance, events and staging remain atomic, and publication still
+follows its committed native transition. Older layouts are rejected; there is
+no migration, compatibility reader or dual write.
