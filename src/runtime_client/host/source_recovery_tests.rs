@@ -332,7 +332,7 @@ async fn checkpoint_source_repair_fails_at_its_deadline_and_a_later_checkpoint_r
     // the publication stays held, never with a stale checkpoint.
     let inner = fixture.host.inner.clone();
     let expired = tokio::task::spawn_blocking(move || {
-        inner.repair_failed_source_for_checkpoint(std::time::Instant::now())
+        inner.hydrate_read_domains_for_checkpoint(std::time::Instant::now())
     })
     .await
     .unwrap();
