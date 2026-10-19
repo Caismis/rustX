@@ -224,10 +224,10 @@ fn scoped_tool_fact_merge_preserves_fresh_roots_and_admitted_original_fragment()
     let mut initial = owner.session(&scope);
     let captured_original = scalar(&cached, &original, Some((&scope, &mut initial))).unwrap();
     assert_eq!(pages(&baseline), pages(&cached));
-    let (reused, retained_rows, owned) = initial.work();
+    let (reused, retained_rows, retained_heap) = initial.work();
     assert_eq!(reused, 0);
     assert!(retained_rows >= 610);
-    assert!(owned <= 1_048_576);
+    assert!(retained_heap <= 1_048_576);
     initial.commit(&owner);
     let retained_bytes =
         bytes(&cached, &captured_original.0, 0, captured_original.0.length).unwrap();
@@ -278,7 +278,7 @@ fn scoped_tool_fact_merge_preserves_fresh_roots_and_admitted_original_fragment()
         serde_json::to_vec(&expected_original.0).unwrap()
     );
     eprintln!(
-        "scoped Tools fact reuse rows={retained_rows}, owned={owned}, TEMP inserts={baseline_writes}->{current_writes}; all fresh previews and exact pages retained"
+        "scoped Tools fact reuse rows={retained_rows}, owned={retained_heap}, TEMP inserts={baseline_writes}->{current_writes}; all fresh previews and exact pages retained"
     );
 }
 
