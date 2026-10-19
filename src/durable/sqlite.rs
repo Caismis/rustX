@@ -333,8 +333,8 @@ fn count_conversation_store_open() {
 /// Version 70 requires explicit immutable ownership in every request-start fact.
 /// Version 71 adds authoritative owner/Call indexes, bounded auxiliary audit,
 /// and explicit owner evidence on physical request terminals.
-/// Version 72 retains exact Summary-generation source audit closure in lineage.
-pub const SQLITE_SCHEMA_VERSION: i64 = 72;
+/// Version 73 admits bounded consumer-defined auxiliary attribution.
+pub const SQLITE_SCHEMA_VERSION: i64 = 73;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -19932,7 +19932,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 72);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 73);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -20001,7 +20001,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 72);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 73);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current

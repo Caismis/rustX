@@ -7041,8 +7041,8 @@ mod tests {
         store: &SqliteConversationStore,
     ) -> crate::runtime::identity::AuxiliaryCallId {
         use crate::model::auxiliary::{
-            AuxiliaryBusinessSource, AuxiliaryCallPurpose, AuxiliaryCallStart,
-            AuxiliaryCallTrigger, AuxiliaryFingerprint, AuxiliaryInputEvidence,
+            AuxiliaryAttribution, AuxiliaryBusinessSource, AuxiliaryCallStart,
+            AuxiliaryFingerprint, AuxiliaryInputEvidence,
         };
         let call_id = crate::runtime::identity::AuxiliaryCallId::generate();
         let fingerprint = AuxiliaryFingerprint::new("a".repeat(64)).unwrap();
@@ -7050,8 +7050,8 @@ mod tests {
             .commit_auxiliary_call_start(
                 &AuxiliaryCallStart {
                     call_id: call_id.clone(),
-                    purpose: AuxiliaryCallPurpose::Summary,
-                    trigger: AuxiliaryCallTrigger::Manual,
+                    purpose: AuxiliaryAttribution::new("summary").unwrap(),
+                    trigger: AuxiliaryAttribution::new("manual").unwrap(),
                     business_source: AuxiliaryBusinessSource::Independent,
                     input: AuxiliaryInputEvidence::Temporary,
                     semantic_input_fingerprint: fingerprint.clone(),

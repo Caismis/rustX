@@ -4,8 +4,7 @@ use chrono::{TimeZone, Utc};
 use rusqlite::Connection;
 
 use crate::model::auxiliary::{
-    AuxiliaryAuditCut, AuxiliaryBusinessSource, AuxiliaryCallOutcome, AuxiliaryCallPurpose,
-    AuxiliaryCallStart, AuxiliaryCallTrigger, AuxiliaryCommitDisposition,
+    AuxiliaryAuditCut, AuxiliaryBusinessSource, AuxiliaryCallOutcome, AuxiliaryCallStart, AuxiliaryAttribution, AuxiliaryCommitDisposition,
     AuxiliaryFingerprint, AuxiliaryFinishReason, AuxiliaryInputEvidence,
     AuxiliaryObservedProviderTerminal, AuxiliaryRequestEvidence, AuxiliaryRequestStart,
     AuxiliaryUsageCompleteness,
@@ -113,8 +112,8 @@ fn commit_completed_one_request_call(
 
     let call = AuxiliaryCallStart {
         call_id: call_id.clone(),
-        purpose: AuxiliaryCallPurpose::Summary,
-        trigger: AuxiliaryCallTrigger::Automatic,
+        purpose: AuxiliaryAttribution::new("summary").unwrap(),
+        trigger: AuxiliaryAttribution::new("automatic").unwrap(),
         business_source: AuxiliaryBusinessSource::Independent,
         input: AuxiliaryInputEvidence::Temporary,
         semantic_input_fingerprint: measurement_fingerprint(ordinal, 0),

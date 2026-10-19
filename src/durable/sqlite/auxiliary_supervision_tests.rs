@@ -13,11 +13,10 @@ use crate::durable::auxiliary::{
     AuxiliaryCallStartCommit, AuxiliaryRequestStartCommit, AuxiliarySettlementCommit,
     AuxiliaryWriteFailure,
 };
-use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
+use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
 use crate::model::adapter::{ModelAdapter, ModelStream, ModelStreamItem};
 use crate::model::auxiliary::{
-    AuxiliaryAuditFact, AuxiliaryBusinessSource, AuxiliaryCallOutcome, AuxiliaryCallPurpose,
-    AuxiliaryCallStart, AuxiliaryCallTrigger, AuxiliaryCommitConfirmation,
+    AuxiliaryAuditFact, AuxiliaryBusinessSource, AuxiliaryCallOutcome, AuxiliaryCallStart, AuxiliaryAttribution, AuxiliaryCommitConfirmation,
     AuxiliaryCommitDisposition, AuxiliaryFingerprint, AuxiliaryInputEvidence,
     AuxiliaryObservedProviderTerminal, AuxiliaryRequestEvidence, AuxiliaryRequestStart,
     AuxiliaryRequestTerminal, AuxiliaryUsageCompleteness,
@@ -35,7 +34,7 @@ use crate::model::{
 };
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::{
-    AuxiliaryCallId, EventId, RequestId, SystemUuidV7Generator,
+    AuxiliaryCallId, RequestId, SystemUuidV7Generator,
 };
 
 const MAX_STAGES: usize = 16;
@@ -449,8 +448,8 @@ fn spawn_supervised(
         .expect("native auxiliary RequestId allocation");
     let call_start = AuxiliaryCallStart {
         call_id: call_id.clone(),
-        purpose: AuxiliaryCallPurpose::Classification,
-        trigger: AuxiliaryCallTrigger::Automatic,
+        purpose: AuxiliaryAttribution::new("classification").unwrap(),
+        trigger: AuxiliaryAttribution::new("automatic").unwrap(),
         business_source: AuxiliaryBusinessSource::Independent,
         input: AuxiliaryInputEvidence::Temporary,
         semantic_input_fingerprint: AuxiliaryFingerprint::new("a".repeat(64)).unwrap(),
@@ -679,10 +678,6 @@ fn settlement_for(
             let evidence_usage = usage.clone();
             let request_terminal = runtime_envelope(
                 store,
-                format!(
-                    "auxiliary-request-completed:{}",
-                    request_start.request_id
-                ),
                 RuntimeEvent::ModelRequestCompleted {
                     owner,
                     request_id: request_start.request_id.clone(),
@@ -727,7 +722,6 @@ fn settlement_for(
             };
             let request_terminal = runtime_envelope(
                 store,
-                format!("auxiliary-request-failed:{}", request_start.request_id),
                 RuntimeEvent::ModelRequestFailed {
                     owner,
                     request_id: request_start.request_id.clone(),
@@ -770,7 +764,6 @@ fn call_settled_envelope(
 ) -> RuntimeEventEnvelope {
     runtime_envelope(
         store,
-        format!("auxiliary-call-settled:{call_id}"),
         RuntimeEvent::AuxiliaryCallSettled {
             call_id,
             outcome,
@@ -781,21 +774,11 @@ fn call_settled_envelope(
 
 fn runtime_envelope(
     store: &SqliteConversationStore,
-    event_id: String,
     event: RuntimeEvent,
 ) -> RuntimeEventEnvelope {
-    RuntimeEventEnvelope {
-        tool_occurrence: None,
-        observation: None,
-        schema_version: EVENT_SCHEMA_VERSION,
-        event_id: EventId::new(event_id),
-        sequence: 0,
-        conversation_id: store.conversation_id().clone(),
-        attempt_id: None,
-        turn_id: None,
-        timestamp: fixture_time(),
-        event,
-    }
+    crate::durable::auxiliary::auxiliary_settlement_envelope(
+        store.conversation_id().clone(), fixture_time(), event,
+    ).unwrap()
 }
 
 fn adapter_request(request_start: &AuxiliaryRequestStart) -> ModelRequest {
@@ -1285,8 +1268,8 @@ fn unfinished_blocked_writer_is_unknown_then_joined_commit_is_exact() {
     };
     let call_start = AuxiliaryCallStart {
         call_id,
-        purpose: AuxiliaryCallPurpose::Classification,
-        trigger: AuxiliaryCallTrigger::Automatic,
+        purpose: AuxiliaryAttribution::new("classification").unwrap(),
+        trigger: AuxiliaryAttribution::new("automatic").unwrap(),
         business_source: AuxiliaryBusinessSource::Independent,
         input: AuxiliaryInputEvidence::Temporary,
         semantic_input_fingerprint: AuxiliaryFingerprint::new("c".repeat(64)).unwrap(),
@@ -1373,8 +1356,8 @@ fn actual_rolled_back_auxiliary_transaction_is_typed_known_not_committed() {
     };
     let call_start = AuxiliaryCallStart {
         call_id,
-        purpose: AuxiliaryCallPurpose::Classification,
-        trigger: AuxiliaryCallTrigger::Automatic,
+        purpose: AuxiliaryAttribution::new("classification").unwrap(),
+        trigger: AuxiliaryAttribution::new("automatic").unwrap(),
         business_source: AuxiliaryBusinessSource::Independent,
         input: AuxiliaryInputEvidence::Temporary,
         semantic_input_fingerprint: AuxiliaryFingerprint::new("e".repeat(64)).unwrap(),

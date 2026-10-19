@@ -10,8 +10,8 @@ use crate::model::auxiliary::{
     AUXILIARY_CALL_START_ENCODED_MAX, AUXILIARY_INPUT_MESSAGE_REF_LIMIT_MAX,
     AUXILIARY_REQUEST_ID_BYTES_MAX, AUXILIARY_REQUEST_MODEL_BYTES_MAX,
     AUXILIARY_TERMINAL_ENVELOPE_ENCODED_MAX, AuxiliaryAuditCut, AuxiliaryAuditFact,
-    AuxiliaryBusinessSource, AuxiliaryCallOutcome, AuxiliaryCallPurpose, AuxiliaryCallStart,
-    AuxiliaryCallTrigger, AuxiliaryCommitConfirmation, AuxiliaryCommitDisposition,
+    AuxiliaryBusinessSource, AuxiliaryCallOutcome, AuxiliaryCallStart,
+    AuxiliaryAttribution, AuxiliaryCommitConfirmation, AuxiliaryCommitDisposition,
     AuxiliaryFingerprint, AuxiliaryInputEvidence, AuxiliaryObservedProviderTerminal,
     AuxiliaryRequestEvidence, AuxiliaryRequestStart, AuxiliaryRequestTerminal,
     AuxiliaryUsageCompleteness,
@@ -51,8 +51,8 @@ fn usage(input_tokens: u64, output_tokens: u64, total_tokens: u64) -> ModelUsage
 fn call_start(call_id: AuxiliaryCallId) -> AuxiliaryCallStart {
     AuxiliaryCallStart {
         call_id,
-        purpose: AuxiliaryCallPurpose::Summary,
-        trigger: AuxiliaryCallTrigger::Automatic,
+        purpose: AuxiliaryAttribution::new("summary").unwrap(),
+        trigger: AuxiliaryAttribution::new("automatic").unwrap(),
         business_source: AuxiliaryBusinessSource::Independent,
         input: AuxiliaryInputEvidence::Temporary,
         semantic_input_fingerprint: fingerprint('a'),
@@ -1276,8 +1276,8 @@ fn generic_append_cannot_bypass_auxiliary_semantic_transitions() {
         format!("auxiliary-call-started:{call_id}"),
         RuntimeEvent::AuxiliaryCallStarted {
             call_id: call_id.clone(),
-            purpose: AuxiliaryCallPurpose::Summary,
-            trigger: AuxiliaryCallTrigger::Automatic,
+            purpose: AuxiliaryAttribution::new("summary").unwrap(),
+            trigger: AuxiliaryAttribution::new("automatic").unwrap(),
             business_source: AuxiliaryBusinessSource::Independent,
             input: AuxiliaryInputEvidence::Temporary,
             semantic_input_fingerprint: fingerprint('a'),
@@ -1713,4 +1713,171 @@ fn resource_read_cut_is_part_of_the_stored_call_identity() {
         receipt.event.event,
         RuntimeEvent::AuxiliaryCallStarted { .. }
     ));
+}
+
+#[test]
+fn business_sources_may_follow_the_frozen_input_cut() {
+    let store = store();
+    store
+        .initialize(&[user_message("base", "frozen input")])
+        .unwrap();
+    let input_cut = store.compaction_resource_cut().unwrap();
+    store
+        .append_canonical(&user_message("trigger", "later business cause"))
+        .unwrap();
+    let operation_id = crate::runtime::identity::CompactionOperationId::new("later-operation");
+    let operation = store
+        .append_event(auxiliary_envelope(
+            &store,
+            "later-operation-start".into(),
+            RuntimeEvent::CompactionStarted {
+                operation_id: operation_id.clone(),
+            },
+        ))
+        .unwrap();
+    assert!(operation.sequence > input_cut.journal.0);
+    for source in [
+        AuxiliaryBusinessSource::HumanMessage {
+            message_id: MessageId::new("trigger"),
+        },
+        AuxiliaryBusinessSource::Compaction { operation_id },
+    ] {
+        let mut start = call_start(AuxiliaryCallId::generate());
+        start.input = AuxiliaryInputEvidence::Historical {
+            cut: input_cut.clone(),
+        };
+        start.selected_message_ids = vec![MessageId::new("base")];
+        start.business_source = source;
+        let committed = store
+            .commit_auxiliary_call_start(&start, timestamp())
+            .unwrap();
+        assert_eq!(committed.call.input, start.input);
+        assert_eq!(committed.call.business_source, start.business_source);
+        assert!(matches!(
+            store.confirm_auxiliary_call_start(&start).unwrap(),
+            AuxiliaryCommitConfirmation::ConfirmedCommitted(_)
+        ));
+        let read = store
+            .load_auxiliary_call(&start.call_id, store.auxiliary_audit_cut().unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(read, committed.call);
+
+        // The same later message is still invalid as selected historical input.
+        start.call_id = AuxiliaryCallId::generate();
+        start.selected_message_ids.push(MessageId::new("trigger"));
+        assert_known_not_committed(store.commit_auxiliary_call_start(&start, timestamp()));
+    }
+}
+
+#[test]
+fn consumer_defined_attribution_uses_the_shared_store_lifecycle() {
+    use crate::durable::auxiliary::auxiliary_settlement_envelope;
+    let store = store();
+    let mut start = call_start(AuxiliaryCallId::generate());
+    start.purpose = AuxiliaryAttribution::new("translation").unwrap();
+    start.trigger = AuxiliaryAttribution::new("document_revision").unwrap();
+    start.business_source = AuxiliaryBusinessSource::Business {
+        namespace: AuxiliaryAttribution::new("document.translation").unwrap(),
+        reference: AuxiliaryAttribution::new("document-42:revision-7").unwrap(),
+    };
+    let encoded = serde_json::to_string(&start).unwrap();
+    assert_eq!(
+        serde_json::from_str::<AuxiliaryCallStart>(&encoded).unwrap(),
+        start
+    );
+    store
+        .commit_auxiliary_call_start(&start, timestamp())
+        .unwrap();
+    let request = request_start(start.call_id.clone(), 0, generated_request_id());
+    store
+        .commit_auxiliary_request_start(&request, timestamp())
+        .unwrap();
+    let terminal = auxiliary_settlement_envelope(
+        store.conversation_id().clone(),
+        timestamp(),
+        RuntimeEvent::ModelRequestCompleted {
+            owner: ModelRequestOwner::Auxiliary {
+                call_id: start.call_id.clone(),
+                ordinal: 0,
+            },
+            request_id: request.request_id.clone(),
+            finish_reason: ModelFinishReason::Stop,
+            usage: None,
+            generation: None,
+        },
+    )
+    .unwrap();
+    let settled = auxiliary_settlement_envelope(
+        store.conversation_id().clone(),
+        timestamp(),
+        RuntimeEvent::AuxiliaryCallSettled {
+            call_id: start.call_id.clone(),
+            outcome: AuxiliaryCallOutcome::Completed,
+            request_evidence: Some(AuxiliaryRequestEvidence {
+                request_id: request.request_id,
+                observed_provider_terminal: Some(AuxiliaryObservedProviderTerminal::Completed {
+                    finish_reason: crate::model::auxiliary::AuxiliaryFinishReason::Stop,
+                }),
+                usage: None,
+                usage_completeness: AuxiliaryUsageCompleteness::Unreported,
+                remote_execution_uncertainty: false,
+            }),
+        },
+    )
+    .unwrap();
+    let receipt = store
+        .commit_auxiliary_request_settlement(terminal.clone(), settled.clone())
+        .unwrap();
+    assert_eq!(receipt.call.purpose, start.purpose);
+    assert_eq!(receipt.call.trigger, start.trigger);
+    assert_eq!(receipt.call.business_source, start.business_source);
+    assert!(matches!(
+        store
+            .confirm_auxiliary_settlement(&terminal, &settled)
+            .unwrap(),
+        AuxiliaryCommitConfirmation::ConfirmedCommitted(_)
+    ));
+    let replay = store
+        .commit_auxiliary_request_settlement(terminal, settled)
+        .unwrap();
+    assert_eq!(
+        replay.disposition,
+        AuxiliaryCommitDisposition::IdempotentReplay
+    );
+    assert_eq!(
+        store
+            .read_auxiliary_audit(store.auxiliary_audit_cut().unwrap(), None, 32)
+            .unwrap()
+            .total,
+        4
+    );
+}
+
+#[test]
+fn settlement_constructor_rejects_primary_and_nonterminal_events() {
+    use crate::durable::auxiliary::auxiliary_settlement_envelope;
+    let store = store();
+    let owner = ModelRequestOwner::Agent {
+        identity: crate::model::RequestIdentity {
+            attempt_id: crate::runtime::identity::AttemptId::new("attempt"),
+            turn: crate::runtime::identity::TurnId::new("turn"),
+            retry_number: 0,
+        },
+    };
+    for event in [
+        RuntimeEvent::ModelRequestCompleted {
+            owner,
+            request_id: RequestId::new("primary"),
+            finish_reason: ModelFinishReason::Stop,
+            usage: None,
+            generation: None,
+        },
+        RuntimeEvent::TurnStarted,
+    ] {
+        assert!(
+            auxiliary_settlement_envelope(store.conversation_id().clone(), timestamp(), event)
+                .is_err()
+        );
+    }
 }

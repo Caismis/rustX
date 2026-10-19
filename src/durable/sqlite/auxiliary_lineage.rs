@@ -19,9 +19,9 @@ use crate::model::ModelRequestOwner;
 use crate::model::auxiliary::{
     AUXILIARY_AUDIT_RECORD_ENCODED_MAX, AUXILIARY_CALL_START_ENCODED_MAX,
     AUXILIARY_INPUT_MESSAGE_REF_LIMIT_MAX, AUXILIARY_REQUEST_ID_BYTES_MAX,
-    AUXILIARY_REQUEST_MODEL_BYTES_MAX, AUXILIARY_TERMINAL_ENVELOPE_ENCODED_MAX, AuxiliaryAuditCut,
-    AuxiliaryAuditFact, AuxiliaryAuditRecord, AuxiliaryBusinessSource, AuxiliaryCallAudit,
-    AuxiliaryCallOutcome, AuxiliaryCallPurpose, AuxiliaryCallTrigger, AuxiliaryFingerprint,
+    AUXILIARY_REQUEST_MODEL_BYTES_MAX, AUXILIARY_TERMINAL_ENVELOPE_ENCODED_MAX,
+    AuxiliaryAttribution, AuxiliaryAuditCut, AuxiliaryAuditFact, AuxiliaryAuditRecord,
+    AuxiliaryBusinessSource, AuxiliaryCallAudit, AuxiliaryCallOutcome, AuxiliaryFingerprint,
     AuxiliaryInputEvidence, AuxiliaryObservedProviderTerminal, AuxiliaryRequestAudit,
     AuxiliaryRequestEvidence, AuxiliaryRequestTerminal, AuxiliaryUsageCompleteness,
 };
@@ -339,7 +339,7 @@ fn local_snapshot(
     else {
         unreachable!("call_start checks the variant")
     };
-    if *purpose != AuxiliaryCallPurpose::Summary {
+    if purpose.as_str() != "summary" {
         return Err(invalid(
             "checkpoint generation dependency must name a Summary Call",
         ));
@@ -352,7 +352,9 @@ fn local_snapshot(
         .transpose()?;
     let mut settled_outcome = None;
     if let Some(settlement) = &settlement {
-        if settlement.event_id != event_id("auxiliary-call-settled", &reference.call_id) {
+        if settlement.event_id
+            != crate::durable::auxiliary::call_settled_event_id(&reference.call_id)
+        {
             return Err(invalid(
                 "auxiliary Summary settlement has a noncanonical event id",
             ));
@@ -381,8 +383,8 @@ fn local_snapshot(
     }
     let call_audit = AuxiliaryCallAudit {
         call_id: reference.call_id.clone(),
-        purpose: *purpose,
-        trigger: *trigger,
+        purpose: purpose.clone(),
+        trigger: trigger.clone(),
         business_source: business_source.clone(),
         input: input.clone(),
         semantic_input_fingerprint: semantic_input_fingerprint.clone(),
@@ -533,7 +535,8 @@ fn local_snapshot(
                     usage: event_usage,
                     generation: event_generation,
                     ..
-                } if terminal.event_id == event_id("auxiliary-request-completed", &request_id)
+                } if terminal.event_id
+                    == crate::durable::auxiliary::request_terminal_event_id(&request_id, true)
                     && call_id == &reference.call_id
                     && *owner_ordinal == ordinal
                     && event_request == &request_id =>
@@ -552,7 +555,8 @@ fn local_snapshot(
                     error,
                     usage: event_usage,
                     generation: event_generation,
-                } if terminal.event_id == event_id("auxiliary-request-failed", &request_id)
+                } if terminal.event_id
+                    == crate::durable::auxiliary::request_terminal_event_id(&request_id, false)
                     && call_id == &reference.call_id
                     && *owner_ordinal == ordinal
                     && event_request == &request_id =>
@@ -813,8 +817,8 @@ fn validate_snapshot(snapshot: &AuxiliaryAuditSnapshot) -> Result<(), Conversati
 #[derive(serde::Serialize)]
 struct BorrowedCallStart<'a> {
     call_id: &'a AuxiliaryCallId,
-    purpose: AuxiliaryCallPurpose,
-    trigger: AuxiliaryCallTrigger,
+    purpose: &'a AuxiliaryAttribution,
+    trigger: &'a AuxiliaryAttribution,
     business_source: &'a AuxiliaryBusinessSource,
     input: &'a AuxiliaryInputEvidence,
     semantic_input_fingerprint: &'a AuxiliaryFingerprint,
@@ -854,8 +858,8 @@ fn validate_call_metadata(call: &AuxiliaryCallAudit) -> Result<(), ConversationS
     bounded_encoded_len(
         &BorrowedCallStart {
             call_id: &call.call_id,
-            purpose: call.purpose,
-            trigger: call.trigger,
+            purpose: &call.purpose,
+            trigger: &call.trigger,
             business_source: &call.business_source,
             input: &call.input,
             semantic_input_fingerprint: &call.semantic_input_fingerprint,
@@ -1015,14 +1019,12 @@ pub(super) fn validate_snapshot_facts(
         bounded_encoded_len(record, AUXILIARY_AUDIT_RECORD_ENCODED_MAX)?;
         let (call_id, purpose) = match &record.fact {
             AuxiliaryAuditFact::CallStarted(call) | AuxiliaryAuditFact::CallSettled(call) => {
-                (&call.call_id, call.purpose)
+                (&call.call_id, call.purpose.as_str())
             }
             AuxiliaryAuditFact::RequestStarted(request)
-            | AuxiliaryAuditFact::RequestSettled(request) => {
-                (&request.call_id, AuxiliaryCallPurpose::Summary)
-            }
+            | AuxiliaryAuditFact::RequestSettled(request) => (&request.call_id, "summary"),
         };
-        if call_id != &snapshot.call_id || purpose != AuxiliaryCallPurpose::Summary {
+        if call_id != &snapshot.call_id || purpose != "summary" {
             return Err(invalid(
                 "inherited auxiliary audit is not for the named Summary Call",
             ));
@@ -1065,7 +1067,7 @@ pub(super) fn validate_snapshot_facts(
             if cut.conversation_id == snapshot.source_conversation_id
                 && cut.journal.0 <= start.started_sequence
     );
-    if start.purpose != AuxiliaryCallPurpose::Summary
+    if start.purpose.as_str() != "summary"
         || !matches!(
             &start.business_source,
             AuxiliaryBusinessSource::Compaction { .. }
@@ -1352,7 +1354,9 @@ pub(super) fn validate_local_reference(
                 "Summary generation business source disagrees with the compaction operation",
             ));
         }
-        AuxiliaryBusinessSource::Independent | AuxiliaryBusinessSource::HumanMessage { .. } => {
+        AuxiliaryBusinessSource::Independent
+        | AuxiliaryBusinessSource::Business { .. }
+        | AuxiliaryBusinessSource::HumanMessage { .. } => {
             return Err(invalid(
                 "new Summary generation requires its owning Compaction operation",
             ));

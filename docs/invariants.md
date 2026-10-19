@@ -7615,6 +7615,10 @@ when required by lineage/dependency closure; no stronger global audit is implied
 - Owner filtering precedes recovery mutation, native query limits, aggregation,
   occupancy, predecessors and subagent activity. Auxiliary facts never consume
   an adopted Agent answer obligation.
+- Purpose, activation cause and opaque consumer business references are bounded
+  attribution, not a closed list of products or execution permissions. Native
+  Compaction/Human references retain independent integrity checks at admission.
+  A business source may postdate frozen input; selected input references may not.
 - Full native input cuts remain distinct from Journal-only audit cuts.
   Fingerprints do not reconstruct missing prompts or generated output.
 - Local audit survives for the Conversation lifetime. Inherited source audit is

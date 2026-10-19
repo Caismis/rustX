@@ -9,7 +9,7 @@ use crate::events::types::ToolObservationOccurrence;
 use crate::message::types::ContentBlockIndex;
 use crate::model::auxiliary::{
     AUXILIARY_REQUEST_ID_BYTES_MAX, AuxiliaryAuditCut, AuxiliaryBusinessSource,
-    AuxiliaryCallOutcome, AuxiliaryCallPurpose, AuxiliaryCallStart, AuxiliaryCallTrigger,
+    AuxiliaryCallOutcome, AuxiliaryCallStart, AuxiliaryAttribution,
     AuxiliaryCommitConfirmation, AuxiliaryCommitDisposition, AuxiliaryFingerprint,
     AuxiliaryInputEvidence, AuxiliaryObservedProviderTerminal, AuxiliaryRequestEvidence,
     AuxiliaryRequestStart, AuxiliaryUsageCompleteness,
@@ -62,8 +62,8 @@ fn usage() -> ModelUsage {
 fn make_call_start(call_id: AuxiliaryCallId) -> AuxiliaryCallStart {
     AuxiliaryCallStart {
         call_id,
-        purpose: AuxiliaryCallPurpose::Summary,
-        trigger: AuxiliaryCallTrigger::Automatic,
+        purpose: AuxiliaryAttribution::new("summary").unwrap(),
+        trigger: AuxiliaryAttribution::new("automatic").unwrap(),
         business_source: AuxiliaryBusinessSource::Independent,
         input: AuxiliaryInputEvidence::Temporary,
         semantic_input_fingerprint: fingerprint('c'),
@@ -1082,7 +1082,7 @@ fn request_cardinality_and_call_terminal_absorbing_rules_are_enforced() {
 
 #[test]
 fn required_schema_indexes_and_constraints_are_current() {
-    assert_eq!(SQLITE_SCHEMA_VERSION, 72);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 73);
     let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
     let connection = store.lock().unwrap();
     for index in [
@@ -1409,4 +1409,27 @@ fn deleting_the_latest_open_audit_fact_is_detected_by_total_and_read() {
             Err(ConversationStoreError::InvalidReference(_))
         ));
     }
+}
+
+#[test]
+fn closed_attribution_store_version_is_rejected_without_rewrite() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("closed-attribution.sqlite");
+    let conversation_id = ConversationId::generate();
+    let store = SqliteConversationStore::open(conversation_id.clone(), &path).unwrap();
+    store
+        .lock()
+        .unwrap()
+        .execute_batch("UPDATE rustx_store SET schema_version=72 WHERE id=1")
+        .unwrap();
+    drop(store);
+    let before = std::fs::read(&path).unwrap();
+    assert!(matches!(
+        SqliteConversationStore::open(conversation_id, &path),
+        Err(ConversationStoreError::SchemaVersionMismatch {
+            stored: 72,
+            expected: 73
+        })
+    ));
+    assert_eq!(std::fs::read(path).unwrap(), before);
 }

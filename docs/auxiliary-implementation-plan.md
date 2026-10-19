@@ -87,7 +87,7 @@ The inheritance matrix carries eligible source audit only for an explicitly reta
 
 Inspection archives expose explicit bounded projections and omissions; they do not serialize private native types wholesale or become executable recovery formats. No later terminal may leak into an earlier export cut.
 
-The implemented formats are SQLite schema 72 and inspection archive v6, with Journal schema 4, projection/generation schemas 2, and local/inherited auxiliary-audit schemas 1. Runtime Client 71 and App Server 50 are unchanged; regenerated protocol and configuration artifacts have no content drift. Obsolete and falsely current stores are rejected without migration or reconstruction. Reassess these development-format gates when integrating #484.
+The implemented formats are SQLite schema 73 and inspection archive v7, with Journal schema 5, projection/generation schemas 2, and local/inherited auxiliary-audit schemas 2. Runtime Client 71 and App Server 50 are unchanged; regenerated protocol and configuration artifacts have no content drift. Obsolete and falsely current stores are rejected without migration or reconstruction. Reassess these development-format gates when integrating #484.
 
 ### 1.5 AUX-01 acceptance gate
 
@@ -99,7 +99,7 @@ The private supervised real-Store/scripted-adapter fixture exercises CallStarted
 
 Implementation details, finite bounds, confirmation rules, lineage semantics and measured storage growth are recorded in [Auxiliary execution](auxiliary-execution.md). The native Store owns transaction/index integrity; compact observation headers preserve primary readers' existing bounded-work guarantees, and the inspection archive uses explicit projections.
 
-Local verification used Ubuntu 24.04 WSL and pinned Rust 1.98.1:
+Initial implementation verification at `8f54e195` used Ubuntu 24.04 WSL and pinned Rust 1.98.1:
 
 - Formatting, all-target/all-feature Clippy with warnings denied, and whitespace checks passed.
 - Across the complete library run and final focused fixture checks, all 4,076 runnable non-boundary library cases were exercised successfully; four cases remain ignored. The final four-case Session paging check removes host-clock ordering assumptions while retaining its ordering, pagination and zero-Store-open assertions.
@@ -109,6 +109,29 @@ Local verification used Ubuntu 24.04 WSL and pinned Rust 1.98.1:
 - Schema/protocol regeneration had no content drift. The changed browser Session-export test passed against the pinned Playwright container and compared browser download with remote TUI export.
 
 These are local verification results, not a GitHub FULL/macOS CI verdict. The complete browser suite and native macOS lanes remain part of the repository's merge gate.
+
+### Attribution review follow-up
+
+The follow-up separates business-source admission from historical input visibility,
+replaces the closed purpose/trigger vocabulary with bounded consumer-defined
+attribution, and adds opaque consumer business references without execution
+permissions. A shared terminal-envelope constructor removes the consumer's need
+to duplicate private event-ID formatting. Native Summary lineage still requires
+its explicit checkpoint dependency and owning Compaction operation.
+
+On Linux x86_64 with Rust 1.98.1, all 502 selected library tests passed with no
+failures or ignored tests. The selection covered all `durable::sqlite` tests,
+auxiliary consumers/readers, archive and artifact-lineage tests, and request-owner
+regressions. It includes the later-business-source negative controls, a custom
+translation consumer's full lifecycle, archive attribution round-trip, and
+schema-72 rejection without rewriting storage. All-feature binary builds,
+all-target/all-feature Clippy with warnings denied, formatting and whitespace
+checks passed. The `rust-contracts` test-lane discovery check passed. Native
+configuration/protocol regeneration produced no drift.
+
+The browser archive expectations now name v7. Browser E2E was not rerun because
+this host has neither Docker nor Podman for the pinned browser image. These
+focused results do not replace exact-head FULL or native macOS merge gates.
 
 ## Stage 2: AUX-02 supervised execution and Summary
 

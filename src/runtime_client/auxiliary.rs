@@ -193,10 +193,10 @@ mod tests {
     use super::*;
     use crate::durable::{ConversationStore, SqliteConversationStore};
     use crate::model::auxiliary::{
-        AuxiliaryAuditFact, AuxiliaryAuditRecord, AuxiliaryBusinessSource, AuxiliaryCallOutcome,
-        AuxiliaryCallPurpose, AuxiliaryCallStart, AuxiliaryCallTrigger, AuxiliaryFingerprint,
-        AuxiliaryInputEvidence, AuxiliaryObservedProviderTerminal, AuxiliaryRequestEvidence,
-        AuxiliaryRequestStart, AuxiliaryUsageCompleteness,
+        AuxiliaryAttribution, AuxiliaryAuditFact, AuxiliaryAuditRecord, AuxiliaryBusinessSource,
+        AuxiliaryCallOutcome, AuxiliaryCallStart, AuxiliaryFingerprint, AuxiliaryInputEvidence,
+        AuxiliaryObservedProviderTerminal, AuxiliaryRequestEvidence, AuxiliaryRequestStart,
+        AuxiliaryUsageCompleteness,
     };
     use crate::model::finish::ModelFinishReason;
     use crate::model::snapshot::ModelRequestOwner;
@@ -212,8 +212,8 @@ mod tests {
     fn temporary_call(call_id: AuxiliaryCallId) -> AuxiliaryCallStart {
         AuxiliaryCallStart {
             call_id,
-            purpose: AuxiliaryCallPurpose::Summary,
-            trigger: AuxiliaryCallTrigger::Manual,
+            purpose: AuxiliaryAttribution::new("summary").unwrap(),
+            trigger: AuxiliaryAttribution::new("manual").unwrap(),
             business_source: AuxiliaryBusinessSource::Independent,
             input: AuxiliaryInputEvidence::Temporary,
             semantic_input_fingerprint: fingerprint(),
@@ -838,8 +838,8 @@ mod tests {
         let call_id = AuxiliaryCallId::generate();
         let start = AuxiliaryCallStart {
             call_id,
-            purpose: AuxiliaryCallPurpose::Title,
-            trigger: AuxiliaryCallTrigger::Automatic,
+            purpose: AuxiliaryAttribution::new("title").unwrap(),
+            trigger: AuxiliaryAttribution::new("automatic").unwrap(),
             business_source: AuxiliaryBusinessSource::HumanMessage {
                 message_id: MessageId::new("historical-input-message"),
             },

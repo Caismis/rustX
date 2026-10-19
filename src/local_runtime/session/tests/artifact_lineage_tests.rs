@@ -224,7 +224,7 @@ fn link_summary_generation_with_outcome(
     completed: bool,
 ) -> (AuxiliaryCallId, RequestId, u64) {
     use crate::model::auxiliary::{
-        AuxiliaryBusinessSource, AuxiliaryCallStart, AuxiliaryCallTrigger, AuxiliaryFingerprint,
+        AuxiliaryAttribution, AuxiliaryBusinessSource, AuxiliaryCallStart, AuxiliaryFingerprint,
         AuxiliaryInputEvidence, AuxiliaryRequestStart,
     };
     use crate::runtime::identity::CompactionOperationId;
@@ -259,8 +259,8 @@ fn link_summary_generation_with_outcome(
         .commit_auxiliary_call_start(
             &AuxiliaryCallStart {
                 call_id: call_id.clone(),
-                purpose: crate::model::auxiliary::AuxiliaryCallPurpose::Summary,
-                trigger: AuxiliaryCallTrigger::Automatic,
+                purpose: crate::model::auxiliary::AuxiliaryAttribution::new("summary").unwrap(),
+                trigger: AuxiliaryAttribution::new("automatic").unwrap(),
                 business_source: AuxiliaryBusinessSource::Compaction {
                     operation_id: operation_id.clone(),
                 },
@@ -315,7 +315,7 @@ pub(super) fn link_open_summary_generation(
     store: &SqliteConversationStore,
 ) -> (AuxiliaryCallId, RequestId, u64) {
     use crate::model::auxiliary::{
-        AuxiliaryBusinessSource, AuxiliaryCallStart, AuxiliaryCallTrigger, AuxiliaryFingerprint,
+        AuxiliaryAttribution, AuxiliaryBusinessSource, AuxiliaryCallStart, AuxiliaryFingerprint,
         AuxiliaryInputEvidence, AuxiliaryRequestStart,
     };
     use crate::runtime::identity::CompactionOperationId;
@@ -350,8 +350,8 @@ pub(super) fn link_open_summary_generation(
         .commit_auxiliary_call_start(
             &AuxiliaryCallStart {
                 call_id: call_id.clone(),
-                purpose: crate::model::auxiliary::AuxiliaryCallPurpose::Summary,
-                trigger: AuxiliaryCallTrigger::Automatic,
+                purpose: crate::model::auxiliary::AuxiliaryAttribution::new("summary").unwrap(),
+                trigger: AuxiliaryAttribution::new("automatic").unwrap(),
                 business_source: AuxiliaryBusinessSource::Compaction {
                     operation_id: operation_id.clone(),
                 },
@@ -405,8 +405,8 @@ fn summary_checkpoint_overlap_does_not_inherit_auxiliary_execution() {
     assert!(!cut.projections.is_empty());
     let (summary_call, summary_request) = super::archive_tests::start_auxiliary(
         &store,
-        crate::model::auxiliary::AuxiliaryCallPurpose::Summary,
-        crate::model::auxiliary::AuxiliaryCallTrigger::Automatic,
+        crate::model::auxiliary::AuxiliaryAttribution::new("summary").unwrap(),
+        crate::model::auxiliary::AuxiliaryAttribution::new("automatic").unwrap(),
     );
     super::archive_tests::settle_auxiliary(
         &store,
@@ -468,8 +468,8 @@ fn named_summary_generation_dependency_survives_clone_and_source_deletion() {
     let (call_id, request_id, through) = link_summary_generation(&store);
     let (unrelated_call, unrelated_request) = super::archive_tests::start_auxiliary(
         &store,
-        crate::model::auxiliary::AuxiliaryCallPurpose::Btw,
-        crate::model::auxiliary::AuxiliaryCallTrigger::Manual,
+        crate::model::auxiliary::AuxiliaryAttribution::new("btw").unwrap(),
+        crate::model::auxiliary::AuxiliaryAttribution::new("manual").unwrap(),
     );
     super::archive_tests::settle_auxiliary(
         &store,
@@ -479,8 +479,8 @@ fn named_summary_generation_dependency_survives_clone_and_source_deletion() {
     );
     let (title_call, title_request) = super::archive_tests::start_auxiliary(
         &store,
-        crate::model::auxiliary::AuxiliaryCallPurpose::Title,
-        crate::model::auxiliary::AuxiliaryCallTrigger::Automatic,
+        crate::model::auxiliary::AuxiliaryAttribution::new("title").unwrap(),
+        crate::model::auxiliary::AuxiliaryAttribution::new("automatic").unwrap(),
     );
     super::archive_tests::settle_auxiliary(&store, title_call.clone(), title_request.clone(), true);
     let source_cut = store
@@ -693,14 +693,14 @@ fn clone_and_fork_do_not_inherit_overlapping_auxiliary_execution_after_source_de
     let (store, cut) = source(&catalog, false);
     let (btw_call, btw_request) = super::archive_tests::start_auxiliary(
         &store,
-        crate::model::auxiliary::AuxiliaryCallPurpose::Btw,
-        crate::model::auxiliary::AuxiliaryCallTrigger::Manual,
+        crate::model::auxiliary::AuxiliaryAttribution::new("btw").unwrap(),
+        crate::model::auxiliary::AuxiliaryAttribution::new("manual").unwrap(),
     );
     super::archive_tests::settle_auxiliary(&store, btw_call.clone(), btw_request.clone(), true);
     let (classification_call, classification_request) = super::archive_tests::start_auxiliary(
         &store,
-        crate::model::auxiliary::AuxiliaryCallPurpose::Classification,
-        crate::model::auxiliary::AuxiliaryCallTrigger::Automatic,
+        crate::model::auxiliary::AuxiliaryAttribution::new("classification").unwrap(),
+        crate::model::auxiliary::AuxiliaryAttribution::new("automatic").unwrap(),
     );
     super::archive_tests::settle_auxiliary(
         &store,

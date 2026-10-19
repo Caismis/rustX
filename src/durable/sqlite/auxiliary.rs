@@ -8,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, 
 use crate::context::resources::ResourceLimits;
 use crate::durable::auxiliary::{
     AuxiliaryCallStartCommit, AuxiliaryRequestStartCommit, AuxiliarySettlementCommit,
-    AuxiliaryWriteFailure,
+    AuxiliaryWriteFailure, call_settled_event_id, request_terminal_event_id,
 };
 use crate::durable::inbox::ConversationStoreError;
 use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
@@ -556,8 +556,8 @@ fn validate_call_start_input(start: &AuxiliaryCallStart) -> Result<(), Conversat
         journal_sequence: u64::MAX,
         fact: AuxiliaryAuditFact::CallSettled(AuxiliaryCallAudit {
             call_id: start.call_id.clone(),
-            purpose: start.purpose,
-            trigger: start.trigger,
+            purpose: start.purpose.clone(),
+            trigger: start.trigger.clone(),
             business_source: start.business_source.clone(),
             input: start.input.clone(),
             semantic_input_fingerprint: start.semantic_input_fingerprint.clone(),
@@ -642,17 +642,6 @@ fn call_started_event_id(call_id: &AuxiliaryCallId) -> EventId {
 
 fn request_started_event_id(request_id: &RequestId) -> EventId {
     EventId::new(format!("auxiliary-request-started:{request_id}"))
-}
-
-fn request_terminal_event_id(request_id: &RequestId, completed: bool) -> EventId {
-    EventId::new(format!(
-        "auxiliary-request-{}:{request_id}",
-        if completed { "completed" } else { "failed" }
-    ))
-}
-
-fn call_settled_event_id(call_id: &AuxiliaryCallId) -> EventId {
-    EventId::new(format!("auxiliary-call-settled:{call_id}"))
 }
 
 fn call_start_matches(event: &RuntimeEventEnvelope, start: &AuxiliaryCallStart) -> bool {
@@ -764,33 +753,10 @@ fn validate_terminal_envelope_shape(
             "a new auxiliary settlement must leave Journal sequence unallocated".into(),
         ));
     }
-    match &event.event {
-        RuntimeEvent::ModelRequestCompleted { request_id, .. } => {
-            if event.event_id != request_terminal_event_id(request_id, true) {
-                return Err(ConversationStoreError::InvalidReference(
-                    "auxiliary request terminal has a noncanonical event identity".into(),
-                ));
-            }
-        }
-        RuntimeEvent::ModelRequestFailed { request_id, .. } => {
-            if event.event_id != request_terminal_event_id(request_id, false) {
-                return Err(ConversationStoreError::InvalidReference(
-                    "auxiliary request terminal has a noncanonical event identity".into(),
-                ));
-            }
-        }
-        RuntimeEvent::AuxiliaryCallSettled { call_id, .. } => {
-            if event.event_id != call_settled_event_id(call_id) {
-                return Err(ConversationStoreError::InvalidReference(
-                    "auxiliary Call terminal has a noncanonical event identity".into(),
-                ));
-            }
-        }
-        _ => {
-            return Err(ConversationStoreError::InvalidReference(
-                "auxiliary settlement requires a request or Call terminal".into(),
-            ));
-        }
+    if event.event_id != crate::durable::auxiliary::settlement_event_id(&event.event)? {
+        return Err(ConversationStoreError::InvalidReference(
+            "auxiliary terminal has a noncanonical event identity".into(),
+        ));
     }
     if let RuntimeEvent::ModelRequestCompleted {
         generation: Some(generation),
@@ -1060,7 +1026,7 @@ fn require_compaction_operation_through(
         .map_err(|error| storage(format!("auxiliary Compaction source lookup: {error}")))?;
     if !exists {
         return Err(ConversationStoreError::InvalidReference(format!(
-            "auxiliary Compaction source {operation_id} is not visible at its historical Journal cut"
+            "auxiliary Compaction source {operation_id} is not visible at the business-source validation frontier"
         )));
     }
     Ok(())
@@ -1089,15 +1055,6 @@ fn validate_call_start_authority_tx(
             for message_id in &start.selected_message_ids {
                 require_message_in_ledger(connection, message_id, cut.ledger.0)?;
             }
-            match &start.business_source {
-                AuxiliaryBusinessSource::Independent => {}
-                AuxiliaryBusinessSource::Compaction { operation_id } => {
-                    require_compaction_operation_through(connection, operation_id, cut.journal.0)?;
-                }
-                AuxiliaryBusinessSource::HumanMessage { message_id } => {
-                    require_human_message_in_ledger(connection, message_id, cut.ledger.0)?;
-                }
-            }
         }
         AuxiliaryInputEvidence::Temporary => {
             if !start.selected_message_ids.is_empty() {
@@ -1105,17 +1062,21 @@ fn validate_call_start_authority_tx(
                     "temporary auxiliary input cannot name selected historical MessageIds".into(),
                 ));
             }
-            let ledger = ledger_frontier(connection)?;
-            let journal = journal_prefix(connection)?;
-            match &start.business_source {
-                AuxiliaryBusinessSource::Independent => {}
-                AuxiliaryBusinessSource::Compaction { operation_id } => {
-                    require_compaction_operation_through(connection, operation_id, journal)?;
-                }
-                AuxiliaryBusinessSource::HumanMessage { message_id } => {
-                    require_human_message_in_ledger(connection, message_id, ledger)?;
-                }
-            }
+        }
+    }
+    // Business causality and input selection have independent coordinates.
+    // A newly admitted operation may intentionally consume an older input cut.
+    match &start.business_source {
+        AuxiliaryBusinessSource::Independent | AuxiliaryBusinessSource::Business { .. } => {}
+        AuxiliaryBusinessSource::Compaction { operation_id } => {
+            require_compaction_operation_through(
+                connection,
+                operation_id,
+                journal_prefix(connection)?,
+            )?;
+        }
+        AuxiliaryBusinessSource::HumanMessage { message_id } => {
+            require_human_message_in_ledger(connection, message_id, ledger_frontier(connection)?)?;
         }
     }
     Ok(())
@@ -1148,8 +1109,8 @@ pub(super) fn validate_call_event_tx(
             }
             let start = AuxiliaryCallStart {
                 call_id: call_id.clone(),
-                purpose: *purpose,
-                trigger: *trigger,
+                purpose: purpose.clone(),
+                trigger: trigger.clone(),
                 business_source: business_source.clone(),
                 input: input.clone(),
                 semantic_input_fingerprint: semantic_input_fingerprint.clone(),
@@ -2481,8 +2442,8 @@ fn call_audit_at_tx(
             invocation_fingerprint,
             selected_message_ids,
         } if event_call == call_id => (
-            *purpose,
-            *trigger,
+            purpose.clone(),
+            trigger.clone(),
             business_source.clone(),
             input.clone(),
             semantic_input_fingerprint.clone(),
@@ -2497,8 +2458,8 @@ fn call_audit_at_tx(
     };
     let start_projection = AuxiliaryCallStart {
         call_id: call_id.clone(),
-        purpose,
-        trigger,
+        purpose: purpose.clone(),
+        trigger: trigger.clone(),
         business_source: business_source.clone(),
         input: input.clone(),
         semantic_input_fingerprint: semantic_input_fingerprint.clone(),
@@ -3088,8 +3049,8 @@ impl SqliteConversationStore {
                 timestamp,
                 event: RuntimeEvent::AuxiliaryCallStarted {
                     call_id: start.call_id.clone(),
-                    purpose: start.purpose,
-                    trigger: start.trigger,
+                    purpose: start.purpose.clone(),
+                    trigger: start.trigger.clone(),
                     business_source: start.business_source.clone(),
                     input: start.input.clone(),
                     semantic_input_fingerprint: start.semantic_input_fingerprint.clone(),

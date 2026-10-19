@@ -194,6 +194,12 @@ fn auxiliary_business_source(source: &crate::model::auxiliary::AuxiliaryBusiness
     use crate::model::auxiliary::AuxiliaryBusinessSource;
     match source {
         AuxiliaryBusinessSource::Independent => json!({"kind":"independent"}),
+        AuxiliaryBusinessSource::Business {
+            namespace,
+            reference,
+        } => {
+            json!({"kind":"business","namespace":namespace,"reference":reference})
+        }
         AuxiliaryBusinessSource::Compaction { operation_id } => {
             json!({"kind":"compaction","operation_id":operation_id})
         }

@@ -29,7 +29,7 @@ fn trace_raw_seed() -> (LineageSeed, Vec<u8>) {
 #[test]
 fn primary_request_predecessor_filters_auxiliary_start_before_limit() {
     use crate::model::auxiliary::{
-        AuxiliaryCallPurpose, AuxiliaryCallTrigger, AuxiliaryCallStart, AuxiliaryFingerprint,
+        AuxiliaryAttribution, AuxiliaryCallStart, AuxiliaryFingerprint,
         AuxiliaryRequestStart,
     };
     use crate::runtime::identity::{AuxiliaryCallId, RequestId};
@@ -60,8 +60,8 @@ fn primary_request_predecessor_filters_auxiliary_start_before_limit() {
         .commit_auxiliary_call_start(
             &AuxiliaryCallStart {
                 call_id: call_id.clone(),
-                purpose: AuxiliaryCallPurpose::Summary,
-                trigger: AuxiliaryCallTrigger::Automatic,
+                purpose: AuxiliaryAttribution::new("summary").unwrap(),
+                trigger: AuxiliaryAttribution::new("automatic").unwrap(),
                 semantic_input_fingerprint: fingerprint.clone(),
                 invocation_fingerprint: fingerprint,
                 business_source: crate::model::auxiliary::AuxiliaryBusinessSource::Independent,

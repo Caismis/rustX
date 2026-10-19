@@ -127,7 +127,7 @@ fn t10_t19_schema_65_source_pages_are_refused_without_conversion() {
         SqliteConversationStore::open_existing(conversation, &path),
         Err(ConversationStoreError::SchemaVersionMismatch {
             stored: 65,
-            expected: 72
+            expected: 73
         })
     ));
     let connection = Connection::open(path).unwrap();
@@ -199,7 +199,7 @@ fn t10_t19_schema_66_full_child_facts_are_refused_without_conversion() {
         SqliteConversationStore::open_existing(conversation, &path),
         Err(ConversationStoreError::SchemaVersionMismatch {
             stored: 66,
-            expected: 72
+            expected: 73
         })
     ));
     let connection = Connection::open(path).unwrap();

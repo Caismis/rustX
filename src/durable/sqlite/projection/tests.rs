@@ -7,8 +7,8 @@ use crate::message::types::{
     InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
 use crate::model::auxiliary::{
-    AuxiliaryAuditFact, AuxiliaryBusinessSource, AuxiliaryCallOutcome, AuxiliaryCallPurpose,
-    AuxiliaryCallStart, AuxiliaryCallTrigger, AuxiliaryFingerprint, AuxiliaryInputEvidence,
+    AuxiliaryAttribution, AuxiliaryAuditFact, AuxiliaryBusinessSource, AuxiliaryCallOutcome,
+    AuxiliaryCallStart, AuxiliaryFingerprint, AuxiliaryInputEvidence,
     AuxiliaryObservedProviderTerminal, AuxiliaryRequestAudit, AuxiliaryRequestEvidence,
     AuxiliaryRequestStart, AuxiliaryUsageCompleteness,
 };
@@ -27,7 +27,7 @@ fn auxiliary_fingerprint(byte: char) -> AuxiliaryFingerprint {
 
 fn start_auxiliary_call(
     store: &SqliteConversationStore,
-    purpose: AuxiliaryCallPurpose,
+    purpose: AuxiliaryAttribution,
     source: AuxiliaryBusinessSource,
     with_request: bool,
 ) -> (crate::runtime::identity::AuxiliaryCallId, Option<RequestId>) {
@@ -55,7 +55,7 @@ fn start_auxiliary_call(
             &AuxiliaryCallStart {
                 call_id: call_id.clone(),
                 purpose,
-                trigger: AuxiliaryCallTrigger::Automatic,
+                trigger: AuxiliaryAttribution::new("automatic").unwrap(),
                 business_source: source,
                 input: AuxiliaryInputEvidence::Historical {
                     cut: store.compaction_resource_cut().unwrap(),
@@ -92,7 +92,12 @@ fn start_summary_call(
     source: AuxiliaryBusinessSource,
     with_request: bool,
 ) -> (crate::runtime::identity::AuxiliaryCallId, Option<RequestId>) {
-    start_auxiliary_call(store, AuxiliaryCallPurpose::Summary, source, with_request)
+    start_auxiliary_call(
+        store,
+        AuxiliaryAttribution::new("summary").unwrap(),
+        source,
+        with_request,
+    )
 }
 
 fn settle_summary_call(
@@ -2930,7 +2935,7 @@ fn summary_generation_dependency_rejects_missing_wrong_and_future_prerequisites(
     let wrong_purpose_operation = CompactionOperationId::new("operation:summary-wrong-purpose");
     let (wrong_purpose_call, wrong_purpose_request) = start_auxiliary_call(
         &store,
-        AuxiliaryCallPurpose::Btw,
+        AuxiliaryAttribution::new("btw").unwrap(),
         AuxiliaryBusinessSource::Compaction {
             operation_id: wrong_purpose_operation.clone(),
         },

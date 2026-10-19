@@ -1,6 +1,6 @@
 //! Bounded provider-independent facts for one auxiliary model Call.
 //!
-//! These types describe frozen execution coordinates and closed attribution.
+//! These types describe frozen execution coordinates and bounded consumer-defined attribution.
 //! They carry no input bodies, generated output, credentials, budgets, Store
 //! handles, or executor policy.
 
@@ -62,26 +62,49 @@ pub const AUXILIARY_REQUEST_MODEL_BYTES_MAX: usize = 512;
 /// Exact lowercase SHA-256 hexadecimal encoding width.
 pub const AUXILIARY_FINGERPRINT_HEX_BYTES: usize = 64;
 
-/// Closed business purpose of one auxiliary Call.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum AuxiliaryCallPurpose {
-    Summary,
-    Title,
-    Classification,
-    Btw,
+/// Bounded consumer-defined attribution, never execution authority.
+///
+/// Purpose names, activation causes and business references use this same text
+/// contract. Consumers own their vocabulary; adding a consumer does not change
+/// the Store schema. Values must not contain prompts, output or secrets.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(try_from = "String", into = "String")]
+pub struct AuxiliaryAttribution(String);
+
+impl AuxiliaryAttribution {
+    /// Validates a nonempty attribution of at most 512 UTF-8 bytes.
+    ///
+    /// # Errors
+    /// Rejects empty, oversized or control-character-containing values.
+    pub fn new(value: impl Into<String>) -> Result<Self, String> {
+        let value = value.into();
+        if value.is_empty() || value.len() > 512 || value.chars().any(char::is_control) {
+            return Err(
+                "auxiliary attribution must contain 1..=512 UTF-8 bytes without control characters"
+                    .into(),
+            );
+        }
+        Ok(Self(value))
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
-/// Closed trigger attribution for one auxiliary Call.
-///
-/// Attribution grants no execution permission and cannot substitute for the
-/// owning business operation's authority.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum AuxiliaryCallTrigger {
-    Automatic,
-    Manual,
-    Client,
+impl TryFrom<String> for AuxiliaryAttribution {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl From<AuxiliaryAttribution> for String {
+    fn from(value: AuxiliaryAttribution) -> Self {
+        value.0
+    }
 }
 
 /// Terminal outcome of one auxiliary Call.
@@ -93,15 +116,26 @@ pub enum AuxiliaryCallOutcome {
     Cancelled,
 }
 
-/// Closed business relation retained for bounded attribution.
+/// Business relation retained for bounded attribution.
+/// Native references retain their integrity checks; consumer references are
+/// opaque attribution whose validation and authority belong to that consumer.
 ///
 /// The relation grants no replay, execution, or inheritance authority.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AuxiliaryBusinessSource {
     Independent,
-    Compaction { operation_id: CompactionOperationId },
-    HumanMessage { message_id: MessageId },
+    /// Consumer-owned business identity, not a native storage reference.
+    Business {
+        namespace: AuxiliaryAttribution,
+        reference: AuxiliaryAttribution,
+    },
+    Compaction {
+        operation_id: CompactionOperationId,
+    },
+    HumanMessage {
+        message_id: MessageId,
+    },
 }
 
 /// Explicit authority used to interpret frozen input.
@@ -164,9 +198,9 @@ impl From<AuxiliaryFingerprint> for String {
 #[serde(deny_unknown_fields)]
 pub struct AuxiliaryCallStart {
     pub call_id: AuxiliaryCallId,
-    pub purpose: AuxiliaryCallPurpose,
-    /// Automatic/manual/client attribution, independent of business source.
-    pub trigger: AuxiliaryCallTrigger,
+    pub purpose: AuxiliaryAttribution,
+    /// Consumer-defined activation cause, independent of transport and business source.
+    pub trigger: AuxiliaryAttribution,
     pub business_source: AuxiliaryBusinessSource,
     pub input: AuxiliaryInputEvidence,
     /// Fingerprint of provider-visible frozen semantic input, never its bytes.
@@ -265,8 +299,8 @@ pub struct AuxiliaryAuditCut {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AuxiliaryCallAudit {
     pub call_id: AuxiliaryCallId,
-    pub purpose: AuxiliaryCallPurpose,
-    pub trigger: AuxiliaryCallTrigger,
+    pub purpose: AuxiliaryAttribution,
+    pub trigger: AuxiliaryAttribution,
     pub business_source: AuxiliaryBusinessSource,
     pub input: AuxiliaryInputEvidence,
     pub semantic_input_fingerprint: AuxiliaryFingerprint,
@@ -349,8 +383,8 @@ pub enum AuxiliaryCommitConfirmation<T> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AUXILIARY_FINGERPRINT_HEX_BYTES, AuxiliaryCallPurpose, AuxiliaryCallTrigger,
-        AuxiliaryFingerprint, AuxiliaryFinishReason,
+        AUXILIARY_FINGERPRINT_HEX_BYTES, AuxiliaryAttribution, AuxiliaryFingerprint,
+        AuxiliaryFinishReason,
     };
     use crate::model::finish::ModelFinishReason;
 
@@ -375,22 +409,32 @@ mod tests {
     }
 
     #[test]
-    fn closed_attribution_has_stable_serialized_names() {
-        for (value, name) in [
-            (AuxiliaryCallPurpose::Summary, "summary"),
-            (AuxiliaryCallPurpose::Title, "title"),
-            (AuxiliaryCallPurpose::Classification, "classification"),
-            (AuxiliaryCallPurpose::Btw, "btw"),
+    fn consumer_attribution_round_trips_and_rejects_invalid_values() {
+        for name in [
+            "summary",
+            "translation",
+            "scheduled_refresh",
+            "consumer:source",
         ] {
-            assert_eq!(serde_json::to_value(value).unwrap(), name);
+            let value = AuxiliaryAttribution::new(name).unwrap();
+            let encoded = serde_json::to_string(&value).unwrap();
+            assert_eq!(
+                serde_json::from_str::<AuxiliaryAttribution>(&encoded).unwrap(),
+                value
+            );
         }
-        for (value, name) in [
-            (AuxiliaryCallTrigger::Automatic, "automatic"),
-            (AuxiliaryCallTrigger::Manual, "manual"),
-            (AuxiliaryCallTrigger::Client, "client"),
+        for value in [
+            String::new(),
+            "x".repeat(513),
+            "界".repeat(171),
+            "line\nbreak".into(),
         ] {
-            assert_eq!(serde_json::to_value(value).unwrap(), name);
+            assert!(AuxiliaryAttribution::new(value.clone()).is_err());
+            assert!(
+                serde_json::from_value::<AuxiliaryAttribution>(serde_json::json!(value)).is_err()
+            );
         }
+        assert!(AuxiliaryAttribution::new("x".repeat(512)).is_ok());
     }
 
     #[test]

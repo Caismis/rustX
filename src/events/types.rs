@@ -94,8 +94,8 @@ use serde::{Deserialize, Serialize};
 use crate::events::interaction::{InteractionSettlement, InteractionSubject};
 use crate::message::types::ContributionEmission;
 use crate::model::auxiliary::{
-    AuxiliaryBusinessSource, AuxiliaryCallOutcome, AuxiliaryCallPurpose, AuxiliaryCallTrigger,
-    AuxiliaryFingerprint, AuxiliaryInputEvidence, AuxiliaryRequestEvidence,
+    AuxiliaryAttribution, AuxiliaryBusinessSource, AuxiliaryCallOutcome, AuxiliaryFingerprint,
+    AuxiliaryInputEvidence, AuxiliaryRequestEvidence,
 };
 use crate::model::error::ModelError;
 use crate::model::finish::ModelFinishReason;
@@ -332,13 +332,13 @@ pub enum RuntimeEvent {
     },
     /// Durable start of one bounded auxiliary Call.
     ///
-    /// Call facts carry closed attribution, explicit input authority, and
+    /// Call facts carry bounded consumer-defined attribution, explicit input authority, and
     /// semantic/invocation fingerprints. They never carry prompt bytes,
     /// generated output, credentials, budgets, or transport correlation.
     AuxiliaryCallStarted {
         call_id: AuxiliaryCallId,
-        purpose: AuxiliaryCallPurpose,
-        trigger: AuxiliaryCallTrigger,
+        purpose: AuxiliaryAttribution,
+        trigger: AuxiliaryAttribution,
         business_source: AuxiliaryBusinessSource,
         input: AuxiliaryInputEvidence,
         semantic_input_fingerprint: AuxiliaryFingerprint,
@@ -1282,8 +1282,8 @@ mod tests {
         let fingerprint = AuxiliaryFingerprint::new("a".repeat(64)).unwrap();
         let call_started = RuntimeEvent::AuxiliaryCallStarted {
             call_id: call_id.clone(),
-            purpose: crate::model::AuxiliaryCallPurpose::Summary,
-            trigger: crate::model::AuxiliaryCallTrigger::Automatic,
+            purpose: crate::model::AuxiliaryAttribution::new("summary").unwrap(),
+            trigger: crate::model::AuxiliaryAttribution::new("automatic").unwrap(),
             business_source: crate::model::AuxiliaryBusinessSource::Independent,
             input: crate::model::AuxiliaryInputEvidence::Temporary,
             semantic_input_fingerprint: fingerprint.clone(),

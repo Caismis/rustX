@@ -2732,8 +2732,8 @@ mod tests {
                 adopted(&["msg-aux-obligation"]),
                 auxiliary_fact(RuntimeEvent::AuxiliaryCallStarted {
                     call_id: call_id.clone(),
-                    purpose: crate::model::AuxiliaryCallPurpose::Summary,
-                    trigger: crate::model::AuxiliaryCallTrigger::Automatic,
+                    purpose: crate::model::AuxiliaryAttribution::new("summary").unwrap(),
+                    trigger: crate::model::AuxiliaryAttribution::new("automatic").unwrap(),
                     semantic_input_fingerprint: fingerprint.clone(),
                     invocation_fingerprint: fingerprint,
                     business_source: crate::model::auxiliary::AuxiliaryBusinessSource::Independent,

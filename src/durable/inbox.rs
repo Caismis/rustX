@@ -684,9 +684,7 @@ impl LineageSeed {
                     "inherited Summary generation audit lacks CallStarted".into(),
                 ));
             };
-            if call.call_id != audit.call_id
-                || call.purpose != crate::model::auxiliary::AuxiliaryCallPurpose::Summary
-            {
+            if call.call_id != audit.call_id || call.purpose.as_str() != "summary" {
                 return Err(ConversationStoreError::InvalidReference(
                     "inherited generation audit is not the named Summary Call".into(),
                 ));
@@ -2958,12 +2956,15 @@ pub trait ConversationStore: Send + Sync + 'static {
     ) -> Result<crate::durable::AuxiliaryRequestStartCommit, crate::durable::AuxiliaryWriteFailure>;
 
     /// Atomically commits the final open request terminal and Call terminal.
+    /// Construct both with [`crate::durable::auxiliary::auxiliary_settlement_envelope`]
+    /// and retain them unchanged for retry and confirmation.
     fn commit_auxiliary_request_settlement(
         &self,
         request_terminal: RuntimeEventEnvelope,
         call_settled: RuntimeEventEnvelope,
     ) -> Result<crate::durable::AuxiliarySettlementCommit, crate::durable::AuxiliaryWriteFailure>;
 
+    /// Construct the terminal with [`crate::durable::auxiliary::auxiliary_settlement_envelope`].
     /// Settles one active zero-request Call. No physical request or primary
     /// Snapshot is fabricated. Intermediate request transitions extend this
     /// contract separately before a settled-request backoff cancellation.

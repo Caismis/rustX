@@ -1,15 +1,14 @@
 //! Real durable fixtures; gates are completion/queue boundaries, never sleeps.
 use super::*;
 use crate::durable::{AuxiliarySettlementCommit, ConversationStore};
-use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
+use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
 use crate::model::auxiliary::{
-    AuxiliaryCallPurpose, AuxiliaryCallStart, AuxiliaryCallTrigger, AuxiliaryFingerprint,
-    AuxiliaryRequestStart,
+    AuxiliaryAttribution, AuxiliaryCallStart, AuxiliaryFingerprint, AuxiliaryRequestStart,
 };
 use crate::model::error::{ModelError, ModelErrorKind, ModelRetryDisposition};
 use crate::model::generation_evidence::GenerationEvidence;
 use crate::model::{ModelFinishReason, ModelRequestOwner, ModelUsage};
-use crate::runtime::identity::{AuxiliaryCallId, EventId, RequestId};
+use crate::runtime::identity::{AuxiliaryCallId, RequestId};
 use crate::session_archive::{SessionArchiveCut, SessionArchiveProducer};
 use crate::tools::artifacts::ArtifactStore;
 use std::collections::BTreeMap;
@@ -54,36 +53,18 @@ fn auxiliary_fingerprint(byte: char) -> AuxiliaryFingerprint {
 }
 
 fn auxiliary_event(store: &SqliteConversationStore, event: RuntimeEvent) -> RuntimeEventEnvelope {
-    let event_id = EventId::new(match &event {
-        RuntimeEvent::ModelRequestCompleted { request_id, .. } => {
-            format!("auxiliary-request-completed:{request_id}")
-        }
-        RuntimeEvent::ModelRequestFailed { request_id, .. } => {
-            format!("auxiliary-request-failed:{request_id}")
-        }
-        RuntimeEvent::AuxiliaryCallSettled { call_id, .. } => {
-            format!("auxiliary-call-settled:{call_id}")
-        }
-        _ => panic!("auxiliary fixture requires a terminal"),
-    });
-    RuntimeEventEnvelope {
-        tool_occurrence: None,
-        observation: None,
-        schema_version: EVENT_SCHEMA_VERSION,
-        event_id,
-        sequence: 0,
-        conversation_id: store.conversation_id().clone(),
-        attempt_id: None,
-        turn_id: None,
-        timestamp: Utc::now(),
+    crate::durable::auxiliary::auxiliary_settlement_envelope(
+        store.conversation_id().clone(),
+        Utc::now(),
         event,
-    }
+    )
+    .unwrap()
 }
 
 pub(super) fn start_auxiliary(
     store: &SqliteConversationStore,
-    purpose: AuxiliaryCallPurpose,
-    trigger: AuxiliaryCallTrigger,
+    purpose: AuxiliaryAttribution,
+    trigger: AuxiliaryAttribution,
 ) -> (AuxiliaryCallId, RequestId) {
     let call_id = AuxiliaryCallId::generate();
     let request_id =
@@ -245,8 +226,8 @@ fn settled_auxiliary_fixture(
     let store = store_for(&catalog, &session, &conversation);
     let (call_id, request_id) = start_auxiliary(
         &store,
-        AuxiliaryCallPurpose::Summary,
-        AuxiliaryCallTrigger::Automatic,
+        AuxiliaryAttribution::new("summary").unwrap(),
+        AuxiliaryAttribution::new("automatic").unwrap(),
     );
     settle_auxiliary(&store, call_id.clone(), request_id.clone(), completed);
     (
@@ -281,11 +262,11 @@ async fn archive_auxiliary_audit_preserves_owner_usage_and_excludes_provider_pro
     )
     .await;
     let manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
-    assert_eq!(manifest["format"], "rustx-session-archive/v6");
-    assert_eq!(manifest["schemas"]["journal"], 4);
+    assert_eq!(manifest["format"], "rustx-session-archive/v7");
+    assert_eq!(manifest["schemas"]["journal"], 5);
     assert_eq!(manifest["schemas"]["generations"], 2);
-    assert_eq!(manifest["schemas"]["auxiliary_audit"], 1);
-    assert_eq!(manifest["schemas"]["inherited_auxiliary_audit"], 1);
+    assert_eq!(manifest["schemas"]["auxiliary_audit"], 2);
+    assert_eq!(manifest["schemas"]["inherited_auxiliary_audit"], 2);
     assert_eq!(
         manifest["auxiliary_reconstruction"],
         serde_json::json!({
@@ -388,8 +369,8 @@ async fn archive_cut_before_auxiliary_settlement_does_not_leak_later_terminal() 
         let store = store_for(&catalog, &session, &conversation);
         let (call_id, request_id) = start_auxiliary(
             &store,
-            AuxiliaryCallPurpose::Btw,
-            AuxiliaryCallTrigger::Manual,
+            AuxiliaryAttribution::new("btw").unwrap(),
+            AuxiliaryAttribution::new("manual").unwrap(),
         );
         (
             directory,
@@ -447,8 +428,8 @@ async fn archive_exports_only_named_inherited_summary_generation_audit() {
         super::artifact_lineage_tests::link_failed_summary_generation(&store);
     let (unrelated_call, unrelated_request) = start_auxiliary(
         &store,
-        AuxiliaryCallPurpose::Btw,
-        AuxiliaryCallTrigger::Manual,
+        AuxiliaryAttribution::new("btw").unwrap(),
+        AuxiliaryAttribution::new("manual").unwrap(),
     );
     settle_auxiliary(
         &store,
@@ -477,8 +458,8 @@ async fn archive_exports_only_named_inherited_summary_generation_audit() {
     )
     .await;
     let manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
-    assert_eq!(manifest["schemas"]["auxiliary_audit"], 1);
-    assert_eq!(manifest["schemas"]["inherited_auxiliary_audit"], 1);
+    assert_eq!(manifest["schemas"]["auxiliary_audit"], 2);
+    assert_eq!(manifest["schemas"]["inherited_auxiliary_audit"], 2);
     let inherited = records(&files, &clone.conversation_id, "inherited_auxiliary_audit");
     assert_eq!(inherited.len(), 4);
     assert!(inherited.iter().all(|record| {
@@ -717,12 +698,12 @@ async fn archive_v6_contract_preserves_accepted_contributions_and_journal_vocabu
             .unwrap();
     let files = decode(cut).await;
     let manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
-    assert_eq!(manifest["format"], "rustx-session-archive/v6");
+    assert_eq!(manifest["format"], "rustx-session-archive/v7");
     assert_eq!(
         manifest["schemas"],
         serde_json::json!({
-            "journal": 4, "messages": 1, "surface": 1, "requests": 4, "projections":2,
-            "generations": 2, "auxiliary_audit": 1, "inherited_auxiliary_audit": 1,
+            "journal": 5, "messages": 1, "surface": 1, "requests": 4, "projections":2,
+            "generations": 2, "auxiliary_audit": 2, "inherited_auxiliary_audit": 2,
             "publication_audits": 1,
             "inherited_responses": 1, "inherited_turns": 1,
         })
@@ -882,7 +863,7 @@ async fn archive_cut_excludes_live_writes_and_later_descendants() {
     release.send(()).unwrap();
     let files = decode_bytes(producing.await.unwrap());
     let manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
-    assert_eq!(manifest["format"], "rustx-session-archive/v6");
+    assert_eq!(manifest["format"], "rustx-session-archive/v7");
     assert_eq!(manifest["conversations"].as_array().unwrap().len(), 2);
     assert!(files.contains_key(&format!("sessions/{child}/journal.jsonl")));
     assert!(!files.contains_key(&format!("sessions/{later}/journal.jsonl")));
@@ -1854,8 +1835,8 @@ async fn inherited_turn_archive(member: bool) {
             );
         }
         let manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
-        assert_eq!(manifest["schemas"]["auxiliary_audit"], 1);
-        assert_eq!(manifest["schemas"]["inherited_auxiliary_audit"], 1);
+        assert_eq!(manifest["schemas"]["auxiliary_audit"], 2);
+        assert_eq!(manifest["schemas"]["inherited_auxiliary_audit"], 2);
         assert_eq!(manifest["schemas"]["inherited_turns"], 1);
         assert_eq!(manifest["conversations"][0]["frontiers"]["bootstrap"], 1);
         assert!(
@@ -1991,4 +1972,45 @@ async fn lossy_archive_reports_missing_old_encrypted_input_without_invalidating_
         store.reconstruct_model_request(&old.request_id).unwrap(),
         exact
     );
+}
+
+#[tokio::test]
+async fn archive_preserves_consumer_defined_auxiliary_attribution() {
+    use crate::model::auxiliary::{AuxiliaryBusinessSource, AuxiliaryInputEvidence};
+    let (directory, catalog, _) = open_catalog();
+    let (conversation, session, _) = append_history(&catalog, &[]);
+    let store = store_for(&catalog, &session, &conversation);
+    let start = AuxiliaryCallStart {
+        call_id: AuxiliaryCallId::generate(),
+        purpose: AuxiliaryAttribution::new("translation").unwrap(),
+        trigger: AuxiliaryAttribution::new("document_revision").unwrap(),
+        business_source: AuxiliaryBusinessSource::Business {
+            namespace: AuxiliaryAttribution::new("document.translation").unwrap(),
+            reference: AuxiliaryAttribution::new("document-42:revision-7").unwrap(),
+        },
+        input: AuxiliaryInputEvidence::Temporary,
+        semantic_input_fingerprint: auxiliary_fingerprint('a'),
+        invocation_fingerprint: auxiliary_fingerprint('b'),
+        selected_message_ids: Vec::new(),
+    };
+    store
+        .commit_auxiliary_call_start(&start, Utc::now())
+        .unwrap();
+    let files = decode(
+        SessionArchiveProducer::prepare(directory.path(), &session, &CancellationToken::new())
+            .unwrap(),
+    )
+    .await;
+    let audit = records(&files, &conversation, "auxiliary_audit");
+    assert_eq!(audit.len(), 1);
+    assert_eq!(audit[0]["event"]["purpose"], "translation");
+    assert_eq!(audit[0]["event"]["trigger"], "document_revision");
+    assert_eq!(
+        audit[0]["event"]["business_source"],
+        serde_json::json!({
+            "kind": "business", "namespace": "document.translation",
+            "reference": "document-42:revision-7",
+        })
+    );
+    assert!(records(&files, &conversation, "requests").is_empty());
 }

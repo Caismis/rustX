@@ -246,7 +246,7 @@ fn t10_t14_occupancy_derived_header_failure_preserves_original_provider_terminal
 fn mixed_auxiliary_terminal_never_replaces_primary_occupancy_statistics_or_trace() {
     use crate::durable::observation::{TraceFactKind, TraceFactQuery, TraceFactScope};
     use crate::model::auxiliary::{
-        AuxiliaryCallPurpose, AuxiliaryCallTrigger, AuxiliaryCallStart, AuxiliaryFingerprint,
+        AuxiliaryAttribution, AuxiliaryCallStart, AuxiliaryFingerprint,
         AuxiliaryRequestStart,
     };
     use crate::model::snapshot::ModelRequestOwner;
@@ -315,8 +315,8 @@ fn mixed_auxiliary_terminal_never_replaces_primary_occupancy_statistics_or_trace
         .commit_auxiliary_call_start(
             &AuxiliaryCallStart {
                 call_id: call_id.clone(),
-                purpose: AuxiliaryCallPurpose::Summary,
-                trigger: AuxiliaryCallTrigger::Automatic,
+                purpose: AuxiliaryAttribution::new("summary").unwrap(),
+                trigger: AuxiliaryAttribution::new("automatic").unwrap(),
                 semantic_input_fingerprint: fingerprint.clone(),
                 invocation_fingerprint: fingerprint,
                 business_source: crate::model::auxiliary::AuxiliaryBusinessSource::Independent,
