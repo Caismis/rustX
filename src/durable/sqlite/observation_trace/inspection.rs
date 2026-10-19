@@ -195,7 +195,7 @@ pub(in crate::durable::sqlite) fn tool_definition(
     let path = ["tools".to_owned(), definition.to_string()];
     let (start_offset, end_offset, _) = super::super::observation_request::field_coordinates(
         connection,
-        "request_observation_fields",
+        "request_source_roots",
         &start.to_string(),
         &path,
     )?;

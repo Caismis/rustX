@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { AttachmentTarget, CheckpointPage, CheckpointPageItem, CheckpointValueChunk, CheckpointReadCut, CollectionFrontier, RuntimeClientAgent } from '../../../../protocol/app-server/v50';
+import type { AttachmentTarget, CheckpointPage, CheckpointPageItem, CheckpointValueChunk, CheckpointReadCut, CollectionFrontier, RuntimeClientAgent } from '../../../../protocol/app-server/v51';
 import type { AppServerClient } from '../../client/app-server';
 import { useTranslation } from '../../locale/react';
 import { Button } from '../../presentation/primitives/Button';

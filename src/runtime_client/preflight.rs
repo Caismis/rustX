@@ -2,18 +2,51 @@
 use serde::ser::{self, SerializeMap, SerializeSeq, SerializeStruct};
 use serde::{Serialize, Serializer};
 
+#[cfg(test)]
+thread_local! {
+    static STRUCTURAL_ONLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(crate) fn with_structural_admission_only<T>(work: impl FnOnce() -> T) -> T {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            STRUCTURAL_ONLY.with(|flag| flag.set(self.0));
+        }
+    }
+    let _restore = Restore(STRUCTURAL_ONLY.with(|flag| flag.replace(true)));
+    work()
+}
+
 pub(crate) fn fits(value: &(impl Serialize + ?Sized), limit: usize) -> bool {
     bounded_fit(value, limit).unwrap_or(true)
 }
 /// A successful conservative walk proves the JSON byte bound. Unusual map
 /// keys still require the capped encoder to establish JSON representability.
 pub(crate) fn bounded_fit(value: &(impl Serialize + ?Sized), limit: usize) -> Option<bool> {
+    checked_fit(value, limit, is_opaque_json(value))
+}
+/// Conservative admission for native structural encoding without its schema walk.
+/// Treat every integer as opaque: unsafe signed/constrained quantities must
+/// still reach the structural codec, while full-width native u64 may be quoted.
+pub(crate) fn bounded_safe_integer_fit(
+    value: &(impl Serialize + ?Sized),
+    limit: usize,
+) -> Option<bool> {
+    #[cfg(test)]
+    if STRUCTURAL_ONLY.with(std::cell::Cell::get) {
+        return None;
+    }
+    checked_fit(value, limit, true)
+}
+fn checked_fit(value: &(impl Serialize + ?Sized), limit: usize, opaque_json: bool) -> Option<bool> {
     let mut left = limit;
     let mut uncertain = false;
     let admitted = value
         .serialize(Check {
             left: &mut left,
-            opaque_json: is_opaque_json::<_>(value),
+            opaque_json,
             uncertain: &mut uncertain,
             map_key: false,
         })
@@ -349,6 +382,90 @@ impl ser::SerializeStructVariant for Check<'_> {
 mod tests {
     use super::*;
     use std::cell::Cell;
+
+    #[test]
+    fn safe_integer_proof_preserves_structural_admission_at_every_boundary() {
+        #[derive(Serialize, schemars::JsonSchema)]
+        struct Native {
+            count: u64,
+            signed: i64,
+            #[schemars(range(max = 9_007_199_254_740_991_u64))]
+            bounded: u64,
+            opaque: serde_json::Value,
+            names: Vec<String>,
+        }
+        let schema = super::super::structural_json::root::<Native>();
+        let mut proved = 0;
+        for count in [0, 1, 9_007_199_254_740_991, 9_007_199_254_740_992, u64::MAX] {
+            for signed in [i64::MIN, -9_007_199_254_740_991, 0, i64::MAX] {
+                for bounded in [0, 9_007_199_254_740_991, u64::MAX] {
+                    for opaque in [
+                        serde_json::json!({"quoted\"\n": [1, "水", null]}),
+                        serde_json::json!({"wide": u64::MAX}),
+                    ] {
+                        let value = Native {
+                            count,
+                            signed,
+                            bounded,
+                            opaque,
+                            names: vec!["a\"\\\n\u{0}水".repeat(3)],
+                        };
+                        let encoded = super::super::structural_json::Encoded {
+                            value: &value,
+                            schema: &schema,
+                            root: &schema,
+                        };
+                        for limit in 0..512 {
+                            if bounded_safe_integer_fit(&value, limit) == Some(true) {
+                                proved += 1;
+                                assert_eq!(bounded_fit(&encoded, limit), Some(true));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            proved > 0,
+            "the conservative shortcut admits ordinary native DTOs"
+        );
+    }
+
+    #[test]
+    fn safe_integer_proof_defers_wide_native_values_and_ambiguous_keys() {
+        #[derive(Serialize, schemars::JsonSchema)]
+        struct Native {
+            count: u64,
+        }
+        #[derive(Serialize, schemars::JsonSchema)]
+        struct Constrained {
+            #[schemars(range(max = 9_007_199_254_740_991_u64))]
+            count: u64,
+        }
+        #[derive(Serialize, schemars::JsonSchema)]
+        struct Signed {
+            count: i64,
+        }
+        let wide = Native { count: u64::MAX };
+        assert_eq!(bounded_fit(&wide, 4096), Some(true));
+        assert_eq!(bounded_safe_integer_fit(&wide, 4096), Some(false));
+        assert!(super::super::checkpoint::structural_value(&wide).is_some());
+        assert!(
+            super::super::checkpoint::structural_value(&Constrained { count: u64::MAX }).is_none()
+        );
+        for count in [i64::MIN, i64::MAX] {
+            let value = Signed { count };
+            assert_eq!(bounded_safe_integer_fit(&value, 4096), Some(false));
+            assert!(super::super::checkpoint::structural_value(&value).is_none());
+        }
+        assert_eq!(
+            bounded_safe_integer_fit(&serde_json::json!({"wide": u64::MAX}), 4096),
+            Some(false)
+        );
+        let ambiguous = std::collections::BTreeMap::from([((1_u8, 2_u8), 3_u8)]);
+        assert_eq!(bounded_safe_integer_fit(&ambiguous, 4096), None);
+    }
+
     fn prove_bound(value: &impl Serialize) {
         let bytes = serde_json::to_vec(value).unwrap();
         let first = (0..bytes.len() * 32 + 128)

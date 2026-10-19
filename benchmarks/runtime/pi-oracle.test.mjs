@@ -4,7 +4,6 @@ import { expected, normalized, verify } from './pi-oracle.mjs';
 const tools=[];
 function fixture() {
  const body=expected('short-small',3,tools);
- body.messages[1].content[0].text=body.messages[1].content[0].text.replace('<TIME>','2026-10-18 00:00:00');
  const capture=body.messages.map(m=>({role:m.role,content:structuredClone(m.content)}));
  return {body,capture};
 }
@@ -18,3 +17,5 @@ for(const [name,change] of [
 test('changed captured timestamp fails',()=>{const {body,capture}=fixture();capture[1].content[0].text=capture[1].content[0].text.replace('00:00:00','00:00:01');assert.throws(()=>verify('short-small',3,'/fixture',body,capture,tools));});
 test('wrong tool schema fails',()=>{const {body,capture}=fixture();body.tools=[{type:'function',function:{name:'unexpected'}}];assert.throws(()=>verify('short-small',3,'/fixture',body,capture,tools));});
 test('normalization preserves unknown semantic fields',()=>{const {body}=fixture();body.temperature=0.8;assert.notDeepEqual(normalized(body,'/fixture',true),expected('short-small',3,tools));});
+
+test('changed timestamp fails even when wire and capture agree',()=>{const {body,capture}=fixture();for(const messages of [body.messages,capture]) messages[1].content[0].text=messages[1].content[0].text.replace('00:00:00','00:00:01');assert.throws(()=>verify('short-small',3,'/fixture',body,capture,tools));});

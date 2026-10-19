@@ -32,7 +32,7 @@ fn captured_header_rows(connection: &Connection, sequence: u64) -> Vec<Vec<u8>> 
         .map(|ordinal| {
             observation_request::field_from(
                 connection,
-                "request_observation_fields",
+                "request_source_roots",
                 &sequence.to_string(),
                 &["messages".into(), ordinal.to_string()],
             )
@@ -166,7 +166,7 @@ fn assert_header_capture_fault(trigger: &str) {
     let connection = store.lock().unwrap();
     for (sql, id) in [
         (
-            "SELECT count(*) FROM request_observation_fields WHERE source_id=?1",
+            "SELECT count(*) FROM request_source_roots WHERE source_id=?1",
             started.sequence.to_string(),
         ),
         (
@@ -204,7 +204,7 @@ fn assert_header_capture_fault(trigger: &str) {
 fn t10_t19_request_header_placeholder_failure_rolls_back_only_optional_layout() {
     for trigger in [
         "CREATE TEMP TRIGGER refuse_captured_offsets BEFORE INSERT ON request_source_nodes BEGIN SELECT RAISE(FAIL,'optional Source node'); END;",
-        "CREATE TEMP TRIGGER remove_captured_header BEFORE INSERT ON request_observation_fields BEGIN SELECT RAISE(FAIL,'optional original witness'); END;",
+        "CREATE TEMP TRIGGER remove_captured_header BEFORE INSERT ON request_source_roots BEGIN SELECT RAISE(FAIL,'optional original witness'); END;",
     ] {
         assert_header_capture_fault(trigger);
     }
@@ -222,12 +222,12 @@ fn t08_t19_generic_json_message_lookalikes_never_claim_native_header_placeholder
         .unwrap();
     assert_eq!(observation_request::take_header_constructions(), 0);
     let (computed, skipped) = crate::runtime::read_layout::take_field_preview_work();
-    assert!(computed > 0);
-    assert_eq!(skipped, 0);
+    assert_eq!(computed, 0, "generic state previews are now lazy too");
+    assert!(skipped > 0);
     assert_eq!(
         connection
             .query_row(
-                "SELECT count(*) FROM request_observation_fields",
+                "SELECT count(*) FROM request_source_roots",
                 [],
                 |row| row.get::<_, u64>(0)
             )

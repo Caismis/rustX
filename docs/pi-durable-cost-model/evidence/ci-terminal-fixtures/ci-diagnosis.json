@@ -1,0 +1,18 @@
+{
+  "run": 39146279121,
+  "job": 117730983806,
+  "head": "770248f10fe63ba50f7457ed17436ea339521618",
+  "log_sha256": "08ee22f34c76213db2b653155826c9222e2bd7f35272bf6bc28622063c0a8d2c",
+  "job_start_utc": "2026-10-18T16:44:40Z",
+  "cancellation_utc": "2026-10-18T17:29:56Z",
+  "workflow_job_timeout_minutes": 45,
+  "unit_test_count": 4035,
+  "passed": 4029,
+  "failed": 1,
+  "ignored": 4,
+  "unfinished": [
+    "runtime::conversation_runtime::tests::terminal_event_durable_failure_degrades_without_fabricated_terminal"
+  ],
+  "superseded": false,
+  "evidence": "Same PR head; macOS job remains active. Cancellation matches Linux job deadline, after nineteen minutes with only terminal durability test unfinished. One earlier snapshot assertion failure also recorded."
+}

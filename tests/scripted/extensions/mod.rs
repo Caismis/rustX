@@ -2145,6 +2145,7 @@ fn conversation_runtime_over_model(
             model_timeout_policy: rustx::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: rustx::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: rustx::runtime::ConversationContextConfig {
+                status_clock: std::sync::Arc::new(rustx::context::SystemClock),
                 policy: rustx::context::SessionContextPolicy {
                     reserve_tokens: 0,
                     keep_recent_tokens: 0,

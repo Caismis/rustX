@@ -1,0 +1,258 @@
+[
+  {
+    "file": "src/durable/sqlite.rs",
+    "line": 11732,
+    "indexes": [
+      "events_request_id_kind_idx"
+    ],
+    "sql": "SELECT event_json FROM events INDEXED BY events_request_id_kind_idx\n    WHERE json_extract(event_json,'$.event.request_id')=?1\n      AND json_extract(event_json,'$.event.type')='model_request_started'\n    ORDER BY sequence LIMIT 2"
+  },
+  {
+    "file": "src/durable/sqlite.rs",
+    "line": 11736,
+    "indexes": [
+      "events_request_id_kind_idx"
+    ],
+    "sql": "SELECT event_json FROM (\n    SELECT event_json,sequence FROM (\n        SELECT event_json,sequence FROM events INDEXED BY events_request_id_kind_idx\n        WHERE json_extract(event_json,'$.event.request_id')=?1\n          AND json_extract(event_json,'$.event.type')='model_request_completed'\n        ORDER BY sequence LIMIT 1)\n    UNION ALL\n    SELECT event_json,sequence FROM (\n        SELECT event_json,sequence FROM events INDEXED BY events_request_id_kind_idx\n        WHERE json_extract(event_json,'$.event.request_id')=?1\n          AND json_extract(event_json,'$.event.type')='model_request_failed'\n        ORDER BY sequence LIMIT 1))\n    ORDER BY sequence LIMIT 1"
+  },
+  {
+    "file": "src/durable/sqlite.rs",
+    "line": 13768,
+    "indexes": [
+      "events_message_id_kind_idx"
+    ],
+    "sql": "SELECT attempt_id FROM events INDEXED BY events_message_id_kind_idx WHERE json_extract(event_json,'$.event.message_id')=?1 AND json_extract(event_json,'$.event.type')='assistant_message_committed' AND sequence<=?2"
+  },
+  {
+    "file": "src/durable/sqlite/observation.rs",
+    "line": 1246,
+    "indexes": [
+      "events_attempt_kind_idx"
+    ],
+    "sql": "SELECT sequence,observation_json,observation_witness FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_id=?1 AND json_extract(event_json,'$.event.type')=?2 AND sequence<=?3 AND sequence<?4 ORDER BY sequence DESC LIMIT 1"
+  },
+  {
+    "file": "src/durable/sqlite/observation_occupancy.rs",
+    "line": 180,
+    "indexes": [
+      "events_context_reading_idx"
+    ],
+    "sql": "SELECT sequence,observation_occupancy FROM events INDEXED BY events_context_reading_idx WHERE json_extract(event_json,'$.event.type')=?1 AND (json_extract(event_json,'$.event.type')='compaction_completed' OR COALESCE(json_type(event_json,'$.event.usage'),'null')!='null')=1 AND sequence<=?2 ORDER BY sequence DESC LIMIT 1"
+  },
+  {
+    "file": "src/durable/sqlite/observation_turn.rs",
+    "line": 60,
+    "indexes": [
+      "events_attempt_kind_idx"
+    ],
+    "sql": "SELECT sequence FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_id=?1 AND json_extract(event_json,'$.event.type')='attempt_started' AND sequence<=?2 ORDER BY sequence DESC LIMIT 1"
+  },
+  {
+    "file": "src/durable/sqlite/observation_turn.rs",
+    "line": 495,
+    "indexes": [
+      "events_attempt_kind_idx"
+    ],
+    "sql": "SELECT observation_turn_ordinal FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_id=?1 AND conversation_id=?2 AND json_extract(event_json,'$.event.type')='attempt_started' AND sequence<=?3 ORDER BY sequence LIMIT 1"
+  },
+  {
+    "file": "src/durable/sqlite/reading_tests.rs",
+    "line": 995,
+    "indexes": [
+      "events_attempt_kind_idx"
+    ],
+    "sql": "SELECT sequence FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_id='selected' AND json_extract(event_json,'$.event.type')='attempt_started'"
+  },
+  {
+    "file": "src/durable/sqlite/observation_execution.rs",
+    "line": 315,
+    "indexes": [
+      "events_request_id_kind_idx"
+    ],
+    "sql": "SELECT sequence FROM events INDEXED BY events_request_id_kind_idx WHERE json_extract(event_json,'$.event.request_id')=?1 AND json_extract(event_json,'$.event.type')='model_request_started' AND sequence<?2 ORDER BY sequence DESC LIMIT 1"
+  },
+  {
+    "file": "src/durable/sqlite/reading.rs",
+    "line": 94,
+    "indexes": [
+      "events_attempt_kind_idx"
+    ],
+    "sql": "SELECT event_id,json_extract(event_json,'$.event.message_id') FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_id=?1 AND json_extract(event_json,'$.event.type')=?2 AND sequence<=?3 ORDER BY sequence LIMIT 1"
+  },
+  {
+    "file": "src/durable/sqlite/reading.rs",
+    "line": 142,
+    "indexes": [
+      "events_attempt_kind_idx"
+    ],
+    "sql": "WITH adoptions AS (\n         SELECT sequence,event_json FROM events INDEXED BY events_attempt_kind_idx\n         WHERE attempt_id=?1 AND json_extract(event_json,'$.event.type')='inbound_turn_adopted' AND sequence<=?3\n         UNION ALL\n         SELECT sequence,event_json FROM events INDEXED BY events_attempt_kind_idx\n         WHERE attempt_id IS NULL AND json_extract(event_json,'$.event.type')='inbound_turn_adopted' AND sequence<?2\n           AND sequence>(SELECT COALESCE(MAX(sequence),0) FROM events INDEXED BY events_kind_idx\n             WHERE sequence<?2 AND json_extract(event_json,'$.event.type')='attempt_started')\n        )\n        SELECT m.value FROM adoptions e,json_each(e.event_json,'$.event.message_ids') m\n        JOIN message_ledger l ON l.message_id=m.value\n        WHERE {eligible}\n        ORDER BY e.sequence,CAST(m.key AS INTEGER) LIMIT 1"
+  },
+  {
+    "file": "src/durable/sqlite/reading.rs",
+    "line": 163,
+    "indexes": [
+      "events_attempt_kind_idx"
+    ],
+    "sql": "SELECT sequence FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_id=?1 AND sequence<=?2 AND json_extract(event_json,'$.event.type')='attempt_started' ORDER BY sequence LIMIT 1"
+  },
+  {
+    "file": "src/durable/sqlite/reading.rs",
+    "line": 233,
+    "indexes": [
+      "events_attempt_idx"
+    ],
+    "sql": "SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_attempt_idx WHERE attempt_id=?1 AND sequence<=?2\n             AND json_extract(event_json,'$.event.type') IN ('attempt_completed','attempt_cancelled','attempt_failed','attempt_timed_out','attempt_limit_exceeded'))"
+  },
+  {
+    "file": "src/durable/sqlite/reading.rs",
+    "line": 244,
+    "indexes": [
+      "events_attempt_kind_idx"
+    ],
+    "sql": "SELECT json_extract(event_json,'$.event.message_id') FROM events INDEXED BY events_attempt_kind_idx\n             WHERE attempt_id=?1 AND sequence<=?2 AND json_extract(event_json,'$.event.type')='assistant_message_committed'\n             AND EXISTS(SELECT 1 FROM observation_headers h WHERE h.reference_kind='message' AND h.reference_id=json_extract(event_json,'$.event.message_id') AND json_extract(h.header_json,'$.has_text_preview')=1)\n             ORDER BY sequence DESC LIMIT 1"
+  },
+  {
+    "file": "src/durable/sqlite/reading.rs",
+    "line": 703,
+    "indexes": [
+      "events_attempt_idx"
+    ],
+    "sql": "SELECT event_json FROM events INDEXED BY events_attempt_idx WHERE attempt_id=?1 AND sequence<=?2 AND json_extract(event_json,'$.event.type') IN ('turn_started','model_request_started','model_request_completed','model_request_failed','tool_execution_started','tool_execution_completed','tool_execution_failed','compaction_started','compaction_completed','assistant_message_committed','attempt_completed') ORDER BY sequence"
+  },
+  {
+    "file": "src/durable/sqlite/reading.rs",
+    "line": 809,
+    "indexes": [
+      "events_attempt_idx"
+    ],
+    "sql": "SELECT event_json FROM events INDEXED BY events_attempt_idx WHERE attempt_id=?1 AND sequence<=?2 AND json_extract(event_json,'$.event.type') IN ('assistant_message_committed','attempt_completed','attempt_cancelled','attempt_failed','attempt_timed_out','attempt_limit_exceeded') ORDER BY sequence"
+  },
+  {
+    "file": "src/durable/sqlite/observation_statistics.rs",
+    "line": 313,
+    "indexes": [
+      "events_attempt_kind_idx"
+    ],
+    "sql": "SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_id=?1 AND json_extract(event_json,'$.event.type')='assistant_message_committed' AND sequence<?2)"
+  },
+  {
+    "file": "src/durable/sqlite/observation_statistics.rs",
+    "line": 407,
+    "indexes": [
+      "events_observation_tool_idx"
+    ],
+    "sql": "SELECT sequence,event_timestamp FROM events INDEXED BY events_observation_tool_idx WHERE json_extract(event_json,'$.event.tool_call_id')=?1 AND attempt_id=?2 AND json_extract(event_json,'$.event.type')=?3 AND sequence<?4 ORDER BY sequence DESC LIMIT 1"
+  },
+  {
+    "file": "src/durable/sqlite/observation_members.rs",
+    "line": 55,
+    "indexes": [
+      "events_attempt_kind_idx"
+    ],
+    "sql": "SELECT sequence,event_timestamp FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_id=?1 AND json_extract(event_json,'$.event.type')='attempt_started' AND sequence<=?2 ORDER BY sequence DESC LIMIT 1"
+  },
+  {
+    "file": "src/durable/sqlite/observation_members.rs",
+    "line": 303,
+    "indexes": [
+      "events_message_id_kind_idx"
+    ],
+    "sql": "SELECT attempt_id FROM events INDEXED BY events_message_id_kind_idx WHERE json_extract(event_json,'$.event.message_id')=?1 AND json_extract(event_json,'$.event.type')='assistant_message_committed' AND sequence<=?2 ORDER BY sequence DESC LIMIT 1"
+  },
+  {
+    "file": "src/durable/sqlite/observation_trace/event.rs",
+    "line": 32,
+    "indexes": [
+      "events_attempt_kind_idx"
+    ],
+    "sql": "SELECT sequence FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_id=?1 AND json_extract(event_json,'$.event.type')='attempt_started' AND sequence<=?2 ORDER BY sequence DESC LIMIT 1"
+  },
+  {
+    "file": "src/durable/sqlite/observation_trace/event.rs",
+    "line": 45,
+    "indexes": [
+      "events_step_kind_idx"
+    ],
+    "sql": "SELECT sequence FROM events INDEXED BY events_step_kind_idx WHERE attempt_id=?1 AND turn_id=?2 AND json_extract(event_json,'$.event.type')='turn_started' AND sequence<=?3 ORDER BY sequence DESC LIMIT 1"
+  },
+  {
+    "file": "src/durable/sqlite/observation_trace/event.rs",
+    "line": 62,
+    "indexes": [
+      "events_attempt_kind_idx"
+    ],
+    "sql": "SELECT sequence FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_id=?1 AND json_extract(event_json,'$.event.type')='model_request_started' AND sequence<=?2 ORDER BY sequence LIMIT 1"
+  },
+  {
+    "file": "src/durable/sqlite/observation_trace/event.rs",
+    "line": 77,
+    "indexes": [
+      "events_step_kind_idx"
+    ],
+    "sql": "SELECT sequence FROM events INDEXED BY events_step_kind_idx WHERE attempt_id=?1 AND turn_id=?2 AND json_extract(event_json,'$.event.type')='model_request_started' AND sequence<=?3 ORDER BY sequence LIMIT 1"
+  },
+  {
+    "file": "src/durable/sqlite/observation_trace/event.rs",
+    "line": 235,
+    "indexes": [
+      "events_request_id_kind_idx"
+    ],
+    "sql": "SELECT sequence FROM events INDEXED BY events_request_id_kind_idx WHERE json_extract(event_json,'$.event.request_id')=?1 AND json_extract(event_json,'$.event.type')='model_request_started' AND sequence<?2 ORDER BY sequence DESC LIMIT 1"
+  },
+  {
+    "file": "src/durable/sqlite/observation_trace/event.rs",
+    "line": 240,
+    "indexes": [
+      "events_tool_call_scope_kind_idx"
+    ],
+    "sql": "SELECT sequence FROM events INDEXED BY events_tool_call_scope_kind_idx WHERE json_extract(event_json,'$.event.tool_call_id')=?1 AND attempt_id IS ?2 AND turn_id IS ?3 AND json_extract(event_json,'$.event.type')='tool_execution_started' AND json_extract(event_json,'$.event.tool_id')=?4 AND sequence<?5 ORDER BY sequence DESC LIMIT 1"
+  },
+  {
+    "file": "src/durable/sqlite/observation_trace/event.rs",
+    "line": 247,
+    "indexes": [
+      "events_execution_id_kind_idx"
+    ],
+    "sql": "SELECT sequence FROM events INDEXED BY events_execution_id_kind_idx WHERE json_extract(event_json,'$.event.execution_id')=?1 AND json_extract(event_json,'$.event.type')='background_execution_committed' AND sequence<?2 ORDER BY sequence DESC LIMIT 1"
+  },
+  {
+    "file": "src/durable/sqlite/observation_trace/event.rs",
+    "line": 248,
+    "indexes": [
+      "events_subagent_id_kind_idx"
+    ],
+    "sql": "SELECT sequence FROM events INDEXED BY events_subagent_id_kind_idx WHERE json_extract(event_json,'$.event.subagent_id')=?1 AND json_extract(event_json,'$.event.type')='subagent_ownership_committed' AND sequence<?2 ORDER BY sequence DESC LIMIT 1"
+  },
+  {
+    "file": "src/durable/sqlite/observation_trace/event.rs",
+    "line": 249,
+    "indexes": [
+      "events_workflow_coordinates_idx"
+    ],
+    "sql": "SELECT sequence FROM events INDEXED BY events_workflow_coordinates_idx WHERE json_extract(event_json,'$.event.run_id.conversation_id')=?1 AND json_extract(event_json,'$.event.run_id.attempt_id')=?2 AND json_extract(event_json,'$.event.run_id.invocation')=?3 AND json_extract(event_json,'$.event.type')='workflow_started' AND sequence<?4 ORDER BY sequence DESC LIMIT 1"
+  },
+  {
+    "file": "src/durable/sqlite/observation_trace/event.rs",
+    "line": 250,
+    "indexes": [
+      "events_interaction_id_kind_idx"
+    ],
+    "sql": "SELECT sequence FROM events INDEXED BY events_interaction_id_kind_idx WHERE json_extract(event_json,'$.event.interaction_id')=?1 AND json_extract(event_json,'$.event.type')='interaction_requested' AND sequence<?2 ORDER BY sequence DESC LIMIT 1"
+  },
+  {
+    "file": "src/durable/sqlite/observation_trace/event.rs",
+    "line": 830,
+    "indexes": [
+      "events_attempt_kind_idx"
+    ],
+    "sql": "SELECT sequence FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_id=?1 AND json_extract(event_json,'$.event.type')='turn_started' AND sequence<?2 ORDER BY sequence DESC LIMIT 1"
+  },
+  {
+    "file": "src/durable/sqlite/observation_trace/event.rs",
+    "line": 1037,
+    "indexes": [
+      "events_step_kind_idx"
+    ],
+    "sql": "SELECT sequence FROM events INDEXED BY events_step_kind_idx WHERE attempt_id=?1 AND turn_id=?2 AND json_extract(event_json,'$.event.type')='model_request_started' AND sequence<?3 ORDER BY sequence DESC LIMIT 1"
+  }
+]

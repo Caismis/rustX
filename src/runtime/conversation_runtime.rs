@@ -575,6 +575,9 @@ impl std::error::Error for ConversationRuntimeError {}
 /// attempt's immutable model snapshot. No window captured at process start
 /// can survive a session model change.
 pub struct ConversationContextConfig {
+    /// Clock for Agent Status engines materialized from accepted configuration.
+    /// This is separate from runtime event timestamps and monotonic deadlines.
+    pub status_clock: Arc<dyn crate::context::AgentStatusClock>,
     /// The current runtime context policy captured by this composition.
     pub policy: SessionContextPolicy,
     /// The deterministic token estimator.
@@ -2095,7 +2098,7 @@ impl RuntimeInner {
             Some(generation) => generation
                 .config
                 .extension_composition()
-                .agent_status_engine(Arc::new(crate::context::SystemClock)),
+                .agent_status_engine(Arc::clone(&self.context.status_clock)),
             None => self
                 .context
                 .status_engine
@@ -4471,6 +4474,7 @@ impl ConversationRuntime {
         let resources = self.runtime_resources();
         let configuration = resources.configuration();
         ConversationContextConfig {
+            status_clock: Arc::clone(&self.inner.context.status_clock),
             policy: configuration.map_or(self.inner.context.policy, |g| g.config.context_policy()),
             estimator: Arc::clone(&self.inner.context.estimator),
             status_engine: configuration.map_or_else(
@@ -4484,7 +4488,7 @@ impl ConversationRuntime {
                 |g| {
                     g.config
                         .extension_composition()
-                        .agent_status_engine(Arc::new(crate::context::SystemClock))
+                        .agent_status_engine(Arc::clone(&self.inner.context.status_clock))
                 },
             ),
         }
@@ -8687,6 +8691,7 @@ mod tests {
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
+                status_clock: std::sync::Arc::new(crate::context::SystemClock),
                 policy: options.policy,
                 estimator: options.estimator,
                 status_engine: Some(options.status_engine),
@@ -8797,6 +8802,7 @@ mod tests {
             model_timeout_policy,
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
+                status_clock: std::sync::Arc::new(crate::context::SystemClock),
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
                     keep_recent_tokens: 0,
@@ -8906,6 +8912,7 @@ mod tests {
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
+                status_clock: std::sync::Arc::new(crate::context::SystemClock),
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
                     keep_recent_tokens: 0,
@@ -9022,6 +9029,7 @@ mod tests {
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
+                status_clock: std::sync::Arc::new(crate::context::SystemClock),
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
                     keep_recent_tokens: 0,
@@ -11549,6 +11557,7 @@ mod tests {
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
+                status_clock: std::sync::Arc::new(crate::context::SystemClock),
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
                     keep_recent_tokens: 0,
@@ -11636,6 +11645,7 @@ mod tests {
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
+                status_clock: std::sync::Arc::new(crate::context::SystemClock),
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
                     keep_recent_tokens: 0,
@@ -12822,12 +12832,26 @@ mod tests {
         );
     }
 
-    /// A terminal Event Journal failure must degrade the owning runtime while
-    /// leaving the execution settlement candidate and the durable Journal
-    /// truthful: no observer or local read model may see a terminal event that
-    /// `SQLite` rejected.
+    /// A separately committed failed-attempt terminal still owns the Event
+    /// Journal failure classification and must never publish a rejected event.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn terminal_event_durable_failure_degrades_without_fabricated_terminal() {
+        assert_terminal_commit_failure(false).await;
+    }
+
+    /// Ordinary successful output now includes its terminal in the canonical
+    /// transaction. Rejecting that terminal rolls back P/U/C together, then
+    /// records the truthful runtime failure rather than a fabricated success.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn atomic_terminal_durable_failure_rolls_back_and_degrades() {
+        assert_terminal_commit_failure(true).await;
+    }
+
+    #[allow(clippy::too_many_lines)] // Compare both native transaction owners with the same assertions.
+    async fn assert_terminal_commit_failure(atomic: bool) {
+        use crate::model::error::{ModelError, ModelErrorKind};
+        use crate::model::event::ModelEvent;
+
         let dir = tempfile::tempdir().expect("temp dir");
         let store = Arc::new(
             crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
@@ -12835,10 +12859,32 @@ mod tests {
             ))
             .expect("in-memory store"),
         );
-        let (runtime, model) = headless_runtime_over_store(
+        let script = if atomic {
+            one_turn_script()
+        } else {
+            vec![
+                FakeStep::Emit(ModelEvent::Started),
+                FakeStep::Emit(ModelEvent::Failed {
+                    error: ModelError {
+                        kind: ModelErrorKind::InvalidRequest,
+                        message: "fixture provider rejected request".to_owned(),
+                        retry_disposition: crate::model::error::ModelRetryDisposition::Never,
+                        retry_after_ms: None,
+                        provider_code: None,
+                        context_overflow: None,
+                        malformed_tool_proposal: None,
+                        timeout_phase: None,
+                        generation: None,
+                    },
+                }),
+            ]
+        };
+        let (runtime, model) = headless_runtime_over_store_with(
             &dir,
             "conv_8a56d655-7b4e-7b7a-870c-20e586d7d16f",
             store.clone(),
+            vec![script],
+            None,
         )
         .await;
         let pending = Arc::new(PendingObservations::new());
@@ -12846,49 +12892,94 @@ mod tests {
             .install_fixture_observation_bridge(&pending)
             .expect("bridge");
         runtime.activate();
-
         store.arm_fail_next_terminal_event();
         let admission = runtime
             .submit_inbound(text_content("terminal fault"))
             .expect("accepted");
-        let observations = await_observation(pending.as_ref(), |observation| {
-            matches!(
-                observation,
-                ConversationObservation::DurabilityFailed { operation, .. }
-                    if operation == "event_journal"
-            )
-        })
+        // Wait for any degradation, then assert its owner. A changed operation
+        // must fail immediately instead of silently waiting for an impossible
+        // observation. The timeout is a liveness guard, not synchronization.
+        let observations = within_liveness_guard(
+            "terminal commit durability failure",
+            await_observation(pending.as_ref(), |observation| {
+                matches!(
+                    observation,
+                    ConversationObservation::DurabilityFailed { .. }
+                )
+            }),
+        )
         .await;
-
-        assert_eq!(
-            model.requests().len(),
-            1,
-            "the model turn completed normally"
-        );
-        assert!(
-            !observations.iter().any(|observation| matches!(
-                observation,
-                ConversationObservation::Event { event, .. } if is_terminal_event(event)
-            )),
-            "the rejected terminal candidate never reaches the runtime observer"
-        );
+        let expected_operation = if atomic {
+            "canonical_commit"
+        } else {
+            "event_journal"
+        };
+        assert!(matches!(observations.last(),
+            Some(ConversationObservation::DurabilityFailed { operation, .. })
+                if operation == expected_operation
+        ));
+        assert_eq!(model.requests().len(), 1, "exactly one provider invocation");
+        let observed_terminals: Vec<_> = observations
+            .iter()
+            .filter_map(|observation| match observation {
+                ConversationObservation::Event { event, .. } if is_terminal_event(event) => {
+                    Some(event)
+                }
+                _ => None,
+            })
+            .collect();
         let journal = store.read_events(None, 128).expect("event journal").events;
+        let durable_terminals: Vec<_> = journal
+            .iter()
+            .filter(|envelope| is_terminal_event(&envelope.event))
+            .collect();
+        if atomic {
+            assert_eq!(observed_terminals.len(), 1);
+            assert_eq!(durable_terminals.len(), 1);
+            assert!(matches!(
+                observed_terminals[0],
+                RuntimeEvent::AttemptFailed { .. }
+            ));
+            assert!(matches!(
+                durable_terminals[0].event,
+                RuntimeEvent::AttemptFailed { .. }
+            ));
+            assert!(
+                journal.iter().all(|envelope| !matches!(
+                    envelope.event,
+                    RuntimeEvent::ModelRequestCompleted { .. }
+                        | RuntimeEvent::AssistantMessageCommitted { .. }
+                        | RuntimeEvent::TurnCompleted
+                        | RuntimeEvent::AttemptCompleted { .. }
+                )),
+                "the rejected compound transaction publishes none of its success facts"
+            );
+            assert_eq!(
+                store.terminal_event_attempts(),
+                2,
+                "one rejected compound terminal and one truthful failure terminal"
+            );
+        } else {
+            assert!(
+                observed_terminals.is_empty(),
+                "the rejected journal terminal is never observed"
+            );
+            assert!(
+                durable_terminals.is_empty(),
+                "the rejected journal terminal is never durable"
+            );
+            assert_eq!(store.terminal_event_attempts(), 1);
+        }
+        let canonical = store.load_canonical().expect("canonical ledger");
+        assert!(canonical.iter().any(|message| matches!(message,
+            MessageBlock::User(user) if user.id == admission.message_id
+        )));
         assert!(
-            !journal
+            canonical
                 .iter()
-                .any(|envelope| is_terminal_event(&envelope.event)),
-            "the failed terminal transaction leaves no durable terminal event"
+                .all(|message| !matches!(message, MessageBlock::Assistant(_))),
+            "no rejected final output enters canonical history"
         );
-        assert!(
-            store
-                .load_canonical()
-                .expect("canonical ledger")
-                .iter()
-                .any(|message| {
-                    matches!(message, MessageBlock::User(user) if user.id == admission.message_id)
-                })
-        );
-        assert_eq!(store.terminal_event_attempts(), 1);
         assert!(!runtime.has_current_attempt());
         assert!(matches!(
             runtime.submit_inbound(text_content("late")),
@@ -15400,6 +15491,7 @@ mod tests {
                 None,
             ),
             context: ConversationContextConfig {
+                status_clock: std::sync::Arc::new(crate::context::SystemClock),
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
                     keep_recent_tokens: 0,
@@ -16212,6 +16304,7 @@ mod tests {
                 None,
             ),
             context: ConversationContextConfig {
+                status_clock: std::sync::Arc::new(crate::context::SystemClock),
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
                     keep_recent_tokens: 0,
@@ -18036,6 +18129,7 @@ mod tests {
                     tool_deadline_policy:
                         crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
                     context: ConversationContextConfig {
+                        status_clock: std::sync::Arc::new(crate::context::SystemClock),
                         policy: crate::context::SessionContextPolicy {
                             reserve_tokens: 0,
                             keep_recent_tokens: 0,
@@ -18157,6 +18251,7 @@ mod tests {
                     model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
                     tool_deadline_policy,
                     context: ConversationContextConfig {
+                        status_clock: std::sync::Arc::new(crate::context::SystemClock),
                         policy: crate::context::SessionContextPolicy {
                             reserve_tokens: 0,
                             keep_recent_tokens: 0,
@@ -18308,6 +18403,7 @@ mod tests {
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
+                status_clock: std::sync::Arc::new(crate::context::SystemClock),
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
                     keep_recent_tokens: 0,

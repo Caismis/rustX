@@ -1,0 +1,84 @@
+{
+  "append_mode": null,
+  "append_counter_scope": null,
+  "memory_scope": "all observed lifecycle and operation counters; sampled maxima, not peaks",
+  "scope": "See baseline.md: CPU self plus driver; process-attributed writes, not device writes; sampled memory, not peak; same-pair ratios; no unrelated median subtraction",
+  "medians": {
+    "short-large": {
+      "before": {
+        "lifecycle_cpu_ms": 14150.0,
+        "lifecycle_ms": 11565.115,
+        "lifecycle_write_mib": 314.890625,
+        "max_sampled_anon_pss_mib": 231.40234375,
+        "max_sampled_pss_mib": 287.552734375,
+        "max_sampled_rss_mib": 288.26171875,
+        "mean_turn_ms": 68.0655,
+        "turn_cpu_ms_per_turn": 100.0,
+        "turn_write_mib_per_turn": 3.4468994140625
+      },
+      "after": {
+        "lifecycle_cpu_ms": 14210.0,
+        "lifecycle_ms": 11587.947,
+        "lifecycle_write_mib": 314.85546875,
+        "max_sampled_anon_pss_mib": 232.37109375,
+        "max_sampled_pss_mib": 289.216796875,
+        "max_sampled_rss_mib": 289.92578125,
+        "mean_turn_ms": 69.1829375,
+        "turn_cpu_ms_per_turn": 101.5625,
+        "turn_write_mib_per_turn": 3.4503173828125
+      },
+      "after_over_before": {
+        "lifecycle_cpu_ms": 1.0042402826855124,
+        "lifecycle_ms": 1.0019742129671863,
+        "lifecycle_write_mib": 1.0000496173263704,
+        "max_sampled_anon_pss_mib": 0.9985731551735715,
+        "max_sampled_pss_mib": 1.0007704524718684,
+        "max_sampled_rss_mib": 1.0007685669597108,
+        "mean_turn_ms": 1.0164170908903922,
+        "turn_cpu_ms_per_turn": 1.015625,
+        "turn_write_mib_per_turn": 1.001451019252548
+      }
+    },
+    "short-small": {
+      "before": {
+        "lifecycle_cpu_ms": 4790.0,
+        "lifecycle_ms": 3817.542,
+        "lifecycle_write_mib": 123.71484375,
+        "max_sampled_anon_pss_mib": 148.3515625,
+        "max_sampled_pss_mib": 204.5888671875,
+        "max_sampled_rss_mib": 205.296875,
+        "mean_turn_ms": 64.70953125,
+        "turn_cpu_ms_per_turn": 96.875,
+        "turn_write_mib_per_turn": 3.10205078125
+      },
+      "after": {
+        "lifecycle_cpu_ms": 4890.0,
+        "lifecycle_ms": 3855.572,
+        "lifecycle_write_mib": 123.63671875,
+        "max_sampled_anon_pss_mib": 146.68359375,
+        "max_sampled_pss_mib": 202.9716796875,
+        "max_sampled_rss_mib": 203.6796875,
+        "mean_turn_ms": 66.2231875,
+        "turn_cpu_ms_per_turn": 98.4375,
+        "turn_write_mib_per_turn": 3.099365234375
+      },
+      "after_over_before": {
+        "lifecycle_cpu_ms": 1.0208768267223383,
+        "lifecycle_ms": 1.0184692601027392,
+        "lifecycle_write_mib": 0.9993685074673992,
+        "max_sampled_anon_pss_mib": 0.9882826899784085,
+        "max_sampled_pss_mib": 0.992019054983556,
+        "max_sampled_rss_mib": 0.9920465788872821,
+        "mean_turn_ms": 1.011228060008548,
+        "turn_cpu_ms_per_turn": 1.0161290322580645,
+        "turn_write_mib_per_turn": 0.9992918682875015
+      }
+    }
+  },
+  "full_samples": {
+    "archive": "docs/pi-durable-cost-model/evidence/derived-summaries.tar.xz",
+    "member": "template-summary.json",
+    "sha256": "a9f01eeedc4e469fe3f1f3aa5103b160c9d651c96c7342578b9b5881ebf45877",
+    "note": "Original full derived summary preserved byte-for-byte; raw measurements remain in their original archives."
+  }
+}

@@ -127,7 +127,7 @@ fn t10_t19_schema_65_source_pages_are_refused_without_conversion() {
         SqliteConversationStore::open_existing(conversation, &path),
         Err(ConversationStoreError::SchemaVersionMismatch {
             stored: 65,
-            expected: 71
+            expected: 75
         })
     ));
     let connection = Connection::open(path).unwrap();
@@ -199,7 +199,7 @@ fn t10_t19_schema_66_full_child_facts_are_refused_without_conversion() {
         SqliteConversationStore::open_existing(conversation, &path),
         Err(ConversationStoreError::SchemaVersionMismatch {
             stored: 66,
-            expected: 71
+            expected: 75
         })
     ));
     let connection = Connection::open(path).unwrap();
@@ -245,7 +245,7 @@ fn binary_fragment_gate_rejects_schema_70_without_rewriting_it() {
         Err(
             crate::durable::ConversationStoreError::SchemaVersionMismatch {
                 stored: 70,
-                expected: 71
+                expected: 75
             }
         )
     ));
@@ -256,5 +256,44 @@ fn binary_fragment_gate_rejects_schema_70_without_rewriting_it() {
                 .get::<_, i64>(0))
             .unwrap(),
         70
+    );
+}
+
+#[test]
+fn independent_source_witness_layout_is_rejected_without_migration() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("source.sqlite");
+    let id = ConversationId::generate();
+    let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
+    {
+        let connection = store.lock().unwrap();
+        let old_seat: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='request_observation_fields')", [], |row|row.get(0)).unwrap();
+        assert!(
+            !old_seat,
+            "no duplicate independent witness seat or dual write"
+        );
+        for name in ["origin_source_id", "origin_rank"] {
+            let old_column: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('request_source_nodes') WHERE name=?1)",[name],|row|row.get(0)).unwrap();
+            assert!(!old_column);
+        }
+        connection
+            .execute("UPDATE rustx_store SET schema_version=73", [])
+            .unwrap();
+    }
+    drop(store);
+    assert!(matches!(
+        SqliteConversationStore::open_existing(id, &path),
+        Err(ConversationStoreError::SchemaVersionMismatch {
+            stored: 73,
+            expected: 75
+        })
+    ));
+    let connection = Connection::open(path).unwrap();
+    assert_eq!(
+        connection
+            .query_row("SELECT schema_version FROM rustx_store", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        73
     );
 }

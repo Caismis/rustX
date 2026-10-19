@@ -1065,7 +1065,9 @@ pub async fn submission_acceptance_is_not_settlement(factory: &dyn DriverFactory
             FakeStep::ParkUntilReleased(release_rx),
             FakeStep::Emit(ModelEvent::TextDelta {
                 block_index: ContentBlockIndex::new(0),
-                text: "done".to_owned(),
+                // Deterministic pressure makes this a streaming scenario even when
+                // a short final answer uses only its canonical notification.
+                text: ".".repeat(65_536),
             }),
             FakeStep::Emit(ModelEvent::Completed {
                 finish_reason: ModelFinishReason::Stop,

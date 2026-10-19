@@ -12,11 +12,13 @@ use crate::tools::types::ToolExecutionStatus as Status;
 
 fn find(
     connection: &Connection,
-    sql: &str,
+    sql: &'static str,
     args: impl rusqlite::Params,
 ) -> Result<Option<u64>, ConversationStoreError> {
     connection
-        .query_row(sql, args, |row| row.get(0))
+        .prepare_cached(sql)
+        .map_err(|error| storage(error.to_string()))?
+        .query_row(args, |row| row.get(0))
         .optional()
         .map_err(|error| storage(error.to_string()))
 }
@@ -742,7 +744,7 @@ pub(in crate::durable::sqlite) fn index_event(
     save(connection, &header)
 }
 fn save(connection: &Connection, header: &TraceFactHeader) -> Result<(), ConversationStoreError> {
-    connection.execute("UPDATE events SET observation_trace_fact=?2,observation_trace_owner=?3 WHERE sequence=?1",params![header.sequence,encode(header)?,header.owner_anchor]).map_err(|error|storage(error.to_string()))?;
+    connection.prepare_cached("UPDATE events SET observation_trace_fact=?2,observation_trace_owner=?3 WHERE sequence=?1").map_err(|error| storage(error.to_string()))?.execute(params![header.sequence,encode(header)?,header.owner_anchor]).map_err(|error|storage(error.to_string()))?;
     Ok(())
 }
 pub(in crate::durable::sqlite) fn request_core(

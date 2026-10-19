@@ -1,0 +1,349 @@
+{
+  "scope": "Existing optimized production benchmark conformance tests, not newly run tests or diagnostic-variant FULL/recovery suite. Native recovery test diffs are exposed for review, not represented as separately executed variant tests.",
+  "samples": [
+    {
+      "file": "0-cancel-after.log",
+      "sha256": "ba911cf2ed5f66996836025990a7efcbbef6f95b882a73cd1be07d4b99c9de84",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "file": "0-cancel-before.log",
+      "sha256": "dec105e028fc6ce87c3c2cbd1713db7c21368ba1d06b48ee46583f767aff7f31",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "file": "0-large-after.log",
+      "sha256": "72cc0ac5ca8c29f46c5c998d1e94048a2a147f7e49a75a8ee3abb53f281e3670",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "file": "0-large-before.log",
+      "sha256": "d4545c17762662f8eb6cb7cfb9fc61fda7d258c93ee67533985cf6d47df63684",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "file": "0-short-large-after.log",
+      "sha256": "79c802deee5b80a9c9b0ceb2e687dae7d940c0b063cb335e981266934db565a9",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "file": "0-short-large-before.log",
+      "sha256": "effab6355191bb091581914debdc6d72e67135b3dae705a0dedb3746247e9697",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "file": "0-short-small-after.log",
+      "sha256": "ebc5d97c2fff1673a2e3c80ea1b55d93f6b7ca69bfef8787d37f4f067f807763",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "file": "0-short-small-before.log",
+      "sha256": "69547cc97c933aa8b9f14fd3a3cc88dfb7c6f520c57460820b8ff2a082b77799",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "file": "0-stream-after.log",
+      "sha256": "818b1fa2576646d5abe270c5c5a0eef300fd2d91f312403ba15c108562e6e8e3",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "file": "0-stream-before.log",
+      "sha256": "99cb5c7310dbd24c2d9ddee8e8699f97fa37287fb6eba677e2ea473f4cc37ae7",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "file": "0-tool-after.log",
+      "sha256": "24c98781f6e1fc07e7c5c3805cfae779f30d0f12bcbad7d53c975e19b2c84c4b",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "file": "0-tool-before.log",
+      "sha256": "857c3234825d14574f6106286ddbbbeacf43577f56dbcc774c715e0dd8eeab64",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "file": "1-cancel-after.log",
+      "sha256": "a5754942518501c932e449d249d82acfeb6364ca2347015aa831963611392ed3",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "file": "1-cancel-before.log",
+      "sha256": "cc2d0a58126c076355da224753ef2fa4e5aadaa3e2f946ffe227be2eb024364e",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "file": "1-large-after.log",
+      "sha256": "299901c13d8626aa4146b2dfcfd715ca0d6b9d6bd6b847938d95420fd90fdbd6",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "file": "1-large-before.log",
+      "sha256": "b50e94683d9d64913c91c044861ae0a9db40fac50fe7c791f5a5a55d6d290473",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "file": "1-short-large-after.log",
+      "sha256": "f54a1f13169e4e24ebd728885972c0cc80aa29781707cf79497152f84a3321ef",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "file": "1-short-large-before.log",
+      "sha256": "18f139b77fd24dead732a9520623513e3ac464c0f251a3e83e5e285ef65b0712",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "file": "1-short-small-after.log",
+      "sha256": "cfa28fe569531adb7dae86c1f331ac99ea38927a94dbbcfdf8d254ffe0cdb61c",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "file": "1-short-small-before.log",
+      "sha256": "8a993aeeec6e58eb637dbf68655e370daa923a7cc2e0192f4f98f6da1000ad51",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "file": "1-stream-after.log",
+      "sha256": "9dbd7b0c8055da03ce50af65fbb32c981807eaf0a6f3837f31ee95764994a376",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "file": "1-stream-before.log",
+      "sha256": "6dc8a1fa82e3e8a20cacecf32459754a26fa12a66dbb5d4386083e4e11559135",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "file": "1-tool-after.log",
+      "sha256": "4e8f775dadd696e5c61379f1dfbf13f433fa602d6a5735fba7fc4c438fe30ace",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "file": "1-tool-before.log",
+      "sha256": "f951e45cf498f5f9abde30ae5ecd715c56d9bf29b6c702b00ef2cf3464f3aacf",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "file": "2-cancel-after.log",
+      "sha256": "77b33f5580a2bfe7bdcc361a9759c44705d45fd3675d1a1bdaa217b5f9eb6c30",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "file": "2-cancel-before.log",
+      "sha256": "29f3dd976996aefb1609d0c202459186da2a35d9eca2cf458d61caa3dc8cc121",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "file": "2-large-after.log",
+      "sha256": "c38802b82f58b69708026b2b490f422515c81ed0aff1800a25382bb7ff1d41c9",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "file": "2-large-before.log",
+      "sha256": "b0e3e81b5a04d5fd837ec90a6611f8ad00c24e4f9269f4fbefc4f68aca5b9251",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "file": "2-short-large-after.log",
+      "sha256": "f3fb9b21401ef9f19fe8eb43e54e89fd4dd548c54e3a43d64bad7839f6fc1ce0",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "file": "2-short-large-before.log",
+      "sha256": "c1e49f3288e46009e7b019f8e35849638b95d02e6c3670ab4715c1b2b8a6a5ea",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "file": "2-short-small-after.log",
+      "sha256": "093c41c24649ea9fcac8dc80e0572b0a7e5ec8b51609bc408b0ecdf2e5b05fc8",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "file": "2-short-small-before.log",
+      "sha256": "35f88f37d9e70aaf88bbc66d44db164bf4a20b97b16d36aa2e52e6c1e6b1503b",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "file": "2-stream-after.log",
+      "sha256": "f7fac83d082029c5f0b8894f2d264b7c80be41d3470f6587b759c68f12327630",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "file": "2-stream-before.log",
+      "sha256": "ec71acd4abcfe18f9173646fdcabd552648fd225d6263db4c60b3858fe377108",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "file": "2-tool-after.log",
+      "sha256": "2726ecd14615f4830fc39cb8a25a44d2bb30c31da6faf3edde30e793d7795162",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "file": "2-tool-before.log",
+      "sha256": "3ae728ba5281546d1c9438178d05d656e6c3bb34b2c54f4abd50c279633fe447",
+      "passed": 1,
+      "failed": 0
+    }
+  ],
+  "paired_oracles": [
+    {
+      "file": "0-cancel-comparison.json",
+      "sha256": "d645f37d870fa639001743efaafa6adc87994b516f31a290a68c8bcc32f397b6",
+      "ordered_requests": 1,
+      "all_core_equal": true,
+      "all_full_request_equal": true
+    },
+    {
+      "file": "0-large-comparison.json",
+      "sha256": "2eff6176b8bf03139379fe41eed4939073c25acd9bf40d0c5adfc777f8f460ab",
+      "ordered_requests": 1,
+      "all_core_equal": true,
+      "all_full_request_equal": true
+    },
+    {
+      "file": "0-short-large-comparison.json",
+      "sha256": "0470c7d81e34e64f315b4a650e4ddb80521a19babd8b6b3499376f25aa057937",
+      "ordered_requests": 96,
+      "all_core_equal": true,
+      "all_full_request_equal": true
+    },
+    {
+      "file": "0-short-small-comparison.json",
+      "sha256": "5390510949ea4c0b3fb6b9ba1f9a1667deb2c8e475c1a36dd7766e0fc81a7ad2",
+      "ordered_requests": 40,
+      "all_core_equal": true,
+      "all_full_request_equal": true
+    },
+    {
+      "file": "0-stream-comparison.json",
+      "sha256": "e3fe7cf0614155fd3a2ef3e570b6d57eb5b9aac2b3b5c59db730bfddd5bc4aed",
+      "ordered_requests": 1,
+      "all_core_equal": true,
+      "all_full_request_equal": true
+    },
+    {
+      "file": "0-tool-comparison.json",
+      "sha256": "db73a22b25344348dd1a3aa6536f139c69d5c126c521df5e89bd46620d652493",
+      "ordered_requests": 2,
+      "all_core_equal": true,
+      "all_full_request_equal": true
+    },
+    {
+      "file": "1-cancel-comparison.json",
+      "sha256": "d645f37d870fa639001743efaafa6adc87994b516f31a290a68c8bcc32f397b6",
+      "ordered_requests": 1,
+      "all_core_equal": true,
+      "all_full_request_equal": true
+    },
+    {
+      "file": "1-large-comparison.json",
+      "sha256": "2eff6176b8bf03139379fe41eed4939073c25acd9bf40d0c5adfc777f8f460ab",
+      "ordered_requests": 1,
+      "all_core_equal": true,
+      "all_full_request_equal": true
+    },
+    {
+      "file": "1-short-large-comparison.json",
+      "sha256": "0470c7d81e34e64f315b4a650e4ddb80521a19babd8b6b3499376f25aa057937",
+      "ordered_requests": 96,
+      "all_core_equal": true,
+      "all_full_request_equal": true
+    },
+    {
+      "file": "1-short-small-comparison.json",
+      "sha256": "5390510949ea4c0b3fb6b9ba1f9a1667deb2c8e475c1a36dd7766e0fc81a7ad2",
+      "ordered_requests": 40,
+      "all_core_equal": true,
+      "all_full_request_equal": true
+    },
+    {
+      "file": "1-stream-comparison.json",
+      "sha256": "e3fe7cf0614155fd3a2ef3e570b6d57eb5b9aac2b3b5c59db730bfddd5bc4aed",
+      "ordered_requests": 1,
+      "all_core_equal": true,
+      "all_full_request_equal": true
+    },
+    {
+      "file": "1-tool-comparison.json",
+      "sha256": "db73a22b25344348dd1a3aa6536f139c69d5c126c521df5e89bd46620d652493",
+      "ordered_requests": 2,
+      "all_core_equal": true,
+      "all_full_request_equal": true
+    },
+    {
+      "file": "2-cancel-comparison.json",
+      "sha256": "d645f37d870fa639001743efaafa6adc87994b516f31a290a68c8bcc32f397b6",
+      "ordered_requests": 1,
+      "all_core_equal": true,
+      "all_full_request_equal": true
+    },
+    {
+      "file": "2-large-comparison.json",
+      "sha256": "2eff6176b8bf03139379fe41eed4939073c25acd9bf40d0c5adfc777f8f460ab",
+      "ordered_requests": 1,
+      "all_core_equal": true,
+      "all_full_request_equal": true
+    },
+    {
+      "file": "2-short-large-comparison.json",
+      "sha256": "0470c7d81e34e64f315b4a650e4ddb80521a19babd8b6b3499376f25aa057937",
+      "ordered_requests": 96,
+      "all_core_equal": true,
+      "all_full_request_equal": true
+    },
+    {
+      "file": "2-short-small-comparison.json",
+      "sha256": "5390510949ea4c0b3fb6b9ba1f9a1667deb2c8e475c1a36dd7766e0fc81a7ad2",
+      "ordered_requests": 40,
+      "all_core_equal": true,
+      "all_full_request_equal": true
+    },
+    {
+      "file": "2-stream-comparison.json",
+      "sha256": "e3fe7cf0614155fd3a2ef3e570b6d57eb5b9aac2b3b5c59db730bfddd5bc4aed",
+      "ordered_requests": 1,
+      "all_core_equal": true,
+      "all_full_request_equal": true
+    },
+    {
+      "file": "2-tool-comparison.json",
+      "sha256": "db73a22b25344348dd1a3aa6536f139c69d5c126c521df5e89bd46620d652493",
+      "ordered_requests": 2,
+      "all_core_equal": true,
+      "all_full_request_equal": true
+    }
+  ]
+}

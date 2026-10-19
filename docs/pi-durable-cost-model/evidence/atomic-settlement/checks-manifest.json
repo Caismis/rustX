@@ -1,0 +1,70 @@
+{
+  "pi-settlement-agent-initial.log": {
+    "bytes": 6944,
+    "sha256": "d29d51d78a4753d8de0c31446d3aa3e614defc0fb307f7c7632db61ffe10c7e4"
+  },
+  "pi-settlement-agent-second.log": {
+    "bytes": 5346,
+    "sha256": "b79103d58aa5b557fea924efdf9cc6e2afbdf74324591690fbd609a701fa921a"
+  },
+  "pi-settlement-agent-third.log": {
+    "bytes": 3687,
+    "sha256": "412212c823572c86d42305fcc2dee442e2d3a896f3db1e17339263fbc008122b"
+  },
+  "pi-settlement-bins.log": {
+    "bytes": 2124,
+    "sha256": "dad002f625e34db8325f79963986da2340e430dfa2d281d9d5ca43614ca909bc"
+  },
+  "pi-settlement-clippy-final-corrected.log": {
+    "bytes": 117,
+    "sha256": "069627889036ee8c480bc5911485c1679d4013f554d66568162a44e2b38691b2"
+  },
+  "pi-settlement-clippy-final.log": {
+    "bytes": 1661,
+    "sha256": "d96cbcb225cd56b3fc34d27b4390fe3b0e515257b5ee15eb1e7680f265971c56"
+  },
+  "pi-settlement-clippy-initial.log": {
+    "bytes": 1131,
+    "sha256": "40dc72f44cb44fb00ae17b493abfe56c9b9316607c7eba3debcc297e10d8be40"
+  },
+  "pi-settlement-clippy-second.log": {
+    "bytes": 1071,
+    "sha256": "174e4a0dd428a65b46b3db5124bda690035af8a2c292e30a5812b499b3aedb03"
+  },
+  "pi-settlement-clippy-third.log": {
+    "bytes": 734,
+    "sha256": "3d9291d5b973d94e9b1fd8f1c3ba7bce8a4502468a91e2ce1409f5def0a52a72"
+  },
+  "pi-settlement-durable-final.log": {
+    "bytes": 50023,
+    "sha256": "4c4b9048a51ce744f4c018899ef6625bb1054e392740ed278a6ca61eb38af2f3"
+  },
+  "pi-settlement-native-fourth.log": {
+    "bytes": 1000,
+    "sha256": "625f2418c0fcb6a362f3da7b8bfe80b29e703fa460b7703c9e0551646ba808c5"
+  },
+  "pi-settlement-native-initial.log": {
+    "bytes": 1717,
+    "sha256": "f7937f0e87cd5ae185115e2f0cc4f837c4a8c8d26a1bf7fde7f4314d68bee1e4"
+  },
+  "pi-settlement-native-second.log": {
+    "bytes": 1000,
+    "sha256": "4b707961a554fb03f1e3eeacfb7e2018fd1a5279bcc972bb69a57d3fc25c0350"
+  },
+  "pi-settlement-native-third.log": {
+    "bytes": 1000,
+    "sha256": "b357d337cc733a809d5743dbe5dbbdcd5816e46ccf2fa24c9b957c8a333c8ed7"
+  },
+  "pi-settlement-process-initial.log": {
+    "bytes": 8175,
+    "sha256": "6fc4e449998cf09d97c6f7fa2ffdecbac8a79ce131e4e5eb37133874efd5e496"
+  },
+  "pi-settlement-provider-prewarm.log": {
+    "bytes": 29,
+    "sha256": "b822cbc0a4303c6990b46114858694e488611a08aaedee3eccf07580513b4fa3"
+  },
+  "pi-settlement-source-final.log": {
+    "bytes": 3216,
+    "sha256": "9dbe3204a0d76bd9a20bd10c2453deb72ed4589c656a4dac9cfc9ea7bf802e77"
+  }
+}

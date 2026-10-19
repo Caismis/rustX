@@ -1,0 +1,23 @@
+{
+  "production_base": "a3c116fe91d7689d86c5009c7b563289d3cd34cc",
+  "production_variant": "7295a1d5b95f757c7401a66e34f21e8f85b7db09",
+  "measured_head": "13e09b13c2a8b19455cdbbf6a23b693a066126ad",
+  "measured_source_tree": "774a0a1d81e7ed51fad9e76b2618b445e842226a",
+  "patches": [
+    {
+      "file": "production-variant.patch",
+      "base": "a3c116fe91d7689d86c5009c7b563289d3cd34cc",
+      "head": "7295a1d5b95f757c7401a66e34f21e8f85b7db09",
+      "applied_tree": "52334ddac239aebf0f2d48425de9b0b6e2c53bd6",
+      "verified_exact_tree": true
+    },
+    {
+      "file": "checksum-fixture-follow-up.patch",
+      "base": "7295a1d5b95f757c7401a66e34f21e8f85b7db09",
+      "head": "13e09b13c2a8b19455cdbbf6a23b693a066126ad",
+      "applied_tree": "67fe7b8cf7b69d64d6ca213c7807126eda72d79d",
+      "verified_exact_tree": true
+    }
+  ],
+  "note": "First patch is the complete exact variant commit, including native/in-crate recovery test adjustments and its diagnostic note. Second patch is the subsequent external checksum fixture correction. Neither commit must be remotely resolvable: applying the patches to the public base reproduces their exact full trees."
+}

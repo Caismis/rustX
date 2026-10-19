@@ -329,7 +329,11 @@ fn count_conversation_store_open() {
 /// Version 69 requires explicit native artifact settlement evidence.
 /// Version 70 removes the redundant serialized active history from the Surface head.
 /// Version 71 stores authenticated Source pages with a bounded binary codec.
-pub const SQLITE_SCHEMA_VERSION: i64 = 71;
+/// Version 72 excludes unrelated NULL-key rows from scoped event indexes.
+/// Version 73 derives state field previews lazily from retained geometry and bytes.
+/// Version 74 removes independent original-capture Source witness seats.
+/// Version 75 makes ordinary accepted model output and its no-tool boundary atomic.
+pub const SQLITE_SCHEMA_VERSION: i64 = 75;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -875,6 +879,16 @@ impl SqliteConversationStore {
         conversation_id: ConversationId,
         connection: Connection,
     ) -> Result<Self, ConversationStoreError> {
+        // Native readers select bounded index ranges explicitly. Do not
+        // recompile their plans whenever a historical cut or identity changes:
+        // bundled SQLite's STAT4 parameter-sensitive planning otherwise does
+        // so even for reused statements. Schema changes still invalidate plans.
+        connection
+            .set_db_config(
+                rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_QPSG,
+                true,
+            )
+            .map_err(|error| storage(format!("configure stable SQLite plans: {error}")))?;
         let append_validation = append_validation::Owner::new(&connection)?;
         let rollback = Arc::clone(&append_validation);
         connection
@@ -3532,101 +3546,15 @@ impl ConversationStore for SqliteConversationStore {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("adopt transaction: {error}")))?;
-        #[cfg(test)]
-        if let Some(probe) = self
-            .pending_adoption_transaction_probe
-            .lock()
-            .unwrap()
-            .take()
-        {
-            probe();
-        }
-        ensure_surface_head(&transaction)?;
-
-        let items = load_pending_until(&transaction, watermark)?;
-        for item in &items {
-            let block = MessageBlock::User(item.message.clone());
-            let cursor = validation.append(&transaction, &block, Some(&item.message_id))?;
-            if cursor != item.transcript_cursor {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "adopted inbound {} changed its transcript cursor from {:?} to {:?}",
-                    item.message_id, item.transcript_cursor, cursor
-                )));
-            }
-        }
-        transaction
-            .execute(
-                "DELETE FROM pending_inbound WHERE sequence <= ?1",
-                [seq_to_i64(watermark.get())?],
-            )
-            .map_err(|error| storage(format!("adopt pending delete: {error}")))?;
-        for item in &items {
-            // The removed native pending row fences these derived bytes even
-            // if cleanup fails; their deletion cannot refuse adoption.
-            let _ = optional_display_layout(&transaction, || {
-                content::clear_pending(&transaction, &item.sequence.get().to_string())
-            });
-        }
-        if !items.is_empty() {
-            transaction.execute("UPDATE rustx_store SET pending_observation_count=pending_observation_count-?1,reading_mutation_revision=reading_mutation_revision+1 WHERE id=1",[items.len() as u64]).map_err(|error|storage(error.to_string()))?;
-        }
-        let mut adoption = None;
-        if !items.is_empty() {
-            let fact = crate::durable::inbox::inbound_adoption_event(
-                &self.conversation_id,
-                attempt_id,
-                items.iter().map(|item| item.message_id.clone()).collect(),
-            );
-            adoption = Some(persist_event_tx(&transaction, &self.conversation_id, fact)?.event);
-        }
-        #[cfg(test)]
-        if self.consume_admission_fault(AdmissionFaultOperation::AdoptPendingBatch)
-            || Self::consume(&self.fail_adopt_remaining)
-        {
-            return Err(storage("fault injected: adopt commit"));
-        }
-        let read_cut = reading::cut(&transaction, &self.conversation_id)?;
-        let canonical_receipts = canonical_observation_batch(
-            &transaction,
-            &self.conversation_id,
-            &items
-                .iter()
-                .map(|item| (&item.message_id, item.transcript_cursor))
-                .collect::<Vec<_>>(),
-            adoption
-                .as_ref()
-                .map(|event| (event.sequence, event.sequence)),
-        )?;
-        if let Some(event) = &mut adoption {
-            event.observation = canonical_receipts.first().and_then(|receipt| {
-                observation_receipt::canonical(
-                    &transaction,
-                    &self.conversation_id,
-                    event,
-                    Arc::clone(&receipt.observation),
-                )
-            });
-        }
-        let pending_observation = observation_receipt::pending(
-            &transaction,
-            &self.conversation_id,
-            None,
-            None,
-            Some((watermark.get(), items.len() as u64)),
-        );
+        let adopted =
+            self.adopt_pending_tx(&transaction, &mut validation, watermark, attempt_id)?;
         process_death::reach("before:adopt_pending_batch");
         transaction
             .commit()
             .map_err(|error| storage(format!("adopt commit: {error}")))?;
         validation.committed(&connection);
         process_death::reach("after:adopt_pending_batch");
-        Ok(crate::durable::inbox::AdoptedBatch {
-            pending_observation,
-            canonical_receipts,
-            read_cut,
-            items,
-            adoption,
-        })
+        Ok(adopted)
     }
 
     fn edit_pending(
@@ -5709,62 +5637,11 @@ impl ConversationStore for SqliteConversationStore {
         stream_id: &PublicationStreamId,
         frames: &[PublicationFrame],
     ) -> Result<Vec<crate::publication::PublicationFrameReceipt>, ConversationStoreError> {
-        if frames.is_empty() {
-            return Err(ConversationStoreError::PublicationViolation(
-                "the publication terminal transaction must carry a final frame".to_owned(),
-            ));
-        }
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("publication terminal transaction: {error}")))?;
-        #[cfg(test)]
-        if Self::consume(&self.fail_publication_terminal_remaining) {
-            return Err(storage("fault injected: publication terminal commit"));
-        }
-        let stream = require_publication_stream(&transaction, stream_id)?;
-        let (snapshot, _, completed_sequence) = require_started_request_tx(
-            &transaction,
-            &self.conversation_id,
-            &stream.start.request_id,
-        )?;
-        validate_publication_generation(&snapshot, &stream.start)?;
-        // U may never precede P: prove the exact provider outcome before the
-        // frame/proposal staging transaction does any durable work.
-        if !request_outcome_is_durable(
-            &transaction,
-            &self.conversation_id,
-            &snapshot,
-            completed_sequence,
-        )? {
-            return Err(ConversationStoreError::PublicationViolation(format!(
-                "publication terminal for {stream_id} has no durable provider outcome for request {}",
-                stream.start.request_id
-            )));
-        }
-        let (stream, receipts) = stage_frames_tx(&transaction, frames, &self.conversation_id)?;
-        if stream.start.stream_id != *stream_id {
-            return Err(ConversationStoreError::PublicationViolation(format!(
-                "terminal frames belong to publication stream {}, not {stream_id}",
-                stream.start.stream_id
-            )));
-        }
-        if stream.terminal_sequence.is_some() {
-            return Err(ConversationStoreError::PublicationViolation(format!(
-                "publication stream {stream_id} already committed its terminal boundary"
-            )));
-        }
-        let terminal_sequence = frames
-            .last()
-            .map(|frame| frame.sequence)
-            .ok_or_else(|| storage("terminal frames are empty"))?;
-        // The final frame and the terminal marker share this one transaction.
-        transaction
-            .execute(
-                "UPDATE publication_streams SET terminal_sequence=?1 WHERE stream_id=?2",
-                params![seq_to_i64(terminal_sequence)?, stream_id.as_str()],
-            )
-            .map_err(|error| storage(format!("commit publication terminal: {error}")))?;
+        let receipts = self.publication_terminal_tx(&transaction, stream_id, frames)?;
         process_death::reach("before:commit_publication_terminal");
         transaction
             .commit()
@@ -5773,8 +5650,14 @@ impl ConversationStore for SqliteConversationStore {
         Ok(receipts)
     }
 
-    // Keep native acceptance, event/staging and COMMIT in one auditable boundary.
-    #[allow(clippy::too_many_lines)]
+    fn settle_model_turn(
+        &self,
+        settlement: crate::durable::inbox::ModelTurnSettlement<'_>,
+    ) -> Result<crate::durable::inbox::CommittedModelTurn, ConversationStoreError> {
+        self.settle_model_turn_native(settlement)
+    }
+
+    // Workflow preparation uses the same canonical transaction body.
     fn commit_canonical_publication(
         &self,
         stream_id: &PublicationStreamId,
@@ -5786,113 +5669,20 @@ impl ConversationStore for SqliteConversationStore {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("canonical publication transaction: {error}")))?;
-        let stream = require_publication_stream(&transaction, stream_id)?;
-        let (snapshot, _, completed_sequence) = require_started_request_tx(
+        let result = self.canonical_publication_tx(
             &transaction,
-            &self.conversation_id,
-            &stream.start.request_id,
-        )?;
-        validate_publication_generation(&snapshot, &stream.start)?;
-        validate_canonical_publication_event(
-            &self.conversation_id,
-            &stream.start,
+            &mut validation,
+            stream_id,
             message,
-            &event,
-        )?;
-        validate_canonical_tool_proposals(&transaction, stream_id, message)?;
-        if let Some(settlement) = stream.settlement {
-            return Err(ConversationStoreError::PublicationViolation(format!(
-                "publication stream {stream_id} already settled as {}; canonical acceptance is permanently forbidden",
-                settlement.as_str()
-            )));
-        }
-        // C may never precede U for a published stream.
-        if stream.terminal_sequence.is_none() {
-            return Err(ConversationStoreError::PublicationViolation(format!(
-                "publication stream {stream_id} has no durable publication terminal; canonical acceptance requires U"
-            )));
-        }
-        if !matches!(message, MessageBlock::Assistant(_)) {
-            return Err(ConversationStoreError::PublicationViolation(format!(
-                "canonical acceptance of publication stream {stream_id} requires an Assistant message"
-            )));
-        }
-        if !request_outcome_is_durable(
-            &transaction,
-            &self.conversation_id,
-            &snapshot,
-            completed_sequence,
-        )? {
-            return Err(ConversationStoreError::PublicationViolation(format!(
-                "canonical acceptance of publication stream {stream_id} has no durable provider outcome for request {}",
-                stream.start.request_id
-            )));
-        }
-        ensure_surface_head(&transaction)?;
-
-        let transcript_cursor =
-            validation
-                .append(&transaction, message, None)?
-                .ok_or_else(|| {
-                    ConversationStoreError::InvalidReference(
-                        "canonical publication must receive a transcript cursor".to_owned(),
-                    )
-                })?;
-        #[cfg(test)]
-        if Self::consume(&self.fail_event_remaining) {
-            return Err(storage("fault injected: canonical publication commit"));
-        }
-        let mut persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
-        content::settle_canonical(&transaction, stream_id, message)?;
-        rebind_published_read_layouts(&transaction, message, &persisted.event)?;
-        // The canonical transition clears the lifecycle staging of the stream:
-        // the Ledger is now the long-term authority and no transient frame
-        // survives it.
-        clear_publication_staging(&transaction, stream_id)?;
-        // Proposal ownership remains as one bounded `(stream_id, call_id)`
-        // fact after C. Recovery ToolResult repair and later Tool Plane
-        // transitions must still resolve the exact accepted proposal rather
-        // than falling back to a bare call id.
-        transaction
-            .execute(
-                "UPDATE publication_proposals SET settlement=?1 WHERE stream_id=?2",
-                params![
-                    PublicationSettlement::Canonical.as_str(),
-                    stream_id.as_str()
-                ],
-            )
-            .map_err(|error| storage(format!("settle canonical publication proposals: {error}")))?;
-        transaction
-            .execute(
-                "UPDATE publication_streams SET settlement=?1 WHERE stream_id=?2",
-                params![
-                    PublicationSettlement::Canonical.as_str(),
-                    stream_id.as_str()
-                ],
-            )
-            .map_err(|error| storage(format!("settle canonical publication: {error}")))?;
-        let mut receipt = canonical_observation_receipt(
-            &transaction,
-            &self.conversation_id,
-            message,
-            Some(transcript_cursor),
-            persisted.event.tool_occurrence.clone(),
+            event,
         )?;
         process_death::reach("before:commit_canonical_publication");
-        let sequence = persisted.event.sequence;
-        set_canonical_range(&mut receipt, Some((sequence, sequence)));
-        persisted.event.observation = observation_receipt::canonical(
-            &transaction,
-            &self.conversation_id,
-            &persisted.event,
-            Arc::clone(&receipt.observation),
-        );
         transaction
             .commit()
             .map_err(|error| storage(format!("canonical publication commit: {error}")))?;
         validation.committed(&connection);
         process_death::reach("after:commit_canonical_publication");
-        Ok((persisted.event, receipt))
+        Ok(result)
     }
 
     fn terminalize_publication_audit(
@@ -8402,54 +8192,58 @@ fn presentation_statements(
     Ok(statements)
 }
 
+#[cfg(test)]
+mod scoped_event_index_tests;
+
+// Full index suffixes, including predicates that every matching reader implies.
 const PRESENTATION_INDEXES: &[(&str, &str)] = &[
     (
         "events_context_reading_idx",
-        "json_extract(event_json, '$.event.type'), (json_extract(event_json, '$.event.type') = 'compaction_completed' OR COALESCE(json_type(event_json, '$.event.usage'), 'null') != 'null'), sequence",
+        "(json_extract(event_json, '$.event.type'), (json_extract(event_json, '$.event.type') = 'compaction_completed' OR COALESCE(json_type(event_json, '$.event.usage'), 'null') != 'null'), sequence) WHERE (json_extract(event_json, '$.event.type') = 'compaction_completed' OR COALESCE(json_type(event_json, '$.event.usage'), 'null') != 'null') = 1",
     ),
     (
         "events_message_id_kind_idx",
-        "json_extract(event_json, '$.event.message_id'), json_extract(event_json, '$.event.type'), sequence",
+        "(json_extract(event_json, '$.event.message_id'), json_extract(event_json, '$.event.type'), sequence) WHERE json_extract(event_json, '$.event.message_id') IS NOT NULL",
     ),
     (
         "events_kind_idx",
-        "json_extract(event_json, '$.event.type'), sequence",
+        "(json_extract(event_json, '$.event.type'), sequence)",
     ),
     (
         "events_attempt_kind_idx",
-        "attempt_id, json_extract(event_json, '$.event.type'), sequence",
+        "(attempt_id, json_extract(event_json, '$.event.type'), sequence)",
     ),
     (
         "events_step_kind_idx",
-        "attempt_id, turn_id, json_extract(event_json, '$.event.type'), sequence",
+        "(attempt_id, turn_id, json_extract(event_json, '$.event.type'), sequence) WHERE attempt_id IS NOT NULL AND turn_id IS NOT NULL",
     ),
     (
         "events_compaction_operation_kind_idx",
-        "json_extract(event_json, '$.event.operation_id'), json_extract(event_json, '$.event.type'), sequence",
+        "(json_extract(event_json, '$.event.operation_id'), json_extract(event_json, '$.event.type'), sequence) WHERE json_extract(event_json, '$.event.operation_id') IS NOT NULL",
     ),
     (
         "events_request_id_kind_idx",
-        "json_extract(event_json, '$.event.request_id'), json_extract(event_json, '$.event.type'), sequence",
+        "(json_extract(event_json, '$.event.request_id'), json_extract(event_json, '$.event.type'), sequence) WHERE json_extract(event_json, '$.event.request_id') IS NOT NULL",
     ),
     (
         "events_tool_call_scope_kind_idx",
-        "json_extract(event_json, '$.event.tool_call_id'), attempt_id, turn_id, json_extract(event_json, '$.event.type'), sequence",
+        "(json_extract(event_json, '$.event.tool_call_id'), attempt_id, turn_id, json_extract(event_json, '$.event.type'), sequence) WHERE json_extract(event_json, '$.event.tool_call_id') IS NOT NULL",
     ),
     (
         "events_execution_id_kind_idx",
-        "json_extract(event_json, '$.event.execution_id'), json_extract(event_json, '$.event.type'), sequence",
+        "(json_extract(event_json, '$.event.execution_id'), json_extract(event_json, '$.event.type'), sequence) WHERE json_extract(event_json, '$.event.execution_id') IS NOT NULL",
     ),
     (
         "events_subagent_id_kind_idx",
-        "json_extract(event_json, '$.event.subagent_id'), json_extract(event_json, '$.event.type'), sequence",
+        "(json_extract(event_json, '$.event.subagent_id'), json_extract(event_json, '$.event.type'), sequence) WHERE json_extract(event_json, '$.event.subagent_id') IS NOT NULL",
     ),
     (
         "events_run_id_kind_idx",
-        "json_extract(event_json, '$.event.run_id'), json_extract(event_json, '$.event.type'), sequence",
+        "(json_extract(event_json, '$.event.run_id'), json_extract(event_json, '$.event.type'), sequence) WHERE json_extract(event_json, '$.event.run_id') IS NOT NULL",
     ),
     (
         "events_interaction_id_kind_idx",
-        "json_extract(event_json, '$.event.interaction_id'), json_extract(event_json, '$.event.type'), sequence",
+        "(json_extract(event_json, '$.event.interaction_id'), json_extract(event_json, '$.event.type'), sequence) WHERE json_extract(event_json, '$.event.interaction_id') IS NOT NULL",
     ),
 ];
 
@@ -8734,27 +8528,6 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
             ) WITHOUT ROWID;
             CREATE INDEX IF NOT EXISTS state_observation_ledger_idx ON state_observation_sources(domain,ledger_position,source_id);
             CREATE INDEX IF NOT EXISTS state_observation_journal_idx ON state_observation_sources(domain,journal_sequence,source_id);
-            CREATE TABLE IF NOT EXISTS state_observation_fields (
-                source_id TEXT NOT NULL,
-                path_json TEXT NOT NULL,parent_path TEXT,ordinal INTEGER,
-                key_path TEXT,key_header BLOB CHECK(key_header IS NULL OR length(key_header)<=4096),
-                start INTEGER NOT NULL CHECK(start>=0),end INTEGER NOT NULL CHECK(end>=start),
-                children INTEGER NOT NULL CHECK(children>=0),header_json BLOB NOT NULL CHECK(length(header_json)<=16384),
-                PRIMARY KEY(source_id,path_json)
-            ) WITHOUT ROWID;
-            CREATE UNIQUE INDEX IF NOT EXISTS state_observation_children_idx ON state_observation_fields(source_id,parent_path,ordinal);
-            CREATE TABLE IF NOT EXISTS request_observation_fields (
-                source_id TEXT PRIMARY KEY REFERENCES request_snapshots(observation_source_id),
-                path_json TEXT NOT NULL CHECK(path_json='[]'),
-                parent_path TEXT CHECK(parent_path IS NULL),ordinal INTEGER CHECK(ordinal IS NULL),
-                start INTEGER NOT NULL CHECK(start=0),
-                end INTEGER NOT NULL CHECK(end BETWEEN 0 AND 9007199254740991),
-                children INTEGER NOT NULL CHECK(children=0),
-                header_kind TEXT NOT NULL CHECK(header_kind='inline'),
-                header_json BLOB NOT NULL CHECK(header_json=x'6e756c6c'),
-                shape_witness BLOB NOT NULL CHECK(typeof(shape_witness)='blob' AND length(shape_witness)=32)
-            ) WITHOUT ROWID;
-
             CREATE TABLE IF NOT EXISTS request_trace_catalogs (
                 source_sequence INTEGER PRIMARY KEY REFERENCES events(sequence),
                 tool_count INTEGER NOT NULL CHECK(tool_count>=0),
@@ -8871,7 +8644,7 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
             CREATE INDEX IF NOT EXISTS events_trace_kind_idx ON events(observation_kind,sequence) WHERE observation_kind IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_trace_owner_idx ON events(observation_trace_owner,observation_kind,sequence) WHERE observation_trace_owner IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_trace_holes_idx ON events(sequence) WHERE observation_trace_fact_required=1 AND observation_trace_fact IS NULL;
-            CREATE INDEX IF NOT EXISTS events_workflow_coordinates_idx ON events(json_extract(event_json,'$.event.run_id.conversation_id'),json_extract(event_json,'$.event.run_id.attempt_id'),json_extract(event_json,'$.event.run_id.invocation'),json_extract(event_json,'$.event.type'),sequence);
+            CREATE INDEX IF NOT EXISTS events_workflow_coordinates_idx ON events(json_extract(event_json,'$.event.run_id.conversation_id'),json_extract(event_json,'$.event.run_id.attempt_id'),json_extract(event_json,'$.event.run_id.invocation'),json_extract(event_json,'$.event.type'),sequence) WHERE json_extract(event_json,'$.event.run_id.conversation_id') IS NOT NULL;
             CREATE TABLE IF NOT EXISTS event_observation_readiness (
                 sequence INTEGER PRIMARY KEY REFERENCES events(sequence) ON DELETE CASCADE,
                 ready INTEGER NOT NULL CHECK(ready IN (0,1)),
@@ -8887,7 +8660,7 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
             CREATE INDEX IF NOT EXISTS events_observation_statistics_idx ON events(sequence) WHERE observation_statistics IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_observation_tool_lifecycle_idx ON events(observation_tool_ledger,observation_tool_block,observation_tool_phase,sequence) WHERE observation_tool_phase IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_observation_tool_occurrence_idx ON events(observation_tool_ledger,observation_tool_block,sequence) WHERE observation_tool_ledger IS NOT NULL AND json_extract(event_json,'$.event.type')='tool_execution_started';
-            CREATE INDEX IF NOT EXISTS events_observation_tool_idx ON events(json_extract(event_json,'$.event.tool_call_id'),attempt_id,json_extract(event_json,'$.event.type'),sequence);
+            CREATE INDEX IF NOT EXISTS events_observation_tool_idx ON events(json_extract(event_json,'$.event.tool_call_id'),attempt_id,json_extract(event_json,'$.event.type'),sequence) WHERE json_extract(event_json,'$.event.tool_call_id') IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_observation_members_idx ON events(attempt_id,sequence) WHERE observation_members IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_observation_member_holes_idx ON events(attempt_id,sequence) WHERE observation_members_required=1 AND observation_members IS NULL;
             CREATE INDEX IF NOT EXISTS events_observation_member_holes_sequence_idx ON events(sequence) WHERE observation_members_required=1 AND observation_members IS NULL;
@@ -8915,9 +8688,8 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
             CREATE INDEX IF NOT EXISTS message_ledger_boundary_holes_idx ON message_ledger(first_append_revision) WHERE ordinary_user=1 AND boundary_indexed=0 AND first_append_revision IS NOT NULL;
             CREATE INDEX IF NOT EXISTS transcript_order_reference_idx ON transcript_order(reference_kind, reference_id);
             CREATE INDEX IF NOT EXISTS surface_ops_revision_idx ON surface_ops(revision);
-            CREATE INDEX IF NOT EXISTS events_sequence_idx ON events(sequence);
 
-            CREATE INDEX IF NOT EXISTS events_attempt_idx ON events(attempt_id, sequence);
+            CREATE INDEX IF NOT EXISTS events_attempt_idx ON events(attempt_id, sequence) WHERE attempt_id IS NOT NULL;
             CREATE INDEX IF NOT EXISTS request_snapshots_canonical_frontier_idx ON request_snapshots(canonical_frontier);
             CREATE INDEX IF NOT EXISTS contribution_emission_heads_lookup_idx ON contribution_emission_heads(producer, semantic_key);
             CREATE INDEX IF NOT EXISTS publication_frames_stream_idx ON publication_frames(stream_id, sequence);
@@ -8929,12 +8701,13 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
     content::create_binary_schema(connection)?;
     manifest::create_schema(connection)?;
     observation_request::composed::create_schema(connection)?;
+    observation_request::state_preview::create_schema(connection)?;
     connection
         .execute_batch(&projection::completion_index_sql())
         .map_err(|error| storage(error.to_string()))?;
-    for (name, expression) in PRESENTATION_INDEXES {
+    for (name, definition) in PRESENTATION_INDEXES {
         connection
-            .execute_batch(&format!("CREATE INDEX {name} ON events({expression});"))
+            .execute_batch(&format!("CREATE INDEX {name} ON events{definition};"))
             .map_err(|error| storage(format!("create presentation index: {error}")))?;
     }
     connection
@@ -9021,9 +8794,30 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
             )));
         }
     }
-    for (name, expression) in PRESENTATION_INDEXES {
+    for (name, expected) in [
+        (
+            "events_attempt_idx",
+            "CREATE INDEX events_attempt_idx ON events(attempt_id, sequence) WHERE attempt_id IS NOT NULL",
+        ),
+        (
+            "events_workflow_coordinates_idx",
+            "CREATE INDEX events_workflow_coordinates_idx ON events(json_extract(event_json,'$.event.run_id.conversation_id'),json_extract(event_json,'$.event.run_id.attempt_id'),json_extract(event_json,'$.event.run_id.invocation'),json_extract(event_json,'$.event.type'),sequence) WHERE json_extract(event_json,'$.event.run_id.conversation_id') IS NOT NULL",
+        ),
+        (
+            "events_observation_tool_idx",
+            "CREATE INDEX events_observation_tool_idx ON events(json_extract(event_json,'$.event.tool_call_id'),attempt_id,json_extract(event_json,'$.event.type'),sequence) WHERE json_extract(event_json,'$.event.tool_call_id') IS NOT NULL",
+        ),
+    ] {
+        let actual: Option<String> = connection.query_row("SELECT sql FROM sqlite_schema WHERE type='index' AND name=?1 AND tbl_name='events'", [name], |row| row.get(0)).optional().map_err(|error| storage(error.to_string()))?;
+        if actual.as_deref() != Some(expected) {
+            return Err(ConversationStoreError::IncompatibleSchema(format!(
+                "missing or invalid scoped event index {name}"
+            )));
+        }
+    }
+    for (name, definition) in PRESENTATION_INDEXES {
         let sql: Option<String> = connection.query_row("SELECT sql FROM sqlite_schema WHERE type='index' AND name=?1 AND tbl_name='events'", [name], |row| row.get(0)).optional().map_err(|error| storage(error.to_string()))?;
-        if sql.as_deref() != Some(format!("CREATE INDEX {name} ON events({expression})").as_str()) {
+        if sql.as_deref() != Some(format!("CREATE INDEX {name} ON events{definition}").as_str()) {
             return Err(ConversationStoreError::IncompatibleSchema(format!(
                 "missing or invalid presentation index {name}"
             )));
@@ -9492,25 +9286,16 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
             &["source_sequence", "ordinal", "header_json"],
         ),
         (
-            "request_observation_fields",
-            &[
-                "source_id",
-                "path_json",
-                "parent_path",
-                "ordinal",
-                "header_kind",
-                "shape_witness",
-                "header_json",
-            ],
-        ),
-        (
             "state_observation_fields",
             &[
                 "source_id",
                 "path_json",
                 "parent_path",
                 "ordinal",
-                "header_json",
+                "source_kind",
+                "preview_nodes",
+                "preview_kind",
+                "preview_key",
             ],
         ),
         (
@@ -9631,6 +9416,7 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
     observation::verify_schema(connection)?;
     observation_trace::verify_schema(connection)?;
     observation_request::verify_schema(connection)?;
+    observation_request::state_preview::verify_schema(connection)?;
     Ok(())
 }
 
@@ -14114,6 +13900,10 @@ mod tests {
     mod request_probe_tests {
         use super::*;
         include!("sqlite/request_probe_tests.rs");
+    }
+    mod final_settlement_tests {
+        use super::*;
+        include!("sqlite/final_settlement_tests.rs");
     }
     mod request_snapshot_validation_tests {
         use super::*;
@@ -19486,7 +19276,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 71);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 75);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -19555,7 +19345,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 71);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 75);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
@@ -20530,10 +20320,8 @@ mod tests {
     #[test]
     fn trace_schema_indexes_are_required_and_queries_use_them() {
         use super::super::presentation::{FactQuery, FactScope};
-        let store = SqliteConversationStore::in_memory(ConversationId::new(
-            "conv_ab18a567-5190-73a5-8156-2e8693be6392",
-        ))
-        .unwrap();
+        let id = ConversationId::new("conv_ab18a567-5190-73a5-8156-2e8693be6392");
+        let store = SqliteConversationStore::in_memory(id).unwrap();
         let connection = store.conn.lock().unwrap();
         verify_schema_shape(&connection).unwrap();
         let scopes = [
@@ -20547,6 +20335,10 @@ mod tests {
                 "events_step_kind_idx",
             ),
             (FactScope::Request("r".into()), "events_request_id_kind_idx"),
+            (
+                FactScope::Compaction(crate::runtime::identity::CompactionOperationId::new("o")),
+                "events_compaction_operation_kind_idx",
+            ),
             (FactScope::Message("m".into()), "events_message_id_kind_idx"),
             (FactScope::ContextReading, "events_context_reading_idx"),
             (
@@ -20604,7 +20396,7 @@ mod tests {
                 }
             }
         }
-        for (name, expression) in PRESENTATION_INDEXES {
+        for (name, definition) in PRESENTATION_INDEXES {
             connection
                 .execute_batch(&format!("DROP INDEX {name}"))
                 .unwrap();
@@ -20621,7 +20413,7 @@ mod tests {
             );
             connection
                 .execute_batch(&format!(
-                    "DROP INDEX {name}; CREATE INDEX {name} ON events({expression})"
+                    "DROP INDEX {name}; CREATE INDEX {name} ON events{definition}"
                 ))
                 .unwrap();
             verify_schema_shape(&connection).unwrap();
@@ -21612,3 +21404,5 @@ mod projection;
 mod observation_projection;
 
 mod projection_publication;
+
+mod final_settlement;

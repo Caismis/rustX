@@ -41,7 +41,7 @@ fn t08_t19_composed_source_corruption_preserves_native_request_and_restored_exac
         "metadata=zeroblob(4000000)",
         "metadata='{}'",
         "metadata=x'7b7d'",
-        "witness=zeroblob(32)",
+        "checksum=zeroblob(32)",
     ] {
         let (store, snapshot, sequence) = span_integrity_fixture();
         let connection = store.lock().unwrap();
@@ -147,7 +147,7 @@ fn t10_t19_original_span_insert_failure_rolls_back_optional_layout_and_preserves
                 },
             )
             .unwrap();
-        connection.execute_batch("CREATE TRIGGER reject_original_span BEFORE INSERT ON request_observation_fields BEGIN SELECT test_original_span_attempt(); SELECT RAISE(FAIL,'optional span insert'); END;").unwrap();
+        connection.execute_batch("CREATE TRIGGER reject_original_span BEFORE INSERT ON request_source_roots BEGIN SELECT test_original_span_attempt(); SELECT RAISE(FAIL,'optional span insert'); END;").unwrap();
     }
     let started = store
         .commit_model_turn_start(&[], &snapshot, Utc::now())
@@ -176,7 +176,7 @@ fn t10_t19_original_span_insert_failure_rolls_back_optional_layout_and_preserves
     );
     let connection = store.lock().unwrap();
     for sql in [
-        "SELECT count(*) FROM request_observation_fields WHERE source_id=?1",
+        "SELECT count(*) FROM request_source_roots WHERE source_id=?1",
         "SELECT count(*) FROM content_segments WHERE source_kind='trace_request' AND source_id=?1",
         "SELECT count(*) FROM content_frontiers WHERE source_kind='trace_request' AND source_id=?1",
     ] {
@@ -200,24 +200,16 @@ fn t10_t19_original_span_insert_failure_rolls_back_optional_layout_and_preserves
 }
 
 #[test]
-fn t14_t19_original_span_schema_requires_explicit_kind_and_consistent_native_bounds() {
+fn t14_t19_source_root_schema_requires_bounded_metadata_and_checksum() {
     let (store, snapshot, sequence) = span_integrity_fixture();
     let connection = store.lock().unwrap();
     for mutation in [
-        "header_kind='unknown'",
-        "header_kind=NULL",
-        "header_json=x'30'",
-        "path_json='[1]'",
-        "parent_path='[]'",
-        "ordinal=0",
-        "start=1",
-        "end=9007199254740992",
-        "children=1",
-        "shape_witness=zeroblob(31)",
+        "metadata=NULL", "metadata='not a blob'", "metadata=zeroblob(16385)",
+        "checksum=NULL", "checksum='not a blob'", "checksum=zeroblob(31)",
     ] {
-        assert!(connection.execute(&format!("UPDATE request_observation_fields SET {mutation} WHERE source_id=?1 AND path_json='[]'"), [sequence.to_string()]).is_err(), "{mutation}");
+        assert!(connection.execute(&format!("UPDATE request_source_roots SET {mutation} WHERE source_id=?1"), [sequence.to_string()]).is_err(), "{mutation}");
     }
-    assert!(connection.execute("INSERT INTO request_observation_fields(source_id,path_json,start,end,children,header_json) VALUES(?1,'[]',0,1,0,x'30')", [sequence.to_string()]).is_err());
+    assert!(connection.execute("INSERT INTO request_source_roots(source_id,metadata) VALUES('missing',x'30')", []).is_err());
     drop(connection);
     assert_native_span_authority(&store, &snapshot, sequence);
 }
@@ -241,7 +233,7 @@ fn t08_t19_original_span_duplicate_ordinal_keys_preserve_legacy_last_wins_header
     let transaction = connection.transaction().unwrap();
     transaction
         .execute(
-            "DELETE FROM request_observation_fields WHERE source_id=?1",
+            "DELETE FROM request_source_roots WHERE source_id=?1",
             [sequence.to_string()],
         )
         .unwrap();
@@ -261,7 +253,7 @@ fn t08_t19_original_span_duplicate_ordinal_keys_preserve_legacy_last_wins_header
         .unwrap();
     let root = observation_request::field_from(
         &transaction,
-        "request_observation_fields",
+        "request_source_roots",
         &sequence.to_string(),
         &[],
     )
@@ -270,7 +262,7 @@ fn t08_t19_original_span_duplicate_ordinal_keys_preserve_legacy_last_wins_header
     let raw = observation_request::read_from(
         &transaction,
         "trace_request",
-        "request_observation_fields",
+        "request_source_roots",
         &sequence.to_string(),
         &[],
         0,
@@ -280,7 +272,7 @@ fn t08_t19_original_span_duplicate_ordinal_keys_preserve_legacy_last_wins_header
     assert_eq!(raw.bytes, br#"{"@same":1,"@same":2}"#);
     let page = observation_request::page_from(
         &transaction,
-        "request_observation_fields",
+        "request_source_roots",
         &sequence.to_string(),
         &[],
         0,

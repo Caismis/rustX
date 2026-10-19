@@ -2241,3 +2241,122 @@ fn inherited_turn_reverse_membership_seeks_only_the_selected_ordinal() {
     }
     assert!(costs.iter().all(|cost| *cost == costs[0]), "{costs:?}");
 }
+
+#[test]
+fn historical_fact_cuts_reuse_plans_without_changing_rows_or_scan_work() {
+    use rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_QPSG;
+    let store = store();
+    let first = terminal(&store, 0, true);
+    let last = terminal(&store, 1, true);
+    let connection = store.lock().unwrap();
+    assert!(connection.db_config(SQLITE_DBCONFIG_ENABLE_QPSG).unwrap());
+    let cuts = [0, first.sequence, last.sequence, first.sequence, 0];
+    let mut controls = Vec::new();
+    for stable in [false, true] {
+        connection
+            .set_db_config(SQLITE_DBCONFIG_ENABLE_QPSG, stable)
+            .unwrap();
+        let (sql, _) = presentation_statements(&query(
+            FactScope::All,
+            vec!["model_request_completed"],
+            last.sequence,
+        ))
+        .unwrap()
+        .remove(0);
+        let mut statement = connection.prepare(&sql).unwrap();
+        let mut results = Vec::new();
+        for through in cuts {
+            let (_, values) = presentation_statements(&query(
+                FactScope::All,
+                vec!["model_request_completed"],
+                through,
+            ))
+            .unwrap()
+            .remove(0);
+            let rows = statement
+                .query_map(rusqlite::params_from_iter(values), |row| {
+                    row.get::<_, String>(0)
+                })
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            results.push(rows);
+        }
+        assert_eq!(statement.get_status(StatementStatus::FullscanStep), 0);
+        assert_eq!(statement.get_status(StatementStatus::Sort), 0);
+        if stable {
+            assert_eq!(statement.get_status(StatementStatus::RePrepare), 0);
+            assert_eq!(results, controls);
+        } else {
+            assert!(statement.get_status(StatementStatus::RePrepare) > 0);
+            assert!(results[0].is_empty());
+            assert_eq!(results[1].len(), 1);
+            assert_eq!(results[2].len(), 1);
+            assert_ne!(results[1], results[2]);
+            controls = results;
+        }
+    }
+}
+
+#[test]
+fn native_metadata_cached_statements_keep_historical_cuts_and_readiness_errors() {
+    use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+    use std::sync::atomic::AtomicUsize;
+
+    for capacity in [0, 16] {
+        let store = store();
+        store.initialize(&[]).unwrap();
+        let started = |name: &str| {
+            let attempt = AttemptId::new(name);
+            store
+                .append_event(envelope(
+                    store.conversation_id(), name, Some(attempt.clone()),
+                    RuntimeEvent::AttemptStarted { attempt_id: attempt },
+                ))
+                .unwrap().sequence
+        };
+        let first = started("cache-first");
+        let last = started("cache-last");
+        let connection = store.lock().unwrap();
+        connection.set_prepared_statement_cache_capacity(capacity);
+        let prepares = Arc::new(AtomicUsize::new(0));
+        let count = prepares.clone();
+        connection.authorizer(Some(move |context: AuthContext<'_>| {
+            if matches!(context.action,
+                AuthAction::Read { table_name: "events", column_name:
+                    "observation_trace_total" | "observation_trace_required" |
+                    "observation_readiness_missing" }
+                | AuthAction::Read { table_name: "event_observation_readiness", column_name: "ready" }
+            ) {
+                count.fetch_add(1, Ordering::SeqCst);
+            }
+            Authorization::Allow
+        })).unwrap();
+        assert_eq!(super::super::observation_statistics::trace_total(&connection, first).unwrap(), 1);
+        assert_eq!(super::super::observation_readiness::frontier(&connection, 0, first).unwrap(), 0);
+        assert!(prepares.swap(0, Ordering::SeqCst) > 0);
+        // Rebinding the retained statements reads the requested native cut,
+        // rather than retaining the first result or first parameter values.
+        assert_eq!(super::super::observation_statistics::trace_total(&connection, last).unwrap(), 2);
+        assert_eq!(super::super::observation_readiness::frontier(&connection, 0, last).unwrap(), 0);
+        let repeated = prepares.swap(0, Ordering::SeqCst);
+        if capacity == 0 {
+            assert!(repeated > 0);
+        } else {
+            assert_eq!(repeated, 0, "fixed native metadata SQL must reuse preparation");
+        }
+        super::super::observation_readiness::mark(&connection, first, first).unwrap();
+        assert_eq!(super::super::observation_readiness::frontier(&connection, 0, last).unwrap(), first);
+        assert_eq!(super::super::observation_statistics::trace_total(&connection, first).unwrap(), 1);
+        super::super::observation_readiness::mark(&connection, last, last).unwrap();
+        assert_eq!(super::super::observation_readiness::frontier(&connection, 0, last).unwrap(), last);
+        // SQLite invalidates a prepared statement when its authorizer changes.
+        // Warming a statement must never bypass a later injected read error.
+        connection.authorizer(Some(|context: AuthContext<'_>| {
+            if matches!(context.action, AuthAction::Read {
+                table_name: "events", column_name: "observation_trace_total",
+            }) { Authorization::Deny } else { Authorization::Allow }
+        })).unwrap();
+        assert!(super::super::observation_statistics::trace_total(&connection, last).is_err());
+    }
+}

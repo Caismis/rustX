@@ -334,7 +334,7 @@ infallible hot-state installation or authoritative reload. File-backed SQLite
 uses WAL, `synchronous=NORMAL`, foreign keys, and the explicit bounded writer
 busy handler. Successful commits survive process death with a healthy OS and
 filesystem. Machine/OS failure can lose recent commits without a fixed loss window.
-P, U and C remain distinct commits; observed I/O failures never become success. Development
+Ordinary accepted P/U/C facts share one final commit; observed I/O failures never become success. Development
 schema `SQLITE_SCHEMA_VERSION` is the only accepted schema; incompatible
 development schemas fail explicitly at open and are not migrated. Version 36 records typed Session upload references and frozen
 request-time path projection. Version 35
@@ -506,7 +506,7 @@ spine; clients merge live and older pages by durable transcript cursor. Entry
 identity only detects the same durable fact, and page reads do not move the
 live event cursor.
 
-App Server v50 navigation adds native Turn-relative finite windows at a captured
+App Server v51 navigation adds native Turn-relative finite windows at a captured
 `ConversationReadCut`. It owns positioning and mutation rejection. Web presentation
 retains at most 256 historical entries / 8 MiB plus the independent finite live
 snapshot; it never walks from a distant Turn to the live tail. New navigation,
@@ -6092,20 +6092,28 @@ the publication plane and is never a canonical message.
 No semantic output is released to a user-facing Runtime Client before rustX
 has durably committed that publication.
 
-### Three linearization points
+### Final model settlement
 
-```text
-P — Provider outcome         ModelRequestCompleted durable   (Event Journal)
-U — Publication outcome      final frame + terminal marker   (publication plane)
-C — Conversation acceptance  canonical Assistant durable     (Message Ledger)
-```
+P (provider completion), U (final frames/terminal marker) and C (canonical
+Assistant acceptance) are distinct facts with the durable implication
+`C => U => P`. Ordinary accepted output commits them together. For no-tool output,
+TurnCompleted and either finite inbox adoption or empty-inbox AttemptCompleted
+share that same transaction. Before commit all final changes roll back; after
+commit the complete final result survives healthy-OS process death. Observer
+notification follows commit, including when a process dies before publishing it.
+A terminal commit failure cannot leave a canonical final answer behind.
+The final accepted output uses its canonical receipt; final staging frames are
+consumed inside COMMIT and their invalidated live-prefix receipts never escape.
+Partial streaming still uses committed frame receipts until canonical replacement.
 
-The required commit ordering is `P < U < C`, and the durable store — not only
-Agent Loop control flow — enforces `C => U => P`. P and U are never combined
-into one transaction: they are different facts and a crash between them must
-stay distinguishable. `ModelRequestCompleted` is likewise never merged with
-the Assistant commit, because provider completion remains an external
-execution fact even when canonicalization later fails.
+The existing mailbox publication mutex fences inbox selection through commit and
+terminal/adoption notification. Tool calls still need a later Tool Plane intent
+before external effects, and preserve unknown-outcome/replay policies. Workflow
+cross-owner preparation and rejected noncanonical output retain separate P/U/audit
+transitions; those cuts never authorize an unaccepted tool proposal. This is an
+intentional reduction in ordinary final crash cuts, authorized by the Pi Durable
+cost-model change. No exactly-once external execution or power-loss guarantee is
+introduced. Development schema 75 refuses older stores without conversion.
 
 The store re-proves the exact chain at U and C. It decodes the named Request
 Snapshot and its durable `ModelRequestStarted` envelope, checks the stream's
@@ -6128,16 +6136,21 @@ outcome that can establish P.
 ### The U transaction
 
 The final publication frame and the publication terminal marker commit in one
-transaction; only after it succeeds may the final buffered payload be
-released. When no visible payload remains, a terminal-only frame carries the
-terminal transition. There is no "write the final frame, publish, then mark
+transaction. Ordinary accepted output publishes the complete canonical receipt
+after that compound commit; consumed final staging references are not released.
+Prepared Workflow/rejected output releases its committed staging receipts. When
+no visible payload remains, a terminal-only frame carries the terminal transition. There is no "write the final frame, publish, then mark
 complete" sequence to crash inside.
 
 ### Bounded publication writes
 
 Provider chunk size is not the publication unit. The bounded coalescer flushes
-on maximum bytes, a structural boundary (a tool-call proposal start or
-completion), or the stream terminal. When the first payload enters an empty
+on 64 KiB of conservative payload weight, 128 nonmergeable frames, the 100 ms
+oldest-payload deadline, or the stream terminal. Tool proposal start/completion
+retain distinct ordered frames without forcing a transaction. Tool identities
+and completed arguments count toward pressure; one incoming oversized payload
+flushes immediately without truncation. These pressure exceptions differ from
+Pi Durable's timer-only snapshot cadence. When the first payload enters an empty
 buffer, it owns one absolute monotonic deadline `oldest_pending_time +
 max_latency`; later canonical provider events do not reset or extend it. The coalescer
 owns the deadline and the runtime monotonic clock owns the wake-up mechanism,
@@ -7559,7 +7572,7 @@ invented wire ID. Nullable `wire_id` distinguishes absence from explicit correla
 transmitted stored results use actual accepted native IDs. Stateless/full replay IDs
 match the adapter's relevant wire segment, independent of covered historical occurrences.
 Ambiguous duplicate unresolved wire IDs are rejected before detached wire mutation.
-This required observation change is carried by App Server v50 and Runtime Client v71.
+This required observation change is carried by App Server v51 and Runtime Client v71.
 
 ## PR #477 bounded activation header integrity
 

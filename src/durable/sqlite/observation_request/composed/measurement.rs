@@ -13,7 +13,7 @@ impl Measurement {
             .then(|| (WORK.with(std::cell::Cell::get), manifest::node_read_work()));
         let phase = match scope {
             SourceScope::Request => Phase::Source,
-            SourceScope::Authenticate => Phase::SourceAuthenticate,
+            SourceScope::Lookup => Phase::SourceLookup,
             SourceScope::Leaf => Phase::SourceLeaf,
         };
         Self {

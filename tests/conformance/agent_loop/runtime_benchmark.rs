@@ -4,6 +4,7 @@ use super::*;
 use serde_json::json;
 use std::time::Instant;
 
+mod aligned;
 mod profiling;
 mod request_oracle;
 
@@ -121,6 +122,13 @@ fn verify_requests(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "offline performance measurement; no timing gate"]
 async fn measure_runtime() {
+    let mode =
+        std::env::var("RUSTX_BENCH_OBSERVER_MODE").unwrap_or_else(|_| "native-workflow".into());
+    match mode.as_str() {
+        "live-subscriber" | "no-live-subscriber" => return aligned::measure(&mode).await,
+        "native-workflow" => {}
+        _ => panic!("unknown observer mode"),
+    }
     let case = std::env::var("RUSTX_BENCH_CASE").expect("case");
     let output = PathBuf::from(std::env::var_os("RUSTX_BENCH_OUTPUT").expect("output"));
     let (history, measured) = match case.as_str() {
@@ -151,7 +159,13 @@ async fn measure_runtime() {
     );
     lifecycle_sample(&mut lifecycle, "after_provider_start", lifecycle_began);
     let began = Instant::now();
-    let mut driver = Driver::start_in(root, &emulator, &Setup::new("emulator/chat-model")).await;
+    let mut driver = Driver::start_in_with_status_clock(
+        root,
+        &emulator,
+        &Setup::new("emulator/chat-model"),
+        Arc::new(request_oracle::FixedStatusClock::default()),
+    )
+    .await;
     let open_us = began.elapsed().as_micros();
     let initial = process_sample();
     lifecycle_sample(&mut lifecycle, "after_initialization", lifecycle_began);
@@ -295,7 +309,7 @@ async fn measure_runtime() {
             "case":case,"schema":rustx::durable::sqlite::SQLITE_SCHEMA_VERSION,
             "protocol":APP_SERVER_PROTOCOL_VERSION,"history":history,"measured":measured,
             "requests":expected_requests,"open_us":open_us,"samples":samples,
-            "initial_process":initial,"lifecycle":lifecycle,"measurement_version":3,
+            "initial_process":initial,"lifecycle":lifecycle,"workload_version":3,"model_time":request_oracle::MODEL_TIME,"measurement_version":3,
             "wire_requests":requests,"live_requests":verified_requests,
             "reopened_requests":reopened_requests,"canonical":history_messages,
             "oracle_version":2,"verified_live_requests":verified_live_requests,

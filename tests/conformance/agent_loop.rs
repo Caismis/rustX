@@ -195,6 +195,21 @@ impl Driver {
     /// (a Skill package must exist before the capability candidate is
     /// prepared, which happens inside composition).
     async fn start_in(root: tempfile::TempDir, emulator: &ProviderEmulator, setup: &Setup) -> Self {
+        Self::start_in_with_status_clock(
+            root,
+            emulator,
+            setup,
+            Arc::new(rustx::context::SystemClock),
+        )
+        .await
+    }
+
+    async fn start_in_with_status_clock(
+        root: tempfile::TempDir,
+        emulator: &ProviderEmulator,
+        setup: &Setup,
+        status_clock: Arc<dyn rustx::context::AgentStatusClock>,
+    ) -> Self {
         let workspace = root.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
         if setup.images {
@@ -238,6 +253,7 @@ impl Driver {
             runtime_root: root.path().join("private"),
         };
         let dependencies = LocalRuntimeDependencies {
+            status_clock,
             credentials: Some(Arc::new(MapCredentialEnvironment::new([(
                 CREDENTIAL_VARIABLE.to_owned(),
                 CREDENTIAL_VALUE.to_owned(),
@@ -892,23 +908,58 @@ async fn a_normal_streamed_turn_settles_once_on_every_protocol() {
             "Hello world",
             "{scenario}: the streamed deltas commit as one canonical message"
         );
-        // The scripted response leads with the protocol's full normal
-        // reasoning lifecycle, so this also proves the real stream parser
-        // accepts it rather than only the text subset.
+        // Short streamed responses can settle without any intermediate partial.
+        // Verify the actual canonical client notification and its original native
+        // body, rather than requiring a transient inline-delta representation.
+        let committed: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                RuntimeClientEvent::MessageCommitted {
+                    message: MessageBlock::Assistant(assistant),
+                    ..
+                } => Some(assistant),
+                _ => None,
+            })
+            .collect();
         assert_eq!(
-            events
-                .iter()
-                .filter_map(|event| match event {
-                    RuntimeClientEvent::BlockContentAdvanced {
-                        kind,
-                        inline_delta: Some(delta),
-                        ..
-                    } if kind == "reasoning" => Some(delta.as_str()),
-                    _ => None,
-                })
-                .collect::<String>(),
-            "the conformance plan",
-            "{scenario}: the reasoning block reached the runtime"
+            committed.len(),
+            1,
+            "{scenario}: one canonical client answer"
+        );
+        let reasoning: String = committed[0]
+            .content
+            .iter()
+            .filter_map(|block| match block {
+                rustx::message::types::AssistantContentBlock::Reasoning(reasoning) => {
+                    reasoning.text.as_deref()
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            reasoning, "the conformance plan",
+            "{scenario}: exact reasoning"
+        );
+        assert!(
+            driver
+                .canonical_history()
+                .contains(&MessageBlock::Assistant(committed[0].clone())),
+            "{scenario}: canonical client content equals the original native body"
+        );
+        let partial_reasoning: String = events
+            .iter()
+            .filter_map(|event| match event {
+                RuntimeClientEvent::BlockContentAdvanced {
+                    kind,
+                    inline_delta: Some(delta),
+                    ..
+                } if kind == "reasoning" => Some(delta.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            reasoning.starts_with(&partial_reasoning),
+            "{scenario}: any released partial is the exact reasoning prefix"
         );
         assert_eq!(
             events

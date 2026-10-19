@@ -93,6 +93,8 @@
 //! Goal change is a durable phase/revision change: there is no activation-only
 //! Goal event, and no snapshot or event can represent an Active-but-inert Goal.
 
+mod canonical_tools;
+
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
@@ -317,6 +319,8 @@ pub(crate) struct RuntimeClientProjection {
         super::content::ContentRef,
     >,
     read_domains_dirty: bool,
+    /// One explicit checkpoint demand, coalesced until its bounded read completes.
+    read_domains_requested: bool,
     /// Failure of the current read-domain fence; cleared by matching success
     /// or a new invalidating revision, never by an obsolete read.
     read_failure: Option<String>,
@@ -387,6 +391,7 @@ struct ForegroundResultContent {
 
 #[derive(Clone)]
 pub(crate) struct CheckpointSeed {
+    read_domains: Option<ReadDomainCut>,
     snapshot: RuntimeClientSnapshot,
     capability_head: super::capability_source::PreparedCapabilityHead,
     trace_head: super::checkpoint::PreparedTraceHead,
@@ -484,7 +489,9 @@ fn stamp_event_trace_cut(
     cut: &super::checkpoint::CheckpointReadCut,
 ) {
     match event {
-        RuntimeClientEvent::ReadDomainsUpdated { trace, .. } => stamp_trace_cut(trace, cut),
+        RuntimeClientEvent::ReadDomainsUpdated {
+            trace: Some(trace), ..
+        } => stamp_trace_cut(trace, cut),
         RuntimeClientEvent::ProjectionTransition { events, .. } => {
             for event in events {
                 stamp_event_trace_cut(event, cut);
@@ -515,6 +522,9 @@ impl PublicationDraft {
             .ok_or(RuntimeClientError::ProjectionExhausted)?;
         self.seed.cursor = RuntimeClientCursor::new(next);
         self.seed.read_cut.revision = next;
+        if let Some(cut) = &mut self.seed.read_domains {
+            cut.revision = next;
+        }
         stamp_trace_cut(&mut self.seed.snapshot.trace, &self.seed.read_cut);
         for event in &mut self.events {
             stamp_event_trace_cut(event, &self.seed.read_cut);
@@ -710,6 +720,57 @@ impl CheckpointSeed {
                     .item("attempt.execution_settings", &attempt.execution_settings)
                     .flatten(),
             })
+    }
+
+    pub(crate) fn native_read_cut(
+        &self,
+    ) -> Option<&crate::durable::observation::ObservationReadCut> {
+        self.read_cut.source_cut.as_ref()
+    }
+
+    /// Hydrate only this request's retained published cut. Concurrent native
+    /// publication may retire the live head, but cannot change this seed's
+    /// dependencies. Inspection neither installs domains nor publishes a repair.
+    pub(crate) fn checkpoint_with_read_domains(
+        &self,
+        store: &dyn crate::durable::ConversationStore,
+    ) -> Result<super::checkpoint::RuntimeClientCheckpoint, RuntimeClientError> {
+        let Some(cut) = self
+            .read_domains
+            .as_ref()
+            .filter(|_| !self.exhausted && !self.journal_failure)
+        else {
+            return self.checkpoint_candidate();
+        };
+        let ReadDomainValues {
+            projection_head,
+            transcript,
+            occupancy,
+            trace,
+            trace_total,
+        } = cut
+            .read(store)
+            .map_err(RuntimeClientError::observation_store_error)?;
+        let mut trace = trace.ok_or_else(|| RuntimeClientError::ObservationUnavailable {
+            message: "complete checkpoint Trace head unavailable".into(),
+        })?;
+        let mut seed = self.clone();
+        super::trace::repair_records(&mut trace.records, &seed.snapshot);
+        stamp_trace_cut(&mut trace, &seed.read_cut);
+        seed.source_frontiers.insert(
+            "trace.records".into(),
+            super::trace::checkpoint_frontier(
+                trace_total,
+                trace.records.len() as u64,
+                trace.next_cursor.as_ref(),
+            ),
+        );
+        seed.snapshot.transcript = transcript;
+        seed.snapshot.context.occupancy = occupancy;
+        seed.snapshot.context.projection_head = projection_head;
+        seed.snapshot.trace = trace;
+        seed.trace_head = super::checkpoint::PreparedTraceHead::default();
+        seed.checkpoint_candidate()
     }
 
     /// Finite capture at the native semantic cut. No Store work or awaiting is
@@ -1566,7 +1627,7 @@ pub(crate) struct ReadDomainValues {
     pub(crate) projection_head: Option<super::snapshot::RuntimeClientProjectionHeadView>,
     pub(crate) transcript: super::snapshot::RuntimeClientTranscriptPage,
     pub(crate) occupancy: Option<super::occupancy::RuntimeClientContextOccupancy>,
-    pub(crate) trace: super::trace::TracePage,
+    pub(crate) trace: Option<super::trace::TracePage>,
     pub(crate) trace_total: u64,
 }
 
@@ -1638,6 +1699,18 @@ pub(crate) fn checkpoint_view(
 
 impl ReadDomainCut {
     pub(crate) fn read(&self, store: &dyn crate::durable::ConversationStore) -> ReadDomains {
+        self.read_with_trace(store, true)
+    }
+
+    pub(crate) fn read_live(&self, store: &dyn crate::durable::ConversationStore) -> ReadDomains {
+        self.read_with_trace(store, false)
+    }
+
+    fn read_with_trace(
+        &self,
+        store: &dyn crate::durable::ConversationStore,
+        materialize_trace: bool,
+    ) -> ReadDomains {
         let mut page = if let Some(cut) = &self.source_cut {
             super::snapshot::transcript_header_view(store.transcript_header_page(
                 cut,
@@ -1655,9 +1728,14 @@ impl ReadDomainCut {
             .source_cut
             .as_ref()
             .ok_or(crate::durable::ConversationStoreError::ObservationCutExpired)?;
-        let mut trace = super::trace::TraceProjection::at_cut(store, trace_cut)?
-            .page(None, super::trace::TRACE_PAGE_LIMIT)?;
-        trace.read_cut = None;
+        let trace = if materialize_trace {
+            let mut trace = super::trace::TraceProjection::at_cut(store, trace_cut)?
+                .page(None, super::trace::TRACE_PAGE_LIMIT)?;
+            trace.read_cut = None;
+            Some(trace)
+        } else {
+            None
+        };
         let trace_total = store.observation_trace_total(self.through)?;
         Ok(ReadDomainValues {
             projection_head: projection_head_view(store, self.through)?,
@@ -1698,7 +1776,12 @@ impl SnapshotCandidate {
         self.snapshot.transcript = domains.transcript;
         self.snapshot.context.occupancy = domains.occupancy;
         self.snapshot.context.projection_head = domains.projection_head;
-        self.snapshot.trace = domains.trace;
+        self.snapshot.trace =
+            domains
+                .trace
+                .ok_or_else(|| RuntimeClientError::ObservationUnavailable {
+                    message: "complete snapshot Trace head unavailable".into(),
+                })?;
         Ok(self)
     }
 }
@@ -2034,6 +2117,7 @@ impl RuntimeClientProjection {
             prepared_journal: std::collections::BTreeMap::new(),
             live_frontiers: std::collections::BTreeMap::new(),
             read_domains_dirty: false,
+            read_domains_requested: false,
             read_failure: None,
             read_revision: 0,
             domain_revisions: std::collections::BTreeMap::new(),
@@ -5029,6 +5113,9 @@ impl RuntimeClientProjection {
             if canonical_header_position(header).is_some_and(|position| {
                 position >= batch.first_position && position <= batch.last_position
             }) {
+                if batch.read_cut.ledger_through > self.canonical_observed_through {
+                    self.install_canonical_tool_proposals(attempt_id, header, &mut events);
+                }
                 self.rebind_canonical_foreground(header, &mut events);
             }
         }
@@ -5062,7 +5149,7 @@ impl RuntimeClientProjection {
             events.push(RuntimeClientEvent::ReadDomainsUpdated {
                 projection_head: self.snapshot.context.projection_head.clone(),
                 transcript: self.snapshot.transcript.clone(),
-                trace: self.snapshot.trace.clone(),
+                trace: None,
                 occupancy: self.snapshot.context.occupancy.clone(),
                 todos: self.snapshot.todos.clone(),
             });
@@ -6107,12 +6194,22 @@ impl RuntimeClientProjection {
     }
 
     fn capture_working_seed(&self) -> CheckpointSeed {
+        let read_cut = self.working_read_cut();
         CheckpointSeed {
+            read_domains: (self.read_domains_dirty
+                || self.snapshot.trace.read_cut.as_ref().is_none_or(|trace| {
+                    trace.through != read_cut.through || trace.source_cut != read_cut.source_cut
+                }))
+            .then(|| ReadDomainCut {
+                revision: read_cut.revision,
+                through: read_cut.through,
+                source_cut: read_cut.source_cut.clone(),
+            }),
             snapshot: self.snapshot.clone(),
             capability_head: self.capability_head.clone(),
             trace_head: self.trace_head.clone(),
             cursor: self.cursor,
-            read_cut: self.working_read_cut(),
+            read_cut,
             exhausted: self.exhausted,
             journal_failure: self.source_state.journal_failure,
             source_pending: !self.source_state.source_layout_failure
@@ -6917,7 +7014,32 @@ impl RuntimeClientProjection {
     }
 
     pub(crate) fn read_domain_candidate(&self) -> Option<ReadDomainCut> {
+        if self.subscribers.is_empty() && !self.read_domains_requested {
+            return None;
+        }
         self.read_domain_cut()
+    }
+
+    /// A published Source failure requires a successful worker-owned repair.
+    /// An ordinary dirty view is materialized from the checkpoint's own seed.
+    pub(crate) fn request_failed_read_domains(&mut self) -> Option<(ReadDomainCut, bool)> {
+        self.read_failure.as_ref()?;
+        self.request_read_domains()
+    }
+
+    /// Request a worker-owned hydration without requiring a subscriber.
+    /// The worker still owns physical reads and their publication fence.
+    pub(crate) fn request_read_domains(&mut self) -> Option<(ReadDomainCut, bool)> {
+        if self.exhausted
+            || (!self.read_domains_dirty && self.read_failure.is_none())
+            || self.validate_source_prefix().is_err()
+        {
+            return None;
+        }
+        let newly_requested = !self.read_domains_requested;
+        self.read_domains_requested = true;
+        self.read_domains_dirty = true;
+        self.read_domain_cut().map(|cut| (cut, newly_requested))
     }
 
     #[cfg(test)]
@@ -6944,18 +7066,8 @@ impl RuntimeClientProjection {
 
     #[cfg(test)]
     pub(crate) fn request_read_domains_for_test(&mut self) {
+        self.read_domains_requested = true;
         self.read_domains_dirty = true;
-    }
-
-    /// An explicit checkpoint may request one retry of a failed derived read.
-    /// Native prefix/layout failures require their own original receipt repair.
-    pub(crate) fn request_failed_read_repair(&mut self) -> Option<(ReadDomainCut, bool)> {
-        if self.exhausted || self.read_failure.is_none() || self.validate_source_prefix().is_err() {
-            return None;
-        }
-        let newly_requested = !self.read_domains_dirty;
-        self.read_domains_dirty = true;
-        self.read_domain_cut().map(|cut| (cut, newly_requested))
     }
 
     pub(crate) fn read_domain_cut(&self) -> Option<ReadDomainCut> {
@@ -6977,6 +7089,7 @@ impl RuntimeClientProjection {
         {
             return false;
         }
+        self.read_domains_requested = false;
         let ReadDomainValues {
             projection_head,
             transcript,
@@ -7005,30 +7118,39 @@ impl RuntimeClientProjection {
             self.wake_subscribers();
         }
         self.read_domains_dirty = false;
-        super::trace::repair_records(&mut trace.records, &self.snapshot);
-        // A read result has not been published yet. Compare its contents using
-        // the cache's existing cut so an unchanged installation stays a no-op.
-        trace.read_cut.clone_from(&self.snapshot.trace.read_cut);
-        self.source_frontiers.insert(
-            "trace.records".into(),
-            super::trace::checkpoint_frontier(
-                trace_total,
-                trace.records.len() as u64,
-                trace.next_cursor.as_ref(),
-            ),
-        );
+        let trace_changed = trace.as_mut().is_some_and(|trace| {
+            super::trace::repair_records(&mut trace.records, &self.snapshot);
+            // This cache owns its original issued cut. A live refresh without
+            // Trace never clears, retags or retires its physical Source pins.
+            trace.read_cut.clone_from(&self.snapshot.trace.read_cut);
+            self.snapshot.trace != *trace
+        });
+        if let Some(trace) = &trace {
+            self.source_frontiers.insert(
+                "trace.records".into(),
+                super::trace::checkpoint_frontier(
+                    trace_total,
+                    trace.records.len() as u64,
+                    trace.next_cursor.as_ref(),
+                ),
+            );
+        }
         if recovered_failure
             || self.snapshot.transcript != transcript
             || self.snapshot.context.occupancy != occupancy
             || self.snapshot.context.projection_head != projection_head
-            || self.snapshot.trace != trace
+            || trace_changed
         {
-            trace.read_cut = None;
             self.snapshot.transcript.clone_from(&transcript);
-            if self.snapshot.trace.records != trace.records {
-                self.trace_head = super::checkpoint::PreparedTraceHead::default();
+            if let Some(trace) = &mut trace {
+                if trace_changed {
+                    trace.read_cut = None;
+                }
+                if self.snapshot.trace.records != trace.records {
+                    self.trace_head = super::checkpoint::PreparedTraceHead::default();
+                }
+                self.snapshot.trace.clone_from(trace);
             }
-            self.snapshot.trace.clone_from(&trace);
             self.snapshot.context.occupancy.clone_from(&occupancy);
             self.snapshot
                 .context
@@ -7038,7 +7160,7 @@ impl RuntimeClientProjection {
                 self.publish(RuntimeClientEvent::ReadDomainsUpdated {
                     projection_head,
                     transcript,
-                    trace,
+                    trace: trace_changed.then_some(trace).flatten(),
                     occupancy,
                     todos: self.snapshot.todos.clone(),
                 });
@@ -10138,7 +10260,7 @@ mod tests {
                 projection_head: None,
                 transcript: super::super::snapshot::RuntimeClientTranscriptPage::default(),
                 occupancy: None,
-                trace: super::super::trace::TracePage::default(),
+                trace: Some(super::super::trace::TracePage::default()),
                 trace_total: 0,
             }),
             true
@@ -10228,6 +10350,75 @@ mod tests {
     }
 
     #[test]
+    fn display_reads_follow_observers_and_explicit_checkpoint_demand() {
+        let mut projection = projection();
+        projection.apply(event_observation(RuntimeEvent::TurnStarted));
+        let cut = projection.read_domain_cut().unwrap();
+        assert!(projection.read_domain_candidate().is_none());
+        let cursor = projection.cursor();
+        let (subscriber, _) = projection.subscribe(cursor).unwrap();
+        assert_eq!(projection.read_domain_candidate(), Some(cut.clone()));
+        projection.remove_subscriber(subscriber);
+        assert!(projection.read_domain_candidate().is_none());
+        assert_eq!(projection.read_domain_cut(), Some(cut.clone()));
+        assert_eq!(projection.request_read_domains(), Some((cut.clone(), true)));
+        assert_eq!(
+            projection.request_read_domains(),
+            Some((cut.clone(), false))
+        );
+        assert_eq!(projection.read_domain_candidate(), Some(cut.clone()));
+        assert_eq!(
+            projection.cursor(),
+            cursor,
+            "demand itself publishes nothing"
+        );
+        let domains = super::ReadDomainValues {
+            projection_head: projection.snapshot.context.projection_head.clone(),
+            transcript: projection.snapshot.transcript.clone(),
+            occupancy: projection.snapshot.context.occupancy.clone(),
+            trace: Some(projection.snapshot.trace.clone()),
+            trace_total: 0,
+        };
+        assert!(projection.install_read_domains(&cut, Ok(domains), false));
+        assert!(!projection.read_domains_requested);
+        assert!(projection.read_domain_candidate().is_none());
+        projection.apply(event_observation(RuntimeEvent::TurnStarted));
+        assert!(projection.read_domain_cut().is_some());
+        assert!(
+            projection.read_domain_candidate().is_none(),
+            "a completed request is not a permanent observer"
+        );
+    }
+
+    #[test]
+    fn dormant_display_preserves_serviceable_semantic_replay() {
+        let mut projection = projection();
+        let cursor = projection.cursor();
+        projection.apply(event_observation(RuntimeEvent::AttemptStarted {
+            attempt_id: attempt(),
+        }));
+        projection.apply(event_observation(RuntimeEvent::TurnStarted));
+        projection.apply(event_observation(RuntimeEvent::TurnCompleted));
+        assert!(projection.read_domain_candidate().is_none());
+        let published = projection.cursor();
+        assert!(published > cursor);
+        let (subscriber, _) = projection.subscribe(cursor).unwrap();
+        let mut consumed = cursor;
+        while consumed < published {
+            let super::SubscriberPoll::Event(event) = projection.poll_subscriber(subscriber) else {
+                panic!("every retained semantic event must remain replayable");
+            };
+            assert_eq!(event.cursor.get(), consumed.get() + 1);
+            consumed = event.cursor;
+        }
+        assert_eq!(
+            projection.poll_subscriber(subscriber),
+            super::SubscriberPoll::Pending
+        );
+        assert!(projection.read_domain_candidate().is_some());
+    }
+
+    #[test]
     fn read_failure_requires_successful_source_read_at_the_current_dependency_revision() {
         let mut projection = projection();
         projection.apply(event_observation(RuntimeEvent::TurnStarted));
@@ -10243,11 +10434,11 @@ mod tests {
         assert!(projection.read_domain_cut().is_none());
         let cursor = projection.cursor();
         assert_eq!(
-            projection.request_failed_read_repair(),
+            projection.request_read_domains(),
             Some((failed.clone(), true))
         );
         assert_eq!(
-            projection.request_failed_read_repair(),
+            projection.request_read_domains(),
             Some((failed.clone(), false))
         );
         assert_eq!(
@@ -10279,7 +10470,7 @@ mod tests {
             projection_head: projection.snapshot.context.projection_head.clone(),
             transcript: projection.snapshot.transcript.clone(),
             occupancy: None,
-            trace: super::super::trace::TracePage::default(),
+            trace: Some(super::super::trace::TracePage::default()),
             trace_total: 0,
         };
         assert!(!projection.install_read_domains(&failed, Ok(domains.clone()), true));
@@ -10317,7 +10508,7 @@ mod tests {
                 projection_head: None,
                 transcript: super::super::snapshot::RuntimeClientTranscriptPage::default(),
                 occupancy: None,
-                trace: super::super::trace::TracePage::default(),
+                trace: Some(super::super::trace::TracePage::default()),
                 trace_total: 0,
             }),
             true

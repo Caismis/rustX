@@ -57,6 +57,9 @@ use super::harness::{CONVERSATION, MODEL};
 
 /// One inbound message answered by one plain streaming text turn.
 pub(crate) const TEXT_TURN: &str = "text_turn";
+/// Structurally complete provider output rejected by native tool preflight.
+/// Its provider/publication facts never authorize canonical tool execution.
+pub(crate) const REJECTED_TOOL_TURN: &str = "rejected_tool_turn";
 pub(crate) const GOAL_ROUND: &str = "goal_round";
 pub(crate) const GOAL_REOPEN_PAUSED: &str = "goal_reopen_paused";
 pub(crate) const GOAL_RECOVER_INTERRUPT: &str = "goal_recover_interrupt";
@@ -848,12 +851,18 @@ fn call_steps(index: u32, call: &ScriptedCall) -> Vec<FakeStep> {
         .collect()
 }
 
+/// A fixed pressure-sized payload keeps crash cuts reachable without clocks
+/// or sleeps, including with the 64 KiB partial policy.
+fn wide_text_chunk() -> FakeStep {
+    text(&format!("{WIDE_TEXT}{}", ".".repeat(65_536)))
+}
+
 /// One plain streaming text turn whose payload provably crosses the
 /// publication byte threshold before the terminal event.
 fn wide_text_turn() -> Vec<FakeStep> {
     vec![
         started(),
-        text(WIDE_TEXT),
+        wide_text_chunk(),
         text(" tail"),
         done(ModelFinishReason::Stop),
     ]
@@ -866,7 +875,7 @@ fn wide_text_turn() -> Vec<FakeStep> {
 fn unresolved_output_turn() -> Vec<FakeStep> {
     vec![
         started(),
-        text(WIDE_TEXT),
+        wide_text_chunk(),
         FakeStep::Emit(ModelEvent::Failed {
             error: ModelError {
                 kind: ModelErrorKind::Transport,
@@ -888,7 +897,7 @@ fn unresolved_output_turn() -> Vec<FakeStep> {
 fn retryable_unresolved_output_turn() -> Vec<FakeStep> {
     vec![
         started(),
-        text(WIDE_TEXT),
+        wide_text_chunk(),
         FakeStep::Emit(ModelEvent::Failed {
             error: ModelError {
                 kind: ModelErrorKind::Transport,
@@ -925,7 +934,7 @@ fn short_text_turn() -> Vec<FakeStep> {
 fn structurally_incomplete_turn() -> Vec<FakeStep> {
     vec![
         started(),
-        text(WIDE_TEXT),
+        wide_text_chunk(),
         FakeStep::Emit(ModelEvent::ToolCallStarted {
             block_index: ContentBlockIndex::new(1),
             call: ToolCallStart {
@@ -945,7 +954,7 @@ fn structurally_incomplete_turn() -> Vec<FakeStep> {
 
 /// A turn that proposes one complete tool call after releasing frames.
 fn calling_turn(call: &ScriptedCall) -> Vec<FakeStep> {
-    let mut steps = vec![started(), text(WIDE_TEXT)];
+    let mut steps = vec![started(), wide_text_chunk()];
     steps.extend(call_steps(1, call));
     steps.push(done(ModelFinishReason::ToolCalls));
     steps
@@ -1050,10 +1059,17 @@ async fn scenario_body(root: &Path, scenario: &str) {
         GOAL_RECOVER_INTERRUPT | GOAL_RECOVER_STALE_INTERRUPT | HUMAN_RECOVER_INTERRUPT => {
             recovered_interrupt(root, scenario).await;
         }
-        TEXT_TURN | TEXT_TURN_NO_CLIENT | TERMINAL_ONLY_TURN | STRUCTURAL_FAILURE => {
+        TEXT_TURN | TEXT_TURN_NO_CLIENT | TERMINAL_ONLY_TURN | STRUCTURAL_FAILURE
+        | REJECTED_TOOL_TURN => {
             let script = match scenario {
                 TERMINAL_ONLY_TURN => short_text_turn(),
                 STRUCTURAL_FAILURE => structurally_incomplete_turn(),
+                REJECTED_TOOL_TURN => calling_turn(&ScriptedCall {
+                    id: "call-unknown",
+                    tool_id: "unknown-tool",
+                    name: "unknown_tool",
+                    arguments: serde_json::json!({}),
+                }),
                 _ => wide_text_turn(),
             };
             let client = scenario != TEXT_TURN_NO_CLIENT;
@@ -1425,7 +1441,7 @@ async fn scenario_body(root: &Path, scenario: &str) {
                 vec![
                     vec![
                         started(),
-                        text(WIDE_TEXT),
+                        wide_text_chunk(),
                         FakeStep::ParkUntilReleased(receiver),
                         text(" tail"),
                         done(ModelFinishReason::Stop),

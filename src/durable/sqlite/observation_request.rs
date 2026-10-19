@@ -11,12 +11,14 @@ use std::io::Write;
 pub(in crate::durable::sqlite) mod composed;
 mod input;
 pub(super) mod provenance;
+pub(in crate::durable::sqlite) mod state_preview;
+#[cfg(test)]
+mod state_preview_tests;
 const SEGMENT: usize = 65_536;
 struct SourceWriter<'a> {
     connection: &'a Connection,
     id: &'a str,
     kind: &'static str,
-    table: &'static str,
     buffer: Vec<u8>,
     written: u64,
     segment: u64,
@@ -86,22 +88,12 @@ pub(super) fn index_state<T: serde::Serialize + schemars::JsonSchema>(
     id: &str,
     value: &T,
 ) -> Result<(), ConversationStoreError> {
-    index_stream(connection, kind, id, "state_observation_fields", value)
-}
-fn index_stream<T: serde::Serialize + schemars::JsonSchema>(
-    connection: &Connection,
-    kind: &'static str,
-    id: &str,
-    table: &'static str,
-    value: &T,
-) -> Result<(), ConversationStoreError> {
     let source =
         crate::runtime::read_layout::SeekableObservationSource::new(value).map_err(storage)?;
     let mut writer = SourceWriter {
         connection,
         id,
         kind,
-        table,
         buffer: Vec::with_capacity(SEGMENT),
         written: 0,
         segment: 0,
@@ -110,7 +102,7 @@ fn index_stream<T: serde::Serialize + schemars::JsonSchema>(
         .copy_original_bytes_to(&mut writer)
         .map_err(|error| storage(error.to_string()))?;
     writer.flush().map_err(|error| storage(error.to_string()))?;
-    index_fields(&writer, &source)?;
+    state_preview::index_fields(&writer, &source)?;
     connection
         .execute(
             "INSERT INTO content_frontiers VALUES(?1,?2,0,'canonical_json_v1',1,?3)",
@@ -119,6 +111,7 @@ fn index_stream<T: serde::Serialize + schemars::JsonSchema>(
         .map_err(|error| storage(error.to_string()))?;
     Ok(())
 }
+#[cfg(test)]
 fn stored_preview(
     source: &crate::runtime::read_layout::SeekableObservationSource,
     path: &[String],
@@ -146,52 +139,6 @@ fn stored_preview(
         16_384,
     )
     .unwrap_or_else(|| b"null".to_vec()))
-}
-fn index_fields(
-    writer: &SourceWriter<'_>,
-    source: &crate::runtime::read_layout::SeekableObservationSource,
-) -> Result<(), ConversationStoreError> {
-    let (connection, id, table) = (writer.connection, writer.id, writer.table);
-    let insert = format!(
-        "INSERT INTO {table}(source_id,path_json,parent_path,ordinal,start,end,children,header_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)"
-    );
-    let mut fields = connection
-        .prepare_cached(&insert)
-        .map_err(|error| storage(error.to_string()))?;
-    let mut failure = None;
-    source
-        .visit_fields_selecting_previews(
-            |_| crate::runtime::read_layout::FieldPreviewPolicy::Inline,
-            |path, path_json, parent, start, end, children, key_span, preview| {
-                let result = (|| {
-                    let header = stored_preview(source, path, start, end, preview)?;
-                    fields
-                        .execute(params![
-                            id,
-                            path_json,
-                            parent.map(|(path, _)| path),
-                            parent.map(|(_, ordinal)| ordinal),
-                            start,
-                            end,
-                            children,
-                            header
-                        ])
-                        .map_err(|error| storage(error.to_string()))?;
-                    if let Some((start, end)) = key_span
-                        && path.last().is_some_and(|part| part.starts_with('@'))
-                    {
-                        index_key(writer, path, "", start, end)?;
-                    }
-                    Ok(())
-                })();
-                result.map_err(|error| {
-                    failure = Some(error);
-                    "native persistent layout unavailable"
-                })
-            },
-        )
-        .map_err(|error| failure.unwrap_or_else(|| storage(error)))?;
-    Ok(())
 }
 fn provenance_source(
     sequence: u64,
@@ -425,7 +372,7 @@ pub(super) fn field_coordinates(
     id: &str,
     path: &[String],
 ) -> Result<(u64, u64, u64), ConversationStoreError> {
-    if table == "request_observation_fields" {
+    if table == "request_source_roots" {
         field_path(path)?;
         return composed::coordinates(connection, id, path);
     }
@@ -447,33 +394,7 @@ pub(super) fn field_coordinates(
     }
     Ok(coordinates)
 }
-struct StoredField {
-    start: u64,
-    end: u64,
-    children: u64,
-    bytes: Option<Vec<u8>>,
-}
-impl StoredField {
-    fn row(row: &rusqlite::Row<'_>, offset: usize) -> rusqlite::Result<Self> {
-        Ok(Self {
-            start: row.get(offset)?,
-            end: row.get(offset + 1)?,
-            children: row.get(offset + 2)?,
-            bytes: row.get(offset + 3)?,
-        })
-    }
-    fn materialize(self) -> Result<(u64, u64, u64, Vec<u8>), ConversationStoreError> {
-        if self.start > self.end
-            || self.end > crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX
-        {
-            return Err(storage("native field coordinates unavailable"));
-        }
-        let bytes = self
-            .bytes
-            .ok_or_else(|| storage("native state field header unavailable"))?;
-        Ok((self.start, self.end, self.children, bytes))
-    }
-}
+use state_preview::Field as StoredField;
 // Count original entries, including duplicate object keys. Value normalization
 // remains last-wins, exactly as the previous inline-preview producer.
 fn original_node_count(bytes: &[u8]) -> Result<u64, ConversationStoreError> {
@@ -537,9 +458,7 @@ fn header_columns(table: &str) -> Result<&'static str, ConversationStoreError> {
     if table != "state_observation_fields" {
         return Err(storage("unknown native state header table"));
     }
-    Ok(
-        "start,end,children,CASE WHEN typeof(header_json)='blob' AND length(header_json)<=16384 THEN header_json END",
-    )
+    Ok(state_preview::COLUMNS)
 }
 type FieldWithKey = (u64, u64, u64, Vec<u8>, Option<Vec<u8>>);
 fn field_with_key(
@@ -549,13 +468,14 @@ fn field_with_key(
     path: &[String],
 ) -> Result<FieldWithKey, ConversationStoreError> {
     field_path(path)?;
-    if table == "request_observation_fields" {
+    if table == "request_source_roots" {
         return composed::field(connection, id, path);
     }
     let (field,key)=connection.prepare_cached(&format!("SELECT {},CASE WHEN typeof(key_header)='blob' AND length(key_header)<=4096 THEN key_header END FROM {table} WHERE source_id=?1 AND path_json=?2",header_columns(table)?)).map_err(|error|storage(error.to_string()))?
-        .query_row(params![id,field_path(path)?],|row|Ok((StoredField::row(row,0)?,row.get::<_,Option<Vec<u8>>>(4)?))).optional().map_err(|error|storage(error.to_string()))?
+        .query_row(params![id,field_path(path)?],|row|Ok((StoredField::row(row,0)?,row.get::<_,Option<Vec<u8>>>(6)?))).optional().map_err(|error|storage(error.to_string()))?
         .ok_or_else(||ConversationStoreError::InvalidReference("request field is unavailable".into()))?;
-    let (start, end, children, bytes) = field.materialize()?;
+    let source = state_preview::Source::load(connection, id)?;
+    let (start, end, children, bytes) = field.materialize(connection, id, path, &source)?;
     Ok((start, end, children, bytes, key))
 }
 pub(super) fn field_from(
@@ -587,11 +507,11 @@ pub(super) fn header_at(
     validate_start(connection, sequence, through)?;
     let key = sequence.to_string();
     let (start, end, children_total, bytes) =
-        field_from(connection, "request_observation_fields", &key, &[])?;
+        field_from(connection, "request_source_roots", &key, &[])?;
     let summary = super::observation_trace::summary(connection, sequence, through)?;
     let count = field_coordinates(
         connection,
-        "request_observation_fields",
+        "request_source_roots",
         &key,
         &["messages".into()],
     )?
@@ -632,7 +552,7 @@ pub(super) fn page_at(
     validate_start(connection, sequence, through)?;
     page_from(
         connection,
-        "request_observation_fields",
+        "request_source_roots",
         &sequence.to_string(),
         path,
         offset,
@@ -680,7 +600,7 @@ pub(super) fn page_from(
     if limit == 0 || limit > HEADER_PAGE_MAX {
         return Err(ConversationStoreError::InvalidContentRange);
     }
-    if table == "request_observation_fields" {
+    if table == "request_source_roots" {
         field_path(path)?;
         return composed::page(connection, id, path, offset, limit);
     }
@@ -692,12 +612,14 @@ pub(super) fn page_from(
         .map_err(|error|storage(error.to_string()))?.query_map(params![id,field_path(path)?,offset,limit],
             |row| {let (path,key)=page_metadata(row,0)?;Ok((path,StoredField::row(row,2)?,key))})
         .map_err(|error|storage(error.to_string()))?.collect::<Result<Vec<_>,_>>().map_err(|error|storage(error.to_string()))?;
+    let source = state_preview::Source::load(connection, id)?;
     let mut fields = rows
         .into_iter()
         .map(|(path, field, key)| {
-            let (start, end, children_total, bytes) = field.materialize()?;
             let path: Vec<String> =
                 serde_json::from_str(&path).map_err(|error| storage(error.to_string()))?;
+            let (start, end, children_total, bytes) =
+                field.materialize(connection, id, &path, &source)?;
             let content = metadata_list(table, &path, &bytes, "content")?;
             let collections = metadata_list(table, &path, &bytes, "collections")?;
             let value: serde_json::Value =
@@ -751,7 +673,7 @@ pub(super) fn read_at(
     read_from(
         connection,
         "trace_request",
-        "request_observation_fields",
+        "request_source_roots",
         &sequence.to_string(),
         path,
         offset,
@@ -784,7 +706,7 @@ pub(super) fn read_from(
     offset: u64,
     max_bytes: u32,
 ) -> Result<ObservationValueChunk, ConversationStoreError> {
-    if table == "request_observation_fields" {
+    if table == "request_source_roots" {
         field_path(path)?;
         return composed::range(connection, id, path, offset, max_bytes);
     }
@@ -830,11 +752,11 @@ pub(super) fn field_header_at(
     validate_start(connection, sequence, through)?;
     let key = sequence.to_string();
     let (start, end, children_total, bytes, name) =
-        field_with_key(connection, "request_observation_fields", &key, path)?;
+        field_with_key(connection, "request_source_roots", &key, path)?;
     let value: serde_json::Value =
         serde_json::from_slice(&bytes).map_err(|_| storage("native request field corrupt"))?;
     let deferred = end - start > bytes.len() as u64
-        || message_descriptor_deferred("request_observation_fields", path, &value);
+        || message_descriptor_deferred("request_source_roots", path, &value);
     Ok(RequestObservationField {
         path: path.to_vec(),
         key: name
@@ -844,8 +766,8 @@ pub(super) fn field_header_at(
             })
             .transpose()?,
         value,
-        content: metadata_list("request_observation_fields", path, &bytes, "content")?,
-        collections: metadata_list("request_observation_fields", path, &bytes, "collections")?,
+        content: metadata_list("request_source_roots", path, &bytes, "content")?,
+        collections: metadata_list("request_source_roots", path, &bytes, "collections")?,
         encoded_bytes: end - start,
         children_total,
         deferred,
@@ -1063,7 +985,7 @@ pub(super) fn outcome_read(
 // Only a native request-message producer owns this descriptor flag. An
 // identically named property inside arbitrary original JSON stays opaque.
 fn message_descriptor_deferred(table: &str, path: &[String], value: &serde_json::Value) -> bool {
-    table == "request_observation_fields"
+    table == "request_source_roots"
         && path.len() == 2
         && path[0] == "messages"
         && path[1].parse::<u64>().is_ok()
@@ -1078,7 +1000,7 @@ fn metadata_list<T: serde::de::DeserializeOwned + schemars::JsonSchema>(
 ) -> Result<Vec<T>, ConversationStoreError> {
     // Only message_value appends these typed fields. Original Journal, state
     // and arbitrary request JSON retain their own property-name semantics.
-    if table != "request_observation_fields"
+    if table != "request_source_roots"
         || path.len() != 2
         || path[0] != "messages"
         || path[1].parse::<u64>().is_err()
@@ -1346,26 +1268,18 @@ fn index_key(
         encoded_bytes: end - start,
     };
     let header = serde_json::to_vec(&descriptor).map_err(|error| storage(error.to_string()))?;
-    let key_value =
-        serde_json::to_vec(&descriptor.preview).map_err(|error| storage(error.to_string()))?;
-    let insert = format!(
-        "INSERT INTO {}(source_id,path_json,parent_path,ordinal,start,end,children,header_json) VALUES(?1,?2,NULL,NULL,?3,?4,0,?5)",
-        writer.table
-    );
+    let insert = "INSERT INTO state_observation_fields(source_id,path_json,parent_path,ordinal,start,end,children,preview_nodes,preview_kind) VALUES(?1,?2,NULL,NULL,?3,?4,0,1,3)";
     writer
         .connection
         .execute(
-            &insert,
-            params![writer.id, encoded_path(&key_path)?, start, end, key_value],
+            insert,
+            params![writer.id, encoded_path(&key_path)?, start, end],
         )
         .map_err(|error| storage(error.to_string()))?;
     writer
         .connection
         .execute(
-            &format!(
-                "UPDATE {} SET key_path=?3,key_header=?4 WHERE source_id=?1 AND path_json=?2",
-                writer.table
-            ),
+            "UPDATE state_observation_fields SET key_path=?3,key_header=?4 WHERE source_id=?1 AND path_json=?2",
             params![
                 writer.id,
                 encoded_path(path)?,

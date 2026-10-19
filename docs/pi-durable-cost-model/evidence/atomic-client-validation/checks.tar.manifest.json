@@ -1,0 +1,26 @@
+{
+  "pi-partial-agent-final.log": {
+    "bytes": 8443,
+    "sha256": "d369987a2fd7a2db53f7e1cd6b0edf8ff45a4b08f0ebd95fad8651dc5b028d48"
+  },
+  "pi-partial-clippy-final.log": {
+    "bytes": 117,
+    "sha256": "069627889036ee8c480bc5911485c1679d4013f554d66568162a44e2b38691b2"
+  },
+  "pi-partial-order-diagnostic.log": {
+    "bytes": 682,
+    "sha256": "86a8eb2034dffff9292e4f77d12cbb223ef54564322f95433b80adae31eb870f"
+  },
+  "pi-partial-scripted-second.log": {
+    "bytes": 65964,
+    "sha256": "282eeb5080b0a69c37627bd3fbff5b65455d9a03fae9b92f4aec17749920ccd3"
+  },
+  "pi-settlement-scripted-initial.log": {
+    "bytes": 27528,
+    "sha256": "5d4284243fd221f8c7beb155224572e43e17a95c4dbfb87a6f62815675af22c2"
+  },
+  "pi-settlement-scripted-rest-initial.log": {
+    "bytes": 44220,
+    "sha256": "1b45cc6e915d45c9b6f6b52b859b69891ad28bb6a5c36b53fcebd105ed457089"
+  }
+}

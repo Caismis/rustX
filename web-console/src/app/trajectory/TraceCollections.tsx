@@ -1,5 +1,5 @@
 import {useCallback,useEffect,useMemo,useRef,useState} from 'react';
-import type {CheckpointPage,CollectionFrontier} from '../../../../protocol/app-server/v50';
+import type {CheckpointPage,CollectionFrontier} from '../../../../protocol/app-server/v51';
 import {validateCanonicalInspectionPage} from '../../../../protocol/app-server/trace-inspection';
 import type {TraceFieldReader} from '../../client/trace';
 import {useTranslation} from '../../locale/react';

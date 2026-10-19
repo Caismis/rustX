@@ -4137,7 +4137,11 @@ export type RuntimeClientEvent =
   | {
       projection_head?: RuntimeClientProjectionHeadView | null;
       transcript: RuntimeClientTranscriptPage;
-      trace: TracePage;
+      /**
+       * A supplied native Trace head replaces the loaded cache. None leaves
+       * its issued cut/pins intact; native facts advertise independent Trace reads.
+       */
+      trace?: TracePage | null;
       occupancy?: RuntimeClientContextOccupancy | null;
       todos?: TodoSnapshot | null;
       type: 'read_domains_updated';
@@ -13236,7 +13240,11 @@ export interface RuntimeClientProtocolEvent {
     | {
         projection_head?: RuntimeClientProjectionHeadView | null;
         transcript: RuntimeClientTranscriptPage;
-        trace: TracePage;
+        /**
+         * A supplied native Trace head replaces the loaded cache. None leaves
+         * its issued cut/pins intact; native facts advertise independent Trace reads.
+         */
+        trace?: TracePage | null;
         occupancy?: RuntimeClientContextOccupancy | null;
         todos?: TodoSnapshot | null;
         type: 'read_domains_updated';

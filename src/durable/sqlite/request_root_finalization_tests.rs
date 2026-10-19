@@ -1,7 +1,7 @@
-// A composed Source is published once under the original Request witness. Shared
+// A composed Source is published once for its committed Request identity. Shared
 // immutable subtrees are never rewritten when a later Request adds an item.
 #[test]
-fn t08_t14_t19_certified_request_roots_finalize_once_with_exact_legacy_geometry_and_witness() {
+fn t08_t14_t19_request_roots_finalize_once_with_exact_legacy_geometry_and_checksum() {
     let store = fragment_fixture();
     let updates = Arc::new(AtomicUsize::new(0));
     let observed = updates.clone();
@@ -43,8 +43,8 @@ fn t08_t14_t19_certified_request_roots_finalize_once_with_exact_legacy_geometry_
             snapshot
         );
         let connection = store.lock().unwrap();
-        let seats: u64 = connection.query_row("SELECT count(*) FROM request_observation_fields WHERE source_id=?1 AND path_json='[]' AND length(shape_witness)=32", [sequence.to_string()], |r| r.get(0)).unwrap();
-        assert_eq!(seats, 1, "one original Request witness seat");
+        let seats: u64 = connection.query_row("SELECT count(*) FROM request_source_roots WHERE source_id=?1 AND length(checksum)=32", [sequence.to_string()], |r| r.get(0)).unwrap();
+        assert_eq!(seats, 1, "one committed Request Source root");
         let roots: u64 = connection
             .query_row(
                 "SELECT count(*) FROM request_source_roots WHERE source_id=?1",
@@ -108,7 +108,6 @@ fn t10_t14_t19_certified_root_finalization_failure_rolls_back_only_optional_sour
     {
         let connection = store.lock().unwrap();
         for table in [
-            "request_observation_fields",
             "request_source_roots",
             "request_source_nodes",
             "request_source_pages",

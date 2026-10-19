@@ -1,0 +1,24 @@
+diff --git a/src/durable/sqlite/observation_request/state_preview_tests.rs b/src/durable/sqlite/observation_request/state_preview_tests.rs
+index 41dbd1bf..a02f77f3 100644
+--- a/src/durable/sqlite/observation_request/state_preview_tests.rs
++++ b/src/durable/sqlite/observation_request/state_preview_tests.rs
+@@ -29,2 +29,5 @@ fn state_preview_capture_skips_unused_previews_and_lazy_reads_match_eager_oracle
+-    let value = fixture();
+-    let original = SeekableObservationSource::new(&value).unwrap();
++    assert_lazy_matches_eager(&fixture());
++}
++
++fn assert_lazy_matches_eager<T: serde::Serialize + schemars::JsonSchema>(value: &T) {
++    let original = SeekableObservationSource::new(value).unwrap();
+@@ -46 +49 @@ fn state_preview_capture_skips_unused_previews_and_lazy_reads_match_eager_oracle
+-    index_state(&connection, "preview_test", "source", &value).unwrap();
++    index_state(&connection, "preview_test", "source", value).unwrap();
+@@ -49,0 +53,8 @@ fn state_preview_capture_skips_unused_previews_and_lazy_reads_match_eager_oracle
++    // A later immutable source cannot replace the selected historical source.
++    index_state(
++        &connection,
++        "preview_test",
++        "later",
++        &serde_json::json!({"later":true}),
++    )
++    .unwrap();

@@ -1284,6 +1284,15 @@ impl ConversationInboundMailbox {
         })?
     }
 
+    /// Holds the existing pending publication ordering while the Agent owner
+    /// commits a final-output boundary. This lease owns no model semantics.
+    pub(crate) fn pending_publication(&self) -> PendingPublication<'_> {
+        PendingPublication {
+            mailbox: self,
+            _guard: self.publication.lock().expect("inbound publication lock"),
+        }
+    }
+
     /// Claims current pending rows through the selected watermark and publishes
     /// only the committed receipt. Selection is never payload authority.
     ///
@@ -1303,10 +1312,24 @@ impl ConversationInboundMailbox {
                 actual: batch.conversation_id().clone(),
             });
         }
-        let _publication = self.publication.lock().expect("inbound publication lock");
+        let publication = self.pending_publication();
         let adopted = self
             .inbound
             .adopt_pending_batch(batch.watermark(), attempt_id)?;
+        Ok(publication.publish_adoption(adopted))
+    }
+}
+
+/// Pending observation publication ordering, borrowed only for a native commit.
+pub(crate) struct PendingPublication<'a> {
+    mailbox: &'a ConversationInboundMailbox,
+    _guard: std::sync::MutexGuard<'a, ()>,
+}
+impl PendingPublication<'_> {
+    pub(crate) fn publish_adoption(
+        &self,
+        adopted: crate::durable::inbox::AdoptedBatch,
+    ) -> AdoptedInbound {
         let adoption = adopted.adoption;
         let items: Vec<_> = adopted
             .items
@@ -1319,16 +1342,20 @@ impl ConversationInboundMailbox {
             })
             .collect();
         if !items.is_empty() {
-            let state = self.state.lock().expect("inbound mailbox lock poisoned");
+            let state = self
+                .mailbox
+                .state
+                .lock()
+                .expect("inbound mailbox lock poisoned");
             if let Some(observer) = &state.observer {
                 observer.on_pending(adopted.pending_observation.as_ref(), &adopted.read_cut);
             }
         }
-        Ok(AdoptedInbound {
+        AdoptedInbound {
             items,
             adoption,
             canonical_receipts: adopted.canonical_receipts,
-        })
+        }
     }
 }
 

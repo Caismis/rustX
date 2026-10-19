@@ -2,7 +2,7 @@ import {applicationReceipt} from './fixture';
 import {readCut} from './fixture';
 import { checkpoint } from "./fixture";
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { RuntimeClientSnapshot } from '../../protocol/app-server/v50';
+import type { RuntimeClientSnapshot } from '../../protocol/app-server/v51';
 import { interactionKey, OutcomeUncertain, RequestNotDispatched, RpcFailure } from '../src/client/app-server';
 import { conversation } from '../src/bindings/projection';
 import { deriveSessionProductState } from '../src/bindings/session-product';
@@ -44,7 +44,7 @@ describe('native App Server connection', () => {
     const s = server(); await s.connect();
     expect(s.client.getSnapshot().connection).toBe('connected');
     expect(s.client.getSnapshot().capabilities).toEqual(capabilities);
-    expect(s.requests[0].request).toMatchObject({ method: 'initialize', params: { protocol_version: 50 } });
+    expect(s.requests[0].request).toMatchObject({ method: 'initialize', params: { protocol_version: 51 } });
     expect(JSON.stringify(s.client.log.getSnapshot())).not.toContain(TOKEN);
   });
   it('rejects incompatible versions and missing native capabilities', async () => {

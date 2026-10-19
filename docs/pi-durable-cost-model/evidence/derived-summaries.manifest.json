@@ -1,0 +1,73 @@
+{
+  "archive_sha256": "9cf03ffc47ec00a70c0b7e988fc25e62f1bb04cf0614586b291cc9cc1b140fa8",
+  "files": {
+    "atomic-leaveout/formal-summary.json": {
+      "bytes": 93511,
+      "sha256": "7233c18ecf2b5a5568ae77ef8fef0b67db4ddd54503eaef0fa57f2b63a04e89f"
+    },
+    "atomic-measurements/formal-summary.json": {
+      "bytes": 93412,
+      "sha256": "5bd9e0b54063d317bfed63d3ce4e3cf77911299031b8330939ed9dd71e416172"
+    },
+    "auth-leaveout/formal-summary.json": {
+      "bytes": 93521,
+      "sha256": "4f1c7cccd32a0d08dc2a7162557fd102906062a6b5bc42ae3e751d2391ff573f"
+    },
+    "combined-measurements/pi-combined-summary.json": {
+      "bytes": 93497,
+      "sha256": "a90c45f1a34d4d17c537de2a4293571b911ddc545d665fc91fd1533c29b0f577"
+    },
+    "combined-measurements/pi-final-base-cold-summary.json": {
+      "bytes": 53528,
+      "sha256": "53b45c566d58d36f1484b3806079cebeddf06ad54d8f4a873a696c11e155388f"
+    },
+    "combined-measurements/pi-final-base-warm-summary.json": {
+      "bytes": 46978,
+      "sha256": "3df054cb3f9a441595d2c7fada1f7aeb073012ae0830bddc97c75f0c0ab42cf8"
+    },
+    "combined-measurements/pi-final-main-cold-summary.json": {
+      "bytes": 54374,
+      "sha256": "39d4ff35b6b240715785d15a673820f78cb875a457bbd1071f07e8e699780fae"
+    },
+    "combined-measurements/pi-final-main-summary.json": {
+      "bytes": 93671,
+      "sha256": "69cb537503a7e890753a578ef036c7cad7c295ec6aaa7919b6a802da23a69600"
+    },
+    "combined-measurements/pi-final-main-warm-summary.json": {
+      "bytes": 47515,
+      "sha256": "f2990da8ef9860cf10df6f9591a840a71634bb9f8e23047eb547c282bcc88665"
+    },
+    "event-index-measurements/formal-summary.json": {
+      "bytes": 93227,
+      "sha256": "5acabe111511088923fc40b66ed39d45bb4efaf7855132d2102da82dbb8dea98"
+    },
+    "integrity-measurements/formal-summary.json": {
+      "bytes": 93466,
+      "sha256": "8e07d0c3877811ce5b6b3680c3c7e82c5f6609d5c5707c1f60288964d18e8ffd"
+    },
+    "lazy-preview-measurements/formal-summary.json": {
+      "bytes": 93232,
+      "sha256": "5366bb29e94a0a6289425f4c5c0779fbfbdf13c6caafdf9101602e6a1810e3ba"
+    },
+    "partial-measurements/formal-summary.json": {
+      "bytes": 93371,
+      "sha256": "d37c17f81d5d269f590f931a0a0a97105c6ee7943fafa87c99e6a577a05a01f8"
+    },
+    "resident-bound-summary.json": {
+      "bytes": 93308,
+      "sha256": "799a383d6e53e13a329a8ea01b4e902790e2a1d97e28dd4dce8b3eef8a063ed3"
+    },
+    "resident-summary.json": {
+      "bytes": 93161,
+      "sha256": "15a18e32dfb63530759336e4b0008187710a9de3f9615c190cba56448ed52052"
+    },
+    "template-complete-summary.json": {
+      "bytes": 93429,
+      "sha256": "78871a2d1123a3f25951683bdbacc1a2afdac9dc07e358925a84a50dffde4de4"
+    },
+    "template-summary.json": {
+      "bytes": 31795,
+      "sha256": "a9f01eeedc4e469fe3f1f3aa5103b160c9d651c96c7342578b9b5881ebf45877"
+    }
+  }
+}

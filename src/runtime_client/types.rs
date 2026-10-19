@@ -271,7 +271,8 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// Version 69 separates typed projection history and exact frozen request occurrences from canonical execution.
 /// Version 70 represents absent wire fields for native-covered Tool associations.
 /// Version 71 adds bounded observation and exact source-unavailability handling.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 71;
+/// Version 72 permits Session enrichment without replacing the separately pinned Trace cache.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 72;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1361,7 +1362,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 71);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 72);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

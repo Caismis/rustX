@@ -465,7 +465,7 @@ fn verify_header_layout(connection: &Connection) -> Result<(), ConversationStore
             "CAST(observation_source_id AS INTEGER)=started_sequence",
         ),
         (
-            "request_observation_fields",
+            "request_source_roots",
             "REFERENCES request_snapshots(observation_source_id)",
         ),
     ] {
