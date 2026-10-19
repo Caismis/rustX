@@ -7621,6 +7621,9 @@ when required by lineage/dependency closure; no stronger global audit is implied
   A business source may postdate frozen input; selected input references may not.
 - Full native input cuts remain distinct from Journal-only audit cuts.
   Fingerprints do not reconstruct missing prompts or generated output.
+- Complete archive validation selects dependencies at its captured native cut and
+  releases each bounded local audit closure before reading the next. A live
+  materialization budget is not a limit on retained lifetime history.
 - Local audit survives for the Conversation lifetime. Inherited source audit is
   separate from local execution, admission, quota and correlation. History
   overlap alone does not create a Summary generation dependency.

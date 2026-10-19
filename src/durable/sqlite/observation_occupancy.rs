@@ -179,11 +179,16 @@ pub(super) fn read(
         "compaction_completed",
     ] {
         let row: Option<(u64, Option<Vec<u8>>)> = if kind == "compaction_completed" {
+            // Fix the index's middle expression even though the kind implies
+            // eligibility, so SQLite can seek and order directly by sequence.
             connection
                 .query_row(
                     "SELECT sequence,observation_occupancy
                      FROM events INDEXED BY events_context_reading_idx
                      WHERE json_extract(event_json,'$.event.type')=?1
+                       AND (json_extract(event_json,'$.event.type')='compaction_completed'
+                            OR (COALESCE(json_type(event_json,'$.event.usage'),'null')!='null'
+                                AND json_extract(event_json,'$.event.owner.type')='agent'))=1
                        AND sequence<=?2
                      ORDER BY sequence DESC LIMIT 1",
                     params![kind, through],

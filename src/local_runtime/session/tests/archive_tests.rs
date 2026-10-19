@@ -2008,3 +2008,75 @@ async fn archive_preserves_consumer_defined_auxiliary_attribution() {
     );
     assert!(records(&files, &conversation, "requests").is_empty());
 }
+
+#[tokio::test]
+async fn archive_streams_more_summary_dependencies_than_one_materialization_budget() {
+    let (directory, catalog, _) = open_catalog();
+    let (conversation, session, _) = append_history(&catalog, &[]);
+    let (store, _) = super::artifact_lineage_tests::source(&catalog, false);
+    let (before_growth, before_cut) = store.archive_frontiers().unwrap();
+    // 350 * four facts * 12 KiB exceeds the old cumulative 16 MiB limit.
+    for index in 0..350 {
+        super::artifact_lineage_tests::link_summary_generation(&store, &format!("summary-{index}"));
+    }
+    store.archive_validate(&before_growth, &before_cut).unwrap();
+    let archive =
+        SessionArchiveProducer::prepare(directory.path(), &session, &CancellationToken::new())
+            .unwrap();
+    let files = decode(archive).await;
+    let audit = records(&files, &conversation, "auxiliary_audit");
+    assert_eq!(audit.len(), 350 * 4);
+    assert_eq!(
+        records(&files, &conversation, "projections").len(),
+        usize::try_from(before_growth.projections).unwrap() + 350
+    );
+    let calls: std::collections::BTreeSet<_> = audit
+        .iter()
+        .filter(|row| row["event"]["type"] == "auxiliary_call_started")
+        .map(|row| row["event"]["call_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(calls.len(), 350);
+}
+
+#[test]
+fn archive_summary_validation_uses_captured_cut_and_rejects_visible_corruption() {
+    let (_directory, catalog, _) = open_catalog();
+    let (_, session, _) = append_history(&catalog, &[]);
+    let (store, _) = super::artifact_lineage_tests::source(&catalog, false);
+    let (first, _, _) =
+        super::artifact_lineage_tests::link_summary_generation(&store, "before-cut");
+    let (frontiers, cut) = store.archive_frontiers().unwrap();
+    let (later, _, _) = super::artifact_lineage_tests::link_summary_generation(&store, "after-cut");
+    let (current_frontiers, current_cut) = store.archive_frontiers().unwrap();
+    assert!(current_cut.projection_activation > cut.projection_activation);
+    assert!(current_cut.journal > cut.journal);
+    store.archive_validate(&frontiers, &cut).unwrap();
+    store
+        .archive_validate(&current_frontiers, &current_cut)
+        .unwrap();
+
+    let connection =
+        rusqlite::Connection::open(catalog.database_path(&session, store.conversation_id()))
+            .unwrap();
+    // A missing mandatory record after capture cannot poison the older view.
+    connection
+        .execute(
+            "DELETE FROM auxiliary_audit_facts WHERE call_id=?1",
+            [later.as_str()],
+        )
+        .unwrap();
+    store.archive_validate(&frontiers, &cut).unwrap();
+    assert!(
+        store
+            .archive_validate(&current_frontiers, &current_cut)
+            .is_err()
+    );
+    // The same corruption within the captured dependency must still be refused.
+    connection
+        .execute(
+            "DELETE FROM auxiliary_audit_facts WHERE call_id=?1",
+            [first.as_str()],
+        )
+        .unwrap();
+    assert!(store.archive_validate(&frontiers, &cut).is_err());
+}

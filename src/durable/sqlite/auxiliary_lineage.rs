@@ -1634,11 +1634,11 @@ pub(super) fn verify_installed_snapshots(
     Ok(())
 }
 
-/// Compare every persisted checkpoint reference with the independently owned
-/// inherited-source snapshots. Local references stay in the local audit domain.
-#[allow(clippy::too_many_lines)] // SQL scalar scans keep the closure bounded before decoding.
+/// Validate captured checkpoint dependencies one at a time. A materialization
+/// budget bounds live data, not the Conversation's retained execution lifetime.
 pub(super) fn validate_store_closure(
     connection: &Connection,
+    cut: &crate::context::resources::ResourceReadCut,
 ) -> Result<(), ConversationStoreError> {
     let scope: String = connection
         .query_row(
@@ -1648,6 +1648,14 @@ pub(super) fn validate_store_closure(
         )
         .map_err(|error| storage(format!("inherited Summary audit scope: {error}")))?;
     let scope = ConversationId::parse(scope).map_err(invalid)?;
+    let limits = ResourceLimits::default();
+    super::super::compaction_resources::validate(connection, &scope, cut, limits)?;
+    let frontier = super::selected_frontier(
+        connection,
+        Some((cut.ledger, cut.journal, cut.projection_activation)),
+    )?;
+    // Inherited snapshots belong to the immutable, bounded bootstrap, whereas
+    // local Summary history can grow throughout the Conversation's lifetime.
     let inherited_keys = load_all(connection)?
         .into_iter()
         .map(|snapshot| {
@@ -1658,79 +1666,52 @@ pub(super) fn validate_store_closure(
             )
         })
         .collect::<BTreeSet<_>>();
-    let mut statement = connection
-        .prepare(
-            "SELECT CASE WHEN octet_length(candidate_json)<=8388608 THEN
-                    json_extract(candidate_json,'$.summary_generation.conversation_id') END,
-                 CASE WHEN octet_length(candidate_json)<=8388608 THEN
-                    json_extract(candidate_json,'$.summary_generation.call_id') END,
-                 CASE WHEN octet_length(candidate_json)<=8388608 THEN
-                    json_extract(candidate_json,'$.summary_generation.through_journal') END
-             FROM projection_checkpoints
-             WHERE json_extract(candidate_json,'$.summary_generation.call_id') IS NOT NULL
-             ORDER BY checkpoint_id",
-        )
-        .map_err(|error| storage(format!("checkpoint Summary audit closure: {error}")))?;
-    let rows = statement
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, Option<String>>(0)?,
-                row.get::<_, Option<String>>(1)?,
-                row.get::<_, Option<i64>>(2)?,
-            ))
-        })
-        .map_err(|error| storage(format!("read checkpoint Summary audit closure: {error}")))?;
     let mut expected = BTreeSet::new();
-    let mut local = BTreeSet::new();
-    for row in rows {
-        let (source, call, through) =
-            row.map_err(|error| storage(format!("collect checkpoint Summary audit: {error}")))?;
-        let source = source.ok_or_else(|| invalid("invalid Summary source identity"))?;
-        let call = call.ok_or_else(|| invalid("invalid Summary Call identity"))?;
-        let through = through.ok_or_else(|| invalid("invalid Summary provenance cut"))?;
-        let source = ConversationId::parse(source).map_err(invalid)?;
-        let call = AuxiliaryCallId::parse(call).map_err(invalid)?;
-        let through = sequence_from_i64(through)?;
-        if source == scope {
-            local.insert((call, through));
+    let mut after = crate::context::checkpoint::ProjectionActivationId(0);
+    while after.0 < frontier {
+        let reference = {
+            let checkpoint =
+                super::timeline_prefix(connection, after, 1, frontier, limits.total_bytes)?
+                    .pop()
+                    .ok_or_else(|| invalid("captured Summary timeline did not advance"))?;
+            after = checkpoint.activation.activation;
+            checkpoint.candidate.summary_generation
+        };
+        // The checkpoint payload has been released before materializing audit.
+        let Some(reference) = reference else { continue };
+        if reference.conversation_id == scope {
+            if reference.through_journal > cut.journal.0 {
+                return Err(invalid(
+                    "Summary dependency is after the captured Journal cut",
+                ));
+            }
+            let snapshot = local_snapshot(
+                connection,
+                &scope,
+                &reference,
+                limits.total_items,
+                limits.total_bytes,
+            )?;
+            validate_snapshot_or_local(&snapshot.value)?;
         } else {
-            expected.insert((source, call, through));
+            let key = (
+                reference.conversation_id,
+                reference.call_id,
+                reference.through_journal,
+            );
+            if !inherited_keys.contains(&key) {
+                return Err(invalid(
+                    "missing inherited Summary dependency at archive cut",
+                ));
+            }
+            // Membership is checked first, bounding this set by bootstrap size.
+            expected.insert(key);
         }
     }
     if expected != inherited_keys {
         return Err(invalid(
             "inherited Summary audit closure differs from retained checkpoints",
         ));
-    }
-    let mut remaining_records = ResourceLimits::default().total_items;
-    let mut remaining_bytes = ResourceLimits::default().total_bytes;
-    for (call_id, through_journal) in local {
-        let snapshot = local_snapshot(
-            connection,
-            &scope,
-            &SummaryGenerationRef {
-                conversation_id: scope.clone(),
-                call_id,
-                through_journal,
-            },
-            remaining_records,
-            remaining_bytes,
-        )?;
-        validate_snapshot_or_local(&snapshot.value)?;
-        remaining_records = remaining_records
-            .checked_sub(snapshot.value.records.len())
-            .ok_or_else(|| {
-                ConversationStoreError::ResourceBoundExceeded(
-                    "local Summary audit records exceed archive bounds".into(),
-                )
-            })?;
-        remaining_bytes = remaining_bytes
-            .checked_sub(snapshot.encoded_bytes)
-            .ok_or_else(|| {
-                ConversationStoreError::ResourceBoundExceeded(
-                    "local Summary audit bytes exceed archive bounds".into(),
-                )
-            })?;
     }
     Ok(())
 }

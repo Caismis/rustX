@@ -113,7 +113,8 @@ impl SqliteConversationStore {
         let transaction = conn.unchecked_transaction().map_err(error)?;
         super::provenance::turns(&transaction).map_err(error)?;
         super::provenance::responses(&transaction).map_err(error)?;
-        super::projection::validate_auxiliary_lineage_store(&transaction).map_err(error)?;
+        super::projection::validate_auxiliary_lineage_store(&transaction, read_cut)
+            .map_err(error)?;
         super::projection::archive_history(
             &transaction,
             &self.conversation_id,

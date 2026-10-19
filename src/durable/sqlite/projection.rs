@@ -1652,8 +1652,9 @@ pub(super) fn verify_inherited_auxiliary_audits(
 
 pub(super) fn validate_auxiliary_lineage_store(
     connection: &Connection,
+    cut: &crate::context::resources::ResourceReadCut,
 ) -> Result<(), ConversationStoreError> {
-    auxiliary_lineage::validate_store_closure(connection)
+    auxiliary_lineage::validate_store_closure(connection, cut)
 }
 
 pub(super) fn inherited_auxiliary_archive_rows(

@@ -207,6 +207,7 @@ pub(super) fn source(
 #[allow(clippy::type_complexity)]
 pub(super) fn link_summary_generation(
     store: &SqliteConversationStore,
+    checkpoint_id: &str,
 ) -> (AuxiliaryCallId, RequestId, u64) {
     use crate::model::auxiliary::{
         AuxiliaryAttribution, AuxiliaryBusinessSource, AuxiliaryCallStart, AuxiliaryFingerprint,
@@ -216,11 +217,11 @@ pub(super) fn link_summary_generation(
 
     let mut candidate = crate::scripted_suites::support::context::checkpoint_fixture(
         store,
-        "summary-link",
+        checkpoint_id,
         1,
         "Linked Summary generation",
     );
-    let operation_id = CompactionOperationId::new("operation:summary-link");
+    let operation_id = CompactionOperationId::new(format!("operation:{checkpoint_id}"));
     let call_id = AuxiliaryCallId::generate();
     let request_id =
         RequestId::generate_auxiliary(&crate::runtime::identity::SystemUuidV7Generator).unwrap();
@@ -487,7 +488,7 @@ fn named_summary_generation_dependency_survives_clone_and_source_deletion() {
     let source_session = first_session(&catalog);
     let (store, _) = source(&catalog, false);
     let source_conversation_id = store.conversation_id().clone();
-    let (call_id, request_id, through) = link_summary_generation(&store);
+    let (call_id, request_id, through) = link_summary_generation(&store, "summary-link");
     let (unrelated_call, unrelated_request) = super::archive_tests::start_auxiliary(
         &store,
         crate::model::auxiliary::AuxiliaryAttribution::new("btw").unwrap(),

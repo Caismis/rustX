@@ -512,3 +512,126 @@ fn latest_primary_occupancy_requires_an_exact_mandatory_owner_row() {
         );
     }
 }
+
+fn occupancy_sql_steps<T>(store: &SqliteConversationStore, read: impl FnOnce() -> T) -> (T, usize) {
+    let steps = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = steps.clone();
+    store
+        .lock()
+        .unwrap()
+        .progress_handler(
+            1,
+            Some(move || {
+                counted.fetch_add(1, Ordering::Relaxed);
+                false
+            }),
+        )
+        .unwrap();
+    let result = read();
+    store
+        .lock()
+        .unwrap()
+        .progress_handler(0, None::<fn() -> bool>)
+        .unwrap();
+    (result, steps.load(Ordering::Relaxed))
+}
+
+#[test]
+fn occupancy_compaction_lookup_work_is_bounded_across_history_growth() {
+    use crate::context::checkpoint::{CheckpointCandidate, CheckpointItem, CheckpointMessage};
+    use crate::context::occupancy::{ContextBreakdown, ContextOccupancy};
+    use crate::model::projected::CanonicalMessageRef;
+    let store = store();
+    let message = user_message("occupancy-history", "history");
+    store.initialize(std::slice::from_ref(&message)).unwrap();
+    let mut first_cut = 0;
+    let mut baseline = Vec::new();
+    let mut negative_baseline = Vec::new();
+    for index in 1..=256 {
+        let cut = store.compaction_resource_cut().unwrap();
+        let candidate = CheckpointCandidate {
+            checkpoint_id: crate::runtime::identity::CheckpointId::new(format!(
+                "occupancy-{index}"
+            )),
+            expected_head: store
+                .projection_head()
+                .unwrap()
+                .map(|p| p.candidate.checkpoint_id),
+            base_frontier: cut.ledger,
+            read_cut: cut,
+            items: vec![CheckpointItem {
+                message: CheckpointMessage::Original(CanonicalMessageRef::of(
+                    store.conversation_id(),
+                    &message,
+                )),
+                call_sources: Vec::new(),
+                result_call: None,
+            }],
+            summary_metadata: None,
+            summary_generation: None,
+        };
+        let mut input = crate::scripted_suites::support::context::checkpoint_commit_fixture(
+            &store, candidate, None,
+        );
+        input.estimated_tokens_after = index;
+        input.occupancy = Some(ContextOccupancy {
+            estimated: true,
+            input_tokens: index,
+            context_window_tokens: 1000,
+            model: "model".into(),
+            breakdown: ContextBreakdown {
+                system_tokens: 0,
+                tool_tokens: 0,
+                message_tokens: index,
+            },
+        });
+        let committed = store.commit_projection(input).unwrap();
+        if index == 1 {
+            first_cut = committed.completed.sequence;
+        }
+        if ![1, 32, 256].contains(&index) {
+            continue;
+        }
+        for (case, through, expected) in
+            [(0, first_cut, 1), (1, committed.completed.sequence, index)]
+        {
+            let (actual, steps) = occupancy_sql_steps(&store, || {
+                store.observation_occupancy(through).unwrap().unwrap()
+            });
+            assert_eq!(actual.input_tokens, expected);
+            assert!(steps > 0);
+            if index == 1 {
+                baseline.push(steps);
+            } else {
+                assert!(
+                    steps <= baseline[case] + 128,
+                    "{index} compactions: {steps} versus {}",
+                    baseline[case]
+                );
+            }
+
+            // Negative control: omitting the middle index equality returns the
+            // same row but scans/sorts growing history, even at a fixed old cut.
+            let (sequence, unbounded) = occupancy_sql_steps(&store, || {
+                store
+                    .lock()
+                    .unwrap()
+                    .query_row(
+                        "SELECT sequence FROM events INDEXED BY events_context_reading_idx
+                     WHERE json_extract(event_json,'$.event.type')='compaction_completed'
+                       AND sequence<=?1 ORDER BY sequence DESC LIMIT 1",
+                        [through],
+                        |row| row.get::<_, u64>(0),
+                    )
+                    .unwrap()
+            });
+            assert_eq!(sequence, through);
+            if index == 1 {
+                negative_baseline.push(unbounded);
+            }
+            if index == 256 {
+                assert!(unbounded > negative_baseline[case] * 16);
+            }
+        }
+    }
+}

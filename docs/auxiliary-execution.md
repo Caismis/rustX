@@ -67,7 +67,7 @@ Clone/Fork canonical overlap never creates target-local auxiliary execution or r
 
 A new local checkpoint naming a Summary-generation dependency requires the successful physical request and completed local Call to be visible at the dependency's declared Journal cut. A later settlement cannot authorize a dependency captured before that settlement. Historical inspection and inherited source audit preserve open or failed execution evidence at their captured cuts; that evidence grants no new checkpoint commit authority.
 
-Inspection archives keep requests.jsonl for actual primary Snapshots. Auxiliary facts have a separate auxiliary_audit.jsonl projection at the captured Journal cut; generation rows identify their owner. Complete audit does not imply reconstructed prompts or generated output. Archive projections explicitly exclude private diagnostics and execution bindings instead of serializing newly added native fields indiscriminately.
+Inspection archives keep requests.jsonl for actual primary Snapshots. Auxiliary facts have a separate auxiliary_audit.jsonl projection at the captured Journal cut; generation rows identify their owner. Complete audit does not imply reconstructed prompts or generated output. Archive dependency validation walks the captured native Journal/activation prefix one checkpoint at a time. Each local Summary audit closure has its own bounded materialization budget; released history does not consume a lifetime archive allowance. Later checkpoints cannot enter an older captured archive. Archive projections explicitly exclude private diagnostics and execution bindings instead of serializing newly added native fields indiscriminately.
 
 ## Verification boundary
 
