@@ -49,7 +49,7 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
  };
  const read = async (at: number, previous?: CheckpointPage) => {
    if (!target || !current(at)) return;
-     const result = await client.modelCatalogRead(target,()=>current(at),previous);
+     const result = await client.reads.modelCatalogRead(target,()=>current(at),previous);
      if (!current(at)) return;
      const observed = client.getSnapshot().views[view!.id];
      if (observed?.modelMutation && observed.modelMutation.status !== 'in-flight') {
@@ -125,7 +125,7 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
  const nextSourcePage = source && sourceOffset != null ? async () => {
    if(guard.current)return;const at=epoch.current,sourceAt=sourceEpoch.current,owned=source;guard.current=true;setBusy(true);
    const currentSource=()=>epoch.current===at && sourceEpoch.current===sourceAt && client.getSnapshot().generation===generation;
-   try {const result=await client.sourceModelCatalogRead(owned,currentSource,sourceOffset);if(currentSource()){setSourcePage(result.page);setSourceCatalog(result.catalog);}}
+   try {const result=await client.reads.sourceModelCatalogRead(owned,currentSource,sourceOffset);if(currentSource()){setSourcePage(result.page);setSourceCatalog(result.catalog);}}
    catch(cause){if(currentSource())setError(String(cause));}
    finally{if(epoch.current===at){guard.current=false;setBusy(false);}}
  } : undefined;

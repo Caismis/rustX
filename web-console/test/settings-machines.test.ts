@@ -2160,7 +2160,7 @@ function scriptedClient() {
     getSnapshot: () => view,
     subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
     // The configuration owner consumes a materialized read port.
-    readApplication: async(id:string) => (await client.request({method:'session/configuration',params:{session_id:id}},'session_configuration') as unknown as {application:ConfigurationApplication|null}).application,
+    reads: { readApplication: async(id:string) => (await client.request({method:'session/configuration',params:{session_id:id}},'session_configuration') as unknown as {application:ConfigurationApplication|null}).application },
     request: ({ method }: { method: string }) => {
       const gate = deferred<unknown>();
       requests.push({ method, authority: view.authorityRevision, ...gate });

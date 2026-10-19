@@ -13,7 +13,7 @@ export interface SessionConfigurationPort {
 
 export function createSessionConfigurationPort(client: AppServerClient, sessionId: string): SessionConfigurationPort {
   return {
-    read: async () => {const generation=client.getSnapshot().generation;return await client.readApplication(sessionId,()=>client.getSnapshot().generation===generation)??null;},
+    read: async () => {const generation=client.getSnapshot().generation;return await client.reads.readApplication(sessionId,()=>client.getSnapshot().generation===generation)??null;},
     adopt: async candidate => {
       await client.request({
         method: 'session/adoptConfiguration',

@@ -22,7 +22,7 @@ export function CollectionPages({client,target,agentId,cut,read,collections,owne
   useEffect(()=>()=>{generation.current++;},[identity]);
   const [state,setState]=useState<{identity:string;page?:CheckpointPage;loading?:boolean;error?:string;item?:string;offset?:number;next?:number;text?:string}>();
   const loaded=state?.identity===identity?state:undefined;
-  const reader=useMemo(()=>client&&target?client.domainReader(target,()=>currentIdentity.current===identity&&owned(),agentId):undefined,[client,target,agentId,identity,owned]);
+  const reader=useMemo(()=>client&&target?client.reads.domainReader(target,()=>currentIdentity.current===identity&&owned(),agentId):undefined,[client,target,agentId,identity,owned]);
   const loadPage=async(offset:number)=>{
     const token=++generation.current, current=()=>token===generation.current&&currentIdentity.current===identity&&owned();
     if(!frontier||!current())return;

@@ -31,8 +31,8 @@ export class CommandSession {
   async models() {
     this.requireCurrent();
     const [current, catalog] = await Promise.all([
-      this.client.modelRead(this.target,this.current),
-      this.client.modelCatalogRead(this.target,this.current),
+      this.client.reads.modelRead(this.target,this.current),
+      this.client.reads.modelCatalogRead(this.target,this.current),
     ]);
     this.requireCurrent();
     if (this.client.getSnapshot().views[this.sessionId]?.modelMutation) await this.client.repairAgentModel(this.sessionId);

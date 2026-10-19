@@ -1,10 +1,4 @@
 import {interactionBody,readInteractionBody} from '../../../protocol/app-server/interaction';
-import { materializeApplication } from '../../../protocol/app-server/application-observation';
-import { sourceObservation } from '../../../protocol/app-server/source-observation';
-import { materializeFields } from '../../../protocol/app-server/field-observation';
-import { materializeEffective } from '../../../protocol/app-server/effective-observation';
-import { domainValue, type DomainReader } from '../../../protocol/app-server/domain-observation';
-import { materializeSettings } from '../../../protocol/app-server/settings-observation';
 import { ObservationChain, validateObservationCut, validateRootCheckpoint, validateRootEvent } from '../../../protocol/app-server/observation';
 import { SessionLifecycles } from './session-lifecycle/system';
 import { emptyFacts, type Observation, type LifecycleFacts, type SessionLifecyclePort } from './session-lifecycle/port';
@@ -15,11 +9,13 @@ import { checkpointSnapshot, foldRuntimeEvent, observationCheckpoint, transition
 import { hasResponseDeadline, requestEffect, requestLane } from '../../../protocol/app-server/method-policy';
 import { SourceRepairObserver } from './source-repairs';
 import { SessionCatalog } from './session-catalog';
+import { SessionReads } from './session-reads';
+import { ConfigurationObservations } from './configuration-observations';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { SessionExportController } from "./session-export";
 import { standaloneTraceCut,inlineTraceDetail,retainedTraceDetailPage,bindTraceDetailReader,TRACE_LIMIT, TRACE_PAGE_SIZE, beginTraceDetail, completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterestBatches,traceInterests, type TraceCache,type TraceFieldReader } from './trace';
 import type {
-  TraceToolLocator, ConfigurationApplication, PendingInboundRef, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
+  TraceToolLocator, PendingInboundRef, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request, Request1, Response, RuntimeClientSnapshot, RuntimeClientEvent,
   UserInputBlock, UploadReceipt, UploadedFile,
 } from '../../../protocol/app-server/v50';
@@ -319,7 +315,7 @@ export class AppServerClient {
         }
         this.setSession(id, { observationState: chain.phase });
         this.reconcileInteractions(id); this.settleSubmissions(id);
-        const settings=await this.readSettings(id,current);
+        const settings=await this.reads.readSettings(id,current);
         if(!current())return;
         this.setSession(id,{settings:settings.settings});
         this.sourceRepairs.visit(settings.settings.cwd);
@@ -396,7 +392,7 @@ export class AppServerClient {
     if (replacing) {
       this.retireAuthority();
     }
-    this.configurationCuts.clear();this.configurationWeights.clear();
+    this.configurations.connect();
     this.sourceRepairs.connect();
     this.publish({ configuration: {}, configurationObservation: {}, sourceRepairs: {}, endpoint: url.href, connection: transition === 'reconnect' ? 'reconnecting' : 'connecting', capabilities: undefined, error: undefined });
     // Ownership commits after close/retirement, before attempting the new transport.
@@ -735,19 +731,7 @@ export class AppServerClient {
       }
       return;
     }
-    if (value.method === 'configuration/changed') {
-      const cut=value.params.application;
-      const previous=this.configurationCuts.get(cut.scope);
-      if(previous&&BigInt(cut.version)<=BigInt(previous.version))return;
-      this.configurationCuts.set(cut.scope,cut);
-      this.pruneConfiguration();
-      if(cut.inline)this.retainConfiguration(cut.inline);
-      else {
-        const configuration={...this.state.configuration};delete configuration[cut.scope];this.publish({configuration,configurationObservation:{...this.state.configurationObservation,[cut.scope]:{version:cut.version,phase:'deferred'}}});
-        this.loadApplication(cut,generation);
-      }
-      return;
-    }
+    if (value.method === 'configuration/changed') { this.configurations.changed(value.params.application, generation); return; }
     if (value.method === 'configuration/sourceRepairChanged') {
       // Source-scoped (Issue #464): it addresses a configuration source, never
       // a Session, and never changes runtime application or conversation state.
@@ -844,103 +828,14 @@ export class AppServerClient {
     if (transitionFacts(event).some(fact=>fact.type==='trace_changed')) void this.refreshTraceDomain(id).catch(() => {});
   }
 
-  domainReader(target: AttachmentTarget, current: () => boolean, agentId?: string): DomainReader {
-    return {current,
-      page:async(page,offset)=>(await this.request({method:'conversation/checkpointPage',params:{target,agent_id:agentId??null,cut:page.read_cut,domain:page.domain,offset,limit:32}},'checkpoint_page',undefined,current)).page,
-      value:async(page,item,offset)=>(await this.request({method:'conversation/checkpointValueRead',params:{target,agent_id:agentId??null,cut:page.read_cut,domain:page.domain,item_offset:Number(item.offset),path:[],offset,max_bytes:65536}},'checkpoint_value_chunk',undefined,current)).chunk};
-  }
-  async modelRead(target: AttachmentTarget, current: () => boolean) {
-    const {page}=await this.request({method:'session/model',params:{target}},'domain_page',undefined,current);
-    return domainValue<import('../../../protocol/app-server/v50').SessionModelView>(page,this.domainReader(target,current));
-  }
-  async modelCatalogRead(target: AttachmentTarget, current: () => boolean, previous?: import('../../../protocol/app-server/v50').CheckpointPage) {
-    const reader=this.domainReader(target,current);
-    const page=previous?.next_offset!=null ? await reader.page(previous,Number(previous.next_offset)) : (await this.request({method:'session/models',params:{target}},'domain_page',undefined,current)).page;
-    if (!current() || page.items.length > 32) throw new Error('Model catalog observation was replaced or exceeded its bound.');
-    // A picker retains the finite published headers. Deferred native identities
-    // and profile collections remain explicitly readable through their page;
-    // opening this menu never downloads every growing catalog row.
-    const models = page.items.flatMap(item => {
-      const row = item.value as import('../../../protocol/app-server/v50').CatalogModelView | null;
-      return row && typeof row.model === 'string' && row.model.length <= 256
-        && (row.profiles?.length ?? 0) <= 32
-        && (row.profiles ?? []).every(profile => typeof profile.id === 'string' && profile.id.length <= 256)
-        && (row.defaultProfile == null || row.defaultProfile.length <= 256) ? [row] : [];
-    });
-    return {catalog:{models},page};
-  }
-  async sourceModelCatalogRead(source: import('../../../protocol/app-server/v50').SourceSettings, current: () => boolean, offset = 0) {
-    const cut = sourceObservation(source);
-    if (!cut || !current()) throw new Error('Model source observation is unavailable.');
-    const {page} = await this.request({method:'configuration/sourcePage',params:{target:cut.target,revision:cut.revision,field:'session_models',offset,limit:32}},'source_page',undefined,current);
-    if (page.revision !== cut.revision || page.field !== 'session_models' || page.items.length > 32) throw new Error('Model source page cut changed.');
-    const models: import('../../../protocol/app-server/v50').CatalogModelView[] = [];
-    for (const [index,item] of page.items.entries()) {
-      if (Number(item.index) !== offset + index || !current()) throw new Error('Model source page failed to advance.');
-      const value = await materializeFields<{model:import('../../../protocol/app-server/v50').CatalogModelView},import('../../../protocol/app-server/v50').SourceFieldRef>(
-        {revision:cut.revision,fields:[{name:'model',value:item.value,reference:item.reference}]},
-        async(reference,offset)=>(await this.request({method:'configuration/sourceValueRead',params:{target:cut.target,reference,offset,max_bytes:65536}},'source_value_chunk',undefined,current)).chunk,current);
-      models.push(value.model);
-    }
-    if (page.next_offset != null && (page.items.length === 0 || page.next_offset !== offset + page.items.length)) throw new Error('Model source continuation did not advance.');
-    return {catalog:{models},page};
-  }
-  async effectiveConfigurationRead(target: AttachmentTarget, current: () => boolean) {
-    const {projection}=await this.request({method:'session/effectiveConfiguration',params:{target}},'effective_configuration',undefined,current);
-    return materializeEffective(projection,async(reference,offset)=>(await this.request({method:'session/effectiveConfigurationValueRead',params:{target,reference,offset,max_bytes:65536}},'configuration_value_chunk',undefined,current)).chunk,current);
-  }
-  private readonly configurationCuts=new Map<string,import('../../../protocol/app-server/v50').BoundedSessionApplication>();
-  private readonly configurationReads=new Map<string,Promise<void>>();
-  private readonly configurationWeights=new Map<string,number>();
-  private retainConfiguration(application:ConfigurationApplication) {
-    // Each source read is bounded; the aggregate cache must also stay finite.
-    const bytes=new TextEncoder().encode(JSON.stringify(application)).byteLength;
-    if(bytes>16*1024*1024)throw new Error('Configuration observation exceeds the local cache budget.');
-    this.configurationWeights.delete(application.scope);this.configurationWeights.set(application.scope,bytes);
-    const diagnostics={...this.state.configurationObservation};delete diagnostics[application.scope];
-    this.publish({configuration:{...this.state.configuration,[application.scope]:application},configurationObservation:diagnostics});
-    this.pruneConfiguration();
-  }
-  private pruneConfiguration() {
-    const retired=new Set<string>();
-    while(this.configurationCuts.size>32){const scope=this.configurationCuts.keys().next().value!;this.configurationCuts.delete(scope);retired.add(scope);this.configurationWeights.delete(scope);}
-    let bytes=[...this.configurationWeights.values()].reduce((sum,value)=>sum+value,0);
-    while(this.configurationWeights.size>32||bytes>16*1024*1024){const scope=this.configurationWeights.keys().next().value!;bytes-=this.configurationWeights.get(scope)!;this.configurationWeights.delete(scope);this.configurationCuts.delete(scope);retired.add(scope);}
-    if(!retired.size)return;
-    const configuration={...this.state.configuration},diagnostics={...this.state.configurationObservation};
-    for(const scope of retired){delete configuration[scope];delete diagnostics[scope];}
-    this.publish({configuration,configurationObservation:diagnostics});
-  }
-
-  private loadApplication(cut:import('../../../protocol/app-server/v50').BoundedSessionApplication,generation:number) {
-    if(this.configurationReads.has(cut.scope))return;
-    const current=()=>this.current(generation)&&this.configurationCuts.get(cut.scope)===cut;
-    const load=async()=>{
-      if(this.state.views[cut.scope])return materializeApplication(cut,async(reference,offset)=>(await this.request({method:'session/configurationValueRead',params:{session_id:cut.scope,reference,offset,max_bytes:65536}},'session_application_value_chunk',undefined,current)).chunk,current);
-      const target=cut.sources[0];if(!target)throw new Error('Configuration source is unavailable.');
-      const {projection}=await this.request({method:'configuration/sourcesRead',params:{target}},'source_settings',undefined,current);
-      const application=projection.inline?.application ?? (await materializeFields<{application:ConfigurationApplication},import('../../../protocol/app-server/v50').SourceFieldRef>({revision:projection.revision,fields:projection.fields.filter(field=>field.name==='application')},async(reference,offset)=>(await this.request({method:'configuration/sourceValueRead',params:{target,reference,offset,max_bytes:65536}},'source_value_chunk',undefined,current)).chunk,current)).application;
-      if(application?.version!==cut.version||application.scope!==cut.scope)throw new Error('Configuration source cut changed.');return application;
-    };
-    this.publish({configurationObservation:{...this.state.configurationObservation,[cut.scope]:{version:cut.version,phase:'loading'}}});
-    const work=load().then(application=>{if(current()&&application){const diagnostics={...this.state.configurationObservation};delete diagnostics[cut.scope];this.publish({configurationObservation:diagnostics});this.retainConfiguration(application);}}).catch(error=>{if(current())this.publish({configurationObservation:{...this.state.configurationObservation,[cut.scope]:{version:cut.version,phase:'unavailable',error:String(error).slice(0,512)}}});}).finally(()=>{
-      if(this.configurationReads.get(cut.scope)!==work)return;this.configurationReads.delete(cut.scope);
-      const latest=this.configurationCuts.get(cut.scope);if(latest&&latest!==cut)this.loadApplication(latest,generation);
-    });
-    this.configurationReads.set(cut.scope,work);
-  }
-  async readApplication(id:string,current:()=>boolean) {
-    const {projection}=await this.request({method:'session/configuration',params:{session_id:id}},'session_configuration',undefined,current);
-    return materializeApplication(projection,async(reference,offset)=>(await this.request({method:'session/configurationValueRead',params:{session_id:id,reference,offset,max_bytes:65536}},'session_application_value_chunk',undefined,current)).chunk,current);
-  }
-  async readSettings(id: string, current: () => boolean = () => true) {
-    const {projection} = await this.request({method:'session/settings',params:{session_id:id}},'settings',undefined,current);
-    const settings = await materializeSettings(projection, async(reference,offset)=>(await this.request({method:'session/settingsValueRead',params:{session_id:id,reference,offset,max_bytes:65_536}},'settings_value_chunk',undefined,current)).chunk, current);
-    return {revision:projection.revision,settings};
-  }
-  async readContent(target: AttachmentTarget, agentId: string | undefined, content_ref: import('../../../protocol/app-server/v50').ContentRef, offset: number, current: () => boolean) {
-    return (await this.request({ method: 'conversation/contentRead', params: { target, agent_id: agentId ?? null, content_ref, offset, max_bytes: 65_536 } }, 'content_chunk', undefined, current)).chunk;
-  }
+  /** Bounded native Session, model, settings and content reads. */
+  readonly reads = new SessionReads((...args) => this.request(...args));
+  private readonly configurations = new ConfigurationObservations({
+    request: (...args) => this.request(...args),
+    state: () => this.state,
+    current: generation => this.current(generation),
+    publish: patch => this.publish(patch),
+  });
   private readonly catalog = new SessionCatalog({
     request: (...args) => this.request(...args),
     state: () => this.state,
@@ -1010,7 +905,7 @@ export class AppServerClient {
     await Promise.allSettled([
       this.request({ method: 'session/statistics', params: { session_id: id, node_id: node } }, 'session_statistics', undefined, current)
         .then(result => { if (current() && result.conversation_id === conversation && result.read_cut.conversation_id === conversation) this.setSession(id, { statisticsPreview: { conversationId: result.conversation_id, nodeId: node, cut: result.read_cut, statistics: result.statistics, occupancy: result.occupancy } }); }),
-      this.readSettings(id, current)
+      this.reads.readSettings(id, current)
         .then(result => { if (current()) this.setSession(id, { settings: result.settings }); }),
     ]);
   }
@@ -1176,7 +1071,7 @@ export class AppServerClient {
     };
     const reader:TraceFieldReader={
       value:async(cut,field,offset,owns)=>{valid(cut,owns);const result=await this.request({method:'conversation/checkpointValueRead',params:{target,agent_id:null,cut,domain:field.domain,item_offset:field.item_offset,path:field.path,offset,max_bytes:65536}},'checkpoint_value_chunk',undefined,()=>current()&&owns());valid(cut,owns);return result.chunk;},
-      content:async(cut,reference,offset,owns)=>{valid(cut,owns);if(reference.conversation_id!==cut.conversation_id)throw new Error('Trace content source changed.');return this.readContent(target,undefined,reference,offset,()=>current()&&owns());},
+      content:async(cut,reference,offset,owns)=>{valid(cut,owns);if(reference.conversation_id!==cut.conversation_id)throw new Error('Trace content source changed.');return this.reads.readContent(target,undefined,reference,offset,()=>current()&&owns());},
       page:async(cut,domain,offset,owns)=>{valid(cut,owns);const result=await this.request({method:'conversation/checkpointPage',params:{target,agent_id:null,cut,domain,offset,limit:32}},'checkpoint_page',undefined,()=>current()&&owns());valid(cut,owns);return result.page;},
     };
     this.traceFieldScopes.set(reader,{generation:this.state.generation,target});
@@ -1332,7 +1227,7 @@ export class AppServerClient {
       if(page&&(page.read_cut.conversation_id!==target.conversation_id||page.read_cut.activation_id!=null))throw new Error('Trace detail source changed.');
       if(!current())return;
       const reader=page?bindTraceDetailReader(this.liveTraceFields(target),page,()=>observation.current()&&this.traceAuthorities.get(id)===authority&&this.state.views[id]?.trace?.epoch===epoch&&this.state.views[id]?.trace?.details[record]?.page===page):undefined;
-      this.setSession(id, { trace: completeTraceDetail(this.state.views[id].trace!,record,epoch,detail,undefined,result.page.items.flatMap(item=>item.content),(ref,offset,ownsView)=>this.readContent(target,undefined,ref,offset,()=>ownsView()&&observation.current()&&this.traceAuthorities.get(id)===authority&&this.state.views[id]?.trace?.epoch===epoch),page,reader) });
+      this.setSession(id, { trace: completeTraceDetail(this.state.views[id].trace!,record,epoch,detail,undefined,result.page.items.flatMap(item=>item.content),(ref,offset,ownsView)=>this.reads.readContent(target,undefined,ref,offset,()=>ownsView()&&observation.current()&&this.traceAuthorities.get(id)===authority&&this.state.views[id]?.trace?.epoch===epoch),page,reader) });
     } catch (error) {
       if (current()) this.setSession(id, { trace: completeTraceDetail(this.state.views[id].trace!, record, epoch, undefined, String(error)) });
     }
@@ -1979,7 +1874,7 @@ export class AppServerClient {
       &&this.pendingInteractions(id)[index]?.request_id===header.request_id;
     const {page}=await this.request({method:'conversation/checkpointPage',params:{target,agent_id:null,cut,domain:'pending_interactions',offset,limit:1}},'checkpoint_page',undefined,current);
     if(page.items.length!==1)throw new Error('Interaction body is unavailable.');
-    const body=await readInteractionBody(page,page.items[0]!,header,this.domainReader(target,current));
+    const body=await readInteractionBody(page,page.items[0]!,header,this.reads.domainReader(target,current));
     if(current())this.setSession(id,{interactionDetail:{target,cut,body}});
   }
   async interactionValueChunk(id:string,index:number,path:string[],offset:number,ownsView:()=>boolean) {
