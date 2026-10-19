@@ -189,7 +189,13 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
     }
   }
   getSnapshotBeforeUpdate() {
-    if (this.scroller()?.closest('[hidden]')) return {};
+    const el = this.scroller();
+    if (!el || el.closest('[hidden]')) return {};
+    // A shorter projection can clamp the browser before its scroll event.
+    // Record that layout movement before this update grows the tail again;
+    // otherwise the delayed event looks like an upward reading gesture.
+    const floor = Math.max(0, el.scrollHeight - el.clientHeight);
+    if (floor < this.writtenTop && el.scrollTop === floor) this.writtenTop = floor;
     // Preserve the original anchor across multiple commits before the frame.
     const position = this.position();
     if (!this.following && this.frame === undefined) this.reading = position;
