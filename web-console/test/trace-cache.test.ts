@@ -6,6 +6,25 @@ import { requestDetail as detail, traceRecord as entry } from './trace-fixture';
 const rootCut=()=>checkpoint(snapshot()).read_cut;
 let server: Server;
 afterEach(() => server?.client.disconnect());
+it('automatic lifecycle batches retain a new window-bound error from the repaired head', async () => {
+  server=new Server();let tail=512;
+  const record=(n:number)=>entry(n,{state:n>=504&&n<=512?'running':'completed'});
+  server.snapshots.set('A',{...snapshot(),trace:{read_cut:rootCut(),records:Array.from({length:32},(_,i)=>record(481+i)),next_cursor:'trace:481'}});
+  server.handlers.set('session/trace',request=>{
+    if(request.method!=='session/trace')throw Error('Trace fixture method');
+    const end=request.params.before==null?tail+1:Number(request.params.before.slice(6));
+    const start=Math.max(1,end-request.params.limit);
+    return {type:'trace',page:{read_cut:{...rootCut(),revision:tail===512?'0':'1',through:tail===512?'0':'1'},records:Array.from({length:end-start},(_,i)=>record(start+i)),next_cursor:start>1?`trace:${start}`:null}};
+  });
+  await server.attached('A');
+  for(let i=0;i<15;i++)await server.client.loadEarlierTrace('A');
+  expect(server.client.getSnapshot().views.A.trace?.page.records).toHaveLength(TRACE_LIMIT);
+  tail=513;const published=checkpoint(snapshot(),'1');
+  server.socket.deliver({jsonrpc:'2.0',method:'session/event',params:{target:server.target('A'),cursor:'1',event:{type:'projection_transition',events:[{type:'trace_changed'}],metadata:{read_cut:published.read_cut,content:published.content,collections:published.collections}}}});
+  await server.client['traceReads'].get('A')!.work;
+  expect(server.client.getSnapshot().views.A.trace?.page.records.map(row=>row.id)).toEqual(Array.from({length:32},(_,i)=>`trace:${482+i}`));
+  expect(server.client.getSnapshot().views.A.trace?.error).toBe('Trace window reached its bound; showing latest.');
+});
 it('a later automatic overlapping Trace repair clears its failure and retains pending old-cut detail', async () => {
   server=new Server();
   server.snapshots.set('A',{...snapshot(),trace:{read_cut:rootCut(),records:[entry(9),entry(10)],next_cursor:'trace:9'}});

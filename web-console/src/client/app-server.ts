@@ -1760,7 +1760,7 @@ export class AppServerClient {
               const previous=this.state.views[id]?.trace;
               // This read recovered. Clear its old error before merging so a
               // newly produced window-bound error remains authoritative.
-              this.setSession(id,{trace:{...refreshTrace(previous?{...previous,error:undefined}:undefined,result.page,result.page.updates??[],undefined,index>0),fields:this.liveTraceFields(target)}});
+              this.setSession(id,{trace:{...refreshTrace(previous&&index===0?{...previous,error:undefined}:previous,result.page,result.page.updates??[],undefined,index>0),fields:this.liveTraceFields(target)}});
             }
           }
         }
