@@ -17,6 +17,8 @@ struct Display {
     first_content: Option<Instant>,
     text: BTreeMap<(String, String), String>,
     ended: BTreeMap<String, RuntimeClientOutcome>,
+    explicit_ended: BTreeMap<String, RuntimeClientOutcome>,
+    checkpoint_terminal_sightings: usize,
     tool_results: Vec<serde_json::Value>,
     outcomes: Vec<RuntimeClientOutcome>,
 }
@@ -30,6 +32,18 @@ impl Display {
         self.ended.insert(id.to_owned(), outcome.clone());
         self.outcomes.push(outcome.clone());
         self.settled += 1;
+    }
+    fn explicit_terminal(&mut self, id: &str, outcome: &RuntimeClientOutcome) {
+        assert!(
+            !self.explicit_ended.contains_key(id),
+            "duplicate explicit AttemptSettled"
+        );
+        self.explicit_ended.insert(id.to_owned(), outcome.clone());
+        self.terminal(id, outcome);
+    }
+    fn checkpoint_terminal(&mut self, id: &str, outcome: &RuntimeClientOutcome) {
+        self.checkpoint_terminal_sightings += 1;
+        self.terminal(id, outcome);
     }
     fn text_value(&mut self, id: &str, index: String, text: String) {
         let prior = self.text.entry((id.to_owned(), index)).or_default();
@@ -110,7 +124,7 @@ impl Display {
                 }
             }
             if let RuntimeClientAttemptPhase::Settled { outcome } = &attempt.phase {
-                self.terminal(attempt.attempt_id.as_ref().unwrap().as_str(), outcome);
+                self.checkpoint_terminal(attempt.attempt_id.as_ref().unwrap().as_str(), outcome);
             }
         }
     }
@@ -158,7 +172,7 @@ impl Display {
                 RuntimeClientEvent::AttemptSettled {
                     attempt_id,
                     outcome,
-                } => self.terminal(attempt_id.as_str(), outcome),
+                } => self.explicit_terminal(attempt_id.as_str(), outcome),
                 RuntimeClientEvent::MessageCommitted {
                     message: MessageBlock::Assistant(message),
                     ..
@@ -320,6 +334,30 @@ fn display_prefix_rejects_mutation_and_does_not_retime_unchanged_content() {
     );
 }
 
+#[test]
+fn explicit_terminal_duplicates_fail_while_checkpoint_sightings_remain_idempotent() {
+    let mut display = Display::default();
+    let outcome = RuntimeClientOutcome::Completed {
+        finish_reason: rustx::model::ModelFinishReason::Stop,
+        finish_reason_deferred: false,
+        finish_reason_source: None,
+    };
+    display.checkpoint_terminal("attempt", &outcome);
+    display.explicit_terminal("attempt", &outcome);
+    display.checkpoint_terminal("attempt", &outcome);
+    assert_eq!(display.outcomes.len(), 1);
+    assert_eq!(display.checkpoint_terminal_sightings, 2);
+    assert_eq!(display.explicit_ended.len(), 1);
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            display.explicit_terminal("attempt", &outcome);
+        }))
+        .is_err()
+    );
+    assert_eq!(display.explicit_ended.len(), 1);
+    assert_eq!(display.explicit_ended["attempt"], outcome);
+}
+
 struct NativeDriver {
     root: tempfile::TempDir,
     runtime: LocalConversationRuntime,
@@ -351,6 +389,7 @@ impl NativeDriver {
         };
         let runtime = paths
             .compose(&LocalRuntimeDependencies {
+                status_clock: Arc::new(request_oracle::FixedStatusClock::default()),
                 credentials: Some(Arc::new(MapCredentialEnvironment::new([(
                     CREDENTIAL_VARIABLE.to_owned(),
                     CREDENTIAL_VALUE.to_owned(),
@@ -782,7 +821,9 @@ pub(super) async fn measure(mode: &str) {
     lifecycle_sample(&mut lifecycle, "after_verification", lifecycle_began);
     let observer_validation = if mode == "live-subscriber" {
         let display = driver.display.lock().unwrap();
-        json!({"completed_attempts":display.outcomes.len(),"tool_results":display.tool_results,
+        json!({"oracle_version":2,"completed_attempts":display.outcomes.len(),"tool_results":display.tool_results,
+            "checkpoint_terminal_sightings":display.checkpoint_terminal_sightings,
+            "explicit_settlements":display.explicit_ended.iter().map(|(id,outcome)|json!({"attempt_id":id,"outcome":outcome})).collect::<Vec<_>>(),
             "text":display.text.iter().map(|((id,index),text)|json!({"message_id":id,"block_index":index,"text":text})).collect::<Vec<_>>()})
     } else {
         serde_json::Value::Null
@@ -838,7 +879,7 @@ pub(super) async fn measure(mode: &str) {
             "case":case,"schema":rustx::durable::sqlite::SQLITE_SCHEMA_VERSION,
             "protocol":APP_SERVER_PROTOCOL_VERSION,"history":history,"measured":measured,
             "requests":expected_requests,"open_us":open_us,"samples":samples,
-            "initial_process":initial,"lifecycle":lifecycle,"measurement_version":4,"observer_mode":mode,"observer_surface":"LocalConversationRuntime/Runtime Client","late_snapshot":late_snapshot,"observer_validation":observer_validation,
+            "initial_process":initial,"lifecycle":lifecycle,"workload_version":3,"model_time":request_oracle::MODEL_TIME,"measurement_version":4,"observer_mode":mode,"observer_surface":"LocalConversationRuntime/Runtime Client","late_snapshot":late_snapshot,"observer_validation":observer_validation,
             "wire_requests":requests,"live_requests":verified_requests,
             "reopened_requests":reopened_requests,"canonical":history_messages,
             "oracle_version":2,"verified_live_requests":verified_live_requests,

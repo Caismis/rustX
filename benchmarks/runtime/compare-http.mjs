@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import {readFile,writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
-import {normalized} from './pi-oracle.mjs';
+import {normalized,MODEL_TIME} from './pi-oracle.mjs';
 const [rustFile,piFile,output]=process.argv.slice(2);
 const rust=JSON.parse(await readFile(rustFile)),pi=JSON.parse(await readFile(piFile));
+for(const sample of [rust,pi]) { assert.equal(sample.workload_version,3); assert.equal(sample.model_time,MODEL_TIME); }
 const modes=['native-workflow','no-live-subscriber','live-subscriber'];
 const mode=rust.observer_mode??'native-workflow';
 assert(modes.includes(mode));
@@ -36,4 +37,4 @@ for(let i=0;i<rightRequests.length;i++) {
  const digest=x=>createHash('sha256').update(JSON.stringify(x)).digest('hex');
  checked.push({index:i,coreEqual:true,fullRequestEqual:sameEngine || JSON.stringify(a)===JSON.stringify(b),rustToolNames:rustTools.map(t=>t.function.name),piToolNames:piTools.map(t=>t.function.name),rustToolsSha256:digest(rustTools),piToolsSha256:digest(piTools)});
 }
-await writeFile(output,JSON.stringify({case:rust.case,observer_mode:mode,checked},null,2));
+await writeFile(output,JSON.stringify({workload_version:3,model_time:MODEL_TIME,case:rust.case,observer_mode:mode,checked},null,2));

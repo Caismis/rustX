@@ -1,7 +1,8 @@
 // Pi Durable at its pinned revision, using the production HTTP/SSE adapter.
 import assert from 'node:assert/strict';
-import { verify } from './pi-oracle.mjs';
+import { verify, MODEL_TIME } from './pi-oracle.mjs';
 import { PiObserver } from './pi-observer.mjs';
+import { observerFixture } from './pi-observer-fixture.mjs';
 const observerMode = process.env.RUSTX_BENCH_OBSERVER_MODE ?? 'native-workflow';
 assert(['native-workflow','no-live-subscriber','live-subscriber'].includes(observerMode));
 import { execFileSync } from 'node:child_process';
@@ -68,7 +69,7 @@ const open = async () => {
 };
 let {harness,root} = await open();
 harness.resume();
-const observer = observerMode === 'live-subscriber' ? new PiObserver() : null;
+const observer = observerMode === 'live-subscriber' ? new PiObserver(observerFixture(scenario,workspace)) : null;
 const liveWatch = observer ? await watchEvents(harness,root.id,context) : null;
 if(liveWatch) {
   observer.consume(liveWatch.snapshot);
@@ -88,7 +89,7 @@ for (let i=0;i<history+measured;i++) {
     // Persist the same two ordered input messages using Pi's native entry API.
     const input = await root.submit({type:'write',entry:{kind:'benchmark.input',model:[{role:'user',content,timestamp:Date.now()}]}},context);
     await input.wait(context);
-    content = `<system-reminder>\nTimezone: UTC\nCurrent time: ${new Date().toISOString().slice(0,19).replace('T',' ')}\n</system-reminder>`;
+    content = `<system-reminder>\nTimezone: UTC\nCurrent time: ${MODEL_TIME}\n</system-reminder>`;
   }
   const submission = await root.submit({type:'input',content},context);
   const accepted_us = Math.round((performance.now()-began)*1000);
@@ -163,4 +164,4 @@ await harness.close(context);
 await phase('after_reopen_verification');
 await rm(rootDir,{recursive:true});
 await phase('after_cleanup');
-await writeFile(output,JSON.stringify({observer_mode:observerMode,observer_surface:observerMode==='native-workflow'?'submission settlement':'Harness ConversationViews/watchEvents',observer_counts:observer?.counts??{},observed_partial_text:observer?.lastAssistantText??null,lateSnapshot,revision,scenario,history,measured,samples,lifecycle,requests,captures,reopenedRequests,expectedTools,entries,liveContext,before_close,closed_footprint,oracle:'passed',allocations:null,provider:'production openAICompletionsApi HTTP/SSE'},null,2));
+await writeFile(output,JSON.stringify({observer_mode:observerMode,observer_surface:observerMode==='native-workflow'?'submission settlement':'Harness ConversationViews/watchEvents',observer_counts:observer?.counts??{},observer_oracle_version:2,observer_versions:observer?.observedVersions??[],observer_failure:observer?.failure?String(observer.failure):null,observer_explicit_run_ends:observer?[...observer.explicitCompletedRuns]:[],observed_partial_text:observer?.lastAssistantText??null,lateSnapshot,revision,scenario,workload_version:3,model_time:MODEL_TIME,history,measured,samples,lifecycle,requests,captures,reopenedRequests,expectedTools,entries,liveContext,before_close,closed_footprint,oracle:'passed',allocations:null,provider:'production openAICompletionsApi HTTP/SSE'},null,2));

@@ -1538,6 +1538,7 @@ pub(crate) mod tests {
                 tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(
                 ),
                 context: ConversationContextConfig {
+                    status_clock: std::sync::Arc::new(crate::context::SystemClock),
                     policy: SessionContextPolicy {
                         reserve_tokens: 0,
                         keep_recent_tokens: 0,

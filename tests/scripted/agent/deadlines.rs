@@ -258,6 +258,7 @@ async fn runtime_with_manual_clock(
             model_timeout_policy: policy,
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
+                status_clock: std::sync::Arc::new(rustx::context::SystemClock),
                 policy: SessionContextPolicy {
                     reserve_tokens: 0,
                     keep_recent_tokens: 0,

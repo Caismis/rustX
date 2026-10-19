@@ -11,9 +11,12 @@ import signal
 import traceback
 import time
 import urllib.request
+from observer_oracle import validate_pi_versions, validate_rust_settlements
 
 TEST = 'agent_loop::runtime_benchmark::measure_runtime'
 OBSERVER_MODES = ['native-workflow', 'no-live-subscriber', 'live-subscriber']
+MODEL_TIME = '2026-10-19 00:00:00'
+MODEL_REMINDER = '<system-reminder>\nTimezone: UTC\nCurrent time: ' + MODEL_TIME + '\n</system-reminder>'
 CASES = ['short-small', 'short-large', 'stream', 'large', 'tool', 'cancel']
 
 
@@ -44,6 +47,7 @@ def validate_sample(result, sample, case, log_text):
     assert result['product_exit'] == result['provider_exit'] == 0
     assert result['provider_report']['ok'] is True
     assert sample['oracle'] == 'passed'
+    assert sample['workload_version'] == 3 and sample['model_time'] == MODEL_TIME
     mode = result.get('observer_mode', 'native-workflow')
     assert mode in OBSERVER_MODES
     if mode != 'native-workflow' or 'observer_mode' in sample:
@@ -54,6 +58,9 @@ def validate_sample(result, sample, case, log_text):
     wire = sample.get('wire_requests', sample.get('requests'))
     assert isinstance(wire,list) and len(wire) == expected_requests
     assert wire == result['provider_report']['requests']
+    for request in wire:
+        content = request['body']['messages'][1]['content']
+        assert content == MODEL_REMINDER or content == [{'type': 'text', 'text': MODEL_REMINDER}]
     expected_history={'short-small':8,'short-large':64}.get(case,0)
     expected_measured=32 if expected_history else 1
     assert sample['history']==expected_history and sample['measured']==expected_measured
@@ -86,6 +93,7 @@ def validate_sample(result, sample, case, log_text):
             assert replay['kind'] in ('contiguous','resync_required')
             assert replay.get('through',replay.get('snapshot'))==checkpoint['cursor']
             if mode=='live-subscriber':
+                validate_rust_settlements(sample, case)
                 observed=sample['observer_validation']
                 assert observed['completed_attempts']==expected_history+expected_measured
                 expected_text={(m['id'],f'ContentBlockIndex({i})'):b['text']
@@ -102,8 +110,10 @@ def validate_sample(result, sample, case, log_text):
                 assert observed['tool_results']==[m['result'] for m in sample['canonical'] if m['role']=='tool']
         else:
             assert sample['lateSnapshot']['entries']==sample['entries'], 'late Pi snapshot differs from native entries'
-            if mode=='live-subscriber' and case=='cancel':
-                assert sample['observed_partial_text'] in ('','partial'), 'cancelled provider tail was published'
+            if mode=='live-subscriber':
+                validate_pi_versions(sample, case, result.get('workspace'))
+                if case=='cancel':
+                    assert 'partial'.startswith(sample['observed_partial_text']), 'cancelled provider tail was published'
     assert sample['lifecycle'][-1]['phase'] == 'after_cleanup'
 
 
@@ -124,6 +134,7 @@ def run(argv, stem, case, env, project):
             else:
                 raise RuntimeError('product exited before provider handshake')
             result['product_startup_ns'] = time.monotonic_ns() - began
+            result['workspace'] = ready['workspace']
             provider_start = time.monotonic_ns()
             provider = subprocess.Popen(['uv', 'run', '--project', str(project), '--frozen', 'fake-provider', '--scenario', ready['scenario'], '--workspace', ready['workspace'], '--port', '0'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=provider_log, text=True, env=env, start_new_session=True)
             provider_ready = json.loads(provider.stdout.readline())

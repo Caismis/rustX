@@ -575,6 +575,9 @@ impl std::error::Error for ConversationRuntimeError {}
 /// attempt's immutable model snapshot. No window captured at process start
 /// can survive a session model change.
 pub struct ConversationContextConfig {
+    /// Clock for Agent Status engines materialized from accepted configuration.
+    /// This is separate from runtime event timestamps and monotonic deadlines.
+    pub status_clock: Arc<dyn crate::context::AgentStatusClock>,
     /// The current runtime context policy captured by this composition.
     pub policy: SessionContextPolicy,
     /// The deterministic token estimator.
@@ -2095,7 +2098,7 @@ impl RuntimeInner {
             Some(generation) => generation
                 .config
                 .extension_composition()
-                .agent_status_engine(Arc::new(crate::context::SystemClock)),
+                .agent_status_engine(Arc::clone(&self.context.status_clock)),
             None => self
                 .context
                 .status_engine
@@ -4471,6 +4474,7 @@ impl ConversationRuntime {
         let resources = self.runtime_resources();
         let configuration = resources.configuration();
         ConversationContextConfig {
+            status_clock: Arc::clone(&self.inner.context.status_clock),
             policy: configuration.map_or(self.inner.context.policy, |g| g.config.context_policy()),
             estimator: Arc::clone(&self.inner.context.estimator),
             status_engine: configuration.map_or_else(
@@ -4484,7 +4488,7 @@ impl ConversationRuntime {
                 |g| {
                     g.config
                         .extension_composition()
-                        .agent_status_engine(Arc::new(crate::context::SystemClock))
+                        .agent_status_engine(Arc::clone(&self.inner.context.status_clock))
                 },
             ),
         }
@@ -8687,6 +8691,7 @@ mod tests {
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
+                status_clock: std::sync::Arc::new(crate::context::SystemClock),
                 policy: options.policy,
                 estimator: options.estimator,
                 status_engine: Some(options.status_engine),
@@ -8797,6 +8802,7 @@ mod tests {
             model_timeout_policy,
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
+                status_clock: std::sync::Arc::new(crate::context::SystemClock),
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
                     keep_recent_tokens: 0,
@@ -8906,6 +8912,7 @@ mod tests {
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
+                status_clock: std::sync::Arc::new(crate::context::SystemClock),
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
                     keep_recent_tokens: 0,
@@ -9022,6 +9029,7 @@ mod tests {
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
+                status_clock: std::sync::Arc::new(crate::context::SystemClock),
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
                     keep_recent_tokens: 0,
@@ -11549,6 +11557,7 @@ mod tests {
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
+                status_clock: std::sync::Arc::new(crate::context::SystemClock),
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
                     keep_recent_tokens: 0,
@@ -11636,6 +11645,7 @@ mod tests {
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
+                status_clock: std::sync::Arc::new(crate::context::SystemClock),
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
                     keep_recent_tokens: 0,
@@ -15481,6 +15491,7 @@ mod tests {
                 None,
             ),
             context: ConversationContextConfig {
+                status_clock: std::sync::Arc::new(crate::context::SystemClock),
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
                     keep_recent_tokens: 0,
@@ -16293,6 +16304,7 @@ mod tests {
                 None,
             ),
             context: ConversationContextConfig {
+                status_clock: std::sync::Arc::new(crate::context::SystemClock),
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
                     keep_recent_tokens: 0,
@@ -18117,6 +18129,7 @@ mod tests {
                     tool_deadline_policy:
                         crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
                     context: ConversationContextConfig {
+                        status_clock: std::sync::Arc::new(crate::context::SystemClock),
                         policy: crate::context::SessionContextPolicy {
                             reserve_tokens: 0,
                             keep_recent_tokens: 0,
@@ -18238,6 +18251,7 @@ mod tests {
                     model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
                     tool_deadline_policy,
                     context: ConversationContextConfig {
+                        status_clock: std::sync::Arc::new(crate::context::SystemClock),
                         policy: crate::context::SessionContextPolicy {
                             reserve_tokens: 0,
                             keep_recent_tokens: 0,
@@ -18389,6 +18403,7 @@ mod tests {
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
+                status_clock: std::sync::Arc::new(crate::context::SystemClock),
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
                     keep_recent_tokens: 0,

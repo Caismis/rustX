@@ -302,6 +302,7 @@ async fn child_fixture_scoped_at(
             model_timeout_policy: inherited_policy(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
+                status_clock: std::sync::Arc::new(rustx::context::SystemClock),
                 policy: rustx::context::SessionContextPolicy {
                     reserve_tokens: 0,
                     keep_recent_tokens: 0,
@@ -642,6 +643,7 @@ async fn compose_parent_runtime_plane(
         model_timeout_policy: inherited_policy(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
+            status_clock: std::sync::Arc::new(rustx::context::SystemClock),
             policy: rustx::context::SessionContextPolicy {
                 reserve_tokens: 0,
                 keep_recent_tokens: 0,
