@@ -153,7 +153,7 @@ async fn staged_rollback_uncertainty_survives_prepare_and_durable_admission_roll
         .replace('\'', "'\\''");
     let script = plane.dir.path().join("unproven-child.sh");
     std::fs::write(&script, format!(
-        "#!/bin/sh\nRUSTX_STAGED_ROLLBACK_FIXTURE=1 exec '{executable}' --exact runtime::subagent::registry::tests::staged_rollback_wire_child --nocapture\n"
+        "#!/bin/sh\nRUSTX_STAGED_ROLLBACK_FIXTURE=1 exec '{executable}' --exact runtime::subagent::registry::tests::resume::staged_rollback_wire_child --nocapture\n"
     )).unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
     plane.registry.config.spawn.program = script;
