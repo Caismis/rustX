@@ -1,6 +1,6 @@
 import {act,cleanup,fireEvent,render,waitFor} from '@testing-library/react';
 import {afterEach,expect,it,vi} from 'vitest';
-import type {CheckpointPage,CheckpointReadCut,TraceContextPresentation} from '../../protocol/app-server/v50';
+import type {CheckpointPage,CheckpointReadCut,TraceContextPresentation} from '../../protocol/app-server/v51';
 import {TraceContexts} from '../src/app/trajectory/TraceContexts';
 import type {TraceFieldReader} from '../src/client/trace';
 import {traceRecord} from './trace-fixture';

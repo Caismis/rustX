@@ -105,6 +105,14 @@ use crate::durable::observation::{TraceFactHeader, TraceFactKind, TraceFactQuery
 use crate::durable::presentation::{FactQuery, FactScope};
 use crate::durable::{ConversationStore, ConversationStoreError};
 #[cfg(test)]
+thread_local! {
+    static PAGE_READ_WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+#[cfg(test)]
+pub(crate) fn take_page_read_work() -> usize {
+    PAGE_READ_WORK.with(|work| work.replace(0))
+}
+#[cfg(test)]
 use crate::events::types::RuntimeEventEnvelope;
 
 /// Largest page a client may request.
@@ -299,6 +307,8 @@ impl<'a> TraceProjection<'a> {
         before: Option<&TraceCursor>,
         limit: usize,
     ) -> Result<TracePage, ConversationStoreError> {
+        #[cfg(test)]
+        PAGE_READ_WORK.with(|work| work.set(work.get() + 1));
         if limit == 0 || limit > TRACE_PAGE_LIMIT {
             return Err(ConversationStoreError::InvalidReference(
                 "Trace limit must be 1..=32".into(),

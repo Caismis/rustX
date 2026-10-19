@@ -1820,7 +1820,7 @@ impl ClientInner {
                         projection_head: candidate.snapshot.context.projection_head.clone(),
                         transcript: candidate.snapshot.transcript.clone(),
                         occupancy: candidate.snapshot.context.occupancy.clone(),
-                        trace: candidate.snapshot.trace.clone(),
+                        trace: Some(candidate.snapshot.trace.clone()),
                         trace_total,
                     }),
                     true,
@@ -1961,7 +1961,7 @@ impl ClientInner {
                         }
                         #[cfg(test)]
                         read_diagnostic.read_stage("source", &cut);
-                        let domains = cut.read(store.as_ref());
+                        let domains = cut.read_live(store.as_ref());
                         #[cfg(test)]
                         read_diagnostic.read_stage("completed", &cut);
                         (cut, domains)
@@ -10817,10 +10817,13 @@ mod tests {
             panic!("accepted")
         };
         await_background_started(&mut started, "published background").await;
-        receive_until(&subscription, |event| event.event.facts().iter().any(|fact| {
-            matches!(fact, RuntimeClientEvent::ReadDomainsUpdated { trace, .. }
-                if trace.records.iter().any(|record| record.native_id.as_deref() == Some(execution_id.as_str())))
-        })).await;
+        receive_until(&subscription, |event| {
+            event.event.facts().iter().any(|fact| {
+                matches!(fact, RuntimeClientEvent::JobUpdated { job, .. }
+                        if job.job_id == execution_id)
+            })
+        })
+        .await;
         fixture.host.projection_settled().await;
         let after_checkpoint = fixture.host.checkpoint().unwrap();
         let after_cursor = after_checkpoint.cursor;
@@ -11178,7 +11181,10 @@ mod tests {
                 expected.projection_head
             );
             assert!(checkpoint.snapshot.shutting_down);
-            assert_eq!(checkpoint.snapshot.trace.records, expected.trace.records);
+            assert_eq!(
+                checkpoint.snapshot.trace.records,
+                expected.trace.as_ref().unwrap().records
+            );
             let page = inner
                 .checkpoint_page(&checkpoint.read_cut, "transcript.entries", 0, 32)
                 .unwrap();
@@ -11610,7 +11616,9 @@ mod tests {
             } => {
                 snapshot.context.projection_head.clone_from(projection_head);
                 snapshot.transcript.clone_from(transcript);
-                snapshot.trace.clone_from(trace);
+                if let Some(trace) = trace {
+                    snapshot.trace.clone_from(trace);
+                }
                 snapshot.context.occupancy.clone_from(occupancy);
                 snapshot.todos.clone_from(todos);
             }
@@ -11662,7 +11670,7 @@ mod tests {
                     projection_head: candidate.snapshot.context.projection_head.clone(),
                     transcript: candidate.snapshot.transcript.clone(),
                     occupancy: candidate.snapshot.context.occupancy.clone(),
-                    trace: candidate.snapshot.trace.clone(),
+                    trace: Some(candidate.snapshot.trace.clone()),
                     trace_total: 0,
                 }),
                 true

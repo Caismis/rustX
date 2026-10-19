@@ -88,7 +88,7 @@ Attempt, or model request.
 
 ## Authorized read and containment
 
-App Server v50 has no public `session/fileRead` Method. An ordinary authenticated
+App Server v51 has no public `session/fileRead` Method. An ordinary authenticated
 App Server connection cannot enter the file-read seam, even with the exact
 attachment, canonical Tool locator, delivery index, Session cwd, and reference.
 Initialize client names are metadata and have no authorization role.

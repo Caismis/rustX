@@ -22868,7 +22868,15 @@
               "$ref": "#/$defs/RuntimeClientTranscriptPage"
             },
             "trace": {
-              "$ref": "#/$defs/TracePage"
+              "description": "A supplied native Trace head replaces the loaded cache. None leaves\nits issued cut/pins intact; native facts advertise independent Trace reads.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TracePage"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "occupancy": {
               "anyOf": [
@@ -22898,8 +22906,7 @@
           "additionalProperties": false,
           "required": [
             "type",
-            "transcript",
-            "trace"
+            "transcript"
           ]
         },
         {
