@@ -3,11 +3,12 @@ import { describe, it } from "node:test";
 
 import { visibleWidth } from "@earendil-works/pi-tui";
 
-import { QuestionnaireOverlay, readNumberDraft } from "../src/ui/components/questionnaire.ts";
+import { QuestionnaireOverlay, scalarValidationError } from "../src/ui/components/questionnaire.ts";
+import { readNumberDraft, readScalarAnswer } from "../../protocol/app-server/number.ts";
 import {
   finiteNumberFromWire,
   finiteNumberToWire,
-} from "../src/protocol/number.ts";
+} from "../../protocol/app-server/number.ts";
 import type {
   InteractionRequester,
   QuestionnaireResponse,
@@ -1429,5 +1430,34 @@ describe("readNumberDraft", () => {
         assert.equal(readNumberDraft(draft).kind, "inexact", `${draft} must be refused like ${digits}`);
       }
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The shared numeric contract (Issue #487): one reading for Web and terminal
+// ---------------------------------------------------------------------------
+
+describe("shared numeric answer contract", () => {
+  it("refuses inexact whole numbers however spelled and accepts exact or fractional values", () => {
+    const number = { type: "number" } as const;
+    for (const draft of ["9007199254740993", "9007199254740993.0", "9.007199254740993e15"]) {
+      assert.deepEqual(readScalarAnswer(number, draft), { kind: "rejected", reason: "inexact" }, draft);
+      assert.equal(scalarValidationError(number, draft), "Enter a number this runtime can represent exactly.", draft);
+    }
+    assert.deepEqual(readScalarAnswer(number, "9223372036854775808"), { kind: "answer", answer: { type: "number", value: { value: "43e0000000000000" } } });
+    assert.equal(scalarValidationError(number, "9223372036854775808"), undefined);
+    assert.deepEqual(readScalarAnswer(number, "1.25"), { kind: "answer", answer: { type: "number", value: { value: "3ff4000000000000" } } });
+    assert.equal(scalarValidationError(number, "1.25"), undefined);
+  });
+
+  it("submits only the canonical integer text the native parse accepts", () => {
+    const integer = { type: "integer", minimum: "-5", maximum: "9223372036854775807" } as const;
+    assert.deepEqual(readScalarAnswer(integer, " 9007199254740993 "), { kind: "answer", answer: { type: "integer", value: { value: "9007199254740993" } } });
+    for (const draft of ["007", "-0", "+1", "1.0", "1e3", ""]) {
+      assert.deepEqual(readScalarAnswer(integer, draft), { kind: "rejected", reason: "malformed" }, draft);
+    }
+    assert.deepEqual(readScalarAnswer(integer, "9223372036854775808"), { kind: "rejected", reason: "out-of-range" });
+    assert.deepEqual(readScalarAnswer(integer, "-6"), { kind: "rejected", reason: "below-minimum", bound: "-5" });
+    assert.equal(scalarValidationError(integer, "-6"), "Enter a whole number at least -5.");
   });
 });

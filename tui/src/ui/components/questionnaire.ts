@@ -22,8 +22,9 @@ import type {
 import {
   finiteNumberDecimal,
   finiteNumberFromWire,
-  finiteNumberToWire,
-} from "../../protocol/number.ts";
+  readScalarAnswer,
+  type ScalarAnswerRejection,
+} from "../../../../protocol/app-server/number.ts";
 import { markdownTheme, role } from "../theme.ts";
 import type { PopupContent } from "./popup-frame.ts";
 
@@ -117,128 +118,6 @@ export function selectionBoundsLabel(min: number, max: number): string {
   return `Select ${min}–${max}`;
 }
 
-/** The inclusive bounds of the runtime's canonical `Integer` domain. */
-const I64_MIN = -(2n ** 63n);
-const I64_MAX = 2n ** 63n - 1n;
-
-/**
- * One `Number` draft's decimal syntax, split into the parts its exact value is
- * built from: integer digits, fraction digits, and a signed exponent.
- *
- * The accepted spellings are `123`, `-123`, `1.5`, `.5`, `1.`, `1e3`, `1.5e3`,
- * `1E-2`, `-2.5e+4`. A leading `+`, a bare `.`, and a bare exponent are not
- * numbers; the digit check below refuses the two the pattern alone would let
- * through.
- */
-const NUMBER_DRAFT = /^-?(\d*)(?:\.(\d*))?(?:[eE]([+-]?)(\d+))?$/;
-
-/** `2^53`: the first magnitude at which binary64 stops holding every whole number. */
-const EXACT_WHOLE_FRONTIER = 2n ** 53n;
-
-/** What one `Number` draft denotes, or why it denotes nothing submittable. */
-export type NumberDraftReading =
-  /** The finite binary64 value the draft denotes exactly. */
-  | { readonly kind: "value"; readonly value: number }
-  /** Not the syntax of a number. */
-  | { readonly kind: "malformed" }
-  /** Beyond the finite binary64 range. */
-  | { readonly kind: "not-finite" }
-  /** A whole number binary64 cannot hold exactly. */
-  | { readonly kind: "inexact" };
-
-/**
- * Reads one `Number` draft as the value the runtime would receive.
- *
- * This is the single point where a human's decimal spelling becomes a
- * JavaScript `number`, and it is deliberately taken **on the original string**:
- * `Number(...)` rounds, and rounding is precisely the information this has to
- * inspect. Asking whether the draft is exact after `Number(...)` has already
- * run can only ever confirm that a rounded value is equal to itself.
- *
- * The runtime's `Number` domain is the finite binary64 (`FiniteNumber`), and a
- * fractional decimal *means* the nearest binary64 — that is what a JSON number
- * means everywhere, and where the MCP server's own parse lands. A **whole**
- * number is different: `9007199254740993` names one specific integer, and
- * binary64 cannot hold it, so `FiniteNumber` refuses it rather than rounding it
- * to `9007199254740992`. That rule is about the *value*, so it cannot be evaded
- * by respelling: `9007199254740993.0`, `9.007199254740993e15` and
- * `90071992547409930e-1` all denote the same refused integer, and this reads
- * every one of them out of the decimal itself rather than out of the rounded
- * `Number`.
- *
- * Nothing here widens the domain: no arbitrary-precision value crosses the
- * wire. The exact arithmetic exists only to decide whether one lossy
- * conversion is faithful, and the value submitted is the ordinary binary64.
- */
-export function readNumberDraft(draft: string): NumberDraftReading {
-  const spelling = draft.trim();
-  const match = NUMBER_DRAFT.exec(spelling);
-  if (match === null) return { kind: "malformed" };
-  const [, integerDigits = "", fractionDigits = "", exponentSign, exponentDigits] = match;
-  // `.` and `e3` match the pattern but spell no digits, so they are not numbers.
-  if (integerDigits.length + fractionDigits.length === 0) return { kind: "malformed" };
-
-  const value = Number(spelling);
-  if (!Number.isFinite(value)) return { kind: "not-finite" };
-
-  const magnitude = exponentDigits === undefined ? 0n : BigInt(exponentDigits);
-  const exponent = exponentSign === "-" ? -magnitude : magnitude;
-  const whole = decimalWholeValue(integerDigits, fractionDigits, exponent);
-  if (whole !== undefined && !isExactBinary64Whole(whole)) return { kind: "inexact" };
-  return { kind: "value", value };
-}
-
-/**
- * The exact integer a well-formed decimal spelling denotes, or `undefined`
- * when it denotes a fractional value.
- *
- * The digits are one integer scaled by a power of ten: `1.5e3` is `15` scaled
- * by `10^2`. A negative scale is cancelled one digit at a time, which both
- * decides wholeness and terminates immediately on the first non-zero digit
- * below the point — so an absurd exponent like `1e-999999999` costs one step
- * rather than a `10^999999999`.
- *
- * The sign is dropped: binary64 exactness is symmetric, so `-9007199254740993`
- * and `9007199254740993` are decided identically.
- *
- * The caller has already proven the draft finite. That bounds a non-zero
- * `scale` at 308, because the value is at least `10^scale` and a finite
- * binary64 is below `2^1024`; zero is returned before `scale` is used at all.
- */
-function decimalWholeValue(
-  integerDigits: string,
-  fractionDigits: string,
-  exponent: bigint,
-): bigint | undefined {
-  let significand = BigInt(`${integerDigits}${fractionDigits}`);
-  // Every spelling of zero is whole, and no exponent can change that — which
-  // is also what keeps `0e999999999` from reaching the exponentiation below.
-  if (significand === 0n) return 0n;
-  let scale = exponent - BigInt(fractionDigits.length);
-  while (scale < 0n) {
-    if (significand % 10n !== 0n) return undefined;
-    significand /= 10n;
-    scale += 1n;
-  }
-  return significand * 10n ** scale;
-}
-
-/**
- * Whether binary64 holds this whole number exactly.
- *
- * Every whole number is an odd number times a power of two, and binary64's
- * significand is 53 bits, so it is exact when that odd part fits in 53 bits.
- * This is the same rule the runtime applies in `is_exact_binary64_whole`,
- * stated over `BigInt` instead of `u64` — the client is therefore never looser
- * than the boundary it is about to submit to.
- */
-function isExactBinary64Whole(value: bigint): boolean {
-  let odd = value < 0n ? -value : value;
-  if (odd === 0n) return true;
-  while (odd % 2n === 0n) odd >>= 1n;
-  return odd < EXACT_WHOLE_FRONTIER;
-}
-
 /**
  * Validates one scalar draft against its declared answer shape.
  *
@@ -272,54 +151,28 @@ export function scalarValidationError(
       }
       return undefined;
     }
-    case "number": {
-      // Syntax, then finiteness, then admissibility to the canonical domain,
-      // and only then the declared bounds: a value is never compared against
-      // `minimum`/`maximum` before it is established that it is the value the
-      // user actually entered.
-      const reading = readNumberDraft(value);
-      if (reading.kind === "malformed") return "Enter a number.";
-      if (reading.kind === "not-finite") return "Enter a finite number.";
-      if (reading.kind === "inexact") {
-        return "Enter a number this runtime can represent exactly.";
-      }
-      const parsed = reading.value;
-      // The bounds are canonical binary64 text, so they are decoded through
-      // the one seam that reconstructs a `number` exactly and then compared in
-      // the domain both sides belong to. Comparing the wire spellings as
-      // strings would be a lexical comparison of bit patterns, which is not
-      // the numeric order.
-      const minimum = numberBound(answer.minimum ?? undefined);
-      const maximum = numberBound(answer.maximum ?? undefined);
-      if (minimum !== undefined && parsed < minimum) {
-        return `Enter a number at least ${minimum}.`;
-      }
-      if (maximum !== undefined && parsed > maximum) {
-        return `Enter a number at most ${maximum}.`;
-      }
-      return undefined;
-    }
+    case "number":
     case "integer": {
-      // Never `Number(...)`: the runtime's Integer domain is the exact i64,
-      // and a JavaScript number would silently round every value above 2^53 —
-      // the whole reason this field crosses the wire as decimal text. The
-      // draft is compared as a `BigInt` and submitted as the user's own
-      // digits; the runtime performs the one authoritative parse.
-      if (!/^-?\d+$/.test(value)) return "Enter a whole number.";
-      const parsed = BigInt(value);
-      if (parsed < I64_MIN || parsed > I64_MAX) {
-        return "Enter a whole number inside the 64-bit range.";
-      }
-      if (answer.minimum != null && parsed < BigInt(answer.minimum)) {
-        return `Enter a whole number at least ${answer.minimum}.`;
-      }
-      if (answer.maximum != null && parsed > BigInt(answer.maximum)) {
-        return `Enter a whole number at most ${answer.maximum}.`;
-      }
-      return undefined;
+      // The shared reading decides syntax, exactness, the canonical domain
+      // and the declared bounds; only the words are this terminal's.
+      const reading = readScalarAnswer(answer, value);
+      return reading.kind === "answer" ? undefined : scalarRejectionText(answer.type, reading);
     }
     default:
       return undefined;
+  }
+}
+
+/** This terminal's words for one shared machine-readable rejection. */
+function scalarRejectionText(type: "number" | "integer", rejection: ScalarAnswerRejection): string {
+  const noun = type === "number" ? "a number" : "a whole number";
+  switch (rejection.reason) {
+    case "malformed": return `Enter ${noun}.`;
+    case "not-finite": return "Enter a finite number.";
+    case "inexact": return "Enter a number this runtime can represent exactly.";
+    case "out-of-range": return "Enter a whole number inside the 64-bit range.";
+    case "below-minimum": return `Enter ${noun} at least ${rejection.bound}.`;
+    case "above-maximum": return `Enter ${noun} at most ${rejection.bound}.`;
   }
 }
 
@@ -1038,28 +891,18 @@ export class QuestionnaireOverlay implements PopupContent {
         return this.#committed[index]
           ? { type: "text", value: { value: draft ?? "" } }
           : undefined;
-      case "number": {
-        // The same reading that admitted the draft produces the value that
-        // crosses the wire, so the one lossy conversion is the one already
-        // proven faithful to the spelling the user typed. A draft that has no
-        // reading is left out rather than rounded into an answer — the submit
-        // gate refuses it first, and this cannot invent a value behind it.
+      case "number":
+      case "integer": {
+        // The same shared reading that admitted the draft produces the value
+        // that crosses the wire: the accepted binary64 encoded through the one
+        // seam that preserves it exactly, or the canonical digits the runtime
+        // parses. A draft that has no reading is left out rather than rounded
+        // into an answer — the submit gate refuses it first, and this cannot
+        // invent a value behind it.
         if (!filled) return undefined;
-        const reading = readNumberDraft(draft);
-        // The accepted binary64 — not the human's spelling — is what crosses
-        // the wire, encoded through the one seam that preserves it exactly.
-        // `JSON.stringify` of the same `number` would print the shortest
-        // decimal that round-trips it, which is a different integer for a
-        // value like `2^63` and is the failure this encoding exists to close.
-        return reading.kind === "value"
-          ? { type: "number", value: { value: finiteNumberToWire(reading.value) } }
-          : undefined;
+        const reading = readScalarAnswer(answer, draft);
+        return reading.kind === "answer" ? reading.answer : undefined;
       }
-      case "integer":
-        // The user's own digits cross the wire. Converting to a JavaScript
-        // number here would round every answer above 2^53 before the runtime
-        // ever performed its authoritative parse.
-        return filled ? { type: "integer", value: { value: draft.trim() } } : undefined;
       case "boolean": {
         const value = this.#boolean[index];
         return value === undefined ? undefined : { type: "boolean", value: { value } };

@@ -1,5 +1,6 @@
 import { displayText, message, type Message, type Translate } from '../locale/translation';
 import type { QuestionSpecification, QuestionnaireAnswerEntry, QuestionnaireSubmission } from '../../../protocol/app-server/v50';
+import { readScalarAnswer, type ScalarAnswerRejection } from '../../../protocol/app-server/number';
 export class QuestionnaireValidationError extends Error {
   constructor(tx: Translate, readonly notice: Message) { super(displayText(tx, notice)); }
 }
@@ -7,19 +8,18 @@ export class QuestionnaireValidationError extends Error {
 export interface QuestionDraft { selected: number[]; text: string; boolean?: boolean; skipped?: boolean }
 export const emptyDraft = (): QuestionDraft => ({ selected: [], text: '' });
 
-/** Encode the existing lossless binary64 wire scalar, never a JSON number. */
-export function finiteNumber(tx: Translate, text: string): string {
-  if (!text.trim()) throw new QuestionnaireValidationError(tx, message('interactions:copy.enter-a-number'));
-  const number = Number(text);
-  if (!Number.isFinite(number)) throw new QuestionnaireValidationError(tx, message('interactions:copy.enter-a-finite-number'));
-  const bytes = new DataView(new ArrayBuffer(8));
-  bytes.setFloat64(0, Object.is(number, -0) ? 0 : number, false);
-  return bytes.getBigUint64(0, false).toString(16).padStart(16, '0');
-}
-export function displayNumber(wire: string): number {
-  const bytes = new DataView(new ArrayBuffer(8));
-  bytes.setBigUint64(0, BigInt(`0x${wire}`), false);
-  return bytes.getFloat64(0, false);
+/** This client's words for one shared machine-readable numeric rejection;
+ * the reading, exactness rule and wire encoding are the protocol's. */
+function scalarRejection(header: string, type: 'number' | 'integer', rejection: ScalarAnswerRejection): Message {
+  if (type === 'integer') return rejection.reason === 'malformed'
+    ? message('interactions:copy.value-enter-a-canonical-whole-number', { p0: header })
+    : message('interactions:copy.value-integer-is-outside-the-declared-bounds', { p0: header });
+  switch (rejection.reason) {
+    case 'malformed': return message('interactions:copy.enter-a-number');
+    case 'not-finite': return message('interactions:copy.enter-a-finite-number');
+    case 'inexact': return message('interactions:copy.value-number-is-not-exactly-representable', { p0: header });
+    default: return message('interactions:copy.value-number-is-outside-the-declared-bounds', { p0: header });
+  }
 }
 export function submission(tx: Translate, questions: QuestionSpecification[], drafts: QuestionDraft[]): QuestionnaireSubmission {
   const answers: QuestionnaireAnswerEntry[] = [];
@@ -35,17 +35,10 @@ export function submission(tx: Translate, questions: QuestionSpecification[], dr
         if (length < (shape.min_length ?? 0) || length > (shape.max_length ?? Infinity)) throw new QuestionnaireValidationError(tx, message('interactions:copy.value-text-length-is-outside-the-declared-bounds', { p0: question.header }));
         answer = { type: 'text', value: { value: draft.text } }; break;
       }
-      case 'integer': {
-        if (!/^(0|[1-9][0-9]*|-[1-9][0-9]*)$/.test(draft.text)) throw new QuestionnaireValidationError(tx, message('interactions:copy.value-enter-a-canonical-whole-number', { p0: question.header }));
-        const integer = BigInt(draft.text);
-        if (integer < BigInt(shape.minimum ?? '-9223372036854775808') || integer > BigInt(shape.maximum ?? '9223372036854775807') || integer < -9223372036854775808n || integer > 9223372036854775807n) throw new QuestionnaireValidationError(tx, message('interactions:copy.value-integer-is-outside-the-declared-bounds', { p0: question.header }));
-        answer = { type: 'integer', value: { value: draft.text } }; break;
-      }
-      case 'number': {
-        const value = finiteNumber(tx, draft.text);
-        const numeric = displayNumber(value);
-        if (numeric < (shape.minimum ? displayNumber(shape.minimum) : -Infinity) || numeric > (shape.maximum ? displayNumber(shape.maximum) : Infinity)) throw new QuestionnaireValidationError(tx, message('interactions:copy.value-number-is-outside-the-declared-bounds', { p0: question.header }));
-        answer = { type: 'number', value: { value } }; break;
+      case 'integer': case 'number': {
+        const reading = readScalarAnswer(shape, draft.text);
+        if (reading.kind === 'rejected') throw new QuestionnaireValidationError(tx, scalarRejection(question.header, shape.type, reading));
+        answer = reading.answer; break;
       }
       case 'boolean': answer = { type: 'boolean', value: { value: draft.boolean! } }; break;
       case 'single_choice': case 'multi_choice': {
