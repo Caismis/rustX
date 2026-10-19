@@ -3,11 +3,11 @@ import type { RuntimeClientAgent, RuntimeClientSnapshot } from '../../../../prot
 import type { AppServerClient } from '../../client/app-server';
 import type { Observation } from '../../client/session-lifecycle/port';
 import { AgentReading, type AgentReadingState } from '../../client/agent-reading';
-import { turnAnchor } from '../../client/transcript';
+import { turnAnchor, transcriptContent } from '../../client/transcript';
 import { useTranslation } from '../../locale/react';
 import { ChatViewport } from '../../presentation/layout/ChatViewport';
 import { AgentTranscript } from './AgentTranscript';
-import { DeferredContent } from './DeferredContent';
+import { JournalSourceProvider, useObservationSource } from './ObservationSource';
 import chatCss from '../../presentation/agent/Chat.module.css';
 import { currentTurnLocation } from './turn-rail-items';
 import { TurnNavigation } from './TurnNavigator';
@@ -34,10 +34,10 @@ export function SubagentChat({ client, sessionId, admission, agent, snapshot, vi
   useEffect(() => () => reader?.dispose(), [reader]);
   useEffect(() => { if (!visible) reader?.suspend(); else if (snapshot) reader?.observe(snapshot); }, [reader, snapshot, visible]);
   const reading = useSyncExternalStore(reader?.subscribe ?? noopSubscribe, reader?.getSnapshot ?? (() => empty));
-  const ownsContent = useMemo(() => () => visible && currentView.current === view && !!client && !!sessionId && !!admission && client.isAttachmentObservationCurrent(sessionId, admission), [visible, view, client, sessionId, admission]);
   const currentId = useMemo(() => snapshot?.attempt && ['admitted','running'].includes(snapshot.attempt.phase.type) ? {
     conversation_id: snapshot.conversation_id, attempt_id: snapshot.attempt.attempt_id,attempt_id_source:snapshot.attempt.attempt_id_source,
   } : undefined, [snapshot?.conversation_id, snapshot?.attempt?.attempt_id,snapshot?.attempt?.attempt_id_source, snapshot?.attempt?.phase.type]);
+  const source = useObservationSource();
   return <ChatViewport chromeVisible={visible} ref={viewport} latestLabel={tx('agent:agent-transcript.return-to-latest')}
     historical={!!reading.history?.window} onLatest={() => reader?.returnToLatest()} onActiveTurn={setActive}
     latestTurn={currentId && turnAnchor(currentId)}
@@ -50,8 +50,7 @@ export function SubagentChat({ client, sessionId, admission, agent, snapshot, vi
         if (intent) void reader.navigate(selection, intent.current).then(turn => { if (turn) intent.commit(turnAnchor(turn.id), intent.current); });
       }}/>}
   >
-    {snapshot && <AgentTranscript snapshot={snapshot} history={reading.history} loadEarlier={() => void reader?.loadEarlier()} loadLater={() => void reader?.loadLater()} historicalDisabled/>}
-    {client && admission && <DeferredContent client={client} target={admission.target} agentId={agent.agent_id} bindings={reading.history?.page.content ?? []} owned={ownsContent}/>}
+    {snapshot && <JournalSourceProvider source={source} content={transcriptContent(reading.history, source?.content ?? [])} messages={snapshot.messages} transcript={snapshot.transcript} history={reading.history?.page}><AgentTranscript snapshot={snapshot} history={reading.history} loadEarlier={() => void reader?.loadEarlier()} loadLater={() => void reader?.loadLater()} historicalDisabled/></JournalSourceProvider>}
     <div className={chatCss.column}>{children}</div>
   </ChatViewport>;
 }

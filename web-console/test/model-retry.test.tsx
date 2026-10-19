@@ -211,12 +211,7 @@ it('a large original failure remains an explicit bounded window and never loads 
  try{
   const ui=render(<RetryFeedback client={server.client} sessionId="A" attemptId="attempt-a"/>);
   await act(async()=>{const details=ui.container.querySelector('details')!;details.open=true;fireEvent(details,new Event('toggle'));});
-  expect(server.requests.filter(row=>row.request.method==='conversation/checkpointValueRead')).toHaveLength(0);
-  fireEvent.click(ui.getByText('Read original value'));
-  await waitFor(()=>expect(ui.container.querySelector('pre')).toBeTruthy());
-  expect(new TextEncoder().encode(ui.container.querySelector('pre')!.textContent!).length).toBe(65536);
-  expect(server.requests.filter(row=>row.request.method==='conversation/checkpointValueRead')).toHaveLength(1);
-  fireEvent.click(ui.getByText('Read next chunk'));
+  await waitFor(()=>expect(ui.container.querySelector('pre')?.textContent).toBe(text));
   await waitFor(()=>expect(server.requests.filter(row=>row.request.method==='conversation/checkpointValueRead')).toHaveLength(2));
   const requests=server.requests.filter(row=>row.request.method==='conversation/checkpointValueRead').map(row=>row.request);
   expect(requests[1].params).toMatchObject({offset:65536,max_bytes:65536,domain:'journal.5',path:['event','error']});

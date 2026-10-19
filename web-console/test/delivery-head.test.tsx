@@ -1,7 +1,7 @@
 import {act,cleanup,fireEvent,render} from '@testing-library/react';
 import {afterEach,expect,it,vi} from 'vitest';
 import {DeliveryHead} from '../src/app/agent/DeliveryHead';
-import {JournalSourceProvider} from '../src/app/agent/JournalValue';
+import {JournalSourceProvider} from '../src/app/agent/ObservationSource';
 import {PreviewContext} from '../src/app/components/ArtifactPreview';
 import {checkpoint,Server,snapshot} from './fixture';
 import type {CheckpointPage,RuntimeClientDeliveryHead,RuntimeClientDeliveryItem,SessionFileReference} from '../../protocol/app-server/v50';

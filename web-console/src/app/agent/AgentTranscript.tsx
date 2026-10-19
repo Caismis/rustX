@@ -3,13 +3,12 @@ import { attemptOwnerKey } from '../../../../protocol/app-server/attempt-identit
 import { sameToolOccurrence } from '../../../../protocol/app-server/projection';
 import { statusIdentity } from '../../../../protocol/app-server/projection';
 import { isHumanMessage } from './InboundMessage';
-import { AttemptIdentityValue, AttemptJournalValues, TurnFinalMessageValue } from './JournalValue';
 import { toolCard } from '../../bindings/tools';
 import { useConversationPreferences } from '../conversation-preferences';
 import { useTranslation } from '../../locale/react';
 import { useState, type ReactNode } from 'react';
 import { turnPresentation } from '../../bindings/turn-presentation';
-import { isFinalTurnDescriptor, isFinalTurnMessage, turnProcesses } from '../../bindings/turn-process';
+import { isFinalTurnMessage, turnProcesses } from '../../bindings/turn-process';
 import { stepActivity, stepGroups, type StepPiece } from '../../bindings/step-groups';
 import { StepGroup } from '../../presentation/agent/StepGroup';
 import { TurnError } from '../../presentation/agent/TurnError';
@@ -22,7 +21,7 @@ import { Button } from '../../presentation/primitives/Button';
 import { Feedback } from '../components/ConversationFeedback';
 import { AgentStatusAnnotation } from './AgentStatus';
 import { Content, Message } from './Message';
-import { AssistantMessage } from '../../presentation/agent/Message';
+import { AssistantMessage, UserMessage } from '../../presentation/agent/Message';
 import { ForkPoint, type ForkPointInfo, type ForkOrigin } from './ForkPoint';
 import { ToolDeliveries } from '../components/Artifact';
 import { DeliveryHead } from './DeliveryHead';
@@ -34,6 +33,9 @@ import type { ResponseAction } from '../commands/native';
 import { CopyMessage, MessageTime, TurnTail } from './TurnTail';
 import tailCss from './TurnTail.module.css';
 import css from '../../presentation/agent/Chat.module.css';
+import { useContentSource } from './ObservationSource';
+import { SourceContent } from './SourceContent';
+import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 /** Standalone Tool-result bodies are suppressed: the native call projection
  * already renders their content beside the call. Suppressing a body does not
  * erase the entry's authoritative transcript position, so a `PostToolBatch`
@@ -70,12 +72,6 @@ export function AgentTranscript({ snapshot, history, loadEarlier, loadLater, onH
   const entries = transcriptPresentation(history, snapshot.transcript);
   const descriptors = deferredToolDescriptors(snapshot.message_descriptors ?? [], history?.page ?? snapshot.transcript, entries, !!history?.window);
   const descriptorProcessSeats = new Map<string,string>();
-  const processIdentitySeats = new Map<string,string>();
-  const completedOwners = new Set(entries.flatMap(entry=>entry.completed_response?[attemptOwnerKey(entry.completed_response.origin)]:[]));
-  for(const entry of entries)if(entry.turn_process?.attempt_id_source){
-    const owner=attemptOwnerKey(entry.turn_process);
-    if(!completedOwners.has(owner)&&!processIdentitySeats.has(owner))processIdentitySeats.set(owner,entry.cursor);
-  }
   const loadedProcessOwners = new Set(entries.flatMap(entry=>entry.turn_process?[attemptOwnerKey(entry.turn_process)]:[]));
   for(const descriptor of descriptors){
     const owner=descriptor.turn_process;if(!owner)continue;
@@ -165,16 +161,12 @@ export function AgentTranscript({ snapshot, history, loadEarlier, loadLater, onH
   const descriptorOwner = (descriptor:RuntimeClientMessageDescriptor) => (descriptor.turn_process && descriptorProcessSeats.get(attemptOwnerKey(descriptor.turn_process))===canonicalLocatorKey(descriptor.locator) && <>
         <TurnProcess id={attemptOwnerKey(descriptor.turn_process)} open tools={descriptor.turn_process.tool_call_count} messages={descriptor.turn_process.message_count}
           outcome={descriptor.turn_process.outcome} running={descriptor.turn_process.outcome==='running'} start={descriptor.turn_process.started_at??undefined} end={descriptor.turn_process.ended_at??undefined}/>
-        <AttemptIdentityValue field={descriptor.turn_process.attempt_id_source}/>
-        {descriptor.turn_process.outcome==='completed' && descriptor.turn_process.final_message_id_deferred && <TurnFinalMessageValue reference={descriptor.turn_process.final_message_id_source}/>}
       </>);
   const descriptorResponse = (descriptor:RuntimeClientMessageDescriptor) => (descriptor.completed_response && <div className={tailCss.actions} aria-label={tx('agent:turn-tail.completed-turn')} data-turn-tail={attemptOwnerKey(descriptor.completed_response.origin)}>
-        {!descriptor.turn_process && <AttemptIdentityValue field={descriptor.completed_response.origin.attempt_id_source}/>}
         {descriptor.completed_response.usage && <TurnUsage usage={descriptor.completed_response.usage} models={descriptor.completed_response.models??[]}/>}
         <MessageTime time={descriptor.completed_response.completed_at}/>
       </div>);
   return <div className={css.column} aria-label={tx('agent:agent-transcript.canonical-conversation')}>
-    {!history?.window && <AttemptJournalValues attempt={snapshot.attempt}/>}
     {history?.page.next_cursor != null && <Button disabled={history.loading} onClick={loadEarlier}>{history.loading ? tx('agent:agent-transcript.loading-earlier') : tx('agent:agent-transcript.load-earlier')}</Button>}
     {history?.window && <p role="status">{tx('agent:agent-transcript.history-window')}</p>}
     {history?.window?.newer_cursor != null && <Button disabled={history.loading} onClick={loadLater}>{tx('agent:agent-transcript.load-later')}</Button>}
@@ -203,8 +195,8 @@ export function AgentTranscript({ snapshot, history, loadEarlier, loadLater, onH
           prefix={requestFeedback?.messages.get(node.streaming.message_id)} other={messageSegments({role:'assistant',id:node.streaming.message_id,content:[]}, node.streaming.blocks ?? [], tools, true)}/></div>;
       }
       if (node.kind === 'process' && node.process.outcome === 'running') return null;
-      if (node.kind === 'process') return <div className={css.flowItem} data-chat-flow-kind="turn-process" key={node.key} data-chat-turn-owner={turnAnchor(node.process)} data-chat-anchor-key={entries.some(entry => entry.cursor === node.process.control_cursor) ? turnAnchor(node.process) : undefined}><TurnProcess id={node.key} open tools={node.process.tool_call_count} messages={node.process.message_count} outcome={node.process.outcome} start={node.process.started_at ?? undefined} end={node.process.ended_at ?? undefined}/>{requestFeedback?.attempts.get(attemptOwnerKey(node.process))}{!processIdentitySeats.has(node.key) && <AttemptIdentityValue field={node.process.attempt_id_source}/>}</div>;
       if (node.kind === 'tail') return <TurnTail key={node.key} text={node.text} response={node.response} latest={node.response === latestResponse?.completed_response} onHistorical={onHistorical} disabled={historicalDisabled} lineageSwitchSafe={lineageSwitchSafe}/>;
+      if (node.kind === 'process') return <div className={css.flowItem} data-chat-flow-kind="turn-process" key={node.key} data-chat-turn-owner={turnAnchor(node.process)} data-chat-anchor-key={entries.some(entry => entry.cursor === node.process.control_cursor) ? turnAnchor(node.process) : undefined}><TurnProcess id={node.key} open tools={node.process.tool_call_count} messages={node.process.message_count} outcome={node.process.outcome} start={node.process.started_at ?? undefined} end={node.process.ended_at ?? undefined}/>{requestFeedback?.attempts.get(attemptOwnerKey(node.process))}</div>;
       const entry = node.entry;
       if (entry.item.type === 'attempt_terminal') {
         const turn = entry.item.turn;
@@ -243,11 +235,9 @@ export function AgentTranscript({ snapshot, history, loadEarlier, loadLater, onH
         {entrySeat && disclosure(key!)}
         {entry.completed_response && !process.groups.has(process.attempts.get(attemptOwnerKey(entry.completed_response.origin)) ?? '') && <><TurnProcess id={attemptOwnerKey(entry.completed_response.origin)} open tools={entry.turn_process?.tool_call_count ?? 0} messages={entry.turn_process?.message_count ?? 0} durationMs={entry.completed_response.timing?.total_duration_ms ?? undefined}/>{requestFeedback?.attempts.get(attemptOwnerKey(entry.completed_response.origin))}</>}
         {feedback}
-        {entry.turn_process && processIdentitySeats.get(attemptOwnerKey(entry.turn_process))===entry.cursor && <AttemptIdentityValue field={entry.turn_process.attempt_id_source}/>}
-        {entry.turn_process && process.finalMetadataSeats.get(attemptOwnerKey(entry.turn_process))===entry.cursor && <TurnFinalMessageValue reference={entry.turn_process.final_message_id_source}/>}
         </>} bodyHidden={!final && !processOpen}
         message={body && !stepped && entry.item.type === 'message' && entry.item.message.role !== 'assistant' ? entry.item.message : undefined} reasoningHidden={final && !processOpen}
-        actions={entry.item.type === 'message' && isHumanMessage(entry.item.message) && (!entry.item.message.kind || entry.item.message.kind === 'message') && <div className={tailCss.actions} aria-label={tx('agent:agent-transcript.message-actions')}><MessageTime time={entry.item.message.timestamp}/><CopyMessage text={entry.item.message.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('')}/></div>}
+        actions={entry.item.type === 'message' && isHumanMessage(entry.item.message) && (!entry.item.message.kind || entry.item.message.kind === 'message') && <div className={tailCss.actions} aria-label={tx('agent:agent-transcript.message-actions')}><MessageTime time={entry.item.message.timestamp}/><CopyMessage messageId={entry.item.message.id} text={entry.item.message.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('')}/></div>}
         tools={toolsOf(entry)}
         other={stepped ? pieces(entry, stepped, processOpen) : body && (entry.item.type === 'message' && entry.item.message.role === 'assistant' ? messageSegments(entry.item.message, entry.item.message.content, toolsOf(entry)) : audit(entry))}
         suffix={<>{statuses.map(status => {
@@ -258,17 +248,25 @@ export function AgentTranscript({ snapshot, history, loadEarlier, loadLater, onH
           return <div className={css.flow} hidden={!verbose && !!owner && process.groups.get(owner)?.owner.outcome === 'completed' && !expanded.has(owner) && !(seat?.kind === 'status' && seat.statusId === statusIdentity(status))} key={statusIdentity(status)}>{seat?.kind === 'status' && seat.statusId === statusIdentity(status) && disclosure(owner!)}<div hidden={!verbose && !!owner && process.groups.get(owner)?.owner.outcome === 'completed' && !expanded.has(owner)}><AgentStatusAnnotation status={status}/></div></div>;
         })}</>}/></div>;
     })}
-    {(snapshot.publication_settlements ?? []).filter(record => !entries.some(entry => entry.cursor === record.transcript_cursor)).map(record => <p role="status" key={`publication:${record.transcript_cursor}`} data-publication-settlement={record.settlement.kind}>{tx('agent:message.incomplete-response')} · {tx('common:activity.content-deferred')} ({record.settlement.block_count}) <MessageTime time={record.settlement.settled_at}/></p>)}
+    {(snapshot.publication_settlements ?? []).filter(record => !entries.some(entry => entry.cursor === record.transcript_cursor)).map(record => <p role="status" key={`publication:${record.transcript_cursor}`} data-publication-settlement={record.settlement.kind}>{tx('agent:message.incomplete-response')} <MessageTime time={record.settlement.settled_at}/></p>)}
     {descriptors.filter(descriptor=>descriptor.deliveries && (descriptor.identity==null||!durableIds.has(descriptor.identity))).map(descriptor=><DeliveryHead key={`deliveries:${canonicalLocatorKey(descriptor.locator)}`} head={descriptor.deliveries!}/>)}
     {descriptors.filter(descriptor => history?.window || descriptor.identity == null || !messages.some(message => message.id === descriptor.identity)).map(descriptor => <section key={canonicalLocatorKey(descriptor.locator)} data-canonical-locator={JSON.stringify(descriptor.locator)}>
       {descriptorOwner(descriptor)}
-      <p role="status" data-native-final-message={isFinalTurnDescriptor(descriptor)||undefined}>{tx('common:activity.content-deferred')} ({descriptor.role}, {descriptor.block_count})</p>
+      <DescriptorContent descriptor={descriptor}/>
       {descriptorResponse(descriptor)}
       {descriptor.tool_calls.map(tool=><Tool key={`${canonicalLocatorKey(tool.occurrence.locator)}:${tool.block_index}`} tool={tool}/>)}
     </section>)}
     {!!currentContext.length && <details><summary>{tx('agent:agent-transcript.current-context')}</summary>{currentContext.map(message => <Message key={message.id} message={message} />)}</details>}
     {runningAttempt && requestFeedback?.attempts.get(attemptOwnerKey({conversation_id:snapshot.conversation_id,...runningAttempt}))}
-    {snapshot.attempt?.attempt_id_source && <AttemptIdentityValue field={snapshot.attempt.attempt_id_source}/>}
     {runningAttempt && <RunningStatus key={attemptOwnerKey({conversation_id:snapshot.conversation_id,...runningAttempt})} startTime={startTime !== undefined && Number.isFinite(startTime) ? startTime : undefined}/>}
   </div>;
+}
+
+function DescriptorContent({ descriptor }: { descriptor: RuntimeClientMessageDescriptor }) {
+  const { source, read } = useContentSource(), tx = useTranslation();
+  const bindings = descriptor.content.filter(binding => binding.content_ref.representation === 'utf8_text' && binding.content_ref.source.component === 'payload');
+  if (!source || !bindings.length) return null;
+  const content = <SourceContent explicit bindings={bindings} owned={source.owned} read={read}>{text => <MarkdownText text={text}/>}</SourceContent>;
+  return descriptor.role === 'user' ? <UserMessage label={tx('agent:message.your-message')}>{content}</UserMessage>
+    : <AssistantMessage label={tx('agent:message.assistant-response')}>{content}</AssistantMessage>;
 }

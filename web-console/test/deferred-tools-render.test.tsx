@@ -1,9 +1,9 @@
-import { act, cleanup, fireEvent, render } from '@testing-library/react';
+import { cleanup, render } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
 import type { ForegroundToolExecution, RuntimeClientMessageDescriptor, RuntimeClientTranscriptPage } from '../../protocol/app-server/v50';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { isFinalTurnDescriptor } from '../src/bindings/turn-process';
-import { JournalSourceProvider } from '../src/app/agent/JournalValue';
+import { JournalSourceProvider } from '../src/app/agent/ObservationSource';
 import { checkpoint, readCut, Server, snapshot } from './fixture';
 
 afterEach(cleanup);
@@ -22,7 +22,7 @@ it('T11/T14 a historical deferred Tool row keeps its captured cut even when the 
   const ui = render(<AgentTranscript snapshot={live} history={{epoch:1,page,window:{cut:readCut(),target_cursor:'7',page}}}/>);
   expect(ui.container.querySelector('[data-canonical-locator]')).not.toBeNull();
   expect(ui.container.querySelector('[data-tool-call-id="original"] [data-state]')?.getAttribute('data-state')).toBe('running');
-  expect(ui.container.querySelector('[data-tool-result-committed]')?.textContent).toContain('success');
+  expect(ui.container.querySelector('[data-tool-result-committed]')).toBeNull();
   expect(ui.queryByText('late native failure')).toBeNull();
 });
 
@@ -36,7 +36,7 @@ it('T14 a deferred process seat displays only original native completion and exa
   const original=JSON.stringify(page);
   const ui=render(<AgentTranscript snapshot={{...snapshot(),message_descriptors:[],transcript:page}}/>);
   expect(ui.getByRole('button',{name:'Worked'}).getAttribute('data-turn-process')).toBe(JSON.stringify(['origin','attempt-original']));
-  expect(ui.container.querySelector('[data-native-final-message="true"]')).not.toBeNull();
+  expect(ui.container.querySelector('[data-native-final-message]')).toBeNull();
   expect(isFinalTurnDescriptor({...descriptor,locator:{type:'by_ledger_position',position:18}})).toBe(false);
   for(const outcome of ['running','failed','cancelled','incomplete_at_cut'] as const)expect(isFinalTurnDescriptor({...descriptor,turn_process:{...owner,outcome}})).toBe(false);
   ui.rerender(<AgentTranscript snapshot={{...snapshot(),message_descriptors:[],transcript:{...page,deferred_entries:[{...page.deferred_entries![0]!,value:{...descriptor,turn_process:{...owner,outcome:'incomplete_at_cut'}}}]}}}/>);
@@ -47,27 +47,14 @@ it('T14 a deferred process seat displays only original native completion and exa
 });
 
 
-it('T08/T14 a deferred descriptor completion loads its original final metadata through the product reader',async()=>{
-  const server=new Server();await server.attached('A');
-  try {
-    const base=snapshot(),target=server.target('A'),cut=checkpoint(base).read_cut;
-    const locator={type:'by_ledger_position' as const,position:17};
-    const raw='{ "id": "'+ 'original-final\\u0061'.repeat(40)+'", "opaque": 9007199254740993 }';
-    const reference={conversation_id:base.conversation_id,source:{type:'canonical_message_block' as const,component:'message_metadata' as const,block_index:0,locator},representation:'canonical_json_v1' as const,version:1,content_revision:1,readable_end:Buffer.byteLength(raw)};
-    const owner={attempt_id_source:null,conversation_id:base.conversation_id,attempt_id:'exact-native-owner',outcome:'completed' as const,control_cursor:'22',message_count:2,tool_call_count:0,
-      final_message_id:null,final_message_locator:locator,final_message_id_deferred:true,final_message_id_source:reference};
-    const descriptor:RuntimeClientMessageDescriptor={locator,role:'assistant',kind:'message',block_count:'1',tool_call_count:'0',tool_calls:[],turn_process:owner,completed_response:null,content:[],collections:[]};
-    server.handlers.set('conversation/contentRead',request=>{
-      if(request.method!=='conversation/contentRead')throw Error('exact content method');
-      expect(request.params).toEqual({target,agent_id:null,content_ref:reference,offset:0,max_bytes:65_536});
-      return {type:'content_chunk',chunk:{content_ref:reference,offset:0,end_offset:reference.readable_end,readable_end:reference.readable_end,data_base64:Buffer.from(raw).toString('base64'),next_offset:null,complete:true}};
-    });
-    const state={...base,message_descriptors:[descriptor]},original=JSON.stringify(state);
-    const ui=render(<JournalSourceProvider source={{client:server.client,target,cut:()=>cut,owned:()=>true}}><AgentTranscript snapshot={state}/></JournalSourceProvider>);
-    await act(async()=>fireEvent.click(ui.getByRole('button',{name:`Read content (${reference.readable_end} bytes)`})));
-    expect(ui.container.querySelector('pre')?.textContent).toBe(raw);
-    expect(ui.container.querySelector('[data-native-final-message="true"]')).not.toBeNull();
-    expect(state.attempt).toBeUndefined();expect(state.transcript.entries).toEqual([]);
-    expect(JSON.stringify(state)).toBe(original);
-  } finally {server.client.disconnect();}
+it('deferred completion metadata stays in the native owner without adding raw-value UI to chat',async()=>{
+ const server=new Server();await server.attached('A');
+ try {
+  const base=snapshot(),cut=checkpoint(base).read_cut,locator={type:'by_ledger_position' as const,position:17};
+  const reference={conversation_id:base.conversation_id,source:{type:'canonical_message_block' as const,component:'message_metadata' as const,block_index:0,locator},representation:'canonical_json_v1' as const,version:1,content_revision:1,readable_end:16384};
+  const descriptor:RuntimeClientMessageDescriptor={locator,role:'assistant',kind:'message',block_count:'1',tool_call_count:'0',tool_calls:[],content:[],collections:[],completed_response:null,turn_process:{attempt_id_source:null,conversation_id:base.conversation_id,attempt_id:'original',outcome:'completed',control_cursor:'22',message_count:2,tool_call_count:0,final_message_id:null,final_message_locator:locator,final_message_id_deferred:true,final_message_id_source:reference}};
+  const ui=render(<JournalSourceProvider source={{client:server.client,target:server.target('A'),cut:()=>cut,owned:()=>true}}><AgentTranscript snapshot={{...base,message_descriptors:[descriptor]}}/></JournalSourceProvider>);
+  expect(ui.getByRole('button',{name:'Worked'})).toBeTruthy();expect(ui.queryByText(/Content deferred|16384|Read content|Read original/)).toBeNull();
+  expect(server.requests.filter(row=>row.request.method==='conversation/contentRead')).toHaveLength(0);
+ }finally{server.client.disconnect();}
 });

@@ -122,7 +122,7 @@ function cellsOf(tx: Translate, record: TraceRecord): InspectableDisplayItem[] {
   for (const context of request.context_additions) {
     cells.push({ ...origin(record, 'context', contextKindLabel(tx, context.context_kind), context.preview?.text ?? tx('trajectory:trajectory-inspector.content-unavailable'), 'overview', record.id, canonicalLocatorKey(context.locator)), type: 'ContextRow', context, context_message_id: context.message_id??undefined });
   }
-  cells.push({ ...origin(record, 'request-boundary', tx('trajectory:copy.request'), request.model??tx('common:activity.content-deferred'), 'overview', record.id), type: 'RequestBoundary' });
+  cells.push({ ...origin(record, 'request-boundary', tx('trajectory:copy.request'), request.model??tx('common:activity.loading'), 'overview', record.id), type: 'RequestBoundary' });
   return cells;
 }
 

@@ -261,35 +261,23 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     // identity, not human-facing Inspector labels.
     await expect(inspector).toContainText('render_image');
     await expect(inspector.getByRole('button', { name: 'Preview artifact_1', exact: true })).toBeVisible();
-    // Each original Tool field remains explicitly selected at the returned
-    // head cut. No whole detail or current Tool registry supplies these bytes.
+    // Opening the normal detail tab owns automatic bounded reads at its retained cut.
     await inspector.getByRole('tab', { name: 'Payload', exact: true }).click();
     let selectedField = inspector.getByRole('tabpanel');
-    await selectedField.getByRole('button', { name: /^Read content/ }).click();
     await expect(selectedField.locator('pre').last()).toHaveText('{}');
     await inspector.getByRole('tab', { name: 'Result', exact: true }).click();
     selectedField = inspector.getByRole('tabpanel');
-    await selectedField.getByRole('button', { name: /^Read content/ }).click();
-    await expect(selectedField.locator('pre').last()).toContainText('"tool_call_id":"chat-image"');
-    await expect(selectedField.locator('pre').last()).toContainText('"artifacts":[]');
-    await expect(selectedField.locator('pre').last()).toContainText('"type":"success"');
-    const resultCollections = selectedField.getByRole('combobox', { name: 'Collection', exact: true });
-    const resultDomains = await resultCollections.locator('option').evaluateAll(options => options.map(option => (option as HTMLOptionElement).value).filter(value => /^messages\.ledger:[1-9][0-9]*\.blocks$/.test(value)));
-    expect(resultDomains).toHaveLength(1);
-    await resultCollections.selectOption(resultDomains[0]!);
-    await selectedField.getByRole('button', { name: 'Read first page', exact: true }).click();
-    await expect(selectedField.locator('pre').last()).toContainText('"artifact_id":"artifact_1"');
-    // The image is original Tool content, separate from ResultMetadata.artifacts.
-    const blockSources = selectedField.getByRole('combobox', { name: 'Read original value', exact: true });
-    const binary = await blockSources.locator('option').evaluateAll(options => options.filter(option => option.textContent?.includes('binary_bytes')).map(option => (option as HTMLOptionElement).value));
-    expect(binary).toHaveLength(1);
-    await blockSources.selectOption(binary[0]!);
-    await selectedField.getByRole('button', { name: /^Read content/ }).click();
-    await expect(selectedField.locator('pre').last()).toContainText('iVBORw0KGgo');
+    await expect(selectedField).toContainText('"tool_call_id":"chat-image"');
+    await expect(selectedField).toContainText('"artifacts":[]');
+    await expect(selectedField).toContainText('"type":"success"');
+    await expect(selectedField).toContainText('"artifact_id":"artifact_1"');
+    await expect(selectedField).not.toContainText('iVBORw0KGgo');
+    await expect(selectedField.getByRole('combobox', { name: 'Collection', exact: true })).toHaveCount(0);
     await inspector.getByRole('tab', { name: 'Schema', exact: true }).click();
     selectedField = inspector.getByRole('tabpanel');
-    await selectedField.getByRole('button', { name: 'Read original value', exact: true }).click();
     await expect(selectedField.locator('pre').last()).toContainText('"name":"render_image"');
+    await expect(page.getByRole('button', { name: /Read content|Read original value|Read next chunk|Read first page/ })).toHaveCount(0);
+    await expect(page.getByText('Content deferred', { exact: true })).toHaveCount(0);
     await page.screenshot({ path: 'test-results/trajectory-inspector.png', fullPage: true });
     await connectionAction(page, 'Reconnect');
     await expect(page.getByLabel('Transport token')).toHaveCount(0);

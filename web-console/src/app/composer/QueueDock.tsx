@@ -93,7 +93,7 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
             {origin && <span className={css.status}>{origin}</span>}
             {row.message.source === 'human' && (!row.message.kind || row.message.kind === 'message') && <div className={css.actions}>
               <button type="button" className={css.action} disabled={locked || !edit || row.deferred || row.message.content.length !== 1 || row.message.content[0].type !== 'text'}
-                title={row.deferred ? tx('common:activity.content-deferred') : row.message.content.length !== 1 || row.message.content[0].type !== 'text' ? tx('agent:queue-dock.non-text-or-multiple-content-blocks-cannot-be-safely-edited-here') : tx('agent:queue-dock.edit-queued-message')}
+                title={row.deferred ? tx('common:activity.loading') : row.message.content.length !== 1 || row.message.content[0].type !== 'text' ? tx('agent:queue-dock.non-text-or-multiple-content-blocks-cannot-be-safely-edited-here') : tx('agent:queue-dock.edit-queued-message')}
                 onClick={() => { setDraft({ expected: expected(row), messageId:row.message.id, text: row.message.content[0].type === 'text' ? row.message.content[0].text : '' }); setNotice(''); }}>{tx('agent:queue-dock.edit')}</button>
               <button type="button" className={css.action} disabled={locked || !remove} onClick={() => { if (remove) void apply(() => remove(expected(row))); }}>{tx('agent:queue-dock.remove')}</button>
             </div>}

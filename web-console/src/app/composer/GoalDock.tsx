@@ -162,7 +162,7 @@ export function GoalDock({ state, observation, disabled, mutate, loadObjective }
       </>}</div>
     </div>
     {goal.phase === 'blocked' && goal.blocked_reason && <p className={css.note}>{tx('agent:goal-dock.blocked')}{' '}{goal.blocked_reason}</p>}
-    {(goal.objective_deferred || goal.blocked_reason_deferred) && <p className={css.note} role="status">{tx('common:activity.content-deferred')}</p>}
+    {(goal.objective_deferred || goal.blocked_reason_deferred) && <p className={css.note} role="status">{tx('common:activity.loading')}</p>}
     {error && <p className={css.error} role="alert">{error}</p>}
     {locking && <p className={css.note} role="status">{AWAITING[locking.kind]}</p>}
   </section>;

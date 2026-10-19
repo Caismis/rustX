@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
 import type { CheckpointReadCut, Request, RoutedInteraction, RuntimeClientInteractionHeader } from '../../protocol/app-server/v50';
 import { Interactions } from '../src/app/agent/Interactions';
@@ -51,7 +51,6 @@ async function pendingFixture(){
 
 it('an unrelated checkpoint preserves the selected pending read and its original Page/Value cut',async()=>{
   const {current,publish}=await pendingFixture();
-  fireEvent.click(screen.getByRole('button',{name:'Read content (0 bytes)'}));
   const page=await current.waitFor('conversation/checkpointPage',1);
   if(page.method!=='conversation/checkpointPage')throw new Error('Expected Page.');
   const originalCut=structuredClone(page.params.cut);
@@ -70,7 +69,6 @@ it('an unrelated checkpoint preserves the selected pending read and its original
 
 it.each(['page','value'] as const)('a replaced pending owner resets loading while its held %s cannot apply late',async(held)=>{
   const {current,publish}=await pendingFixture();
-  fireEvent.click(screen.getByRole('button',{name:'Read content (0 bytes)'}));
   const page=await current.waitFor('conversation/checkpointPage',1);
   let retired:Request=page;
   if(held==='value'){
@@ -81,11 +79,10 @@ it.each(['page','value'] as const)('a replaced pending owner resets loading whil
   // native owner and held only at its carrier delivery boundary.
   const late=current.commit(retired);
   await publish(true);
-  await waitFor(()=>expect((screen.getByRole('button',{name:'Read content (0 bytes)'}) as HTMLButtonElement).disabled).toBe(false));
+  await current.waitFor('conversation/checkpointPage',2);
   await act(async()=>current.socket.deliver(late));
   expect(screen.queryByText('Which direction?')).toBeNull();
   expect(screen.queryByRole('alert')).toBeNull();
-  fireEvent.click(screen.getByRole('button',{name:'Read content (0 bytes)'}));
   const replacement=await current.waitFor('conversation/checkpointPage',2);
   if(replacement.method!=='conversation/checkpointPage')throw new Error('Expected replacement Page.');
   expect(replacement.params.cut.domain_revisions.pending_interactions).toBe('2');

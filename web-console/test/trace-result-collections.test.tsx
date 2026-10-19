@@ -1,4 +1,4 @@
-import {act,cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
+import {act,cleanup,render,screen,waitFor} from '@testing-library/react';
 import {afterEach,expect,it,vi} from 'vitest';
 import type {CheckpointPage,ContentChunk,ContentRef,TraceInspectionHead,TraceRecord} from '../../protocol/app-server/v50';
 import {TrajectoryInspector,type TrajectoryInspectorProps} from '../src/app/trajectory/TrajectoryInspector';
@@ -19,38 +19,43 @@ function fixture(){
 }
 function chunk(reference:ContentRef,raw:string,offset=0):ContentChunk{const bytes=new TextEncoder().encode(raw),end=Math.min(offset+65536,bytes.length);return {content_ref:reference,offset,data_base64:btoa(String.fromCharCode(...bytes.slice(offset,end))),end_offset:end,readable_end:bytes.length,next_offset:end<bytes.length?end:null,complete:end===bytes.length};}
 const props=(record:TraceRecord):TrajectoryInspectorProps=>({item:{type:'RecordRow',record,display_key:'tool',owner_record_id:record.id,facet:'output',label:'Tool',preview:''},facet:'output',onFacet:vi.fn(),onLoadDetail:vi.fn(),onClose:vi.fn(),records:[record],executions:new Map(),requestNumbers:new Map(),completeHistory:true,onOpen:vi.fn()});
-it('Tool Result retains original metadata separately from advertised original image blocks and bytes',async()=>{
- const f=fixture();render(<TrajectoryInspector {...props(f.record)} detailPage={f.page} detailReader={f.reader}/>);expect(f.content).not.toHaveBeenCalled();expect(f.readPage).not.toHaveBeenCalled();
- fireEvent.click(screen.getByRole('button',{name:/^Read content/}));await screen.findByText(f.metadata);expect(f.metadata).not.toContain('artifact_1');
- fireEvent.change(screen.getByRole('combobox',{name:'Collection'}),{target:{value:f.record.collections[0].domain}});fireEvent.click(screen.getByRole('button',{name:'Read first page'}));await screen.findByText('{"type":"image","artifact_id":"artifact_1"}');
- const reads=screen.getAllByRole('button',{name:/^Read content/});fireEvent.click(reads[0]);await screen.findByText(f.image);expect(screen.queryByText(f.metadata)).toBeNull();expect(f.readPage.mock.calls[0].slice(0,3)).toEqual([f.original,f.record.collections[0].domain,0]);expect(f.content.mock.calls.map(args=>args.slice(0,3))).toEqual([[f.original,f.ref,0],[f.original,f.imageRef,0]]);expect(f.value).not.toHaveBeenCalled();
+function only(f:ReturnType<typeof fixture>,mode:'field'|'collection') {
+ const head=f.page.items[0].value as unknown as TraceInspectionHead;
+ if(mode==='field')head.record.collections=[];else {head.record.fields=[];if(head.record.tool)head.record.tool.fields=[];}
+}
+it('opening Tool Result automatically renders original metadata and result blocks',async()=>{
+ const f=fixture();render(<TrajectoryInspector {...props(f.record)} detailPage={f.page} detailReader={f.reader}/>);
+ await screen.findByText(f.metadata);await screen.findByText(f.image);
+ expect(f.readPage.mock.calls[0].slice(0,3)).toEqual([f.original,f.record.collections[0].domain,0]);
+ expect(f.content.mock.calls.map(args=>args.slice(0,3))).toEqual([[f.original,f.ref,0],[f.original,f.imageRef,0]]);expect(f.value).not.toHaveBeenCalled();
+ expect(screen.queryByRole('combobox',{name:'Collection'})).toBeNull();expect(screen.queryByRole('button',{name:/Read content|Read first page/})).toBeNull();
 });
-it.each(['field','collection'] as const)('an unrelated parent rerender preserves held and loaded %s bytes under the same reader/cut',async mode=>{
- const f=fixture(),raw=' {"original":"'+'x'.repeat(66000)+'","opaque":18446744073709551615} ',bytes=new TextEncoder().encode(raw);let finish!:(chunk:ContentChunk)=>void;
- // Preserve the exact fixture source identity while extending its genuine selected extent.
- const head=f.page.items[0].value as unknown as TraceInspectionHead;if(mode==='field'){const field=head.record.fields[0];if(field.type!=='content')throw Error('fixture');field.binding.content_ref.readable_end=bytes.length;}
+it.each(['field','collection'] as const)('same-owner rerenders preserve held %s reads and assemble continuation bytes',async mode=>{
+ const f=fixture(),raw=' {"original":"'+'x'.repeat(66000)+'","opaque":18446744073709551615} ',bytes=new TextEncoder().encode(raw);let finish!:(value:ContentChunk)=>void;
+ only(f,mode);const head=f.page.items[0].value as unknown as TraceInspectionHead;
+ if(mode==='field'){const field=head.record.fields[0];if(field.type!=='content')throw Error('fixture');field.binding.content_ref.readable_end=bytes.length;}
  else {f.imageRef.readable_end=bytes.length;f.readPage.mockResolvedValue({read_cut:f.original,cursor:f.original.revision,domain:f.record.collections[0].domain,total:'1',next_offset:null,collections:[],items:[{offset:'0',identity:'json',key:null,value:null,content:[{path:['value'],source_path:null,content_ref:f.imageRef,deferred:true}],deferred:true,body_complete:null}]});}
  f.content.mockImplementation(async(_cut,reference,offset)=>offset?chunk(reference,raw,offset):new Promise(resolve=>{finish=resolve;}));
  const ui=render(<TrajectoryInspector {...props(f.record)} detailPage={f.page} detailReader={f.reader}/>);
- if(mode==='collection'){fireEvent.change(screen.getByRole('combobox',{name:'Collection'}),{target:{value:f.record.collections[0].domain}});fireEvent.click(screen.getByRole('button',{name:'Read first page'}));await waitFor(()=>expect(screen.getAllByRole('button',{name:/^Read content/})).toHaveLength(1));}
- fireEvent.click(screen.getAllByRole('button',{name:/^Read content/})[0]);expect(f.content).toHaveBeenCalledTimes(1);
+ await waitFor(()=>expect(f.content).toHaveBeenCalledTimes(1));const reference=f.content.mock.calls[0][1];
  ui.rerender(<TrajectoryInspector {...props({...f.record,state:'running'})} records={[f.record,traceTool(999)]} detailPage={f.page} detailReader={f.reader}/>);
- const reference=f.content.mock.calls[0][1];await act(async()=>finish(chunk(reference,raw)));await screen.findByRole('button',{name:'Read next chunk'});expect(f.content).toHaveBeenCalledTimes(1);
- const first=[...document.querySelectorAll('pre')].find(value=>value.textContent?.startsWith(' {"original":"x'))!.textContent!;expect(new TextEncoder().encode(first)).toHaveLength(65536);
- ui.rerender(<TrajectoryInspector {...props({...f.record,state:'completed'})} records={[traceTool(998),f.record]} detailPage={f.page} detailReader={f.reader}/>);expect(screen.getByRole('button',{name:'Read next chunk'})).toBeTruthy();
- fireEvent.click(screen.getByRole('button',{name:'Read next chunk'}));await waitFor(()=>expect(document.body.textContent).toContain('18446744073709551615'));expect(f.content.mock.calls.map(args=>args[2])).toEqual([0,65536]);expect([...document.querySelectorAll('pre')].some(value=>value.textContent===first)).toBe(false);expect(f.value).not.toHaveBeenCalled();
+ await act(async()=>finish(chunk(reference,raw)));await waitFor(()=>expect([...document.querySelectorAll('pre')].some(element=>element.textContent===raw)).toBe(true));
+ ui.rerender(<TrajectoryInspector {...props({...f.record,state:'completed'})} records={[traceTool(998),f.record]} detailPage={f.page} detailReader={f.reader}/>);
+ expect(f.content.mock.calls.map(args=>args[2])).toEqual([0,65536]);expect(f.value).not.toHaveBeenCalled();
 });
-it.each([['reader','field'],['cut','field'],['reader','collection'],['cut','collection']] as const)('actual %s replacement rejects a held original %s window',async(replacement,mode)=>{
- const f=fixture();let finish!:(chunk:ContentChunk)=>void;f.content.mockImplementation(()=>new Promise(resolve=>{finish=resolve;}));const ui=render(<TrajectoryInspector {...props(f.record)} detailPage={f.page} detailReader={f.reader}/>);if(mode==='collection'){fireEvent.change(screen.getByRole('combobox',{name:'Collection'}),{target:{value:f.record.collections[0].domain}});fireEvent.click(screen.getByRole('button',{name:'Read first page'}));await screen.findByText('{"type":"image","artifact_id":"artifact_1"}');}
- fireEvent.click(screen.getByRole('button',{name:/^Read content/}));
- const reference=f.content.mock.calls[0][1],text=mode==='field'?f.metadata:f.image;
+it.each([['reader','field'],['cut','field'],['reader','collection'],['cut','collection']] as const)('replacing %s rejects a held original %s reply',async(replacement,mode)=>{
+ const f=fixture();only(f,mode);let finish!:(value:ContentChunk)=>void;f.content.mockImplementation(()=>new Promise(resolve=>{finish=resolve;}));
+ const ui=render(<TrajectoryInspector {...props(f.record)} detailPage={f.page} detailReader={f.reader}/>);
+ await waitFor(()=>expect(f.content).toHaveBeenCalledTimes(1));const originalFinish=finish,reference=f.content.mock.calls[0][1],text=mode==='field'?f.metadata:f.image;
  const next=structuredClone(f.page);if(replacement==='cut'){next.cursor='10';next.read_cut.revision='10';}
- ui.rerender(<TrajectoryInspector {...props(f.record)} detailPage={next} detailReader={replacement==='reader'?fixture().reader:f.reader}/>);await act(async()=>finish(chunk(reference,text)));expect(screen.queryByText(text)).toBeNull();
+ const nextReader={...f.reader,content:vi.fn(()=>new Promise<ContentChunk>(()=>{}))};
+ ui.rerender(<TrajectoryInspector {...props(f.record)} detailPage={next} detailReader={replacement==='reader'?nextReader:f.reader}/>);
+ await act(async()=>originalFinish(chunk(reference,text)));expect(screen.queryByText(text)).toBeNull();
 });
-it.each(['initial','replacement'] as const)('sole advertised result blocks remain reachable with no metadata field (%s)',async mode=>{
+it.each(['initial','replacement'] as const)('result blocks remain reachable without metadata fields (%s)',async mode=>{
  const f=fixture(),without=structuredClone(f.page),head=without.items[0].value as unknown as TraceInspectionHead;head.record.fields=[];if(head.record.tool)head.record.tool.fields=[];
  const ui=render(<TrajectoryInspector {...props(f.record)} detailPage={mode==='initial'?without:f.page} detailReader={f.reader}/>);
- if(mode==='replacement'){expect(screen.getByRole('button',{name:/^Read content/})).toBeTruthy();ui.rerender(<TrajectoryInspector {...props(f.record)} detailPage={without} detailReader={f.reader}/>);}
- expect(screen.queryByRole('combobox',{name:'Collection'})).toBeNull();expect(screen.queryByRole('button',{name:/^Read content/})).toBeNull();fireEvent.click(screen.getByRole('button',{name:'Read first page'}));await screen.findByText('{"type":"image","artifact_id":"artifact_1"}');fireEvent.click(screen.getByRole('button',{name:/^Read content/}));await screen.findByText(f.image);
- expect(f.readPage.mock.calls[0].slice(0,3)).toEqual([f.original,f.record.collections[0].domain,0]);expect(f.content.mock.calls.map(args=>args.slice(0,3))).toEqual([[f.original,f.imageRef,0]]);expect(f.value).not.toHaveBeenCalled();
+ if(mode==='replacement')ui.rerender(<TrajectoryInspector {...props(f.record)} detailPage={without} detailReader={f.reader}/>);
+ await screen.findByText(f.image);expect(f.readPage.mock.calls[0].slice(0,3)).toEqual([f.original,f.record.collections[0].domain,0]);
+ expect(f.content.mock.calls.some(args=>JSON.stringify(args[1])===JSON.stringify(f.imageRef))).toBe(true);expect(f.value).not.toHaveBeenCalled();
 });

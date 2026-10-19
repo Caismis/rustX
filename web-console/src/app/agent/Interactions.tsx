@@ -40,6 +40,14 @@ export function Interactions({ client, state, view }: {
     setLoading(true);setFailure(undefined);
     void client.interactionPage(view.id,offset).catch(error=>{if(current())setFailure({key:'page',message:String(error).slice(0,512)});}).finally(()=>{if(current())setLoading(false);});
   };
+  const missingBody=pending.findIndex(item=>!client.interactionBody(view.id,item)&&!(item.kind==='approval'&&item.approval));
+  useEffect(()=>{
+    if(missingBody<0)return;
+    let active=true;const current=()=>active&&ownership.current.live;
+    const key=interactionKey(pending[missingBody].interaction);
+    void client.loadInteractionBody(view.id,missingBody,current).catch(error=>{if(current())setFailure({key,message:String(error).slice(0,512)});});
+    return()=>{active=false;};
+  },[client,view.id,identity,missingBody]);
   return <>{pending.map((item,index) => {
     const key = interactionKey(item.interaction);
     const operation = state.interactionOperations[key]?.status;
@@ -59,13 +67,9 @@ export function Interactions({ client, state, view }: {
       </div>;
     }
     if(!body)return <section key={key} className="interaction">
-      <p role="status">{tx('common:activity.content-deferred')} · {item.kind}</p>
+      <p role="status">{tx('common:activity.loading')} · {item.kind}</p>
       {failure?.key===key&&<p role="alert">{failure.message}</p>}
-      <Button disabled={loading} onClick={()=>{
-        const captured=ownership.current.generation;
-        setLoading(true);
-        run(key,()=>client.loadInteractionBody(view.id,index,()=>ownership.current.live&&ownership.current.generation===captured).finally(()=>{if(ownership.current.live&&ownership.current.generation===captured)setLoading(false);}));
-      }}>{tx('common:activity.load-content',{bytes:0})}</Button>
+
       <Button disabled={disabled} onClick={()=>run(key,()=>client.answer(view.id,item.interaction))}>{tx('interactions:interactions.cancel-interaction')}</Button>
     </section>;
     const kind = body.request.kind;
@@ -104,22 +108,19 @@ function Review({ title, detail, disabled, accept, reject }: {
 }
 
 function InteractionField({client,view,index,identity,path}:{client:AppServerClient;view:SessionView;index:number;identity:string;path:string[]}) {
-  const tx=useTranslation(),generation=useRef(0),decoder=useRef(new TextDecoder('utf-8',{ignoreBOM:true}));
-  const [state,setState]=useState<{text?:string;next?:number;loading?:boolean;error?:string}>({});
+  const tx=useTranslation(),generation=useRef(0);
+  const [state,setState]=useState<{text?:string;loading?:boolean;error?:string}>({});
   const key=JSON.stringify([view.target,view.checkpoint?.read_cut.domain_revisions.pending_interactions,view.interactionPage?.offset,index,identity,path]);
-  useEffect(()=>{generation.current++;setState({});decoder.current=new TextDecoder('utf-8',{ignoreBOM:true});return()=>{generation.current++;};},[key]);
-  const load=async(offset=0)=>{
-    const captured=++generation.current,current=()=>generation.current===captured;
-    if(offset===0)decoder.current=new TextDecoder('utf-8',{ignoreBOM:true});
+  useEffect(()=>{
+    const token=++generation.current,current=()=>generation.current===token;
+    const decoder=new TextDecoder('utf-8',{ignoreBOM:true,fatal:true});
     setState({loading:true});
-    try{
-      const chunk=await client.interactionValueChunk(view.id,index,path,offset,current);
-      if(current())setState({text:decoder.current.decode(chunk.bytes,{stream:chunk.next!==undefined}),next:chunk.next});
-    }catch(error){if(current())setState({error:String(error).slice(0,512)});}
-  };
-  return <section aria-label={tx('common:activity.content-deferred')}>
-    {!state.text&&<p role="status">{tx('common:activity.content-deferred')}</p>}
-    <Button disabled={state.loading} onClick={()=>void load(state.next??0)}>{tx(state.next!==undefined?'common:activity.next-content':'common:activity.load-content',{bytes:0})}</Button>
-    {state.text&&<pre>{state.text}</pre>}{state.error&&<p role="alert">{state.error}</p>}
-  </section>;
+    void(async()=>{
+      const parts:string[]=[];let offset:number|undefined=0;
+      do {const chunk=await client.interactionValueChunk(view.id,index,path,offset,current);if(!current())return;parts.push(decoder.decode(chunk.bytes,{stream:chunk.next!==undefined}));offset=chunk.next;}while(offset!==undefined);
+      if(current())setState({text:parts.join('')});
+    })().catch(error=>{if(current())setState({error:String(error).slice(0,512)});});
+    return()=>{generation.current++;};
+  },[key,client]);
+  return <>{state.loading&&<p role="status">{tx('common:activity.loading')}</p>}{state.text&&<pre>{state.text}</pre>}{state.error&&<p role="alert">{state.error}</p>}</>;
 }

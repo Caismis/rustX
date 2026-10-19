@@ -136,7 +136,7 @@
         "Harness queue and retry authority"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "1940465762bc1fd5371ed9e5eba7ae5f781ea5fd4f69a9242b03fd949d52e640"
+      "local_sha256": "4ab435469b3300972277899c428026bd57d9bfeace3fdd093e08ffb27dbb6640"
     },
     {
       "upstream": "packages/client/ui-commands/src/client/PopupSelectView.module.css",
@@ -256,7 +256,7 @@
         "clear/tombstone control"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "14bdcc1f9a2f2bdbb863694210efaf14e6bc75b4bde30fe24e35195b8100152e"
+      "local_sha256": "92cd1f157805b8a2364366c0d2c19e307d6557bde8e2f760839f01b9f678509f"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/queue/QueueDock.module.css",
@@ -295,7 +295,7 @@
         "Harness per-row steer/reclassification and queue storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "54117a2bf8db41a5c30b28104e9c83c8e5a13a7d108e04bef15fbb51a62ef1ce"
+      "local_sha256": "60a7618ee44c04382a5cae4266485c0296945c081bdba5deb4e0ebb84bf70d49"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/TodoPanel.module.css",
@@ -333,7 +333,7 @@
         "Harness locale runtime"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "ff5043b3d0512f73c75b18672783a2cb91f71ffd9abf99fc14a773c86b2ec3a7"
+      "local_sha256": "74d4039e64f0c645a505e34e06b48fb4aff8a746232aacc1b328780e1d887098"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/input/submission-policy.ts",
@@ -667,7 +667,7 @@
           "treatment": "Toolbar markup adapted; Actual time stays a visible rustX switch."
         }
       ],
-      "local_sha256": "9649f451c87caf657c36c766c5679eaa3348e7b5f5cf03e7f4890c700473159f"
+      "local_sha256": "cc97b7ef342a38dbb016379a03c470f14bb13b5dec5c6b0e0ca290a3f5533254"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
@@ -685,7 +685,6 @@
         "../../presentation/primitives/JsonTree",
         "../../presentation/primitives/clipboard",
         "../../presentation/primitives/icons",
-        "../agent/DeferredContent",
         "../components/Artifact",
         "./TraceContexts",
         "./TraceFields",
@@ -733,7 +732,7 @@
           "treatment": "Details header (role tag, section/group location, icon close) adapted."
         }
       ],
-      "local_sha256": "4c1a952a1cbe4790d4dff1d5dfd1fd90054038d9e549a5debc234ba1178282cc"
+      "local_sha256": "0ab8756a46d285ecd21c8d080db31d8ce47a3555be107a41c7d398cd9eff2cbd"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.module.css",
@@ -824,7 +823,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "79f42565c6ef12bbbe21a2308fda4f880cc30b4d18ac9c087568be0eaa9d7a7f",
+      "local_sha256": "492b2be007e6594514cfee40bed15166fcb2d5a5bb574ba7457736ecf5cd5130",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-trajectory/src/client/layout.ts",
@@ -2719,6 +2718,7 @@
       ],
       "retained_dependencies": [
         "../../../../protocol/app-server/attempt-identity",
+        "../../../../protocol/app-server/content-cache",
         "../../../../protocol/app-server/v50",
         "../../client/transcript",
         "../../locale/react",
@@ -2726,7 +2726,8 @@
         "../../presentation/primitives/clipboard",
         "../../presentation/primitives/icons",
         "../commands/native",
-        "./JournalValue",
+        "./ObservationSource",
+        "./SourceContent",
         "./TurnTail.module.css",
         "./UsageStats",
         "react"
@@ -2738,7 +2739,7 @@
         "Cordis/plugin slots"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "f424223b94efe9c579aba98166e6040db2791d25be1bbf682c8823af048c870b"
+      "local_sha256": "2c9769246b33249b555c0fbf299cd25df6172fc6fb7075bafc1c42bc55997137"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.module.css",
@@ -3287,7 +3288,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "5e3fdfd4c37800f6e062a7b2c2f7a00eea0f0250ce0e295c9daa60e237c33ba6"
+      "local_sha256": "2c248c9704f1a1508d781586c9f9fdd3d39f86485968d468b75dd6bd7abc727c"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -3431,7 +3432,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "d0eebb8087c90d8de11834bdd8ba14ab46069adb6b777853850f3b84a00d62bd"
+      "local_sha256": "c93e9f4c92f8927a8365d1a7bb67142f830918ad8a2b5149740b969872270e90"
     },
     {
       "upstream": "packages/client/ui-workspace/src/client/locales.ts",
@@ -3748,13 +3749,11 @@
         "../../locale/translation",
         "../../presentation/primitives/StatDialog",
         "../../presentation/primitives/icons",
-        "./JournalValue",
-        "./OccupancyModelValue",
         "./UsageStats.module.css",
         "./token-format"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "3d4e8d2b28a533c5b60862bebd5bd49d8f0dde9c5a87d68f5ad188cf4d58bf49"
+      "local_sha256": "7b174b532ad5b8f1e0ec44fc134ff101cd1d58739f9eabc08d40e825f7ec2012"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/StatsPills.module.css",

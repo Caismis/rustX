@@ -492,7 +492,7 @@ describe('typed native operations and continuation fencing', () => {
     server.handlers.set('resources/read', () => receipt);
     expect(await scope.tools()).toEqual(receipt.page);
     render(<CommandPanel request={{ id: 'tools' }} client={server.client} sessionId="A" current={navigation.capture()} close={() => {}} succeeded={() => {}} navigate={() => {}} />);
-    await screen.findByText('Content deferred');
+    await screen.findByText('Loading…');
     expect(screen.queryByText('More conversation details')).toBeNull();
     expect(screen.queryByRole('combobox')).toBeNull();
     expect(methods()).not.toContain('conversation/checkpointPage');

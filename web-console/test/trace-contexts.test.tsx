@@ -1,4 +1,4 @@
-import {act,cleanup,fireEvent,render,waitFor} from '@testing-library/react';
+import {act,cleanup,render,waitFor} from '@testing-library/react';
 import {afterEach,expect,it,vi} from 'vitest';
 import type {CheckpointPage,CheckpointReadCut,TraceContextPresentation} from '../../protocol/app-server/v50';
 import {TraceContexts} from '../src/app/trajectory/TraceContexts';
@@ -12,18 +12,19 @@ const page=():CheckpointPage=>({cursor:'4',read_cut:cut,domain:'trace.records.1.
 const reader=(read:TraceFieldReader['page']):TraceFieldReader=>({page:read,value:async()=>{throw Error('must not hydrate whole Context');},content:async()=>{throw Error('must not hydrate whole Context');}});
 it('native Context continuation uses original returned cut and immutable offsets without collecting whole history',async()=>{
  const read=vi.fn(async()=>page()),port=reader(read),ui=render(<TraceContexts request={request()} cut={cut} reader={port} owned={()=>true}/>);
- expect(read).not.toHaveBeenCalled();fireEvent.click(ui.getByText('Read original value'));
+
  await waitFor(()=>expect(ui.getByText('original context 1')).toBeTruthy());expect(ui.getByText('original context 2')).toBeTruthy();
  expect(read.mock.calls[0]).toEqual([cut,'trace.records.1.context',1,expect.any(Function)]);
 });
 it('late Context page cannot repaint a new selected cut',async()=>{
  let release!:(page:CheckpointPage)=>void;const read=vi.fn(()=>new Promise<CheckpointPage>(resolve=>{release=resolve;})),port=reader(read);
- const ui=render(<TraceContexts request={request()} cut={cut} reader={port} owned={()=>true}/>);fireEvent.click(ui.getByText('Read original value'));
+ const ui=render(<TraceContexts request={request()} cut={cut} reader={port} owned={()=>true}/>);
+ const oldRelease=release;
  ui.rerender(<TraceContexts request={request()} cut={{...cut,revision:'5'}} reader={port} owned={()=>true}/>);
- await act(async()=>release(page()));expect(ui.queryByText('original context 1')).toBeNull();expect(read).toHaveBeenCalledTimes(1);
+ await act(async()=>oldRelease(page()));expect(ui.queryByText('original context 1')).toBeNull();expect(read).toHaveBeenCalledTimes(2);
 });
 it('oversized Context pages are refused before visiting their selected values',async()=>{
  let visits=0;const oversized={...page(),items:Array.from({length:33},()=>({offset:'1',identity:'untrusted',get value(){visits++;throw Error('must not visit');},content:[],deferred:false}))};
- const ui=render(<TraceContexts request={request()} cut={cut} reader={reader(async()=>oversized)} owned={()=>true}/>);fireEvent.click(ui.getByText('Read original value'));
- await waitFor(()=>expect(ui.getByRole('alert').textContent).toContain('Original Context page changed'));expect(visits).toBe(0);expect(ui.getByText('3')).toBeTruthy();
+ const ui=render(<TraceContexts request={request()} cut={cut} reader={reader(async()=>oversized)} owned={()=>true}/>);
+ await waitFor(()=>expect(ui.getByRole('alert').textContent).toContain('Original Context page changed'));expect(visits).toBe(0);
 });

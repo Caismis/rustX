@@ -82,9 +82,9 @@ describe('Todo dock binds only the composed native Todo projection', () => {
     const state = todoDock(withTodos([]), { domain: 'todos.tasks', revision: '7', total: '1000', loaded: '0', next_offset: '0' });
     expect(state).toEqual({ kind: 'current', tasks: [], deferred: true });
     render(<TodoDock state={state}/>);
-    expect(dock('To-dos').textContent).toContain('Content deferred');
+    expect(dock('To-dos').textContent).toContain('Loading…');
     fireEvent.click(within(dock('To-dos')).getByRole('button'));
-    expect(within(dock('To-dos')).getByRole('status').textContent).toBe('Content deferred');
+    expect(within(dock('To-dos')).getByRole('status').textContent).toBe('Loading…');
     expect(within(dock('To-dos')).queryAllByRole('listitem')).toHaveLength(0);
     expect(todoDock(snapshot(), { domain: 'todos.tasks', revision: '7', total: '1000', loaded: '0', next_offset: '0' })).toEqual({ kind: 'absent' });
   });

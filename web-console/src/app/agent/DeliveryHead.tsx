@@ -1,7 +1,7 @@
 import { useContext,useEffect,useRef,useState } from 'react';
 import type { CheckpointReadCut,RuntimeClientDeliveryHead,RuntimeClientDeliveryItem } from '../../../../protocol/app-server/v50';
 import { deliveryHead,deliveryItem,deliveryItemKey,deliveryPage,readDeliveryMetadata } from '../../../../protocol/app-server/delivery-observation';
-import { observationSourceIdentity,readObservationValue,useObservationSource } from './JournalValue';
+import { observationSourceIdentity,readObservationValue,useObservationSource } from './ObservationSource';
 import { DeliveryCards } from '../components/Artifact';
 import { PreviewContext } from '../components/ArtifactPreview';
 import { Button } from '../../presentation/primitives/Button';
@@ -57,7 +57,7 @@ function NativeDeliveryHead({head}:{head:RuntimeClientDeliveryHead}) {
  };
  return <section data-canonical-deliveries>
   {sourceCid&&<DeliveryCards conversationId={sourceCid} owned={source?.owned} deliveries={shown.items.flatMap(item=>item.file?[{key:deliveryItemKey(item),locator:item.locator,index:item.index,file:item.file}]:[])}/>}
-  {shown.items.filter(item=>item.file==null).map(item=><div key={deliveryItemKey(item)} data-delivery-metadata-deferred><p>{tx('common:activity.content-deferred')} · {String(BigInt(item.index)+1n)}/{head.total}</p>
+  {shown.items.filter(item=>item.file==null).map(item=><div key={deliveryItemKey(item)} data-delivery-metadata-deferred><p>{tx('common:activity.loading')} · {String(BigInt(item.index)+1n)}/{head.total}</p>
    <Button disabled={loaded?.pending||!preview||!source?.owned()} onClick={()=>void action(item,false)}>{tx('artifacts:artifact.preview')} {String(BigInt(item.index)+1n)}/{head.total}</Button>
    <Button disabled={loaded?.pending||!preview||!source?.owned()} onClick={()=>void action(item,true)}>{tx('artifacts:attachment-card.download')} {String(BigInt(item.index)+1n)}/{head.total}</Button></div>)}
   {shown.next_offset!=null&&<Button disabled={loaded?.pending||!source?.owned()} onClick={()=>void next()}>{tx('common:activity.next-page')}</Button>}

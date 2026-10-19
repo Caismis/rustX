@@ -68,7 +68,7 @@ export function ModelPicker({ state, close, chosen }: { state: ModelPickerState;
       {!rows.length && <p role="status">{tx(state.loading ? 'agent:model-select.reading-native-models' : 'agent:model-picker.empty')}</p>}
     </div>
     {!state.loading && stale && <p role="status">{tx('agent:model-select.profile')}{' '}{state.profile} {tx('agent:model-select.is-unavailable-for')}{' '}{state.current} {tx('agent:model-select.in-this-workspace')}</p>}
-    {state.nextPage && <button type="button" disabled={state.loading || pending} onClick={() => void state.nextPage!()}>{tx('common:activity.next-content')}</button>}
+    {state.nextPage && <button type="button" disabled={state.loading || pending} onClick={() => void state.nextPage!()}>{tx('common:activity.show-more')}</button>}
     {state.error && <p role="alert">{state.error}</p>}
   </div>;
 }

@@ -38,7 +38,7 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
     if (!valid()) return;
     const matches = (selection: typeof page.selections[number]) => !request.messageId || selection.boundary.locator.type === 'by_message_id' && selection.boundary.locator.message_id === request.messageId;
     setRows(page.selections.filter(matches).map(selection => ({ id: JSON.stringify(selection.boundary.locator),
-      label: selection.boundary.message ? selection.boundary.message.content.map(block => block.type === 'text' ? block.text : block.type === 'uploaded_file' ? block.name : `[${block.type}]`).join(' ').slice(0, 240) : message('common:activity.content-deferred'),
+      label: selection.boundary.message ? selection.boundary.message.content.map(block => block.type === 'text' ? block.text : block.type === 'uploaded_file' ? block.name : `[${block.type}]`).join(' ').slice(0, 240) : message('common:activity.loading'),
 
       choice: { kind: 'history', action, selection } })));
     setNext(page.nextOffset); setActive(0);
@@ -80,7 +80,7 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
   return <Modal closeLabel={tx('commands:command-panel.close-dialog')} open title={request.id === 'tree' ? tx('commands:command-panel.session-tree') : tx('commands:command-panel.value', { p0: request.id })} onClose={close}>
     <p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{detail}</p>
     {toolsPage && <>
-      {toolsPage.items.some(item => item.value == null || item.deferred) && <p role="status">{tx('common:activity.content-deferred')}</p>}
+      {toolsPage.items.some(item => item.value == null || item.deferred) && <p role="status">{tx('common:activity.loading')}</p>}
       {toolsPage.items.map(item => item.value != null ? <pre key={item.offset}>{JSON.stringify(item.value, null, 2)}</pre> : null)}
     </>}
     {error && <p role="alert">{error}</p>}

@@ -132,7 +132,6 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
  const toolbar = <div ref={root} className="agent-control"><ModelSelect binding={JSON.stringify([generation, target?.attachment_id, draft?.source?.target, view?.snapshot?.resources?.revision, view?.snapshot?.model_status?.binding_revision])} choices={picker.choices}
    current={picker.current} profile={picker.profile} effectiveProfile={picker.effectiveProfile} disabled={draft ? draft.disabled || !choices : disabled} loading={draft ? !draft.source : connecting ? !coldSource : blocked} error={picker.error} load={load}
    choose={intent => { void choose(intent); }}/>
-   {!draft && modelStatus?.body_deferred && <p role="status">{tx('common:activity.model-details-deferred')}</p>}
    {!draft && modelStatus?.available === false && <p role="status">{tx('common:activity.model-unavailable')}</p>}
    {!draft && !busy && (blocked && error || queued?.phase === 'failed') && <Button size="sm" disabled={!attached} onClick={() => load(true)}>{tx('agent:agent-controls.reread-models')}</Button>}
  </div>;

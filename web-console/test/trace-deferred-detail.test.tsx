@@ -33,26 +33,22 @@ it('retains a positive deferred header and reads selected Options at its own ret
  const {server,cut}=await root(),entry=server.client.getSnapshot().views.A.trace!.details['trace:4'];
  expect(entry.page).toEqual(descriptor(cut));expect(entry.detail).toBeUndefined();expect(entry.error).toBeUndefined();
  const load=show(server);expect(screen.getByText(/console-model/)).toBeTruthy();expect(screen.queryByRole('alert')).toBeNull();expect(load).not.toHaveBeenCalled();
- expect(server.requests.filter(row=>row.request.method==='conversation/checkpointValueRead')).toHaveLength(0);
- fireEvent.click(screen.getByRole('button',{name:'Read original value'}));await screen.findByText('"console-model"');
- const reads=server.requests.filter(row=>row.request.method==='conversation/checkpointValueRead');expect(reads).toHaveLength(1);
+ await screen.findByText('"console-model"');
+ await waitFor(()=>expect(server.requests.filter(row=>row.request.method==='conversation/checkpointValueRead')).toHaveLength(1));
+ const reads=server.requests.filter(row=>row.request.method==='conversation/checkpointValueRead');
  expect(reads[0].request.params).toMatchObject({cut,domain:'trace.records.4.detail.request.model',item_offset:0,path:[],offset:0,max_bytes:65536});
  await server.client.loadTraceDetail('A','trace:4');expect(server.requests.filter(row=>row.request.method==='session/traceDetail')).toHaveLength(1);
 });
-it('replaces finite original windows without rounding opaque numbers or splitting UTF8 text',async()=>{
+it('automatically assembles original chunks without rounding opaque numbers or splitting UTF8 text',async()=>{
  const {server}=await root(),prefix='{"text":"',text=prefix+'x'.repeat(65535-prefix.length)+'🙂","opaque":18446744073709551615}';
  server.handlers.set('conversation/checkpointPage',request=>fieldPage(request,'1'));
  server.handlers.set('conversation/checkpointValueRead',request=>valueReply(request,text));show(server);
  fireEvent.change(screen.getByRole('combobox',{name:'Request options JSON'}),{target:{value:'options'}});
- fireEvent.click(screen.getByRole('button',{name:'Read original value'}));await screen.findByText('options.0');
- expect(server.requests.filter(row=>row.request.method==='conversation/checkpointValueRead')).toHaveLength(0);
- fireEvent.click(screen.getAllByRole('button',{name:'Read original value'})[1]);
- await screen.findByRole('button',{name:'Read next chunk'});
- const first=[...document.querySelectorAll('pre')].find(el=>el.textContent?.startsWith(prefix))!.textContent!;expect(new TextEncoder().encode(first)).toHaveLength(65535);
- fireEvent.click(screen.getByRole('button',{name:'Read next chunk'}));await screen.findByText('🙂","opaque":18446744073709551615}');
- const last=screen.getByText('🙂","opaque":18446744073709551615}').textContent!;expect(first+last).toBe(text);expect(screen.queryByText(first)).toBeNull();
- const reads=server.requests.filter(row=>row.request.method==='conversation/checkpointValueRead');expect(reads.map(row=>'offset' in row.request.params?row.request.params.offset:null)).toEqual([0,65536]);
+ await waitFor(()=>expect([...document.querySelectorAll('pre')].some(element=>element.textContent===text)).toBe(true));
+ const reads=server.requests.filter(row=>row.request.method==='conversation/checkpointValueRead'&&row.request.params.domain.endsWith('.options'));
+ expect(reads.map(row=>'offset' in row.request.params?row.request.params.offset:null)).toEqual([0,65536]);
  expect(reads.every(row=>'max_bytes' in row.request.params&&row.request.params.max_bytes===65536)).toBe(true);expect(document.body.textContent).not.toContain('18446744073709552000');
+ expect(screen.queryByRole('button',{name:/Read original|Read next chunk/})).toBeNull();
 });
 it.each(['root','child','historical'] as const)('%s keeps its own page cut and suppresses replies after its owner is replaced',async kind=>{
  let server:Server,entry:TraceDetailEntry,retire:()=>Promise<void>,cut:CheckpointReadCut;
@@ -88,7 +84,7 @@ it('Diff selects the exact native predecessor prompt at the current retained det
  server.handlers.set('conversation/checkpointPage',request=>fieldPage(request));
  server.handlers.set('conversation/checkpointValueRead',request=>valueReply(request,'{"text":"ORIGINAL_PRIOR_PROMPT","truncated":false}'));
  render(<Trajectory cache={cache} loadEarlier={()=>{}} onSelect={()=>{}} onLoadDetail={()=>{}}/>);
- fireEvent.click(document.querySelector('[data-display-type="SystemPromptCell"][data-owner="trace:4"]')!);fireEvent.click(screen.getByRole('tab',{name:'Diff'}));fireEvent.click(screen.getByRole('button',{name:'Read original value'}));
+ fireEvent.click(document.querySelector('[data-display-type="SystemPromptCell"][data-owner="trace:4"]')!);fireEvent.click(screen.getByRole('tab',{name:'Diff'}));
  await screen.findByText('{"text":"ORIGINAL_PRIOR_PROMPT","truncated":false}');
  const read=server.requests.find(row=>row.request.method==='conversation/checkpointValueRead')!.request;
  expect(read.params).toMatchObject({cut,domain:'trace.records.2.detail.request.effective_system_prompt',item_offset:0,path:[],offset:0,max_bytes:65536});
@@ -116,7 +112,7 @@ it('detail descriptor replacement invalidates the reader while the existing fini
 });
 it('late selected field pages cannot publish into another explicit field selection',async()=>{
  const {server}=await root();server.held.add('conversation/checkpointPage');show(server);
- fireEvent.click(screen.getByRole('button',{name:'Read original value'}));const request=await server.waitFor('conversation/checkpointPage',1);
+ const request=await server.waitFor('conversation/checkpointPage',1);
  fireEvent.change(screen.getByRole('combobox',{name:'Request options JSON'}),{target:{value:'contributions'}});
  await act(async()=>server.socket.success(request,fieldPage(request)));
  expect(screen.queryByRole('alert')).toBeNull();expect(server.requests.filter(row=>row.request.method==='conversation/checkpointValueRead')).toHaveLength(0);
@@ -171,7 +167,7 @@ it.each([false,true])('checkpoint refresh retains inline bytes only when no fenc
 it('rejects a selected page cursor that differs from its exact returned read cut before any value read',async()=>{
  const {server}=await root();
  server.handlers.set('conversation/checkpointPage',request=>{const result=fieldPage(request);if(result.type!=='checkpoint_page')throw Error('page');return {...result,page:{...result.page,cursor:'10'}};});
- show(server);fireEvent.click(screen.getByRole('button',{name:'Read original value'}));
+ show(server);
  await waitFor(()=>expect(screen.getByRole('alert').textContent).toContain('Original request field page changed'));
  expect(server.client.getSnapshot().views.A.trace!.details['trace:4'].page).toBeDefined();
  expect(server.requests.filter(row=>row.request.method==='conversation/checkpointValueRead')).toHaveLength(0);

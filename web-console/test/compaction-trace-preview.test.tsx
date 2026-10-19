@@ -37,7 +37,7 @@ it('a newer projection cannot replace the selected historical compaction preview
 it.each(['overview','raw'] as const)('a truncated original compaction remains explicitly deferred in %s',facet=>{
  const prefix='# Long original\n\n水🙂 exact prefix',selected=record(31,prefix,true);
  const view=render(<TrajectoryInspector {...props(selected)} facet={facet}/>);
- expect(screen.getByRole('status').textContent).toBe('Content deferred');
+ expect(screen.getByRole('status').textContent).toBe('Loading…');
  expect(view.container.textContent).not.toContain('unread original remainder');
  if(facet==='raw')expect(view.container.querySelector('pre')?.textContent).toBe(prefix);
  else expect(screen.getByRole('heading',{name:'Long original'})).toBeTruthy();

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ProjectionHistory } from '../src/app/agent/ProjectionHistory';
 import { Server, projectionHead, checkpoint, snapshot } from './fixture';
 import type { ProjectionDetail } from '../../protocol/app-server/v50';
@@ -163,18 +163,16 @@ it('retains each original provenance page cut when newer detail pages are merged
   });
   server.handlers.set('conversation/checkpointValueRead', request => {
     if(request.method!=='conversation/checkpointValueRead')throw Error('unexpected field method');
-    expect(request.params.cut).toEqual(first.read_cut);
-    expect(request.params.domain).toBe('context.projections.1.items.0.provenance');
+    expect(request.params.cut).toEqual(request.params.domain.includes('items.0.')?first.read_cut:second.read_cut);
     return {type:'checkpoint_value_chunk',chunk:{cut:request.params.cut,domain:request.params.domain,item_offset:0,path:[],offset:0,bytes_base64:btoa(original),readable_end:new TextEncoder().encode(original).length,next_offset:null,representation:'canonical_json_v1'}};
   });
   const view=render(<ProjectionHistory client={server.client} sessionId="A"/>);
   await openHistory(view.container);
   await act(async()=>fireEvent.click(screen.getByRole('button',{name:'Inspect projected messages'})));
   await act(async()=>fireEvent.click(screen.getByRole('button',{name:'Load more'})));
-  expect(screen.getAllByRole('button',{name:'Read original value'})).toHaveLength(2);
-  await act(async()=>fireEvent.click(screen.getAllByRole('button',{name:'Read original value'})[0]!));
-  expect(screen.getByText(original)).toBeTruthy();
-  expect(server.requests.filter(row=>row.request.method==='conversation/checkpointValueRead')).toHaveLength(1);
+  await waitFor(()=>expect(screen.getAllByText(original)).toHaveLength(2));
+  expect(screen.queryByRole('button',{name:'Read original value'})).toBeNull();
+  expect(server.requests.filter(row=>row.request.method==='conversation/checkpointValueRead')).toHaveLength(2);
   expect(server.client.getSnapshot().views.A?.cursor).toBe('0');
   await server.client.disconnect();
 });

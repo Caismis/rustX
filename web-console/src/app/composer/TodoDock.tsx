@@ -57,7 +57,7 @@ export function TodoDock({ state }: { state: TodoDockState }) {
   return <section className={css.root} aria-label={tx('agent:todo-dock.to-dos')} data-todo-state="current">
     <button type="button" className={css.header} aria-expanded={!collapsed} aria-controls={collapsed ? undefined : listId} onClick={() => setCollapsed(value => !value)}>
       <span className={css.lead}><ChecklistGlyph /></span><span className={css.title}>{tx('agent:todo-dock.to-dos')}</span>
-      <span className={css.progress}>{progress(tx, tasks)}{state.deferred && <>{tasks.length ? ' · ' : ''}{tx('common:activity.content-deferred')}</>}</span>
+      <span className={css.progress}>{progress(tx, tasks)}{state.deferred && <>{tasks.length ? ' · ' : ''}{tx('common:activity.loading')}</>}</span>
       <span className={css.chevron} data-collapsed={collapsed} aria-hidden><IconChevronDownOutline14 /></span>
     </button>
     {!collapsed && <><ol id={listId} className={css.list}>{tasks.map(task => {
@@ -68,6 +68,6 @@ export function TodoDock({ state }: { state: TodoDockState }) {
         <span className={css.hidden}>{STATUS[task.status]}</span>
         {!!task.blocked_by?.length && <span className={css.dependency}>{tx('agent:todo-dock.after')}{' '}{task.blocked_by.map(id => `#${id}`).join(', ')}</span>}
       </li>;
-    })}</ol>{state.deferred && <p role="status">{tx('common:activity.content-deferred')}</p>}</>}
+    })}</ol>{state.deferred && <p role="status">{tx('common:activity.loading')}</p>}</>}
   </section>;
 }

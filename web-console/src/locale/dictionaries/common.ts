@@ -1,16 +1,11 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
-  "activity.model-details-deferred": "Model details deferred",
   "activity.model-unavailable": "Model unavailable",
   "activity.saved-tool-result": "Saved result: {status}",
   "activity.tools-active": "Tools running: {count}",
-  "activity.content-deferred": "Content deferred",
-  "activity.load-content": "Read content ({bytes} bytes)",
-  "activity.next-content": "Read next chunk",
-  "activity.collection": "Collection",
-  "activity.first-page": "Read first page",
+  "activity.loading": "Loading…",
+  "activity.show-more": "Show more",
   "activity.next-page": "Read next page",
-  "activity.read-value": "Read original value",
   "activity.first-interactions": "First pending requests",
   "activity.next-interactions": "Next pending requests",
   "activity.durable-only": "Durable history; live observation is unavailable.",
@@ -266,17 +261,12 @@ export const en = {
 } as const;
 export type CommonKey = keyof typeof en;
 export const zh = {
-  "activity.model-details-deferred": "模型详情尚未加载",
   "activity.model-unavailable": "模型不可用",
   "activity.saved-tool-result": "已保存的结果：{status}",
   "activity.tools-active": "运行中的工具：{count}",
-  "activity.content-deferred": "内容延迟加载",
-  "activity.load-content": "读取内容（{bytes} 字节）",
-  "activity.next-content": "读取下一段",
-  "activity.collection": "集合",
-  "activity.first-page": "读取首页",
+  "activity.loading": "加载中…",
+  "activity.show-more": "显示更多",
   "activity.next-page": "读取下一页",
-  "activity.read-value": "读取原始值",
   "activity.first-interactions": "首批待处理请求",
   "activity.next-interactions": "下一批待处理请求",
   "activity.durable-only": "持久历史记录；实时观察不可用。",

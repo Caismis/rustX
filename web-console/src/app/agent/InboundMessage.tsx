@@ -19,7 +19,7 @@ export function InboundMessage({ message }: { message: Extract<MessageBlock, { r
   const text = message.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n');
   return <div className={own.root} data-inbound-source={agentId ? 'agent' : 'context'}>
     <DisclosureRow icon={<IconAgentPresetOutline16 size={14}/>} title={title} open={expanded} expandable expandOnRowClick keepContentWhenOpen onToggle={() => setExpanded(value => !value)} collapsedContent={<><span className={css.sep}/><span className={css.summary}>{text}</span></>}>
-      <div className={own.body}>{agent && <Button size="sm" onClick={() => scope?.open(agent.agent_id)}>{tx('common:subagents.view')}</Button>}<Content blocks={message.content} markdown/></div>
+      <div className={own.body}>{agent && <Button size="sm" onClick={() => scope?.open(agent.agent_id)}>{tx('common:subagents.view')}</Button>}<Content messageId={message.id} blocks={message.content} markdown/></div>
     </DisclosureRow>
   </div>;
 }

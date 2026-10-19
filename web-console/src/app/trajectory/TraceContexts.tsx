@@ -34,11 +34,11 @@ export function TraceContexts({request,cut,reader,owned}:{request:TraceRequestSu
    setState({identity,reader,rows,next});
   }catch(error){if(current())setState({identity,reader,rows:[],error:String(error).slice(0,512)});}
  };
+ useEffect(()=>{if(request.context_next_offset!=null)void read(request.context_next_offset);},[identity,reader]);
  if(request.context_next_offset==null)return null;
- return <section aria-label={tx('common:activity.content-deferred')}>
-  <span>{request.context_total}</span> · <Button disabled={!cut||!reader||loaded?.pending||!owned()} onClick={()=>void read(request.context_next_offset!)}>{tx('common:activity.read-value')}</Button>
+ return <section aria-label={tx('common:activity.loading')}>
   {loaded?.rows.map(row=><div key={canonicalLocatorKey(row.locator)}><p>{row.preview?.text}</p><TraceFields fields={row.fields} cut={cut} reader={reader} owned={()=>latest.current===identity&&owned()}/></div>)}
-  {loaded?.next!=null&&<Button disabled={loaded.pending||!owned()} onClick={()=>void read(loaded.next!)}>{tx('common:activity.next-content')}</Button>}
+  {loaded?.next!=null&&<Button disabled={loaded.pending||!owned()} onClick={()=>void read(loaded.next!)}>{tx('common:activity.show-more')}</Button>}
   {loaded?.error&&<p role="alert">{loaded.error}</p>}
  </section>;
 }

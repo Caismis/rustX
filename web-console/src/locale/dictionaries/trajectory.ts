@@ -1,7 +1,7 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
   "source.byte-count": "{bytes} bytes",
-  "source.cut-unavailable": "Original Trace field cut is unavailable.",
+  "source.cut-unavailable": "Details are unavailable. Reopen this event.",
   "trajectory.trace-ledger": "Trace ledger",
   "trajectory.no-loaded-item-matches-this-search": "No loaded item matches this search.",
   "trajectory.no-records-in-the-loaded-window": "No records in the loaded window.",
@@ -211,7 +211,7 @@ export const en = {
 export type TrajectoryKey = keyof typeof en;
 export const zh = {
   "source.byte-count": "{bytes} 字节",
-  "source.cut-unavailable": "原始轨迹字段的读取切面不可用。",
+  "source.cut-unavailable": "暂时无法读取详情，请重新打开此事件。",
   "trajectory.trace-ledger": "追踪明细",
   "trajectory.no-loaded-item-matches-this-search": "已加载内容中无匹配项。",
   "trajectory.no-records-in-the-loaded-window": "已加载窗口中无记录。",

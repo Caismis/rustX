@@ -5,7 +5,6 @@ import {TraceRequestFields,REQUEST_OPTION_FIELDS} from './TraceRequestFields';
 import {TraceContexts} from './TraceContexts';
 import {TraceFields} from './TraceFields';
 import {traceRequestAccepts,sameTraceStep,traceOccurrenceKey,traceFieldKey,traceFields} from '../../../../protocol/app-server/trace-identity';
-import {DeferredContent} from '../agent/DeferredContent';
 import type { Translate } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/TrajectoryTable.tsx inspector; see PROVENANCE.md. */
@@ -118,7 +117,7 @@ function DetailPending({ error, deferred }: { error: string | undefined; deferre
   const tx = useTranslation();
   return error
     ? <p role="alert" className={`${css.noPayload} ${css.error}`}>{error}</p>
-    : <p role="status" className={css.noPayload}>{tx(deferred?'common:activity.content-deferred':'trajectory:details.loading')}</p>;
+    : <p role="status" className={css.noPayload}>{tx(deferred?'common:activity.loading':'trajectory:details.loading')}</p>;
 }
 
 function Json({ value, label, preview = false, error = false }: { value: unknown; label: string; preview?: boolean; error?: boolean }) {
@@ -522,8 +521,6 @@ export interface TrajectoryInspectorProps {
   detail?: TraceDetail | undefined;
   detailPage?:import('../../../../protocol/app-server/v50').CheckpointPage;
   detailReader?:import('../../client/trace').TraceFieldReader;
-  deferredContent?:import('../../../../protocol/app-server/v50').ContentBinding[]|undefined;
-  readContent?:import('../../client/trace').TraceDetailEntry['readContent'];
   fieldSources?:import('../../../../protocol/app-server/v50').TraceFieldSource[];
   fieldCut?:import('../../../../protocol/app-server/v50').CheckpointReadCut;
   fieldReader?:import('../../client/trace').TraceFieldReader;
@@ -551,7 +548,7 @@ export interface TrajectoryInspectorProps {
  * @param props - the selected item, its fetched detail and navigation.
  * @returns the details panel contents.
  */
-export function TrajectoryInspector({ detailPage,detailReader,fieldSources,fieldCut,fieldReader,item, facet, onFacet, detail, deferredContent,readContent,loading,error,onLoadDetail,onLoadEarlier, onClose, location, records, executions, requestNumbers, completeHistory, onOpen }: TrajectoryInspectorProps) {
+export function TrajectoryInspector({ detailPage,detailReader,fieldSources,fieldCut,fieldReader,item, facet, onFacet, detail, loading,error,onLoadDetail,onLoadEarlier, onClose, location, records, executions, requestNumbers, completeHistory, onOpen }: TrajectoryInspectorProps) {
   const tx = useTranslation();
   const inspection=detailPage?traceInspectionHead(detailPage,item.record.id):undefined;
   const toolHead=inspection?.kind==='tool'&&inspection.content.type==='tool'?inspection:undefined;
@@ -630,7 +627,7 @@ export function TrajectoryInspector({ detailPage,detailReader,fieldSources,field
   const content = (rendered: boolean, preview = false) => messagesHead?messageFields():pending && !fallback
     ? <DetailPending error={error} deferred={!!detailPage} />
     : <><MessageContent blocks={blocks} fallback={fallback} artifacts={artifacts} rendered={rendered} preview={preview} thinkingExpanded={thinkingExpanded} onThinkingExpanded={setThinkingExpanded} onOpenCall={record.kind === 'compaction' || item.type === 'ContextRow' || item.type === 'RequestBoundary' ? undefined : openCall} />
-      {record.kind === 'compaction' && !blocks && record.preview?.truncated && <p role="status">{tx('common:activity.content-deferred')}</p>}</>;
+      {record.kind === 'compaction' && !blocks && record.preview?.truncated && <p role="status">{tx('common:activity.loading')}</p>}</>;
   const tabLabel = (tab: TrajectoryFacet) => tab === 'input' && program ? tx('trajectory:code.source') : tab === 'raw' && record.kind === 'compaction' ? tx('trajectory:tab.raw-output') : tx(TAB_LABEL[tab]);
   const title = item.type === 'RequestBoundary'
     ? <>
@@ -652,7 +649,7 @@ export function TrajectoryInspector({ detailPage,detailReader,fieldSources,field
       return <>
         <dl className={`${css.overview} ${css.summaryScrollRegion}`} data-summary-scroll-region="">
           <div><dt>{tx('trajectory:details.status')}</dt><StatusValue state={state} /></div>
-          {record.request && <div><dt>{tx('trajectory:details.model')}</dt><dd>{record.request.model??tx('common:activity.content-deferred')}</dd></div>}
+          {record.request && <div><dt>{tx('trajectory:details.model')}</dt><dd>{record.request.model??tx('common:activity.loading')}</dd></div>}
           <div><dt>{tx('trajectory:details.tool-calls')}</dt><dd>{records.filter(candidate => candidate.kind === 'tool' && sameTraceStep(candidate.location,record.location)).length}</dd></div>
           {failure && <div><dt>{tx('trajectory:details.error')}</dt><dd className={css.error}>{failure}</dd></div>}
           {requestAssistant && <div><dt>{tx('trajectory:details.result')}</dt><dd className={css.overviewParentLinks}><NavLink label={tx('trajectory:details.assistant-message')} onClick={() => onOpen(requestAssistant.id)} /></dd></div>}
@@ -715,7 +712,7 @@ export function TrajectoryInspector({ detailPage,detailReader,fieldSources,field
 
   const body = () => {
     switch (active) {
-      case 'overview': return overview();
+      case 'overview': return <>{overview()}{item.type==='RequestBoundary'&&record.request&&<TraceContexts request={record.request} cut={fieldCut} reader={fieldReader} owned={()=>true}/>}</>;
       case 'system-prompt': {
         if (!requestDetail) return deferredRequest?<TraceRequestFields page={detailPage} reader={detailReader} fields={['effective_system_prompt']}/>:<DetailPending error={error} deferred={!!detailPage} />;
         const prompt = requestDetail.effective_system_prompt.text;
@@ -729,7 +726,9 @@ export function TrajectoryInspector({ detailPage,detailReader,fieldSources,field
         : deferredRequest?<TraceRequestFields page={detailPage} reader={detailReader} fields={['previous_system_prompt','effective_system_prompt']} previousDomain={previousDomain} onEarlier={!completeHistory?onLoadEarlier:undefined}/>:  <DetailPending error={error} deferred={!!detailPage} />;
       case 'rendered': return content(true);
       case 'raw': return content(false);
-      case 'source': return messagesHead?messageFields(true):pending && item.type !== 'ContextRow' ? <DetailPending error={error} deferred={!!detailPage} /> : <MessageSource source={source} />;
+      case 'source': return <>{messagesHead?messageFields(true):pending && item.type !== 'ContextRow' ? <DetailPending error={error} deferred={!!detailPage} /> : <MessageSource source={source} />}
+        <TraceFields fields={provenanceFields} cut={detailPage?.read_cut??fieldCut} reader={detailPage?detailReader:fieldReader} owned={()=>true}/>
+        <TraceFields fields={metadataFields} cut={toolHead?detailPage?.read_cut:fieldCut} reader={toolHead?detailReader:fieldReader} owned={()=>true}/></>;
       case 'input':
         if(toolHead)return toolFields('input');
         if (pending) return <DetailPending error={error} deferred={!!detailPage} />;
@@ -746,11 +745,7 @@ export function TrajectoryInspector({ detailPage,detailReader,fieldSources,field
   };
 
   return <>
-    {item.type==='RequestBoundary'&&record.request&&<TraceContexts request={record.request} cut={fieldCut} reader={fieldReader} owned={()=>true}/>}
-    {record.calls.some(call=>call.call_id==null||call.name==null)&&<ul>{record.calls.map(call=>{const tool=records.find(candidate=>candidate.kind==='tool'&&candidate.tool?.occurrence!=null&&traceOccurrenceKey(candidate.tool.occurrence)===traceOccurrenceKey(call.occurrence)&&sameTraceStep(candidate.location,record.location));return <li key={traceOccurrenceKey(call.occurrence)}><button type="button" disabled={!tool} onClick={()=>tool&&onOpen(tool.id)}>{call.name??tx('common:activity.content-deferred')}</button></li>;})}</ul>}
-    {provenanceFields.length ? <TraceFields fields={provenanceFields} cut={detailPage?.read_cut??fieldCut} reader={detailPage?detailReader:fieldReader} owned={()=>true}/> : null}
-    {metadataFields.length?<TraceFields fields={metadataFields} cut={toolHead?detailPage?.read_cut:fieldCut} reader={toolHead?detailReader:fieldReader} owned={()=>true}/>:null}
-    {deferredContent?.length&&readContent?<DeferredContent bindings={deferredContent} read={readContent} owned={()=>true}/>:null}
+    {record.calls.some(call=>call.call_id==null||call.name==null)&&<ul>{record.calls.map(call=>{const tool=records.find(candidate=>candidate.kind==='tool'&&candidate.tool?.occurrence!=null&&traceOccurrenceKey(candidate.tool.occurrence)===traceOccurrenceKey(call.occurrence)&&sameTraceStep(candidate.location,record.location));return <li key={traceOccurrenceKey(call.occurrence)}><button type="button" disabled={!tool} onClick={()=>tool&&onOpen(tool.id)}>{call.name??tx('common:activity.loading')}</button></li>;})}</ul>}
     <div className={css.detailsHeader}>
       <div className={css.detailsTitle}>{title}</div>
       <button type="button" className={css.close} aria-label={tx('trajectory:details.close')} onClick={onClose}><span aria-hidden="true">×</span></button>

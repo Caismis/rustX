@@ -1,4 +1,3 @@
-import { JournalValue, ToolMetadataValue } from './JournalValue';
 import { useToolInspection } from './tool-inspection';
 import { useTranslation } from '../../locale/react';
 import type { ForegroundToolExecution } from '../../../../protocol/app-server/v50';
@@ -12,12 +11,6 @@ import { ToolArtifacts } from '../components/Artifact';
 import { DomainActivity, domainActivity } from './DomainActivity';
 import { GoalActivity, goalActivityLabel } from './GoalActivity';
 export function Tool({ tool }: { tool: ForegroundToolExecution }) {
-  const tx = useTranslation(), result = tool.committed_result;
-  const saved = result?.status.type;
-  const label = saved === 'outcome_unknown' ? 'uncertain' : saved === 'success' ? 'success' : saved === 'cancelled' ? 'cancelled' : 'failure';
-  return <><ToolBody tool={tool}/>{result && tool.state.type !== 'settled' && <p data-tool-result-committed>{tx('common:activity.saved-tool-result', {status:tx(`common:state.${label}`)})}</p>}<JournalValue field={tool.result_source ?? undefined}/>{tool.committed_result_deferred && <ToolMetadataValue reference={tool.result_metadata_ref}/>}</>;
-}
-function ToolBody({ tool }: { tool: ForegroundToolExecution }) {
   const tx = useTranslation(), inspect = useToolInspection(tool);
   if (domainActivity(tool)) return <DomainActivity tool={tool}/>;
   const question = tool.tool_id === 'tool-ask-user' ? askUserRow(tool) : undefined;
