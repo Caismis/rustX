@@ -13,6 +13,7 @@ import { lifecycleAvailability, type LifecycleContext } from './session-lifecycl
 import { AgentMeters } from './agent-meters';
 import { UploadFailure, AttachmentIntakes } from './uploads';
 import { checkpointSnapshot, foldRuntimeEvent, observationCheckpoint, transitionFacts } from '../../../protocol/app-server/projection';
+import { hasResponseDeadline, requestEffect, requestLane } from '../../../protocol/app-server/method-policy';
 import { FirstSubmissions } from '../app/new-conversation/first-submit';
 import { SessionExportController } from "./session-export";
 import { standaloneTraceCut,inlineTraceDetail,retainedTraceDetailPage,bindTraceDetailReader,TRACE_LIMIT, TRACE_PAGE_SIZE, beginTraceDetail, completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterestBatches,traceInterests, type TraceCache,type TraceFieldReader } from './trace';
@@ -297,28 +298,12 @@ function goalRefusal(error: unknown) {
   } catch { /* Non-Goal refusal: show the transport message. */ }
   return error.message;
 }
-const READS = new Set<Request1['method']>([
-  'session/projections', 'session/projectionDetail',
-  'session/traceLocateTool', 'agent/traceLocateTool', 'agent/trace', 'agent/traceDetail',
-  'configuration/sourceValueRead', 'configuration/sourcePage', 'session/attachmentStatus', 'session/editorRead', 'conversation/contentRead', 'conversation/checkpointPage', 'conversation/checkpointValueRead', 'agent/observeCancel', 'agent/observe', 'agent/artifactRead', 'agent/deliveryRead', 'agent/deliveryLocate', 'session/turns', 'session/uploadStatus',
-  'delivery/read','delivery/locate','mcp/probe','server/diagnostics',
-  'artifact/read', 'initialize', 'server/info', 'session/list', 'session/read', 'session/summary', 'session/node', 'session/tree', 'session/deletePreview',
-  'session/history', 'session/historyContentRead', 'session/historyPage', 'session/historyValueRead', 'session/nodeOriginHistory', 'session/nodeValueRead', 'session/traceContentRead', 'session/statistics', 'session/traceHistory', 'session/traceHistoryDetail', 'session/tracePage', 'session/traceValueRead', 'session/configuration', 'session/configurationValueRead', 'session/checkpoint', 'session/transcript', 'session/trace', 'session/traceDetail', 'session/settings', 'session/settingsValueRead', 'session/model', 'session/models',
-  'configuration/sourcesRead', 'session/effectiveConfiguration', 'session/effectiveConfigurationValueRead', 'session/effectiveConfigurationPage', 'resources/read', 'job/status', 'job/list', 'job/wait', 'agent/status', 'agent/list', 'agent/wait', 'agent/transcript', 'agent/turns', 'agent/statistics', 'session/boundaries',
-]);
-const mayCommit = (operation: Request1) => !READS.has(operation.method) && !(operation.method === 'goal/control' && operation.params.control.action === 'show');
-/** Domain settlement has no RPC response deadline. Separate bounded lanes keep
- * observation/admission from occupying the slots needed to stop or inspect work. */
-function requestLane(method: Request1['method']): 'control' | 'observation' | 'rpc' {
-  switch (method) {
-    case 'agent/observe': return 'observation';
-    case 'agent/observeCancel': case 'delivery/cancel': case 'turn/cancel': case 'agent/interrupt': case 'job/cancel': case 'session/detach': case 'interaction/cancel': return 'control';
-    default: return 'rpc';
-  }
-}
+/** Shared method semantics; this transport keeps its own queue, backpressure
+ * and lifetime implementation. Only a side-effecting request may have
+ * committed when its response is lost. */
+const mayCommit = (operation: Request1) => requestEffect(operation) === 'side_effecting';
 const DOMAIN_CAPACITY = { control: 2, observation: 8 } as const;
 const RPC_CAPACITY = 6;
-const longWait = (method: Request1['method']) => ['mcp/probe', 'context/compact', 'agent/wait', 'job/wait'].includes(method);
 /** Operation-admission validations reserve ordinary RPC slots so the final check
  * stays adjacent to send, but at most two at once: a stalled Product Host read
  * can never take the remaining slots needed to cancel or control native work. */
@@ -901,7 +886,7 @@ export class AppServerClient {
     let authority: (() => boolean) | undefined;
     if ('target' in operation.params && 'session_id' in operation.params.target
       && mayCommit(operation)
-      && operation.method !== 'session/detach' && operation.method !== 'session/switchNode' && operation.method !== 'session/subscribe') {
+      && operation.method !== 'session/detach' && operation.method !== 'session/switchNode') {
       const target = operation.params.target, id = target.session_id;
       const admission = this.state.views[id]?.attachmentObservation;
       const current = () => (operation.method === 'turn/cancel' || operation.method === 'context/compact'
@@ -1031,7 +1016,7 @@ export class AppServerClient {
     // sent means transmission attempted, never native acceptance.
     pending.sent = true;
     this.log.observe('out', generation, raw, pending.context);
-    if (requestLane(pending.request.method) === 'rpc' && !longWait(pending.request.method)) pending.timer = setTimeout(() => this.lose(generation), this.timeoutMs);
+    if (requestLane(pending.request.method) === 'rpc' && hasResponseDeadline(pending.request.method)) pending.timer = setTimeout(() => this.lose(generation), this.timeoutMs);
     try { socket.send(raw); } catch { this.lose(generation); }
     try { if (typeof pending.dispatchCurrent === 'object') pending.dispatchCurrent.sent?.(); }
     catch (error) { console.error('App Server dispatch observer failed', error); }

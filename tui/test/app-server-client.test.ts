@@ -1,3 +1,4 @@
+import { METHOD_POLICY, requestEffect } from "../../protocol/app-server/method-policy.ts";
 import { jobReceipt, domainReceipt } from './support/fixtures.ts';
 import { checkpoint } from "./support/fixtures.ts";
 import { fixtures as uploadFixtures } from "../../protocol/app-server/fixtures.ts";
@@ -24,8 +25,6 @@ import {
   APP_SERVER_PROTOCOL_VERSION,
   AppServerClient,
   AppServerRequestError,
-  METHOD_RESPONSE_LOSS_CLASS,
-  type ResponseLossClass,
   UncertainOutcomeError,
   isDeliveryCancelled,
   isResyncRequired,
@@ -683,14 +682,14 @@ describe("generated-contract ingress", () => {
     transport.fail("input_eof");
     await assert.rejects(pending, TransportClosedError);
     assert.equal(transport.log.count("initialize"), 1);
-    assert.equal(METHOD_RESPONSE_LOSS_CLASS.initialize, "connection_local");
-    assert.equal(METHOD_RESPONSE_LOSS_CLASS["session/summary"], "read");
+    assert.equal(METHOD_POLICY.initialize.effect, "connection_local");
+    assert.equal(METHOD_POLICY["session/summary"].effect, "read");
   });
 });
 
 // Compile-time regression: extending the vocabulary cannot inherit a default.
 // @ts-expect-error A future method requires its own response-loss decision.
-const futurePolicy: Record<MethodName | "future/mutation", ResponseLossClass> = METHOD_RESPONSE_LOSS_CLASS;
+const futurePolicy: Record<MethodName | "future/mutation", (typeof METHOD_POLICY)[MethodName]> = METHOD_POLICY;
 void futurePolicy;
 
 describe("bounded request ownership", () => {
@@ -926,9 +925,21 @@ it('T11 T15 capability reads retain deferred native page evidence without whole-
 
 it('T13 a lost native read-only MCP probe preserves connection-failure classification and does not replay',async()=>{
  const {client,transport}=await initialized();
- assert.equal(METHOD_RESPONSE_LOSS_CLASS['mcp/probe'],'read');
+ assert.equal(METHOD_POLICY['mcp/probe'].effect,'read');
  const request=client.call('mcp/probe',{target:{kind:'user'},id:'exa',expected_revision:'mcp-1'},'mcp_probe');
  const failure=request.catch((error:unknown)=>error);
  await transport.log.awaitMethod('mcp/probe');transport.fail('socket_error');
  const error=await failure;assert.ok(error instanceof TransportClosedError);assert.ok(!isUncertainOutcome(error));assert.equal(transport.log.count('mcp/probe'),1);
+});
+
+it("derives parameter-sensitive Goal reads and lanes from the one shared method policy", () => {
+  const goal = (action: "show" | "mutate") => ({ method: "goal/control", params: { target: target(), control: { action } } }) as unknown as import("../../protocol/app-server/v50.ts").Request1;
+  assert.equal(requestEffect(goal("show")), "read");
+  assert.equal(requestEffect(goal("mutate")), "side_effecting");
+  for (const [method, policy] of Object.entries(METHOD_POLICY)) {
+    assert.ok(["read", "side_effecting", "connection_local"].includes(policy.effect), method);
+    assert.ok(policy.lane === undefined || policy.lane === "observation" || policy.lane === "control", method);
+  }
+  assert.equal(METHOD_POLICY["delivery/cancel"].lane, "control");
+  assert.equal(METHOD_POLICY["agent/observe"].lane, "observation");
 });

@@ -102,7 +102,9 @@ import {
   type DeliveryPage,
   type DeliveryRecord,
 } from "../presentation/deliveries.ts";
-import { AppServerClient, METHOD_RESPONSE_LOSS_CLASS, isResyncRequired, isUncertainOutcome } from "./client.ts";
+import { AppServerClient, isResyncRequired, isUncertainOutcome } from "./client.ts";
+import { requestEffect } from "../../../protocol/app-server/method-policy.ts";
+import type { Request1 } from "../../../protocol/app-server/v50.ts";
 
 /** Native owner bound for one bounded page. */
 export const SESSION_PROJECTION_PAGE_LIMIT = 32;
@@ -220,9 +222,8 @@ export class AppServerSession {
   #call<M extends Exclude<MethodName, 'delivery/cancel'>, T extends ResultType>(
     method: M, params: MethodParams<M>, expected: T,
   ): Promise<ResultOf<T>> {
-    const goalRead = method === 'goal/control' && 'control' in params && params.control.action === 'show';
     if ('target' in params && 'session_id' in params.target
-      && METHOD_RESPONSE_LOSS_CLASS[method] === 'side_effecting' && !goalRead
+      && requestEffect({ method, params } as Request1) === 'side_effecting'
       && method !== 'session/detach' && method !== 'session/switchNode') {
       try { this.#assertControlReady(); } catch (error) { return Promise.reject(error); }
     }

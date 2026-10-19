@@ -3,7 +3,7 @@ import { domainReceipt } from './support/fixtures.ts';
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { describeRpcError } from "../src/protocol/app-server.ts";
-import { METHOD_RESPONSE_LOSS_CLASS } from "../src/app-server/client.ts";
+import { METHOD_POLICY } from "../../protocol/app-server/method-policy.ts";
 import { reduce, replaceFromSnapshot } from "../src/presentation/projection.ts";
 import { cycleSubagentSelection, hasSubagentSelection } from "../src/ui/subagent-navigation.ts";
 import { renderSubagentDetail } from "../src/ui/components/activity.ts";
@@ -72,8 +72,8 @@ test("wait-agent retains the returned captured activation while an Agent has res
 });
 
 test("T10 T13 response loss is read failure and cannot silently retarget an Agent wait", () => {
-  assert.equal(METHOD_RESPONSE_LOSS_CLASS["agent/wait"], "read");
-  assert.equal(METHOD_RESPONSE_LOSS_CLASS["job/wait"], "read");
+  assert.equal(METHOD_POLICY["agent/wait"].effect, "read");
+  assert.equal(METHOD_POLICY["job/wait"].effect, "read");
 });
 
 test("interrupt forwards stable identity and never removes the resumable Agent row", async () => {
