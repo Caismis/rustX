@@ -90,13 +90,20 @@ pub(crate) fn fit_checkpoint(
     checkpoint: &mut RuntimeClientCheckpoint,
 ) -> Result<bool, super::types::RuntimeClientError> {
     fn fits(checkpoint: &RuntimeClientCheckpoint) -> bool {
+        let limit = CHECKPOINT_TARGET_BYTES - CHECKPOINT_ITEM_BYTES;
+        // The raw admission charges 24 bytes per number. Safe integers can
+        // gain at most two quotes in the structural codec (at most 18 bytes),
+        // with every other token unchanged. Ambiguous keys and wide native
+        // quantities still require the existing structural admission below.
+        if super::preflight::bounded_safe_integer_fit(checkpoint, limit) == Some(true) {
+            return true;
+        }
         let schema = super::structural_json::root::<RuntimeClientCheckpoint>();
         let encoded = super::structural_json::Encoded {
             value: checkpoint,
             schema: &schema,
             root: &schema,
         };
-        let limit = CHECKPOINT_TARGET_BYTES - CHECKPOINT_ITEM_BYTES;
         super::preflight::bounded_fit(&encoded, limit)
             .unwrap_or_else(|| bounded_bytes(&encoded, limit).is_some())
     }
