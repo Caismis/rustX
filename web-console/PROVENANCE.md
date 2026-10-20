@@ -2875,3 +2875,44 @@ source execution preservation and horizontal-overflow assertions passed.
 Screenshots `/tmp/rustx-session-{menu,rename,delete}-{1440,390}.png` were visually
 inspected. Chromium is the rendered browser authority; other engines were not
 exercised for this change.
+
+## Text-field focus paint (2026-10-20)
+
+Reference: Harness `687f282e8625c6b8d11ff58211a90524be2e4317`,
+`ui-theme/src/styles/focus.css`, `ui-primitives/src/Input.module.css`,
+`ui-primitives/src/settings-form/fields.module.css`, and
+`ui-workspace/src/client/rows/WorkspaceBrowser.module.css`.
+The local reset forced a solid blue outline after input components had disabled
+it; Settings also repeated that forced outline for text fields and React Aria
+search. Use the DSH color/width-only focus defaults, preserve component-owned
+outline style, and remove the two Settings text-field overrides. Editable text
+controls default to no external outline; existing field/card borders, invalid
+states, text selection and non-text keyboard controls remain independent.
+No React, native protocol or TUI logic changes.
+
+Browser plugin not available; QA uses the repository's pinned Playwright browser.
+The flow under test is: pointer/keyboard focus of Sidebar search and Rename →
+edit/cancel with stable geometry and focus → Settings provider search, endpoint
+and multiline fields → Trajectory search. Desktop/light and narrow/dark evidence
+is kept outside the repository. Existing screenshot tolerances are unchanged.
+
+The Sidebar search reference is updated to its outline-free rendering. Two
+Trajectory references also contained stale missing “Between turns” labels from
+existing commit `faa11646`; the labels are already present in HEAD's
+`TrajectoryRow.tsx`. Their refreshed differences are confined to the label/rail
+column. No Trajectory source, comparison policy or noise tolerance changed.
+
+Verification: the two outside-repository focus flows passed at 1440px/light and
+390px/dark, checking pointer and Tab/Shift+Tab focus, outline paint, stable field
+geometry, filtering, draft edits, cancel/return focus, endpoint and multiline
+fields, and a retained action-button keyboard outline. All nine selected
+existing browser regressions passed across the four keyboard viewports, Settings
+pages, native desktop/narrow Session actions, Shell references and Trajectory
+search/detail. The two refreshed reference cases passed a subsequent normal
+strict comparison. Page identity, meaningful content, console/error-overlay
+health and overflow checks passed. Screenshots
+`/tmp/rustx-focus-{search,rename,provider-search,trajectory}-{1440,390}.png` and
+the localized native Rename captures were inspected. Build, Web typecheck, i18n,
+302 source records and 264 package notices passed; the existing large-chunk
+build warning remains. URLs were `http://127.0.0.1:5273` and
+`http://127.0.0.1:5274`; Chromium was the rendered browser authority.

@@ -2306,9 +2306,9 @@
       "upstream": "packages/client/ui-settings-models/src/client/ModelsSection.module.css",
       "destination": "web-console/src/presentation/settings/SettingsContent.module.css",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "WEB-RESET-03: adapted provider outlined cards, filled editor modules, field rows, inventory badges, warnings and responsive details. Replaces obsolete app Settings CSS. rustX scope/revision presentation extensions; no business ownership. Compact model modality rows in the native profile editor. #392 repair: the inert field group of an inspected inherited resource definition has no frame of its own. #393: one page vocabulary scoped to the Settings section (page title/description, group headings, 16px-radius setting-row cards with a sticky draft action row, AA-contrast hints, badges and errors, designed pending state); narrow rules are container queries; unused rows/tabs/generation/content/model rules are deleted.",
+      "treatment": "WEB-RESET-03: adapted provider outlined cards, filled editor modules, field rows, inventory badges, warnings and responsive details. Replaces obsolete app Settings CSS. rustX scope/revision presentation extensions; no business ownership. Compact model modality rows in the native profile editor. #392 repair: the inert field group of an inspected inherited resource definition has no frame of its own. #393: one page vocabulary scoped to the Settings section (page title/description, group headings, 16px-radius setting-row cards with a sticky draft action row, AA-contrast hints, badges and errors, designed pending state); narrow rules are container queries; unused rows/tabs/generation/content/model rules are deleted. Text fields follow DSH settings-form outline:none, while native checkboxes, selects and action keyboard indicators retain their existing styles.",
       "upstream_sha256": "e248958cfe8e5d4c36cb48f8438c4210837d440786c930147b70021c90ac40eb",
-      "local_sha256": "bb9552a65e54571142891be032f124153a596ffc9152a1d69ae710aff95a88a4",
+      "local_sha256": "bc8715c2994d28c9f25b2e2566c1809ddce4857018e5b36a89b49485344c61ac",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -2328,6 +2328,12 @@
           "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
           "upstream_sha256": "fcde749f0cc6dba596f52875501d0872d019d558f7ee76b52aafbc813aebad17",
           "treatment": "Adapted field, badge, card and diagnostic styles only."
+        },
+        {
+          "upstream": "packages/client/ui-primitives/src/settings-form/fields.module.css",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "afd83b53d8b053bd6e60967b3b452e307b69312c38f3c64ef22320ed9e32f2a6",
+          "treatment": "Inspected text-field focus: no external outline; component borders and invalid states remain independent."
         }
       ]
     },
@@ -6544,6 +6550,20 @@
         "Cordis runtime and projection stores"
       ],
       "local_sha256": "80312480994cbfeb59b344eb850d08cd3b34109d743b38459f45f088fb4fe4be"
+    },
+    {
+      "upstream": "packages/client/ui-theme/src/styles/focus.css",
+      "destination": "web-console/src/presentation/theme/reset.css",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "f7398e7730415592ab1e81cec36f8c5e23065becd06c050f0129a6fa44d247e8",
+      "local_sha256": "2d59990c632539b0592d59e8058ff6acbaff8ba9aa2d7aacf44f731eca0bdce8",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "classification": "B",
+      "treatment": "DSH focus paint sets color and width without forcing outline style, preserving each component's outline:none. rustX text editors default to no external outline; field/card borders remain component-owned. Existing layout/font reset is rustX-owned.",
+      "retained_dependencies": [],
+      "excluded_dependencies": [
+        "Harness input-modality observer and pointer suppression; not needed for this text-field correction"
+      ]
     }
   ],
   "inspected_only": [
