@@ -178,9 +178,9 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await page.locator(`button[data-session-id="${idB}"]`).hover();
     await page.locator(`button[data-session-actions="${idB}"]`).click();
     await page.getByRole('menuitem', { name: 'Delete Session', exact: true }).click();
-    await expect(page.getByRole('dialog', { name: 'Confirm Session deletion' })).toBeVisible();
-    await page.getByRole('button', { name: 'Confirm delete', exact: true }).click();
-    await expect(page.getByRole('dialog', { name: 'Confirm Session deletion' })).toHaveCount(0);
+    await expect(page.getByRole('dialog', { name: 'Delete this session?' })).toBeVisible();
+    await page.getByRole('button', { name: 'Delete', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: 'Delete this session?' })).toHaveCount(0);
     await expect(page.getByText('Session deleted.', { exact: true })).toHaveCount(0);
     await expect(page.locator(`button[data-session-id="${idB}"]`)).toHaveCount(0);
     await expect(page.getByLabel('Session title')).toHaveText('Long action in A');

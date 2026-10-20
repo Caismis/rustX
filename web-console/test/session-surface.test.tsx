@@ -63,8 +63,9 @@ it('uses only the Sidebar for selection; switching preserves concurrent work and
   await select('A');
   expect(screen.getByLabelText('Session title').textContent).toBe('Session A');
   expect(methods().slice(before).filter(method => ['session/attach', 'session/detach', 'session/unload', 'turn/cancel'].includes(method))).toEqual([]);
-  fireEvent.click(screen.getByRole('button', { name: 'Session actions for Session A' }));
-  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Close Session A view' })));
+  fireEvent.click(screen.getByRole('button', { name: 'View options' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Close view' }));
+  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Session A' })));
   expect(server.client.getSnapshot().views.A.attachmentIntent).toBe('released');
   expect(server.snapshots.get('A')!.attempt?.phase.type).toBe('running');
   expect(server.loaded.has('A')).toBe(true);
@@ -252,8 +253,8 @@ it('manual naming immediately wins and survives later messages and catalog pagin
   });
   fireEvent.click(screen.getByRole('button', { name: 'Session actions for First native preview' }));
   fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }));
-  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'My explicit name' } });
-  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save name' })));
+  fireEvent.change(screen.getByLabelText('Session name'), { target: { value: 'My explicit name' } });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Rename' })));
   expect(screen.getByLabelText('Session title').textContent).toBe('My explicit name');
   await act(async () => server.update('A', canonicalUser('Later conversation')));
   await act(async () => server.client.listSessions(0, 'Session B'));
@@ -276,8 +277,8 @@ it.each([false, true])('rename establishes a post-commit exact read independentl
   });
   fireEvent.click(screen.getByRole('button', { name: 'Session actions for Old preview' }));
   fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }));
-  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'New name' } });
-  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save name' })));
+  fireEvent.change(screen.getByLabelText('Session name'), { target: { value: 'New name' } });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Rename' })));
   const freshRequest = await server.waitFor('session/summary', 3);
   expect(freshRequest.params).toEqual({ session_id: 'A' });
   expect(server.summaries.get('A')?.name).toBe('New name');
@@ -291,7 +292,7 @@ it.each([false, true])('rename establishes a post-commit exact read independentl
     expect(server.client.getSnapshot().views.A.summary).toBe(beforeRename);
   }
   await act(async () => { server.reply(freshRequest); await shared; });
-  const followupList = await server.waitFor('session/list', beforeLists + 1);
+  expect(methods().filter(method => method === 'session/list')).toHaveLength(beforeLists);
   // List remains held: exact summary alone updates all product labels.
   expect(server.client.getSnapshot().views.A.summary?.name).toBe('New name');
   expect(screen.getByLabelText('Session title').textContent).toBe('New name');
@@ -302,7 +303,7 @@ it.each([false, true])('rename establishes a post-commit exact read independentl
   expect(screen.getByLabelText('Session title').textContent).toBe('New name');
   expect(methods().filter(method => method === 'session/summary')).toHaveLength(3);
   expect(methods().filter(method => method === 'session/name')).toHaveLength(1);
-  await act(async () => server.reply(followupList));
+
 });
 
 it('a delayed older Sidebar page cannot overwrite a newer committed native preview', async () => {
@@ -409,8 +410,9 @@ it('32-view capacity is actionable through Sidebar close, without eviction or st
   expect(server.claims()).toHaveLength(32);
   fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
   await act(async () => server.client.listSessions(0, ''));
-  fireEvent.click(screen.getByRole('button', { name: 'Session actions for Session session-0' }));
-  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Close Session session-0 view' })));
+  fireEvent.click(screen.getByRole('button', { name: 'View options' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Close view' }));
+  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Session session-0' })));
   fireEvent.click(screen.getByRole('button', { name: 'Search Sessions' }));
   await act(async () => fireEvent.change(screen.getByLabelText('Search Session metadata'), { target: { value: 'session-32' } }));
   await select('session-32');
@@ -427,14 +429,15 @@ it('deletion shows the catalog title and impact, never raw identity/CAS, while s
   await mount();
   fireEvent.click(screen.getByRole('button', { name: 'Session actions for My first prompt' }));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Delete Session' })));
-  const confirmation = screen.getByRole('dialog', { name: 'Confirm Session deletion' });
-  expect(confirmation.textContent).toContain('Delete My first prompt?');
-  expect(confirmation.textContent).toContain('Saved conversations: 3 · History nodes: 3 · Child conversations: 1');
+  const confirmation = screen.getByRole('dialog', { name: 'Delete this session?' });
+  expect(confirmation.textContent).toContain('“My first prompt”');
+  expect(confirmation.textContent).toContain('permanently deleted');
+  expect(confirmation.textContent).toContain('Any active work will be stopped first.');
   expect(confirmation.textContent).not.toMatch(/session_id|target_revision|9007199254740999/);
   expect(confirmation.querySelector('pre')).toBeNull();
-  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Confirm delete' })));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Delete' })));
   expect(server.requests.find(({ request }) => request.method === 'session/delete')?.request.params).toEqual({ session_id: 'A', expected_target_revision: '9007199254740999' });
-  expect(screen.queryByRole('dialog', { name: 'Confirm Session deletion' })).toBeNull();
+  expect(screen.queryByRole('dialog', { name: 'Delete this session?' })).toBeNull();
   expect(screen.queryByText('Session deleted.')).toBeNull();
   expect(screen.queryByText('This Session no longer exists.')).toBeNull();
 });
@@ -507,7 +510,7 @@ it.each([true, false])('focused deletion fences controls and selects an existing
   server.held.add('session/delete');
   fireEvent.click(screen.getByRole('button', { name: 'Session actions for Session A' }));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Delete Session' })));
-  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Confirm delete' })));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Delete' })));
   expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).disabled).toBe(true);
   const request = await server.waitFor('session/delete', 1);
   await act(async () => server.reply(request));
@@ -786,7 +789,7 @@ it('deletion presentation follows actor admission while Switch and queued Releas
   server.handlers.set('session/deletePreview', () => ({ type: 'deletion', result: { status: 'preview', preview: { session_id: 'A', target_revision: '1', owned_node_count: 2, owned_conversation_count: 2, owned_child_count: 0 } } }));
   await server.attached('A');
   await act(async () => { render(<SessionDeletion client={server.client} sessionId="A" title="A" close={() => {}} deleted={() => {}} />); });
-  const confirm = screen.getByRole('button', { name: 'Confirm delete' });
+  const confirm = screen.getByRole('button', { name: 'Delete' });
   expect(confirm.hasAttribute('disabled')).toBe(false);
   server.held.add('session/switchNode');
   let switching!: Promise<void>, release!: Promise<void>;

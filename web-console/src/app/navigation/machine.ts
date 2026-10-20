@@ -8,6 +8,7 @@ import type { ForkOrigin } from '../agent/ForkPoint';
 import type { SettingsNavigationActor, SettingsNavigationEvent } from '../settings/machines/navigation';
 import { installTranscriptWindow } from '../../client/transcript';
 import { responseRetry, responseRetryReady, type ResponseRetry } from '../agent/response-retry';
+import { forkLatestSession } from '../commands/fork-session';
 
 class RetiredPreparation extends Error {}
 export type ConversationRoute = { kind: 'new-conversation'; workspaceId?: string } | { kind: 'session'; sessionId: string } | { kind: 'session-draft'; sessionId: string };
@@ -32,6 +33,7 @@ type Destination =
   | { kind: 'restore-session'; sessionId: string; sidebar: boolean; command?: CommandRequest }
   | { kind: 'history'; origin: ForkOrigin; beginViewport?: (retired: () => void) => { current: () => boolean } }
   | { kind: 'transition'; sessionId: string; action: HistoryAction; response?: CompletedResponseView; selection?: HistoricalSelection }
+  | { kind: 'fork-session'; sessionId: string; sidebar?: boolean }
   | { kind: 'node'; sessionId: string; nodeId: string; conversationId: string };
 interface Pending { viewportCurrent?: () => boolean; observation?: Observation; destination: Destination; route: ShellRoute; generation: number; authority: number | undefined }
 interface Prepared { pending: Pending; route: ShellRoute; observation?: Observation; content?: UserInputBlock[]; replay?: ResponseRetry['replay'] }
@@ -126,6 +128,10 @@ async function prepare(input: { client: AppServerClient; pending: Pending; paren
         }).then(resolve, reject);
       });
     }
+  } else if (destination.kind === 'fork-session') {
+    const child = await forkLatestSession(client, sessionId, current);
+    if (!child) throw new RetiredPreparation();
+    return { pending, route: pending.route, observation: pending.route.kind === 'session' ? client.getSnapshot().views[pending.route.sessionId]?.attachmentObservation : undefined };
   } else {
     const scope = new CommandSession(client, sessionId, current);
     if (destination.kind === 'node') {
@@ -172,7 +178,7 @@ export const shellNavigationMachine = setup({
     attached: ({ context, event }) => event.type === 'OPEN' && (event.destination.kind === 'session' || event.destination.kind === 'restore-session')
       && context.client.isAttachmentControlCurrent(event.destination.sessionId, context.client.getSnapshot().views[event.destination.sessionId]?.attachmentObservation),
     cancelling: ({ context, event }) => event.type === 'CANCEL' && (!event.pending || context.pending === event.pending),
-    sidebar: ({ context }) => context.pending?.destination.kind === 'session' && context.pending.destination.sidebar,
+    sidebar: ({ context }) => (context.pending?.destination.kind === 'session' || context.pending?.destination.kind === 'fork-session') && !!context.pending.destination.sidebar,
     drafting: ({ context }) => context.route.kind === 'new-conversation',
     commandRoute: ({ context }) => context.route.kind === 'session' && context.client.isAttachmentControlCurrent(context.route.sessionId, context.client.getSnapshot().views[context.route.sessionId]?.attachmentObservation),
     commandOwner: ({ context, event }) => event.type === 'COMMAND.CLOSE' && context.command === event.command,
@@ -206,6 +212,7 @@ export const shellNavigationMachine = setup({
     retire: assign({ retry: () => undefined, draftSession: () => undefined, readAdmission: () => undefined, pending: () => undefined, command: () => undefined, error: () => undefined }),
     commit: assign(({ context, event }) => {
       const output = (event as unknown as { output: Prepared }).output;
+      if (output.pending.destination.kind === 'fork-session') return { pending: undefined, error: undefined, publication: { intent: output.pending, control: context.control, sidebar: false } };
       const control = {};
       // Refocus/admission preserves the logical editor. Explicit executable
       // Node/Branch/Retry transitions still publish a fresh editor identity.
@@ -213,7 +220,7 @@ export const shellNavigationMachine = setup({
       return { retry: context.retry && output.replay ? { ...context.retry, replay: output.replay } : undefined, draftSession: undefined, readAdmission: undefined, binding: preserveDraft || output.route.kind === 'history' ? context.binding : context.binding + 1, control, route: output.route, pending: undefined, error: undefined,
         command: (output.pending.destination.kind === 'session' || output.pending.destination.kind === 'restore-session') && output.pending.destination.command ? { request: output.pending.destination.command, route: output.route, generation: output.pending.generation } : undefined,
         restored: output.route.kind === 'history' ? context.restored : output.route.kind === 'session' && output.content ? { conversation: output.observation!.target.conversation_id, content: output.content } : preserveDraft && context.restored?.conversation === output.observation?.target.conversation_id ? context.restored : undefined,
-        publication: { intent: output.pending, control, sidebar: (output.pending.destination.kind === 'session' || output.pending.destination.kind === 'restore-session') && output.pending.destination.sidebar } };
+        publication: { intent: output.pending, control, sidebar: (output.pending.destination.kind === 'session' || output.pending.destination.kind === 'restore-session') && !!output.pending.destination.sidebar } };
     }),
     attached: assign(({ context, event }) => {
       if (event.type !== 'OPEN' || event.destination.kind !== 'session' && event.destination.kind !== 'restore-session') return {};

@@ -6,6 +6,7 @@ import { useClientSelector, transportSelection, sameValue } from '../client/sele
 import { sessionDeletionNotice } from '../bindings/session-deletion';
 import { Modal } from '../presentation/primitives/Modal';
 import { Button } from '../presentation/primitives/Button';
+import css from '../presentation/workspace/WorkspaceBrowser.module.css';
 
 /** One action owns its confirmation, pending state, and rejection. Durable
  * cleanup/uncertainty remains in the native/client projection after it closes. */
@@ -16,7 +17,7 @@ export function SessionDeletion({ client, sessionId, title, close, deleted }: {
   const transport = useClientSelector(client, transportSelection, sameValue);
   const lifecycle = useClientSelector(client, state => state.views[sessionId]?.lifecycle, sameValue);
   const [preview, setPreview] = useState<RuntimeClientSessionDeletePreview>();
-  const [busy, setBusy] = useState(false), [error, setError] = useNotice(), [uncertain, setUncertain] = useState(false);
+  const [busy, setBusy] = useState(true), [error, setError] = useNotice(), [uncertain, setUncertain] = useState(false);
   const guard = useRef(false);
   const generation = transport.generation;
   const alive = useRef(true);
@@ -48,16 +49,12 @@ export function SessionDeletion({ client, sessionId, title, close, deleted }: {
       if (alive.current) { setError(String(cause)); setUncertain(isOutcomeUncertain(cause)); }
     } finally { guard.current = false; if (alive.current) setBusy(false); }
   };
-  return <Modal open title={tx('common:session-deletion.confirm-session-deletion')} closeLabel={tx('common:session-deletion.close-deletion-confirmation')} onClose={dismiss}>
-    <h3>{tx('common:session-deletion.delete')}{' '}{title}?</h3>
-    <p>{tx('common:session-deletion.this-permanently-deletes-the-session-and-its-saved-history')}</p>
-    {preview && <p>{tx('common:session-deletion.saved-conversations')}{' '}{preview.owned_conversation_count} {tx('common:session-deletion.history-nodes')}{' '}{preview.owned_node_count} {tx('common:session-deletion.child-conversations')}{' '}{preview.owned_child_count}</p>}
-    <p>{tx('common:session-deletion.any-active-work-will-be-settled-before-deletion')}</p>
-    {error && <p role="alert">{error}</p>}
-    {uncertain && <p role="alert">{tx('common:session-deletion.deletion-outcome-uncertain-inspect-native-recovery-before-anothe')}</p>}
-    <div className="row" aria-busy={busy}>
-      <Button disabled={busy} onClick={dismiss}>{tx('common:session-deletion.keep-session')}</Button>
-      <Button variant="primary" disabled={busy || uncertain || !preview || lifecycle?.delete === false || transport.connection !== 'connected'} onClick={() => void confirm()}>{tx('common:session-deletion.confirm-delete')}</Button>
-    </div>
+  return <Modal open title={tx('common:session-deletion.confirm-session-deletion')} closeLabel={tx('common:session-deletion.close-deletion-confirmation')} onClose={dismiss}
+    description={tx('common:session-deletion.description', { title })}
+    footer={<><Button variant="outline" disabled={busy && guard.current} onClick={dismiss}>{tx('common:session-deletion.keep-session')}</Button>
+      <Button variant="outline" className={css.deleteAction} disabled={busy || uncertain || !preview || lifecycle?.delete === false || transport.connection !== 'connected'} onClick={() => void confirm()}>{tx('common:session-deletion.confirm-delete')}</Button></>}>
+    {busy && <div className={css.deleteStatus} role="status">{tx(guard.current ? 'common:session-deletion.deleting' : 'common:session-deletion.reading')}</div>}
+    {error && <div className={css.renameError} role="alert">{error}</div>}
+    {uncertain && <div className={css.renameError} role="alert">{tx('common:session-deletion.deletion-outcome-uncertain-inspect-native-recovery-before-anothe')}</div>}
   </Modal>;
 }

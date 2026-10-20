@@ -1918,7 +1918,7 @@
     {
       "upstream": "packages/client/ui-primitives/src/Menu.tsx",
       "destination": "web-console/src/presentation/primitives/Menu.tsx",
-      "treatment": "A: upstream anchored menu, submenus, keyboard and pointer grace; local imports; autofocus waits for placement #393: all menu geometry is Floating UI's (@floating-ui/react-dom 2.1.9: offset, flip, shift, size, autoUpdate, fixed strategy). The hand-written portal geometry (anchor/list measurement, viewport clamping, capture-phase scroll and resize listeners), the CSS-positioned in-place list with its portal prop, and the CSS-positioned submenu card are removed. The list is always a body-portaled Floating UI surface (side/align map to one placement; getAnchorRect is a virtual reference), and each open submenu is a body-portaled Floating UI surface anchored to its own row (right-end, flipping to left-end, shifted and size-bounded, with a side-aware pointer bridge). size() publishes the room the viewport leaves as CSS custom properties that Menu.module.css combines with the design bounds. A submenu is its own keyboard layer: ArrowRight, Enter, Space or Tab on its row enter it, the arrows, Home and End walk only the focused layer, and Escape or ArrowLeft inside it return to its row. The upstream API (less portal), DOM classes, selection, disabled rows, pointer grace and focus restoration are retained; floating surfaces are React Aria top layers, Escape stops at the menu before a containing React Aria modal, and selected rows announce aria-current. #393 repair: every surface lives only while its reference is a visible interaction anchor (Floating UI hide, referenceHidden): a list whose anchor leaves layout, is detached or is clipped out closes through onClose; a submenu whose row scrolls out of its card closes. A keyboard either held goes to the trigger, the anchor's first enabled button or the nearest rendered focus container (a containing dialog), never to a hidden control or an unmounting row. #393 correction: a liveness close is not a dismissal. A list whose anchor is hidden settles a keyboard it held on the nearest containing focus owner without scrolling, never on the hidden trigger; a submenu whose row is hidden leaves the keyboard on the still-open list, never on the clipped row; Escape and ArrowLeft still return it to a visible row. #393 repair: a hidden anchor's keyboard goes to the focusOwner its host names, with no [tabindex] ancestor inference; with none named it is released, never left on a removed row or a hidden anchor. #393 repair: a submenu the keyboard holds (being entered, or focus inside its card) is never replaced or closed by passive hover; a pointer press on a parent row moves the keyboard to that row before it takes over. A placement reporting referenceHidden stops presenting its surface in the same render, and the layout phase of that commit settles the keyboard and closes the surface once, before paint. #400 focus lifecycle: portal into a containing Settings dialog scope when present; Floating UI geometry, reference-hidden settlement, keyboard behavior and owners unchanged. Header/Trajectory chrome alignment: the remembered trigger survives the close, so a split-button anchor gets the keyboard back after a selection. Main integration #456: general Model Profiles and JSON-object request parameter authoring; existing upstream baseline unchanged.",
+      "treatment": "A: upstream anchored menu, submenus, keyboard and pointer grace; local imports; autofocus waits for placement #393: all menu geometry is Floating UI's (@floating-ui/react-dom 2.1.9: offset, flip, shift, size, autoUpdate, fixed strategy). The hand-written portal geometry (anchor/list measurement, viewport clamping, capture-phase scroll and resize listeners), the CSS-positioned in-place list with its portal prop, and the CSS-positioned submenu card are removed. The list is always a body-portaled Floating UI surface (side/align map to one placement; getAnchorRect is a virtual reference), and each open submenu is a body-portaled Floating UI surface anchored to its own row (right-end, flipping to left-end, shifted and size-bounded, with a side-aware pointer bridge). size() publishes the room the viewport leaves as CSS custom properties that Menu.module.css combines with the design bounds. A submenu is its own keyboard layer: ArrowRight, Enter, Space or Tab on its row enter it, the arrows, Home and End walk only the focused layer, and Escape or ArrowLeft inside it return to its row. The upstream API (less portal), DOM classes, selection, disabled rows, pointer grace and focus restoration are retained; floating surfaces are React Aria top layers, Escape stops at the menu before a containing React Aria modal, and selected rows announce aria-current. #393 repair: every surface lives only while its reference is a visible interaction anchor (Floating UI hide, referenceHidden): a list whose anchor leaves layout, is detached or is clipped out closes through onClose; a submenu whose row scrolls out of its card closes. A keyboard either held goes to the trigger, the anchor's first enabled button or the nearest rendered focus container (a containing dialog), never to a hidden control or an unmounting row. #393 correction: a liveness close is not a dismissal. A list whose anchor is hidden settles a keyboard it held on the nearest containing focus owner without scrolling, never on the hidden trigger; a submenu whose row is hidden leaves the keyboard on the still-open list, never on the clipped row; Escape and ArrowLeft still return it to a visible row. #393 repair: a hidden anchor's keyboard goes to the focusOwner its host names, with no [tabindex] ancestor inference; with none named it is released, never left on a removed row or a hidden anchor. #393 repair: a submenu the keyboard holds (being entered, or focus inside its card) is never replaced or closed by passive hover; a pointer press on a parent row moves the keyboard to that row before it takes over. A placement reporting referenceHidden stops presenting its surface in the same render, and the layout phase of that commit settles the keyboard and closes the surface once, before paint. #400 focus lifecycle: portal into a containing Settings dialog scope when present; Floating UI geometry, reference-hidden settlement, keyboard behavior and owners unchanged. Header/Trajectory chrome alignment: the remembered trigger survives the close, so a split-button anchor gets the keyboard back after a selection. Main integration #456: general Model Profiles and JSON-object request parameter authoring; existing upstream baseline unchanged. Session-list alignment: DSH row/menu/rename geometry and interaction patterns; browser-scoped pin preference, native completed-response Fork and permanent deletion retain rustX ownership. Archive is excluded.",
       "upstream_sha256": "e7e71f29eb88b9c11516b19ea3e9e49012fd348a995d1ebac11c23e75474c571",
       "retained_dependencies": [
         "./DialogSurface",
@@ -1938,8 +1938,16 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "6dd8e1c19598e66043c59b616e9a6f22279f0cb832bd1290278d25a55dbe5846",
-      "classification": "B"
+      "local_sha256": "f096461f4393189a190425f586e4be7973c2634c10ffbc77f5a981c74dac6441",
+      "classification": "B",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-primitives/src/Menu.tsx",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "6a1acc8cc2310d036471b42a7a047a803c0e0629ba46810836bcf4f7c786d4b1",
+          "treatment": "Inspected and adapted current DSH Session list actions, 144px/34px menu geometry, pin glyphs and rename focus behavior. Native execution and deletion semantics are rustX-owned; no Archive action."
+        }
+      ]
     },
     {
       "upstream": "packages/client/ui-primitives/src/Modal.module.css",
@@ -2156,7 +2164,7 @@
     {
       "upstream": "packages/client/ui-primitives/src/icons/index.tsx",
       "destination": "web-console/src/presentation/primitives/icons/index.tsx",
-      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation #454: Harness IconDeliverDocRegular artwork added as IconDeliverDocOutline14.",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation #454: Harness IconDeliverDocRegular artwork added as IconDeliverDocOutline14. Session-list alignment: DSH row/menu/rename geometry and interaction patterns; browser-scoped pin preference, native completed-response Fork and permanent deletion retain rustX ownership. Archive is excluded.",
       "upstream_sha256": "0808f16b575502111c00b08181a68da4d065eb6008fd1da4076d458b324bdf78",
       "retained_dependencies": [
         "./props.ts"
@@ -2169,8 +2177,16 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "d256ed260905c768adc8c8aea0ce595efb5a0b10ddad76ada92a344bbd3e5453",
-      "classification": "A"
+      "local_sha256": "ea6a9021df80bc7063c8e64a8a4b84ab330154ac6f9a1a6b4580851a6cb57e86",
+      "classification": "A",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-primitives/src/icons/index.tsx",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "25052a41938e69b557fd730f1ada0deae0994f1ee410195f98c83661188b958a",
+          "treatment": "Inspected and adapted current DSH Session list actions, 144px/34px menu geometry, pin glyphs and rename focus behavior. Native execution and deletion semantics are rustX-owned; no Archive action."
+        }
+      ]
     },
     {
       "upstream": "packages/client/ui-primitives/src/icons/props.ts",
@@ -2521,7 +2537,7 @@
       "destination": "web-console/src/presentation/workspace/Rows.module.css",
       "upstream": "packages/client/ui-workspace/src/client/rows/Rows.module.css",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation; WEB-12 review repair: bounded second-line observation with flexible Session row height. Native authority unchanged.",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation; WEB-12 review repair: bounded second-line observation with flexible Session row height. Native authority unchanged. Session-list alignment: DSH row/menu/rename geometry and interaction patterns; browser-scoped pin preference, native completed-response Fork and permanent deletion retain rustX ownership. Archive is excluded.",
       "upstream_sha256": "baee8fbdccbfb13855ed6254d3c2cadab524e15c16bb277d463f74c1bf16377f",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -2530,15 +2546,29 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "92f335164bf02e27ba5e02cfa9420eb8c80349cf377227d141023ba434a7445e",
+      "local_sha256": "b67b7dd590beb9825a6f15b464fe7ae747ed1e08d80189a2bef832c9141f8a45",
       "retained_dependencies": [],
-      "classification": "B"
+      "classification": "B",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-workspace/src/client/rows/Rows.module.css",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "7c7abb0d19d2265aa6edfb0e0b1a96cf3bb686b5c7d7806ad161f67be4d4dbad",
+          "treatment": "Inspected and adapted current DSH Session list actions, 144px/34px menu geometry, pin glyphs and rename focus behavior. Native execution and deletion semantics are rustX-owned; no Archive action."
+        },
+        {
+          "upstream": "packages/client/ui-primitives/src/Menu.module.css",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "77265cc046078c060ca2f5b700b31c77f024a32e1834ebd3a0fc8b4562c7134a",
+          "treatment": "Inspected and adapted current DSH Session list actions, 144px/34px menu geometry, pin glyphs and rename focus behavior. Native execution and deletion semantics are rustX-owned; no Archive action."
+        }
+      ]
     },
     {
       "destination": "web-console/src/presentation/workspace/Rows.tsx",
       "upstream": "packages/client/ui-workspace/src/client/rows/Rows.tsx",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "B: upstream project, Session and search rows; native view models and callbacks; accessible open/toggle controls; omit provisional identity, archive, reorder and schedule affordances; native deletion preview replaces archive; WEB-12 review repair: Sidebar Close view menu callback and visible product observation for Session/search rows. Native authority unchanged. #393: no longer passes the removed Menu portal prop. #393 repair: row action menus name the Session tree as their focus owner and announce their open state. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. New conversation sidebar: show only the current browser draft, pinned above native sessions, without allocating a native identity; native creation acknowledgement retains ownership.",
+      "treatment": "B: upstream project, Session and search rows; native view models and callbacks; accessible open/toggle controls; omit provisional identity, archive, reorder and schedule affordances; native deletion preview replaces archive; WEB-12 review repair: Sidebar Close view menu callback and visible product observation for Session/search rows. Native authority unchanged. #393: no longer passes the removed Menu portal prop. #393 repair: row action menus name the Session tree as their focus owner and announce their open state. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. New conversation sidebar: show only the current browser draft, pinned above native sessions, without allocating a native identity; native creation acknowledgement retains ownership. Session-list alignment: DSH row/menu/rename geometry and interaction patterns; browser-scoped pin preference, native completed-response Fork and permanent deletion retain rustX ownership. Archive is excluded.",
       "upstream_sha256": "e61586fd63c0ae8f54ab6076905d8c96c97482576770964552c0a03acbcce6d4",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -2553,6 +2583,7 @@
         "../primitives/HoverCard",
         "../primitives/Menu",
         "../primitives/StateDot",
+        "../primitives/Tooltip",
         "../primitives/icons",
         "../primitives/relative-time",
         "./Rows.module.css",
@@ -2560,14 +2591,40 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "92a5b07c6f8999f923bd3a58f4acb956992e5afcb42f1565b24dec773a11ca9f",
-      "classification": "B"
+      "local_sha256": "f59062b98e12dc16302109c85f464d32a8e186fc081d5375c18dbd558107e74f",
+      "classification": "B",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-workspace/src/client/rows/Rows.tsx",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "b8a7da793a526a1b4e04f321be547dfb2983b73b6604c474ed1fcb41e8493408",
+          "treatment": "Inspected and adapted current DSH Session list actions, 144px/34px menu geometry, pin glyphs and rename focus behavior. Native execution and deletion semantics are rustX-owned; no Archive action."
+        },
+        {
+          "upstream": "packages/client/ui-workspace/src/client/session-actions/PinSession.tsx",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "4b0370b69c5601a652f16aa465ad20db5858de4b9a5a82e18238dd617b164115",
+          "treatment": "Inspected and adapted current DSH Session list actions, 144px/34px menu geometry, pin glyphs and rename focus behavior. Native execution and deletion semantics are rustX-owned; no Archive action."
+        },
+        {
+          "upstream": "packages/client/ui-workspace/src/client/session-actions/SessionId.tsx",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "14c494c1efe299dbf9cdffc50ed5e376dcbdb91aceb02832c45f0e743700aff3",
+          "treatment": "Inspected and adapted current DSH Session list actions, 144px/34px menu geometry, pin glyphs and rename focus behavior. Native execution and deletion semantics are rustX-owned; no Archive action."
+        },
+        {
+          "upstream": "packages/client/ui-workspace/src/client/session-actions/ForkSession.tsx",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "d06ef198e4eaafececf4087d287b41ee725a8d08a7a6986836d53bcc3b960629",
+          "treatment": "Inspected and adapted current DSH Session list actions, 144px/34px menu geometry, pin glyphs and rename focus behavior. Native execution and deletion semantics are rustX-owned; no Archive action."
+        }
+      ]
     },
     {
       "destination": "web-console/src/presentation/workspace/WorkspaceBrowser.module.css",
       "upstream": "packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.module.css",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation Session-list alignment: DSH row/menu/rename geometry and interaction patterns; browser-scoped pin preference, native completed-response Fork and permanent deletion retain rustX ownership. Archive is excluded.",
       "upstream_sha256": "95190edcbe40455651e26aaf0b42b1c952bd45dd6777179de5fc179153c2d5d3",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -2576,15 +2633,23 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "79d21a765bf15f9acc14b243f9b9459f950e4951dbc83b32e4fc9ff366eefd4b",
+      "local_sha256": "0437a094dbd357cf62c3b31d87a698866a72f7e8ab44097f7644b035defbe42b",
       "retained_dependencies": [],
-      "classification": "B"
+      "classification": "B",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.module.css",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "208fe8d00ef6e4285bd41bc979bc2362895ab2d2026e82ebd255c0bce680fbde",
+          "treatment": "Inspected and adapted current DSH Session list actions, 144px/34px menu geometry, pin glyphs and rename focus behavior. Native execution and deletion semantics are rustX-owned; no Archive action."
+        }
+      ]
     },
     {
       "destination": "web-console/src/presentation/workspace/WorkspaceBrowser.tsx",
       "upstream": "packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "B: Harness UI + rustX binding; explicit props replace runtime/registry injection; WEB-12 review repair: passes presentation-only Close view callback to open Sidebar rows. Native authority unchanged. Explicit Sidebar Close all views also releases unlisted/restored browser views without cancelling native work. #393: no longer passes the removed Menu portal prop. #393 repair: the Session tree is the programmatically focusable owner of its row action menus. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. New conversation sidebar: show only the current browser draft, pinned above native sessions, without allocating a native identity; native creation acknowledgement retains ownership.",
+      "treatment": "B: Harness UI + rustX binding; explicit props replace runtime/registry injection; WEB-12 review repair: passes presentation-only Close view callback to open Sidebar rows. Native authority unchanged. Explicit Sidebar Close all views also releases unlisted/restored browser views without cancelling native work. #393: no longer passes the removed Menu portal prop. #393 repair: the Session tree is the programmatically focusable owner of its row action menus. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. New conversation sidebar: show only the current browser draft, pinned above native sessions, without allocating a native identity; native creation acknowledgement retains ownership. Session-list alignment: DSH row/menu/rename geometry and interaction patterns; browser-scoped pin preference, native completed-response Fork and permanent deletion retain rustX ownership. Archive is excluded.",
       "upstream_sha256": "861c3a98489e6ddb7c9383c514a0af7ce59eedd03317b09d51063b0c69c6c775",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -2604,7 +2669,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "a24ac51f01bcc1a96b6c2a66b244e042edc984a22ac73b2f1e95d520c650dbed",
+      "local_sha256": "856d1a04a604e8aa1f0519551aaf9788fd53c24981530e50e24f4d7f3a2f6501",
       "classification": "B",
       "additional_sources": [
         {
@@ -2618,7 +2683,7 @@
     {
       "upstream": "packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx",
       "destination": "web-console/src/workspaces/WorkspaceNavigation.tsx",
-      "treatment": "adapted grouped/flat navigation, bounded metadata search, capability-gated picker and metadata actions; native and Product Host authority replace Harness controllers; WEB-12 removes ordinary diagnostic counters/lifecycle labels while preserving native controls and authoritative refs; WEB-12 review repair: Sidebar-only selection/close callbacks, native display-title projection and Session-scoped uncertainty. Native authority unchanged. Explicit Sidebar Close all views also releases unlisted/restored browser views without cancelling native work. Issue #406: current App Server v27 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v27 imports; upstream reference unchanged. Issue #433 review repair: consume the shared owner current-demand status instead of aggregating retained historical entries; no new upstream reuse or dependencies. #436 metadata dispatch repair: retain the opened dialog Product Host mutation scope, send it for add/rename/unregister and independently fence display settlement; native Session rename remains separate. #436 contract hardening: bind Sidebar metadata intent capture to the exact catalog that rendered the action, matching the Composer; no new upstream reuse or dependencies. New conversation sidebar: show only the current browser draft, pinned above native sessions, without allocating a native identity; native creation acknowledgement retains ownership. PR #458 navigation ownership: catalog search supersedes preparation/read continuations without revoking committed controls or acquiring route ownership. PR #458 Shell navigation: one XState route owner, independent native lifecycle settlement and read-only Fork history; upstream reference unchanged.",
+      "treatment": "adapted grouped/flat navigation, bounded metadata search, capability-gated picker and metadata actions; native and Product Host authority replace Harness controllers; WEB-12 removes ordinary diagnostic counters/lifecycle labels while preserving native controls and authoritative refs; WEB-12 review repair: Sidebar-only selection/close callbacks, native display-title projection and Session-scoped uncertainty. Native authority unchanged. Explicit Sidebar Close all views also releases unlisted/restored browser views without cancelling native work. Issue #406: current App Server v27 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v27 imports; upstream reference unchanged. Issue #433 review repair: consume the shared owner current-demand status instead of aggregating retained historical entries; no new upstream reuse or dependencies. #436 metadata dispatch repair: retain the opened dialog Product Host mutation scope, send it for add/rename/unregister and independently fence display settlement; native Session rename remains separate. #436 contract hardening: bind Sidebar metadata intent capture to the exact catalog that rendered the action, matching the Composer; no new upstream reuse or dependencies. New conversation sidebar: show only the current browser draft, pinned above native sessions, without allocating a native identity; native creation acknowledgement retains ownership. PR #458 navigation ownership: catalog search supersedes preparation/read continuations without revoking committed controls or acquiring route ownership. PR #458 Shell navigation: one XState route owner, independent native lifecycle settlement and read-only Fork history; upstream reference unchanged. Session-list alignment: DSH row/menu/rename geometry and interaction patterns; browser-scoped pin preference, native completed-response Fork and permanent deletion retain rustX ownership. Archive is excluded.",
       "upstream_sha256": "541bcf73a753b049ca25ade38a6565ddeabc750d8b4098eee4901c6d4a461d09",
       "retained_dependencies": [
         "../bindings/projection",
@@ -2631,11 +2696,16 @@
         "../presentation/primitives/Button",
         "../presentation/primitives/Input",
         "../presentation/primitives/Modal",
+        "../presentation/primitives/Toast",
+        "../presentation/primitives/clipboard",
+        "../presentation/primitives/icons",
         "../presentation/workspace/WorkspaceBrowser",
         "../presentation/workspace/types",
+        "./RenameSession",
         "./associations",
         "./endpoint",
         "./host",
+        "./session-pins",
         "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -2669,7 +2739,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "3ff8053416c71344a0ea2c5c76a1e41d4d514c1e67f78f42b1f8e2b71317c2ec"
+      "local_sha256": "01ae7ba3628da399102707801362769ba6331413201355ae24a12c95d15f7742"
     },
     {
       "upstream": "packages/client/ui-primitives/tests/markdown-incremental.client.spec.tsx",
@@ -3327,7 +3397,7 @@
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
       "upstream_sha256": "664def8bce9e753c3a670f9e9f01fe2280227a0921021e3a08b496f8c5d6effe",
-      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v27 imports; upstream reference unchanged. Connection UX: allow local submission during attachment and show generic connecting status; native readiness and admission remain authoritative. Issue #467: bounded native observation, deferred source reads and exact view ownership; original presentation and license attribution retained. Issue #467: deferred Goal content and finite ToolGroup progress copy; native status and execution authority unchanged. Issue #467: translated deferred-content, bounded catalog choices, model availability and canonical result status copy; native facts remain independent of execution settlement. Background task header, grouping, clearing and native-duration copy in English and Chinese. Background task alignment: native dispatch acceptance, task settlement and historical observations retain independent ownership; header grouping, native timing and output formatting are presentation only. DSH task menu UI/UX parity: compact native task rows, translucent material, command-copy output, exclusive expansion and two-press stopping replace generic task controls; native observation ownership is retained. Native Tool detail alignment: shared compact result presentation and one Inspect path; duplicate execution JSON disclosures removed; native lifecycle and original Trace Result remain authoritative. Workflow alignment: compact native node activity in Chat, readable review decisions and receipts, explicit execution budget labels; upstream authority remains excluded.",
+      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v27 imports; upstream reference unchanged. Connection UX: allow local submission during attachment and show generic connecting status; native readiness and admission remain authoritative. Issue #467: bounded native observation, deferred source reads and exact view ownership; original presentation and license attribution retained. Issue #467: deferred Goal content and finite ToolGroup progress copy; native status and execution authority unchanged. Issue #467: translated deferred-content, bounded catalog choices, model availability and canonical result status copy; native facts remain independent of execution settlement. Background task header, grouping, clearing and native-duration copy in English and Chinese. Background task alignment: native dispatch acceptance, task settlement and historical observations retain independent ownership; header grouping, native timing and output formatting are presentation only. DSH task menu UI/UX parity: compact native task rows, translucent material, command-copy output, exclusive expansion and two-press stopping replace generic task controls; native observation ownership is retained. Native Tool detail alignment: shared compact result presentation and one Inspect path; duplicate execution JSON disclosures removed; native lifecycle and original Trace Result remain authoritative. Workflow alignment: compact native node activity in Chat, readable review decisions and receipts, explicit execution budget labels; upstream authority remains excluded. Session-list alignment: DSH row/menu/rename geometry and interaction patterns; browser-scoped pin preference, native completed-response Fork and permanent deletion retain rustX ownership. Archive is excluded.",
       "destination": "web-console/src/locale/dictionaries/common.ts",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -3351,7 +3421,7 @@
           "treatment": "Task count, stop confirmation, duration and output disclosure wording follows the Harness job menu."
         }
       ],
-      "local_sha256": "de08fa814116635c7a53ea49e1ca34b392762a48faaf1ab16288616f86ddb219"
+      "local_sha256": "efb9254d1a17ca34f19cb8d92889fb60dd06207f036592ac8bdb319f46769682"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -3381,7 +3451,7 @@
       "destination": "web-console/src/locale/dictionaries/workspace.ts",
       "upstream": "packages/client/ui-workspace/src/client/locales.ts",
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
-      "treatment": "Issue #410: selected current bilingual workspace wording adapted into one typed en/zh feature namespace. Replaces the English-only workspace translation API; no upstream locale runtime is imported.",
+      "treatment": "Issue #410: selected current bilingual workspace wording adapted into one typed en/zh feature namespace. Replaces the English-only workspace translation API; no upstream locale runtime is imported. Session-list alignment: DSH row/menu/rename geometry and interaction patterns; browser-scoped pin preference, native completed-response Fork and permanent deletion retain rustX ownership. Archive is excluded.",
       "upstream_sha256": "448cea752f9daa196284e6a8da59c7acd944b3ad05590df5bddc6e153e43c113",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -3391,7 +3461,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "retained_dependencies": [],
-      "local_sha256": "b126c81ced9c23a2afc8b2037dc47f01cfbe9c22bf1b7dfda1fbd3cb0183bd71",
+      "local_sha256": "7b23671be14be1940d598b8afe7c072c8985bd4f9ff76827880571b0e62f05ca",
       "classification": "B",
       "additional_sources": [
         {
@@ -3399,6 +3469,12 @@
           "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
           "upstream_sha256": "d2b2c7e89a031e6c729b7b141a72e2b6e632e254e9a3b7e35dbd908ede870155",
           "treatment": "Historical English dictionary extraction, moved from presentation/locale/workspace.ts and refactored into the paired built-in namespace."
+        },
+        {
+          "upstream": "packages/client/ui-workspace/src/client/locales.ts",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "3f30bd4a0959f1b183747b0963669ebbaa3e10f0737d393abbb47b27802736b9",
+          "treatment": "Inspected and adapted current DSH Session list actions, 144px/34px menu geometry, pin glyphs and rename focus behavior. Native execution and deletion semantics are rustX-owned; no Archive action."
         }
       ]
     },
@@ -6428,6 +6504,46 @@
         "DSH Cordis runtime, Remote upload/receipt authority and provider image-message submission"
       ],
       "local_sha256": "a0089ece4de771fad89451e4be545f4d036071c4740eacc38fa6b242ec35ee60"
+    },
+    {
+      "upstream": "packages/client/ui-workspace/src/client/session-actions/RenameSession.tsx",
+      "destination": "web-console/src/workspaces/RenameSession.tsx",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "6d2cbc25552034e3ccd80b4aff0010513359fdc6794f69cbaf36b98332b3c992",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "treatment": "Adapt the DSH session rename modal: select the complete draft, Cancel/Rename footer, trim on submit, IME guard and inline rejection. Existing native name mutation and exact post-commit summary read remain the authority. Session-list alignment: DSH row/menu/rename geometry and interaction patterns; browser-scoped pin preference, native completed-response Fork and permanent deletion retain rustX ownership. Archive is excluded.",
+      "retained_dependencies": [
+        "../client/app-server",
+        "../locale/react",
+        "../presentation/primitives/Button",
+        "../presentation/primitives/Modal",
+        "../presentation/workspace/WorkspaceBrowser.module.css",
+        "react"
+      ],
+      "excluded_dependencies": [
+        "Cordis slots and injected Session mutation service",
+        "Harness Host metadata persistence"
+      ],
+      "local_sha256": "c316d3c5252f63d64f4151133539e68651787133f957d8cf16f5a2cbd0c73174"
+    },
+    {
+      "upstream": "packages/api/session-controller/src/client/sessions/service.ts",
+      "destination": "web-console/src/app/commands/fork-session.ts",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "5a085d04f97ac7a0f76d10815aded19996734742a132d28954b70e07d8ad7116",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "treatment": "Port DSH durable fork-title numbering and catalog-only child publication. Resolve the latest native completed-response boundary through finite immutable history pages; do not attach the source/child, switch the editor or send input. Session-list alignment: DSH row/menu/rename geometry and interaction patterns; browser-scoped pin preference, native completed-response Fork and permanent deletion retain rustX ownership. Archive is excluded.",
+      "retained_dependencies": [
+        "../../../../protocol/app-server/message-descriptor",
+        "../../client/app-server",
+        "../../locale/controller",
+        "../../locale/translation"
+      ],
+      "excluded_dependencies": [
+        "Harness Session manager and Host RPC",
+        "Cordis runtime and projection stores"
+      ],
+      "local_sha256": "80312480994cbfeb59b344eb850d08cd3b34109d743b38459f45f088fb4fe4be"
     }
   ],
   "inspected_only": [

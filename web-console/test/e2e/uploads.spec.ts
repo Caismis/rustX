@@ -83,8 +83,8 @@ test('Session uploads compose with model Tool IO, fork, source deletion and relo
     await page.locator(`button[data-session-id="${source}"]`).hover();
     await page.locator(`button[data-session-actions="${source}"]`).click();
     await page.getByRole('menuitem', { name: 'Delete Session', exact: true }).click();
-    await page.getByRole('button', { name: 'Confirm delete', exact: true }).click();
-    await expect(page.getByRole('dialog', { name: 'Confirm Session deletion' })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Delete', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: 'Delete this session?' })).toHaveCount(0);
     await expect(page.getByText('Session deleted.', { exact: true })).toHaveCount(0);
     expect(existsSync(root(source))).toBe(false);
     for (const path of destinationPaths) expect(existsSync(path)).toBe(true);
@@ -104,8 +104,8 @@ test('Session uploads compose with model Tool IO, fork, source deletion and relo
     await page.locator(`button[data-session-id="${destination}"]`).hover();
     await page.locator(`button[data-session-actions="${destination}"]`).click();
     await page.getByRole('menuitem', { name: 'Delete Session', exact: true }).click();
-    await page.getByRole('button', { name: 'Confirm delete', exact: true }).click();
-    await expect(page.getByRole('dialog', { name: 'Confirm Session deletion' })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Delete', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: 'Delete this session?' })).toHaveCount(0);
     await expect(page.getByText('Session deleted.', { exact: true })).toHaveCount(0);
     expect(existsSync(root(destination))).toBe(false);
     expect(errors).toEqual([]); passed = true;

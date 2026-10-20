@@ -1,3 +1,4 @@
+import { closeSessionView } from './shell-actions';
 import { test as base, expect } from '@playwright/test';
 import { startDogfood } from './dogfood-server';
 import { AppServerHost } from '../../../tui/src/app-server/host';
@@ -297,9 +298,7 @@ test('Fork source exact Message landing and cancellation by scrolling, newer nav
     await expect(page.locator(`button[data-session-id="${id}"]`)).toHaveAttribute('aria-current', 'page');
   } else if (race === 'attachment') {
     // Explicitly retire the initiating Fork attachment, not the source read.
-    await page.locator(`button[data-session-id="${forkId}"]`).hover();
-    await page.locator(`button[data-session-actions="${forkId}"]`).click();
-    await page.getByRole('menuitem', { name: /^Close .* view$/ }).click();
+    await closeSessionView(page, forkId);
     await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', 'new-conversation');
   }
   await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));

@@ -10,7 +10,7 @@ import type { DraftConversation, GroupNode, SessionNode } from './types';
 import css from './WorkspaceBrowser.module.css';
 
 /** Native adapters supply facts/gestures. This component owns only visual state. */
-export function WorkspaceBrowser({ unclassified = [], wide, expand, groups, sessions, selected, draft, query, search, open, rename, fork, remove, closeView, closeAllViews,
+export function WorkspaceBrowser({ unclassified = [], wide, expand, groups, sessions, selected, draft, query, search, open, rename, fork, remove, pin, copyId, closeView, closeAllViews,
   selectWorkspace, create, renameWorkspace, removeWorkspace, workspaceSettings, addWorkspace, refresh, previous, next, notices, renderSession = (_node, render) => render(_node) }: {
   draft?: DraftConversation;
   unclassified?: readonly string[];
@@ -19,6 +19,7 @@ export function WorkspaceBrowser({ unclassified = [], wide, expand, groups, sess
   wide: boolean; expand: () => void; groups: readonly GroupNode[]; sessions: readonly SessionNode[]; selected?: string;
   query: string; search: (text: string) => void; open: (id: string) => void; rename: (id: string) => void;
   closeView?: (id: string) => void;
+  pin?: (id: string) => void; copyId?: (id: string) => void;
   closeAllViews?: () => void;
   fork: (id: string) => void; remove: (id: string) => void; selectWorkspace: (id: string) => void; create: (id: string) => void;
   renameWorkspace: (id: string, title: string) => void; removeWorkspace: (id: string, title: string) => void;
@@ -38,7 +39,7 @@ export function WorkspaceBrowser({ unclassified = [], wide, expand, groups, sess
   // stays rendered and visible around it. Programmatically focusable, never a
   // Tab stop of its own; Tab from it enters its rows.
   const tree = useRef<HTMLDivElement>(null);
-  const row = (node: SessionNode) => renderSession(node, node => <SessionNodeItem key={node.id} node={node} currentId={selected} now={Date.now()} onOpen={open} onRename={rename} onFork={fork} onDelete={remove} onClose={node.viewOpen ? closeView : undefined} flat={flat || !!query} menuFocusOwner={tree} t={tx} />);
+  const row = (node: SessionNode) => renderSession(node, node => <SessionNodeItem key={node.id} node={node} currentId={selected} now={Date.now()} onOpen={open} onRename={rename} onFork={fork} onDelete={remove} onPin={pin} onCopyId={copyId} flat={flat || !!query} menuFocusOwner={tree} t={tx} />);
   return <section className={clsx(css.root, !wide && css.rail)} aria-label={tx('workspace:workspace-browser.workspaces-and-sessions')}>
     <div className={css.sectionHeader}>
       {wide && <span className={clsx(css.sectionLabel, css.wide, searchExpanded && css.sectionLabelHidden)}>{flat ? tx('workspace:workspace-browser.sessions') : tx('workspace:workspace-browser.workspaces')}</span>}
@@ -49,8 +50,10 @@ export function WorkspaceBrowser({ unclassified = [], wide, expand, groups, sess
       </div></div>}
       <div className={clsx(css.headerActions, wide && searchExpanded && css.headerActionsHidden)}>
         {wide && <Menu open={menu} onClose={() => setMenu(false)} autoFocus anchor={<button type="button" className={css.iconButton} aria-label={tx('workspace:workspace-browser.view-options')} onClick={() => setMenu(!menu)}><IconEllipsisOutline16 /></button>}
-          items={[{ id: 'group', label: flat ? tx('workspace:workspace-browser.grouped-view') : tx('workspace:workspace-browser.flat-view') }, { id: 'refresh', label: tx('workspace:workspace-browser.refresh-list') }, ...(closeAllViews ? [{ id: 'close-views', label: tx('workspace:workspace-browser.close-all-views') }] : [])]}
-          onSelect={id => { setMenu(false); if (id === 'group') setFlat(!flat); else if (id === 'close-views') closeAllViews?.(); else refresh(); }} />}
+          items={[{ id: 'group', label: flat ? tx('workspace:workspace-browser.grouped-view') : tx('workspace:workspace-browser.flat-view') }, { id: 'refresh', label: tx('workspace:workspace-browser.refresh-list') },
+            ...(closeView && sessions.some(node => node.viewOpen) ? [{ id: 'close-view', label: tx('workspace:workspace-browser.close-view'), submenu: sessions.filter(node => node.viewOpen).map(node => ({ id: `close:${node.id}`, label: node.title })) }] : []),
+            ...(closeAllViews ? [{ id: 'close-views', label: tx('workspace:workspace-browser.close-all-views') }] : [])]}
+          onSelect={id => { setMenu(false); if (id === 'group') setFlat(!flat); else if (id === 'close-views') closeAllViews?.(); else if (id.startsWith('close:')) closeView?.(id.slice(6)); else refresh(); }} />}
         {addWorkspace && <Tooltip label={tx('workspace:workspace-navigation.add-workspace')}><button type="button" className={css.iconButton} aria-label={tx('workspace:workspace-navigation.add-workspace')} onClick={addWorkspace}><IconProjectAddOutline16 size={wide ? 16 : 18} /></button></Tooltip>}
       </div>
     </div>

@@ -267,8 +267,8 @@ it('picker capability exposes only authorized choices and Session rename uses th
   const catalogs = vi.mocked(host.listWorkspaces).mock.calls.length;
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Session actions for Session A' })));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' })));
-  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Native name' } });
-  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save name' })));
+  fireEvent.change(screen.getByLabelText('Session name'), { target: { value: 'Native name' } });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Rename' })));
   expect(server.requests.find(row => row.request.method === 'session/name')?.request.params).toEqual({ session_id: 'A', name: 'Native name' });
   expect(host.renameWorkspace).not.toHaveBeenCalled();
   expect(host.classifyLocations).toHaveBeenCalledTimes(classifications);
@@ -326,20 +326,17 @@ it('stale or unloaded snapshots cannot claim running work', () => {
   expect(sessionObservation(translator('en'), { ...server.client.getSnapshot(), views: { A: view }, connection: 'disconnected' }, 'A')).toBe('Connection interrupted');
 });
 it('sidebar Fork uses the exact native boundary and late completion cannot undo Workspace focus', async () => {
-  const boundary = { surface_revision: '37', locator:{type:'by_message_id' as const,message_id:'user-cut'},block_count:'1',content:[],collections:[], message: { id: 'user-cut', kind: 'message' as const, source: 'human' as const, content: [{ type: 'text' as const, text: 'Fork this native boundary' }] } };
-  server.handlers.set('session/boundaries', () => ({ type: 'boundaries', surface_revision: '37', boundaries: [boundary] }));
-  server.handlers.set('session/tree', () => ({ type: 'tree', nodes: [{ id: 'node-A', conversation_id: 'conversation-A', ordinal: '1', origin: { type: 'new' } }] }));
+  server.snapshots.get('A')!.transcript.entries = [{ cursor: '1', item: { type: 'message', message: { id: 'reply-cut', role: 'assistant', content: [{ type: 'text', text: 'Completed native reply' }] } }, completed_response: { closing_locator: {type:'by_message_id',message_id:'reply-cut'}, origin: {conversation_id:'conversation-A',attempt_id:'original'}, deferred_fields:[], surface_revision:'37', completed_at:'2026-10-20T00:00:00Z' } }];
   server.handlers.set('session/fork', request => {
     if (request.method !== 'session/fork') throw new Error('wrong request');
-    expect(request.params).toEqual({ side: 'before', session_id: 'A', node_id: 'node-A', surface_revision: '37', boundary:{type:'by_message_id',message_id:'user-cut'} });
+    expect(request.params).toEqual({ side: 'after', session_id: 'A', node_id: 'node-A', surface_revision: '37', boundary:{type:'by_message_id',message_id:'reply-cut'} });
     server.snapshots.set('fork-child', snapshot('fork-child'));
     return { type: 'session_transition', session: { id: 'fork-child', active_node: 'node-child', active_conversation_id: 'conversation-fork-child', node_count: 1, created_at: '0', updated_at: '0' } };
   });
   await mount(); server.held.add('session/fork');
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Session actions for Session A' })));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Fork session' })));
-  const popup = screen.getByRole('dialog', { name: '/fork' });
-  fireEvent.click(within(popup).getByRole('option', { name: /Fork this native boundary/ }));
+  expect(screen.queryByRole('dialog')).toBeNull();
   const request = await server.waitFor('session/fork', 1);
   const committed = server.commit(request);
   fireEvent.click(screen.getByRole('button', { name: 'Select Workspace Workspace B' }));
@@ -356,8 +353,8 @@ it('late native rename completion cannot replace a newer metadata query', async 
   server.handlers.set('session/name', () => ({ type: 'session', session: { id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' } }));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Session actions for Session A' })));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' })));
-  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Renamed' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save name' }));
+  fireEvent.change(screen.getByLabelText('Session name'), { target: { value: 'Renamed' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
   const rename = await server.waitFor('session/name', 1);
   await act(async () => fireEvent.change(screen.getByLabelText('Search Session metadata'), { target: { value: 'new query' } }));
   const lists = methods().filter(method => method === 'session/list').length;
@@ -482,11 +479,11 @@ it('an already attached source cannot Fork a child after current cwd authorizati
   server.handlers.set('session/boundaries', () => ({ type: 'boundaries', surface_revision: '1', boundaries: [boundary] }));
   server.handlers.set('session/tree', () => ({ type: 'tree', nodes: [{ id: 'node-A', conversation_id: 'conversation-A', ordinal: '1', origin: { type: 'new' } }] }));
   await mount();
+  await act(async () => fireEvent.click(document.querySelector<HTMLButtonElement>('button[data-session-id="A"]')!));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Session actions for Session A' })));
-  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Fork session' })));
-  const popup = screen.getByRole('dialog', { name: '/fork' });
   server.handlers.set('session/settings', () => (settingsReceipt({ cwd: '/outside/roots' },'1')));
-  await act(async () => fireEvent.click(within(popup).getByRole('option', { name: /Native Fork boundary/ })));
+  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Fork session' })));
+  expect(screen.queryByRole('dialog')).toBeNull();
   expect(methods()).not.toContain('session/fork');
   expect(server.loaded.has('A')).toBe(true); // No hot revocation/unload.
   expect(methods()).not.toContain('session/unload');

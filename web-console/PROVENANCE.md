@@ -2803,3 +2803,75 @@ error-overlay/console health and horizontal-overflow checks passed. Screenshots
 `/tmp/rustx-retry-pending-{1440,390}.png` and
 `/tmp/rustx-retry-streaming-{1440,390}.png` were visually inspected. No reference
 pixels or comparator tolerances changed. The existing bundle-size warning remains.
+
+## Session list operations (2026-10-20)
+
+Reference: DeepSeek Harness `687f282e8625c6b8d11ff58211a90524be2e4317`,
+`ui-workspace/session-actions/{PinSession,RenameSession,ForkSession,SessionId}.tsx`,
+`rows/Rows{.tsx,.module.css}`, `ui-primitives/{Menu,Modal,useModalLayer}`,
+`ui-workspace/navigation.ts` and `session-controller/sessions/service.ts`.
+Archive is explicitly outside the user's requested scope. Permanent deletion is
+rustX's native operation, not an upstream Archive action.
+
+| Reference / rendered mismatch | Treatment |
+| --- | --- |
+| Row actions lacked Pin and Copy ID; extra Close view displaced the reference menu | Match Pin, Rename, Fork, Delete, Copy ID order, hover buttons and resting pin marker. Close view moves into the existing View options submenu. Pin and Copy ID do not select or attach an inactive Session. |
+| Current upstream Session menu uses 144px minimum width and 34px rows; the older shared menu uses 218px and 40px | Reuse upstream `listClassName` to scope current 13px text, 14px icons, spacing and 16px radius to Session menus; other menus retain their geometry. |
+| Rename had a generic Workspace form, no explicit Cancel footer and a list-refresh barrier | Adapt upstream Session dialog: selected draft, trimmed submit, composition-aware Enter, Cancel/Rename footer, inline error and native summary settlement. Focus returns to the opening control. |
+| Sidebar Fork selected its source and opened an explicit boundary picker | Use the latest completed native response, paging backward at its retained read cut when necessary. Publish the child in the catalog without switching the current Session or editor. Increment an existing durable title using upstream half/full-width parenthesis numbering. Explicit `/fork` and response Fork retain their native boundary pickers. |
+| Delete confirmation showed low-level native inventory instead of a concise product dialog | Use the shared modal and Cancel/red-outline Delete footer with the Session title, irreversible history removal and active-work termination explanation. Native delete preview, revision check, failure and uncertain-outcome ownership remain intact. |
+
+Intentional native difference: DSH pins are Host metadata. rustX has no native
+pin API, so pins are a Web list preference, persisted per service endpoint and
+native authority and shared by browser storage events. No pin authority is added
+to Session execution or the TUI. A confirmed deletion removes its local pin.
+The native protocol and TUI interactions are unchanged.
+
+Browser plugin not available; rendered QA uses the repository's pinned
+Playwright 1.63.0 Chromium container. The flow under test is: open the Session list
+→ pin/copy without navigation → rename and cancel/confirm → inspect/cancel native
+delete confirmation → Fork a running source at its last completed response while
+preserving the current editor → explicitly open the child and permanently delete
+it. Desktop English/light and narrow Chinese/dark screenshots are kept outside
+the repository. Existing screenshot tolerances are not expanded.
+
+Rendered review caught a browser-only focus failure: the modal could not restore
+focus to a hover-only ellipsis after the mask removed hover/focus from its row.
+Menu and quick-delete dialog entry now capture the always-visible title button
+instead. Both cancellation paths return the keyboard to that Session row.
+Double-click rename is checked on desktop; the narrow overlay uses the menu,
+since selecting a title deliberately closes the overlay on its first click.
+
+Reference updates are limited to the deletion dialog, the background row's new
+hover controls, and twelve existing references with a stale model-chevron color.
+The latter each differ by exactly 36 pixels; an isolated archive of pre-change
+commit `fa04e72a` rendered the identical chevron as the modified tree, including
+its `rgb(173, 178, 184)` computed color. This is reference repair, with no model
+UI source change. No comparator or rasterizer-noise allowances changed. Stable
+updated captures were reviewed before a normal comparison run.
+
+The Sidebar completion scan also reads native deferred-message descriptors via
+the existing `messageDescriptor` parser. It compares their ledger cursors with
+materialized entries before selecting a boundary, so a newer completed large
+body cannot be silently skipped in favor of an older short reply. No body bytes
+or editor input are reconstructed, and no source/child attachment is needed.
+
+Verification: 2,980 Web tests passed (four existing skips). After the deferred
+completion fix, all 77 focused Session/Fork/navigation checks and the Web
+TypeScript check passed. Production build, i18n, 301 source records, notices for
+264 production packages and all 55 provider checks passed. The existing bundle
+size warning remains.
+
+Across the normal comparison and native runs, all 17 selected browser scenarios
+passed: four keyboard viewports (390/820/1280/1600), six Sidebar product states,
+Shell references in both themes, clipped-menu keyboard settlement, grouped/flat/
+search recency, native upload-bearing Retry/explicit Fork, the two-real-Session
+close-view/controller flow, and the new desktop/narrow Session action flows.
+The last two native flows were rerun successfully after the deferred completion
+fix. Tested URLs were `http://127.0.0.1:5273` (production preview) and
+`http://127.0.0.1:5274` (isolated presentation fixtures). Page identity, meaningful
+content, console/error-overlay health, actual clipboard content, modal focus,
+source execution preservation and horizontal-overflow assertions passed.
+Screenshots `/tmp/rustx-session-{menu,rename,delete}-{1440,390}.png` were visually
+inspected. Chromium is the rendered browser authority; other engines were not
+exercised for this change.

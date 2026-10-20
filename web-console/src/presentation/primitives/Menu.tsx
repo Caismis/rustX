@@ -189,7 +189,7 @@ function placementOf(side: 'bottom' | 'top' | 'right', align: 'start' | 'end'): 
  * focused without scrolling.
  * @returns anchor wrapper with the conditional list.
  */
-export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, onClose, align = 'start', side = 'bottom', closeOnPointerLeave = false, dense = false, compact = false, autoFocus = false, selection = 'check', getAnchorRect, focusOwner, footer, className }: {
+export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, onClose, align = 'start', side = 'bottom', closeOnPointerLeave = false, dense = false, compact = false, autoFocus = false, selection = 'check', getAnchorRect, focusOwner, footer, className, listClassName }: {
   open: boolean
   autoFocus?: boolean
   anchor: ReactNode
@@ -208,6 +208,8 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
   getAnchorRect?: () => DOMRect | null
   focusOwner?: RefObject<HTMLElement | null> | undefined
   className?: string | undefined
+  /** DSH per-surface styling; does not alter shared placement or keyboard behavior. */
+  listClassName?: string | undefined
 }) {
   const portalContainer = useDialogPortal();
   const rootRef = useRef<HTMLSpanElement>(null)
@@ -648,7 +650,7 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
   const list = open && (
     <div
       ref={setList}
-      className={clsx(css.list, dense && css.denseList, compact && css.compactList)}
+      className={clsx(css.list, listClassName, dense && css.denseList, compact && css.compactList)}
       style={listStyle}
       data-react-aria-top-layer
       role="menu"

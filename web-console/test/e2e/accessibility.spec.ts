@@ -74,7 +74,7 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     if (wasCollapsed) { await expect(expandSidebar).toBeFocused(); await page.keyboard.press('Enter'); }
     const rowActions = page.locator('button[data-session-actions]').first();
     await tabTo(rowActions); await page.keyboard.press('Enter'); await page.keyboard.press('ArrowDown');
-    await expect(page.getByRole('menuitem', { name: 'Close New session view', exact: true })).toBeFocused();
+    await expect(page.getByRole('menuitem', { name: 'Pin session', exact: true })).toBeFocused();
     await page.keyboard.press('Escape'); await expect(rowActions).toBeFocused();
     if (wasCollapsed) { await tabTo(page.getByRole('button', { name: 'Collapse Sidebar', exact: true })); await page.keyboard.press('Enter'); }
     await tabTo(message); await page.keyboard.type('/mdl');

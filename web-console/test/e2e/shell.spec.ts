@@ -133,7 +133,7 @@ for (const mode of ['empty', 'preview', 'named', 'delete', 'other-uncertain', 'b
     await page.locator('button[data-session-id="A"]').hover();
     await page.locator('button[data-session-actions="A"]').click();
     await page.getByRole('menuitem', { name: 'Delete Session' }).click();
-    await expect(page.getByRole('dialog', { name: 'Confirm Session deletion' })).toContainText('Delete Inspect the Session ownership boundary?');
+    await expect(page.getByRole('dialog', { name: 'Delete this session?' })).toContainText('“Inspect the Session ownership boundary”');
   }
   await expectStableScreenshot(page, `sidebar-${mode}-light.png`);
 

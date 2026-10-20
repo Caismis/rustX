@@ -85,6 +85,20 @@ def web_response_retry() -> Scenario:
 SCENARIOS["web_response_retry"] = web_response_retry
 
 
+def web_sidebar_actions() -> Scenario:
+    """Sidebar fork retains a native completion while its source keeps running."""
+    def expected(prompt: str, **kwargs) -> Expect:
+        return Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=(prompt,), **kwargs)
+    return Scenario("web_sidebar_actions",
+                    Step(expected("Sidebar source"), Stream(Text("Completed sidebar answer."), Finish())),
+                    Step(expected("Keep source running"), Stream(Text("Unfinished source output."), Gate("sidebar-source-running"), Text(" Source finished."), Finish())),
+                    Step(expected("Fork follow-up", body_excludes=("Keep source running", "Unfinished source output.")),
+                         Stream(Text("Fork kept the completed answer."), Finish())))
+
+
+SCENARIOS["web_sidebar_actions"] = web_sidebar_actions
+
+
 def web_composer_context() -> Scenario:
     """Native Todo and Goal owners feed the composer docks; one Human input waits in the mailbox.
 

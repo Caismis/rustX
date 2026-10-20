@@ -135,12 +135,12 @@ it('Session renaming never promotes a localized fallback title into native data 
     await act(async () => { render(<App client={activeServer.client} workspaceHost={activeServer.workspaceHost}/>); });
     fireEvent.click(document.querySelector<HTMLButtonElement>('button[data-session-actions="A"]')!);
     fireEvent.click(screen.getByRole('menuitem', { name: text('workspace:rename') }));
-    const input = screen.getByRole('textbox', { name: text('workspace:workspace-navigation.name') }) as HTMLInputElement;
+    const input = screen.getByRole('textbox', { name: text('workspace:field.sessionName') }) as HTMLInputElement;
     expect(input.value).toBe('');
-    expect((screen.getByRole('button', { name: text('workspace:workspace-navigation.save-name') }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: text('workspace:rename') }) as HTMLButtonElement).disabled).toBe(true);
     const before = server.requests.length;
     fireEvent.change(input, { target: { value: 'User-authored 名称' } });
-    await act(async () => fireEvent.click(screen.getByRole('button', { name: text('workspace:workspace-navigation.save-name') })));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: text('workspace:rename') })));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     sequences.push(server.requests.slice(before).map(row => row.request));
     cleanup(); server.client.disconnect();
