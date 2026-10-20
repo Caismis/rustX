@@ -1,0 +1,69 @@
+{
+  "start_utc": "2026-10-20T05:40:06.517196+00:00",
+  "base": "623b41b869a95c888eb04f907cbf607232699a2f",
+  "branch": "codex/pr485-metadata-ownership-20261020",
+  "argv": [
+    "cargo",
+    "test",
+    "--release",
+    "--locked",
+    "--offline",
+    "--lib",
+    "--no-run",
+    "--message-format=json",
+    "-vv",
+    "-j",
+    "1"
+  ],
+  "cwd": "/workspace/pr485-study/metadata-ownership-candidate",
+  "environment_overrides": {
+    "PATH": "/workspace/.cargo/bin:/home/agent/.local/bin:/opt/codex/runtimes/codex-primary-runtime/dependencies/bin/override:/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin:/opt/codex/runtimes/codex-primary-runtime/dependencies/node/bin:/opt/codex/runtimes/codex-primary-runtime/dependencies/bin:/opt/codex/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/agent/.local/bin:/opt/codex/runtimes/codex-primary-runtime/dependencies/bin/fallback",
+    "CARGO_HOME": "/workspace/.cargo",
+    "RUSTUP_HOME": "/workspace/.rustup",
+    "RUSTUP_TOOLCHAIN": "1.98.1",
+    "CARGO_TARGET_DIR": "/workspace/pr485-study/target",
+    "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+    "CARGO_PROFILE_RELEASE_DEBUG": "0",
+    "CARGO_INCREMENTAL": "0",
+    "RUSTFLAGS": "-Copt-level=3 -Cdebuginfo=0",
+    "BINDGEN_EXTRA_CLANG_ARGS": "-isystem /usr/lib/gcc/x86_64-linux-gnu/14/include",
+    "LIBCLANG_PATH": "/usr/lib/llvm-19/lib",
+    "TMPDIR": "/workspace/pr485-study/tmp",
+    "CARGO_BUILD_JOBS": "1"
+  },
+  "source_sha256": {
+    "src/runtime_client/projection.rs": "1cd07de1826234d3be42a380c0bc16771d1311dc2b34cfa789841e07a7d7d910",
+    "src/runtime_client/projection/metadata_ownership_tests.rs": "e2f9f6c9f508a754321e19c80408af7ab3b841e79c69c9acee56c828dddc4b94",
+    "Cargo.toml": "59162af233790d4c4c0340046f6fc91c18bac5cfb8d416ca6ba4a109a6e998e4",
+    "Cargo.lock": "5a88074d3762bdf268b191882358bd58d48805a9c079806897dbcdc4a920da51",
+    "rust-toolchain.toml": "c910997cb152c6dc8ed13b1fdf9fa28a4ed30d6776123e27dd6170e5c66067a0"
+  },
+  "before": {
+    "utc": "2026-10-20T05:40:06.525439+00:00",
+    "monotonic_ns": 16419031381677,
+    "available_bytes": 9186533376,
+    "memory_current": "14044217344"
+  },
+  "guard_floor_bytes": 5368709120,
+  "soft_stop_available_bytes": 6442450944,
+  "no_cleanup": true,
+  "purpose": "Compile equivalence/regression tests only; no performance product run",
+  "outer_script_sha256": "7879fda361c5bdea5a051f04b6d70e0993c4afa002be3d1f55ac26ba93837bbd",
+  "state": "compile-finished",
+  "launch": {
+    "utc": "2026-10-20T05:40:06.534034+00:00",
+    "monotonic_ns": 16419039973515,
+    "available_bytes": 9186529280,
+    "memory_current": "14044196864"
+  },
+  "pid": 39389,
+  "exit": 0,
+  "end_utc": "2026-10-20T06:48:05.545975+00:00",
+  "after": {
+    "utc": "2026-10-20T06:48:05.546810+00:00",
+    "monotonic_ns": 20498052775289,
+    "available_bytes": 8975683584,
+    "memory_current": "6287360000"
+  },
+  "minimum_observed_available_bytes": 9090682880
+}

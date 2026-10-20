@@ -1,0 +1,331 @@
+{
+  "utc": "2026-10-20T07:41:58.156173+00:00",
+  "unchanged": true,
+  "files": [
+    {
+      "path": "/workspace/pr485-study/evidence/build-baseline/artifacts/release/deps/librustx-69d6ea2c60a362a0.rlib",
+      "sha256": "c529acd9a2f6d18fb297e0c38facfdd46597ce04e1c44890d0048ed9e99dffb6",
+      "bytes": 324347218
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/build-baseline/artifacts/release/deps/librustx-69d6ea2c60a362a0.rmeta",
+      "sha256": "d8a9417dba68579334f797669f756821c4806176077de70091de0af0c38049de",
+      "bytes": 113130667
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/build-baseline/artifacts/release/interactive-supervisor",
+      "sha256": "d8a4de9c6be9115d759df8ce3745d5591206216552493468b6bc933056103c1b",
+      "bytes": 8124968
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/build-baseline/artifacts/release/rustx",
+      "sha256": "b218ce4b143ae593bd2450ee0a4b8c7b8b7b40c932a6c08dde204fd1e14fb724",
+      "bytes": 133105512
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/build-baseline/artifacts/release/bash-supervisor",
+      "sha256": "0bec7d8218eff7a946dd59f913ba0919c74d529c8b6b312af1f329b201308560",
+      "bytes": 8071208
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/build-baseline/artifacts/release/deps/conformance-24da1f0a9d82f33c",
+      "sha256": "711b5af1ac3500e36f0f1bd827d108fb975a088b5e24a8d3a99218d7812ed388",
+      "bytes": 139129584
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/common-runtime-libraries/f599c0497b4a32ba9363c9995a8ab76ce92af798ac42dd5186c02e4a700e64d8-libasync_openai_macros-086544d7849941ca.so",
+      "sha256": "f599c0497b4a32ba9363c9995a8ab76ce92af798ac42dd5186c02e4a700e64d8",
+      "bytes": 2701976
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/common-runtime-libraries/b412834707a9a679b19b8173ba4ecc7c1865e3ca5602ab2fb961b85c0c0287f2-libasync_trait-1f166d3a91788787.so",
+      "sha256": "b412834707a9a679b19b8173ba4ecc7c1865e3ca5602ab2fb961b85c0c0287f2",
+      "bytes": 3855208
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/common-runtime-libraries/cae3c93dd55268c8c02dcbab2f60fbc96519eeabb9d23ef8de1e057c704bfce2-libbytecheck_derive-e9ff9b3299712b1d.so",
+      "sha256": "cae3c93dd55268c8c02dcbab2f60fbc96519eeabb9d23ef8de1e057c704bfce2",
+      "bytes": 2981488
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/common-runtime-libraries/052302a153a0a62a4deed00d3a42248e90922003f7bbcea628d63f625137fccb-libbytemuck_derive-cd88e57f209e9138.so",
+      "sha256": "052302a153a0a62a4deed00d3a42248e90922003f7bbcea628d63f625137fccb",
+      "bytes": 3346792
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/common-runtime-libraries/f4872c07656cb79875d1551ae8e1a7166c6fd3e3ccf05257d12410e580e5a6a5-libclap_derive-d47de3d866a03c1b.so",
+      "sha256": "f4872c07656cb79875d1551ae8e1a7166c6fd3e3ccf05257d12410e580e5a6a5",
+      "bytes": 3736240
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/common-runtime-libraries/30ec62386d73f34270bc3a9f456e976c27577f0fbc6d3cbabeac19d6996aac27-libconst_random_macro-d2253aa6e64dd404.so",
+      "sha256": "30ec62386d73f34270bc3a9f456e976c27577f0fbc6d3cbabeac19d6996aac27",
+      "bytes": 533984
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/common-runtime-libraries/cc81e8890b5ecf134267595a68a1513927c7500c18685e395576de55898021eb-libdarling_macro-9c8e3f9f46f69b63.so",
+      "sha256": "cc81e8890b5ecf134267595a68a1513927c7500c18685e395576de55898021eb",
+      "bytes": 4039768
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/common-runtime-libraries/d30b97d2c368e5523ff6b3800bb9d6cc06e4f1dbf2b6da291dbcc522799eb168-libderive_builder_macro-95399672b2ecca78.so",
+      "sha256": "d30b97d2c368e5523ff6b3800bb9d6cc06e4f1dbf2b6da291dbcc522799eb168",
+      "bytes": 3965328
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/common-runtime-libraries/cd1dc2b7abc3b14ac553e793065fba2c3bd4476de558811cdab7e9ecc164c163-libdisplaydoc-6e28776aee1a03cf.so",
+      "sha256": "cd1dc2b7abc3b14ac553e793065fba2c3bd4476de558811cdab7e9ecc164c163",
+      "bytes": 2898704
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/common-runtime-libraries/1e975d7e4dc30103d0fe06ceca981209156e119d3f38df169fcce6bb42502ee4-libdocument_features-b21664db61915e5c.so",
+      "sha256": "1e975d7e4dc30103d0fe06ceca981209156e119d3f38df169fcce6bb42502ee4",
+      "bytes": 623392
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/common-runtime-libraries/746b5c6a38be3abe07ac8a22712a81ae453ca731e3383677935c9a713fe8cf20-libfutures_macro-d44a6f626ad396ef.so",
+      "sha256": "746b5c6a38be3abe07ac8a22712a81ae453ca731e3383677935c9a713fe8cf20",
+      "bytes": 2859136
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/common-runtime-libraries/2f4e7904251b69822f2598491cff14001453cd3a0b446a9e1f3284afef5a5614-libmunge_macro-2f063c8dfaef03bf.so",
+      "sha256": "2f4e7904251b69822f2598491cff14001453cd3a0b446a9e1f3284afef5a5614",
+      "bytes": 2611424
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/common-runtime-libraries/3a70b89a7a5f8f8d5052e3400dd99c6660d38bc0ad0e6aa3d5f3650fdafc9435-liboffice_oxide-95084f0ee00cec8d.so",
+      "sha256": "3a70b89a7a5f8f8d5052e3400dd99c6660d38bc0ad0e6aa3d5f3650fdafc9435",
+      "bytes": 3488784
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/common-runtime-libraries/bd8cd2eafaac67b6c3caae0005c7be07168f7bb817c0cbd3980439457e23f3cc-libpaste-2aa9d12e6c53e118.so",
+      "sha256": "bd8cd2eafaac67b6c3caae0005c7be07168f7bb817c0cbd3980439457e23f3cc",
+      "bytes": 587248
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/common-runtime-libraries/1fa735013ddf9db142dfa05f4ba49d20a3e02f11062e2c441afe3f94b834e9fe-libpastey-f8683f2c20b24513.so",
+      "sha256": "1fa735013ddf9db142dfa05f4ba49d20a3e02f11062e2c441afe3f94b834e9fe",
+      "bytes": 606984
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/common-runtime-libraries/320508447a16f7319e72dc51959abcd96001748e6d436ef21427abfe2cd20e49-libpdf_oxide-5ad47634dc4b6132.so",
+      "sha256": "320508447a16f7319e72dc51959abcd96001748e6d436ef21427abfe2cd20e49",
+      "bytes": 30986528
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/common-runtime-libraries/4b0f8969a89b4166599c76123ae72a3806014d1bba3381866e2dfec308e7ee82-libphf_macros-412f282d0f637c32.so",
+      "sha256": "4b0f8969a89b4166599c76123ae72a3806014d1bba3381866e2dfec308e7ee82",
+      "bytes": 2763888
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/common-runtime-libraries/ac50167cc9dc1bd92081445d50c5d21057ca51cc0009054d1dc085950065879e-libptr_meta_derive-0e7b664dbaa69888.so",
+      "sha256": "ac50167cc9dc1bd92081445d50c5d21057ca51cc0009054d1dc085950065879e",
+      "bytes": 2804592
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/common-runtime-libraries/7a2bc7073b14437db3c5519846a9a8e28c0c3074cf31075aa301e49e18493454-libref_cast_impl-d35a998a127e9ac7.so",
+      "sha256": "7a2bc7073b14437db3c5519846a9a8e28c0c3074cf31075aa301e49e18493454",
+      "bytes": 2571432
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/common-runtime-libraries/6b7e4c463efb35d6f3172eeaf2302a0fc41290f741385e6ff2f3f3729c9cd8d2-librkyv_derive-2200ad03d8ed5e34.so",
+      "sha256": "6b7e4c463efb35d6f3172eeaf2302a0fc41290f741385e6ff2f3f3729c9cd8d2",
+      "bytes": 3827240
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/common-runtime-libraries/29cbe85000366a8d4f555611828ff44c52a20c29f6dc840ab77d7297a56f06cd-librustversion-9ae9f56fbf3f0df8.so",
+      "sha256": "29cbe85000366a8d4f555611828ff44c52a20c29f6dc840ab77d7297a56f06cd",
+      "bytes": 610344
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/common-runtime-libraries/fe11df64a90577444695284190fd48dafcdc727c8e305d055accca9afb15974b-libschemars_derive-04651cd44c404a6f.so",
+      "sha256": "fe11df64a90577444695284190fd48dafcdc727c8e305d055accca9afb15974b",
+      "bytes": 4466736
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/common-runtime-libraries/e9afa5e3fb9dde21c6afdf0a818bc6f71899d127e88b6cce7f1d767793ee15f2-libserde_derive-2f96e5336f6cfdb7.so",
+      "sha256": "e9afa5e3fb9dde21c6afdf0a818bc6f71899d127e88b6cce7f1d767793ee15f2",
+      "bytes": 3974152
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/common-runtime-libraries/8fc5f6289f0b1f4bd6cb0b2c3e32dde5970597849538b9e60b6d80639ab24732-libstrum_macros-671bc2177aaae4c7.so",
+      "sha256": "8fc5f6289f0b1f4bd6cb0b2c3e32dde5970597849538b9e60b6d80639ab24732",
+      "bytes": 3720296
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/common-runtime-libraries/ccfaee895f97e952e3652d766b8e512dee6f8c20c148c4136912edda514b0aa2-libthiserror_impl-3e52250dee96fee9.so",
+      "sha256": "ccfaee895f97e952e3652d766b8e512dee6f8c20c148c4136912edda514b0aa2",
+      "bytes": 3509400
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/common-runtime-libraries/52445d37075ea801dd505971fd9a35fab68b46d6d632f4579ca1f96b4e6ead21-libtokio_macros-81750328c2e5bced.so",
+      "sha256": "52445d37075ea801dd505971fd9a35fab68b46d6d632f4579ca1f96b4e6ead21",
+      "bytes": 3027544
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/common-runtime-libraries/8f7047292c7741c2ba240cebeea265394f0853c5af078ce0fa5324fd1eaaa4f7-libtracing_attributes-f8d7169ba851ed6f.so",
+      "sha256": "8f7047292c7741c2ba240cebeea265394f0853c5af078ce0fa5324fd1eaaa4f7",
+      "bytes": 3574328
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/common-runtime-libraries/371d6797dfdcc648504250612c4eaf06ce6a61b498c46c1f43c10e06aac55ce3-libyoke_derive-9f439434e8a4eee0.so",
+      "sha256": "371d6797dfdcc648504250612c4eaf06ce6a61b498c46c1f43c10e06aac55ce3",
+      "bytes": 3538264
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/common-runtime-libraries/8b786e1ce00708766d32da4aa60ea65fb51f0c58ee0459fc0d85d7ad431fde65-libzerocopy_derive-b3cb7ba76ce10ee4.so",
+      "sha256": "8b786e1ce00708766d32da4aa60ea65fb51f0c58ee0459fc0d85d7ad431fde65",
+      "bytes": 3561272
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/common-runtime-libraries/cba8cfc9a506161f8ae0815c0f601dfb89bdcf590d6d04bb9d1b94c5b1c4d463-libzerofrom_derive-4a7d380eb073a2e7.so",
+      "sha256": "cba8cfc9a506161f8ae0815c0f601dfb89bdcf590d6d04bb9d1b94c5b1c4d463",
+      "bytes": 3743232
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/common-runtime-libraries/f07ce25907df55a305c65eb6ed5213b298fbccd082537a7923efb793221bbcef-libzerovec_derive-320cc3997a89e0e7.so",
+      "sha256": "f07ce25907df55a305c65eb6ed5213b298fbccd082537a7923efb793221bbcef",
+      "bytes": 3109688
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/build-baseline/conformance",
+      "sha256": "711b5af1ac3500e36f0f1bd827d108fb975a088b5e24a8d3a99218d7812ed388",
+      "bytes": 139129584
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/build-baseline/rustx",
+      "sha256": "b218ce4b143ae593bd2450ee0a4b8c7b8b7b40c932a6c08dde204fd1e14fb724",
+      "bytes": 133105512
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/build-baseline/bash-supervisor",
+      "sha256": "0bec7d8218eff7a946dd59f913ba0919c74d529c8b6b312af1f329b201308560",
+      "bytes": 8071208
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/build-baseline/interactive-supervisor",
+      "sha256": "d8a4de9c6be9115d759df8ce3745d5591206216552493468b6bc933056103c1b",
+      "bytes": 8124968
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/build-baseline/host/inspector-host",
+      "sha256": "12f4354c26334358c4d585d5159064c13602730346c661a6439326d31149be25",
+      "bytes": 128075448
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/build-geometry/artifacts/release/deps/librustx-69d6ea2c60a362a0.rlib",
+      "sha256": "c72106cd7f3b0a1b8c930b2d5f109110e1c88c8bc8b362ca934555190d9aebbd",
+      "bytes": 323292320
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/build-geometry/artifacts/release/deps/librustx-69d6ea2c60a362a0.rmeta",
+      "sha256": "8a548b96bfd93ece1e42b56131f6aa52e399212b13e6cc51603f6f246c211bac",
+      "bytes": 113131996
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/build-geometry/artifacts/release/rustx",
+      "sha256": "29f3dfe8b5f3fda988c1fb8b5ddec38d230d3f6125c2632f37a67988f638c0f7",
+      "bytes": 132690144
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/build-geometry/artifacts/release/interactive-supervisor",
+      "sha256": "89eaf52144646a329ae0ddd10d7be00da5cdd629881173023a30e058f0d955e0",
+      "bytes": 8098840
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/build-geometry/artifacts/release/bash-supervisor",
+      "sha256": "4fda45f3e08412fbc59a09086da84ae6ffa1bd04e988326fc3a812bde000a16c",
+      "bytes": 8046664
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/build-geometry/artifacts/release/deps/conformance-24da1f0a9d82f33c",
+      "sha256": "d25cae1955161392e1ecfde60b1fcdf87ee17577ee4531da1dac133391dbd4a1",
+      "bytes": 138743416
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/build-geometry/conformance",
+      "sha256": "d25cae1955161392e1ecfde60b1fcdf87ee17577ee4531da1dac133391dbd4a1",
+      "bytes": 138743416
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/build-geometry/rustx",
+      "sha256": "29f3dfe8b5f3fda988c1fb8b5ddec38d230d3f6125c2632f37a67988f638c0f7",
+      "bytes": 132690144
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/build-geometry/bash-supervisor",
+      "sha256": "4fda45f3e08412fbc59a09086da84ae6ffa1bd04e988326fc3a812bde000a16c",
+      "bytes": 8046664
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/build-geometry/interactive-supervisor",
+      "sha256": "89eaf52144646a329ae0ddd10d7be00da5cdd629881173023a30e058f0d955e0",
+      "bytes": 8098840
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/build-geometry/host/inspector-host",
+      "sha256": "fdfc4d0d9bf53d2a6796527486ddaa27a74ac82b4c65c276204b309ae842af30",
+      "bytes": 127691848
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/build-scoped/artifacts/release/deps/librustx-69d6ea2c60a362a0.rlib",
+      "sha256": "b53c656b3bbd3e76466a9301bd0b4cf26745a130a44aade95556ba00a229a737",
+      "bytes": 323132712
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/build-scoped/artifacts/release/deps/librustx-69d6ea2c60a362a0.rmeta",
+      "sha256": "bde64c2426bf7dbfcf48b97a9905438c717747cdf3fcb4d28b8a691ef7a579cb",
+      "bytes": 113161347
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/build-scoped/artifacts/release/bash-supervisor",
+      "sha256": "ab7e132c189e167cae596f3e175d8c49708633c67625ec5676ad4b9721859d74",
+      "bytes": 8038008
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/build-scoped/artifacts/release/interactive-supervisor",
+      "sha256": "c86cd61b827d591ee11aa3f3e2911e38e88bef837871bcea4de66e168a0e3acb",
+      "bytes": 8089944
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/build-scoped/artifacts/release/rustx",
+      "sha256": "a9a2e8e550a646172aec74e817777dd9f73692efaea345bf25acb08f48391361",
+      "bytes": 132691784
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/build-scoped/artifacts/release/deps/conformance-24da1f0a9d82f33c",
+      "sha256": "6e8ea40f0c64a698aa527b52db9a9a10a2deb516d3863180590bfa553ef358aa",
+      "bytes": 138737320
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/build-scoped/conformance",
+      "sha256": "6e8ea40f0c64a698aa527b52db9a9a10a2deb516d3863180590bfa553ef358aa",
+      "bytes": 138737320
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/build-scoped/rustx",
+      "sha256": "a9a2e8e550a646172aec74e817777dd9f73692efaea345bf25acb08f48391361",
+      "bytes": 132691784
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/build-scoped/bash-supervisor",
+      "sha256": "ab7e132c189e167cae596f3e175d8c49708633c67625ec5676ad4b9721859d74",
+      "bytes": 8038008
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/build-scoped/interactive-supervisor",
+      "sha256": "c86cd61b827d591ee11aa3f3e2911e38e88bef837871bcea4de66e168a0e3acb",
+      "bytes": 8089944
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/build-scoped/host/inspector-host",
+      "sha256": "74adcd52ad62656c2d48f4052ea40347555ffea2fbc6ac5b4b968ae9a37f2088",
+      "bytes": 127683880
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/products/browser-baseline-vs-geometry-v2/1-short-large-geometry/failure.json",
+      "sha256": "c2c4e57116b767ab6808c4ee299976d016d19425fa7deed84484f6441f23cddc",
+      "bytes": 2544980
+    }
+  ]
+}

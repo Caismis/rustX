@@ -1,0 +1,15 @@
+Correctness results: 110 passed, 0 failed; direct root Clippy -D warnings exited 0. This is not FULL CI.
+Source: 1dfdf7e53bf20e1869099578b8f41c434e275961, based on exact 623b41b869a95c888eb04f907cbf607232699a2f.
+Production metadata move: da49cecc037d29f90aa48047c1f2441a4531c83c.
+Test fixture admission correction: d6e850e3bb4d987b4fa439a09890e3aeba579755.
+Nested legacy Trace expectation correction: 1dfdf7e53bf20e1869099578b8f41c434e275961.
+Both test-only corrections were independently reviewed by coordinator before this delivery.
+
+The original O3 library-test build took about 68 minutes. Cargo test filters operate when executing the binary, not when compiling: this --lib harness contains 4,199 tests. All 562 dependency artifacts were fresh; the root used O3/debuginfo0, no incremental cache, a single Cargo job, and default multiple codegen units. Observed workers progressed from opt cgu to lto cgu. Rustc documents default thin local LTO when LTO is unspecified, optimization enabled and multiple codegen units are used: https://doc.rust-lang.org/rustc/codegen-options/index.html#lto . No compiler self-profile was collected, so exact phase costs are not claimed.
+Correctness iterations used the original Cargo-resolved O3 extern rlibs but directly compiled the root at O0/debuginfo0, explicit lto=off, release debug-assertion/overflow behavior, 256 codegen units and a separate /tmp incremental directory, with two-CPU affinity. The original O3 binary and both O0 binaries remain preserved. No O0 timing is proposed.
+
+The original O3 run exposed an invalid test fixture before it reached the reviewed Trace assertion. The intermediate fixture correction retained that assertion and reproduced revision 0 versus 5. All raw failure logs are retained. The final run passed all eight branch/error equivalence tests plus 102 existing regressions, with full event/structural-byte oracles and explicit cursor/Trace checks.
+
+The only eligible existing performance executable is the exact 623 baseline conformance product. No isolated ownership conformance O3 product exists yet. The old O3 unit harness has cfg(test) and the old test source; production-file text equality alone does not allow relabeling its source/build identity. Geometry/scoped contain other changes and are excluded.
+The proposed native-only 18-product protocol is not executed. The original workload/controller/oracle remain fixed. Ordinary turns, late snapshot/verification, reopen/close and whole lifecycle must be reported separately. Sampled memory and process writes are not allocation totals or physical disk traffic. Existing wrapper/build scripts have explicit integration constraints recorded in performance-protocol.json; they must not be silently bypassed.
+No browser replay, performance product, Pi run, Docker storage change, main/PR #485 modification, merge, manual deletion, or archive loop occurred in this work.

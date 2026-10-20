@@ -1,0 +1,163 @@
+{
+  "status": "PROPOSED ONLY; no performance launch or candidate product build in this delivery",
+  "base_commit": "623b41b869a95c888eb04f907cbf607232699a2f",
+  "candidate_commit": "1dfdf7e53bf20e1869099578b8f41c434e275961",
+  "binary_mapping": "binary-mapping.json",
+  "workload_script": "benchmarks/runtime/compare-revisions.py",
+  "runtime_script_sha256": {
+    "compare-revisions.py": "67b8f207f2e61348b84c0bc7fc190c6f40855abc45a0aaf177ed523e7df27c08",
+    "controller.py": "15f783a12b44b79583faedab93040fa1f3679f9893ccbeefb955216bd076938a",
+    "compare-http.mjs": "fd415e3f33da2b99cb8020f28efcf4cdf6b4c0196a32ecb0c354b4b150347e2f",
+    "observer_oracle.py": "354ff938d3c30b9293ce699ed0cef7e74b1932a73e3f41bc0d8d9c07834a7721",
+    "summarize-comparisons.py": "6f7e985ff771d80978f0631042c68a1b8a2eedc118cc7835751f063e8c357870",
+    "build-revision.py": "b1e849eef7c7819cc5db1a0677d24bc5c876615aa0e4c1a1e8ba805c57bfb7ed"
+  },
+  "fake_provider_sha256": "c63f98df95cf30a0cc85127b2684858fba4d49fda2805d56029344f360c97db7",
+  "fixture_harness_sha256": {
+    "tests/common/provider_emulator.rs": "cb055ee1f9c9bc55c8af5cae080bb8564f2417226bacab76159f837261a2e47e",
+    "tests/conformance/agent_loop/runtime_benchmark.rs": "d71e6c80216b128927e09828631135b00b9b64748625fdb9fb2e5e9eb6c660f6",
+    "tests/conformance/agent_loop/runtime_benchmark/aligned.rs": "751fa58a98c9067eecd5e9a6c3eee8b6ec35b8987d1cd9a6f4cdc28915c08133",
+    "tests/conformance/agent_loop/runtime_benchmark/expected_tools.json": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d",
+    "tests/conformance/agent_loop/runtime_benchmark/profiling.rs": "12362c4abf9f80deed923b77855a2529d4aeb427cfffe39d6953cad823de0c66",
+    "tests/conformance/agent_loop/runtime_benchmark/request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+  },
+  "source_tree_policy": "Record full commit/src tree and raw source hashes including test-only differences. No binary identity inference solely from matching production-file text.",
+  "blocks": [
+    {
+      "name": "live-main",
+      "observer_mode": "live-subscriber",
+      "cases": [
+        "short-small",
+        "short-large"
+      ],
+      "pairs": 3,
+      "product_count": 12
+    },
+    {
+      "name": "late-consumer-control",
+      "observer_mode": "no-live-subscriber",
+      "cases": [
+        "short-large"
+      ],
+      "pairs": 3,
+      "product_count": 6
+    }
+  ],
+  "maximum_products": 18,
+  "pair_order": [
+    [
+      "baseline",
+      "candidate"
+    ],
+    [
+      "candidate",
+      "baseline"
+    ],
+    [
+      "baseline",
+      "candidate"
+    ]
+  ],
+  "case_order_within_each_main_pair": [
+    "short-small",
+    "short-large"
+  ],
+  "per_product": {
+    "fresh_process": true,
+    "fresh_native_store": true,
+    "fresh_sibling_local_HTTP_SSE_provider": true,
+    "same_persistent_filesystem_TMPDIR": "/workspace/pr485-study/tmp",
+    "model_time": "2026-10-19 00:00:00",
+    "short_small": {
+      "seed_turns": 8,
+      "measured_turns": 32,
+      "requests": 40
+    },
+    "short_large": {
+      "seed_turns": 64,
+      "measured_turns": 32,
+      "requests": 96
+    }
+  },
+  "oracles": [
+    "all complete ordered wire/native requests versus fixed oracle",
+    "exact late checkpoint/replay and all live subscriber versions/settlements",
+    "all live and reopened requests equal",
+    "all lifecycle endpoints through cleanup, product/provider exit 0"
+  ],
+  "metrics": {
+    "steady": "Per-product measured-turn wall and CPU ticks, read/write accounting, sampled RSS/PSS; aggregate 32 measured turns without treating them as independent product repetitions.",
+    "lifecycle": "Report initialization/seed, measured turns, after-turn verification, late snapshot, shutdown, driver drop, final writer close, reopen verification and cleanup separately. Whole product lifecycle is raw endpoint delta, not subtraction of medians.",
+    "provider": "Sibling provider CPU/wall/I/O separately; product CPU excludes children, process I/O may include already-waited children. Provider teardown/controller total retained separately.",
+    "memory": "Existing stat/smaps_rollup samples are sampled observations, not true peaks; no 1 MiB total-memory assertion.",
+    "statistics": "All three per-case paired repetitions, individual ratios and medians/range; no precision or improvement acceptance claim from n=3; zero CPU tick denominator yields no invented ratio."
+  },
+  "build_plan": {
+    "executed": false,
+    "cwd": "/workspace/pr485-study/metadata-ownership-candidate",
+    "argv": [
+      "cargo",
+      "test",
+      "--release",
+      "--locked",
+      "--offline",
+      "--test",
+      "conformance",
+      "--no-run",
+      "--message-format=json",
+      "-vv",
+      "-j",
+      "2"
+    ],
+    "environment": {
+      "RUSTUP_TOOLCHAIN": "1.98.1",
+      "CARGO_TARGET_DIR": "/workspace/pr485-study/target",
+      "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+      "CARGO_PROFILE_RELEASE_DEBUG": "0",
+      "CARGO_INCREMENTAL": "0",
+      "RUSTFLAGS": "-Copt-level=3 -Cdebuginfo=0",
+      "CARGO_BUILD_JOBS": "2",
+      "TMPDIR": "/workspace/pr485-study/tmp"
+    },
+    "remove_environment_overrides": [
+      "CARGO_ENCODED_RUSTFLAGS",
+      "RUSTC_WRAPPER",
+      "RUSTC_WORKSPACE_WRAPPER",
+      "LD_PRELOAD",
+      "CPUPROFILE",
+      "CARGO_PROFILE_RELEASE_LTO",
+      "CARGO_PROFILE_RELEASE_CODEGEN_UNITS"
+    ],
+    "identity_gate": "Non-cfg(test) product library and conformance must be fresh:false and belong to this checkout. Preserve root lib/rmeta, conformance, bin helpers and required runtime shared libraries. No cargo clean; if cache identity is unexpectedly fresh, retain log and stop before timing.",
+    "upstream_builder_note": "Existing build-revision.py calls cargo clean; do not execute it unchanged under the no-deletion constraint. Reuse its checked_artifacts identity validation on the standard non-clean Cargo invocation."
+  },
+  "outer_orchestration_requirements": [
+    "Published workload/controller/oracle bytes unchanged; register only baseline and ownership artifact maps in an independently reviewable outer adapter.",
+    "Before each controller.run, verify/restore corresponding preserved CARGO_BIN_EXE helper executables/runtime libraries to their compiled paths and record hashes outside the measurement window.",
+    "The existing run-native-cohort.py is hardcoded to the old three candidates and a 16 GiB reserve. It is not directly executable for this candidate at current capacity; any adapter/guard change must be explicit, separately reviewed, and retain the user-authorized 5 GiB hard floor.",
+    "One product/provider pair at a time. No compilation, compression, profiling, browser, or other task timing concurrently.",
+    "Preflight every product and continuously sample disk/process identity. Soft stop at 6 GiB, hard floor 5 GiB. Timeout each full product at 180 seconds and entire cohort at 30 minutes. On any failed oracle/exit/resource stop retain data and stop the cohort; no automatic retries."
+  ],
+  "resources": {
+    "usable_bytes_at_plan": 8169218048,
+    "physical_memory_limit_bytes": 17179869184,
+    "disk_hard_floor_bytes": 5368709120,
+    "disk_soft_stop_bytes": 6442450944,
+    "build_allocation_cap_bytes_proposed": 2147483648,
+    "build_preflight_free_bytes_proposed": 8589934592,
+    "run_evidence_cap_bytes": 805306368,
+    "active_store_tmp_cap_bytes": 268435456,
+    "run_preflight_free_bytes_proposed": 7784628224,
+    "combined_no_cleanup_capacity_envelope_bytes": 9932111872,
+    "observed_prior_allocations_only_not_timings": {
+      "live_short_large_product_max": 31576064,
+      "live_short_small_product_max": 8839168,
+      "no_live_short_large_product_max": 31539200
+    },
+    "prior_layout_projection_for_18_products_bytes": 431726592,
+    "no_delete_or_archive_loop": true,
+    "readiness": "Current free space is below the proposed 8 GiB build entry gate; the O3 candidate artifact is absent. Do not start build/timing under this proposal until capacity/build bounds and the outer adapter are resolved. The original 16 GiB setup target remains unmet."
+  },
+  "browser": "Capacity-blocked; no replay, Docker storage changes, or browser launch in this protocol.",
+  "pi": "Not included; pinned 90d863f7c1183b965f099855715d6e88c7b8a52c remains deferred until Source pairing."
+}

@@ -1,0 +1,118 @@
+{
+  "start_utc": "2026-10-20T06:48:07.996383+00:00",
+  "scope": "Correctness only;no performance or ignored/live/provider/measurement test opt-in",
+  "binary": "/workspace/pr485-study/target/release/deps/rustx-7a147e7c97deabb9",
+  "sha256": "d07a8176229bd785d0f0ca882c603ee80cb62a806fa66b97ad8c4297066d4998",
+  "cargo_artifact": {
+    "reason": "compiler-artifact",
+    "package_id": "path+file:///workspace/pr485-study/metadata-ownership-candidate#rustx@0.1.0",
+    "manifest_path": "/workspace/pr485-study/metadata-ownership-candidate/Cargo.toml",
+    "target": {
+      "kind": [
+        "lib"
+      ],
+      "crate_types": [
+        "lib"
+      ],
+      "name": "rustx",
+      "src_path": "/workspace/pr485-study/metadata-ownership-candidate/src/lib.rs",
+      "edition": "2024",
+      "doc": true,
+      "doctest": true,
+      "test": true
+    },
+    "profile": {
+      "opt_level": "3",
+      "debuginfo": 0,
+      "debug_assertions": false,
+      "overflow_checks": false,
+      "test": true
+    },
+    "features": [],
+    "filenames": [
+      "/workspace/pr485-study/target/release/deps/rustx-7a147e7c97deabb9"
+    ],
+    "executable": "/workspace/pr485-study/target/release/deps/rustx-7a147e7c97deabb9",
+    "fresh": false
+  },
+  "cached_dependency_artifacts": 562,
+  "runs": [
+    {
+      "label": "ownership",
+      "argv": [
+        "/workspace/pr485-study/target/release/deps/rustx-7a147e7c97deabb9",
+        "runtime_client::projection::tests::metadata_ownership_tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "discovered_matching_tests": 8,
+      "start_utc": "2026-10-20T06:48:08.261567+00:00",
+      "available_before": 8975237120,
+      "exit": 101,
+      "end_utc": "2026-10-20T06:48:08.763934+00:00",
+      "minimum_observed_available_bytes": 8975233024,
+      "available_after": 8975220736
+    },
+    {
+      "label": "projection",
+      "argv": [
+        "/workspace/pr485-study/target/release/deps/rustx-7a147e7c97deabb9",
+        "runtime_client::projection::tests::",
+        "--test-threads=1",
+        "--nocapture",
+        "--skip",
+        "runtime_client::projection::tests::metadata_ownership_tests::",
+        "--skip",
+        "::scale::"
+      ],
+      "discovered_matching_tests": 88,
+      "start_utc": "2026-10-20T06:48:08.771488+00:00",
+      "available_before": 8975220736,
+      "exit": 0,
+      "end_utc": "2026-10-20T06:48:10.776965+00:00",
+      "minimum_observed_available_bytes": 8975163392,
+      "available_after": 8975208448
+    },
+    {
+      "label": "checkpoint",
+      "argv": [
+        "/workspace/pr485-study/target/release/deps/rustx-7a147e7c97deabb9",
+        "runtime_client::checkpoint::",
+        "--test-threads=1",
+        "--nocapture",
+        "--skip",
+        "::scale::"
+      ],
+      "discovered_matching_tests": 12,
+      "start_utc": "2026-10-20T06:48:10.779527+00:00",
+      "available_before": 8975208448,
+      "exit": 0,
+      "end_utc": "2026-10-20T06:48:11.782535+00:00",
+      "minimum_observed_available_bytes": 8975204352,
+      "available_after": 8975204352
+    },
+    {
+      "label": "settlement",
+      "argv": [
+        "/workspace/pr485-study/target/release/deps/rustx-7a147e7c97deabb9",
+        "runtime_client::host::tests::settlement_tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "discovered_matching_tests": 2,
+      "start_utc": "2026-10-20T06:48:11.786008+00:00",
+      "available_before": 8975204352,
+      "exit": 0,
+      "end_utc": "2026-10-20T06:48:12.288278+00:00",
+      "minimum_observed_available_bytes": 8975204352,
+      "available_after": 8975200256
+    }
+  ],
+  "guard_floor_bytes": 5368709120,
+  "soft_stop_bytes": 6442450944,
+  "state": "tests-failed",
+  "failed_runs": [
+    "ownership"
+  ],
+  "end_utc": "2026-10-20T06:48:12.290239+00:00"
+}

@@ -1,0 +1,17 @@
+
+running 12 tests
+test runtime_client::checkpoint::budget_tests::checkpoint_proof_matches_structural_eviction_and_bytes_at_the_aggregate_limit ... ok
+test runtime_client::checkpoint::budget_tests::dto_capture_value_decode_matches_original_bytes_at_every_admission_boundary ... ok
+test runtime_client::checkpoint::budget_tests::structural_item_reuses_admission_without_changing_bytes_counts_or_integer_domains ... ok
+test runtime_client::checkpoint::budget_tests::t14_t15_aggregate_budget_defers_bodies_without_losing_actionable_headers_or_cut ... ok
+test runtime_client::checkpoint::budget_tests::t20_checkpoint_encoder_capacity_obeys_its_physical_byte_budget ... ok
+test runtime_client::checkpoint::budget_tests::t20_checkpoint_encoder_preserves_exact_bytes_at_small_budgets ... ok
+test runtime_client::checkpoint::prepared_capability_tests::prepared_capability_matches_original_capture_at_every_remaining_item_budget ... ok
+test runtime_client::checkpoint::prepared_capability_tests::prepared_capability_preserves_large_initial_items_and_exact_rejection_frontiers ... ok
+test runtime_client::checkpoint::prepared_capability_tests::prepared_capability_same_revision_model_and_availability_keep_exact_source_owners ... ok
+test runtime_client::checkpoint::prepared_trace_tests::prepared_trace_keeps_original_dto_normalization_before_cloning ... ok
+test runtime_client::checkpoint::prepared_trace_tests::prepared_trace_matches_original_capture_at_every_remaining_item_budget ... ok
+test runtime_client::checkpoint::prepared_trace_tests::prepared_trace_preserves_original_count_and_invalid_head_frontiers ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 4187 filtered out; finished in 3.35s
+

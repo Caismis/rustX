@@ -1,0 +1,49 @@
+ownership equivalence BaselinePath { captured_eviction: true, fitted: true, forced: false, budget_fallback: false }: 5186 encoded bytes
+
+thread 'runtime_client::projection::tests::metadata_ownership_tests::captured_eviction_matches_baseline_replacement' (40428) panicked at src/runtime_client/projection/metadata_ownership_tests.rs:315:5:
+assertion failed: path.captured_eviction && !path.fitted && !path.forced &&
+    !path.budget_fallback
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+   1: core::panicking::panic_fmt
+   2: core::panicking::panic
+   3: rustx::runtime_client::projection::tests::metadata_ownership_tests::captured_eviction_matches_baseline_replacement
+   4: <rustx::runtime_client::projection::tests::metadata_ownership_tests::captured_eviction_matches_baseline_replacement::{closure#0} as core::ops::function::FnOnce<()>>::call_once
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+ownership equivalence BaselinePath { captured_eviction: false, fitted: true, forced: false, budget_fallback: false }: 5727 encoded bytes
+ownership equivalence BaselinePath { captured_eviction: false, fitted: true, forced: true, budget_fallback: false }: 11759 encoded bytes
+
+thread 'runtime_client::projection::tests::metadata_ownership_tests::forced_replacement_preserves_owned_metadata_when_inner_fields_are_cleared' (40432) panicked at src/runtime_client/projection/metadata_ownership_tests.rs:298:5:
+assertion failed: path.forced && !path.captured_eviction && !path.fitted &&
+    !path.budget_fallback
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+   1: core::panicking::panic_fmt
+   2: core::panicking::panic
+   3: rustx::runtime_client::projection::tests::metadata_ownership_tests::forced_replacement_preserves_owned_metadata_when_inner_fields_are_cleared
+   4: <rustx::runtime_client::projection::tests::metadata_ownership_tests::forced_replacement_preserves_owned_metadata_when_inner_fields_are_cleared::{closure#0} as core::ops::function::FnOnce<()>>::call_once
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+ownership equivalence BaselinePath { captured_eviction: false, fitted: true, forced: false, budget_fallback: false }: 11759 encoded bytes
+
+thread 'runtime_client::projection::tests::metadata_ownership_tests::normal_encoding_preserves_wire_metadata_trace_cursors_and_event_order' (40433) panicked at src/runtime_client/projection/metadata_ownership_tests.rs:267:5:
+assertion failed: !path.captured_eviction && !path.fitted && !path.forced &&
+    !path.budget_fallback
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+   1: core::panicking::panic_fmt
+   2: core::panicking::panic
+   3: rustx::runtime_client::projection::tests::metadata_ownership_tests::normal_encoding_preserves_wire_metadata_trace_cursors_and_event_order
+   4: <rustx::runtime_client::projection::tests::metadata_ownership_tests::normal_encoding_preserves_wire_metadata_trace_cursors_and_event_order::{closure#0} as core::ops::function::FnOnce<()>>::call_once
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+ownership equivalence BaselinePath { captured_eviction: false, fitted: true, forced: false, budget_fallback: false }: 11759 encoded bytes
+
+thread 'runtime_client::projection::tests::metadata_ownership_tests::provisional_encoding_budget_triggers_the_same_replacement' (40434) panicked at src/runtime_client/projection/metadata_ownership_tests.rs:360:5:
+assertion failed: path.budget_fallback && !path.captured_eviction && !path.fitted &&
+    !path.forced
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+   1: core::panicking::panic_fmt
+   2: core::panicking::panic
+   3: rustx::runtime_client::projection::tests::metadata_ownership_tests::provisional_encoding_budget_triggers_the_same_replacement
+   4: <rustx::runtime_client::projection::tests::metadata_ownership_tests::provisional_encoding_budget_triggers_the_same_replacement::{closure#0} as core::ops::function::FnOnce<()>>::call_once
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.

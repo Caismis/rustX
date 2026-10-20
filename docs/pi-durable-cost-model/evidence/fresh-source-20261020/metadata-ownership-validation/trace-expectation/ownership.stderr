@@ -1,0 +1,5 @@
+ownership equivalence BaselinePath { captured_eviction: true, fitted: false, forced: false, budget_fallback: false }: 5828 encoded bytes
+ownership equivalence BaselinePath { captured_eviction: false, fitted: true, forced: false, budget_fallback: false }: 5837 encoded bytes
+ownership equivalence BaselinePath { captured_eviction: false, fitted: false, forced: true, budget_fallback: false }: 16363 encoded bytes
+ownership equivalence BaselinePath { captured_eviction: false, fitted: false, forced: false, budget_fallback: false }: 21233 encoded bytes
+ownership equivalence BaselinePath { captured_eviction: false, fitted: false, forced: false, budget_fallback: true }: 16363 encoded bytes

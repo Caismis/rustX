@@ -1,0 +1,48 @@
+From d6e850e3bb4d987b4fa439a09890e3aeba579755 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?=E6=B1=9F=E6=B6=9B=20=E8=94=A1?= <caismislive@gmail.com>
+Date: Tue, 20 Oct 2026 07:04:15 +0000
+Subject: [PATCH] test(runtime-client): use valid ownership metadata fixtures
+
+Use immutable ContentRef revision 1 within its safe-integer schema. Keep wide u64 coverage in the unconstrained native domain revision map so ordinary fixtures reach their intended encoding path. Explain independent branch-witness flags for Clippy.
+
+Original O3 failures and Clippy output retained. Trace-cut expectation is deliberately unchanged here for separate reproduction and correction; no production code changes.
+---
+ src/runtime_client/projection/metadata_ownership_tests.rs | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/src/runtime_client/projection/metadata_ownership_tests.rs b/src/runtime_client/projection/metadata_ownership_tests.rs
+index f5cfa6ab..b0d15304 100644
+--- a/src/runtime_client/projection/metadata_ownership_tests.rs
++++ b/src/runtime_client/projection/metadata_ownership_tests.rs
+@@ -11,6 +11,7 @@ use crate::runtime_client::content::{
+ };
+ 
+ #[derive(Debug, Default)]
++#[allow(clippy::struct_excessive_bools)] // Independent branch witnesses can overlap.
+ struct BaselinePath {
+     captured_eviction: bool,
+     fitted: bool,
+@@ -122,7 +123,7 @@ fn binding(draft: &PublicationDraft, message: &MessageBlock, path: Vec<String>)
+             },
+             representation: ContentRepresentation::Utf8Text,
+             version: 1,
+-            content_revision: u64::MAX,
++            content_revision: 1,
+             readable_end: 7,
+         },
+         deferred: true,
+@@ -130,6 +131,11 @@ fn binding(draft: &PublicationDraft, message: &MessageBlock, path: Vec<String>)
+ }
+ 
+ fn add_owned_metadata(draft: &mut PublicationDraft) {
++    draft
++        .seed
++        .read_cut
++        .domain_revisions
++        .insert("metadata-ownership-wide-native".into(), u64::MAX);
+     let message = compactable_user("metadata-ownership-message");
+     let evidence = binding(
+         draft,
+-- 
+2.52.0
+

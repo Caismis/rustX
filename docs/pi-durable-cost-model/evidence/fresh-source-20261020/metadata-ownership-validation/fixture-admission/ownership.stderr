@@ -1,0 +1,19 @@
+ownership equivalence BaselinePath { captured_eviction: true, fitted: false, forced: false, budget_fallback: false }: 5828 encoded bytes
+ownership equivalence BaselinePath { captured_eviction: false, fitted: true, forced: false, budget_fallback: false }: 5837 encoded bytes
+ownership equivalence BaselinePath { captured_eviction: false, fitted: false, forced: true, budget_fallback: false }: 16363 encoded bytes
+ownership equivalence BaselinePath { captured_eviction: false, fitted: false, forced: false, budget_fallback: false }: 21233 encoded bytes
+
+thread 'runtime_client::projection::tests::metadata_ownership_tests::normal_encoding_preserves_wire_metadata_trace_cursors_and_event_order' (41172) panicked at src/runtime_client/projection/metadata_ownership_tests.rs:289:5:
+assertion `left == right` failed
+  left: Some(CheckpointReadCut { canonical_foreground: Some(CanonicalForegroundReadCut { locator: ByLedgerPosition { position: 1 }, total: 1 }), live_publication: None, conversation_id: ConversationId("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"), activation_id: None, revision: 0, through: 3, source_cut: Some(ObservationReadCut { read: ConversationReadCut { conversation_id: ConversationId("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"), journal: 3, transcript: 1, mutation_revision: 0, ledger_through: 1, surface_revision: SurfaceRevision(1), transcript_total: 1, pending_through: 0, pending_total: 0 }, ledger_through: 1, transcript_total: 1, surface_revision: SurfaceRevision(1), inherited_through: TranscriptCursor(0) }), domain_revisions: {"attempt": 4, "context": 3, "messages": 1, "metadata-ownership-wide-native": 18446744073709551615, "todos": 1, "trace": 3, "transcript": 1}, collection_cuts: {} })
+ right: Some(CheckpointReadCut { canonical_foreground: Some(CanonicalForegroundReadCut { locator: ByLedgerPosition { position: 1 }, total: 1 }), live_publication: None, conversation_id: ConversationId("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"), activation_id: None, revision: 5, through: 3, source_cut: Some(ObservationReadCut { read: ConversationReadCut { conversation_id: ConversationId("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"), journal: 3, transcript: 1, mutation_revision: 0, ledger_through: 1, surface_revision: SurfaceRevision(1), transcript_total: 1, pending_through: 0, pending_total: 0 }, ledger_through: 1, transcript_total: 1, surface_revision: SurfaceRevision(1), inherited_through: TranscriptCursor(0) }), domain_revisions: {"attempt": 4, "context": 3, "messages": 1, "metadata-ownership-wide-native": 18446744073709551615, "todos": 1, "trace": 3, "transcript": 1}, collection_cuts: {} })
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+   1: core::panicking::panic_fmt
+   2: core::panicking::assert_failed_inner
+   3: core::panicking::assert_failed::<core::option::Option<&rustx::runtime_client::checkpoint::CheckpointReadCut>, core::option::Option<&rustx::runtime_client::checkpoint::CheckpointReadCut>>
+   4: rustx::runtime_client::projection::tests::metadata_ownership_tests::normal_encoding_preserves_wire_metadata_trace_cursors_and_event_order
+   5: rustx::runtime_client::projection::tests::metadata_ownership_tests::normal_encoding_preserves_wire_metadata_trace_cursors_and_event_order::{closure#0}
+   6: <rustx::runtime_client::projection::tests::metadata_ownership_tests::normal_encoding_preserves_wire_metadata_trace_cursors_and_event_order::{closure#0} as core::ops::function::FnOnce<()>>::call_once
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+ownership equivalence BaselinePath { captured_eviction: false, fitted: false, forced: false, budget_fallback: true }: 16363 encoded bytes

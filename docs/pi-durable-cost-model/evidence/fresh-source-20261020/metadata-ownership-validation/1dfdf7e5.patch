@@ -1,0 +1,41 @@
+From 1dfdf7e53bf20e1869099578b8f41c434e275961 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?=E6=B1=9F=E6=B6=9B=20=E8=94=A1?= <caismislive@gmail.com>
+Date: Tue, 20 Oct 2026 07:15:30 +0000
+Subject: [PATCH] test(runtime-client): preserve the legacy nested Trace cut
+
+Capture the nested checkpoint read cut before encoding. Verify that its Trace retains this legacy cut even though checkpoint cursor stamping advances its read-cut revision. Keep outer and root Trace checks against the new metadata cut.
+
+Retained O0 reproduction on d6e850e3: 7 ownership cases passed; the single failure compared nested revision 0 with outer revision 5. Production code unchanged; corrected-source validation follows separately.
+---
+ src/runtime_client/projection/metadata_ownership_tests.rs | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/src/runtime_client/projection/metadata_ownership_tests.rs b/src/runtime_client/projection/metadata_ownership_tests.rs
+index b0d15304..eef55dfa 100644
+--- a/src/runtime_client/projection/metadata_ownership_tests.rs
++++ b/src/runtime_client/projection/metadata_ownership_tests.rs
+@@ -269,6 +269,12 @@ fn equivalent_error(draft: PublicationDraft) -> RuntimeClientError {
+ fn normal_encoding_preserves_wire_metadata_trace_cursors_and_event_order() {
+     let draft = traced_draft();
+     let next = draft.seed.cursor.get() + 1;
++    let RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } = &draft.events[1] else {
++        panic!("fixture contains a nested checkpoint");
++    };
++    // Nested Trace stamping precedes the legacy checkpoint cursor rewrite.
++    let nested_trace_cut = checkpoint.read_cut.clone();
++    assert_ne!(nested_trace_cut.revision, next);
+     let (output, path) = equivalent_success(draft);
+     assert!(!path.captured_eviction && !path.fitted && !path.forced && !path.budget_fallback);
+     let RuntimeClientEvent::ProjectionTransition { events, metadata } = &output.event else {
+@@ -288,7 +294,7 @@ fn normal_encoding_preserves_wire_metadata_trace_cursors_and_event_order() {
+     assert!(!checkpoint.snapshot.trace.records.is_empty());
+     assert_eq!(
+         checkpoint.snapshot.trace.read_cut.as_ref(),
+-        Some(&metadata.read_cut)
++        Some(&nested_trace_cut)
+     );
+     assert_eq!(
+         output.seed.snapshot.trace.read_cut.as_ref(),
+-- 
+2.52.0
+

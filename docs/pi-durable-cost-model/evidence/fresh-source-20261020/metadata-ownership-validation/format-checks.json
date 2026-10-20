@@ -1,0 +1,38 @@
+[
+  {
+    "argv": [
+      "cargo",
+      "fmt",
+      "--all",
+      "--",
+      "--check"
+    ],
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "rustfmt",
+      "--edition",
+      "2024",
+      "--check",
+      "src/runtime_client/projection/metadata_ownership_tests.rs"
+    ],
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "diff",
+      "--check",
+      "623b41b869a95c888eb04f907cbf607232699a2f",
+      "HEAD"
+    ],
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+  }
+]

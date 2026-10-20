@@ -1,0 +1,21 @@
+
+running 8 tests
+test runtime_client::projection::tests::metadata_ownership_tests::authoritative_checkpoint_budget_preserves_the_existing_failure ... ok
+test runtime_client::projection::tests::metadata_ownership_tests::captured_eviction_matches_baseline_replacement ... FAILED
+test runtime_client::projection::tests::metadata_ownership_tests::existing_cursor_and_journal_failures_remain_identical ... ok
+test runtime_client::projection::tests::metadata_ownership_tests::final_transition_budget_preserves_the_existing_failure ... ok
+test runtime_client::projection::tests::metadata_ownership_tests::fitting_evicts_loaded_messages_and_keeps_the_same_finite_fallback ... ok
+test runtime_client::projection::tests::metadata_ownership_tests::forced_replacement_preserves_owned_metadata_when_inner_fields_are_cleared ... FAILED
+test runtime_client::projection::tests::metadata_ownership_tests::normal_encoding_preserves_wire_metadata_trace_cursors_and_event_order ... FAILED
+test runtime_client::projection::tests::metadata_ownership_tests::provisional_encoding_budget_triggers_the_same_replacement ... FAILED
+
+failures:
+
+failures:
+    runtime_client::projection::tests::metadata_ownership_tests::captured_eviction_matches_baseline_replacement
+    runtime_client::projection::tests::metadata_ownership_tests::forced_replacement_preserves_owned_metadata_when_inner_fields_are_cleared
+    runtime_client::projection::tests::metadata_ownership_tests::normal_encoding_preserves_wire_metadata_trace_cursors_and_event_order
+    runtime_client::projection::tests::metadata_ownership_tests::provisional_encoding_budget_triggers_the_same_replacement
+
+test result: FAILED. 4 passed; 4 failed; 0 ignored; 0 measured; 4191 filtered out; finished in 0.25s
+

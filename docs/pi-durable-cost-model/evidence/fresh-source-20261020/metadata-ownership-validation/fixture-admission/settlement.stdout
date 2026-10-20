@@ -1,0 +1,7 @@
+
+running 2 tests
+test runtime_client::host::tests::settlement_tests::projection_settled_joins_drained_activation_before_eligible_baseline ... ok
+test runtime_client::host::tests::settlement_tests::projection_settled_joins_encoding_before_model_baseline ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 4197 filtered out; finished in 0.42s
+

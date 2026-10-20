@@ -1,0 +1,54 @@
+[
+  {
+    "role": "baseline-product",
+    "eligible_for_proposed_measurement": true,
+    "source_commit": "623b41b869a95c888eb04f907cbf607232699a2f",
+    "src_tree": "19ff7d6bd64993a6b9fc08bbcd687787dacfe08e",
+    "binary": "/workspace/pr485-study/evidence/build-baseline/conformance",
+    "sha256": "711b5af1ac3500e36f0f1bd827d108fb975a088b5e24a8d3a99218d7812ed388",
+    "library_sha256": "c529acd9a2f6d18fb297e0c38facfdd46597ce04e1c44890d0048ed9e99dffb6",
+    "build": {
+      "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+      "opt_level": 3,
+      "debuginfo": 0,
+      "features": [],
+      "product_library_cfg_test": false,
+      "root_artifacts_fresh": false
+    },
+    "reuse_rule": "Rehash immediately before each fresh same-machine baseline sample; do not reuse previous timing results."
+  },
+  {
+    "role": "ownership-product",
+    "eligible_for_proposed_measurement": false,
+    "source_commit": "1dfdf7e53bf20e1869099578b8f41c434e275961",
+    "src_tree": "6b4e4e4b47592ab9369c364574331daac923ca4e",
+    "binary": null,
+    "sha256": null,
+    "status": "No matching optimized conformance product exists yet. Must build exact reviewed commit with ordinary non-cfg(test) library and record fresh:false, full Cargo/rustc command, source tree, rlib and executable SHA before timing."
+  },
+  {
+    "role": "original-candidate-O3-library-test",
+    "eligible_for_proposed_measurement": false,
+    "source_commit": "da49cecc037d29f90aa48047c1f2441a4531c83c",
+    "binary": "/workspace/pr485-study/target/release/deps/rustx-7a147e7c97deabb9",
+    "sha256": "d07a8176229bd785d0f0ca882c603ee80cb62a806fa66b97ad8c4297066d4998",
+    "status": "Wrong target: cfg(test) root library, old uncorrected test source. Production-file equality does not equate its build/source identity with the corrected conformance product."
+  },
+  {
+    "role": "corrected-candidate-O0-library-test",
+    "eligible_for_proposed_measurement": false,
+    "source_commit": "1dfdf7e53bf20e1869099578b8f41c434e275961",
+    "binary": "/workspace/pr485-study/evidence/metadata-ownership-correctness-20261020/trace-expectation/root-artifacts/rustx-7a147e7c97deabb9",
+    "sha256": "fb0eb1e4b1e28a87a6240c74d9bc937265cebc7680e407ecbda684e4a297b77e",
+    "status": "Correctness only: root O0/debuginfo0/lto-off; cached O3 externs. Never time as a production candidate."
+  },
+  {
+    "role": "geometry/scoped-products",
+    "eligible_for_proposed_measurement": false,
+    "source_commits": [
+      "89d6b618eeba8afaf4b95af4406057330baa60a6",
+      "31668f7a74b63446c538e00ed41ebfc42f0bc1a8"
+    ],
+    "status": "Contain other production changes and do not implement this isolated ownership candidate."
+  }
+]

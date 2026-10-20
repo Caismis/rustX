@@ -1,0 +1,2 @@
+{"$message_type":"artifact","artifact":"/workspace/pr485-study/evidence/metadata-ownership-correctness-20261020/trace-expectation/root-artifacts/rustx-7a147e7c97deabb9.d","emit":"dep-info"}
+{"$message_type":"artifact","artifact":"/workspace/pr485-study/evidence/metadata-ownership-correctness-20261020/trace-expectation/root-artifacts/rustx-7a147e7c97deabb9","emit":"link"}
