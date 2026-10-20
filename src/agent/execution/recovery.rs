@@ -178,7 +178,7 @@ impl SemanticGenerationRecovery {
     }
 }
 
-impl<'a> AgentExecution<'a> {
+impl AgentExecution<'_> {
     /// Replays the currently frozen logical-step semantics for another actual
     /// request. No Context Assembly, status generation, `FreshInbound`
     /// admission, contributor evaluation, or live-state sampling occurs here.

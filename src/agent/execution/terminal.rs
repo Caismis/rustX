@@ -75,7 +75,7 @@ impl From<ConversationError> for CanonicalCommitError {
     }
 }
 
-impl<'a> AgentExecution<'a> {
+impl AgentExecution<'_> {
     /// The `AttemptFailed` terminal of a durable-authority failure: the
     /// durable Message Ledger / Pending Inbound Inbox rejected a required
     /// durable operation of the active attempt. The failure is recorded on

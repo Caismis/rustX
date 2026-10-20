@@ -117,7 +117,7 @@ impl RequestMeasurements {
         self.observed_request_identity = None;
     }
 }
-impl<'a> AgentExecution<'a> {
+impl AgentExecution<'_> {
     /// The one cancellation-vs-start linearization point of every model
     /// turn (Issue #12, M9b): the first turn, every tool→model
     /// continuation, every recovered continuation, every transient retry, and

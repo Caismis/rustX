@@ -31,7 +31,7 @@ pub(super) struct OpenPublication {
     terminal_committed: bool,
 }
 
-impl<'a> AgentExecution<'a> {
+impl AgentExecution<'_> {
     /// Commits **C**: the assembled Assistant message joins canonical history
     /// as one compound durable transition with its publication stream.
     ///

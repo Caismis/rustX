@@ -281,7 +281,7 @@ impl ProgressReporter for ForegroundProgressFanout<'_> {
     }
 }
 
-impl<'a> AgentExecution<'a> {
+impl AgentExecution<'_> {
     /// Preflights every model-issued tool call of the turn.
     ///
     /// An impossible canonical identity mismatch or unregistered tool is a

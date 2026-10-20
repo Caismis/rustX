@@ -20,7 +20,7 @@ use crate::runtime::types::RuntimeError;
 /// plus the measurements the completion event reports.
 struct CompletedCompaction;
 
-impl<'a> AgentExecution<'a> {
+impl AgentExecution<'_> {
     /// Runs one compaction: plan, summarize, verify progress and fit, and
     /// commit immutable typed checkpoint content and its durable activation.
     ///

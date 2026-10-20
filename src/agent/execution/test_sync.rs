@@ -535,7 +535,7 @@ pub(super) struct ExecutionPauses {
 
 use super::AgentExecution;
 
-impl<'a> AgentExecution<'a> {
+impl AgentExecution<'_> {
     /// Installs the test-only start-boundary pause (Issue #12, M9b
     /// deterministic race tests).
     #[cfg(test)]

@@ -132,7 +132,7 @@ impl FrozenCarryover {
     }
 }
 
-impl<'a> AgentExecution<'a> {
+impl AgentExecution<'_> {
     /// Prepares the next model turn without committing anything (Issue #12,
     /// M9b).
     ///

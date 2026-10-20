@@ -41,7 +41,7 @@ pub(super) struct ModelInvocation {
     pub(super) terminal: StreamTerminal,
 }
 
-impl<'a> AgentExecution<'a> {
+impl AgentExecution<'_> {
     /// Consumes one started model invocation: sends the exact request that
     /// crossed the durable start frontier, assembles its provisional stream
     /// under the identity from that same snapshot, and returns the complete
