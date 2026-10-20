@@ -26,6 +26,11 @@ on:
 permissions:
   contents: read
 
+# Artifacts are built once and consumed by other jobs, so every Node setup
+# must use the same exact patch even when runners cache different releases.
+env:
+  NODE_VERSION: "24.22.0"
+
 # A newer run for the same pull request (a push, or a label) supersedes its
 # unfinished predecessor. main, scheduled and dispatched runs each form their
 # own group and are never cancelled; another pull request never shares one.
@@ -794,7 +799,7 @@ jobs:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: ${{ env.NODE_VERSION }}
       - name: Install pinned protocol toolchain
         working-directory: protocol/app-server
         run: |
@@ -831,7 +836,7 @@ jobs:
         run: cargo build --bin interactive-supervisor --bin rustx --locked
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: ${{ env.NODE_VERSION }}
       - name: Install pinned Node dependencies
         run: |
           corepack enable
@@ -887,7 +892,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: ${{ env.NODE_VERSION }}
       - name: Install pinned browser toolchain
         working-directory: web-console
         run: |
@@ -954,7 +959,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: ${{ env.NODE_VERSION }}
       - name: Install pinned Web dependencies
         working-directory: web-console
         run: |
@@ -1014,7 +1019,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: ${{ env.NODE_VERSION }}
       - name: Install pinned browser toolchain
         working-directory: web-console
         run: |
@@ -1084,7 +1089,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: ${{ env.NODE_VERSION }}
       - name: Install pinned browser toolchain
         working-directory: web-console
         run: |
