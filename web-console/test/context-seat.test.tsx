@@ -171,7 +171,7 @@ it('real acknowledgement releases its gesture while explicit checkpoint repair f
   expect(count()).toBe(2);
 });
 
-it('a committed checkpoint owns the completed notice even outside the loaded history window', async () => {
+it('a committed checkpoint leaves the live status seat, including after remount', async () => {
   server.held.add('context/compact');
   const view = render(<ContextSeat client={server.client} sessionId="A"/>);
   compact(); await server.waitFor('context/compact', 1);
@@ -183,10 +183,10 @@ it('a committed checkpoint owns the completed notice even outside the loaded his
       tokens_before: { input_tokens: '100', source: 'provider_reported' }, estimated_tokens_after: '20' },
   });
   expect(server.client.getSnapshot().views.A.compactionRequest?.status).toBe('succeeded');
-  expect(view.container.querySelector('[data-compaction-checkpoint="checkpoint-outside-window"]')).not.toBeNull();
+  expect(view.container.innerHTML).toBe('');
   // A new mounting (as after navigating back to this conversation) cannot
   // turn the immutable historical checkpoint into a composer status again.
   view.unmount();
   const again = render(<ContextSeat client={server.client} sessionId="A"/>);
-  expect(again.container.querySelector('[data-compaction-checkpoint="checkpoint-outside-window"]')).not.toBeNull();
+  expect(again.container.innerHTML).toBe('');
 });

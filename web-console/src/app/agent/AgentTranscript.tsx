@@ -11,6 +11,7 @@ import { useConversationPreferences } from '../conversation-preferences';
 import { useTranslation } from '../../locale/react';
 import { useContext, useState, type ReactNode } from 'react';
 import { turnPresentation } from '../../bindings/turn-presentation';
+import { compactionPlacement } from '../../bindings/compaction-placement';
 import { isFinalTurnMessage, turnProcesses } from '../../bindings/turn-process';
 import { stepActivity, stepGroups, type StepPiece } from '../../bindings/step-groups';
 import { StepGroup } from '../../presentation/agent/StepGroup';
@@ -40,6 +41,7 @@ import { useContentSource } from './ObservationSource';
 import { SourceContent } from './SourceContent';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import type { PublicationHead } from '../../client/publication-heads';
+import type { RuntimeClientProjectionHeadView } from '../../../../protocol/app-server/v51';
 /** Standalone Tool-result bodies are suppressed: the native call projection
  * already renders their content beside the call. Suppressing a body does not
  * erase the entry's authoritative transcript position, so a `PostToolBatch`
@@ -67,7 +69,7 @@ export interface RequestFeedback {
   messages: ReadonlyMap<string, ReactNode>;
   attempts: ReadonlyMap<string, ReactNode>;
 }
-export function AgentTranscript({ snapshot, history, publicationHeads = [], retrying = false, loadEarlier, loadLater, onHistorical, historicalDisabled, lineageSwitchSafe = false, forkPoint, onOpenSource, sourceDisabled, requestFeedback, compaction, workflows }: { snapshot: Pick<RuntimeClientSnapshot, 'messages' | 'attempt' | 'transcript' | 'statuses' | 'conversation_id'> & Partial<Pick<RuntimeClientSnapshot,'message_descriptors'|'publication_settlements'|'pending_interactions'>>; history?: TranscriptCache; publicationHeads?: readonly PublicationHead[]; retrying?: boolean; loadEarlier?: () => void; loadLater?: () => void | Promise<void>; onHistorical?: (action: ResponseAction, response: CompletedResponseView) => void; historicalDisabled?: boolean; lineageSwitchSafe?: boolean; forkPoint?: ForkPointInfo; onOpenSource?: (origin: ForkOrigin) => void; sourceDisabled?: boolean; requestFeedback?: RequestFeedback; compaction?: ReactNode; workflows?: RuntimeClientSnapshot['workflows'] }) {
+export function AgentTranscript({ snapshot, history, publicationHeads = [], retrying = false, loadEarlier, loadLater, onHistorical, historicalDisabled, lineageSwitchSafe = false, forkPoint, onOpenSource, sourceDisabled, requestFeedback, compactions = [], contextActivity, workflows }: { snapshot: Pick<RuntimeClientSnapshot, 'messages' | 'attempt' | 'transcript' | 'statuses' | 'conversation_id'> & Partial<Pick<RuntimeClientSnapshot,'message_descriptors'|'publication_settlements'|'pending_interactions'>>; history?: TranscriptCache; publicationHeads?: readonly PublicationHead[]; retrying?: boolean; loadEarlier?: () => void; loadLater?: () => void | Promise<void>; onHistorical?: (action: ResponseAction, response: CompletedResponseView) => void; historicalDisabled?: boolean; lineageSwitchSafe?: boolean; forkPoint?: ForkPointInfo; onOpenSource?: (origin: ForkOrigin) => void; sourceDisabled?: boolean; requestFeedback?: RequestFeedback; compactions?: readonly { head: RuntimeClientProjectionHeadView; content: ReactNode }[]; contextActivity?: ReactNode; workflows?: RuntimeClientSnapshot['workflows'] }) {
   const tx = useTranslation();
   const receiver = useContext(AgentConversationContext);
   const isUser = (message: MessageBlock) => isUserBubble(message, receiver?.parent_agent_id);
@@ -123,8 +125,12 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
     const list = workflowSeats.get(entry.cursor) ?? []; list.push(run); workflowSeats.set(entry.cursor, list); return false;
   });
   const workflowPanels = (runs: typeof unseated) => runs.map(run => <WorkflowRunPanel key={workflowKey(run.id)} run={run} pending={snapshot.pending_interactions}/>);
+  const compactionBoundaries = new Set(compactions.flatMap(({ head }) => {
+    const next = entries.find(entry => BigInt(entry.cursor) > BigInt(head.transcript_anchor));
+    return next ? [next.cursor] : [];
+  }));
   const steps = stepGroups(entries, entry => hasBody(entry) && !toldByCall(entry),
-    entry => entry.item.type === 'message' && !!requestFeedback?.messages.has(entry.item.message.id));
+    entry => compactionBoundaries.has(entry.cursor) || entry.item.type === 'message' && !!requestFeedback?.messages.has(entry.item.message.id));
   const toolsOf = (entry: RuntimeClientTranscriptEntry) => (entry.tool_calls ?? []).map(tool => history?.window || tool.state.type === 'settled' ? tool : snapshot.attempt?.foreground?.find(live => sameToolOccurrence(live, tool) && (tool.metadata_ref == null || live.metadata_ref == null || live.metadata_ref.conversation_id === tool.metadata_ref.conversation_id)) ?? tool);
   const liveGroup = (tools: readonly ForegroundToolExecution[], reasoning?: string) => {
     const active = tools.filter(tool => tool.state.type !== 'settled').at(-1);
@@ -207,7 +213,7 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
         {descriptor.completed_response.usage && <TurnUsage usage={descriptor.completed_response.usage} models={descriptor.completed_response.models??[]}/>}
         <MessageTime time={descriptor.completed_response.completed_at}/>
       </div>);
-  const flow = [...turnPresentation(entries, forkPoint ? { ...(history?.page ?? snapshot.transcript), inherited_through: forkPoint.through } : undefined, snapshot.conversation_id),
+  const flow = [...compactionPlacement(turnPresentation(entries, forkPoint ? { ...(history?.page ?? snapshot.transcript), inherited_through: forkPoint.through } : undefined, snapshot.conversation_id), compactions, entries, snapshot.transcript, history),
       ...(!history?.window ? messages.filter(message => !durableIds.has(message.id) && message.role !== 'tool'
         && !(message.role === 'user' && message.kind && message.kind !== 'message')).map(message => ({kind:'canonical' as const,message})) : []),
       ...(streaming && !durableIds.has(streaming.message_id) && !settledPublications.has(streaming.message_id) ? [{ kind: 'streaming' as const, streaming }] : [])];
@@ -224,6 +230,7 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
     {history?.error && <p role="alert">{history.error}</p>}
     {!retrying && !messages.length && !entries.length && !runs.length && <Feedback kind="empty" title={tx('agent:agent-transcript.ready-for-a-task')}><p>{tx('agent:agent-transcript.what-would-you-like-to-work-on')}</p></Feedback>}
     {nodes.map(node => {
+      if (node.kind === 'compaction') return <div className={css.flowItem} key={`compaction:${node.marker.head.activation_id}`} data-chat-anchor-key={`compaction:${node.marker.head.activation_id}`} data-compaction-anchor={node.marker.head.transcript_anchor}>{node.marker.content}</div>;
       if (node.kind === 'continuation') return <TranscriptContinuation key="history-continuation" cursor={continuation!} loading={!!history?.loading} load={loadLater!}/>;
       if (node.kind === 'fork-point') return <ForkPoint key="fork-point" point={forkPoint!} disabled={sourceDisabled ?? historicalDisabled} onOpen={onOpenSource}/>;
       if (node.kind === 'canonical') {
@@ -312,7 +319,7 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
     {runningAttempt && <RunningStatus key={attemptOwnerKey({conversation_id:snapshot.conversation_id,...runningAttempt})} startTime={startTime !== undefined && Number.isFinite(startTime) ? startTime : undefined}/>}
     {workflowPanels(unseated)}
     {!!workflows?.omitted_runs && <p>{tx('common:workflow.omitted-runs', { count: workflows.omitted_runs })}</p>}
-    {compaction}
+    {contextActivity}
   </div>;
 }
 

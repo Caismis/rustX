@@ -8,6 +8,8 @@ import { shallowEqual, useClientSelector } from '../../client/selectors';
 import { useModelRetryFeedback } from './ModelRetry';
 import { AgentTranscript } from './AgentTranscript';
 import { ContextSeat } from './ContextSeat';
+import { CompactionCheckpoint } from './CompactionCheckpoint';
+import { useCompactionHistory } from './useCompactionHistory';
 import { useWorkflowContent } from './useWorkflowContent';
 import { ConversationStats } from './UsageStats';
 import { TodoDock } from '../composer/TodoDock';
@@ -75,6 +77,7 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
   const readingEntries = useMemo(() => view ? transcriptPresentation(view.history, view.transcript) : [], [view?.history, view?.transcript]);
   const requestFeedback = useModelRetryFeedback(client, sessionId ?? '', readingEntries,
     !view?.history?.window ? view?.attempt?.in_flight?.message_id : undefined);
+  const checkpoints = useCompactionHistory(client, sessionId, mode === 'chat' && !scope?.selected && !!view && !view.retrying && !view.readingPreview);
   const content = useMemo(() => [...view?.content ?? [], ...(view?.publicationHeads ?? []).flatMap(head => head.content)], [view?.content, view?.publicationHeads]);
   useEffect(() => {
     if (!view?.readable || view.retrying || view.readingPreview || scope?.selected) return;
@@ -101,7 +104,7 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
       latestTurn={view.attempt && ['admitted','running'].includes(view.attempt.phase.type) ? turnAnchor({conversation_id:view.conversation_id,attempt_id:view.attempt.attempt_id,attempt_id_source:view.attempt.attempt_id_source}) : undefined}
       initialHistoryLoading={view.history?.initialLoading} historical={!!view.history?.window} onLatest={() => { client.returnToLatest(view.id); void client.loadInitialHistory(view.id); }} onActiveTurn={setActive}>
       {fork.error && <div role="alert"><p>{fork.error}</p><button type="button" onClick={fork.retry}>{tx('agent:fork-point.reload')}</button></div>}
-      {(view.messages.length > 0 || !!view.transcript.entries?.length || !waiting) && <AgentTranscript publicationHeads={view.publicationHeads} retrying={view.retrying} compaction={!view.retrying && !view.readingPreview && <ContextSeat key={`${view.id}:${view.target?.attachment_id}`} client={client} sessionId={view.id}/>} requestFeedback={requestFeedback} snapshot={view} workflows={!view.retrying && !view.readingPreview && !view.history?.window ? workflows.snapshot : undefined} history={view.history} loadLater={() => client.loadLater(view.id)} loadEarlier={() => { viewport.current?.beginNavigation(); void (view.readingPreview ? client.loadEarlierPreview(view.id) : client.loadEarlier(view.id)).catch(() => {}); }} lineageSwitchSafe={view.safe} historicalDisabled={view.disabled || historicalPending} onHistorical={onHistorical} forkPoint={fork.point} onOpenSource={onOpenSource ? origin => {
+      {(view.messages.length > 0 || !!view.transcript.entries?.length || !waiting) && <AgentTranscript publicationHeads={view.publicationHeads} retrying={view.retrying} compactions={checkpoints.map(({ head, command }) => ({ head, content: <CompactionCheckpoint head={head} client={client} sessionId={view.id} title={command ? tx('agent:context.command-title') : undefined}/> }))} contextActivity={!view.retrying && !view.readingPreview && <ContextSeat key={`${view.id}:${view.target?.attachment_id}`} client={client} sessionId={view.id}/>} requestFeedback={requestFeedback} snapshot={view} workflows={!view.retrying && !view.readingPreview && !view.history?.window ? workflows.snapshot : undefined} history={view.history} loadLater={() => client.loadLater(view.id)} loadEarlier={() => { viewport.current?.beginNavigation(); void (view.readingPreview ? client.loadEarlierPreview(view.id) : client.loadEarlier(view.id)).catch(() => {}); }} lineageSwitchSafe={view.safe} historicalDisabled={view.disabled || historicalPending} onHistorical={onHistorical} forkPoint={fork.point} onOpenSource={onOpenSource ? origin => {
         // The gesture publishes its exact Shell intent and installs viewport
         // cancellation in this same stack, before any browser scroll can interleave.
         onOpenSource(origin, viewport.current?.beginNavigation);

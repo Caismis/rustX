@@ -14319,6 +14319,10 @@
         "activation_id": {
           "$ref": "#/$defs/ProjectionActivationId"
         },
+        "transcript_anchor": {
+          "description": "Insert the historical marker after this native transcript position.\nCaptured at activation; independent of Ledger and Journal coordinates.",
+          "$ref": "#/$defs/RuntimeClientTranscriptCursor"
+        },
         "base_frontier": {
           "$ref": "#/$defs/LedgerFrontier"
         },
@@ -14365,6 +14369,7 @@
       "required": [
         "checkpoint_id",
         "activation_id",
+        "transcript_anchor",
         "base_frontier",
         "activation_ledger",
         "origin",

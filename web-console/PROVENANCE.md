@@ -3432,3 +3432,53 @@ region (desktop x=436..1276, narrow x=123..362), with zero changed pixels in the
 sidebar or top chrome. The input/toolbar screenshots remain unchanged. No noise
 allowances or comparison tolerances changed. Other browser engines were not
 exercised; the existing large-chunk build warning remains.
+
+### Compaction markers retain their historical positions (2026-10-20)
+
+Reference: Harness `ui-chat/src/client/conversation-nodes/compaction.ts` and
+`command.ts` at `687f282e8625c6b8d11ff58211a90524be2e4317`. The automatic marker
+uses the committed checkpoint event's sequence, and manual compaction shares the
+conversation node sequence. The native adapter previously appended ContextSeat
+below every transcript node, so the latest checkpoint followed every later reply.
+
+The original native activation now captures a typed transcript anchor in its
+finite, integrity-checked display header. It observes pending inputs, publication
+audits and terminal controls as well as canonical messages. Inherited activations
+use the destination's translated canonical prefix, not the source's transcript
+coordinate. Projection directory/detail reads retain the same original anchor;
+Ledger frontiers and Journal sequences never become browser ordering guesses.
+This is display metadata; it does not create a canonical message or alter the
+model's compacted history, compaction admission, or TUI interaction logic.
+
+Chat reads checkpoint metadata from the existing native projection directory,
+scoped to the exact attached observation. Each checkpoint has its own stable
+historical seat after the corresponding response tail. Later replies and later
+compactions preserve earlier markers and open summary state. Markers outside a
+loaded window, or inside its unloaded gap, do not attach to unrelated content.
+Process groups split at the marker boundary so later reasoning/Tools remain below
+it. ContextSeat now renders only live operation/receipt feedback; completed
+checkpoint summaries no longer occupy the permanent bottom seat. Summary styling
+and lazy full-summary inspection use the existing Harness presentation primitives.
+
+Validation passed: 57 focused frontend checks; 17 native anchor, original-head,
+receipt, integrity and observation-boundary checks; WebUI and protocol TypeScript;
+i18n ownership; production build; 307 source records and notices for 264 packages.
+The native tests explicitly distinguish accepted-but-not-canonical T positions
+from Ledger positions, retain the first anchor after a later commit, and translate
+an inherited activation into a different destination T position.
+
+Browser plugin not available: visual/interaction QA used the pinned Playwright
+1.63 Linux Chromium container at fixture origin `http://127.0.0.1:5274` and
+production preview origin `http://127.0.0.1:5273`. All 33 scenarios passed,
+including the existing strict Agent/Composer references without baseline changes.
+The compaction matrix covers English/Chinese, light/dark and 1440/390 widths:
+collapsed/expanded summaries, subsequent prompts/replies, a second checkpoint,
+preserved historical ordering and usable disclosure without horizontal overflow.
+The real native flow covers manual and automatic compaction, continuation,
+questionnaires, reconnect, full page reload and interrupted output. It verifies
+both checkpoints survive and the automatic marker remains before the subsequent
+answer after reload. Desktop dark and narrow light captures were visually
+reviewed; the native narrow dark flow was also reviewed. Evidence:
+`/tmp/rustx-compaction-position-{en,zh}-{light,dark}-{1440,390}.png` and
+`/tmp/rustx-compaction-zh-dark.png`. Other browser engines were not exercised.
+The existing large-chunk build warning remains.

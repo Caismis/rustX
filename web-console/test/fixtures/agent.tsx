@@ -75,6 +75,27 @@ if (mode === 'questionnaire') {
 if (mode === 'compaction') {
  s.attempt = null;
  s.context = { compaction_count: 1, compaction_in_progress: false, projection_head: projectionHead('## 已完成的工作\n\n保留 fork 前的历史预览，并整理上下文摘要的显示。\n\n- 历史仍由原生会话数据提供\n- Continue with the original conversation context.') };
+ const records = [s.context.projection_head!];
+ server.handlers.set('session/projections', () => ({ type: 'projections', page: { records, next_activation: null } }));
+ let turn = 1;
+ window.compactionFixture = {
+  async reply() {
+   const next = structuredClone(server.snapshots.get('A')!);
+   turn++;
+   const prompt = { role: 'user' as const, source: 'human' as const, id: `prompt-${turn}`, content: [{ type: 'text' as const, text: `Continue after checkpoint ${turn - 1}` }] };
+   const answer = { role: 'assistant' as const, id: `reply-${turn}`, content: [{ type: 'text' as const, text: `New reply ${turn}` }] };
+   next.messages.push(prompt, answer);
+   next.transcript.entries!.push(...[prompt, answer].map((message, index) => ({ cursor: String((turn - 1) * 2 + index + 1), item: { type: 'message' as const, message } })));
+   await server.update('A', next);
+  },
+  async compact() {
+   const next = structuredClone(server.snapshots.get('A')!);
+   const head = { ...projectionHead('Second preserved summary.'), checkpoint_id: 'checkpoint-2', activation_id: '2', transcript_anchor: next.transcript.entries!.at(-1)!.cursor };
+   records.push(head);
+   next.context = { ...next.context!, compaction_count: 2, projection_head: head };
+   await server.update('A', next);
+  },
+ };
 }
 if (mode === 'fork') {
  s.attempt = null;
@@ -143,6 +164,7 @@ if (mode === 'composer') {
   };
 }
 declare global {
+ interface Window { compactionFixture: { reply(): Promise<void>; compact(): Promise<void> } }
   interface Window { composerFixture: { holdUploads(): void; settleUploads(state: 'ready' | 'failed' | 'unresolved'): void; uploads(): number; running(value: boolean): Promise<void>; docks(value: boolean): Promise<void>; holdCancellation(): void; busyEnter(value: 'queue' | 'steer'): void; cancellations(): import('../../../protocol/app-server/v51').AttachmentTarget[]; acknowledgeCancellation(): Promise<void>; submissions(): string[] } }
 }
 

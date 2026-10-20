@@ -166,8 +166,9 @@ for (const [locale, theme] of [['en', 'light'], ['zh', 'dark']] as const) {
       const latest = page.locator('[data-chat-latest]');
       if (await latest.isVisible()) await latest.click();
       await expect(page.getByText('Question answered after compaction.', { exact: true })).toBeInViewport();
-      await expect(marker).toHaveCount(1);
-      await expect(marker).toContainText(copy('Context compacted', '上下文已压缩'));
+      await expect(marker).toHaveCount(2);
+      await expect(marker.last()).toContainText(copy('Context compacted', '上下文已压缩'));
+      expect(await page.locator('[data-compaction-checkpoint]').last().evaluate(el => !!(el.compareDocumentPosition([...document.querySelectorAll('p')].find(p => p.textContent === 'Question answered after compaction.')!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
       await marker.last().click();
       await expect(page.locator('[data-compaction-body]').getByText("Preserve compaction-evidence-435 and the user's instruction to continue.", { exact: true })).toBeVisible();
       await expect(page.locator('[data-projection-history]')).toHaveCount(0);
@@ -200,6 +201,14 @@ for (const [locale, theme] of [['en', 'light'], ['zh', 'dark']] as const) {
       await fixture.control('observations/await?kind=response_completed&count=8&timeoutMs=30000');
       await expect(page.getByText('Conversation continued after stopping.', { exact: true })).toBeVisible();
       await expect(page.getByText('This must not appear after stopping.', { exact: true })).toHaveCount(0);
+      await expect(marker).toHaveCount(2);
+      if (locale === 'en') {
+        await page.reload();
+        await connectRemote(page, fixture.endpoint, fixture.token);
+        await expect(page.getByText('Conversation continued after stopping.', { exact: true })).toBeVisible();
+        await expect(marker).toHaveCount(2);
+        expect(await page.locator('[data-compaction-checkpoint]').last().evaluate(el => !!(el.compareDocumentPosition([...document.querySelectorAll('p')].find(p => p.textContent === 'Question answered after compaction.')!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
+      }
       expect(errors).toEqual([]);
       passed = true;
     } catch (error) {

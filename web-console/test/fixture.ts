@@ -254,6 +254,7 @@ export class Server {
       }
       case 'session/attachmentStatus': result={type:'attachment_status',target:this.targets.get(socket)?.get(request.params.session_id)??null,configuration_revision:'0'};break;
       case 'session/editorRead': return editorPage(request.params.locator,this.editors.get(JSON.stringify(request.params.locator))??[],request.params.block_index,Number(request.params.offset),request.params.max_bytes);
+      case 'session/projections': result = { type: 'projections', page: { records: request.params.after === '0' && this.snapshots.get(request.params.target.session_id)?.context?.projection_head ? [this.snapshots.get(request.params.target.session_id)!.context!.projection_head!] : [], next_activation: null } }; break;
       case 'session/configuration': result = { type: 'session_configuration', projection:(null) }; break;
       case 'configuration/sourcesRead': result = { type: 'source_settings', projection:boundedSettings(cfg3Source()) }; break;
       case 'session/turns': result = { type: 'conversation_turns', page: { cut: { conversation_id: this.target(id, socket).conversation_id, journal: '0', transcript: '0', mutation_revision: '0' ,ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'}, offset: 0, total: "0", turns: [] } }; break;
@@ -371,7 +372,7 @@ export function applicationReceipt(value:import('../../protocol/app-server/v51')
 export function traceReceipt(detail:TraceDetail|null|undefined){return domainReceipt('trace.records.1.detail',detail==null?[]:[detail]);}
 /** Authoritative projection read-domain fixture, separate from all canonical rows. */
 export function projectionHead(text = '## Preserved context\n\nNative summary facts.', inherited = false): import('../../protocol/app-server/v51').RuntimeClientProjectionHeadView {
-  return {checkpoint_id:'checkpoint-1',activation_id:'1',base_frontier:'100',activation_ledger:'100',
+  return {checkpoint_id:'checkpoint-1',activation_id:'1',transcript_anchor:'2',base_frontier:'100',activation_ledger:'100',
     origin:{conversation_id:'conv_36524fd8-f674-7fc2-8125-06d01fee0e18',activation:'1',completed_journal:'200'},
     destination_installation:inherited?'installation:fixture':null,original_items:1,derived_items:1,
     summary_preview:{text,truncated:false}};

@@ -8522,6 +8522,11 @@ export interface ProjectionPage {
 export interface RuntimeClientProjectionHeadView {
   checkpoint_id: CheckpointId;
   activation_id: ProjectionActivationId;
+  /**
+   * Insert the historical marker after this native transcript position.
+   * Captured at activation; independent of Ledger and Journal coordinates.
+   */
+  transcript_anchor: string;
   base_frontier: LedgerFrontier;
   activation_ledger: LedgerFrontier;
   origin: OriginActivation;

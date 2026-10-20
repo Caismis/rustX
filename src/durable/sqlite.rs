@@ -4179,6 +4179,16 @@ impl ConversationStore for SqliteConversationStore {
             .map_err(|error| storage(error.to_string()))?;
         observation_projection::read(&transaction, through)
     }
+    fn observation_projection_activation(
+        &self,
+        activation: crate::context::checkpoint::ProjectionActivationId,
+    ) -> Result<
+        crate::runtime_client::snapshot::RuntimeClientProjectionHeadView,
+        ConversationStoreError,
+    > {
+        let connection = self.lock()?;
+        observation_projection::read_id(&connection, activation.0)
+    }
     fn projection_at_journal_cut(
         &self,
         through: u64,

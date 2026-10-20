@@ -26,5 +26,21 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
     await page.screenshot({ path: `/tmp/rustx-compaction-expanded-${locale}-${theme}-${width}.png` });
     await page.keyboard.press('Space');
     await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    // The same native checkpoint keeps its seat as later conversation output
+    // arrives, including after another compaction. It is never a sticky footer.
+    const first = page.locator('[data-compaction-checkpoint="checkpoint-1"]');
+    await page.evaluate(() => window.compactionFixture.reply());
+    await expect(page.getByText('New reply 2', { exact: true })).toBeVisible();
+    expect(await first.evaluate(el => !!(el.compareDocumentPosition(document.querySelector('[data-chat-anchor-key="message:prompt-2"]')!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
+    await page.evaluate(() => window.compactionFixture.compact());
+    await expect(page.locator('[data-compaction-marker]')).toHaveCount(2);
+    await page.evaluate(() => window.compactionFixture.reply());
+    await expect(page.getByText('New reply 3', { exact: true })).toBeVisible();
+    const second = page.locator('[data-compaction-checkpoint="checkpoint-2"]');
+    expect(await second.evaluate(el => !!(el.compareDocumentPosition(document.querySelector('[data-chat-anchor-key="message:prompt-3"]')!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
+    await second.getByRole('button').click();
+    await expect(second.getByText('Second preserved summary.')).toBeVisible();
+    await second.getByRole('button').click();
+    await page.screenshot({ path: `/tmp/rustx-compaction-position-${locale}-${theme}-${width}.png` });
   });
 }
