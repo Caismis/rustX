@@ -5,11 +5,10 @@ use super::*;
 fn running_trace_snapshot(
     store: &dyn ConversationStore,
     cut: &crate::durable::observation::ObservationReadCut,
-    current: crate::runtime_client::snapshot::ForegroundToolExecution,
+    current: crate::observation::tool::ForegroundToolExecution,
 ) -> crate::runtime_client::snapshot::RuntimeClientSnapshot {
-    use crate::runtime_client::snapshot::{
-        CapabilityView, RuntimeClientAttempt, RuntimeClientAttemptPhase,
-    };
+    use crate::observation::capability_source::CapabilityView;
+    use crate::runtime_client::snapshot::{RuntimeClientAttempt, RuntimeClientAttemptPhase};
     let mut snapshot = crate::runtime_client::projection::RuntimeClientProjection::new(
         store.conversation_id().clone(),
         vec![],
@@ -47,7 +46,7 @@ fn running_trace_snapshot(
 
 #[test]
 fn t08_t14_trace_live_tool_uses_numeric_occurrence_before_repeated_aliases() {
-    use crate::runtime_client::content::CanonicalContentLocator;
+    use crate::observation::content::CanonicalContentLocator;
     let store = store("conv_672fc113-c7cb-7782-986d-65cb9d216dd1");
     start(&store);
     let call = bash_call("repeated-trace-call");
@@ -75,7 +74,7 @@ fn t08_t14_trace_live_tool_uses_numeric_occurrence_before_repeated_aliases() {
         )
         .unwrap();
     let current =
-        crate::runtime_client::tool_observation::foreground(&tool_page, &tool_page.headers[0])
+        crate::observation::tool::foreground(&tool_page, &tool_page.headers[0])
             .unwrap();
     let mut snapshot = running_trace_snapshot(&store, &cut, current);
     let before = snapshot

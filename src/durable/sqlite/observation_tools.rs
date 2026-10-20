@@ -5,7 +5,7 @@ use super::{
 use crate::durable::observation::{
     NativeToolObservationHeader, NativeToolObservationPage, ObservationReadCut,
 };
-use crate::runtime_client::content::CanonicalContentLocator;
+use crate::observation::content::CanonicalContentLocator;
 
 pub(super) fn page(
     connection: &Connection,
@@ -41,7 +41,7 @@ pub(super) fn page(
             association
                 .call
                 .content
-                .push(crate::runtime_client::checkpoint::ContentBinding {
+                .push(crate::observation::cut::ContentBinding {
                     source_path: None,
                     path: vec!["value".into(), "arguments".into()],
                     content_ref: reference.clone(),
@@ -67,8 +67,7 @@ pub(super) fn page(
             terminal: witness(connection, cut, ledger, block, 2)?,
             association,
         };
-        let Some(bytes) = crate::runtime_client::checkpoint::bounded_bytes(&header, remaining)
-        else {
+        let Some(bytes) = crate::observation::bounded::bounded_bytes(&header, remaining) else {
             next_offset = Some(u64::from(block));
             break;
         };
@@ -110,7 +109,7 @@ fn witness(
 pub(super) fn result_header(
     result: &crate::tools::types::ToolExecutionResult,
 ) -> crate::durable::observation::NativeToolResultHeader {
-    let complete = crate::runtime_client::checkpoint::bounded_clone(result, 14_336);
+    let complete = crate::observation::bounded::bounded_clone(result, 14_336);
     crate::durable::observation::NativeToolResultHeader {
         content_total: result.content.len() as u64,
         result_deferred: complete.is_none(),
@@ -158,8 +157,8 @@ fn argument_reference(
     conversation: &ConversationId,
     ledger: u64,
     block: u32,
-) -> Result<Option<crate::runtime_client::content::ContentRef>, ConversationStoreError> {
-    use crate::runtime_client::content::{
+) -> Result<Option<crate::observation::content::ContentRef>, ConversationStoreError> {
+    use crate::observation::content::{
         CanonicalContentComponent, ContentRepresentation, ContentSource,
     };
     let source = ContentSource::CanonicalMessageBlock {
@@ -187,7 +186,7 @@ fn argument_reference(
 fn arguments(
     connection: &Connection,
     conversation: &ConversationId,
-    reference: Option<&crate::runtime_client::content::ContentRef>,
+    reference: Option<&crate::observation::content::ContentRef>,
 ) -> Result<Option<String>, ConversationStoreError> {
     let Some(reference) = reference.filter(|reference| reference.readable_end <= 1024) else {
         return Ok(None);

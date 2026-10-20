@@ -124,10 +124,10 @@ fn assert_span_public_field(
             serde_json::json!([])
         }
     };
-    let content: Vec<crate::runtime_client::checkpoint::ContentBinding> =
-        crate::runtime_client::checkpoint::decode_domain_value(metadata("content")).unwrap();
-    let collections: Vec<crate::runtime_client::checkpoint::CollectionFrontier> =
-        crate::runtime_client::checkpoint::decode_domain_value(metadata("collections")).unwrap();
+    let content: Vec<crate::observation::cut::ContentBinding> =
+        crate::observation::bounded::decode_domain_value(metadata("content")).unwrap();
+    let collections: Vec<crate::observation::cut::CollectionFrontier> =
+        crate::observation::bounded::decode_domain_value(metadata("collections")).unwrap();
     assert_eq!(field.content, content);
     assert_eq!(field.collections, collections);
 }

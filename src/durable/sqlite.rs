@@ -669,7 +669,7 @@ impl Drop for StoreGuard<'_> {
 pub(crate) fn journal_attempt_source(
     sequence: u64,
     attempt: &AttemptId,
-) -> Result<crate::runtime_client::response::AttemptIdentitySource, ConversationStoreError> {
+) -> Result<crate::observation::turn::AttemptIdentitySource, ConversationStoreError> {
     observation_identity::journal(sequence, attempt)
 }
 
@@ -1752,7 +1752,7 @@ impl InboxStore for SqliteConversationStore {
             )?
             .event;
             receipt = Some(Arc::new(crate::durable::inbox::GoalObservationReceipt {
-                view: crate::runtime_client::goal::RuntimeClientGoalView::from_native(Some(goal)),
+                view: crate::observation::goal::RuntimeClientGoalView::from_native(Some(goal)),
                 native: event.observation,
                 pending: None,
             }));
@@ -1828,7 +1828,7 @@ impl InboxStore for SqliteConversationStore {
         }
         refresh_pending_receipt(&tx, &self.conversation_id, &mut accepted)?;
         accepted.goal_observation = Some(Arc::new(crate::durable::inbox::GoalObservationReceipt {
-            view: crate::runtime_client::goal::RuntimeClientGoalView::from_native(Some(&goal)),
+            view: crate::observation::goal::RuntimeClientGoalView::from_native(Some(&goal)),
             native: event.observation,
             pending: accepted.pending_observation.clone(),
         }));
@@ -2194,7 +2194,7 @@ impl CanonicalStore for SqliteConversationStore {
     fn transcript_tool_headers(
         &self,
         cut: &crate::durable::observation::ObservationReadCut,
-        locator: &crate::runtime_client::content::CanonicalContentLocator,
+        locator: &crate::observation::content::CanonicalContentLocator,
         offset: u64,
         limit: usize,
     ) -> Result<crate::durable::observation::NativeToolObservationPage, ConversationStoreError>
@@ -2635,7 +2635,7 @@ impl CanonicalStore for SqliteConversationStore {
     }
     fn message_append_revision_by_locator(
         &self,
-        locator: &crate::runtime_client::content::CanonicalContentLocator,
+        locator: &crate::observation::content::CanonicalContentLocator,
     ) -> Result<Option<SurfaceRevision>, ConversationStoreError> {
         let connection = self.lock()?;
         let position = content::canonical_position(&connection, locator)?;
@@ -2697,7 +2697,7 @@ impl CanonicalStore for SqliteConversationStore {
     fn surface_boundary_message_id(
         &self,
         boundary_revision: SurfaceRevision,
-        locator: &crate::runtime_client::content::CanonicalContentLocator,
+        locator: &crate::observation::content::CanonicalContentLocator,
     ) -> Result<MessageId, ConversationStoreError> {
         let connection = self.lock()?;
         let position = content::canonical_position(&connection, locator)?;
@@ -2711,7 +2711,7 @@ impl CanonicalStore for SqliteConversationStore {
     fn canonical_boundary_message_id(
         &self,
         boundary_revision: SurfaceRevision,
-        locator: &crate::runtime_client::content::CanonicalContentLocator,
+        locator: &crate::observation::content::CanonicalContentLocator,
     ) -> Result<MessageId, ConversationStoreError> {
         let connection = self.lock()?;
         let position = content::canonical_position(&connection, locator)?;
@@ -4464,10 +4464,8 @@ impl ObservationStore for SqliteConversationStore {
         &self,
         cut: &crate::durable::observation::ObservationReadCut,
         source_sequence: u64,
-    ) -> Result<
-        Option<crate::runtime_client::content::CanonicalContentLocator>,
-        ConversationStoreError,
-    > {
+    ) -> Result<Option<crate::observation::content::CanonicalContentLocator>, ConversationStoreError>
+    {
         let connection = self.lock()?;
         let transaction = connection
             .unchecked_transaction()
@@ -4478,9 +4476,7 @@ impl ObservationStore for SqliteConversationStore {
         Ok(position
             .filter(|position| *position <= cut.ledger_through)
             .map(|position| {
-                crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition {
-                    position,
-                }
+                crate::observation::content::CanonicalContentLocator::ByLedgerPosition { position }
             }))
     }
     fn observation_request_summary_at(
@@ -4552,8 +4548,7 @@ impl ObservationStore for SqliteConversationStore {
         &self,
         cut: &crate::durable::observation::ObservationReadCut,
         occurrence: &crate::events::types::ToolObservationOccurrence,
-    ) -> Result<Option<crate::runtime_client::trace::TraceFieldSource>, ConversationStoreError>
-    {
+    ) -> Result<Option<crate::observation::trace::TraceFieldSource>, ConversationStoreError> {
         let connection = self.lock()?;
         let transaction = connection
             .unchecked_transaction()
@@ -4745,7 +4740,7 @@ impl ObservationStore for SqliteConversationStore {
     }
     fn validate_content_source_cut(
         &self,
-        reference: &crate::runtime_client::content::ContentRef,
+        reference: &crate::observation::content::ContentRef,
         cut: &crate::durable::observation::ObservationReadCut,
     ) -> Result<(), ConversationStoreError> {
         let connection = self.lock()?;
@@ -4754,7 +4749,7 @@ impl ObservationStore for SqliteConversationStore {
     fn observation_inherited_attempt_read(
         &self,
         cut: &crate::durable::observation::ObservationReadCut,
-        kind: crate::runtime_client::response::InheritedAttemptIdentityKind,
+        kind: crate::observation::turn::InheritedAttemptIdentityKind,
         ordinal: u64,
         offset: u64,
         max_bytes: u32,
@@ -5090,15 +5085,13 @@ impl ObservationStore for SqliteConversationStore {
         &self,
         source_sequence: u64,
         through: u64,
-    ) -> Result<
-        Option<crate::runtime_client::content::CanonicalContentLocator>,
-        ConversationStoreError,
-    > {
+    ) -> Result<Option<crate::observation::content::CanonicalContentLocator>, ConversationStoreError>
+    {
         let connection = self.lock()?;
         observation_request::validate_start(&connection, source_sequence, through)?;
         let position:Option<u64>=connection.query_row("SELECT retry_ledger_position FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence=?1",[source_sequence],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
         Ok(position.map(|position| {
-            crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { position }
+            crate::observation::content::CanonicalContentLocator::ByLedgerPosition { position }
         }))
     }
     fn observation_request_retry_at(
@@ -5120,10 +5113,8 @@ impl ObservationStore for SqliteConversationStore {
     fn observation_request_retry_locator(
         &self,
         request_id: &RequestId,
-    ) -> Result<
-        Option<crate::runtime_client::content::CanonicalContentLocator>,
-        ConversationStoreError,
-    > {
+    ) -> Result<Option<crate::observation::content::CanonicalContentLocator>, ConversationStoreError>
+    {
         let connection = self.lock()?;
         let position: Option<u64> = connection
             .query_row(
@@ -5133,7 +5124,7 @@ impl ObservationStore for SqliteConversationStore {
             )
             .map_err(|error| storage(error.to_string()))?;
         Ok(position.map(|position| {
-            crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { position }
+            crate::observation::content::CanonicalContentLocator::ByLedgerPosition { position }
         }))
     }
     fn observation_request_retry(
@@ -5171,8 +5162,7 @@ impl ObservationStore for SqliteConversationStore {
         &self,
         cut: &crate::durable::observation::ObservationReadCut,
         transcript: u64,
-    ) -> Result<Option<crate::runtime_client::response::TurnProcessView>, ConversationStoreError>
-    {
+    ) -> Result<Option<crate::observation::turn::TurnProcessView>, ConversationStoreError> {
         let connection = self.lock()?;
         observation::validate(&connection, &self.conversation_id, cut)?;
         observation_members::transcript_process(&connection, cut, transcript)
@@ -5198,7 +5188,7 @@ impl ObservationStore for SqliteConversationStore {
         &self,
         cut: &crate::durable::observation::ObservationReadCut,
     ) -> Result<
-        Vec<crate::runtime_client::snapshot::RuntimeClientPublicationSettlementRecord>,
+        Vec<crate::observation::transcript::RuntimeClientPublicationSettlementRecord>,
         ConversationStoreError,
     > {
         let connection = self.lock()?;
@@ -5212,7 +5202,7 @@ impl ObservationStore for SqliteConversationStore {
         &self,
         through: u64,
     ) -> Result<
-        Option<crate::runtime_client::occupancy::RuntimeClientContextOccupancy>,
+        Option<crate::observation::occupancy::RuntimeClientContextOccupancy>,
         ConversationStoreError,
     > {
         let connection = self.lock()?;
@@ -5231,7 +5221,7 @@ impl ObservationStore for SqliteConversationStore {
     fn observation_statistics(
         &self,
         through: u64,
-    ) -> Result<crate::runtime_client::response::ConversationStatistics, ConversationStoreError>
+    ) -> Result<crate::observation::statistics::ConversationStatistics, ConversationStoreError>
     {
         let connection = self.lock()?;
         observation_statistics::read(&connection, through)
@@ -5239,8 +5229,7 @@ impl ObservationStore for SqliteConversationStore {
     fn observation_agent_statistics(
         &self,
         through: u64,
-    ) -> Result<crate::runtime_client::agent_statistics::AgentStatistics, ConversationStoreError>
-    {
+    ) -> Result<crate::observation::statistics::AgentStatistics, ConversationStoreError> {
         let connection = self.lock()?;
         observation_statistics::agent_read(&connection, through)
     }
@@ -5408,7 +5397,7 @@ impl ObservationStore for SqliteConversationStore {
     fn tool_association_headers_by_locator(
         &self,
         cut: &crate::durable::observation::ObservationReadCut,
-        locator: &crate::runtime_client::content::CanonicalContentLocator,
+        locator: &crate::observation::content::CanonicalContentLocator,
         offset: u64,
         limit: usize,
     ) -> Result<crate::durable::observation::ToolAssociationHeaderPage, ConversationStoreError>
@@ -5425,24 +5414,24 @@ impl ObservationStore for SqliteConversationStore {
     }
     fn ordinary_user_message(
         &self,
-        locator: &crate::runtime_client::content::CanonicalContentLocator,
+        locator: &crate::observation::content::CanonicalContentLocator,
     ) -> Result<bool, ConversationStoreError> {
         let connection = self.lock()?;
         match locator {
-            crate::runtime_client::content::CanonicalContentLocator::ByMessageId { message_id } => {
+            crate::observation::content::CanonicalContentLocator::ByMessageId { message_id } => {
                 ordinary_user_by_id(&connection, message_id)
             }
-            crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition {
-                position,
-            } => connection
-                .query_row(
-                    "SELECT ordinary_user FROM message_ledger WHERE position=?1",
-                    [position],
-                    |row| row.get(0),
-                )
-                .optional()
-                .map(|value| value.unwrap_or(false))
-                .map_err(|error| storage(error.to_string())),
+            crate::observation::content::CanonicalContentLocator::ByLedgerPosition { position } => {
+                connection
+                    .query_row(
+                        "SELECT ordinary_user FROM message_ledger WHERE position=?1",
+                        [position],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .map(|value| value.unwrap_or(false))
+                    .map_err(|error| storage(error.to_string()))
+            }
         }
     }
     fn message_ledger_position(
@@ -5493,7 +5482,7 @@ impl ObservationStore for SqliteConversationStore {
     fn message_block_header_page_by_locator(
         &self,
         cut: &crate::durable::observation::ObservationReadCut,
-        locator: &crate::runtime_client::content::CanonicalContentLocator,
+        locator: &crate::observation::content::CanonicalContentLocator,
         offset: u64,
         limit: usize,
     ) -> Result<crate::durable::observation::MessageBlockHeaderPage, ConversationStoreError> {
@@ -5610,7 +5599,7 @@ impl ObservationStore for SqliteConversationStore {
         &self,
         offset: Option<u64>,
         limit: usize,
-    ) -> Result<crate::runtime_client::turn::ObservedTurnPage, ConversationStoreError> {
+    ) -> Result<crate::observation::turn::ObservedTurnPage, ConversationStoreError> {
         let connection = self.lock()?;
         let transaction = connection
             .unchecked_transaction()
@@ -5619,7 +5608,7 @@ impl ObservationStore for SqliteConversationStore {
     }
     fn observation_file_delivery(
         &self,
-        locator: &crate::runtime_client::content::CanonicalContentLocator,
+        locator: &crate::observation::content::CanonicalContentLocator,
         index: u64,
     ) -> Result<crate::durable::observation::NativeFileDelivery, ConversationStoreError> {
         let connection = self.lock()?;
@@ -5631,10 +5620,10 @@ impl ObservationStore for SqliteConversationStore {
     fn observation_deliveries(
         &self,
         cut: &crate::durable::observation::ObservationReadCut,
-        locator: &crate::runtime_client::content::CanonicalContentLocator,
+        locator: &crate::observation::content::CanonicalContentLocator,
         offset: u64,
         limit: usize,
-    ) -> Result<crate::runtime_client::delivery::RuntimeClientDeliveryHead, ConversationStoreError>
+    ) -> Result<crate::observation::delivery::RuntimeClientDeliveryHead, ConversationStoreError>
     {
         content::validate_canonical_locator(locator)?;
         let connection = self.lock()?;
@@ -5653,7 +5642,7 @@ impl ObservationStore for SqliteConversationStore {
     fn observation_delivery_read(
         &self,
         cut: &crate::durable::observation::ObservationReadCut,
-        locator: &crate::runtime_client::content::CanonicalContentLocator,
+        locator: &crate::observation::content::CanonicalContentLocator,
         index: u64,
         offset: u64,
         max_bytes: u32,
@@ -5696,7 +5685,7 @@ impl ObservationStore for SqliteConversationStore {
     }
     fn goal_observation_view(
         &self,
-    ) -> Result<crate::runtime_client::goal::RuntimeClientGoalView, ConversationStoreError> {
+    ) -> Result<crate::observation::goal::RuntimeClientGoalView, ConversationStoreError> {
         let connection = self.lock()?;
         let bytes: Option<Option<Vec<u8>>> = connection
             .query_row(
@@ -5707,7 +5696,7 @@ impl ObservationStore for SqliteConversationStore {
             .optional()
             .map_err(|error| storage(error.to_string()))?;
         match bytes {
-            None => Ok(crate::runtime_client::goal::RuntimeClientGoalView { current: None }),
+            None => Ok(crate::observation::goal::RuntimeClientGoalView { current: None }),
             Some(None) => Err(storage("native Goal display header unavailable")),
             Some(Some(bytes)) => {
                 serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string()))
@@ -5742,7 +5731,7 @@ impl ObservationStore for SqliteConversationStore {
         &self,
         through: u64,
     ) -> Result<
-        Option<crate::runtime_client::snapshot::RuntimeClientProjectionHeadView>,
+        Option<crate::observation::head::RuntimeClientProjectionHeadView>,
         ConversationStoreError,
     > {
         let connection = self.lock()?;
@@ -5890,11 +5879,11 @@ impl ObservationStore for SqliteConversationStore {
     }
     fn live_block_header_page(
         &self,
-        source: &crate::runtime_client::content::ContentSource,
+        source: &crate::observation::content::ContentSource,
         through_revision: u64,
         offset: u64,
         limit: usize,
-    ) -> Result<crate::runtime_client::content::LiveBlockHeaderPage, ConversationStoreError> {
+    ) -> Result<crate::observation::content::LiveBlockHeaderPage, ConversationStoreError> {
         let connection = self.lock()?;
         content::live_block_header_page(
             &connection,
@@ -5907,11 +5896,11 @@ impl ObservationStore for SqliteConversationStore {
     }
     fn live_tool_header_page(
         &self,
-        source: &crate::runtime_client::content::ContentSource,
+        source: &crate::observation::content::ContentSource,
         through_revision: u64,
         offset: u64,
         limit: usize,
-    ) -> Result<crate::runtime_client::content::LiveBlockHeaderPage, ConversationStoreError> {
+    ) -> Result<crate::observation::content::LiveBlockHeaderPage, ConversationStoreError> {
         let connection = self.lock()?;
         content::live_tool_header_page(
             &connection,
@@ -5924,10 +5913,10 @@ impl ObservationStore for SqliteConversationStore {
     }
     fn content_descriptor_at(
         &self,
-        source: &crate::runtime_client::content::ContentSource,
-        representation: crate::runtime_client::content::ContentRepresentation,
+        source: &crate::observation::content::ContentSource,
+        representation: crate::observation::content::ContentRepresentation,
         revision: u64,
-    ) -> Result<Option<crate::runtime_client::content::ContentRef>, ConversationStoreError> {
+    ) -> Result<Option<crate::observation::content::ContentRef>, ConversationStoreError> {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction()
@@ -5946,9 +5935,9 @@ impl ObservationStore for SqliteConversationStore {
     }
     fn content_descriptor(
         &self,
-        source: &crate::runtime_client::content::ContentSource,
-        representation: crate::runtime_client::content::ContentRepresentation,
-    ) -> Result<Option<crate::runtime_client::content::ContentRef>, ConversationStoreError> {
+        source: &crate::observation::content::ContentSource,
+        representation: crate::observation::content::ContentRepresentation,
+    ) -> Result<Option<crate::observation::content::ContentRef>, ConversationStoreError> {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction()
@@ -5962,10 +5951,10 @@ impl ObservationStore for SqliteConversationStore {
     }
     fn content_read(
         &self,
-        reference: &crate::runtime_client::content::ContentRef,
+        reference: &crate::observation::content::ContentRef,
         offset: u64,
         max_bytes: u32,
-    ) -> Result<crate::runtime_client::content::ContentChunk, ConversationStoreError> {
+    ) -> Result<crate::observation::content::ContentChunk, ConversationStoreError> {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction()
@@ -6250,7 +6239,7 @@ fn audit_observation_receipt(
         .unwrap_or_else(|| crate::durable::observation::TranscriptHeader {
             tool_calls: Vec::new(),
             publication_settlement: Some(
-                crate::runtime_client::snapshot::RuntimeClientPublicationSettlementRecord {
+                crate::observation::transcript::RuntimeClientPublicationSettlementRecord {
                     settlement: summary.clone().into(),
                     transcript_cursor: cursor.into(),
                     read_cut: read_cut.clone(),
@@ -7316,8 +7305,8 @@ fn save_goal(
     tx: &Transaction<'_>,
     goal: &crate::goal::GoalSnapshot,
 ) -> Result<(), ConversationStoreError> {
-    let header = crate::runtime_client::goal::RuntimeClientGoalView::from_native(Some(goal));
-    let bytes = crate::runtime_client::checkpoint::bounded_bytes(&header, 16384);
+    let header = crate::observation::goal::RuntimeClientGoalView::from_native(Some(goal));
+    let bytes = crate::observation::bounded::bounded_bytes(&header, 16384);
     tx.execute("INSERT INTO goal_state(singleton, snapshot_json,observation_header) VALUES(1, ?1,?2) ON CONFLICT(singleton) DO UPDATE SET snapshot_json = excluded.snapshot_json,observation_header=excluded.observation_header,observation_source_id=NULL,observation_sequence=NULL",
         params![encode(goal, "Goal")?,bytes]).map_err(|error| storage(format!("write Goal: {error}")))?;
     let _ = optional_display_layout(tx, || observation_state::goal(tx, goal));
@@ -11428,7 +11417,7 @@ fn persist_event_tx_internal(
         observation_trace::index_event(transaction, &event)
     })
     .is_some();
-    let observation_json = crate::runtime_client::checkpoint::bounded_bytes(
+    let observation_json = crate::observation::bounded::bounded_bytes(
         &event,
         crate::durable::observation::HEADER_ENCODED_MAX,
     );
@@ -14641,7 +14630,7 @@ mod tests {
             )
             .unwrap();
         store.append_canonical(&assistant("b")).unwrap();
-        let unresolved = crate::runtime_client::snapshot::transcript_page_view(
+        let unresolved = crate::observation::transcript::transcript_page_view(
             store.load_transcript_page(None, 1).unwrap(),
         )
         .unwrap();
@@ -14649,7 +14638,7 @@ mod tests {
         assert_eq!(current.message_id, Some(MessageId::new("b")));
         assert!(matches!(
             current.state,
-            crate::runtime_client::snapshot::ForegroundToolState::Assembled { .. }
+            crate::observation::tool::ForegroundToolState::Assembled { .. }
         ));
         assert!(
             !serde_json::to_string(current)
@@ -14706,13 +14695,13 @@ mod tests {
                 .all(|tool| tool.result.is_none())
         );
         let unresolved =
-            crate::runtime_client::snapshot::transcript_page_view(before.clone()).unwrap();
+            crate::observation::transcript::transcript_page_view(before.clone()).unwrap();
         for (index, tool) in unresolved.entries[0].tool_calls.iter().enumerate() {
             assert_eq!(tool.message_id, Some(MessageId::new("assistant")));
             assert_eq!(tool.block_index.get() as usize, index);
             assert!(matches!(
                 tool.state,
-                crate::runtime_client::snapshot::ForegroundToolState::Assembled { .. }
+                crate::observation::tool::ForegroundToolState::Assembled { .. }
             ));
         }
         // Physical/result publication order differs from canonical call order.
@@ -14768,13 +14757,13 @@ mod tests {
             ToolExecutionStatus::Failed { .. }
         ));
         let original_results: Vec<_> = tools.iter().map(|tool| tool.result.clone()).collect();
-        let projected = crate::runtime_client::snapshot::transcript_page_view(older).unwrap();
+        let projected = crate::observation::transcript::transcript_page_view(older).unwrap();
         // Canonical result acceptance is positive C evidence. No execution J
         // fact occurred in this fixture, so it cannot settle the lifecycle.
         for (tool, expected) in projected.entries[0].tool_calls.iter().zip(original_results) {
             assert!(matches!(
                 tool.state,
-                crate::runtime_client::snapshot::ForegroundToolState::Assembled { .. }
+                crate::observation::tool::ForegroundToolState::Assembled { .. }
             ));
             assert_eq!(tool.committed_result, expected);
             assert!(tool.result_source.is_none());
@@ -19779,7 +19768,7 @@ mod tests {
 
     #[test]
     fn t14_canonical_after_boundary_uses_original_ledger_and_selected_revision() {
-        use crate::runtime_client::content::CanonicalContentLocator;
+        use crate::observation::content::CanonicalContentLocator;
         let store = store();
         store.initialize(&[]).unwrap();
         let opening = store
@@ -21102,7 +21091,7 @@ mod tests {
     }
     fn assert_status_original_ranges(
         store: &SqliteConversationStore,
-        view: &crate::runtime_client::snapshot::AgentStatusView,
+        view: &crate::observation::status::AgentStatusView,
         rendered: &str,
         target: &MessageId,
     ) {
@@ -21212,7 +21201,7 @@ mod tests {
         assert_eq!(
             view.source_locator,
             Some(
-                crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition {
+                crate::observation::content::CanonicalContentLocator::ByLedgerPosition {
                     position: 2
                 }
             )
@@ -21222,14 +21211,14 @@ mod tests {
         assert_eq!(
             fresh.target_locator,
             Some(
-                crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition {
+                crate::observation::content::CanonicalContentLocator::ByLedgerPosition {
                     position: 1
                 }
             )
         );
         assert_eq!(
             fresh.transcript_anchor,
-            Some(crate::runtime_client::snapshot::RuntimeClientTranscriptCursor::new(1))
+            Some(crate::observation::transcript::RuntimeClientTranscriptCursor::new(1))
         );
         assert_eq!(native.read_cut.ledger_through, 2);
         assert_eq!(native.read_cut.read.journal, committed.started.sequence);

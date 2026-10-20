@@ -1,7 +1,8 @@
 // Inspection consumes finite native heads; originals are read only by selected bounded gestures.
 use crate::durable::{CanonicalStore, InboxStore, JournalStore, ObservationStore};
 use super::*;
-use crate::runtime_client::checkpoint::{CheckpointReadCut, decode_domain_value};
+use crate::observation::cut::CheckpointReadCut;
+use crate::observation::bounded::decode_domain_value;
 use crate::runtime_client::host::RuntimeClientHost;
 use base64::Engine as _;
 use std::sync::Arc;
@@ -210,7 +211,7 @@ fn canonical_blocks(
 
 fn selected_content_bytes(
     host: &RuntimeClientHost,
-    binding: &crate::runtime_client::checkpoint::ContentBinding,
+    binding: &crate::observation::cut::ContentBinding,
 ) -> Vec<u8> {
     let mut bytes = Vec::new();
     let mut offset = 0;
@@ -320,11 +321,9 @@ fn original_result(
 
 fn original_text_block(
     host: &RuntimeClientHost,
-    item: &crate::runtime_client::checkpoint::CheckpointPageItem,
+    item: &crate::observation::cut::CheckpointPageItem,
 ) -> serde_json::Value {
-    use crate::runtime_client::content::{
-        CanonicalContentComponent, ContentRepresentation, ContentSource,
-    };
+    use crate::observation::content::{CanonicalContentComponent, ContentRepresentation, ContentSource};
     assert_eq!(item.identity, "text");
     assert!(item.deferred && item.value.is_none());
     let metadata = item

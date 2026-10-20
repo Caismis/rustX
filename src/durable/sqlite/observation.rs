@@ -8,9 +8,11 @@ use crate::durable::observation::{
     ObservationReadCut, TranscriptHeader, TranscriptHeaderPage,
 };
 use crate::message::types::{ContextKind, InboundKind, MessageBlock};
+use crate::observation::bounded::bounded_bytes;
+use crate::observation::capture::Capture;
+use crate::observation::cut::ContentBinding;
+use crate::observation::transcript::RuntimeClientTranscriptEntry;
 use crate::runtime::identity::ConversationId;
-use crate::runtime_client::checkpoint::{Capture, ContentBinding, bounded_bytes};
-use crate::runtime_client::snapshot::RuntimeClientTranscriptEntry;
 
 pub(super) fn cut(
     connection: &Connection,
@@ -110,13 +112,13 @@ fn identity(connection: &Connection) -> Result<ConversationId, ConversationStore
 fn message_locator(
     message_id: &crate::runtime::identity::MessageId,
     position: u64,
-) -> crate::runtime_client::content::CanonicalContentLocator {
+) -> crate::observation::content::CanonicalContentLocator {
     if message_id.as_str().len() <= 256 {
-        crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+        crate::observation::content::CanonicalContentLocator::ByMessageId {
             message_id: message_id.clone(),
         }
     } else {
-        crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { position }
+        crate::observation::content::CanonicalContentLocator::ByLedgerPosition { position }
     }
 }
 fn append_message_metadata(
@@ -130,8 +132,8 @@ fn append_message_metadata(
 ) -> Result<bool, ConversationStoreError> {
     let mut metadata_deferred = false;
     if let Some(position) = position {
-        let source = crate::runtime_client::content::ContentSource::CanonicalMessageBlock {
-            component: crate::runtime_client::content::CanonicalContentComponent::MessageMetadata,
+        let source = crate::observation::content::ContentSource::CanonicalMessageBlock {
+            component: crate::observation::content::CanonicalContentComponent::MessageMetadata,
             locator: message_locator(message.id(), position),
             block_index: crate::message::types::ContentBlockIndex::new(0),
         };
@@ -139,12 +141,12 @@ fn append_message_metadata(
             connection,
             conversation,
             &source,
-            crate::runtime_client::content::ContentRepresentation::CanonicalJsonV1,
+            crate::observation::content::ContentRepresentation::CanonicalJsonV1,
         )? {
             metadata_deferred = !semantic_fits || reference.readable_end > 1024;
             capture
                 .content
-                .push(crate::runtime_client::checkpoint::ContentBinding {
+                .push(crate::observation::cut::ContentBinding {
                     source_path: None,
                     path: vec!["display".into()],
                     content_ref: reference,
@@ -154,19 +156,18 @@ fn append_message_metadata(
     }
     if let Some(position) = position {
         for index in 0..count.min(HEADER_PAGE_MAX) {
-            let binary_source =
-                crate::runtime_client::content::ContentSource::CanonicalMessageBlock {
-                    component: crate::runtime_client::content::CanonicalContentComponent::Payload,
-                    locator: message_locator(message.id(), position),
-                    block_index: crate::message::types::ContentBlockIndex::new(
-                        u32::try_from(index).map_err(|_| storage("block index"))?,
-                    ),
-                };
+            let binary_source = crate::observation::content::ContentSource::CanonicalMessageBlock {
+                component: crate::observation::content::CanonicalContentComponent::Payload,
+                locator: message_locator(message.id(), position),
+                block_index: crate::message::types::ContentBlockIndex::new(
+                    u32::try_from(index).map_err(|_| storage("block index"))?,
+                ),
+            };
             if let Some(reference) = super::content::descriptor(
                 connection,
                 conversation,
                 &binary_source,
-                crate::runtime_client::content::ContentRepresentation::BinaryBytes,
+                crate::observation::content::ContentRepresentation::BinaryBytes,
             )? {
                 let mut path = vec!["display".into()];
                 if matches!(message, MessageBlock::Tool(_)) {
@@ -175,15 +176,15 @@ fn append_message_metadata(
                 path.extend(["content".into(), index.to_string(), "binary".into()]);
                 capture
                     .content
-                    .push(crate::runtime_client::checkpoint::ContentBinding {
+                    .push(crate::observation::cut::ContentBinding {
                         source_path: None,
                         path,
                         content_ref: reference,
                         deferred: true,
                     });
             }
-            let source = crate::runtime_client::content::ContentSource::CanonicalMessageBlock {
-                component: crate::runtime_client::content::CanonicalContentComponent::BlockMetadata,
+            let source = crate::observation::content::ContentSource::CanonicalMessageBlock {
+                component: crate::observation::content::CanonicalContentComponent::BlockMetadata,
                 locator: message_locator(message.id(), position),
                 block_index: crate::message::types::ContentBlockIndex::new(
                     u32::try_from(index).map_err(|_| storage("canonical block index exhausted"))?,
@@ -193,7 +194,7 @@ fn append_message_metadata(
                 connection,
                 conversation,
                 &source,
-                crate::runtime_client::content::ContentRepresentation::CanonicalJsonV1,
+                crate::observation::content::ContentRepresentation::CanonicalJsonV1,
             )? && reference.readable_end > 1024
             {
                 metadata_deferred = true;
@@ -204,7 +205,7 @@ fn append_message_metadata(
                 path.extend(["content".into(), index.to_string()]);
                 capture
                     .content
-                    .push(crate::runtime_client::checkpoint::ContentBinding {
+                    .push(crate::observation::cut::ContentBinding {
                         source_path: None,
                         path,
                         content_ref: reference,
@@ -307,7 +308,7 @@ pub(super) fn index_message(
         transcript_cursor: connection.query_row("SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1",[message.id().as_str()],|row|row.get::<_,u64>(0)).optional().map_err(|error|storage(error.to_string()))?.map(crate::durable::TranscriptCursor::new),
         identity: (message.id().as_str().len() <= 256).then(|| message.id().clone()),
         locator: position.map(|position| {
-            crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { position }
+            crate::observation::content::CanonicalContentLocator::ByLedgerPosition { position }
         }),
         ledger_position: position,
         role: role.into(),
@@ -342,7 +343,7 @@ pub(super) fn index_message(
     if let Some(head) = &header.deliveries {
         header
             .collections
-            .push(crate::runtime_client::delivery::frontier(head));
+            .push(crate::observation::delivery::frontier(head));
     }
     let bytes = message_header_bytes(&mut header)?;
     connection.execute("INSERT INTO observation_headers(reference_kind,reference_id,ledger_position,header_json,transcript_position) VALUES('message',?1,?2,?3,(SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1)) ON CONFLICT(reference_kind,reference_id) DO UPDATE SET ledger_position=excluded.ledger_position,header_json=excluded.header_json",params![message.id().as_str(),position.map(seq_to_i64).transpose()?,bytes]).map_err(|error|storage(error.to_string()))?;
@@ -375,7 +376,16 @@ fn message_header_bytes(header: &mut MessageHeader) -> Result<Vec<u8>, Conversat
         header.deferred = true;
         if header.display.take().is_some() {
             for binding in &mut header.content {
-                if matches!(&binding.content_ref.source,crate::runtime_client::content::ContentSource::CanonicalMessageBlock{component:crate::runtime_client::content::CanonicalContentComponent::MessageMetadata,..}) { binding.deferred=true; }
+                if matches!(
+                    &binding.content_ref.source,
+                    crate::observation::content::ContentSource::CanonicalMessageBlock {
+                        component:
+                            crate::observation::content::CanonicalContentComponent::MessageMetadata,
+                        ..
+                    }
+                ) {
+                    binding.deferred = true;
+                }
             }
             continue;
         }
@@ -394,7 +404,7 @@ fn message_header_bytes(header: &mut MessageHeader) -> Result<Vec<u8>, Conversat
                     .iter_mut()
                     .find(|frontier| frontier.domain == head.domain)
                 {
-                    *frontier = crate::runtime_client::delivery::frontier(head);
+                    *frontier = crate::observation::delivery::frontier(head);
                 }
                 continue;
             }
@@ -403,9 +413,9 @@ fn message_header_bytes(header: &mut MessageHeader) -> Result<Vec<u8>, Conversat
         header.content.retain(|binding| {
             matches!(
                 &binding.content_ref.source,
-                crate::runtime_client::content::ContentSource::CanonicalMessageBlock {
+                crate::observation::content::ContentSource::CanonicalMessageBlock {
                     component:
-                        crate::runtime_client::content::CanonicalContentComponent::MessageMetadata,
+                        crate::observation::content::CanonicalContentComponent::MessageMetadata,
                     ..
                 }
             )
@@ -417,14 +427,14 @@ fn message_header_bytes(header: &mut MessageHeader) -> Result<Vec<u8>, Conversat
             let blocks = format!("messages.ledger:{position}.blocks");
             let tools = format!("messages.ledger:{position}.tools");
             let mut essential = vec![
-                crate::runtime_client::checkpoint::CollectionFrontier {
+                crate::observation::cut::CollectionFrontier {
                     domain: blocks,
                     revision: 1,
                     total: header.block_count,
                     loaded: 0,
                     next_offset: (header.block_count > 0).then_some(0),
                 },
-                crate::runtime_client::checkpoint::CollectionFrontier {
+                crate::observation::cut::CollectionFrontier {
                     domain: tools,
                     revision: 1,
                     total: header.tool_call_count,
@@ -433,7 +443,7 @@ fn message_header_bytes(header: &mut MessageHeader) -> Result<Vec<u8>, Conversat
                 },
             ];
             if let Some(head) = &header.deliveries {
-                essential.push(crate::runtime_client::delivery::frontier(head));
+                essential.push(crate::observation::delivery::frontier(head));
             }
             if header.collections != essential {
                 header.collections = essential;
@@ -454,9 +464,8 @@ pub(super) fn index_entry(
     let conversation = identity(connection)?;
     let mut capture = Capture::new(1);
     let display = capture.transcript_entry(entry, &conversation, &["display".into()]);
-    if let crate::runtime_client::snapshot::RuntimeClientTranscriptItem::PublicationAudit {
-        audit,
-    } = &entry.item
+    if let crate::observation::transcript::RuntimeClientTranscriptItem::PublicationAudit { audit } =
+        &entry.item
     {
         for (index, block) in audit.content.iter().take(HEADER_PAGE_MAX).enumerate() {
             if let crate::publication::PublicationAuditBlock::ProposedToolCall {
@@ -466,16 +475,25 @@ pub(super) fn index_entry(
             } = block
                 && name.len() > 1024
             {
-                let source=crate::runtime_client::content::ContentSource::DurableTranscriptAudit {component:crate::runtime_client::content::PublicationContentComponent::BlockMetadata,stream_id:audit.stream_id.clone(),message_id:audit.message_id.clone(),attempt_id:audit.attempt_id.clone(),turn_id:audit.turn_id.clone(),publication_request_id:audit.request_id.clone(),block_index:*block_index};
+                let source = crate::observation::content::ContentSource::DurableTranscriptAudit {
+                    component:
+                        crate::observation::content::PublicationContentComponent::BlockMetadata,
+                    stream_id: audit.stream_id.clone(),
+                    message_id: audit.message_id.clone(),
+                    attempt_id: audit.attempt_id.clone(),
+                    turn_id: audit.turn_id.clone(),
+                    publication_request_id: audit.request_id.clone(),
+                    block_index: *block_index,
+                };
                 if let Some(reference) = super::content::descriptor(
                     connection,
                     &conversation,
                     &source,
-                    crate::runtime_client::content::ContentRepresentation::CanonicalJsonV1,
+                    crate::observation::content::ContentRepresentation::CanonicalJsonV1,
                 )? {
                     capture
                         .content
-                        .push(crate::runtime_client::checkpoint::ContentBinding {
+                        .push(crate::observation::cut::ContentBinding {
                             source_path: None,
                             path: vec![
                                 "display".into(),
@@ -566,12 +584,11 @@ pub(super) fn index_native_event(
         .ok_or_else(|| storage("native terminal process unavailable"))?;
         return store_transcript_header(transaction,kind,event.event_id.as_str(),TranscriptHeader {
             tool_calls:Vec::new(),publication_settlement:None,cursor,reference_kind:kind.into(),reference_id:if event.event_id.as_str().len()<=256 {event.event_id.to_string()} else {format!("transcript:{}",cursor.get())},message:None,
-            display:Some(crate::runtime_client::snapshot::RuntimeClientTranscriptEntry { cursor:crate::runtime_client::snapshot::RuntimeClientTranscriptCursor::new(cursor.get()), item:crate::runtime_client::snapshot::RuntimeClientTranscriptItem::AttemptTerminal{turn:process}, tool_calls:Vec::new(),turn_process:None,completed_response:None,response_pending:false }),
+            display:Some(crate::observation::transcript::RuntimeClientTranscriptEntry { cursor:crate::observation::transcript::RuntimeClientTranscriptCursor::new(cursor.get()), item:crate::observation::transcript::RuntimeClientTranscriptItem::AttemptTerminal{turn:process}, tool_calls:Vec::new(),turn_process:None,completed_response:None,response_pending:false }),
             content:Vec::new(),collections:Vec::new(),deferred:false,
         });
     }
-    let Some(event_copy) =
-        crate::runtime_client::checkpoint::bounded_clone(event, HEADER_ENCODED_MAX)
+    let Some(event_copy) = crate::observation::bounded::bounded_clone(event, HEADER_ENCODED_MAX)
     else {
         return store_transcript_header(
             transaction,
@@ -630,7 +647,7 @@ pub(super) fn index_item(
                 .ok_or_else(|| storage("inherited terminal process unavailable"))?;
         return store_transcript_header(transaction,kind,id,TranscriptHeader {
             tool_calls:Vec::new(),publication_settlement:None,cursor,reference_kind:kind.into(),reference_id:id.into(),message:None,
-            display:Some(crate::runtime_client::snapshot::RuntimeClientTranscriptEntry { cursor:crate::runtime_client::snapshot::RuntimeClientTranscriptCursor::new(cursor.get()), item:crate::runtime_client::snapshot::RuntimeClientTranscriptItem::AttemptTerminal{turn:process}, tool_calls:Vec::new(),turn_process:None,completed_response:None,response_pending:false }),
+            display:Some(crate::observation::transcript::RuntimeClientTranscriptEntry { cursor:crate::observation::transcript::RuntimeClientTranscriptCursor::new(cursor.get()), item:crate::observation::transcript::RuntimeClientTranscriptItem::AttemptTerminal{turn:process}, tool_calls:Vec::new(),turn_process:None,completed_response:None,response_pending:false }),
             content:Vec::new(),collections:Vec::new(),deferred:false,
         });
     }
@@ -643,7 +660,7 @@ pub(super) fn index_item(
         }],
         next_cursor: None,
     };
-    let view = crate::runtime_client::snapshot::transcript_page_view(page).map_err(storage)?;
+    let view = crate::observation::transcript::transcript_page_view(page).map_err(storage)?;
     let entry = view
         .entries
         .into_iter()
@@ -673,7 +690,7 @@ pub(super) fn enrich_message_header(
         .as_ref()
         .ok_or_else(|| storage("native Tool descriptor locator unavailable"))?;
     let page = super::observation_tools::page(connection, conversation, cut, locator, 0, 32)?;
-    crate::runtime_client::tool_observation::enrich_message(header, &page)
+    crate::observation::tool::enrich_message(header, &page)
         .map_err(|error| storage(format!("{error:?}")))
 }
 
@@ -831,14 +848,14 @@ fn enrich_transcript_tools(
     connection: &Connection,
     conversation: &ConversationId,
     at: &ObservationReadCut,
-    locator: &crate::runtime_client::content::CanonicalContentLocator,
+    locator: &crate::observation::content::CanonicalContentLocator,
     header: &mut TranscriptHeader,
 ) -> Result<(), ConversationStoreError> {
     let tools = super::observation_tools::page(connection, conversation, at, locator, 0, 32)?;
     if header.message.is_some() {
-        crate::runtime_client::tool_observation::enrich_transcript_header(header, &tools)
+        crate::observation::tool::enrich_transcript_header(header, &tools)
     } else {
-        crate::runtime_client::tool_observation::enrich_loaded_transcript_header(header, &tools)
+        crate::observation::tool::enrich_loaded_transcript_header(header, &tools)
     }
     .map_err(|error| storage(format!("{error:?}")))
 }
@@ -865,7 +882,7 @@ fn transcript_message_header(
             message: None,
             display: Some(RuntimeClientTranscriptEntry {
                 cursor: cursor.into(),
-                item: crate::runtime_client::snapshot::RuntimeClientTranscriptItem::Message {
+                item: crate::observation::transcript::RuntimeClientTranscriptItem::Message {
                     message: display_message,
                 },
                 turn_process: None,
@@ -980,7 +997,7 @@ fn block(
     body: &impl serde::Serialize,
     field: &[&str],
 ) -> Result<(), ConversationStoreError> {
-    use crate::runtime_client::content::{ContentRepresentation as Rep, ContentSource};
+    use crate::observation::content::{ContentRepresentation as Rep, ContentSource};
     let conversation = identity(connection)?;
     let block_index = crate::message::types::ContentBlockIndex::new(
         u32::try_from(index).map_err(|_| storage("canonical block index exhausted"))?,
@@ -994,7 +1011,7 @@ fn block(
         .map_err(|error| storage(error.to_string()))?;
     let locator = message_locator(message.id(), position);
     let source = ContentSource::CanonicalMessageBlock {
-        component: crate::runtime_client::content::CanonicalContentComponent::Payload,
+        component: crate::observation::content::CanonicalContentComponent::Payload,
         locator: locator.clone(),
         block_index,
     };
@@ -1016,7 +1033,7 @@ fn block(
             } else {
                 path.extend(field.iter().map(|value| (*value).into()));
             }
-            content.push(crate::runtime_client::checkpoint::ContentBinding {
+            content.push(crate::observation::cut::ContentBinding {
                 source_path: None,
                 path,
                 content_ref: reference,
@@ -1026,7 +1043,7 @@ fn block(
     }
     if value.is_none() {
         let metadata_source = ContentSource::CanonicalMessageBlock {
-            component: crate::runtime_client::content::CanonicalContentComponent::BlockMetadata,
+            component: crate::observation::content::CanonicalContentComponent::BlockMetadata,
             locator,
             block_index,
         };
@@ -1036,7 +1053,7 @@ fn block(
             &metadata_source,
             Rep::CanonicalJsonV1,
         )? {
-            content.push(crate::runtime_client::checkpoint::ContentBinding {
+            content.push(crate::observation::cut::ContentBinding {
                 source_path: None,
                 path: vec!["value".into()],
                 content_ref: reference,
@@ -1112,7 +1129,7 @@ pub(super) fn blocks(
         connection,
         conversation,
         at,
-        &crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+        &crate::observation::content::CanonicalContentLocator::ByMessageId {
             message_id: message_id.clone(),
         },
         offset,
@@ -1124,7 +1141,7 @@ pub(super) fn blocks_by_locator(
     connection: &Connection,
     conversation: &ConversationId,
     at: &ObservationReadCut,
-    locator: &crate::runtime_client::content::CanonicalContentLocator,
+    locator: &crate::observation::content::CanonicalContentLocator,
     offset: u64,
     requested: usize,
 ) -> Result<crate::durable::observation::MessageBlockHeaderPage, ConversationStoreError> {
@@ -1170,7 +1187,7 @@ pub(super) fn blocks_by_locator(
     Ok(crate::durable::observation::MessageBlockHeaderPage {
         cut: at.clone(),
         message_id: header.identity,
-        locator: crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition {
+        locator: crate::observation::content::CanonicalContentLocator::ByLedgerPosition {
             position,
         },
         total: header.block_count,
@@ -1319,7 +1336,7 @@ pub(super) fn tools(
         connection,
         conversation,
         at,
-        &crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+        &crate::observation::content::CanonicalContentLocator::ByMessageId {
             message_id: message_id.clone(),
         },
         offset,
@@ -1356,7 +1373,7 @@ pub(super) fn tools_by_locator(
     connection: &Connection,
     conversation: &ConversationId,
     at: &ObservationReadCut,
-    locator: &crate::runtime_client::content::CanonicalContentLocator,
+    locator: &crate::observation::content::CanonicalContentLocator,
     offset: u64,
     requested: usize,
 ) -> Result<crate::durable::observation::ToolAssociationHeaderPage, ConversationStoreError> {
@@ -1441,7 +1458,7 @@ pub(super) fn tools_by_locator(
     Ok(crate::durable::observation::ToolAssociationHeaderPage {
         cut: at.clone(),
         message_id: assistant.identity,
-        locator: crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition {
+        locator: crate::observation::content::CanonicalContentLocator::ByLedgerPosition {
             position,
         },
         total: assistant.tool_call_count,
@@ -1591,7 +1608,7 @@ pub(super) fn pending_value(
     offset: u64,
     max_bytes: u32,
 ) -> Result<crate::durable::observation::ObservationValueChunk, ConversationStoreError> {
-    use crate::runtime_client::content::{CONTENT_READ_MAX_BYTES, CONTENT_SAFE_INTEGER_MAX};
+    use crate::observation::content::{CONTENT_READ_MAX_BYTES, CONTENT_SAFE_INTEGER_MAX};
     if offset > CONTENT_SAFE_INTEGER_MAX
         || sequence > CONTENT_SAFE_INTEGER_MAX
         || max_bytes == 0
@@ -1778,7 +1795,7 @@ pub(super) fn index_audit(
             tool_calls: Vec::new(),
             turn_process: None,
             completed_response: None,
-            item: crate::runtime_client::snapshot::RuntimeClientTranscriptItem::PublicationAudit {
+            item: crate::observation::transcript::RuntimeClientTranscriptItem::PublicationAudit {
                 audit,
             },
         });
@@ -1797,7 +1814,7 @@ pub(super) fn index_audit(
     let header = TranscriptHeader {
         tool_calls: Vec::new(),
         publication_settlement: Some(
-            crate::runtime_client::snapshot::RuntimeClientPublicationSettlementRecord {
+            crate::observation::transcript::RuntimeClientPublicationSettlementRecord {
                 settlement: audit_summary(audit).into(),
                 transcript_cursor: cursor.into(),
                 read_cut: cut(connection, &conversation)?,
@@ -1830,7 +1847,7 @@ pub(super) fn publication_settlement_head(
     conversation: &ConversationId,
     at: &ObservationReadCut,
 ) -> Result<
-    Vec<crate::runtime_client::snapshot::RuntimeClientPublicationSettlementRecord>,
+    Vec<crate::observation::transcript::RuntimeClientPublicationSettlementRecord>,
     ConversationStoreError,
 > {
     validate(connection, conversation, at)?;
@@ -1945,9 +1962,8 @@ fn audit_metadata_bindings(
         } = block
             && (name.len() > 1024 || call_id.as_str().len() > 256 || tool_id.as_str().len() > 256)
         {
-            let source = crate::runtime_client::content::ContentSource::DurableTranscriptAudit {
-                component:
-                    crate::runtime_client::content::PublicationContentComponent::BlockMetadata,
+            let source = crate::observation::content::ContentSource::DurableTranscriptAudit {
+                component: crate::observation::content::PublicationContentComponent::BlockMetadata,
                 stream_id: audit.stream_id.clone(),
                 message_id: audit.message_id.clone(),
                 attempt_id: audit.attempt_id.clone(),
@@ -1959,11 +1975,11 @@ fn audit_metadata_bindings(
                 connection,
                 conversation,
                 &source,
-                crate::runtime_client::content::ContentRepresentation::CanonicalJsonV1,
+                crate::observation::content::ContentRepresentation::CanonicalJsonV1,
             )? {
                 capture
                     .content
-                    .push(crate::runtime_client::checkpoint::ContentBinding {
+                    .push(crate::observation::cut::ContentBinding {
                         source_path: None,
                         path: vec![
                             "display".into(),
@@ -1988,10 +2004,10 @@ fn index_audit_blocks(
     cursor: crate::durable::TranscriptCursor,
 ) -> Result<(), ConversationStoreError> {
     for (ordinal, block) in audit.content.iter().enumerate() {
-        use crate::publication::PublicationAuditBlock as Block;
-        use crate::runtime_client::content::{
+        use crate::observation::content::{
             ContentRepresentation as Rep, ContentSource, PublicationContentComponent as Component,
         };
+        use crate::publication::PublicationAuditBlock as Block;
         let (block_index, kind, representation, field) = match block {
             Block::Text { block_index, .. } => (*block_index, "text", Rep::Utf8Text, "text"),
             Block::Reasoning { block_index, .. } => {
@@ -2014,8 +2030,8 @@ fn index_audit_blocks(
             publication_request_id: audit.request_id.clone(),
             block_index,
         };
-        let value = crate::runtime_client::checkpoint::bounded_item_bytes(block, 1024)
-            .and_then(|_| crate::runtime_client::checkpoint::structural_value(block));
+        let value = crate::observation::bounded::bounded_item_bytes(block, 1024)
+            .and_then(|_| crate::observation::bounded::structural_value(block));
         let deferred = value.is_none();
         let mut content = Vec::new();
         if deferred {
@@ -2080,7 +2096,7 @@ fn canonical_bindings(
                 connection,
                 conversation,
                 &binding.content_ref.source,
-                crate::runtime_client::content::ContentRepresentation::RawJsonUtf8,
+                crate::observation::content::ContentRepresentation::RawJsonUtf8,
             )?
         } else {
             None

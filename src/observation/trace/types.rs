@@ -21,14 +21,14 @@ use crate::runtime::identity::{
 /// they never parse it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(transparent)]
-pub struct TraceCursor(pub(super) String);
+pub struct TraceCursor(pub(crate) String);
 
 impl TraceCursor {
-    pub(super) fn at(sequence: u64) -> Self {
+    pub(crate) fn at(sequence: u64) -> Self {
         Self(format!("trace:{sequence}"))
     }
 
-    pub(super) fn sequence(&self) -> Result<u64, crate::durable::ConversationStoreError> {
+    pub(crate) fn sequence(&self) -> Result<u64, crate::durable::ConversationStoreError> {
         self.0
             .strip_prefix("trace:")
             .and_then(|value| value.parse().ok())
@@ -45,7 +45,7 @@ impl TraceCursor {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TracePage {
-    pub read_cut: Option<crate::runtime_client::checkpoint::CheckpointReadCut>,
+    pub read_cut: Option<crate::observation::cut::CheckpointReadCut>,
     /// Current-cut repairs for explicitly requested loaded identities.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub updates: Vec<TraceLifecycle>,
@@ -67,7 +67,7 @@ pub enum TraceFieldSource {
     },
     Content {
         field: TraceFieldKind,
-        binding: crate::runtime_client::checkpoint::ContentBinding,
+        binding: crate::observation::cut::ContentBinding,
     },
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -97,7 +97,7 @@ pub enum TraceFieldKind {
 #[serde(deny_unknown_fields)]
 pub struct TraceLocation {
     pub attempt_id: Option<AttemptId>,
-    pub attempt_id_source: Option<crate::runtime_client::response::AttemptIdentitySource>,
+    pub attempt_id_source: Option<crate::observation::turn::AttemptIdentitySource>,
     pub step_id: Option<TurnId>,
     pub step_id_source: Option<TraceFieldSource>,
 }
@@ -209,7 +209,7 @@ pub struct TraceToolCall {
     pub call_id: Option<ToolCallId>,
     pub tool_id: Option<ToolId>,
     pub name: Option<String>,
-    pub occurrence: crate::runtime_client::snapshot::RuntimeClientToolOccurrence,
+    pub occurrence: crate::observation::tool::RuntimeClientToolOccurrence,
     pub fields: Vec<TraceFieldSource>,
 }
 
@@ -325,7 +325,7 @@ pub enum TraceContextSource {
 #[serde(deny_unknown_fields)]
 pub struct TraceContextPresentation {
     pub message_id: Option<MessageId>,
-    pub locator: crate::runtime_client::content::CanonicalContentLocator,
+    pub locator: crate::observation::content::CanonicalContentLocator,
     pub fields: Vec<TraceFieldSource>,
     /// Exact producer from the committed accepted-contribution record.
     pub producer: crate::runtime::identity::ContextContributorIdentity,
@@ -348,7 +348,7 @@ pub struct TraceContextPresentation {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TraceRequestSummary {
-    pub accepted_message_locator: Option<crate::runtime_client::content::CanonicalContentLocator>,
+    pub accepted_message_locator: Option<crate::observation::content::CanonicalContentLocator>,
     pub request_id: Option<RequestId>,
     pub request_id_source: Option<TraceFieldSource>,
     /// Native actual-request ordinal within the logical step. Zero is the
@@ -388,7 +388,7 @@ pub struct TraceRequestSummary {
 pub struct TraceToolSummary {
     pub call_id: Option<ToolCallId>,
     pub tool_id: Option<ToolId>,
-    pub occurrence: Option<crate::runtime_client::snapshot::RuntimeClientToolOccurrence>,
+    pub occurrence: Option<crate::observation::tool::RuntimeClientToolOccurrence>,
     pub fields: Vec<TraceFieldSource>,
     /// Recorded model-facing name, when the canonical proposal is loadable.
     pub name: Option<String>,
@@ -419,7 +419,7 @@ pub enum TraceToolOutcome {
 #[serde(deny_unknown_fields)]
 pub struct TraceRecord {
     pub fields: Vec<TraceFieldSource>,
-    pub collections: Vec<crate::runtime_client::checkpoint::CollectionFrontier>,
+    pub collections: Vec<crate::observation::cut::CollectionFrontier>,
     /// Stable native Trace identity. Selection and detail reads use it, and
     /// it survives paging, prepending and reconnect for the same record.
     pub id: String,
@@ -464,7 +464,7 @@ pub struct TraceRecord {
 #[serde(deny_unknown_fields)]
 pub struct TraceLifecycle {
     pub fields: Vec<TraceFieldSource>,
-    pub collections: Vec<crate::runtime_client::checkpoint::CollectionFrontier>,
+    pub collections: Vec<crate::observation::cut::CollectionFrontier>,
     pub id: String,
     /// Current native ownership, including an idle input's answering Attempt.
     pub location: TraceLocation,
@@ -575,7 +575,7 @@ pub struct TraceContributionMetadata {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum TraceContributionPresentation {
-    AgentStatus(crate::runtime_client::snapshot::AgentStatusView),
+    AgentStatus(crate::observation::status::AgentStatusView),
 }
 
 /// One allowlisted provider-neutral request option.
@@ -613,8 +613,8 @@ pub enum TraceInputProvenance {
         source: Option<crate::model::projected::CanonicalMessageRef>,
         conversation_id: ConversationId,
         content_digest: String,
-        locator: Option<crate::runtime_client::content::CanonicalContentLocator>,
-        message_id_source: Option<Box<crate::runtime_client::checkpoint::ContentBinding>>,
+        locator: Option<crate::observation::content::CanonicalContentLocator>,
+        message_id_source: Option<Box<crate::observation::cut::ContentBinding>>,
     },
     Derived {
         sources: Vec<crate::model::projected::CanonicalMessageRef>,

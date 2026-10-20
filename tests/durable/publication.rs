@@ -2755,9 +2755,9 @@ fn a_provider_outcome_names_one_started_request_exactly_once() {
 fn live_content_source(
     start: &PublicationStreamStart,
     block: u32,
-) -> rustx::runtime_client::content::ContentSource {
-    rustx::runtime_client::content::ContentSource::LivePublicationPrefix {
-        component: rustx::runtime_client::content::PublicationContentComponent::Payload,
+) -> rustx::observation::content::ContentSource {
+    rustx::observation::content::ContentSource::LivePublicationPrefix {
+        component: rustx::observation::content::PublicationContentComponent::Payload,
         stream_id: start.stream_id.clone(),
         message_id: start.message_id.clone(),
         attempt_id: start.attempt_id.clone(),
@@ -2768,7 +2768,7 @@ fn live_content_source(
 }
 fn read_content_bytes(
     store: &SqliteConversationStore,
-    reference: &rustx::runtime_client::content::ContentRef,
+    reference: &rustx::observation::content::ContentRef,
 ) -> Vec<u8> {
     use base64::Engine;
     let mut offset = 0;
@@ -2794,7 +2794,7 @@ fn read_content_bytes(
 }
 #[test]
 fn t08_large_canonical_content_exact_byte_chunks_survive_restart() {
-    use rustx::runtime_client::content::{ContentRepresentation as Rep, ContentSource};
+    use rustx::observation::content::{ContentRepresentation as Rep, ContentSource};
     let durable = Durable::new();
     // Every chunk boundary crosses an actual multibyte character.
     let original = format!("a{}", "水🙂".repeat(600_000));
@@ -2809,8 +2809,8 @@ fn t08_large_canonical_content_exact_byte_chunks_survive_restart() {
     let reference = store
         .content_descriptor(
             &ContentSource::CanonicalMessageBlock {
-                component: rustx::runtime_client::content::CanonicalContentComponent::Payload,
-                locator: rustx::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                component: rustx::observation::content::CanonicalContentComponent::Payload,
+                locator: rustx::observation::content::CanonicalContentLocator::ByMessageId {
                     message_id,
                 },
                 block_index: ContentBlockIndex::new(0),
@@ -2836,7 +2836,7 @@ fn t08_large_canonical_content_exact_byte_chunks_survive_restart() {
 }
 #[test]
 fn t09_t12_t19_committed_live_prefix_fixed_identity_and_frontier() {
-    use rustx::runtime_client::content::ContentRepresentation as Rep;
+    use rustx::observation::content::ContentRepresentation as Rep;
     let durable = Durable::new();
     let (start, reference) = {
         let store = durable.open();
@@ -2905,7 +2905,7 @@ fn t09_t12_t19_committed_live_prefix_fixed_identity_and_frontier() {
                     ConversationId::new("conv_601cccec-75c7-703d-af18-cdf2cb42a8a3");
             }
             _ => {
-                if let rustx::runtime_client::content::ContentSource::LivePublicationPrefix {
+                if let rustx::observation::content::ContentSource::LivePublicationPrefix {
                     attempt_id,
                     ..
                 } = &mut forged.source
@@ -2932,8 +2932,8 @@ fn t09_t12_t19_committed_live_prefix_fixed_identity_and_frontier() {
         store.content_read(&reference, 0, 1).is_err(),
         "expired live ref must not redirect"
     );
-    let source = rustx::runtime_client::content::ContentSource::DurableTranscriptAudit {
-        component: rustx::runtime_client::content::PublicationContentComponent::Payload,
+    let source = rustx::observation::content::ContentSource::DurableTranscriptAudit {
+        component: rustx::observation::content::PublicationContentComponent::Payload,
         stream_id: audit.stream_id,
         message_id: audit.message_id,
         attempt_id: audit.attempt_id,
@@ -2953,7 +2953,7 @@ fn t09_t12_t19_committed_live_prefix_fixed_identity_and_frontier() {
 }
 #[test]
 fn t19_raw_tool_json_retains_original_bytes_after_canonical_commit() {
-    use rustx::runtime_client::content::{ContentRepresentation as Rep, ContentSource};
+    use rustx::observation::content::{ContentRepresentation as Rep, ContentSource};
     let durable = Durable::new();
     let raw = "{ \n}\t";
     let (message_id, live) = {
@@ -3008,10 +3008,8 @@ fn t19_raw_tool_json_retains_original_bytes_after_canonical_commit() {
     let store = durable.open();
     assert!(store.content_read(&live, 0, 1).is_err());
     let source = ContentSource::CanonicalMessageBlock {
-        component: rustx::runtime_client::content::CanonicalContentComponent::Payload,
-        locator: rustx::runtime_client::content::CanonicalContentLocator::ByMessageId {
-            message_id,
-        },
+        component: rustx::observation::content::CanonicalContentComponent::Payload,
+        locator: rustx::observation::content::CanonicalContentLocator::ByMessageId { message_id },
         block_index: ContentBlockIndex::new(0),
     };
     let raw_ref = store
@@ -3035,7 +3033,7 @@ fn t19_raw_tool_json_retains_original_bytes_after_canonical_commit() {
 
 #[test]
 fn t19_parsed_only_tool_value_never_invents_canonical_raw_json() {
-    use rustx::runtime_client::content::{ContentRepresentation as Rep, ContentSource};
+    use rustx::observation::content::{ContentRepresentation as Rep, ContentSource};
     let durable = Durable::new();
     let store = durable.open();
     store.initialize(&[]).unwrap();
@@ -3077,8 +3075,8 @@ fn t19_parsed_only_tool_value_never_invents_canonical_raw_json() {
         )
         .unwrap();
     let source = ContentSource::CanonicalMessageBlock {
-        component: rustx::runtime_client::content::CanonicalContentComponent::Payload,
-        locator: rustx::runtime_client::content::CanonicalContentLocator::ByMessageId {
+        component: rustx::observation::content::CanonicalContentComponent::Payload,
+        locator: rustx::observation::content::CanonicalContentLocator::ByMessageId {
             message_id: start.message_id,
         },
         block_index: ContentBlockIndex::new(0),
@@ -3102,7 +3100,7 @@ fn t19_parsed_only_tool_value_never_invents_canonical_raw_json() {
 fn t08_t09_t19_lineage_keeps_original_raw_bytes_after_parent_removal() {
     use rustx::durable::LineageSeed;
     use rustx::message::types::{InboundKind, UserContentBlock, UserMessageBlock, UserSource};
-    use rustx::runtime_client::content::{
+    use rustx::observation::content::{
         CanonicalContentComponent as Component, ContentRepresentation as Rep, ContentSource,
     };
     let parent = Durable::new();
@@ -3165,7 +3163,7 @@ fn t08_t09_t19_lineage_keeps_original_raw_bytes_after_parent_removal() {
         .unwrap();
     let parent_source = ContentSource::CanonicalMessageBlock {
         component: Component::Payload,
-        locator: rustx::runtime_client::content::CanonicalContentLocator::ByMessageId {
+        locator: rustx::observation::content::CanonicalContentLocator::ByMessageId {
             message_id: start.message_id.clone(),
         },
         block_index: ContentBlockIndex::new(0),
@@ -3209,7 +3207,7 @@ fn t08_t09_t19_lineage_keeps_original_raw_bytes_after_parent_removal() {
         .content_descriptor(
             &ContentSource::CanonicalMessageBlock {
                 component: Component::Payload,
-                locator: rustx::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                locator: rustx::observation::content::CanonicalContentLocator::ByMessageId {
                     message_id: inbound,
                 },
                 block_index: ContentBlockIndex::new(0),
@@ -3240,7 +3238,7 @@ fn t08_t09_t19_lineage_keeps_original_raw_bytes_after_parent_removal() {
 
 #[test]
 fn t08_t12_t19_live_and_audit_tool_metadata_keep_exact_components_and_frame_frontiers() {
-    use rustx::runtime_client::content::{
+    use rustx::observation::content::{
         ContentRepresentation as Rep, ContentSource, PublicationContentComponent as Component,
     };
     let durable = Durable::new();
@@ -3682,7 +3680,7 @@ fn t19_staging_receipts_pin_each_committed_frame_without_later_source_reads() {
 
 #[test]
 fn t15_t19_t20_live_native_pages_seek_sparse_block_and_tool_ordinals_at_fixed_p_frontier() {
-    use rustx::runtime_client::content::{ContentSource, PublicationContentComponent};
+    use rustx::observation::content::{ContentSource, PublicationContentComponent};
     let durable = Durable::new();
     let store = durable.open();
     store.initialize(&[]).unwrap();
@@ -3849,7 +3847,7 @@ fn t09_t19_live_metadata_revisions_keep_exact_frame_evidence() {
 
 #[test]
 fn t08_t12_canonical_locator_namespaces_preserve_literal_ids_and_full_inline_id_budget() {
-    use rustx::runtime_client::content::{
+    use rustx::observation::content::{
         CanonicalContentComponent as Component, CanonicalContentLocator as Locator,
         ContentRepresentation as Rep, ContentSource,
     };
@@ -3909,7 +3907,7 @@ fn t08_t12_canonical_locator_namespaces_preserve_literal_ids_and_full_inline_id_
 /// original publication authority, including exact retained raw Tool JSON.
 #[test]
 fn t10_t19_display_layout_failure_preserves_native_publication_and_original_raw_json() {
-    use rustx::runtime_client::content::{
+    use rustx::observation::content::{
         CanonicalContentComponent, CanonicalContentLocator, ContentRepresentation, ContentSource,
     };
     let durable = Durable::new();
@@ -4037,7 +4035,7 @@ fn t10_t19_derived_journal_families_fence_observation_without_refusing_native_re
 #[test]
 fn t08_t19_native_usage_u64_frontier_and_opaque_canonical_bytes_remain_exact() {
     use rustx::model::types::{ModelUsage, UsageDetails};
-    use rustx::runtime_client::content::{
+    use rustx::observation::content::{
         CanonicalContentComponent, CanonicalContentLocator, ContentRepresentation, ContentSource,
     };
     let store = SqliteConversationStore::in_memory(conversation_id()).unwrap();
@@ -4244,7 +4242,7 @@ fn t10_t19_audit_layout_failure_retains_positive_native_settlement_receipt() {
 #[test]
 fn t08_t14_t15_t19_audit_blocks_advance_past_giant_proposal_metadata_and_exact_raw_json() {
     use base64::Engine as _;
-    use rustx::runtime_client::content::{
+    use rustx::observation::content::{
         ContentRepresentation, ContentSource, PublicationContentComponent,
     };
     let durable = Durable::new();

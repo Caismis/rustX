@@ -127,7 +127,7 @@ fn deny_inspection_original_columns(
 }
 #[test]
 fn t08_t12_t15_t19_trace_definition_uses_exact_original_retry_catalog_without_body_reads() {
-    use crate::runtime_client::trace::{TraceFieldKind, TraceFieldSource};
+    use crate::observation::trace::{TraceFieldKind, TraceFieldSource};
     let store = store();
     store.initialize(&[]).unwrap();
     let (first, first_start) = inspection_request(&store, 0, &"original🙂schema".repeat(70_000));
@@ -390,7 +390,7 @@ fn t08_t12_t15_t19_trace_adoption_advances_and_validates_only_selected_native_me
     assert_eq!(next.next_offset, Some(16));
     assert_eq!(
         next.items[0].locator,
-        crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { position: 9 }
+        crate::observation::content::CanonicalContentLocator::ByLedgerPosition { position: 9 }
     );
     let last = store
         .observation_trace_adoption(&cut, sequence, 16, 8)

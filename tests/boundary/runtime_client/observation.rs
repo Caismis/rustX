@@ -77,7 +77,7 @@ async fn t04_native_unix_initialize_and_checkpoint_never_carry_an_eight_mib_snap
         .unwrap();
     client_write.write_all(b"\n").await.unwrap();
     read.read_line(&mut record).await.unwrap();
-    assert!(record.len() <= crate::runtime_client::checkpoint::CHECKPOINT_TARGET_BYTES);
+    assert!(record.len() <= crate::observation::bounded::CHECKPOINT_TARGET_BYTES);
     let response: RuntimeClientResponse = serde_json::from_str(&record).unwrap();
     let Some(RuntimeClientResult::Checkpoint { checkpoint }) = response.result else {
         panic!("bounded native checkpoint")

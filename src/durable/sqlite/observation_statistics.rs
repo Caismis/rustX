@@ -4,7 +4,7 @@ use super::{Connection, ConversationStoreError, OptionalExtension, params, stora
 use crate::durable::reading::TurnExecution;
 use crate::durable::response::{add_usage, timing::ActivityFold};
 use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
-use crate::runtime_client::response::{ConversationStatistics, ConversationTurnClock};
+use crate::observation::statistics::{ConversationStatistics, ConversationTurnClock};
 use serde::{Deserialize, Serialize};
 #[derive(Default, Serialize, Deserialize)]
 struct StatisticsLayout {
@@ -14,12 +14,12 @@ struct StatisticsLayout {
 }
 #[derive(Default, Serialize, Deserialize)]
 struct LocalStatisticsLayout {
-    view: crate::runtime_client::agent_statistics::AgentStatistics,
+    view: crate::observation::statistics::AgentStatistics,
     activity: TurnExecution,
     active_start: Option<u64>,
 }
 fn encode(value: &impl Serialize) -> Result<Vec<u8>, ConversationStoreError> {
-    crate::runtime_client::checkpoint::bounded_bytes(
+    crate::observation::bounded::bounded_bytes(
         value,
         crate::durable::observation::HEADER_ENCODED_MAX,
     )
@@ -105,7 +105,7 @@ pub(super) fn read(
 pub(super) fn agent_read(
     connection: &Connection,
     through: u64,
-) -> Result<crate::runtime_client::agent_statistics::AgentStatistics, ConversationStoreError> {
+) -> Result<crate::observation::statistics::AgentStatistics, ConversationStoreError> {
     Ok(at_cut(connection, through)?.local.view)
 }
 
@@ -262,7 +262,7 @@ fn fold_statistics(
                 attempt_id: (attempt.as_str().len() <= 512).then(|| attempt.clone()),
                 attempt_id_deferred: attempt.as_str().len() > 512,
                 attempt_id_source: if attempt.as_str().len() > 512 {
-                    Some(crate::runtime_client::snapshot::JournalFieldRef {
+                    Some(crate::observation::tool::JournalFieldRef {
                         sequence: event.sequence,
                         path: vec!["attempt_id".into()],
                         encoded_bytes: super::observation_request_summary::serialized_bytes(
@@ -343,7 +343,7 @@ fn record_duration(
     event: &RuntimeEventEnvelope,
     local: &mut LocalStatisticsLayout,
 ) -> Result<(), ConversationStoreError> {
-    use crate::runtime_client::agent_statistics::AgentActiveInterval;
+    use crate::observation::statistics::AgentActiveInterval;
     if matches!(event.event, RuntimeEvent::AttemptStarted { .. }) {
         if let Some(active) = &local.view.duration.active {
             settle_duration(local, active.observed_at);

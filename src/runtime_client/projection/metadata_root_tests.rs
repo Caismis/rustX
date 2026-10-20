@@ -1,7 +1,4 @@
-use crate::runtime_client::content::{
-    CanonicalContentComponent, CanonicalContentLocator, ContentRef, ContentRepresentation,
-    ContentSource,
-};
+use crate::observation::content::{CanonicalContentComponent, CanonicalContentLocator, ContentRef, ContentRepresentation, ContentSource};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn reference(position: u64) -> ContentRef {

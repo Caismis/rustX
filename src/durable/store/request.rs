@@ -72,11 +72,11 @@ pub enum ModelTurnStartCommitDisposition {
 pub struct StatusObservationSource {
     pub contribution_ordinal: u64,
     pub request_id: crate::runtime::identity::RequestId,
-    pub locator: crate::runtime_client::content::CanonicalContentLocator,
-    pub rendered_ref: Option<crate::runtime_client::content::ContentRef>,
-    pub target_locator: Option<crate::runtime_client::content::CanonicalContentLocator>,
+    pub locator: crate::observation::content::CanonicalContentLocator,
+    pub rendered_ref: Option<crate::observation::content::ContentRef>,
+    pub target_locator: Option<crate::observation::content::CanonicalContentLocator>,
     pub target_transcript: Option<TranscriptCursor>,
-    pub target_metadata_ref: Option<crate::runtime_client::content::ContentRef>,
+    pub target_metadata_ref: Option<crate::observation::content::ContentRef>,
 }
 
 /// One durable semantic contribution emission fact and its materialized latest

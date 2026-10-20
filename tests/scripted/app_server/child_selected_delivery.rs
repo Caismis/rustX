@@ -1,6 +1,5 @@
 // A tiny Child delivery has no dependency on a complete historical Host.
-use rustx::durable::{CanonicalStore, JournalStore, ObservationStore};
-use crate::runtime_client::content::CanonicalContentLocator;
+use crate::observation::content::CanonicalContentLocator;
 
 fn giant_selected_delivery(
     child: &ChildDelivery,

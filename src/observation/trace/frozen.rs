@@ -168,7 +168,7 @@ impl serde::Serialize for Contributions<'_> {
                 Some(crate::context::contribution::ContributionPresentation::AgentStatus(
                     status,
                 )) => Some(super::types::TraceContributionPresentation::AgentStatus(
-                    crate::runtime_client::projection::prepared_status(
+                    crate::observation::status::prepared_status(
                         &self.0.identity.attempt_id,
                         self.0
                             .identity
@@ -257,6 +257,6 @@ pub(crate) fn request_outcome(
         usage,
         failure,
         generation: generation
-            .map(|value| super::record::generation_metrics(value, usage.as_ref())),
+            .map(|value| super::generation::generation_metrics(value, usage.as_ref())),
     })
 }

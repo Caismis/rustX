@@ -253,7 +253,7 @@ pub(crate) enum ReadSource {
     SessionFile {
         #[serde(skip_serializing_if = "Option::is_none")]
         agent_id: Option<crate::runtime::identity::AgentId>,
-        locator: crate::runtime_client::content::CanonicalContentLocator,
+        locator: crate::observation::content::CanonicalContentLocator,
         #[schemars(range(max = 9_007_199_254_740_991_u64))]
         delivery_index: usize,
     },

@@ -6,7 +6,7 @@ use crate::durable::observation::{
     TraceFactQuery, TraceFactScope, TraceRequestContextPage, TraceRequestPredecessorHeader,
     TraceTerminalClass, TraceTerminalHeader, TraceToolProposalSummary,
 };
-use crate::runtime_client::trace::{TraceFieldKind, TraceFieldSource};
+use crate::observation::trace::{TraceFieldKind, TraceFieldSource};
 mod canonical;
 mod event;
 mod inspection;
@@ -136,7 +136,7 @@ fn decode<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, Conversatio
     serde_json::from_slice(bytes).map_err(|_| storage("native Trace header corrupt"))
 }
 fn encode(value: &impl serde::Serialize) -> Result<Vec<u8>, ConversationStoreError> {
-    crate::runtime_client::checkpoint::bounded_bytes(value, HEADER_ENCODED_MAX)
+    crate::observation::bounded::bounded_bytes(value, HEADER_ENCODED_MAX)
         .ok_or_else(|| storage("native Trace header exceeds bound"))
 }
 type HeaderRow = (Option<Vec<u8>>, Option<String>, String, Option<u64>);

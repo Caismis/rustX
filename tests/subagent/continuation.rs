@@ -616,7 +616,7 @@ async fn child_turn_window(
 }
 
 struct ColdTraceEvidence {
-    cut: rustx::runtime_client::checkpoint::CheckpointReadCut,
+    cut: rustx::observation::cut::CheckpointReadCut,
     domain: String,
     item_offset: u64,
     path: Vec<String>,
@@ -627,7 +627,7 @@ async fn cold_trace_evidence(
     process: &mut Parent,
     agent: &rustx::runtime_client::snapshot::RuntimeClientAgent,
 ) -> ColdTraceEvidence {
-    use rustx::runtime_client::trace::{TraceFieldKind, TraceFieldSource, TraceKind, TraceState};
+    use rustx::observation::trace::{TraceFieldKind, TraceFieldSource, TraceKind, TraceState};
     let trace = process
         .call(Method::AgentTrace {
             target: process.target(),
@@ -727,7 +727,7 @@ async fn assert_trace_cut_rejected(
     process: &mut Parent,
     agent: &rustx::runtime_client::snapshot::RuntimeClientAgent,
     evidence: &ColdTraceEvidence,
-    cut: &rustx::runtime_client::checkpoint::CheckpointReadCut,
+    cut: &rustx::observation::cut::CheckpointReadCut,
 ) {
     let result = process
         .call(Method::ConversationCheckpointValueRead {

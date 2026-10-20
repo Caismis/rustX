@@ -171,7 +171,7 @@ pub(super) fn request_start(
                         let crate::context::contribution::ContributionPresentation::AgentStatus(
                             status,
                         ) = contribution.presentation.as_ref()?;
-                        Some(crate::runtime_client::projection::prepared_status(
+                        Some(crate::observation::status::prepared_status(
                             &snapshot.identity.attempt_id,
                             snapshot.identity.turn.as_str().parse().ok()?,
                             &contribution.message_id,
@@ -224,7 +224,7 @@ pub(super) fn tool_results(
     messages: &[crate::message::types::MessageBlock],
     canonical: Arc<CanonicalObservationBatch>,
 ) -> Option<Arc<NativeObservationBatch>> {
-    use crate::runtime_client::content::{
+    use crate::observation::content::{
         CanonicalContentComponent, CanonicalContentLocator, ContentRepresentation, ContentSource,
     };
     let last = events.last()?;
@@ -379,7 +379,7 @@ pub(super) fn status_sources(
     conversation: &ConversationId,
     snapshot: &crate::model::snapshot::RequestSnapshot,
 ) -> Vec<crate::durable::StatusObservationSource> {
-    use crate::runtime_client::content::{
+    use crate::observation::content::{
         CanonicalContentComponent as Component, CanonicalContentLocator as Locator,
         ContentRepresentation as Rep, ContentSource,
     };

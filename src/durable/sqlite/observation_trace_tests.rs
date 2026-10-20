@@ -33,9 +33,9 @@ fn trace_raw_occurrence() -> crate::events::types::ToolObservationOccurrence {
     }
 }
 fn trace_arguments_reference(
-    fields: &[crate::runtime_client::trace::TraceFieldSource],
-) -> crate::runtime_client::content::ContentRef {
-    use crate::runtime_client::trace::{TraceFieldKind, TraceFieldSource};
+    fields: &[crate::observation::trace::TraceFieldSource],
+) -> crate::observation::content::ContentRef {
+    use crate::observation::trace::{TraceFieldKind, TraceFieldSource};
     fields
         .iter()
         .find_map(|field| match field {
@@ -49,7 +49,7 @@ fn trace_arguments_reference(
 }
 fn trace_original_journal_field_bytes(
     store: &SqliteConversationStore,
-    cut: &crate::runtime_client::checkpoint::CheckpointReadCut,
+    cut: &crate::observation::cut::CheckpointReadCut,
     domain: &str,
     path: &[String],
 ) -> Vec<u8> {
@@ -76,13 +76,13 @@ fn trace_original_journal_field_bytes(
 }
 fn trace_assert_headless_fields(
     store: &SqliteConversationStore,
-    cut: &crate::runtime_client::checkpoint::CheckpointReadCut,
+    cut: &crate::observation::cut::CheckpointReadCut,
     fact: &crate::durable::observation::TraceFactHeader,
     snapshot: &RequestSnapshot,
     first: u64,
 ) {
-    use crate::runtime_client::response::AttemptIdentitySource;
-    use crate::runtime_client::trace::TraceFieldSource;
+    use crate::observation::turn::AttemptIdentitySource;
+    use crate::observation::trace::TraceFieldSource;
     let AttemptIdentitySource::Journal { field, domain } =
         fact.location.attempt_id_source.as_ref().unwrap()
     else {
@@ -331,7 +331,7 @@ fn trace_commit_raw_publication(
 }
 #[test]
 fn t08_t14_t15_t19_trace_arguments_preserve_original_raw_spelling_and_missing_frontier() {
-    use crate::runtime_client::content::ContentRepresentation;
+    use crate::observation::content::ContentRepresentation;
     use base64::Engine as _;
     let store = store();
     let (seed, raw) = trace_raw_seed();
@@ -385,7 +385,7 @@ fn t10_t14_t19_trace_raw_refresh_fault_keeps_native_commit_and_never_falls_back(
     use crate::durable::observation::{
         TraceFactData, TraceFactKind, TraceFactQuery, TraceFactScope,
     };
-    use crate::runtime_client::content::ContentRepresentation;
+    use crate::observation::content::ContentRepresentation;
     let store = store();
     // Initial canonical capture succeeds; only the post-raw refresh fails.
     store.lock().unwrap().execute_batch("CREATE TRIGGER trace_raw_refresh_fault BEFORE UPDATE OF observation_trace_summary ON message_ledger WHEN OLD.observation_trace_summary IS NOT NULL BEGIN SELECT RAISE(FAIL,'optional raw refresh'); END;").unwrap();
@@ -454,7 +454,7 @@ fn t10_t14_t19_trace_raw_refresh_fault_keeps_native_commit_and_never_falls_back(
 }
 #[test]
 fn t08_t10_t14_t19_published_trace_raw_fields_bind_after_original_retention() {
-    use crate::runtime_client::content::ContentRepresentation;
+    use crate::observation::content::ContentRepresentation;
     let store = store();
     let (message, raw, committed) = trace_commit_raw_publication(&store);
     let cut = store.observation_read_cut().unwrap();
@@ -741,7 +741,7 @@ fn trace_full_runtime_failure_bytes(failure: &crate::events::types::AttemptFailu
         panic!("original Runtime failure")
     };
     serde_json::to_vec(
-        &crate::runtime_client::event::RuntimeClientAttemptFailure::Runtime {
+        &crate::observation::failure::RuntimeClientAttemptFailure::Runtime {
             error: error.clone(),
         },
     )
@@ -1034,7 +1034,7 @@ fn t08_t14_t15_t19_request_acceptance_compares_original_scalar_in_finite_windows
             .observation_request_accepted_at(&after, start)
             .unwrap(),
         Some(
-            crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition {
+            crate::observation::content::CanonicalContentLocator::ByLedgerPosition {
                 position: 2
             }
         )

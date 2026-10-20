@@ -210,10 +210,9 @@ fn wal_fork_installs_frozen_uncheckpointed_source_and_survives_source_removal() 
                 source_node: node.id,
                 source_surface_revision: revision,
                 source_message: response.id().clone(),
-                source_locator:
-                    crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
-                        message_id: response.id().clone(),
-                    },
+                source_locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
+                    message_id: response.id().clone(),
+                },
                 side: LineageSide::After,
             },
         )

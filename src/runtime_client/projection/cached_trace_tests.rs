@@ -46,7 +46,7 @@ fn commit_result_without_terminal_j(
 
 fn assert_frozen_tool_result_absent(
     store: &dyn ConversationStore,
-    cut: &super::super::super::checkpoint::CheckpointReadCut,
+    cut: &crate::observation::cut::CheckpointReadCut,
     occurrence: &crate::events::types::ToolObservationOccurrence,
 ) {
     let frozen = super::super::super::trace::TraceProjection::at_cut(
@@ -60,7 +60,7 @@ fn assert_frozen_tool_result_absent(
         frozen
             .records
             .iter()
-            .find(|row| row.kind == super::super::super::trace::TraceKind::Tool)
+            .find(|row| row.kind == crate::observation::trace::TraceKind::Tool)
             .unwrap()
             .tool
             .as_ref()

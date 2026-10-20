@@ -68,7 +68,7 @@ pub struct PendingObservationReceipt {
 /// One finite Goal installation and its exact native transaction evidence.
 #[derive(Debug, Clone)]
 pub struct GoalObservationReceipt {
-    pub view: crate::runtime_client::goal::RuntimeClientGoalView,
+    pub view: crate::observation::goal::RuntimeClientGoalView,
     /// Missing derived evidence fences observation without refusing the Goal write.
     pub native: Option<std::sync::Arc<super::observation::NativeObservationBatch>>,
     pub pending: Option<std::sync::Arc<PendingObservationReceipt>>,

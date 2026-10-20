@@ -491,7 +491,7 @@ fn captured_key<T: Serialize + ?Sized>(key: &T) -> Option<String> {
     }
     #[cfg(test)]
     GENERIC_KEY_WORK.with(|work| work.set(work.get() + 1));
-    super::checkpoint::bounded_bytes(key, 258)
+    super::bounded::bounded_bytes(key, 258)
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
         .and_then(|key| match key {
             Value::String(key) => Some(key),
@@ -793,8 +793,8 @@ mod tests {
             .into_iter()
             .map(|limit| {
                 (
-                    super::super::preflight::bounded_fit(&encoded, limit),
-                    super::super::checkpoint::bounded_bytes(&encoded, limit),
+                    crate::observation::preflight::bounded_fit(&encoded, limit),
+                    crate::observation::bounded::bounded_bytes(&encoded, limit),
                 )
             })
             .collect();
@@ -803,7 +803,7 @@ mod tests {
 
     #[test]
     fn t11_t14_t20_ordered_schema_properties_preserve_complete_checkpoint_bytes_and_admission() {
-        let mut checkpoint = super::super::projection::RuntimeClientProjection::new(
+        let mut checkpoint = crate::runtime_client::projection::RuntimeClientProjection::new(
             crate::runtime::identity::ConversationId::new(
                 "conv_77621431-ad5b-7155-9eca-9f21014c0bc9",
             ),
@@ -821,7 +821,7 @@ mod tests {
             .read_cut
             .domain_revisions
             .insert("trace".into(), u64::MAX);
-        let schema = root::<super::super::checkpoint::RuntimeClientCheckpoint>();
+        let schema = root::<crate::runtime_client::checkpoint::RuntimeClientCheckpoint>();
         let expected = property_encoding(&checkpoint, &schema, true);
         let (_, old_fallbacks) = PROPERTY_WORK.with(std::cell::Cell::get);
         let actual = property_encoding(&checkpoint, &schema, false);
@@ -913,7 +913,7 @@ mod tests {
             format!("{}xxxxx", "\u{0001}".repeat(42)),
         ];
         for key in &keys {
-            let legacy = super::super::checkpoint::bounded_bytes(key, 258)
+            let legacy = crate::observation::bounded::bounded_bytes(key, 258)
                 .and_then(|bytes| serde_json::from_slice::<String>(&bytes).ok());
             assert_eq!(captured_key(key), legacy);
             assert_key_map_equivalence(key);
@@ -923,7 +923,7 @@ mod tests {
         }
         for key in ["x".repeat(4 * 1024 * 1024), "\u{0001}".repeat(257)] {
             assert!(captured_key(&key).is_none());
-            assert!(super::super::checkpoint::bounded_bytes(&key, 258).is_none());
+            assert!(crate::observation::bounded::bounded_bytes(&key, 258).is_none());
         }
         STRING_KEY_WORK.with(|work| work.set(0));
         GENERIC_KEY_WORK.with(|work| work.set(0));
@@ -1022,11 +1022,11 @@ mod tests {
         }
         let unsafe_opaque = serde_json::json!({"nested": [{"exact": u64::MAX}]});
         assert_eq!(
-            super::super::preflight::bounded_fit(&unsafe_opaque, 4096),
+            crate::observation::preflight::bounded_fit(&unsafe_opaque, 4096),
             Some(false)
         );
         assert_eq!(
-            super::super::preflight::bounded_fit(
+            crate::observation::preflight::bounded_fit(
                 &Encoded {
                     value: &unsafe_opaque,
                     schema: &Value::Null,
@@ -1064,7 +1064,7 @@ mod tests {
             // preflight behavior, even with opaque values above JS-safe range.
             lookup_work();
             assert_eq!(
-                super::super::preflight::bounded_fit(
+                crate::observation::preflight::bounded_fit(
                     &Encoded {
                         value: &source,
                         schema: &Value::Null,

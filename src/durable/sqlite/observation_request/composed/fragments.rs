@@ -115,7 +115,7 @@ fn capture_facts(
             let field_start = field.start;
             let field_end = field.end;
             max_path = max_path.max(field.encoded_path.len() as u64);
-            let header = crate::runtime_client::checkpoint::bounded_bytes(value, 16384)
+            let header = crate::observation::bounded::bounded_bytes(value, 16384)
                 .unwrap_or_else(|| b"null".to_vec());
             let span = field_end - field_start;
             let nodes = if span > 16384 {
@@ -305,15 +305,15 @@ fn header_parts(value: &serde_json::Value) -> Result<(String, String), Conversat
 struct RawMessage<'a> {
     value: &'a serde_json::Value,
     message: &'a crate::model::ModelInputMessage,
-    view: &'a crate::runtime_client::trace::TraceRequestMessage,
+    view: &'a crate::observation::trace::TraceRequestMessage,
     frozen: &'a crate::model::projected::FrozenModelInput,
 }
 impl schemars::JsonSchema for RawMessage<'_> {
     fn schema_name() -> std::borrow::Cow<'static, str> {
-        <crate::runtime_client::trace::TraceRequestMessage as schemars::JsonSchema>::schema_name()
+        <crate::observation::trace::TraceRequestMessage as schemars::JsonSchema>::schema_name()
     }
     fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        <crate::runtime_client::trace::TraceRequestMessage as schemars::JsonSchema>::json_schema(
+        <crate::observation::trace::TraceRequestMessage as schemars::JsonSchema>::json_schema(
             generator,
         )
     }
@@ -342,7 +342,7 @@ impl serde::Serialize for RawMessage<'_> {
     }
 }
 fn display(
-    view: &crate::runtime_client::trace::TraceRequestMessage,
+    view: &crate::observation::trace::TraceRequestMessage,
     header: Option<&crate::durable::observation::MessageHeader>,
 ) -> Result<serde_json::Value, ConversationStoreError> {
     match header {

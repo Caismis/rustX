@@ -7557,8 +7557,9 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     async fn generation_bridge_survives_settlement_and_reopen() {
         use crate::model::types::ModelUsage;
+        use crate::observation::trace::TraceKind;
         use crate::runtime::monotonic::{ManualMonotonicClock, MonotonicClock};
-        use crate::runtime_client::trace::{TraceKind, TraceProjection};
+        use crate::runtime_client::trace::TraceProjection;
         fn events(store: &dyn ConversationStore) -> Vec<RuntimeEvent> {
             store
                 .read_events(None, 32)

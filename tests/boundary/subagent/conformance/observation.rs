@@ -168,15 +168,15 @@ async fn t18_live_durable_only_and_reactivation_preserve_source_and_execution_id
 }
 
 struct RetainedTraceField {
-    cut: crate::runtime_client::checkpoint::CheckpointReadCut,
+    cut: crate::observation::cut::CheckpointReadCut,
     domain: String,
     item_offset: u64,
     path: Vec<String>,
     encoded_bytes: u64,
 }
 
-fn original_terminal_field(trace: &crate::runtime_client::trace::TracePage) -> RetainedTraceField {
-    use crate::runtime_client::trace::{TraceFieldKind, TraceFieldSource, TraceKind, TraceState};
+fn original_terminal_field(trace: &crate::observation::trace::TracePage) -> RetainedTraceField {
+    use crate::observation::trace::{TraceFieldKind, TraceFieldSource, TraceKind, TraceState};
     let terminal = trace
         .records
         .iter()
@@ -219,7 +219,7 @@ async fn assert_embedded_durable_trace(
     checkpoint: &crate::runtime_client::checkpoint::RuntimeClientCheckpoint,
     store: &dyn ConversationStore,
 ) -> RetainedTraceField {
-    use crate::runtime_client::trace::TraceKind;
+    use crate::observation::trace::TraceKind;
     use base64::Engine as _;
     let before = store.observation_read_cut().unwrap();
     let trace = &checkpoint.snapshot.trace;
@@ -1032,11 +1032,10 @@ async fn t20_real_unix_shutdown_joins_admitted_physical_source_worker() {
     let request = RuntimeClientRequest::TraceLocateTool {
         id: crate::runtime_client::RequestId::new(2),
         locator: crate::runtime_client::trace::TraceToolLocator {
-            occurrence: crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
-                locator:
-                    crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition {
-                        position: 1,
-                    },
+            occurrence: crate::observation::tool::RuntimeClientToolOccurrence {
+                locator: crate::observation::content::CanonicalContentLocator::ByLedgerPosition {
+                    position: 1,
+                },
                 block_index: crate::message::types::ContentBlockIndex::new(0),
             },
             call_id: None,

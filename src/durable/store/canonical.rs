@@ -705,13 +705,13 @@ pub trait CanonicalStore: Send + Sync + 'static {
     fn transcript_tool_headers(
         &self,
         cut: &crate::durable::observation::ObservationReadCut,
-        locator: &crate::runtime_client::content::CanonicalContentLocator,
+        locator: &crate::observation::content::CanonicalContentLocator,
         offset: u64,
         limit: usize,
     ) -> Result<crate::durable::observation::NativeToolObservationPage, ConversationStoreError>;
     fn message_append_revision_by_locator(
         &self,
-        locator: &crate::runtime_client::content::CanonicalContentLocator,
+        locator: &crate::observation::content::CanonicalContentLocator,
     ) -> Result<Option<SurfaceRevision>, ConversationStoreError>;
     fn message_append_revision(
         &self,
@@ -750,7 +750,7 @@ pub trait CanonicalStore: Send + Sync + 'static {
     fn surface_boundary_message_id(
         &self,
         boundary_revision: SurfaceRevision,
-        locator: &crate::runtime_client::content::CanonicalContentLocator,
+        locator: &crate::observation::content::CanonicalContentLocator,
     ) -> Result<MessageId, ConversationStoreError>;
     /// Resolves a canonical boundary of any role from the original Ledger at
     /// the selected Surface revision, independently of display read indexes.
@@ -758,7 +758,7 @@ pub trait CanonicalStore: Send + Sync + 'static {
     fn canonical_boundary_message_id(
         &self,
         boundary_revision: SurfaceRevision,
-        locator: &crate::runtime_client::content::CanonicalContentLocator,
+        locator: &crate::observation::content::CanonicalContentLocator,
     ) -> Result<MessageId, ConversationStoreError>;
     fn load_user_message_boundaries(
         &self,

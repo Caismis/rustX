@@ -6,11 +6,11 @@ use super::{
 use crate::message::types::{
     AssistantContentBlock as A, ContextKind, InboundKind, MessageBlock, UserContentBlock as U,
 };
-use crate::runtime_client::content::{
+use crate::observation::content::{
     CanonicalContentComponent as Component, CanonicalContentLocator, ContentRepresentation as Rep,
     ContentSource,
 };
-use crate::runtime_client::trace::{TraceArtifact, TraceContextKind, TracePreview, TraceToolCall};
+use crate::observation::trace::{TraceArtifact, TraceContextKind, TracePreview, TraceToolCall};
 
 fn binding(
     connection: &Connection,
@@ -43,7 +43,7 @@ fn binding(
     };
     Ok(TraceFieldSource::Content {
         field,
-        binding: crate::runtime_client::checkpoint::ContentBinding {
+        binding: crate::observation::cut::ContentBinding {
             path: Vec::new(),
             source_path: Some(path.iter().map(|part| (*part).into()).collect()),
             content_ref: reference,
@@ -343,7 +343,7 @@ pub(in crate::durable::sqlite) fn index_canonical(
                         call_id: proposal.call_id,
                         tool_id: proposal.tool_id,
                         name: proposal.name,
-                        occurrence: crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
+                        occurrence: crate::observation::tool::RuntimeClientToolOccurrence {
                             locator: summary.locator.clone(),
                             block_index: proposal.occurrence.block_index,
                         },
@@ -357,7 +357,7 @@ pub(in crate::durable::sqlite) fn index_canonical(
         }
         summary
             .collections
-            .push(crate::runtime_client::checkpoint::CollectionFrontier {
+            .push(crate::observation::cut::CollectionFrontier {
                 domain: format!("messages.ledger:{position}.tools"),
                 revision: 1,
                 total,
@@ -373,7 +373,7 @@ fn seal_canonical(
     position: u64,
     summary: &mut TraceCanonicalSummary,
 ) -> Result<(), ConversationStoreError> {
-    while crate::runtime_client::checkpoint::bounded_bytes(summary, HEADER_ENCODED_MAX).is_none() {
+    while crate::observation::bounded::bounded_bytes(summary, HEADER_ENCODED_MAX).is_none() {
         summary.truncated = true;
         if let Some(call) = summary.calls.pop() {
             let frontier = summary
@@ -414,7 +414,7 @@ fn append_blocks_frontier(
     };
     summary
         .collections
-        .push(crate::runtime_client::checkpoint::CollectionFrontier {
+        .push(crate::observation::cut::CollectionFrontier {
             domain: format!("messages.ledger:{position}.blocks"),
             revision: 1,
             total: blocks as u64,

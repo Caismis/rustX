@@ -468,7 +468,7 @@ impl GoalDomain {
 
     pub(crate) fn observation_view(
         &self,
-    ) -> Result<crate::runtime_client::goal::RuntimeClientGoalView, ConversationStoreError> {
+    ) -> Result<crate::observation::goal::RuntimeClientGoalView, ConversationStoreError> {
         self.inner.store.goal_observation_view()
     }
 

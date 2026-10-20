@@ -73,7 +73,7 @@ pub(super) fn message(
         .map_err(|error| storage(error.to_string()))?;
     let id = format!("todos/{ledger}");
     let summary = todo_summary(value, ledger)?;
-    let header = crate::runtime_client::checkpoint::bounded_bytes(&summary, 16_384)
+    let header = crate::observation::bounded::bounded_bytes(&summary, 16_384)
         .ok_or_else(|| storage("native Todo header exceeds bound"))?;
     connection.execute("INSERT INTO state_observation_sources(domain,source_id,ledger_position,todo_header) VALUES('todos',?1,?2,?3)",params![id,ledger,header]).map_err(|error|storage(error.to_string()))?;
     super::observation_request::index_state(
@@ -135,7 +135,7 @@ fn todo_summary(
     };
     let mut remaining = 15_360;
     for task in tasks.iter().take(32) {
-        let Some(bytes) = crate::runtime_client::checkpoint::bounded_bytes(task, remaining) else {
+        let Some(bytes) = crate::observation::bounded::bounded_bytes(task, remaining) else {
             break;
         };
         let parsed = serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string()))?;
@@ -220,7 +220,7 @@ pub(super) fn event(
         RuntimeEvent::CompactionCompleted { occupancy, .. } => {
             #[derive(serde::Serialize, schemars::JsonSchema)]
             struct Diagnostic<'a> {
-                latest_compaction: crate::runtime_client::snapshot::RuntimeClientCompactionView,
+                latest_compaction: crate::observation::head::RuntimeClientCompactionView,
                 occupancy: &'a Option<crate::context::occupancy::ContextOccupancy>,
             }
             let value = Diagnostic {

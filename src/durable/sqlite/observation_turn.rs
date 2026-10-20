@@ -1,10 +1,10 @@
 //! Finite turn outlines captured on their original native J/provenance rows.
 use super::{Connection, ConversationStoreError, OptionalExtension, params, storage};
 use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
+use crate::observation::turn::{ObservedTurn, ObservedTurnIdentity, ObservedTurnPage};
 use crate::runtime::identity::{AttemptId, ConversationId};
-use crate::runtime_client::turn::{ObservedTurn, ObservedTurnIdentity, ObservedTurnPage};
 use serde::{Deserialize, Serialize};
-const SAFE: u64 = crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX;
+const SAFE: u64 = crate::observation::content::CONTENT_SAFE_INTEGER_MAX;
 #[derive(Serialize, Deserialize)]
 struct Layout {
     turn: ObservedTurn,
@@ -12,13 +12,13 @@ struct Layout {
     settled: bool,
 }
 fn encode(value: &impl Serialize) -> Result<Vec<u8>, ConversationStoreError> {
-    crate::runtime_client::checkpoint::bounded_bytes(value, 16_384)
+    crate::observation::bounded::bounded_bytes(value, 16_384)
         .ok_or_else(|| storage("turn display header exceeds bound"))
 }
 fn identity(
     conversation: &ConversationId,
     attempt: &AttemptId,
-    source: crate::runtime_client::response::AttemptIdentitySource,
+    source: crate::observation::turn::AttemptIdentitySource,
 ) -> ObservedTurnIdentity {
     ObservedTurnIdentity {
         conversation_id: conversation.clone(),
@@ -339,7 +339,7 @@ pub(super) fn seed(
                 &turn.id.attempt_id,
                 super::observation_identity::inherited(
                     connection,
-                    crate::runtime_client::response::InheritedAttemptIdentityKind::Turn,
+                    crate::observation::turn::InheritedAttemptIdentityKind::Turn,
                     ordinal,
                 )?,
             ),
@@ -388,7 +388,7 @@ fn validate_header(header: &ObservedTurn) -> Result<(), ConversationStoreError> 
     if header.ordinal == 0
         || header.ordinal > SAFE
         || (header.id.attempt_id.is_none() && header.id.attempt_id_source.is_none())
-        || crate::runtime_client::checkpoint::bounded_bytes(header, 8192).is_none()
+        || crate::observation::bounded::bounded_bytes(header, 8192).is_none()
     {
         return Err(storage("invalid finite turn display"));
     }
@@ -481,7 +481,7 @@ pub(super) fn page(
         offset,
         turns,
     };
-    if crate::runtime_client::checkpoint::bounded_bytes(&page, 786_432).is_none() {
+    if crate::observation::bounded::bounded_bytes(&page, 786_432).is_none() {
         return Err(storage("turn page exceeds bounded reply"));
     }
     Ok(page)

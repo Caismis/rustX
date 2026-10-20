@@ -118,7 +118,7 @@ fn uploaded_frozen_request_retains_the_exact_original_retry_boundary() {
             .observation_request_retry_locator_at(through, through)
             .unwrap(),
         Some(
-            crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition {
+            crate::observation::content::CanonicalContentLocator::ByLedgerPosition {
                 position: 1
             }
         )
@@ -177,7 +177,7 @@ fn uploaded_retry_deferred_identity_uses_the_same_original_anchor_as_its_locator
             .observation_request_retry_locator_at(sequence, sequence)
             .unwrap(),
         Some(
-            crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition {
+            crate::observation::content::CanonicalContentLocator::ByLedgerPosition {
                 position: 1
             }
         )
@@ -368,7 +368,7 @@ fn retry_capture_ignores_optional_display_holes_and_other_attempt_steering() {
             .observation_request_retry_locator_at(sequence, sequence)
             .unwrap(),
         Some(
-            crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition {
+            crate::observation::content::CanonicalContentLocator::ByLedgerPosition {
                 position: 1
             }
         )

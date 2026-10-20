@@ -177,7 +177,7 @@ fn deep_lineage_reopen_preserves_response_facts_without_execution_ownership() {
         tails(&current)[2].timing.as_ref().unwrap().generation_ms,
         Some(1280)
     );
-    let owned = crate::runtime_client::agent_statistics::StatisticsFold::default()
+    let owned = crate::observation::statistics::StatisticsFold::default()
         .read(&store, store.presentation_frontier().unwrap(), || None)
         .unwrap();
     assert_eq!(owned.statistics.turns, 1);
@@ -473,7 +473,7 @@ fn lineage_preserves_success_failed_and_terminal_only_turns_in_native_order() {
                 )
                 .unwrap();
             assert_eq!(read.page.headers[0].cursor, turn.cursor.unwrap());
-            let mut projected = crate::runtime_client::snapshot::transcript_header_view(read.page);
+            let mut projected = crate::observation::transcript::transcript_header_view(read.page);
             decorate_window(&child, &mut projected, read.cut.read.journal).unwrap();
             let owner = projected.entries[0].turn_process.as_ref().unwrap();
             assert_eq!(owner.conversation_id, turn.id.conversation_id);

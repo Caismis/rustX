@@ -1002,8 +1002,7 @@ impl SessionRuntimeManager {
     pub(crate) fn history_observation_cut(
         &self,
         conversation: &ConversationId,
-    ) -> Result<Option<crate::runtime_client::checkpoint::CheckpointReadCut>, RuntimeManagerError>
-    {
+    ) -> Result<Option<crate::observation::cut::CheckpointReadCut>, RuntimeManagerError> {
         let resident = {
             let state = self.registry.0.lock().expect("registry mutex");
             match state.entries.get(conversation) {

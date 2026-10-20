@@ -1,15 +1,13 @@
 //! Child-owned statistics, independent of transcript windows and live activation.
 //! Like Harness's session meters and subagent timing projection, durable facts
 //! supply all readings; clients only interpolate a currently running clock.
-use super::response::ConversationStatistics;
 #[cfg(test)]
-use super::response::ConversationTurnClock;
 #[cfg(test)]
 use crate::durable::response::{add_usage, timing::ActivityFold};
 use crate::durable::{ConversationStore, ConversationStoreError};
 #[cfg(test)]
 use crate::events::types::RuntimeEvent;
-#[cfg(test)]
+use crate::model::types::ModelUsage;
 use crate::runtime::identity::AttemptId;
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
@@ -236,4 +234,37 @@ mod tests {
         assert_eq!(fold.view.statistics.turns, 3);
         assert_eq!(fold.view.statistics.completed_responses, 0);
     }
+}
+
+/// Whole-conversation execution totals, independent of any transcript window.
+/// A lineage child includes its inherited turns' recorded execution, as a
+/// `DeepSeek` Harness fork folds its copied prefix; it owns none of it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ConversationStatistics {
+    /// Harness-style Turn and Step counts: native Attempt starts and Loop turns.
+    pub turns: u64,
+    pub steps: u64,
+    /// Latest native Turn clock; never a browser receipt timestamp.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest_turn: Option<ConversationTurnClock>,
+    /// Summed measured work time, separate from usage coverage.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timing: Option<crate::durable::response::ConversationTiming>,
+    pub completed_responses: u64,
+    pub model_requests: u64,
+    /// Known reported usage. Coverage is explicit; missing reports are not zero.
+    pub requests_with_usage: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reported_usage: Option<ModelUsage>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ConversationTurnClock {
+    pub attempt_id: Option<AttemptId>,
+    pub attempt_id_deferred: bool,
+    pub attempt_id_source: Option<super::tool::JournalFieldRef>,
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<chrono::DateTime<chrono::Utc>>,
 }

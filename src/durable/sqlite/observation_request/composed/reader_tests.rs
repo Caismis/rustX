@@ -37,7 +37,7 @@ fn baseline_probes(
                 start,
                 end,
                 children,
-                crate::runtime_client::checkpoint::bounded_bytes(preview, 16_384)
+                crate::observation::bounded::bounded_bytes(preview, 16_384)
                     .unwrap_or_else(|| b"null".to_vec()),
             ));
             Ok(())
@@ -59,7 +59,7 @@ fn t08_t15_t20_scalar_capture_scopes_span_io_without_changing_any_original_field
         prompt: "λ🙂".repeat(12_000),
     };
     let mut original = Vec::new();
-    crate::runtime_client::structural_json::to_writer(&mut original, &fixture).unwrap();
+    crate::observation::structural_json::to_writer(&mut original, &fixture).unwrap();
     let source = SeekableObservationSource::new(&fixture).unwrap();
     INDEX_OPENS.with(|work| work.set(0));
     take_file_work();

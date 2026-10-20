@@ -2,7 +2,7 @@
 use crate::durable::{CanonicalStore, JournalStore, ObservationStore};
 use super::*;
 use crate::message::types::ToolCallOccurrenceRef;
-use crate::runtime_client::content::CanonicalContentLocator;
+use crate::observation::content::CanonicalContentLocator;
 use crate::tools::session_files::{SessionFileReadFailure, SessionFileReference};
 
 fn commit_delivery_result(
@@ -130,7 +130,7 @@ fn assert_delivery_head(
     assert_eq!(page.items.len(), 1);
     assert_eq!(
         page.items[0].value,
-        crate::runtime_client::checkpoint::structural_value(item)
+        crate::observation::bounded::structural_value(item)
     );
     let mut bytes = Vec::new();
     let mut offset = 0;

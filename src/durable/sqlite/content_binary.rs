@@ -4,8 +4,8 @@ use super::{
     Connection, ConversationStoreError, OptionalExtension, SEGMENT, SEGMENT_BYTES, invalid, params,
     storage,
 };
+use crate::observation::content::CONTENT_SAFE_INTEGER_MAX;
 use crate::runtime::identity::ArtifactId;
-use crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX;
 use crate::tools::artifacts::ArtifactStore;
 use sha2::{Digest, Sha256};
 use std::io::{Read as _, Seek as _};

@@ -117,7 +117,7 @@ impl ChildDelivery {
             target: self.target.clone(),
             source: crate::app_server::product_host::ReadSource::SessionFile {
                 agent_id: Some(self.agent.clone()),
-                locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
                     message_id: self.message.clone(),
                 },
                 delivery_index: 0,
@@ -132,7 +132,7 @@ impl ChildDelivery {
             call: Method::AgentDeliveryRead {
                 target: self.target.clone(),
                 agent_id: self.agent.clone(),
-                locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
                     message_id: self.message.clone(),
                 },
                 delivery_index: 0,
@@ -286,7 +286,7 @@ async fn child_delivery_shared_owner_and_product_host_registration_are_exact() {
         if let crate::app_server::product_host::ReadSource::SessionFile { locator, .. } =
             &mut wrong_message.source
         {
-            *locator = crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+            *locator = crate::observation::content::CanonicalContentLocator::ByMessageId {
                 message_id: MessageId::new("parent-or-other-child"),
             };
         }
@@ -310,7 +310,7 @@ async fn child_delivery_shared_owner_and_product_host_registration_are_exact() {
         if let crate::app_server::product_host::ReadSource::SessionFile { locator, .. } =
             &mut read.source
         {
-            *locator = crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+            *locator = crate::observation::content::CanonicalContentLocator::ByMessageId {
                 message_id: wrong_scope,
             };
         }

@@ -14,12 +14,12 @@ use std::sync::{Arc, OnceLock};
 #[derive(Debug)]
 pub(crate) struct PendingInteractionSource {
     request: Arc<InteractionRequest>,
-    header: crate::runtime_client::snapshot::RuntimeClientInteractionHeader,
+    header: crate::observation::interaction::RuntimeClientInteractionHeader,
     layout: OnceLock<Result<crate::runtime::read_layout::SeekableObservationSource, &'static str>>,
 }
 impl PendingInteractionSource {
     pub(crate) fn new(request: InteractionRequest) -> Arc<Self> {
-        let header = crate::runtime_client::checkpoint::interaction_request_header(
+        let header = crate::observation::interaction::interaction_request_header(
             &request,
             super::InteractionSource::Primary,
         );
@@ -38,7 +38,7 @@ impl PendingInteractionSource {
     }
     pub(crate) fn header(
         &self,
-    ) -> &crate::runtime_client::snapshot::RuntimeClientInteractionHeader {
+    ) -> &crate::observation::interaction::RuntimeClientInteractionHeader {
         &self.header
     }
     #[cfg(test)]
@@ -226,7 +226,7 @@ mod tests {
             visit: 7,
         };
         let mut original = Vec::new();
-        crate::runtime_client::structural_json::to_writer(&mut original, &native).unwrap();
+        crate::observation::structural_json::to_writer(&mut original, &native).unwrap();
         let mut request = source(Value::Null).request().clone();
         let InteractionKind::Approval { invocation_id, .. } = &mut request.kind else {
             unreachable!()
@@ -242,7 +242,7 @@ mod tests {
         let header = source.header();
         assert!(header.workflow_node.is_none());
         assert!(header.workflow_node_deferred);
-        assert!(crate::runtime_client::checkpoint::bounded_bytes(header, 16_384).is_some());
+        assert!(crate::observation::bounded::bounded_bytes(header, 16_384).is_some());
         let path = header.workflow_node_path.as_ref().unwrap();
         let mut offset = 0;
         let mut reconstructed = Vec::new();

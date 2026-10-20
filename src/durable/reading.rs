@@ -104,7 +104,7 @@ pub enum ConversationWindowAt {
     },
     /// Finite immutable canonical locator; absent cut captures native facts.
     Canonical {
-        locator: crate::runtime_client::content::CanonicalContentLocator,
+        locator: crate::observation::content::CanonicalContentLocator,
         cut: Option<ConversationReadCut>,
     },
     /// Exact canonical message position; absent cut captures current native facts.

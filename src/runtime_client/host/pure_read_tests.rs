@@ -105,7 +105,7 @@ fn read_frozen_sources(
         .iter()
         .find(|binding| {
             binding.content_ref.representation
-                == crate::runtime_client::content::ContentRepresentation::Utf8Text
+                == crate::observation::content::ContentRepresentation::Utf8Text
                 && binding.content_ref.readable_end == original.len() as u64
         })
         .unwrap()
