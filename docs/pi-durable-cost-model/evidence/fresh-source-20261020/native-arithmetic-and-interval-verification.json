@@ -1,0 +1,9 @@
+{
+  "checked_utc": "2026-10-20T03:01:17.510905+00:00",
+  "independent_values_matching_published_summary": 6048,
+  "products": 144,
+  "provider_requests": 3384,
+  "full_semantic_request_pairs": 1692,
+  "nonoverlapping_product_intervals": 144,
+  "all_match": true
+}

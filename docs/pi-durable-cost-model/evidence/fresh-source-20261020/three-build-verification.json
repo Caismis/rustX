@@ -1,0 +1,294 @@
+{
+  "checked_utc": "2026-10-20T02:43:01.144629+00:00",
+  "all_external_graphs_equal": true,
+  "external_artifact_records": 562,
+  "available_bytes": 25159860224,
+  "builds": [
+    {
+      "label": "baseline",
+      "head": "623b41b869a95c888eb04f907cbf607232699a2f",
+      "source_tree": "19ff7d6bd64993a6b9fc08bbcd687787dacfe08e",
+      "binary_sha256": "711b5af1ac3500e36f0f1bd827d108fb975a088b5e24a8d3a99218d7812ed388",
+      "library_sha256": "c529acd9a2f6d18fb297e0c38facfdd46597ce04e1c44890d0048ed9e99dffb6",
+      "host_sha256": "12f4354c26334358c4d585d5159064c13602730346c661a6439326d31149be25",
+      "profiles": [
+        {
+          "name": "rustx",
+          "kind": [
+            "lib"
+          ],
+          "profile": {
+            "opt_level": "3",
+            "debuginfo": 0,
+            "debug_assertions": false,
+            "overflow_checks": false,
+            "test": false
+          },
+          "fresh": false,
+          "source": "/workspace/pr485-study/repo/src/lib.rs"
+        },
+        {
+          "name": "interactive-supervisor",
+          "kind": [
+            "bin"
+          ],
+          "profile": {
+            "opt_level": "3",
+            "debuginfo": 0,
+            "debug_assertions": false,
+            "overflow_checks": false,
+            "test": false
+          },
+          "fresh": false,
+          "source": "/workspace/pr485-study/repo/src/bin/interactive_supervisor.rs",
+          "binary": "/workspace/pr485-study/evidence/build-baseline/interactive-supervisor",
+          "sha256": "d8a4de9c6be9115d759df8ce3745d5591206216552493468b6bc933056103c1b",
+          "bytes": 8124968
+        },
+        {
+          "name": "rustx",
+          "kind": [
+            "bin"
+          ],
+          "profile": {
+            "opt_level": "3",
+            "debuginfo": 0,
+            "debug_assertions": false,
+            "overflow_checks": false,
+            "test": false
+          },
+          "fresh": false,
+          "source": "/workspace/pr485-study/repo/src/main.rs",
+          "binary": "/workspace/pr485-study/evidence/build-baseline/rustx",
+          "sha256": "b218ce4b143ae593bd2450ee0a4b8c7b8b7b40c932a6c08dde204fd1e14fb724",
+          "bytes": 133105512
+        },
+        {
+          "name": "bash-supervisor",
+          "kind": [
+            "bin"
+          ],
+          "profile": {
+            "opt_level": "3",
+            "debuginfo": 0,
+            "debug_assertions": false,
+            "overflow_checks": false,
+            "test": false
+          },
+          "fresh": false,
+          "source": "/workspace/pr485-study/repo/src/bin/bash_supervisor.rs",
+          "binary": "/workspace/pr485-study/evidence/build-baseline/bash-supervisor",
+          "sha256": "0bec7d8218eff7a946dd59f913ba0919c74d529c8b6b312af1f329b201308560",
+          "bytes": 8071208
+        },
+        {
+          "name": "conformance",
+          "kind": [
+            "test"
+          ],
+          "profile": {
+            "opt_level": "3",
+            "debuginfo": 0,
+            "debug_assertions": false,
+            "overflow_checks": false,
+            "test": true
+          },
+          "fresh": false,
+          "source": "/workspace/pr485-study/repo/tests/conformance/main.rs"
+        }
+      ],
+      "compiler_inputs": 8389
+    },
+    {
+      "label": "geometry",
+      "head": "89d6b618eeba8afaf4b95af4406057330baa60a6",
+      "source_tree": "7e227b5b08958c0642e2af0e7209af73cd1208e9",
+      "binary_sha256": "d25cae1955161392e1ecfde60b1fcdf87ee17577ee4531da1dac133391dbd4a1",
+      "library_sha256": "c72106cd7f3b0a1b8c930b2d5f109110e1c88c8bc8b362ca934555190d9aebbd",
+      "host_sha256": "fdfc4d0d9bf53d2a6796527486ddaa27a74ac82b4c65c276204b309ae842af30",
+      "profiles": [
+        {
+          "name": "rustx",
+          "kind": [
+            "lib"
+          ],
+          "profile": {
+            "opt_level": "3",
+            "debuginfo": 0,
+            "debug_assertions": false,
+            "overflow_checks": false,
+            "test": false
+          },
+          "fresh": false,
+          "source": "/workspace/pr485-study/repo/src/lib.rs"
+        },
+        {
+          "name": "rustx",
+          "kind": [
+            "bin"
+          ],
+          "profile": {
+            "opt_level": "3",
+            "debuginfo": 0,
+            "debug_assertions": false,
+            "overflow_checks": false,
+            "test": false
+          },
+          "fresh": false,
+          "source": "/workspace/pr485-study/repo/src/main.rs",
+          "binary": "/workspace/pr485-study/evidence/build-geometry/rustx",
+          "sha256": "29f3dfe8b5f3fda988c1fb8b5ddec38d230d3f6125c2632f37a67988f638c0f7",
+          "bytes": 132690144
+        },
+        {
+          "name": "interactive-supervisor",
+          "kind": [
+            "bin"
+          ],
+          "profile": {
+            "opt_level": "3",
+            "debuginfo": 0,
+            "debug_assertions": false,
+            "overflow_checks": false,
+            "test": false
+          },
+          "fresh": false,
+          "source": "/workspace/pr485-study/repo/src/bin/interactive_supervisor.rs",
+          "binary": "/workspace/pr485-study/evidence/build-geometry/interactive-supervisor",
+          "sha256": "89eaf52144646a329ae0ddd10d7be00da5cdd629881173023a30e058f0d955e0",
+          "bytes": 8098840
+        },
+        {
+          "name": "bash-supervisor",
+          "kind": [
+            "bin"
+          ],
+          "profile": {
+            "opt_level": "3",
+            "debuginfo": 0,
+            "debug_assertions": false,
+            "overflow_checks": false,
+            "test": false
+          },
+          "fresh": false,
+          "source": "/workspace/pr485-study/repo/src/bin/bash_supervisor.rs",
+          "binary": "/workspace/pr485-study/evidence/build-geometry/bash-supervisor",
+          "sha256": "4fda45f3e08412fbc59a09086da84ae6ffa1bd04e988326fc3a812bde000a16c",
+          "bytes": 8046664
+        },
+        {
+          "name": "conformance",
+          "kind": [
+            "test"
+          ],
+          "profile": {
+            "opt_level": "3",
+            "debuginfo": 0,
+            "debug_assertions": false,
+            "overflow_checks": false,
+            "test": true
+          },
+          "fresh": false,
+          "source": "/workspace/pr485-study/repo/tests/conformance/main.rs"
+        }
+      ],
+      "compiler_inputs": 8389
+    },
+    {
+      "label": "scoped",
+      "head": "31668f7a74b63446c538e00ed41ebfc42f0bc1a8",
+      "source_tree": "020d4c6334042f243e412e522103ee3d0e1da555",
+      "binary_sha256": "6e8ea40f0c64a698aa527b52db9a9a10a2deb516d3863180590bfa553ef358aa",
+      "library_sha256": "b53c656b3bbd3e76466a9301bd0b4cf26745a130a44aade95556ba00a229a737",
+      "host_sha256": "74adcd52ad62656c2d48f4052ea40347555ffea2fbc6ac5b4b968ae9a37f2088",
+      "profiles": [
+        {
+          "name": "rustx",
+          "kind": [
+            "lib"
+          ],
+          "profile": {
+            "opt_level": "3",
+            "debuginfo": 0,
+            "debug_assertions": false,
+            "overflow_checks": false,
+            "test": false
+          },
+          "fresh": false,
+          "source": "/workspace/pr485-study/repo/src/lib.rs"
+        },
+        {
+          "name": "bash-supervisor",
+          "kind": [
+            "bin"
+          ],
+          "profile": {
+            "opt_level": "3",
+            "debuginfo": 0,
+            "debug_assertions": false,
+            "overflow_checks": false,
+            "test": false
+          },
+          "fresh": false,
+          "source": "/workspace/pr485-study/repo/src/bin/bash_supervisor.rs",
+          "binary": "/workspace/pr485-study/evidence/build-scoped/bash-supervisor",
+          "sha256": "ab7e132c189e167cae596f3e175d8c49708633c67625ec5676ad4b9721859d74",
+          "bytes": 8038008
+        },
+        {
+          "name": "interactive-supervisor",
+          "kind": [
+            "bin"
+          ],
+          "profile": {
+            "opt_level": "3",
+            "debuginfo": 0,
+            "debug_assertions": false,
+            "overflow_checks": false,
+            "test": false
+          },
+          "fresh": false,
+          "source": "/workspace/pr485-study/repo/src/bin/interactive_supervisor.rs",
+          "binary": "/workspace/pr485-study/evidence/build-scoped/interactive-supervisor",
+          "sha256": "c86cd61b827d591ee11aa3f3e2911e38e88bef837871bcea4de66e168a0e3acb",
+          "bytes": 8089944
+        },
+        {
+          "name": "rustx",
+          "kind": [
+            "bin"
+          ],
+          "profile": {
+            "opt_level": "3",
+            "debuginfo": 0,
+            "debug_assertions": false,
+            "overflow_checks": false,
+            "test": false
+          },
+          "fresh": false,
+          "source": "/workspace/pr485-study/repo/src/main.rs",
+          "binary": "/workspace/pr485-study/evidence/build-scoped/rustx",
+          "sha256": "a9a2e8e550a646172aec74e817777dd9f73692efaea345bf25acb08f48391361",
+          "bytes": 132691784
+        },
+        {
+          "name": "conformance",
+          "kind": [
+            "test"
+          ],
+          "profile": {
+            "opt_level": "3",
+            "debuginfo": 0,
+            "debug_assertions": false,
+            "overflow_checks": false,
+            "test": true
+          },
+          "fresh": false,
+          "source": "/workspace/pr485-study/repo/tests/conformance/main.rs"
+        }
+      ],
+      "compiler_inputs": 8389
+    }
+  ],
+  "all_hosts_verified": true
+}

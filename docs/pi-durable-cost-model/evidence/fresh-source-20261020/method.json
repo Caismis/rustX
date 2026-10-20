@@ -1,0 +1,9 @@
+{
+  "clock_ticks": 100,
+  "ratio": "Within-pair after/before. No ratio for a zero or unavailable baseline; zero after values are retained but have no finite log interval.",
+  "interval": "Two-sided 90% log-t, n=3, df=2, critical 2.919985580355516; approximately normal independent log ratios assumed. Center is geometric mean, not median.",
+  "scope": "Self user+system CPU including driver; process-attributed writes, not device writes; sampled memory maxima, not peaks. Complete self counters since exec are separate from initialization-to-cleanup deltas. All adjacent lifecycle phases and external-controller wall scopes remain separate.",
+  "semantic_trust": "Producer product/controller oracles and complete semantic comparator records are checked. This standalone reader independently reproduces counter arithmetic; it is not an independent implementation of all semantic request oracles.",
+  "paired_rows": 3600,
+  "summary_rows": 1200
+}

@@ -1,0 +1,121 @@
+{
+  "created_utc": "2026-10-20T03:12:35.680755+00:00",
+  "files": {
+    "README.txt": {
+      "bytes": 5682,
+      "sha256": "8f32b51b78218531bcf21c062a2b05e5091871570657948cd7cd9ff2eae3c6c0"
+    },
+    "analysis-schema-correction.json": {
+      "bytes": 394,
+      "sha256": "be99435c4963a55a65d507ca7e531b4a94c1efe79d890ca5b6ee415488b32c79"
+    },
+    "build-and-driver-identities.json": {
+      "bytes": 24315,
+      "sha256": "08b40b106a5b059b3d4311b65d570598945146ec93171aa066cdb7d8473b2271"
+    },
+    "build-baseline/build.stderr": {
+      "bytes": 773239,
+      "sha256": "2c50ecc1a470de4d048a5d870c26ffdd7429c97318f4911e800e9303290cad17"
+    },
+    "build-baseline/build.stdout": {
+      "bytes": 464134,
+      "sha256": "b887b546bcb8bb551a6ec40b1278b925ffb5a7344a8ea178892a6a09e249e443"
+    },
+    "build-baseline/identity.json": {
+      "bytes": 2590,
+      "sha256": "db12affce3bf8dced1b9f77970921775718029448bb5686bd5f0740f93ad98f7"
+    },
+    "build-baseline/root-rustc-invocations.txt": {
+      "bytes": 27936,
+      "sha256": "04f48efa91ac24560f10a1c428aefc92bfe5da102a51f2594ae8e42cdb76564a"
+    },
+    "build-geometry/build.stderr": {
+      "bytes": 43358,
+      "sha256": "d3b81b2efa01483a3c91cdbf477136d12ede15947e0576fef24785e315248b2d"
+    },
+    "build-geometry/build.stdout": {
+      "bytes": 463572,
+      "sha256": "0241083e43a5b60abe005ff5b8ad8aad76f6e955600f13ad3bea9286f5c069f7"
+    },
+    "build-geometry/identity.json": {
+      "bytes": 2590,
+      "sha256": "b99b5174d26295755a1963edd45b16dad1e731792ebc0816999e69a8c6c2fc89"
+    },
+    "build-geometry/root-rustc-invocations.txt": {
+      "bytes": 27936,
+      "sha256": "a30e71a4739836773dbf0c3134b4c0b60bc15694d1caca7c8f61ddee136581a7"
+    },
+    "build-native.py": {
+      "bytes": 6742,
+      "sha256": "8466de8612ad49e052c42749f2137136ae663ce02f1730499aab5d29e82ebe66"
+    },
+    "build-scoped/build.stderr": {
+      "bytes": 43358,
+      "sha256": "bf9123ac658695c590dbfa675c81f7a8caab2463e0fea56cf5bd86e7d1afd2d2"
+    },
+    "build-scoped/build.stdout": {
+      "bytes": 463572,
+      "sha256": "c0dbcff0a3ac25c148b73ab5c01ebc152adb318ad367f6c89fbc2f2a65a39db0"
+    },
+    "build-scoped/identity.json": {
+      "bytes": 2588,
+      "sha256": "1261400491172bf12c3c074723ac5c5273120171d5664562ac7242406fd2bb2d"
+    },
+    "build-scoped/root-rustc-invocations.txt": {
+      "bytes": 27936,
+      "sha256": "507ab69bd49ecdc744679c0d4a28197ea6adfb9affcf66b80d46fab4773f04f2"
+    },
+    "link-inspector-host.py": {
+      "bytes": 3340,
+      "sha256": "c7031886a4fa83ecd7e0d79ba5c2086486c1f985a24c7e07f1f7d3bd9b91a68f"
+    },
+    "method.json": {
+      "bytes": 945,
+      "sha256": "159b960f11a45898b792b3b08df7111d99ab8ec10dc31a9e8e1d76c33d93ddc3"
+    },
+    "native-arithmetic-and-interval-verification.json": {
+      "bytes": 264,
+      "sha256": "26661a381c47e1f70ec939e40e20133b5e355e1425ec2c4632e228d4cca711ce"
+    },
+    "native-matrix-orchestration.json": {
+      "bytes": 3253,
+      "sha256": "3d2065c395fb23b0c82b1b9e1b1b60a1f9d2555ab6959fc6e90be9fa9fc81298"
+    },
+    "paired-costs.csv": {
+      "bytes": 335041,
+      "sha256": "dc95e52f9bb00b28f102f9d80c6e56d18b227aa2c95c01bd1496d02c98899360"
+    },
+    "paired-summary.csv": {
+      "bytes": 194076,
+      "sha256": "fafe9faf8042d6982b77ba9c06a1e9f0700636ed258d3b82e90b26a385c33550"
+    },
+    "pr485-native-source-evidence.tar.manifest.json": {
+      "bytes": 165240,
+      "sha256": "f2f41a9d9b19536c388eba76438812d9589a609d77b735fdd4eef9b13fb76767"
+    },
+    "pr485-native-source-evidence.tar.xz": {
+      "bytes": 3784576,
+      "sha256": "d5c97d7a22079d7b6c75a301347673da83db5dafae008c75e7248544a0853a1b"
+    },
+    "preserve-native.py": {
+      "bytes": 4618,
+      "sha256": "33c51b4ef933ceec917ea168bae66184d3b2c17cbe7cdee6e56fef0ebaa858a1"
+    },
+    "raw-input-sha256.json": {
+      "bytes": 67029,
+      "sha256": "86b3673b2f38f215f83e7c78ecdb75aa79da7eb5aa6c28b70a3385256235d544"
+    },
+    "read-native-pairs.py": {
+      "bytes": 10768,
+      "sha256": "d3fa4338b4cd10f4ac16656d7f8e7b5fca48441354bff5842e842051c5299f97"
+    },
+    "run-native-cohort.py": {
+      "bytes": 6190,
+      "sha256": "a7fc73f6f5edb0b2affc4f06bd668b2cc73e2a1a9f8426701b38ce83eb80c4b1"
+    },
+    "three-build-verification.json": {
+      "bytes": 9506,
+      "sha256": "bd39ee1045b792c9738154257ffa860a7fe6ba3fe72cd8eff4ce91ed1aa67d67"
+    }
+  }
+}

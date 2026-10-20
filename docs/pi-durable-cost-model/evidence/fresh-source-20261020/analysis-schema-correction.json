@@ -1,0 +1,8 @@
+{
+  "utc": "2026-10-20T03:00:23.226735+00:00",
+  "initial_reader_assumption": "measurement_version 3",
+  "actual_aligned_measurement_version": 4,
+  "workload_version": 3,
+  "authority": "published controller.py validates measurement_version == 4 for no-live-subscriber/live-subscriber",
+  "action": "corrected independent postprocessor assertion only; no raw data changed, no products rerun"
+}

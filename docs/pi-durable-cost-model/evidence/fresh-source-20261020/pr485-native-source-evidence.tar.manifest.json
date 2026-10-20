@@ -1,0 +1,3494 @@
+{
+  "analysis-schema-correction.json": {
+    "bytes": 394,
+    "sha256": "be99435c4963a55a65d507ca7e531b4a94c1efe79d890ca5b6ee415488b32c79"
+  },
+  "build-baseline/build.stderr": {
+    "bytes": 773239,
+    "sha256": "2c50ecc1a470de4d048a5d870c26ffdd7429c97318f4911e800e9303290cad17"
+  },
+  "build-baseline/build.stdout": {
+    "bytes": 464134,
+    "sha256": "b887b546bcb8bb551a6ec40b1278b925ffb5a7344a8ea178892a6a09e249e443"
+  },
+  "build-baseline/clean.stderr": {
+    "bytes": 50,
+    "sha256": "83ab073cee6131c866d0131ce849ceb8ced44d79b74770c8f0d8f52d32e2d192"
+  },
+  "build-baseline/clean.stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "build-baseline/host/identity.json": {
+    "bytes": 5285,
+    "sha256": "113df7106bb7e7a716268220c1eafffb9f1713df69012349e72c7f159c2cc029"
+  },
+  "build-baseline/host/stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "build-baseline/host/stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "build-baseline/identity.json": {
+    "bytes": 2590,
+    "sha256": "db12affce3bf8dced1b9f77970921775718029448bb5686bd5f0740f93ad98f7"
+  },
+  "build-baseline/preserved-artifacts.json": {
+    "bytes": 2881263,
+    "sha256": "be1d0a4b92c4096352292ba9dbbe2806413343fbcc88db99974bdbd3fb6cc264"
+  },
+  "build-baseline/root-rustc-invocations.txt": {
+    "bytes": 27936,
+    "sha256": "04f48efa91ac24560f10a1c428aefc92bfe5da102a51f2594ae8e42cdb76564a"
+  },
+  "build-baseline-host-orchestration.json": {
+    "bytes": 2013,
+    "sha256": "0e4af19e8f1c9321de9c74396099c431a6d75727ff1056afc1fd48f3320ca019"
+  },
+  "build-baseline-orchestration.json": {
+    "bytes": 6211,
+    "sha256": "9b565cda7fa2cd32ded6bee99cf6b89f6566f4a77d37fd8011e7db781b19d94d"
+  },
+  "build-baseline-resources.jsonl": {
+    "bytes": 120400,
+    "sha256": "384c8836d4a719da48d1714b3c56b5a364b055b1505a81bdaa4be3705260123d"
+  },
+  "build-geometry/build.stderr": {
+    "bytes": 43358,
+    "sha256": "d3b81b2efa01483a3c91cdbf477136d12ede15947e0576fef24785e315248b2d"
+  },
+  "build-geometry/build.stdout": {
+    "bytes": 463572,
+    "sha256": "0241083e43a5b60abe005ff5b8ad8aad76f6e955600f13ad3bea9286f5c069f7"
+  },
+  "build-geometry/clean.stderr": {
+    "bytes": 1633,
+    "sha256": "298a62da1b708261973a5cb43ec3edcd7ff74aaaaf4026f2c625a022ea8cb0ba"
+  },
+  "build-geometry/clean.stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "build-geometry/host/identity.json": {
+    "bytes": 5285,
+    "sha256": "a94cae121687357924868e5771872a1ee27878c0c6f809fd9afab75dcca880ff"
+  },
+  "build-geometry/host/stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "build-geometry/host/stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "build-geometry/identity.json": {
+    "bytes": 2590,
+    "sha256": "b99b5174d26295755a1963edd45b16dad1e731792ebc0816999e69a8c6c2fc89"
+  },
+  "build-geometry/preserved-artifacts.json": {
+    "bytes": 2881263,
+    "sha256": "94dee98f7bd9a0607a4fba728ca5826043a4072ed82c06e2a22a010fb9b421d6"
+  },
+  "build-geometry/root-rustc-invocations.txt": {
+    "bytes": 27936,
+    "sha256": "a30e71a4739836773dbf0c3134b4c0b60bc15694d1caca7c8f61ddee136581a7"
+  },
+  "build-geometry-host-orchestration.json": {
+    "bytes": 2086,
+    "sha256": "5a2bfb2747dbeaae8c71bf7861c66b7b9e1df07b810332210fa090a48e447747"
+  },
+  "build-geometry-orchestration.json": {
+    "bytes": 6213,
+    "sha256": "a827cf30d512e8ce688d068da1841f83642190709be9fa52b0d92bf428710fe7"
+  },
+  "build-geometry-resources.jsonl": {
+    "bytes": 53164,
+    "sha256": "04aa82bb42410acb41aa55024d4a12738b16a96c4557d316d5e4502cb39b2aff"
+  },
+  "build-scoped/build.stderr": {
+    "bytes": 43358,
+    "sha256": "bf9123ac658695c590dbfa675c81f7a8caab2463e0fea56cf5bd86e7d1afd2d2"
+  },
+  "build-scoped/build.stdout": {
+    "bytes": 463572,
+    "sha256": "c0dbcff0a3ac25c148b73ab5c01ebc152adb318ad367f6c89fbc2f2a65a39db0"
+  },
+  "build-scoped/clean.stderr": {
+    "bytes": 1633,
+    "sha256": "a97bab04006d772b485eb855220cac04ef79f090018f997a1c185c5330761d40"
+  },
+  "build-scoped/clean.stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "build-scoped/host/identity.json": {
+    "bytes": 5281,
+    "sha256": "72a8d46179d4026fa8127315b0b385d97fa449638e1ab5bc78acf1ea270e2cce"
+  },
+  "build-scoped/host/stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "build-scoped/host/stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "build-scoped/identity.json": {
+    "bytes": 2588,
+    "sha256": "1261400491172bf12c3c074723ac5c5273120171d5664562ac7242406fd2bb2d"
+  },
+  "build-scoped/preserved-artifacts.json": {
+    "bytes": 2880115,
+    "sha256": "984f8efa62abecc05daa7baa275c914905e9907bb2c727ef1787b4625057d1e0"
+  },
+  "build-scoped/root-rustc-invocations.txt": {
+    "bytes": 27936,
+    "sha256": "507ab69bd49ecdc744679c0d4a28197ea6adfb9affcf66b80d46fab4773f04f2"
+  },
+  "build-scoped-host-orchestration.json": {
+    "bytes": 2082,
+    "sha256": "ba36ae8efe3e980268db0740be18079f2c6e64f32bbdc520f5bc1bc06342b468"
+  },
+  "build-scoped-orchestration.json": {
+    "bytes": 6202,
+    "sha256": "02c9e143c6e8f1ae01955bfa8aa1d8fb0f0bd370013de206004ba5d72e7324de"
+  },
+  "build-scoped-resources.jsonl": {
+    "bytes": 54491,
+    "sha256": "2edd5e05c9de203563865960abfb01d492a00cb1c55243b693930df5dc15c81c"
+  },
+  "handoff-pinned-inputs.json": {
+    "bytes": 1255,
+    "sha256": "8c82e187f79a653513cec8bbc1c37c48def97b9efc47bcad52150a0969f3065f"
+  },
+  "native-arithmetic-and-interval-verification.json": {
+    "bytes": 264,
+    "sha256": "26661a381c47e1f70ec939e40e20133b5e355e1425ec2c4632e228d4cca711ce"
+  },
+  "native-delivery/README.txt": {
+    "bytes": 5507,
+    "sha256": "f6dcfb3833dac9cdfbcad8dd6bc75d282ed5dc7949ff26114cc41d2f68891148"
+  },
+  "native-delivery/build-and-driver-identities.json": {
+    "bytes": 24315,
+    "sha256": "08b40b106a5b059b3d4311b65d570598945146ec93171aa066cdb7d8473b2271"
+  },
+  "native-delivery/build-native.py": {
+    "bytes": 6742,
+    "sha256": "8466de8612ad49e052c42749f2137136ae663ce02f1730499aab5d29e82ebe66"
+  },
+  "native-delivery/link-inspector-host.py": {
+    "bytes": 3340,
+    "sha256": "c7031886a4fa83ecd7e0d79ba5c2086486c1f985a24c7e07f1f7d3bd9b91a68f"
+  },
+  "native-delivery/preserve-native.py": {
+    "bytes": 4618,
+    "sha256": "33c51b4ef933ceec917ea168bae66184d3b2c17cbe7cdee6e56fef0ebaa858a1"
+  },
+  "native-delivery/published-runtime/build-revision.py": {
+    "bytes": 5235,
+    "sha256": "b1e849eef7c7819cc5db1a0677d24bc5c876615aa0e4c1a1e8ba805c57bfb7ed"
+  },
+  "native-delivery/published-runtime/compare-http.mjs": {
+    "bytes": 2685,
+    "sha256": "fd415e3f33da2b99cb8020f28efcf4cdf6b4c0196a32ecb0c354b4b150347e2f"
+  },
+  "native-delivery/published-runtime/compare-revisions.py": {
+    "bytes": 2888,
+    "sha256": "67b8f207f2e61348b84c0bc7fc190c6f40855abc45a0aaf177ed523e7df27c08"
+  },
+  "native-delivery/published-runtime/controller.py": {
+    "bytes": 13132,
+    "sha256": "15f783a12b44b79583faedab93040fa1f3679f9893ccbeefb955216bd076938a"
+  },
+  "native-delivery/published-runtime/observer_oracle.py": {
+    "bytes": 4001,
+    "sha256": "354ff938d3c30b9293ce699ed0cef7e74b1932a73e3f41bc0d8d9c07834a7721"
+  },
+  "native-delivery/published-runtime/pack-evidence.py": {
+    "bytes": 1411,
+    "sha256": "e9a0930c06a093cec5f825be3a96e2d6411ee6136528be2f6eb356bc9233276f"
+  },
+  "native-delivery/published-runtime/pi-oracle.mjs": {
+    "bytes": 3214,
+    "sha256": "f251b2f4a475cd766ca074aac3e93d777aae9a2d856e29d1d4e037f67b16df8a"
+  },
+  "native-delivery/published-runtime/summarize-comparisons.py": {
+    "bytes": 8455,
+    "sha256": "6f7e985ff771d80978f0631042c68a1b8a2eedc118cc7835751f063e8c357870"
+  },
+  "native-delivery/published-runtime/summarize-http.py": {
+    "bytes": 4791,
+    "sha256": "861f2a82dca2d1ac1d82725e94a4749b11dda89c5e9327672cd48fef7c33d789"
+  },
+  "native-delivery/read-native-pairs.py": {
+    "bytes": 10768,
+    "sha256": "d3fa4338b4cd10f4ac16656d7f8e7b5fca48441354bff5842e842051c5299f97"
+  },
+  "native-delivery/run-native-cohort.py": {
+    "bytes": 6190,
+    "sha256": "a7fc73f6f5edb0b2affc4f06bd668b2cc73e2a1a9f8426701b38ce83eb80c4b1"
+  },
+  "native-matrix-orchestration.json": {
+    "bytes": 3253,
+    "sha256": "3d2065c395fb23b0c82b1b9e1b1b60a1f9d2555ab6959fc6e90be9fa9fc81298"
+  },
+  "native-readable-v4/method.json": {
+    "bytes": 945,
+    "sha256": "159b960f11a45898b792b3b08df7111d99ab8ec10dc31a9e8e1d76c33d93ddc3"
+  },
+  "native-readable-v4/paired-costs.csv": {
+    "bytes": 338642,
+    "sha256": "5a0b74ee990831be527e2093c61300e65d2379e86b18a4e1e28ff38b8c532317"
+  },
+  "native-readable-v4/paired-summary.csv": {
+    "bytes": 195277,
+    "sha256": "52167e9868e1ca56a59affe2fa5b86f7079c3e786ea789d1cb93cca63af6a5a3"
+  },
+  "native-readable-v4/raw-input-sha256.json": {
+    "bytes": 67029,
+    "sha256": "86b3673b2f38f215f83e7c78ecdb75aa79da7eb5aa6c28b70a3385256235d544"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-cancel-after.json": {
+    "bytes": 208814,
+    "sha256": "92b4719ebc427c033e7a0f723bd5614fb71d6ce67925512c1c9e0f5704b5ea57"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-cancel-after.log": {
+    "bytes": 350,
+    "sha256": "02aeaac6b24937cce7544498e45d9bd696d92836aca16f850746ae122bc6e458"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-cancel-after.process.json": {
+    "bytes": 22816,
+    "sha256": "849b3eaa94251f555e760949c9c9da5aac15edb1a03929aba68c5344afa05c66"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-cancel-after.provider.log": {
+    "bytes": 67,
+    "sha256": "1ed5a95ff2489a7b9456acc867de6ad31986df99b927636e2bd1e95aeb032b24"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-cancel-after.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "3bc0b6f171057c1ca5a1cf2f3d9ff5613a6473957a1a741d4dd124561d0f5def"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-cancel-before.json": {
+    "bytes": 208802,
+    "sha256": "5cd3897db47e68463e4abd4f77f5280a84c98f29ccb02fde8d6d3c6869b4daa6"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-cancel-before.log": {
+    "bytes": 350,
+    "sha256": "5f1b572bad0a56c73114c30ff048b01f3790a9cf0ad53120ca190f3819425572"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-cancel-before.process.json": {
+    "bytes": 22815,
+    "sha256": "b939809520ec7b1c5d3cbd344766bd961f9aba1e482058045271f8451a3bb26c"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-cancel-before.provider.log": {
+    "bytes": 67,
+    "sha256": "52266807f8235071825000f671ec8999d6e9d7a64fdcecbb92e34ecbef98fba3"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-cancel-before.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "3bc0b6f171057c1ca5a1cf2f3d9ff5613a6473957a1a741d4dd124561d0f5def"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-cancel-comparison.json": {
+    "bytes": 917,
+    "sha256": "ab26d98adb00dcb1ba946b8fccdf4c69dab51cf88e862dbe259486c9bcdc7a6d"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-large-after.json": {
+    "bytes": 317647,
+    "sha256": "ceb282c54672f99b7f1481271fd69ba2ad5c244e18ea76e19b72207f78d4cbe2"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-large-after.log": {
+    "bytes": 349,
+    "sha256": "17851ff89826f965469ec2054a69a3f25cef2c6754b030f6a0c0f6d1b009d7b0"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-large-after.process.json": {
+    "bytes": 44583,
+    "sha256": "5c53a4c71528e365e9f37956f73fc6df29066958f7b08d043f417e3201a56872"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-large-after.provider.log": {
+    "bytes": 66,
+    "sha256": "330b49b3ab306d936e3b6ea3c7b330020a669a4628e84595e3393645cc6f1fbf"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-large-after.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "9c728d045f0e27e021ba07fdbadce1a6ff35982d47c065aa262638c09b3f0542"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-large-before.json": {
+    "bytes": 317652,
+    "sha256": "3f30a0bcca1349fa68812230cf4bcf938b66ea80be73dd1ca9874253f1b48642"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-large-before.log": {
+    "bytes": 349,
+    "sha256": "e5cd71437a24fc0a119d48d4d7bbad317b71e1b6e2a8ad85f5bbd65e69a47948"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-large-before.process.json": {
+    "bytes": 44583,
+    "sha256": "5b35475450d8f583529d9a63fc044d9cc7b0786642eeab4a13fbf65d9b8ffdd2"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-large-before.provider.log": {
+    "bytes": 66,
+    "sha256": "315c69fe34b054db03a06f49b819b4e2d86df5e4f0e1e5d8ed1ab85dd78d1e69"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-large-before.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "9c728d045f0e27e021ba07fdbadce1a6ff35982d47c065aa262638c09b3f0542"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-large-comparison.json": {
+    "bytes": 916,
+    "sha256": "dc4b61c132f551cb12864e05999093b57ac58ce48930642a1dba7980ca821f2a"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-short-large-after.json": {
+    "bytes": 25060045,
+    "sha256": "01292f65f429177d721f3405e0c976a910d109e1f7da1e135f7171db047c8aae"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-short-large-after.log": {
+    "bytes": 356,
+    "sha256": "e74578161704fa3509cdaff92b166f49ed940abc1512a65a9de6a68ab9c95320"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-short-large-after.process.json": {
+    "bytes": 4384718,
+    "sha256": "9d13865d3dac8ffe4b8c95c5ee3c7764cf3f91838232fc496deb39f65d3fa568"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-short-large-after.provider.log": {
+    "bytes": 72,
+    "sha256": "3ac5b451d5e2b65c88fad718ae5a79387f3714abf934aff7bc7d8e9a9b599e23"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-short-large-after.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "ac700ca2446af411a87f99e531ecc78d041604d6ac13c23708aa346bb67f4d1b"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-short-large-before.json": {
+    "bytes": 25059936,
+    "sha256": "dab574c19161c770c0d2549c3eed8333ab4f31a5ce61d580b6270bee60feafab"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-short-large-before.log": {
+    "bytes": 356,
+    "sha256": "da4f86cede77bc45156b629d6addd89c02632fc8c7425edbeba0c0340ccd48f7"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-short-large-before.process.json": {
+    "bytes": 4384717,
+    "sha256": "b87d539a2236266da5777a4d777146fadd671b769b079005010732e650f9ef2a"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-short-large-before.provider.log": {
+    "bytes": 72,
+    "sha256": "3a48a5048b2627f30a59203253e6589bbfbf6af0fd6c0e4567c52f1069dc9798"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-short-large-before.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "ac700ca2446af411a87f99e531ecc78d041604d6ac13c23708aa346bb67f4d1b"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-short-large-comparison.json": {
+    "bytes": 55823,
+    "sha256": "92da0ceea77a07ee8649f3d3d44b32f7923da1f9ed2c114d9316a428c79220a2"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-short-small-after.json": {
+    "bytes": 6899762,
+    "sha256": "db7a7a0ca072b68cdd37685552c79f27ea419012ab99c8099d8a6ab5543f252e"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-short-small-after.log": {
+    "bytes": 355,
+    "sha256": "a6d70763ada446a0a1598641f27f13da9593bec4f591002a5a205447952cf79e"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-short-small-after.process.json": {
+    "bytes": 1263051,
+    "sha256": "96dd0689f3fd0a7c86ee18e486902343faf22f790e15c37a820fb58c979915f5"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-short-small-after.provider.log": {
+    "bytes": 72,
+    "sha256": "96c86e76d43e46c7da7a815e521a0db9dc8e56deebd3fb73f9ecd6811e1d7b0e"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-short-small-after.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "ca6b07849eebc1191191904d114be727c2d4199565fe4e4c83f359a96b384181"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-short-small-before.json": {
+    "bytes": 6899699,
+    "sha256": "20002574c1774a913b8d3b3af957f3868b5496e7ee833fd812d76897f5905fa4"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-short-small-before.log": {
+    "bytes": 355,
+    "sha256": "9fbc15aa5f0fa84f4f2bbdae1b5bac191af09244eb6374f263a91b3d221cc8b9"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-short-small-before.process.json": {
+    "bytes": 1263050,
+    "sha256": "e38ea6fdf31c397d67646e66fa66cbf0d0abbea82955bc52f33bece3f993dc5f"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-short-small-before.provider.log": {
+    "bytes": 72,
+    "sha256": "5e044b33135e6887da595107bb43d615203b306fd158afec69b9ec2c4f9e54f9"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-short-small-before.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "ca6b07849eebc1191191904d114be727c2d4199565fe4e4c83f359a96b384181"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-short-small-comparison.json": {
+    "bytes": 23455,
+    "sha256": "77dc88905882757d3193988d47491a8e09e5f4869b9270267fa62dfef44a98a6"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-stream-after.json": {
+    "bytes": 227049,
+    "sha256": "dbd6909f962e955b447568d009e4158eba7994cbfd2f60f9856ea62b2a58cc59"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-stream-after.log": {
+    "bytes": 350,
+    "sha256": "ef76510ba149588a597fab3a107c10eebf64ef2375813b77024c85da7d1811d3"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-stream-after.process.json": {
+    "bytes": 67028,
+    "sha256": "3b4dd3d69a54b1211198c69d22b53b9715f795f87341b68feec9597aac85c02e"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-stream-after.provider.log": {
+    "bytes": 67,
+    "sha256": "33008d7b35d8e0088fb2a5155e0b7cfc6b694e5433b2ab25af940f40a80c7d5c"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-stream-after.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "f186c9b9665c77a0c115e7432006ee399e55e7bf064c13d88881d55c5daf1c7b"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-stream-before.json": {
+    "bytes": 227039,
+    "sha256": "77683462f0155e31e4c59f5319608a3871a80520ce226b5ab2d063e4a463e2e1"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-stream-before.log": {
+    "bytes": 350,
+    "sha256": "cfff126da0d629608ff5f792b53204bb4f1d267e672a69c9cc7b91d1d91d349f"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-stream-before.process.json": {
+    "bytes": 67028,
+    "sha256": "02fcc1f388740fd07ddf7f218fd8ac6c34a1fd8d26b36d688608d80c61a06dde"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-stream-before.provider.log": {
+    "bytes": 67,
+    "sha256": "54066addd802fdbe86b9235efd23384c0ae81d82f91a01a0372300119cf79fb7"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-stream-before.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "f186c9b9665c77a0c115e7432006ee399e55e7bf064c13d88881d55c5daf1c7b"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-stream-comparison.json": {
+    "bytes": 917,
+    "sha256": "0265e436b39ab6ccf01aae1a66642dfee6765d545f497cead78d204bec192115"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-tool-after.json": {
+    "bytes": 361241,
+    "sha256": "9954925e9108ee1031f162bab72647a6c967013e6316d5e26e682a57aa21f8e6"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-tool-after.log": {
+    "bytes": 348,
+    "sha256": "48881a99b3f560569f9575a2450fd99b97b5433614527e87f10b10176f641f22"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-tool-after.process.json": {
+    "bytes": 45362,
+    "sha256": "fe617cf4a41d4327b2eca0a96cffd5db9dc01c5270ed03c1342d9453a4e89d77"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-tool-after.provider.log": {
+    "bytes": 65,
+    "sha256": "ca6195e74ae5514cdfc55a08a736852a935375502a8314a82ef97fd8ba7d3e54"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-tool-after.provider.stdout": {
+    "bytes": 26233,
+    "sha256": "23fd5207045581e7eb7d7ce89b70d73f016180800eae3caebaf5aba77bd41b9b"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-tool-before.json": {
+    "bytes": 361234,
+    "sha256": "599dd2ac5d6c6f3c15241ae4d32aacaf942d6db8f378e3600aa4bb5ee098c1d2"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-tool-before.log": {
+    "bytes": 348,
+    "sha256": "9ef005776a6b4f97a613f9f29df50346299ed81e64d9484d056c5587aa9da0b3"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-tool-before.process.json": {
+    "bytes": 45362,
+    "sha256": "dc467e18f4858521c12bd5ae2c059243e6a0163ffea6b4147b2092ba9eac2948"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-tool-before.provider.log": {
+    "bytes": 65,
+    "sha256": "1a4812faaf286eb7873475580ffa9454222514475a7adb9d68c8e4dbd34159f5"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-tool-before.provider.stdout": {
+    "bytes": 26233,
+    "sha256": "a48ade296a2105d64ec4a2ea22c2e1fca555639354dee0fcd854cf1b02e03311"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/0-tool-comparison.json": {
+    "bytes": 1492,
+    "sha256": "71606d7d317a67a778bad9d1ad5eee0b7b877b9d665ade381138463bc3a738b1"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-cancel-after.json": {
+    "bytes": 208807,
+    "sha256": "062a476186b46d9cc7122505868f86b4c303396c5b61f63f7f100bc9ef062da3"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-cancel-after.log": {
+    "bytes": 350,
+    "sha256": "11f433145880e42d78b4e732dd33655d0e059853bd6ae37b4b490158c67c203b"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-cancel-after.process.json": {
+    "bytes": 22816,
+    "sha256": "bcdad89b7a73ab806451c62c2bea5ab3ba104f722b7968f30db2688b5a143d15"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-cancel-after.provider.log": {
+    "bytes": 67,
+    "sha256": "c646f325f96b3d67d086eecff114eaa76cf73223013d901a2034bf60139b3627"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-cancel-after.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "3bc0b6f171057c1ca5a1cf2f3d9ff5613a6473957a1a741d4dd124561d0f5def"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-cancel-before.json": {
+    "bytes": 208432,
+    "sha256": "d508ac52c414df1c5a7c96bbf2fb5532c935cdab1cc69e9a241dec9442c82144"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-cancel-before.log": {
+    "bytes": 350,
+    "sha256": "023afea57a040c5942c07b21220dbd0aec6305b5e16f2c0b20f2005b5e5b4fef"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-cancel-before.process.json": {
+    "bytes": 22815,
+    "sha256": "531f616d31d185835d036f9105875be73ad49cbc0bc82127e25eea69a997c530"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-cancel-before.provider.log": {
+    "bytes": 67,
+    "sha256": "096207c8021e6bbbcc64e59dbf1c3c0f166b265dced793bccc3682a1aa0d47f0"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-cancel-before.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "3bc0b6f171057c1ca5a1cf2f3d9ff5613a6473957a1a741d4dd124561d0f5def"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-cancel-comparison.json": {
+    "bytes": 917,
+    "sha256": "ab26d98adb00dcb1ba946b8fccdf4c69dab51cf88e862dbe259486c9bcdc7a6d"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-large-after.json": {
+    "bytes": 317639,
+    "sha256": "78b40b7158d9124920962e8b2c2e24f470f94a3cb73a6fdc5c7c6f1a6a9f6fe0"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-large-after.log": {
+    "bytes": 349,
+    "sha256": "4f3ae3ac14782f8c7c0ff1f1b898578a5439185389fdf6aaea342826a8cc02af"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-large-after.process.json": {
+    "bytes": 44583,
+    "sha256": "7a38c5eed1edb24bfefd9a7c14e6cffceaa646be633e1f647f42a165456af266"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-large-after.provider.log": {
+    "bytes": 66,
+    "sha256": "a69614c40a2dbbf115e2a9307c68d74ffc014dd6859ca7e2221d13e311b6a4ff"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-large-after.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "9c728d045f0e27e021ba07fdbadce1a6ff35982d47c065aa262638c09b3f0542"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-large-before.json": {
+    "bytes": 317649,
+    "sha256": "e19621bdc61ff09dfbe0487056c271c5acde83d324318043439d94bbdd603687"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-large-before.log": {
+    "bytes": 349,
+    "sha256": "fe89e533fef2b813b2b34bde8254bb98c5b68e76e6ef7bf5d9de6a0ac054c2e7"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-large-before.process.json": {
+    "bytes": 44583,
+    "sha256": "f920f82eb1c8f270b1806466d6794eeb7c6b2deece0c0d6310fae2cdd786bea3"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-large-before.provider.log": {
+    "bytes": 66,
+    "sha256": "f0403bdd725b935d1f977476aa64024e013c3a9a5a197e9863822dc1dc3c6d2f"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-large-before.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "9c728d045f0e27e021ba07fdbadce1a6ff35982d47c065aa262638c09b3f0542"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-large-comparison.json": {
+    "bytes": 916,
+    "sha256": "dc4b61c132f551cb12864e05999093b57ac58ce48930642a1dba7980ca821f2a"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-short-large-after.json": {
+    "bytes": 25060106,
+    "sha256": "0fd8161f7d5bede0edddd9aec49fa51ac49a2f2f50320eba341cd2e6010012e5"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-short-large-after.log": {
+    "bytes": 356,
+    "sha256": "9ed2551f9c18811e07f4961fa5bc8d31ca6759795f3be20710dd638559336f99"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-short-large-after.process.json": {
+    "bytes": 4384717,
+    "sha256": "276823476ff55f2f440ef31d7b49cdef13d8fdc6ba1370d9eca89b3df5fdee8d"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-short-large-after.provider.log": {
+    "bytes": 72,
+    "sha256": "482eb0fb055e9e1549fc359faca05b06b6a11ccadae99811dceb708a4d6990cd"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-short-large-after.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "ac700ca2446af411a87f99e531ecc78d041604d6ac13c23708aa346bb67f4d1b"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-short-large-before.json": {
+    "bytes": 25059953,
+    "sha256": "ae34d3fae16ed8281aae40b23db70618ae7dbd5aa79e07ec354b5911b7a18c8d"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-short-large-before.log": {
+    "bytes": 356,
+    "sha256": "e08f5f068556464acabef92cd06b8d16175e2fa20c8cc14bb39143e2f18654ea"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-short-large-before.process.json": {
+    "bytes": 4384716,
+    "sha256": "e4fc5bede6dafbae79ddf324bb3cf3febe6a918a6ee5843f17421bc7940db0cf"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-short-large-before.provider.log": {
+    "bytes": 72,
+    "sha256": "8d1673f4b365498935d25b19355e29d7abbe7ffa5668800c0a67ed5d3abd5548"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-short-large-before.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "ac700ca2446af411a87f99e531ecc78d041604d6ac13c23708aa346bb67f4d1b"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-short-large-comparison.json": {
+    "bytes": 55823,
+    "sha256": "92da0ceea77a07ee8649f3d3d44b32f7923da1f9ed2c114d9316a428c79220a2"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-short-small-after.json": {
+    "bytes": 6899799,
+    "sha256": "057a1fa88cd00a767580eb7d00d649748f5c780fbaacecfe670f21742708757f"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-short-small-after.log": {
+    "bytes": 355,
+    "sha256": "946eac7ebd6b1114582ffe0659c86a26b41c4c77adb22c82a3a1113563e25f32"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-short-small-after.process.json": {
+    "bytes": 1263051,
+    "sha256": "eb06d3e1eca4c0f0af14909d6041560baf1fed3fc78a5f6ea8bcc7b6d45d0d7b"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-short-small-after.provider.log": {
+    "bytes": 72,
+    "sha256": "0c4e1609e05d94e36834b2604efca91d231661c07ca0dd88949bbee5b8288483"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-short-small-after.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "ca6b07849eebc1191191904d114be727c2d4199565fe4e4c83f359a96b384181"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-short-small-before.json": {
+    "bytes": 6899709,
+    "sha256": "0ede0ba62246833354031c718275f8759f72cb91d041f65855554a78e1729ffe"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-short-small-before.log": {
+    "bytes": 355,
+    "sha256": "e203de9e4ca4cada5923e39cb9f267093c1045a3dd80881b7b88a17d1d9b92b0"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-short-small-before.process.json": {
+    "bytes": 1263050,
+    "sha256": "d59079c9656ee3c282d14f92340d2f189663066f5e535f8f4820c4b02f14a2c2"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-short-small-before.provider.log": {
+    "bytes": 72,
+    "sha256": "beee14bcf666d89ea33d5d46630db39626d2edf976a2823b1b6af89655f18f83"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-short-small-before.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "ca6b07849eebc1191191904d114be727c2d4199565fe4e4c83f359a96b384181"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-short-small-comparison.json": {
+    "bytes": 23455,
+    "sha256": "77dc88905882757d3193988d47491a8e09e5f4869b9270267fa62dfef44a98a6"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-stream-after.json": {
+    "bytes": 227051,
+    "sha256": "c5ca97389fd096a354a969b15ddffe32fcb4f3947204b536de26d4dec150199f"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-stream-after.log": {
+    "bytes": 350,
+    "sha256": "a82c62d1e6a2019581a194018bd02a248b0614d983a0c6de5bae39c7e375bb4e"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-stream-after.process.json": {
+    "bytes": 67028,
+    "sha256": "61dac986859597e8cdf036fb8d798a662fe561b06d4c9666c16add5713a0039b"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-stream-after.provider.log": {
+    "bytes": 67,
+    "sha256": "0d4d7e1782ba7edca4472c141ca3be972fa147b702ba8bc71208a38cf22c4692"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-stream-after.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "f186c9b9665c77a0c115e7432006ee399e55e7bf064c13d88881d55c5daf1c7b"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-stream-before.json": {
+    "bytes": 227036,
+    "sha256": "3d56278c93bdc92dde04890ad06a7887e5e39a829fa1b0551e37e974ed28decc"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-stream-before.log": {
+    "bytes": 350,
+    "sha256": "9cbe99bd5aa0831ef96063d05e4a4a26dfc38bd6aac9b30f4e19f9efe9712d2b"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-stream-before.process.json": {
+    "bytes": 67027,
+    "sha256": "ce12d63e815445b5a41069f33dfb3f2714abf03489437e098fff1b99b800b309"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-stream-before.provider.log": {
+    "bytes": 67,
+    "sha256": "fc21ea1d6ed9968c6be561b2da45d6777873a1f5206b89b9d2232ec95f4df73f"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-stream-before.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "f186c9b9665c77a0c115e7432006ee399e55e7bf064c13d88881d55c5daf1c7b"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-stream-comparison.json": {
+    "bytes": 917,
+    "sha256": "0265e436b39ab6ccf01aae1a66642dfee6765d545f497cead78d204bec192115"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-tool-after.json": {
+    "bytes": 361239,
+    "sha256": "37365dd153ea076763be10e2faf085db53ea0cbb89916ad860ad04cf43f894c8"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-tool-after.log": {
+    "bytes": 348,
+    "sha256": "9a863a8308a281761e417da50b1a8062bfea1be8ad5bc1710b5b944e5cdd95a8"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-tool-after.process.json": {
+    "bytes": 45362,
+    "sha256": "1181f13e05d6a53fff43157c1fc3bc49f6e3a9f228a0cd807b326b6043fdc0cf"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-tool-after.provider.log": {
+    "bytes": 65,
+    "sha256": "26edc30075226f39c9fbf881acfd040f7db9a2cc5f509517492bd8102e152c85"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-tool-after.provider.stdout": {
+    "bytes": 26233,
+    "sha256": "04c127e42797fcf381aa5b51d02fc53b5d97cdbde35e4f9bee2078bdda7079b2"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-tool-before.json": {
+    "bytes": 361245,
+    "sha256": "56c8c0d49b255692c4181fe944df579d2cabb3082657b3730b5d2b7c88215cbe"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-tool-before.log": {
+    "bytes": 348,
+    "sha256": "32c056571c8525811079c2b3f92fc16d7de09a8fd6de3a253b5a68b289746f44"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-tool-before.process.json": {
+    "bytes": 45362,
+    "sha256": "ae0005187c6acfb02542b8690b9cc914893531a0f74b9de9d873e5093ed77b2c"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-tool-before.provider.log": {
+    "bytes": 65,
+    "sha256": "629ae0a322442c277788aa1eac68a30fe5b2d36f0bce9a6f2db4db7cb8c0a5a4"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-tool-before.provider.stdout": {
+    "bytes": 26233,
+    "sha256": "365c1f7461a9e36ccbdafc187dac2fa2191ecc2b489ba1a71c32b69284fed528"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/1-tool-comparison.json": {
+    "bytes": 1492,
+    "sha256": "71606d7d317a67a778bad9d1ad5eee0b7b877b9d665ade381138463bc3a738b1"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-cancel-after.json": {
+    "bytes": 208814,
+    "sha256": "527f524cc93d64e7fe6a80c9245ff3a944c297ddbeda112d2ddb9ad6f81231e7"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-cancel-after.log": {
+    "bytes": 350,
+    "sha256": "3945bee1941b747b4205811ffcc4e4791bb5fd1b87bc03ace7bb33abeeec3727"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-cancel-after.process.json": {
+    "bytes": 22816,
+    "sha256": "5b8370f7e7415aa2262d7faf49b886f8f3446c1d8f14861b0e9eea0a0a2d04fc"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-cancel-after.provider.log": {
+    "bytes": 67,
+    "sha256": "b84e8b14ff79348c491458ec4812215f895d8ae046a38eef4b6c6bcdee464ed1"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-cancel-after.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "3bc0b6f171057c1ca5a1cf2f3d9ff5613a6473957a1a741d4dd124561d0f5def"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-cancel-before.json": {
+    "bytes": 208811,
+    "sha256": "0cd1534a3bfcc6988f53f3bb4ab88213bc5c0d7c04655fc42ca3bbd2f151dbfa"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-cancel-before.log": {
+    "bytes": 350,
+    "sha256": "5ae671bcc7cb01cdce324a3fcf2fcd9077e2f5f1bf7b5c5efa06d65bbe496d3a"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-cancel-before.process.json": {
+    "bytes": 22815,
+    "sha256": "00469cb57187d365fbbe975a97bf03f8586f2b5c94e3fde4a19a2824eef9dc61"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-cancel-before.provider.log": {
+    "bytes": 67,
+    "sha256": "9b68b4daf0d19a75103744ddbb8558ec590d8654cbf826496e66f4232f80344a"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-cancel-before.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "3bc0b6f171057c1ca5a1cf2f3d9ff5613a6473957a1a741d4dd124561d0f5def"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-cancel-comparison.json": {
+    "bytes": 917,
+    "sha256": "ab26d98adb00dcb1ba946b8fccdf4c69dab51cf88e862dbe259486c9bcdc7a6d"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-large-after.json": {
+    "bytes": 317656,
+    "sha256": "a3f8f07359bee05dc9137869e892ff476fa63ed0c8d12d24c9ad4537ff2e8155"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-large-after.log": {
+    "bytes": 349,
+    "sha256": "a10f2a3f8be872fe3d9b78deb6d7cf8e81c34f22901c6f71830b1d20384fc6e1"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-large-after.process.json": {
+    "bytes": 44584,
+    "sha256": "a7e51ea7749060ea524ca10435216ba41a3dbef5b44f1d52b75795d675144fd9"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-large-after.provider.log": {
+    "bytes": 66,
+    "sha256": "e5fbdb66e3649e975f259ec63a8be70d289ce829a5b3ab7af95cdd804aa35987"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-large-after.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "9c728d045f0e27e021ba07fdbadce1a6ff35982d47c065aa262638c09b3f0542"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-large-before.json": {
+    "bytes": 317661,
+    "sha256": "ddb9816aa5433386d039d38540a47f9b12e6d3021b36bc9f7627746588d3d542"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-large-before.log": {
+    "bytes": 349,
+    "sha256": "2e23e52c3c9811c4147a195979dfe5dac140b804738bc5faa6f62ec35f354a29"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-large-before.process.json": {
+    "bytes": 44584,
+    "sha256": "6a6e5add55f2ddc4e91118e6576c86ebbf313e58d8f80438f02585e9ffefb267"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-large-before.provider.log": {
+    "bytes": 66,
+    "sha256": "d032ffe4d318c8e3ef6dcf420c5a64c50f57f0e98601d885be249ea2645c1f91"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-large-before.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "9c728d045f0e27e021ba07fdbadce1a6ff35982d47c065aa262638c09b3f0542"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-large-comparison.json": {
+    "bytes": 916,
+    "sha256": "dc4b61c132f551cb12864e05999093b57ac58ce48930642a1dba7980ca821f2a"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-short-large-after.json": {
+    "bytes": 25059988,
+    "sha256": "d426672ab643d98f0d1ed8f040b50116023c7f4d928d62649f454cae78da82e9"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-short-large-after.log": {
+    "bytes": 356,
+    "sha256": "b69ff7adb8b17fc53681fac785a54e6fb792354805d70b6b5085a43e431d7377"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-short-large-after.process.json": {
+    "bytes": 4384718,
+    "sha256": "56145a3c3dd62180f07a711caf848d031d5f5398abd5862ec4bed5e03fc5c75a"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-short-large-after.provider.log": {
+    "bytes": 72,
+    "sha256": "a4c7dd8eeeeb06f137378f4525c966e21d4f8ca62dafbbc1b01f51f21802b89e"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-short-large-after.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "ac700ca2446af411a87f99e531ecc78d041604d6ac13c23708aa346bb67f4d1b"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-short-large-before.json": {
+    "bytes": 25059828,
+    "sha256": "6e3610cf30ce90fd8cb22cedffe87628ceed2f8459e4342ab705c49124fdc1c7"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-short-large-before.log": {
+    "bytes": 356,
+    "sha256": "af15121a5226f47df060cdfe21d321c67b2892807cf872e5d878cad178999ca6"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-short-large-before.process.json": {
+    "bytes": 4384717,
+    "sha256": "cf45cfcd1802ab6184b9648f095694f557883f715891ea6dab078dca70a1c5ff"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-short-large-before.provider.log": {
+    "bytes": 72,
+    "sha256": "3bc9ad2392a52b3e3895a96028fa8d3d118b5fe73ba5d4c0e49e1fc08e4801dc"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-short-large-before.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "ac700ca2446af411a87f99e531ecc78d041604d6ac13c23708aa346bb67f4d1b"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-short-large-comparison.json": {
+    "bytes": 55823,
+    "sha256": "92da0ceea77a07ee8649f3d3d44b32f7923da1f9ed2c114d9316a428c79220a2"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-short-small-after.json": {
+    "bytes": 6899711,
+    "sha256": "e7d327e1c52bfcfb1143ceeb68b32ac411b0c4eb9edb5595268e3576c57dc7a8"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-short-small-after.log": {
+    "bytes": 355,
+    "sha256": "94d3446d5bbd3fdbb56d5f2b2f12ac908a8716f665769806c05407dc1063293a"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-short-small-after.process.json": {
+    "bytes": 1263051,
+    "sha256": "479073bb2b4570731ef8989807e0798bbb8a6288859e1f321773bf2518d40091"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-short-small-after.provider.log": {
+    "bytes": 72,
+    "sha256": "a02fe1592ca0f275a7ac70731062f090accf711d237d024f97db9f116b05c380"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-short-small-after.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "ca6b07849eebc1191191904d114be727c2d4199565fe4e4c83f359a96b384181"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-short-small-before.json": {
+    "bytes": 6899695,
+    "sha256": "2a55403a67cd8bd9ab1c8fddeb3135785ada8c7fa68c7b9d1f0e1f0d08b4f303"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-short-small-before.log": {
+    "bytes": 355,
+    "sha256": "a52c8d3bc62581e02b6174ecbbbdc0077d99c99f88b5fca2a948fae8b0a8adb8"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-short-small-before.process.json": {
+    "bytes": 1263050,
+    "sha256": "e80ea0bef7eb53a353cb555b81853ffe4e56e8a3dc86c3f4248913f03fc2a07f"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-short-small-before.provider.log": {
+    "bytes": 72,
+    "sha256": "df28352c02a4f7207fcb414c7f616fa44526d402c87586902f877437a8f40dec"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-short-small-before.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "ca6b07849eebc1191191904d114be727c2d4199565fe4e4c83f359a96b384181"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-short-small-comparison.json": {
+    "bytes": 23455,
+    "sha256": "77dc88905882757d3193988d47491a8e09e5f4869b9270267fa62dfef44a98a6"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-stream-after.json": {
+    "bytes": 227043,
+    "sha256": "ce98849d98831448883e1cf5636dc73508a509b8f6cff1e110345d9edfaae566"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-stream-after.log": {
+    "bytes": 350,
+    "sha256": "4d5ac312d336165df686ba74dbec1707d0631c7740108b3b1aec528e2cfcb01c"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-stream-after.process.json": {
+    "bytes": 67028,
+    "sha256": "ccd01b73fef3da7b3925440a8db6b73d5c04ba10c197a501704ce5aba76f5a16"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-stream-after.provider.log": {
+    "bytes": 67,
+    "sha256": "a00a5f00a3d754a7ac72b3dfcafa8df1f7eccb7dc0a047fdbc56e687fb855cbd"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-stream-after.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "f186c9b9665c77a0c115e7432006ee399e55e7bf064c13d88881d55c5daf1c7b"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-stream-before.json": {
+    "bytes": 227047,
+    "sha256": "0c1041b35bf2cd59253899be3b9493aadbba7a79bf5bad4f9d1628268169c52d"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-stream-before.log": {
+    "bytes": 350,
+    "sha256": "ab42689498ea5651cc1ece47a9ae87557ea51bc1721719ab43551586f505efc4"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-stream-before.process.json": {
+    "bytes": 67027,
+    "sha256": "786461ce309e4d3b4b45db9b14f6da2b7250af624431b5fcd8253971d22d31a0"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-stream-before.provider.log": {
+    "bytes": 67,
+    "sha256": "87cecd92ff36abfe7198f0e989b47654b72f5e74e6f3b64f31faef74436f6480"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-stream-before.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "f186c9b9665c77a0c115e7432006ee399e55e7bf064c13d88881d55c5daf1c7b"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-stream-comparison.json": {
+    "bytes": 917,
+    "sha256": "0265e436b39ab6ccf01aae1a66642dfee6765d545f497cead78d204bec192115"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-tool-after.json": {
+    "bytes": 361243,
+    "sha256": "37f1b48b54888f8d3fbba2ed4d19973221528f1fe5d0cc0e0e79d5a1860b5364"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-tool-after.log": {
+    "bytes": 348,
+    "sha256": "c24f195e9a54b2fb9f9e81ef6120f428f3d5ee5c8b696606402d8011f009ee53"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-tool-after.process.json": {
+    "bytes": 45362,
+    "sha256": "2071a5839d7d7e970f9b93511a375a57c661a1e08fb603b3495c71098fcccf2a"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-tool-after.provider.log": {
+    "bytes": 65,
+    "sha256": "572654fedaf1755844bb9d84d29e49ce2cf305cd7dbc0d99f8851365ee534856"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-tool-after.provider.stdout": {
+    "bytes": 26233,
+    "sha256": "c2880f1771ba6d4c5761da5bd1e1403509d1c499977208702e27861f5e1bddfa"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-tool-before.json": {
+    "bytes": 361243,
+    "sha256": "975a70ea332b956208ff231de4dfb03402fc17b96d2f8d634a74a573767ded2d"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-tool-before.log": {
+    "bytes": 348,
+    "sha256": "f58479d37e1ce1cf6eb26d45fedd1674ed059e63d1dfaa23e6d8c02e403a2576"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-tool-before.process.json": {
+    "bytes": 45362,
+    "sha256": "94dbe963f05fc61bbb406c53428258c5e274e923399dbea05be1ae8a9ee64541"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-tool-before.provider.log": {
+    "bytes": 65,
+    "sha256": "87a690538c94906385c767b88a5d4a3365806a05168f8472bebd6227295c36b5"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-tool-before.provider.stdout": {
+    "bytes": 26233,
+    "sha256": "858b438d7bbf5550636fcd1f9a727025f1196d2295806caa988107ca717773f9"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/2-tool-comparison.json": {
+    "bytes": 1492,
+    "sha256": "71606d7d317a67a778bad9d1ad5eee0b7b877b9d665ade381138463bc3a738b1"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber/manifest.json": {
+    "bytes": 823,
+    "sha256": "061a0c46d64d6f00350dad0ce46f0c5b9f6b74481168cac575ec84fd8c614618"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber-cohort-manifest.json": {
+    "bytes": 26584,
+    "sha256": "9f06a01651269980519246055e894110c22cc9480553e103d7ced98690be3abf"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber-helper-restoration.jsonl": {
+    "bytes": 250994,
+    "sha256": "58f7da022f4b8a228f784724aa7def712b16c3714fd2232675cc0c1469c44372"
+  },
+  "products/native-baseline-vs-geometry-live-subscriber-product-intervals.jsonl": {
+    "bytes": 13134,
+    "sha256": "4bacf7c2a41440e10c2ec08210318b50551de7aad458229480b65b950b10f290"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-cancel-after.json": {
+    "bytes": 208354,
+    "sha256": "86a6a281ef0222b1613e974912f0f715622c6152bebc09ed7627c0301ef06ed3"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-cancel-after.log": {
+    "bytes": 353,
+    "sha256": "f9e17248d2d8f468eb5ebdc0b47f42ad1986db17260c347d5597a4d9a4f117b9"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-cancel-after.process.json": {
+    "bytes": 22821,
+    "sha256": "2118116bbafeb626e4d0274a9a73a6e5c102f34f31451cabfdef40ff0b22f52d"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-cancel-after.provider.log": {
+    "bytes": 67,
+    "sha256": "ef4eb540416a9b46292fbf7fb139defe94c0ee001eea2524b5fb35a0511d512a"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-cancel-after.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "3bc0b6f171057c1ca5a1cf2f3d9ff5613a6473957a1a741d4dd124561d0f5def"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-cancel-before.json": {
+    "bytes": 208353,
+    "sha256": "ba0546f86a8d9d5049868c74dd57d7b688ac259201767a526c14138d81b94eb4"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-cancel-before.log": {
+    "bytes": 353,
+    "sha256": "b6d5d632fbbc61a59dc1d20a25dae840b8e526155db8337cc9decf12eccc6d95"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-cancel-before.process.json": {
+    "bytes": 22821,
+    "sha256": "92608ed294c520914a235477b9076e86704e7457d62d674e2af1ebff73ea7ad5"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-cancel-before.provider.log": {
+    "bytes": 67,
+    "sha256": "c42448f7a659cdc074a1921f0b8917401be939c7d88c593f02ed1c6906c1e25a"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-cancel-before.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "3bc0b6f171057c1ca5a1cf2f3d9ff5613a6473957a1a741d4dd124561d0f5def"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-cancel-comparison.json": {
+    "bytes": 920,
+    "sha256": "a97d7be940e14ca1d56df9cc685018f5a3497dc86f105e46fd33773738268fff"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-large-after.json": {
+    "bytes": 284398,
+    "sha256": "12da3b0f9f01202b912b8c588bad9ac5ed907e827aa5a1af05c939939d98f14c"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-large-after.log": {
+    "bytes": 352,
+    "sha256": "92e410647f5b330b8e7b865eae04aa66529f11b3000d7ae8ff73778524640a21"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-large-after.process.json": {
+    "bytes": 44589,
+    "sha256": "9d7b99464e5a70eb335929377d7f5ae1322dedc03ce5fcfb2d328e383550a63e"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-large-after.provider.log": {
+    "bytes": 66,
+    "sha256": "85caf96acbc35b5c9ae132bb147d7871af6951bc816df18302818991fba869fb"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-large-after.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "9c728d045f0e27e021ba07fdbadce1a6ff35982d47c065aa262638c09b3f0542"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-large-before.json": {
+    "bytes": 284398,
+    "sha256": "b037e0bce28349cb19d95543643f3d8187e11d9e96c980a0875fe21ad3bae203"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-large-before.log": {
+    "bytes": 352,
+    "sha256": "4871b6d4a438fb6fbdfb4219db23b58c4d699a9166a0cf98a0c085aa48acf9f5"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-large-before.process.json": {
+    "bytes": 44589,
+    "sha256": "c9ea40d63c3327e16c73925ba78da453002801d68e55454868039a662def7c6f"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-large-before.provider.log": {
+    "bytes": 66,
+    "sha256": "a2e6d70c1e8a447095fdfe685d235eac459a2de843d67e11c12c49ad6544ac0d"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-large-before.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "9c728d045f0e27e021ba07fdbadce1a6ff35982d47c065aa262638c09b3f0542"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-large-comparison.json": {
+    "bytes": 919,
+    "sha256": "f74e506640acbda3b0e65f6510cb2460cd0091367b928a8425ac604ce2562099"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-short-large-after.json": {
+    "bytes": 25023097,
+    "sha256": "3d642306ee7377f66876d95ee5292b64da84a00a9144260241e442ee2e5ba504"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-short-large-after.log": {
+    "bytes": 359,
+    "sha256": "2a3db8c32a6e615b717b8be1f9df5fbf400c8ba7f3467b0a211bf3734f717257"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-short-large-after.process.json": {
+    "bytes": 4384723,
+    "sha256": "6e133770e036f80ded2137a8ccfae43323056287e5a6f111c879a6f977cb21fd"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-short-large-after.provider.log": {
+    "bytes": 72,
+    "sha256": "c25cabafdd5b2d494721fcdb3adef88cfdeb7912217b8ad02943ce4e0c908de8"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-short-large-after.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "ac700ca2446af411a87f99e531ecc78d041604d6ac13c23708aa346bb67f4d1b"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-short-large-before.json": {
+    "bytes": 25023145,
+    "sha256": "417647c54d9cb8487e5f14f6023766c99731222f3d1407cec9466f3854eb65bc"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-short-large-before.log": {
+    "bytes": 359,
+    "sha256": "caa3bcaa46519f3b4416e2d94e0cd24246ca6a6836605c3ffb8a510efe850f13"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-short-large-before.process.json": {
+    "bytes": 4384722,
+    "sha256": "3fbebd97d4b99bc494ef2a015d95333f610b3e5be89e71c6d6a3f4ca737d5653"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-short-large-before.provider.log": {
+    "bytes": 72,
+    "sha256": "e55863a37d2ad53a7c6c886e055dabb46d3646959605f4c08e54f50d31fd88d8"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-short-large-before.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "ac700ca2446af411a87f99e531ecc78d041604d6ac13c23708aa346bb67f4d1b"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-short-large-comparison.json": {
+    "bytes": 55826,
+    "sha256": "fc604efc7911501f0cb430e1952ba7b394a85aee6229a2b8d71f9089ba6ad494"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-short-small-after.json": {
+    "bytes": 6884365,
+    "sha256": "a0f596aaa156fa3421127be6150252e5ed9ec9ce6e928f9011040951e663318d"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-short-small-after.log": {
+    "bytes": 358,
+    "sha256": "9b9f0e671a8c7821354372b26db051d610a218bbad5583e7cc7c2ea75fd5353f"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-short-small-after.process.json": {
+    "bytes": 1263057,
+    "sha256": "df8f5a175d3ac0ffe2470dc5d4d23c6e9819f3e0985f5aefd68f5c13cf771aa5"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-short-small-after.provider.log": {
+    "bytes": 72,
+    "sha256": "029f21a5ce9591755740cd9fff07e7da8a5bba8718c58a63d5d4633736d45275"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-short-small-after.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "ca6b07849eebc1191191904d114be727c2d4199565fe4e4c83f359a96b384181"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-short-small-before.json": {
+    "bytes": 6884368,
+    "sha256": "937e75abdbe4e4f7122f0ebba0cc42cc57bfec76ea7aadc29c3527f40225340e"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-short-small-before.log": {
+    "bytes": 358,
+    "sha256": "b7ebf3b1ebdec2d5c499dc35bff7003845d47320a3dcb31d521f093cf505e4b8"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-short-small-before.process.json": {
+    "bytes": 1263056,
+    "sha256": "5bde66ee3ba05e8838205e048dbe36a3dfeb0df527d29b49b1f503563de3ea95"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-short-small-before.provider.log": {
+    "bytes": 72,
+    "sha256": "f791ec61d1817ace39db8d248e98d3012bab99c211aaf77b41755347dffe2fa2"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-short-small-before.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "ca6b07849eebc1191191904d114be727c2d4199565fe4e4c83f359a96b384181"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-short-small-comparison.json": {
+    "bytes": 23458,
+    "sha256": "5163daa4e99f29729fccfb83625127b4ea0a016b2533b2593147915163d4b4d8"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-stream-after.json": {
+    "bytes": 224264,
+    "sha256": "1ff848288a59f197f1a945cf814e961e9d72ab394114134553d289766a47a344"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-stream-after.log": {
+    "bytes": 353,
+    "sha256": "1c7b7b7b673dbea362e889be34c1e534700f162e4aaf736392bbc60e1ac7894e"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-stream-after.process.json": {
+    "bytes": 67034,
+    "sha256": "ed6cb9900c4ce788f45d52379f228fcc54ff33510be240ca735730c34a17cdfb"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-stream-after.provider.log": {
+    "bytes": 67,
+    "sha256": "382f3a6b5ccce73816a50254cdef97a4a3f04d7739bffe28d78a86ab0c4ce88c"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-stream-after.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "f186c9b9665c77a0c115e7432006ee399e55e7bf064c13d88881d55c5daf1c7b"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-stream-before.json": {
+    "bytes": 224261,
+    "sha256": "0c9257f3bd3d76a2e9962b839e279bc3a006d0a72c477271618d2f40c6181004"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-stream-before.log": {
+    "bytes": 353,
+    "sha256": "b4f3247f7e54b63dc350b1237bb9630eaab32cafd1b9737d0c6f68ced691a64a"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-stream-before.process.json": {
+    "bytes": 67033,
+    "sha256": "b73bac4f43fad02d75089993bfc21c18d37ac7eff387a8feab57c85862c862a6"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-stream-before.provider.log": {
+    "bytes": 67,
+    "sha256": "13edf5d6bb4be55f6e5817daca0714832d63b5aff12a25afefaaeec507284187"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-stream-before.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "f186c9b9665c77a0c115e7432006ee399e55e7bf064c13d88881d55c5daf1c7b"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-stream-comparison.json": {
+    "bytes": 920,
+    "sha256": "be5d23e49c12b9b62b9a7649f6d43f74fb9d44a13f73d439fb477c68e7a90f29"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-tool-after.json": {
+    "bytes": 360487,
+    "sha256": "b861cfcc54a72a92bdb461c74162a8a2e74581bf90a83180ac93f96543eb3ca1"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-tool-after.log": {
+    "bytes": 351,
+    "sha256": "63150cb538e857c0504907d5feafac31f5815bc13b6330c88f1030b0cd88e76c"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-tool-after.process.json": {
+    "bytes": 45371,
+    "sha256": "ab56085beaded52a777b6248474aaf569d7899323d8389c2d8d717c3440df937"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-tool-after.provider.log": {
+    "bytes": 65,
+    "sha256": "22b40c423fd7fd09ab94284c2352b936170f56e941c1216e601bbb03c261b798"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-tool-after.provider.stdout": {
+    "bytes": 26236,
+    "sha256": "2708e0c4a00fac6ccea4791d0cbf840ea32ce46a80a1c0f86f535dcf780584da"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-tool-before.json": {
+    "bytes": 360488,
+    "sha256": "b1c8438e76f5bf4a0aa503fb35b3bde35eef1498360d05e97508ac8b18834535"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-tool-before.log": {
+    "bytes": 351,
+    "sha256": "9a8ec4ab5ea2466a967732de99011f62611e27c424bc6c9c807c31b8cb4f5674"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-tool-before.process.json": {
+    "bytes": 45371,
+    "sha256": "b8b40255eede631e8992fe46a2a444f75066efa081445371c7a218681de4ee56"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-tool-before.provider.log": {
+    "bytes": 65,
+    "sha256": "bc7fc1b8ca8fc5f21bebf853f116c448ecf9cc06b41d4a8c42da977155e75a1b"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-tool-before.provider.stdout": {
+    "bytes": 26236,
+    "sha256": "b4b69a4402bfe7e4f7b989b148187425fec2204e0030e66a13d75d4591380ffa"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/0-tool-comparison.json": {
+    "bytes": 1495,
+    "sha256": "ef63ab990f72fd54f0909f189b160136a03cf48031df732ba0a3773b97046240"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-cancel-after.json": {
+    "bytes": 208352,
+    "sha256": "b3ff561bbfb28aa2a3e6382f9a1d10ba4357409a1b82de96f2738fea7b03ba51"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-cancel-after.log": {
+    "bytes": 353,
+    "sha256": "48bdbeb73ef1af5284018b5e30b73dc47be199cdcf52dfb74904a02a62f2c6fb"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-cancel-after.process.json": {
+    "bytes": 22822,
+    "sha256": "6a2693b83f309b3ce03836c9350f04018eb04e33eaad0319690009a09a6c7493"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-cancel-after.provider.log": {
+    "bytes": 67,
+    "sha256": "39e21584649c9bff41dd21ee888004b547dcc5683769a52c44a67d2aa5662970"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-cancel-after.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "3bc0b6f171057c1ca5a1cf2f3d9ff5613a6473957a1a741d4dd124561d0f5def"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-cancel-before.json": {
+    "bytes": 208345,
+    "sha256": "d551611a84dbb72686e6831861770900dde22bb088cb6bc5261c7e55b080ed78"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-cancel-before.log": {
+    "bytes": 353,
+    "sha256": "bbfe3a2a905eaf9aa4711050b14956817043d54cba8fdddf6002dbcb9dc7c580"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-cancel-before.process.json": {
+    "bytes": 22821,
+    "sha256": "74c8d1fdf3980b61afdf44de8c96dfcd84a012598c3e11f22361bdfde1aff1d9"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-cancel-before.provider.log": {
+    "bytes": 67,
+    "sha256": "b1eb7160a4ef300092e553d78cc5553e6c9178dd6254da08f0c54a71e949e7d8"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-cancel-before.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "3bc0b6f171057c1ca5a1cf2f3d9ff5613a6473957a1a741d4dd124561d0f5def"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-cancel-comparison.json": {
+    "bytes": 920,
+    "sha256": "a97d7be940e14ca1d56df9cc685018f5a3497dc86f105e46fd33773738268fff"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-large-after.json": {
+    "bytes": 284399,
+    "sha256": "f19d026d5dd9092606d6832f93e09952123fe83c79a5a731e40e0d10649754a6"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-large-after.log": {
+    "bytes": 352,
+    "sha256": "e49b2662b37e652405ef883b60e5ad6911d4b193ad7e9928e017ce3a87904cad"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-large-after.process.json": {
+    "bytes": 44589,
+    "sha256": "f056044be5a756c27f6be30fdac7ec176e6964629339ec54286eb956cd7d667d"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-large-after.provider.log": {
+    "bytes": 66,
+    "sha256": "825dc744d9794ecfac86476816a0f5f6779761ac8ced2b7e91ec79cf1a427702"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-large-after.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "9c728d045f0e27e021ba07fdbadce1a6ff35982d47c065aa262638c09b3f0542"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-large-before.json": {
+    "bytes": 284397,
+    "sha256": "a2f89ff26030d25014802c01e8d9b95ffd3cfdf3dddcc482519af72570d5d63c"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-large-before.log": {
+    "bytes": 352,
+    "sha256": "b61ac9b83b80b693ecc4d289e9f8db4884f6b800da1587745b3eb5046c9126b5"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-large-before.process.json": {
+    "bytes": 44589,
+    "sha256": "f267cd77703f6b6bf79f02938d560f74e6b617d08b1c6157c00c108ed8600c17"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-large-before.provider.log": {
+    "bytes": 66,
+    "sha256": "1e3f8dd648b280969fb16505cba57e74c5ae8b59921cff2e810d92e18f8b868a"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-large-before.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "9c728d045f0e27e021ba07fdbadce1a6ff35982d47c065aa262638c09b3f0542"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-large-comparison.json": {
+    "bytes": 919,
+    "sha256": "f74e506640acbda3b0e65f6510cb2460cd0091367b928a8425ac604ce2562099"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-short-large-after.json": {
+    "bytes": 25023161,
+    "sha256": "76fef5d154a9349cd8701a26e942297aa12d36df74668e3b9061b3c9b3b3c9bd"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-short-large-after.log": {
+    "bytes": 359,
+    "sha256": "84b397783c45402dd7436849217039f356c8bc2847a3080966f7f7ed2fd51c8d"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-short-large-after.process.json": {
+    "bytes": 4384722,
+    "sha256": "5647dfe6ed307e6431095a7f5c1f252173f604cd1b259c5643f57b393949db57"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-short-large-after.provider.log": {
+    "bytes": 72,
+    "sha256": "3c0965729a0bc60eb1a0ee0cbed87e5628422c6bcf65a5bcf5378b2ae0d0bc4c"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-short-large-after.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "ac700ca2446af411a87f99e531ecc78d041604d6ac13c23708aa346bb67f4d1b"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-short-large-before.json": {
+    "bytes": 25023174,
+    "sha256": "3c6a370ad161ffcb929f86118986adacf7cb8853277857a98ed13fa634e805f4"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-short-large-before.log": {
+    "bytes": 359,
+    "sha256": "d6d0832dda9f179f966ba5dffa1a4c948a050d5ef43922e5d199958585192aa9"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-short-large-before.process.json": {
+    "bytes": 4384722,
+    "sha256": "54fa522d6ba85e5248b79f83d26ed1d57a378cb345dada0cf52d6fb2896ab9d6"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-short-large-before.provider.log": {
+    "bytes": 72,
+    "sha256": "f6028aa880b3395763d4053a85d0cd93c52921603d7603a9b00ff15724a57cec"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-short-large-before.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "ac700ca2446af411a87f99e531ecc78d041604d6ac13c23708aa346bb67f4d1b"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-short-large-comparison.json": {
+    "bytes": 55826,
+    "sha256": "fc604efc7911501f0cb430e1952ba7b394a85aee6229a2b8d71f9089ba6ad494"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-short-small-after.json": {
+    "bytes": 6884354,
+    "sha256": "1a799177cc1a2bcd8efda89fcc5e930ae0806db160126f0f5c633c5e8e50874b"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-short-small-after.log": {
+    "bytes": 358,
+    "sha256": "f697771ffd28e796130d769623b44b8d672104096d9d49f51248ccab6cfb2990"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-short-small-after.process.json": {
+    "bytes": 1263056,
+    "sha256": "b9c532e25a27320e39ea3dcb1dea9985e36703613c7920fb12da00da317b3696"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-short-small-after.provider.log": {
+    "bytes": 72,
+    "sha256": "c9fe46ee62a92805916f914a02485b24a40fa5b7d557ced6a7ea9cbbcd7f0baa"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-short-small-after.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "ca6b07849eebc1191191904d114be727c2d4199565fe4e4c83f359a96b384181"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-short-small-before.json": {
+    "bytes": 6884416,
+    "sha256": "f858141f60ba6ed35561493aa81c197fbfc9567086590fd0adbb6a601aec518d"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-short-small-before.log": {
+    "bytes": 358,
+    "sha256": "0466812ef5f67bcf32852751f7c361a1db0b90ec7ee2d8135c798e48095c5306"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-short-small-before.process.json": {
+    "bytes": 1263057,
+    "sha256": "82b74afd7f97f62bf8980d48a315f9eedccdb962844dbcccb2c2b3f204279035"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-short-small-before.provider.log": {
+    "bytes": 72,
+    "sha256": "8ded66ab84345517fb1b2085e2be051dc656ba12a92430d171e1904ef2b37301"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-short-small-before.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "ca6b07849eebc1191191904d114be727c2d4199565fe4e4c83f359a96b384181"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-short-small-comparison.json": {
+    "bytes": 23458,
+    "sha256": "5163daa4e99f29729fccfb83625127b4ea0a016b2533b2593147915163d4b4d8"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-stream-after.json": {
+    "bytes": 224263,
+    "sha256": "a644caf9d638daccfab2a77c33ebc9d97fb8f139a1e1db37fead85fe891745ae"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-stream-after.log": {
+    "bytes": 353,
+    "sha256": "efafa467f96fedef59a4165447527da9485384e83d7bc4365a2792ca139bf8b9"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-stream-after.process.json": {
+    "bytes": 67033,
+    "sha256": "c70b58f956faf7be73f3ac396216500c8fa4d9082fa269d76ef8d2fb3296b149"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-stream-after.provider.log": {
+    "bytes": 67,
+    "sha256": "266435f069e2055de96da376a15bf708036d36b4fb58c048ff2e5891c0cfc815"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-stream-after.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "f186c9b9665c77a0c115e7432006ee399e55e7bf064c13d88881d55c5daf1c7b"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-stream-before.json": {
+    "bytes": 224260,
+    "sha256": "91b9f2de823205cfcd949d5d9252e2745d7b34a32602e7c43bcb9dd064e68ea1"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-stream-before.log": {
+    "bytes": 353,
+    "sha256": "634396d62f3cb2fe1f1515fa17731c8d86f52ce3932d80ed0bff2093272b3b6c"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-stream-before.process.json": {
+    "bytes": 67033,
+    "sha256": "7dfff7c3c802161b7e20899bdb1f594e4b95ad486b54da4ac16deeec053c20d9"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-stream-before.provider.log": {
+    "bytes": 67,
+    "sha256": "469efe19532a12998594531cd3d9ba6e20b212440c2057a4593bb2763a57fb27"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-stream-before.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "f186c9b9665c77a0c115e7432006ee399e55e7bf064c13d88881d55c5daf1c7b"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-stream-comparison.json": {
+    "bytes": 920,
+    "sha256": "be5d23e49c12b9b62b9a7649f6d43f74fb9d44a13f73d439fb477c68e7a90f29"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-tool-after.json": {
+    "bytes": 360487,
+    "sha256": "f750fe2035af38b16a35cea46cea1b22600723d292f5b91391ec6ed9ee34039a"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-tool-after.log": {
+    "bytes": 351,
+    "sha256": "7885e2d6b16f85c6bc71aa4dfbdd0ba741f5b8c1966aeecb2fcbef886da05471"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-tool-after.process.json": {
+    "bytes": 45371,
+    "sha256": "f46697fd5c27c80d8e38d8cc47a8aa158ef95923fc4dab2d9e69aa7e8ec80529"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-tool-after.provider.log": {
+    "bytes": 65,
+    "sha256": "e8f3a669ef322ee9096304cdbbdc845862fb160dfa5004bf5c2e3dd401d99687"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-tool-after.provider.stdout": {
+    "bytes": 26236,
+    "sha256": "01305a28a9d608ed7585e67e1711bbe0de9ff5c1f4956877070122bec524d0a8"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-tool-before.json": {
+    "bytes": 360483,
+    "sha256": "5cbe0310a2acb0547ff1f4d14f49f32853e6cca7918225446e4c6875c80fe490"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-tool-before.log": {
+    "bytes": 351,
+    "sha256": "b10e7b2006bb38d0fa410ba1fa5590477607a01856b677ee095da313e8a759ea"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-tool-before.process.json": {
+    "bytes": 45371,
+    "sha256": "f3ff6e044c2866b28d8c53b8e5fa1883f5ec4cc3b9e1605c9dd0c8c1d2042722"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-tool-before.provider.log": {
+    "bytes": 65,
+    "sha256": "ab9d86eb9cab9904aebeae67a6f8d911c1febbaf42af4f71bfc652e3e1d78b5e"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-tool-before.provider.stdout": {
+    "bytes": 26236,
+    "sha256": "370cb51df26706bc403dfff42d1a5a5efb29c7c90f82080ce1be4423fed8195c"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/1-tool-comparison.json": {
+    "bytes": 1495,
+    "sha256": "ef63ab990f72fd54f0909f189b160136a03cf48031df732ba0a3773b97046240"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-cancel-after.json": {
+    "bytes": 208355,
+    "sha256": "b375e11cf3c0fb10f82f2d851f65e4fd21af030f2c873463f95f806bb00aad36"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-cancel-after.log": {
+    "bytes": 353,
+    "sha256": "ef5ae9707140426f2586e08811038a4bf6950f041aa9ed2e9c088ca2cce99ea8"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-cancel-after.process.json": {
+    "bytes": 22821,
+    "sha256": "c9bb170212cead2e5c393fe9d28ef964686dfa1aef38c02359e7c7f58adcc86e"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-cancel-after.provider.log": {
+    "bytes": 67,
+    "sha256": "bb43310292cc9ca2207f16da92302c29883eee355bf889c00f31a0322c7597f5"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-cancel-after.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "3bc0b6f171057c1ca5a1cf2f3d9ff5613a6473957a1a741d4dd124561d0f5def"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-cancel-before.json": {
+    "bytes": 208351,
+    "sha256": "878532f125e024be9aa8d2c9640c3ab68b99377fe6d2ad750e9aeb23cc267634"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-cancel-before.log": {
+    "bytes": 353,
+    "sha256": "142ccb854b6cd8abc4f2571771b0bc66d2a6877f7371656a78d983da277086a6"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-cancel-before.process.json": {
+    "bytes": 22821,
+    "sha256": "ead4f1f7edfd85fd2927431bcb0b8aa8b267f7a37245ea09aaf83459712aa967"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-cancel-before.provider.log": {
+    "bytes": 67,
+    "sha256": "be3e9ebd650e698b48968f9e259ec9b4126a80fb7d13144f36e9b150d542aeda"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-cancel-before.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "3bc0b6f171057c1ca5a1cf2f3d9ff5613a6473957a1a741d4dd124561d0f5def"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-cancel-comparison.json": {
+    "bytes": 920,
+    "sha256": "a97d7be940e14ca1d56df9cc685018f5a3497dc86f105e46fd33773738268fff"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-large-after.json": {
+    "bytes": 284409,
+    "sha256": "ae71cf4e331acfc28f6181d3950d0375ecea5cbd66dfcf1d2b89a27aacdf00b5"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-large-after.log": {
+    "bytes": 352,
+    "sha256": "cc96c66ab46869fa61524b48dfbba6bb410b057699487b6e47e25e42c02f1873"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-large-after.process.json": {
+    "bytes": 44590,
+    "sha256": "011b6023ad0b44260e5c6a935ac1b02fa2ed95ea259a1bd444a8289cf0d4925d"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-large-after.provider.log": {
+    "bytes": 66,
+    "sha256": "c20a38dc7f2e728c0f20561249b23b214aee5eecc22c2c149e894d97cb6d273d"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-large-after.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "9c728d045f0e27e021ba07fdbadce1a6ff35982d47c065aa262638c09b3f0542"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-large-before.json": {
+    "bytes": 284411,
+    "sha256": "46f41ab18fe2f368f86a5f27b41d20abdb411d6de984ebfdffc215034ebbfe3a"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-large-before.log": {
+    "bytes": 352,
+    "sha256": "a292206044a464531b1d805547b108033244b30f3f782927df8f5ebaf503bad7"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-large-before.process.json": {
+    "bytes": 44589,
+    "sha256": "e9458ca98fa1a91ad6db35775d9b29bf2936e9c73d9069fbec1cd6414721d65b"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-large-before.provider.log": {
+    "bytes": 66,
+    "sha256": "2873f26674d99bb853404ae4299101697ba2cfa17d6cd0a123a87030854bf18b"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-large-before.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "9c728d045f0e27e021ba07fdbadce1a6ff35982d47c065aa262638c09b3f0542"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-large-comparison.json": {
+    "bytes": 919,
+    "sha256": "f74e506640acbda3b0e65f6510cb2460cd0091367b928a8425ac604ce2562099"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-short-large-after.json": {
+    "bytes": 25023175,
+    "sha256": "15b892b3abb8f70fcf67f70aa068210b4a2404ccccf0df710b3a9d926c2c1404"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-short-large-after.log": {
+    "bytes": 359,
+    "sha256": "ebd85078c3d81f1cb863ac557d98d358407024c8cd759112db071dd1f5ea1f5d"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-short-large-after.process.json": {
+    "bytes": 4384723,
+    "sha256": "015bee0d4523b1f5b39cd61ed60e337c9cc106fcb8adf1bac486a47fa409f145"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-short-large-after.provider.log": {
+    "bytes": 72,
+    "sha256": "19d4cccdba44857f794c990189b9f4f740de27b0ec96a4e93896fbd20e430480"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-short-large-after.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "ac700ca2446af411a87f99e531ecc78d041604d6ac13c23708aa346bb67f4d1b"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-short-large-before.json": {
+    "bytes": 25023171,
+    "sha256": "6d85c70e8ddd03fc7fd5e5964109797445a33e7f8d865587d5eb3d0b26732428"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-short-large-before.log": {
+    "bytes": 359,
+    "sha256": "8b52209412faed0e83316a548b3b5d0a03f3c89d8732399c395d97ba2ef29c98"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-short-large-before.process.json": {
+    "bytes": 4384722,
+    "sha256": "e8253aad5ed99737cdd17b63e408df7809d921b06da2fd3c8f65ced2180559c1"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-short-large-before.provider.log": {
+    "bytes": 72,
+    "sha256": "5d7c6d92f8cb24fbe5c33286650814475cc165584b5d371ea1f18e36be6dfccc"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-short-large-before.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "ac700ca2446af411a87f99e531ecc78d041604d6ac13c23708aa346bb67f4d1b"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-short-large-comparison.json": {
+    "bytes": 55826,
+    "sha256": "fc604efc7911501f0cb430e1952ba7b394a85aee6229a2b8d71f9089ba6ad494"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-short-small-after.json": {
+    "bytes": 6884366,
+    "sha256": "2aa9dd52f5287b6ab5deea7c002bbd9eeafbff1e11adc67a3adeac96f0164c6d"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-short-small-after.log": {
+    "bytes": 358,
+    "sha256": "e81e92852c0019ce8635aa072f9ca7109c69320c13c91734cb1904539f5dcd1b"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-short-small-after.process.json": {
+    "bytes": 1263056,
+    "sha256": "4ccb23e2ca9eee199a978b988a4156fe07f4a0ac775c88262730330687591061"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-short-small-after.provider.log": {
+    "bytes": 72,
+    "sha256": "c0d7fc54075cefc2dba303cbad3b51ff4e0c04375f1d2253634b8f641ab587b8"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-short-small-after.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "ca6b07849eebc1191191904d114be727c2d4199565fe4e4c83f359a96b384181"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-short-small-before.json": {
+    "bytes": 6884347,
+    "sha256": "4a7bc847e5646778b185e7278c5a220ccef2de486ff23bd876f38c3b8d74c9d3"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-short-small-before.log": {
+    "bytes": 358,
+    "sha256": "8263275a21a666042eea1db78efe6a00d85d937b413da00798787aa007e96be1"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-short-small-before.process.json": {
+    "bytes": 1263057,
+    "sha256": "e35b541db372114cf567f5a67fab4603169c55842a5613a5a92e615d571cae62"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-short-small-before.provider.log": {
+    "bytes": 72,
+    "sha256": "908a9130b92b0382550a2899a1a40303f4719bf460b1d5d7d367a14f86eed522"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-short-small-before.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "ca6b07849eebc1191191904d114be727c2d4199565fe4e4c83f359a96b384181"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-short-small-comparison.json": {
+    "bytes": 23458,
+    "sha256": "5163daa4e99f29729fccfb83625127b4ea0a016b2533b2593147915163d4b4d8"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-stream-after.json": {
+    "bytes": 224261,
+    "sha256": "ba4afb687ba4eeafbfe65332b553d1eded1d80dbf0164faa78ccdc8a8b48217b"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-stream-after.log": {
+    "bytes": 353,
+    "sha256": "d685dacadfae5df9cfab4f06bcb7c4b03f4b8897c2ec2dbc55094cc4b5555089"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-stream-after.process.json": {
+    "bytes": 67033,
+    "sha256": "84f6ef0222f33c3971ef2fc89e537c53c70c1ab88697f59befb8b51503a9b84a"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-stream-after.provider.log": {
+    "bytes": 67,
+    "sha256": "a09e3a1f0a3f0d22bd8df86cf23134d5c4d95954e5b9260020f76f66420190e9"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-stream-after.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "f186c9b9665c77a0c115e7432006ee399e55e7bf064c13d88881d55c5daf1c7b"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-stream-before.json": {
+    "bytes": 224263,
+    "sha256": "6c4b1ba407a9c9d5ec144309f1ac910d66bf614d0e941ec2181b4217bfd1d823"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-stream-before.log": {
+    "bytes": 353,
+    "sha256": "2d60497c0c8f39f1588df16679a79829d0b66b8f026582f2462575606600a589"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-stream-before.process.json": {
+    "bytes": 67034,
+    "sha256": "596f40c115ffc72d6ebe2127cad5e28300ed13e0292f262bd36beeb750a3af99"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-stream-before.provider.log": {
+    "bytes": 67,
+    "sha256": "57ed8932d1a2c98b67d4109ed3594bab2092acca9c1f99bed5beeddce48c7e00"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-stream-before.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "f186c9b9665c77a0c115e7432006ee399e55e7bf064c13d88881d55c5daf1c7b"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-stream-comparison.json": {
+    "bytes": 920,
+    "sha256": "be5d23e49c12b9b62b9a7649f6d43f74fb9d44a13f73d439fb477c68e7a90f29"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-tool-after.json": {
+    "bytes": 360495,
+    "sha256": "aaa712083a8f7e1b16b1652cd4223023d362b881725c21a938904f88ae15bda7"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-tool-after.log": {
+    "bytes": 351,
+    "sha256": "2e42b55785cc98a4d221075f202ab3d8577e0239f9ec51a1878b23f351453148"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-tool-after.process.json": {
+    "bytes": 45371,
+    "sha256": "e518a89adc4dd631a83695ca15b352e0cd790a45825064c2a7240932df3dd744"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-tool-after.provider.log": {
+    "bytes": 65,
+    "sha256": "ebe9990551e403cf5a1e920e0440b2d8bde837f04a2d9399065950df693d0d3d"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-tool-after.provider.stdout": {
+    "bytes": 26236,
+    "sha256": "a4d8c2f4459816d4a557f5d70276bfaac8110f9ae0ae5a6a1f2f7a863c0100eb"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-tool-before.json": {
+    "bytes": 360499,
+    "sha256": "38c9fb0dcb5e6cbc5d54fbde79e5b9473d2ca34ee49b408a7885c58714de6ec2"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-tool-before.log": {
+    "bytes": 351,
+    "sha256": "3ac705800ef1ab562ff0ebb65e46f62ac126eee7695b186ee276fc3ba02d7ccd"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-tool-before.process.json": {
+    "bytes": 45371,
+    "sha256": "b51dc2fbc78f2a05653d629ef40265bbceee4f348a7d6de87fed6291b8c7932c"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-tool-before.provider.log": {
+    "bytes": 65,
+    "sha256": "58a4fa027791e52430a4596e860eb24369a144c3970ee5a29af586fc37d3840a"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-tool-before.provider.stdout": {
+    "bytes": 26236,
+    "sha256": "1226919980b27eec5c3aca3e689d58078c42644138f3f80865cd872ba11da569"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/2-tool-comparison.json": {
+    "bytes": 1495,
+    "sha256": "ef63ab990f72fd54f0909f189b160136a03cf48031df732ba0a3773b97046240"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber/manifest.json": {
+    "bytes": 826,
+    "sha256": "29eef8749bdaf8b5d39a62a5b1c80549864d11dfead2b1d36bfb14f75b707f4d"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber-cohort-manifest.json": {
+    "bytes": 26707,
+    "sha256": "e42af8febc9988240db96d88282ab96755b9005f5fbce13851dee7883c0b34ca"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber-helper-restoration.jsonl": {
+    "bytes": 251102,
+    "sha256": "1781d2b148ec16492516266889d194b7f57ce523f3520dfec0f23674e32b56cf"
+  },
+  "products/native-baseline-vs-geometry-no-live-subscriber-product-intervals.jsonl": {
+    "bytes": 13242,
+    "sha256": "8e8394a27c5b19e6cc74d41f1fe5e6dad57e3a1f3dd04c971c0c9d107caed457"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-cancel-after.json": {
+    "bytes": 208739,
+    "sha256": "5ed6ad5489b4103fbd5c27b01bc819af2b7da98b18375125fa2ebd04107b5269"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-cancel-after.log": {
+    "bytes": 348,
+    "sha256": "de649c6d559d49cacfe1d263d0b8f7c19d126ce599ad01de2989acb743e2fe91"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-cancel-after.process.json": {
+    "bytes": 22812,
+    "sha256": "5408e81e872b037603c29444df90857008e24d6667127f8d1637f3b3745796bb"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-cancel-after.provider.log": {
+    "bytes": 67,
+    "sha256": "caa41f7a5ee82d8d4f8541f670502895746980f64f045aba9df043af77d776ea"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-cancel-after.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "3bc0b6f171057c1ca5a1cf2f3d9ff5613a6473957a1a741d4dd124561d0f5def"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-cancel-before.json": {
+    "bytes": 208743,
+    "sha256": "6f61532d7f1806f10709dd2932fc3f37d86bfeadca0bc56bd9f77ee7c54b6992"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-cancel-before.log": {
+    "bytes": 348,
+    "sha256": "41144ec49068886958e9d2e9b058b4378d3e479a3f60a58975290ac7fc62da86"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-cancel-before.process.json": {
+    "bytes": 22813,
+    "sha256": "4c3f7dbaf69860573d06d694bdc898d8d8ee57e8cdad83ec5f51953cbcd8fef5"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-cancel-before.provider.log": {
+    "bytes": 67,
+    "sha256": "b620fd43ba7cc0a4e62c9e56836cb9a7e659800e081678f73652eec45377d107"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-cancel-before.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "3bc0b6f171057c1ca5a1cf2f3d9ff5613a6473957a1a741d4dd124561d0f5def"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-cancel-comparison.json": {
+    "bytes": 917,
+    "sha256": "ab26d98adb00dcb1ba946b8fccdf4c69dab51cf88e862dbe259486c9bcdc7a6d"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-large-after.json": {
+    "bytes": 317605,
+    "sha256": "178050488714c2774e8bd88d23cb1e1ce4244ea99da28b93d5fe40a3a1bae7b6"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-large-after.log": {
+    "bytes": 347,
+    "sha256": "b640f62e54b00ec5daf1bbb69705cc2c855e2509218d8bd1a12cce2ec5a4b4f1"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-large-after.process.json": {
+    "bytes": 44579,
+    "sha256": "4ac2f9665d1f609c3edceef532cb3a940492a0287597a9e5dbfe1d9f3d455c51"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-large-after.provider.log": {
+    "bytes": 66,
+    "sha256": "ff6cc0b971a2d0f37bd9f75bf61c564e283fba8daaf8dd9a8dc4426c3a5ee079"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-large-after.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "9c728d045f0e27e021ba07fdbadce1a6ff35982d47c065aa262638c09b3f0542"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-large-before.json": {
+    "bytes": 317581,
+    "sha256": "cbbdbb805b24b84a9a48d341edf37378a094a8d69efd14d60b496785023a0a68"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-large-before.log": {
+    "bytes": 347,
+    "sha256": "684abc169d78cf9b70098cd13782984ba8abcd938324bec88e696d159c7de8b6"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-large-before.process.json": {
+    "bytes": 44581,
+    "sha256": "98cdf904023e6b45598bb8ec604436a6eb762179ad0c18d88a8c85361fd2fb02"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-large-before.provider.log": {
+    "bytes": 66,
+    "sha256": "68f38b6ec3ca26018bc74801517de3b5b2e8cb9188bdf8c4092331de73c84704"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-large-before.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "9c728d045f0e27e021ba07fdbadce1a6ff35982d47c065aa262638c09b3f0542"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-large-comparison.json": {
+    "bytes": 916,
+    "sha256": "dc4b61c132f551cb12864e05999093b57ac58ce48930642a1dba7980ca821f2a"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-short-large-after.json": {
+    "bytes": 25058254,
+    "sha256": "d03f50fbe092c8411822c4a4ff66ee157c13c1bc788145986c092a8c9b3c60ae"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-short-large-after.log": {
+    "bytes": 354,
+    "sha256": "a39192fd10e4488897d81fe6e092e010f82c3f0c6349b386d4202e9839e91748"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-short-large-after.process.json": {
+    "bytes": 4384712,
+    "sha256": "b6be21f71bcb9c656babc7cc5ab98303d7f02fbd03411bb8cf962a45b68a8c69"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-short-large-after.provider.log": {
+    "bytes": 72,
+    "sha256": "ebf83a1ef98667c4c27484541fa2ba7996e25eec3d34ba6f859557969a813b9a"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-short-large-after.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "ac700ca2446af411a87f99e531ecc78d041604d6ac13c23708aa346bb67f4d1b"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-short-large-before.json": {
+    "bytes": 25058272,
+    "sha256": "b3aafd49a1a35835215688c113c8da5b3cdce6e099088ca63a7f7bfb91fe02e9"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-short-large-before.log": {
+    "bytes": 354,
+    "sha256": "d7dc3c6535a0f0255acd2def564890c84c464188e8bccd6a48a53a7366481e9c"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-short-large-before.process.json": {
+    "bytes": 4384715,
+    "sha256": "a61bb3c62ba080c5877e89791e7080366fdacbd4fc8aaad1a0bc2c76c8a76a00"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-short-large-before.provider.log": {
+    "bytes": 72,
+    "sha256": "f9c194d8d59109ef73031fbfc720f8be1d8ae3a55aa99588161c65e21600828b"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-short-large-before.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "ac700ca2446af411a87f99e531ecc78d041604d6ac13c23708aa346bb67f4d1b"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-short-large-comparison.json": {
+    "bytes": 55823,
+    "sha256": "92da0ceea77a07ee8649f3d3d44b32f7923da1f9ed2c114d9316a428c79220a2"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-short-small-after.json": {
+    "bytes": 6899008,
+    "sha256": "ab557fc21e338281d7e61ccd62b6cf87156a35270f011f3af4bdf2d33fb6e7f5"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-short-small-after.log": {
+    "bytes": 353,
+    "sha256": "2b864190f5d66d0033ec497b5101cef3e74403338824433c68bbd3c2257afc4d"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-short-small-after.process.json": {
+    "bytes": 1263046,
+    "sha256": "9fde613363034eb72295035a1df66b8486a0bd9796af7306da0b135b79ac27f6"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-short-small-after.provider.log": {
+    "bytes": 72,
+    "sha256": "a529d2e74bc884d7bc19b97f3709a7b6eaae02e89176b9ab8053767fb7301fef"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-short-small-after.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "ca6b07849eebc1191191904d114be727c2d4199565fe4e4c83f359a96b384181"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-short-small-before.json": {
+    "bytes": 6899110,
+    "sha256": "6220ccf9641071b003899e84e4bfd40ffa654e476be0ccd239b1db7b069231db"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-short-small-before.log": {
+    "bytes": 353,
+    "sha256": "55b46fc899e1bed34616614c8ecba6fba20a6892f8e33b15c56c6b590fd20521"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-short-small-before.process.json": {
+    "bytes": 1263049,
+    "sha256": "a990e7ed507448f9478eab3d54da362ba89568061d88a1729cee6ae63b14f7a5"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-short-small-before.provider.log": {
+    "bytes": 72,
+    "sha256": "4965b81f677d9d36b98dd1cf63a6fa289c896d9a9c2cd413dc5032108508fcbe"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-short-small-before.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "ca6b07849eebc1191191904d114be727c2d4199565fe4e4c83f359a96b384181"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-short-small-comparison.json": {
+    "bytes": 23455,
+    "sha256": "77dc88905882757d3193988d47491a8e09e5f4869b9270267fa62dfef44a98a6"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-stream-after.json": {
+    "bytes": 226980,
+    "sha256": "64881022a7277c641b65a516c34ac90c5594f10a5202a4305ac22a53ad5781fa"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-stream-after.log": {
+    "bytes": 348,
+    "sha256": "e2b3c7d8b47c8fd0ea51703553895c5409149f7bdb74fa6481036d3930c48ab6"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-stream-after.process.json": {
+    "bytes": 67024,
+    "sha256": "70bd741e7dc42269d05cf8568193f4df819c7aede4ac08204f7805e4fdd4b22b"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-stream-after.provider.log": {
+    "bytes": 67,
+    "sha256": "1a1f58366b30a5d2be62f3465807fe0b153622f86c9681eca4d8f2f579a5664f"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-stream-after.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "f186c9b9665c77a0c115e7432006ee399e55e7bf064c13d88881d55c5daf1c7b"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-stream-before.json": {
+    "bytes": 226977,
+    "sha256": "15e9ae31c7c5430740cc218e4fb36a8000c35ec849e6afc49285b71489b2f2a4"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-stream-before.log": {
+    "bytes": 348,
+    "sha256": "791f2919a71d01c13a38cb5697cba625752e7ac2edfd809d10164a7ef6b9f49d"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-stream-before.process.json": {
+    "bytes": 67025,
+    "sha256": "9260dc6820c4f7c02cedc1bc9e7e714dca2147717944f2182f79c9dd8067c645"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-stream-before.provider.log": {
+    "bytes": 67,
+    "sha256": "fe058fe44c38c3ab7bbbc4bcaa20bbf021c08eca0e793dfe48df6cc292268c37"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-stream-before.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "f186c9b9665c77a0c115e7432006ee399e55e7bf064c13d88881d55c5daf1c7b"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-stream-comparison.json": {
+    "bytes": 917,
+    "sha256": "0265e436b39ab6ccf01aae1a66642dfee6765d545f497cead78d204bec192115"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-tool-after.json": {
+    "bytes": 361163,
+    "sha256": "93fe61ddc0f54976285532f1b00ab988b9c3adab1ab5c760ec165e78f25fcaec"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-tool-after.log": {
+    "bytes": 346,
+    "sha256": "310edec5f9d90640cc494c64eff0e30517da8b5c352cae16d83c4ab79ea004f3"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-tool-after.process.json": {
+    "bytes": 45359,
+    "sha256": "fcb379edb9edba0c353c67efb223f7cc4b9ca50dd5777d8e72aa5751321f9e47"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-tool-after.provider.log": {
+    "bytes": 65,
+    "sha256": "4b4830b7dd10ed0fe4c7d79cdc2a0bd6e312d0d8f870f0eeeb078d859b785389"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-tool-after.provider.stdout": {
+    "bytes": 26231,
+    "sha256": "a25603f679b24dfe4aa6d3e8773e159d066e93947b84bd9f0dd371d03c1371b1"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-tool-before.json": {
+    "bytes": 361157,
+    "sha256": "a23242093f370cea6dc7ad086dc6757d6215061b70ae65963faabbc36eae297b"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-tool-before.log": {
+    "bytes": 346,
+    "sha256": "65e89ef2b9cacaf0daacd046cc0e94b6ef787ad69046b07c47243f5bafbfc769"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-tool-before.process.json": {
+    "bytes": 45358,
+    "sha256": "f1f829c6a009b573474e77a44e83906d3acf7b23bfc59c19d03607cae5bb4704"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-tool-before.provider.log": {
+    "bytes": 65,
+    "sha256": "281f3184890ec1a41a308fad2bfcd40b975f58a9b7098dfe13ed7bf0c8f5cd84"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-tool-before.provider.stdout": {
+    "bytes": 26231,
+    "sha256": "10c727410b50a1abc33f8b8eb3af2bc1843471e5c67f51f2a1e32260f21e4607"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/0-tool-comparison.json": {
+    "bytes": 1492,
+    "sha256": "71606d7d317a67a778bad9d1ad5eee0b7b877b9d665ade381138463bc3a738b1"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-cancel-after.json": {
+    "bytes": 208741,
+    "sha256": "eb5a11fb37716f3b404d0b9b43300864732313a349abbb317bd8d934e5659311"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-cancel-after.log": {
+    "bytes": 348,
+    "sha256": "86be965fad1de24e73aa4ab59774e99b892a7337674f68c4502346a5f2a3bcb2"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-cancel-after.process.json": {
+    "bytes": 22811,
+    "sha256": "480ae23d26186675b708251951c5954067548eb7ea0ed781cba93e16599962d5"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-cancel-after.provider.log": {
+    "bytes": 67,
+    "sha256": "903bf4f74743de4a257637b8eac966f482736ab05caf9e9f828a2e35d71a4416"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-cancel-after.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "3bc0b6f171057c1ca5a1cf2f3d9ff5613a6473957a1a741d4dd124561d0f5def"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-cancel-before.json": {
+    "bytes": 208738,
+    "sha256": "f523418647e41bac71c21ee5c18ef045f5df2eac2e5aa3f78b19a870e946f57a"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-cancel-before.log": {
+    "bytes": 348,
+    "sha256": "f9cee99c4c41f3fdb0f1df5b4c67957e150046b5bc7c0adf113d914bb52f93f8"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-cancel-before.process.json": {
+    "bytes": 22813,
+    "sha256": "565f35371164435bbe00794d64094bfe4f7f61c153bc04a4ad78ce1dcc36c1d6"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-cancel-before.provider.log": {
+    "bytes": 67,
+    "sha256": "9c7b9ea312a6b24a574f640470bfc4ed52d0421c32bdd4e174d2a2c6b7239ad8"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-cancel-before.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "3bc0b6f171057c1ca5a1cf2f3d9ff5613a6473957a1a741d4dd124561d0f5def"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-cancel-comparison.json": {
+    "bytes": 917,
+    "sha256": "ab26d98adb00dcb1ba946b8fccdf4c69dab51cf88e862dbe259486c9bcdc7a6d"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-large-after.json": {
+    "bytes": 317604,
+    "sha256": "e05a5649c3712c5ca91d7c344ab589d284bd25eb9301484f15080d0e9ff02345"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-large-after.log": {
+    "bytes": 347,
+    "sha256": "faf39c234a3e59d8a29baa4d48ab8f70daed579611cda20d87f69cdc78d7d232"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-large-after.process.json": {
+    "bytes": 44579,
+    "sha256": "cbe3cd715eebcccac3b6f89f58e4892a24f0ae93f89ed1163583489b1ea4e1f9"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-large-after.provider.log": {
+    "bytes": 66,
+    "sha256": "755cbccebade96d337c432f9a0b65d6dbc38b33f5f9a80dcd07ee6657c34c20b"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-large-after.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "9c728d045f0e27e021ba07fdbadce1a6ff35982d47c065aa262638c09b3f0542"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-large-before.json": {
+    "bytes": 317586,
+    "sha256": "df798303169f52d7417be227136b9052a0b0c1aa016ae07aa9f369c32cde373a"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-large-before.log": {
+    "bytes": 347,
+    "sha256": "ebf3fcdbf71016f90545316de6bec71e9931948a7d4693214f94f644c9503e09"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-large-before.process.json": {
+    "bytes": 44582,
+    "sha256": "764ded232b39a9f8dd1272e11163a3487303fbd2edfb0231620c821aeacec028"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-large-before.provider.log": {
+    "bytes": 66,
+    "sha256": "97bf0f731b4c471fe775a7ba2d497224ec277655d414c8e6d8acadad63db1251"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-large-before.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "9c728d045f0e27e021ba07fdbadce1a6ff35982d47c065aa262638c09b3f0542"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-large-comparison.json": {
+    "bytes": 916,
+    "sha256": "dc4b61c132f551cb12864e05999093b57ac58ce48930642a1dba7980ca821f2a"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-short-large-after.json": {
+    "bytes": 25058243,
+    "sha256": "0347752883837be4a58459ca877d14a68ac0c12b1f69fec68f38e4f90baa9ac9"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-short-large-after.log": {
+    "bytes": 354,
+    "sha256": "ec894178e291e81d7c1aaf6c6f693224bb63dc82969b59f29b3c8304f2c53c4d"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-short-large-after.process.json": {
+    "bytes": 4384712,
+    "sha256": "af88707a8efa7545ceca3a683ceaa11a14183d972e33099134c433c37fdccedb"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-short-large-after.provider.log": {
+    "bytes": 72,
+    "sha256": "349fb63a6aebd254ef99175ab5b70656af2f94c681407baee68a1fe65233ae34"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-short-large-after.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "ac700ca2446af411a87f99e531ecc78d041604d6ac13c23708aa346bb67f4d1b"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-short-large-before.json": {
+    "bytes": 25058229,
+    "sha256": "797145ebdaa4b2d0b9480a4c1c310ddb0d16206b1e78b8cd1a5e3952d4fb6fae"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-short-large-before.log": {
+    "bytes": 354,
+    "sha256": "8b4beac79ab407cbe42420665a2a97110ccfce64b3a736397bd10d95d7f7b0a1"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-short-large-before.process.json": {
+    "bytes": 4384714,
+    "sha256": "7cfbb8d8ad0e2bcb021aefed2732f6b05b679280404fd0d851ca063558427087"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-short-large-before.provider.log": {
+    "bytes": 72,
+    "sha256": "85dd7794ec7c75b067ebbbe9d1a9eabab04e917f92714f219de43cca0031f917"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-short-large-before.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "ac700ca2446af411a87f99e531ecc78d041604d6ac13c23708aa346bb67f4d1b"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-short-large-comparison.json": {
+    "bytes": 55823,
+    "sha256": "92da0ceea77a07ee8649f3d3d44b32f7923da1f9ed2c114d9316a428c79220a2"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-short-small-after.json": {
+    "bytes": 6899018,
+    "sha256": "31483c2da53fdab0215f60790c0b46ed7a3178ce8bfb0c8f7b3b01ef3d9050be"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-short-small-after.log": {
+    "bytes": 353,
+    "sha256": "c0809929126fe4312c6b02b0c2493c5c4800bf36b321fe7154e2c7cc1e9dda48"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-short-small-after.process.json": {
+    "bytes": 1263047,
+    "sha256": "50cc6b9deda2804470f99526a152b1d01d5fe2b007b8bc0df995b7bd57f43844"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-short-small-after.provider.log": {
+    "bytes": 72,
+    "sha256": "590ba76021d90c2302a8ab97487e2618c0699428b1e91fb498ad7b122be88ee6"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-short-small-after.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "ca6b07849eebc1191191904d114be727c2d4199565fe4e4c83f359a96b384181"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-short-small-before.json": {
+    "bytes": 6899007,
+    "sha256": "1b969fcdc55dd0e8a1446de0215817c7853bd285ecf423c72bca82c0352b30e2"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-short-small-before.log": {
+    "bytes": 353,
+    "sha256": "44c798ce7686b72889d64aa492b868ad3c9c5bc1e1bd4e519cef2fbc7a165a36"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-short-small-before.process.json": {
+    "bytes": 1263048,
+    "sha256": "21d246e7f9cb5d0bc011718f2179261578dfa8ea4237b0454b38f44248815348"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-short-small-before.provider.log": {
+    "bytes": 72,
+    "sha256": "d77a6522d6fe7a3223c75ae6c8e1dd3a78cd939c6352bb97ef8a6ca726baadf0"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-short-small-before.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "ca6b07849eebc1191191904d114be727c2d4199565fe4e4c83f359a96b384181"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-short-small-comparison.json": {
+    "bytes": 23455,
+    "sha256": "77dc88905882757d3193988d47491a8e09e5f4869b9270267fa62dfef44a98a6"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-stream-after.json": {
+    "bytes": 226982,
+    "sha256": "e97972d733c5d26b53b71296530ba98ea1801e3ab044e95f2996a67ded23264f"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-stream-after.log": {
+    "bytes": 348,
+    "sha256": "9e043bd05b0c6aa53de80637ff6e48706c3bf4dec5d21b17fb8f9b2c81b9b62e"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-stream-after.process.json": {
+    "bytes": 67023,
+    "sha256": "29814c4c894205a42a6e1cb35c462a43b06cd76fc65749d28ea65d4adf5ecddb"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-stream-after.provider.log": {
+    "bytes": 67,
+    "sha256": "1acf93ef4ed74572cd00747e62b47be57c3475ed9010ab689fa72973924856c2"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-stream-after.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "f186c9b9665c77a0c115e7432006ee399e55e7bf064c13d88881d55c5daf1c7b"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-stream-before.json": {
+    "bytes": 226981,
+    "sha256": "487e73be1a752070f708acdb611993bd7af97671f247f5bbbeb4694814bfd69d"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-stream-before.log": {
+    "bytes": 348,
+    "sha256": "62b1a61578d75e1984f0c53a04e6cfa1d9eb60b9188b980e681a879d9f1f32cf"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-stream-before.process.json": {
+    "bytes": 67025,
+    "sha256": "9ae5681cf219973816f6d55d520be58f82804a9aa1a08aa1018f44b0018a8af6"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-stream-before.provider.log": {
+    "bytes": 67,
+    "sha256": "cc46a271e23e14329f97665e444a3d6604c0647010dca9a4ebd438620816e76d"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-stream-before.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "f186c9b9665c77a0c115e7432006ee399e55e7bf064c13d88881d55c5daf1c7b"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-stream-comparison.json": {
+    "bytes": 917,
+    "sha256": "0265e436b39ab6ccf01aae1a66642dfee6765d545f497cead78d204bec192115"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-tool-after.json": {
+    "bytes": 361157,
+    "sha256": "8862e8ac91cc100d9edae9f84595892ebfef87ff181f64b1480dd2a0da097f07"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-tool-after.log": {
+    "bytes": 346,
+    "sha256": "3dc4351ddcc15a6c00a627292dd7e07f3310670dbbb8e643e9d54547362e5dad"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-tool-after.process.json": {
+    "bytes": 45356,
+    "sha256": "00c136f2c74ce1037343841dd43249d79cc80ccc0cf1b3fc9478b071645eab1c"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-tool-after.provider.log": {
+    "bytes": 65,
+    "sha256": "67db20efd4412db1bb4a011a1729a6ffd4f486eb839883156a1df4c05834ec3e"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-tool-after.provider.stdout": {
+    "bytes": 26231,
+    "sha256": "8ce33ee878690d5037c724a225464a81e49e41bf23386a38d5e06de157945908"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-tool-before.json": {
+    "bytes": 361145,
+    "sha256": "bb4dc281854fdaa7465230f9c7f4cdb3f620a2e6beb22f453765467385e3f108"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-tool-before.log": {
+    "bytes": 346,
+    "sha256": "95a7d0ca8dfea5770ff5e7d1f9a05906b6be2eb7550a29abd0fa3de905d6ed49"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-tool-before.process.json": {
+    "bytes": 45358,
+    "sha256": "0937309913ac58a727db73ebe00e2cb9d9f4a3641ed5a725dd52f268fe8737a6"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-tool-before.provider.log": {
+    "bytes": 65,
+    "sha256": "9724d0f635e05fd7dddc71c0c8a05071e39c32e70edd644b5af636c6efbf6cbe"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-tool-before.provider.stdout": {
+    "bytes": 26231,
+    "sha256": "e82b6a66ea8571e13e70a2836777f3ab250138ce248f6a5497e45909fa8d0280"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/1-tool-comparison.json": {
+    "bytes": 1492,
+    "sha256": "71606d7d317a67a778bad9d1ad5eee0b7b877b9d665ade381138463bc3a738b1"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-cancel-after.json": {
+    "bytes": 208732,
+    "sha256": "f653063a8f8775cd3a33e217e9fc79875c0c6ac3ce0de6d1627232c9f97b424b"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-cancel-after.log": {
+    "bytes": 348,
+    "sha256": "63986ffc612c76e2794ca487b8acb65f83b2b825f66e710ba424e52d31cb47fb"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-cancel-after.process.json": {
+    "bytes": 22811,
+    "sha256": "305a1a16fb4a4b97084581cafea67bd8c732620f444185bd4088680fa8990d8c"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-cancel-after.provider.log": {
+    "bytes": 67,
+    "sha256": "eca126fc22b8c33ab0149ed27b57b8a64e52dc9b9514149eaf0c27d6b7d80060"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-cancel-after.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "3bc0b6f171057c1ca5a1cf2f3d9ff5613a6473957a1a741d4dd124561d0f5def"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-cancel-before.json": {
+    "bytes": 208740,
+    "sha256": "5b5a5eb3d6c2085eabcd8663f13c1ce82952fa3e812339fd8862519355ebb090"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-cancel-before.log": {
+    "bytes": 348,
+    "sha256": "34badb8cd9da5b87e9c1d1154579f7b9f2b9d1518b3441613548e7aa33695710"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-cancel-before.process.json": {
+    "bytes": 22814,
+    "sha256": "a3b237fe5ac9955b5a46d12372936adbcae32738539f5f1925997d5e033634f3"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-cancel-before.provider.log": {
+    "bytes": 67,
+    "sha256": "2acc0e7c8a83364a0586332d058da79dddbd60813a177d7f38f5c7f91fa84014"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-cancel-before.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "3bc0b6f171057c1ca5a1cf2f3d9ff5613a6473957a1a741d4dd124561d0f5def"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-cancel-comparison.json": {
+    "bytes": 917,
+    "sha256": "ab26d98adb00dcb1ba946b8fccdf4c69dab51cf88e862dbe259486c9bcdc7a6d"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-large-after.json": {
+    "bytes": 317598,
+    "sha256": "4f91033461f05bd32e1715606ee2f4df1afc48569f0d25b93802a306641ccba4"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-large-after.log": {
+    "bytes": 347,
+    "sha256": "f6e113d38e1f9cf63bf2c2572d5a4e715c96212c1451606d05c25bcdc15a367e"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-large-after.process.json": {
+    "bytes": 44580,
+    "sha256": "ad5f25256b9c175fb7feda93f74330f20312e88a5bcfa0937fc5190e2ac5c3dd"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-large-after.provider.log": {
+    "bytes": 66,
+    "sha256": "b2236a81e30565dc5b2f4d6670e0d7229b0c94b4f9095c35bb0108c545dfd313"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-large-after.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "9c728d045f0e27e021ba07fdbadce1a6ff35982d47c065aa262638c09b3f0542"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-large-before.json": {
+    "bytes": 317591,
+    "sha256": "aef30c350fe65fe6bb50a982541fde048667e1491aa4b5eca1f4f9445399965c"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-large-before.log": {
+    "bytes": 347,
+    "sha256": "4b93c295f6824182fa555f203f8ccb202b15507bbae70dfa49b58435506bc13d"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-large-before.process.json": {
+    "bytes": 44582,
+    "sha256": "b4341afe122924b9d73fa4c05dc3dfbadbf42b8053e6d91d1d04bef22bce136d"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-large-before.provider.log": {
+    "bytes": 66,
+    "sha256": "ab7da06777384149cb62f15d621bc6257c4eb35e4c2a069d80e36ea00eeec88b"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-large-before.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "9c728d045f0e27e021ba07fdbadce1a6ff35982d47c065aa262638c09b3f0542"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-large-comparison.json": {
+    "bytes": 916,
+    "sha256": "dc4b61c132f551cb12864e05999093b57ac58ce48930642a1dba7980ca821f2a"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-short-large-after.json": {
+    "bytes": 25058321,
+    "sha256": "8a16297c0dec03857590bbe1fe2890ec79d7266f7ad3e968c9a3d19eec19be0b"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-short-large-after.log": {
+    "bytes": 354,
+    "sha256": "066b660f6f9879e6cf4c21cfbf9e5d75776c9d1bf9ca51eae7ce824d42b14267"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-short-large-after.process.json": {
+    "bytes": 4384712,
+    "sha256": "b5081d21691d6aaa4e5f50a77455f0155176d40076bcb2b0383214e5172b39a0"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-short-large-after.provider.log": {
+    "bytes": 72,
+    "sha256": "5415d345a381548d6514f704b60ceacd6e8ea1d01bcdf22de52151253edddeba"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-short-large-after.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "ac700ca2446af411a87f99e531ecc78d041604d6ac13c23708aa346bb67f4d1b"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-short-large-before.json": {
+    "bytes": 25058325,
+    "sha256": "122c7406ec641f83af18a8447c2d3f7a523ae6d89e57ec77e0d7f7c28128e501"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-short-large-before.log": {
+    "bytes": 354,
+    "sha256": "11146e82b00fff982f90ba5c3e15cd4980f744abe0de21966f0b714d142cad06"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-short-large-before.process.json": {
+    "bytes": 4384716,
+    "sha256": "e79977c78c5a7ed1154c8534e4f05827ffb6da4d08fbe165b4eac18f275a1790"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-short-large-before.provider.log": {
+    "bytes": 72,
+    "sha256": "eb625af884b90264cb8594e156ab7139717bb734f79438445c05813ff9f8a8d2"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-short-large-before.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "ac700ca2446af411a87f99e531ecc78d041604d6ac13c23708aa346bb67f4d1b"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-short-large-comparison.json": {
+    "bytes": 55823,
+    "sha256": "92da0ceea77a07ee8649f3d3d44b32f7923da1f9ed2c114d9316a428c79220a2"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-short-small-after.json": {
+    "bytes": 6899025,
+    "sha256": "aaaf17593095c290434d01185d7546fba17ec980db39d4dd850babf81896cc39"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-short-small-after.log": {
+    "bytes": 353,
+    "sha256": "6980ffa46ee3f844abf5de71b1427d4c35dfb8da5a84bf0d1ceb97447a82d318"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-short-small-after.process.json": {
+    "bytes": 1263046,
+    "sha256": "450072a2b47aa065a46043a54d4d5baf7b37cf1da1638528e9a02b456996a418"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-short-small-after.provider.log": {
+    "bytes": 72,
+    "sha256": "561f721bdf3b0a7ee528ea134515fadd1fa2189f8799891e241dde19c4360c0c"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-short-small-after.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "ca6b07849eebc1191191904d114be727c2d4199565fe4e4c83f359a96b384181"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-short-small-before.json": {
+    "bytes": 6898993,
+    "sha256": "183b41496abe67bbee987acea266dec1eee1ca81e3272281d3740e6df631032d"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-short-small-before.log": {
+    "bytes": 353,
+    "sha256": "19c56ac0c2e2aa6351ae08d77fd7892275f4681ab12bdf633319c06d21a7e731"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-short-small-before.process.json": {
+    "bytes": 1263048,
+    "sha256": "61933b6ac692cba1eb440dd720b6e12f0df5f12945b9e06285dc4a5948eafe18"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-short-small-before.provider.log": {
+    "bytes": 72,
+    "sha256": "214af370e033847504987f41c3e3d7120a4144793eed056357201ad126b608e2"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-short-small-before.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "ca6b07849eebc1191191904d114be727c2d4199565fe4e4c83f359a96b384181"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-short-small-comparison.json": {
+    "bytes": 23455,
+    "sha256": "77dc88905882757d3193988d47491a8e09e5f4869b9270267fa62dfef44a98a6"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-stream-after.json": {
+    "bytes": 226981,
+    "sha256": "28a084f58bc6ff30a284c3b7df103718b912e13330ebef33a47cb7d026d4473f"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-stream-after.log": {
+    "bytes": 348,
+    "sha256": "c54fafd52559ee438f42741b3d70196f0cb6e7a04d9f4e82d290947c6145187c"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-stream-after.process.json": {
+    "bytes": 67024,
+    "sha256": "8e72f12dc36731ca1e016f91ee6e7c0c3b0244313a2f9dee2be99be7a452512a"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-stream-after.provider.log": {
+    "bytes": 67,
+    "sha256": "118d6331502bba7aca4db1345b2e414b2876a225a8294dc0c6958a5b913495d7"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-stream-after.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "f186c9b9665c77a0c115e7432006ee399e55e7bf064c13d88881d55c5daf1c7b"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-stream-before.json": {
+    "bytes": 226986,
+    "sha256": "cf90af5a02844103354b9ddf8eaca9a44b6e1a68947f798394c661b48af4c682"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-stream-before.log": {
+    "bytes": 348,
+    "sha256": "32063a73b2b1efdabdc5cf477b3c33e968d9dd20449ca68915e82c52eda48bdf"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-stream-before.process.json": {
+    "bytes": 67025,
+    "sha256": "7e877a823c837fe691a579472fb26290e97dedd05f2b569c3341bdca84e7b93a"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-stream-before.provider.log": {
+    "bytes": 67,
+    "sha256": "10cb9bbab27bd78d8ceffcc1fe4e443e7403b5ab37d3eb7373b6a4b4f9c315b4"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-stream-before.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "f186c9b9665c77a0c115e7432006ee399e55e7bf064c13d88881d55c5daf1c7b"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-stream-comparison.json": {
+    "bytes": 917,
+    "sha256": "0265e436b39ab6ccf01aae1a66642dfee6765d545f497cead78d204bec192115"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-tool-after.json": {
+    "bytes": 361164,
+    "sha256": "78b2639dbaf0c438ce44e43b425703d986d3d98c6459208ec4d95a13ec6148bc"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-tool-after.log": {
+    "bytes": 346,
+    "sha256": "c2e376b90695d2e1632d54095129b24610db42f5e54db9e863ea7b244124b930"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-tool-after.process.json": {
+    "bytes": 45357,
+    "sha256": "e9b40a4719fbde32de41124b12ad7f87bd5b4e4e85f0790a68be71e84cf9a558"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-tool-after.provider.log": {
+    "bytes": 65,
+    "sha256": "1ce678f5cac411956607e635940f6cb2c4e0dc00b30019993f0d0767380bdf35"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-tool-after.provider.stdout": {
+    "bytes": 26231,
+    "sha256": "ddb913551108f6e09b81e68bd694ad03f0966177c626ed703868472c1e51cc93"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-tool-before.json": {
+    "bytes": 361161,
+    "sha256": "8b98088f05bf923575cd788052e29edca9a0f44402697c67b861cf66d704d8db"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-tool-before.log": {
+    "bytes": 346,
+    "sha256": "23a65f9bf669945d9cce66298c519cbe3f02e8781554cf734f112501b8df5afd"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-tool-before.process.json": {
+    "bytes": 45358,
+    "sha256": "eeaa388933c63c56ebfe44744fc62dfbbecc6496635db2b8d74fa9df3560136f"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-tool-before.provider.log": {
+    "bytes": 65,
+    "sha256": "448c584008a0d5354bfacfcac887d2bbd3048da92c76150a19a8c5b37f7627a4"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-tool-before.provider.stdout": {
+    "bytes": 26231,
+    "sha256": "8c2ec916bf0ea73376e430681d8b307b7a6c54cea96a0883274eb0e99ead5fdc"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/2-tool-comparison.json": {
+    "bytes": 1492,
+    "sha256": "71606d7d317a67a778bad9d1ad5eee0b7b877b9d665ade381138463bc3a738b1"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber/manifest.json": {
+    "bytes": 821,
+    "sha256": "c2aea2700ce2f78f0a8cb0e38c5a75dba46fbc2486ea7599b5f3b3ee6ace065e"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber-cohort-manifest.json": {
+    "bytes": 26466,
+    "sha256": "f7e449e8a0d790034ba213824fdfe9614be2a2d5f860a0d7c9a1f237aefb3311"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber-helper-restoration.jsonl": {
+    "bytes": 250886,
+    "sha256": "bfbe05e02968b4ffb6d12f27b1c36a16416b00a1ceb9f20c3fb08dd30ce2c35d"
+  },
+  "products/native-baseline-vs-scoped-live-subscriber-product-intervals.jsonl": {
+    "bytes": 13026,
+    "sha256": "60d349190b45d70932ea85278524b17d99460bbf4cfea15496ccc79abfe74f23"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-cancel-after.json": {
+    "bytes": 208292,
+    "sha256": "6f02ac3d9838f8c208d1b01e292bd2faa849ef6fde9f2e76619eb4197a48a38a"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-cancel-after.log": {
+    "bytes": 351,
+    "sha256": "632f9ed63e8a300248df5574add80e15d54ebe2b6b5e9dc9fe5ba17e150300e9"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-cancel-after.process.json": {
+    "bytes": 22817,
+    "sha256": "e28ff9cf4f504c221634180ee443991805d2714cfc56e63a5ae349d06d8655e0"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-cancel-after.provider.log": {
+    "bytes": 67,
+    "sha256": "3326858268c79d88278bc0bdecf81932a887cad087787a37909cdd5c9b57915f"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-cancel-after.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "3bc0b6f171057c1ca5a1cf2f3d9ff5613a6473957a1a741d4dd124561d0f5def"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-cancel-before.json": {
+    "bytes": 208296,
+    "sha256": "39c471089fc3c31c4a540b5704bad6cc47db249f900cc3f45bac9b939b4e422d"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-cancel-before.log": {
+    "bytes": 351,
+    "sha256": "92b1fae48d9f56879e8f26fb2bb09e4d8f44a9e6f3b8eb37bceb9c94f419cf97"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-cancel-before.process.json": {
+    "bytes": 22820,
+    "sha256": "c44070aca39e885f5c9b87dfbeb73e9b12884c9c3cd84ee690a404268b8a96ca"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-cancel-before.provider.log": {
+    "bytes": 67,
+    "sha256": "af3f7e6d080cc50d8222cb013588127b659f11ac0efc6087b9c193ae81d0ad41"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-cancel-before.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "3bc0b6f171057c1ca5a1cf2f3d9ff5613a6473957a1a741d4dd124561d0f5def"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-cancel-comparison.json": {
+    "bytes": 920,
+    "sha256": "a97d7be940e14ca1d56df9cc685018f5a3497dc86f105e46fd33773738268fff"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-large-after.json": {
+    "bytes": 284339,
+    "sha256": "d2e1752378e58eac1da11566f1ff083892e589009f80d628e19b9da50e28418c"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-large-after.log": {
+    "bytes": 350,
+    "sha256": "3d57068f35e370d6765c9375b94d228b5a04239dcb786bba65b0ae47ce55b87e"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-large-after.process.json": {
+    "bytes": 44585,
+    "sha256": "1d6e95d07293a9186462e7aa86d546039a21f34087955f4558b66ae564bfb1cc"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-large-after.provider.log": {
+    "bytes": 66,
+    "sha256": "66c9b43e8a89ff940041394cfc22eb9ef9a9506004bd3c5b90658e758435afd9"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-large-after.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "9c728d045f0e27e021ba07fdbadce1a6ff35982d47c065aa262638c09b3f0542"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-large-before.json": {
+    "bytes": 284344,
+    "sha256": "048e507fc9266e7e02498dfc47b3d59ef35d9eb812c18612b8d3ad5fbd5b037b"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-large-before.log": {
+    "bytes": 350,
+    "sha256": "b54c0033061eb35bcc79e6483b40690b37a6a61f5db2db277894ddc6f176f39c"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-large-before.process.json": {
+    "bytes": 44588,
+    "sha256": "c5226f96fdee48dae319f0d5de005389f20ebc301dafd3680d3c713030184aa1"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-large-before.provider.log": {
+    "bytes": 66,
+    "sha256": "9f6dbf366a8ae83bfa6dfd3ddc8761d4e2cf0ccd0755d02681840408bd8c36c6"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-large-before.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "9c728d045f0e27e021ba07fdbadce1a6ff35982d47c065aa262638c09b3f0542"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-large-comparison.json": {
+    "bytes": 919,
+    "sha256": "f74e506640acbda3b0e65f6510cb2460cd0091367b928a8425ac604ce2562099"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-short-large-after.json": {
+    "bytes": 25021592,
+    "sha256": "a4abb1970cc6569308af72764fc7ef264cf7a4bdf9ef22c4267849a4b1a9630d"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-short-large-after.log": {
+    "bytes": 357,
+    "sha256": "f6fdcdf915bccf57a66851d6498eed57dc68f775149003db218c83b8e2a3a194"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-short-large-after.process.json": {
+    "bytes": 4384718,
+    "sha256": "30f190bbf6ce7948ff9162fb7a5ddae16156f4bdc3ef9e6ca6a33c8ff41da885"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-short-large-after.provider.log": {
+    "bytes": 72,
+    "sha256": "54325ffe7bbaddd83a673588d44ed766a1978ee0cfbdb04c895cae7fad63d2c4"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-short-large-after.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "ac700ca2446af411a87f99e531ecc78d041604d6ac13c23708aa346bb67f4d1b"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-short-large-before.json": {
+    "bytes": 25021499,
+    "sha256": "1c8b3efa8c9ca149fcc0c7784d48b904db169910eda3419dc0aaaffbfd4c7ef7"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-short-large-before.log": {
+    "bytes": 357,
+    "sha256": "1fe16f344f70602b389f1f2b1e69a1d3d48c8e3f0f6898d1438f1c24dc6fc051"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-short-large-before.process.json": {
+    "bytes": 4384722,
+    "sha256": "a89fc8f66b5ad43f435344ab9887b49b426d7b3ec612ea3e6e1250b55ecd4a01"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-short-large-before.provider.log": {
+    "bytes": 72,
+    "sha256": "b8365daef21c9104f4bd88df8af2b91035d480e899e3477da29526bd6df1f3e8"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-short-large-before.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "ac700ca2446af411a87f99e531ecc78d041604d6ac13c23708aa346bb67f4d1b"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-short-large-comparison.json": {
+    "bytes": 55826,
+    "sha256": "fc604efc7911501f0cb430e1952ba7b394a85aee6229a2b8d71f9089ba6ad494"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-short-small-after.json": {
+    "bytes": 6883684,
+    "sha256": "606b2b3a7aba7e133c56e41d21b838d0b74094e96faa6ad4e3b3aab44a17ee3e"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-short-small-after.log": {
+    "bytes": 356,
+    "sha256": "8a6e4100bb6ec7b4d5932e44dbd9e02a475bcbe36ef826c13509d053f850beb1"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-short-small-after.process.json": {
+    "bytes": 1263053,
+    "sha256": "32511eb7ededb347e7834bb817c1c1c37a07f8869195fcfa77bafa0749555d30"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-short-small-after.provider.log": {
+    "bytes": 72,
+    "sha256": "d7e83a91f08b9c6260474765ca560fd0a42079c95de7224e16dce95edfbaf95e"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-short-small-after.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "ca6b07849eebc1191191904d114be727c2d4199565fe4e4c83f359a96b384181"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-short-small-before.json": {
+    "bytes": 6883676,
+    "sha256": "29835dfcbf25f7576bc15f769de1fae087e78fe4d29d36a97c522d03ba82e196"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-short-small-before.log": {
+    "bytes": 356,
+    "sha256": "25a15e90a6563fcbf111f37d976f32e571db9f3d792e2cf9092360f206b057c2"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-short-small-before.process.json": {
+    "bytes": 1263054,
+    "sha256": "82e2ff5d238a2aef5352c45df804ed3cca1a84b5537f56d0b8b0b6fa91fe2d99"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-short-small-before.provider.log": {
+    "bytes": 72,
+    "sha256": "dce5179f9cedcb2659435ebd875e64ea7238a3e31484ed3dde35eecca14ef75e"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-short-small-before.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "ca6b07849eebc1191191904d114be727c2d4199565fe4e4c83f359a96b384181"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-short-small-comparison.json": {
+    "bytes": 23458,
+    "sha256": "5163daa4e99f29729fccfb83625127b4ea0a016b2533b2593147915163d4b4d8"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-stream-after.json": {
+    "bytes": 224204,
+    "sha256": "eb82afb8be272aa4c0aa13f4d65a9df90a29324779b1e31d5ddb7ae80b0401a5"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-stream-after.log": {
+    "bytes": 351,
+    "sha256": "085d2f7cfa2baf7ff44fc35c5db901a8c668b96baab59cbfcadbc84837239bba"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-stream-after.process.json": {
+    "bytes": 67030,
+    "sha256": "1951c86d54fed9c7ecef10feaf05c337ff9062d9d6c2dd073fc514a3246db577"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-stream-after.provider.log": {
+    "bytes": 67,
+    "sha256": "e6903b4eae4c7797c98c2ba817c3b45be43451fdc03c4a705a6e00798efb1b40"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-stream-after.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "f186c9b9665c77a0c115e7432006ee399e55e7bf064c13d88881d55c5daf1c7b"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-stream-before.json": {
+    "bytes": 224202,
+    "sha256": "67e63ae0f190fb9ebdbdcf427e658dd0ba37d3f21d215924c87ca398f6028872"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-stream-before.log": {
+    "bytes": 351,
+    "sha256": "5982560fcf0f0b74ff66eb499d1f4e560e42f44f6ba75777aedaf76ad9bc2ca0"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-stream-before.process.json": {
+    "bytes": 67031,
+    "sha256": "36506e70667a5c644ab6596d9d6031f560bbbd0975b55b279bee689eae19fa4f"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-stream-before.provider.log": {
+    "bytes": 67,
+    "sha256": "4e42069e476aaaaa7a2a64b4e54854be59265837dc8d6096f3dfd84d5405420c"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-stream-before.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "f186c9b9665c77a0c115e7432006ee399e55e7bf064c13d88881d55c5daf1c7b"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-stream-comparison.json": {
+    "bytes": 920,
+    "sha256": "be5d23e49c12b9b62b9a7649f6d43f74fb9d44a13f73d439fb477c68e7a90f29"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-tool-after.json": {
+    "bytes": 360418,
+    "sha256": "8c863c7d7a82be43fa1196f0fbe056402c8be82853a9eede4d477b1cb6a6c4d7"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-tool-after.log": {
+    "bytes": 349,
+    "sha256": "b38997c61b291a54699886f4ebac5be118031e3a5e94f1038999926e94fea48c"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-tool-after.process.json": {
+    "bytes": 45365,
+    "sha256": "44b35d8943c6957ceac99884ef38a8c0c3120b6dc69064fd835a1cf91219ab09"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-tool-after.provider.log": {
+    "bytes": 65,
+    "sha256": "2043f6df009e67525b9815d05a66f14cfc10f52fd3ef63ec1d16025453e719c9"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-tool-after.provider.stdout": {
+    "bytes": 26234,
+    "sha256": "f9dadca46378c6b96a0148280cc9e54e5b5100b63c4fd4bcb76f7e28ac4265bc"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-tool-before.json": {
+    "bytes": 360411,
+    "sha256": "b39934886587a1af0e98ee4e250385114b067e955ade8395f13c8cc92d98c9f8"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-tool-before.log": {
+    "bytes": 349,
+    "sha256": "542fb001ec03001424b763f845924909528180de0b0289d20d14eccb502dd1b7"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-tool-before.process.json": {
+    "bytes": 45367,
+    "sha256": "0172de540e9ceeb3e501e7edd096b07798ea2bd7f1581b7399458faee3e386c7"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-tool-before.provider.log": {
+    "bytes": 65,
+    "sha256": "8b289ae1cd9ab7684970d268c82b1afd09c3118055aff63e16ad6813476bcb24"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-tool-before.provider.stdout": {
+    "bytes": 26234,
+    "sha256": "fd9f4c663c06d876c75e21e657e3c6b0441731e22854a1516461ee4186505ecf"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/0-tool-comparison.json": {
+    "bytes": 1495,
+    "sha256": "ef63ab990f72fd54f0909f189b160136a03cf48031df732ba0a3773b97046240"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-cancel-after.json": {
+    "bytes": 208293,
+    "sha256": "e91b8c35c6448bc69bd33fc2b3511251a0d27142d79ff837ae0c392412864719"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-cancel-after.log": {
+    "bytes": 351,
+    "sha256": "9178cbc5658d9952b8dc627314e653b9c5098d8331d6e5f9c4ba7c079128de31"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-cancel-after.process.json": {
+    "bytes": 22817,
+    "sha256": "0783afcbe51408c8cba3e3d5df4e8507206b11ccc67128328f7daddad3a67b7c"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-cancel-after.provider.log": {
+    "bytes": 67,
+    "sha256": "d42a9af7f925a163e90cbe97f289445e361efc085b949f74e349cb4affb3ca1b"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-cancel-after.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "3bc0b6f171057c1ca5a1cf2f3d9ff5613a6473957a1a741d4dd124561d0f5def"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-cancel-before.json": {
+    "bytes": 208283,
+    "sha256": "489e218fc7257b9fbefa29bf73debd431bfeaa2e8639a7d685131634126a4c3d"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-cancel-before.log": {
+    "bytes": 351,
+    "sha256": "eb65ad6c6374acd5db250b4dceb99b6eeef4c8a137a313d5fb50ac2b7bfd8df6"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-cancel-before.process.json": {
+    "bytes": 22819,
+    "sha256": "17da052f44bf974057ad74091dcad4b17c3f9ae08efd567f29b8f02235a78943"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-cancel-before.provider.log": {
+    "bytes": 67,
+    "sha256": "cc8cd674d1a4ac0826021bb91f54226bb90aeac3777bd5d52ec1068d93ca7d8d"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-cancel-before.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "3bc0b6f171057c1ca5a1cf2f3d9ff5613a6473957a1a741d4dd124561d0f5def"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-cancel-comparison.json": {
+    "bytes": 920,
+    "sha256": "a97d7be940e14ca1d56df9cc685018f5a3497dc86f105e46fd33773738268fff"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-large-after.json": {
+    "bytes": 284337,
+    "sha256": "e3c9acfab46dc5406105bae91151fe1a0e9287c40114ba0264b51a83323757f3"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-large-after.log": {
+    "bytes": 350,
+    "sha256": "c1bf9cbd9962b2e49ef1611e20950a6fe51742d2f68f7935598546efa243c2e0"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-large-after.process.json": {
+    "bytes": 44585,
+    "sha256": "e747f562f2157dcc63348c3e8a1ee3bf244da2d9ce39b1e1296aab4f04af827f"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-large-after.provider.log": {
+    "bytes": 66,
+    "sha256": "83909d6bba900824f726eacc4856405fa3524eded76fb144b20adda32be77628"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-large-after.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "9c728d045f0e27e021ba07fdbadce1a6ff35982d47c065aa262638c09b3f0542"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-large-before.json": {
+    "bytes": 284337,
+    "sha256": "e219bd9f5659567438595b936fe319cde7ba4de151a3f1b3d1cf8ab79f065330"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-large-before.log": {
+    "bytes": 350,
+    "sha256": "03f32c49b45996f241019ed39ebbd12ef07e02150ff91a816ba813d4393e8721"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-large-before.process.json": {
+    "bytes": 44588,
+    "sha256": "e1f933abf2d19c940d82099b9e75f436cf2d35f0b1f8e036a39f68f53b1306fd"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-large-before.provider.log": {
+    "bytes": 66,
+    "sha256": "6c97a686c7f635981f4ce98a53d2ed7524c69556f33af2ebc941beee042d7842"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-large-before.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "9c728d045f0e27e021ba07fdbadce1a6ff35982d47c065aa262638c09b3f0542"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-large-comparison.json": {
+    "bytes": 919,
+    "sha256": "f74e506640acbda3b0e65f6510cb2460cd0091367b928a8425ac604ce2562099"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-short-large-after.json": {
+    "bytes": 25021508,
+    "sha256": "983f89253990bd71e8655683158c4160d43ef07abbedb6272368f00bef36d29d"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-short-large-after.log": {
+    "bytes": 357,
+    "sha256": "77afeb3bbc212b1021b32f73bf192439abd41e31a4131070127722ee1cdb942e"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-short-large-after.process.json": {
+    "bytes": 4384719,
+    "sha256": "0441fa538fe8b614d32dca144097d67dbd2f3148b9d941423ddc9eaa3ce64a9b"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-short-large-after.provider.log": {
+    "bytes": 72,
+    "sha256": "5c620a836938032fb99a715675c807958328375420fe1c19b958f2da236eb848"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-short-large-after.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "ac700ca2446af411a87f99e531ecc78d041604d6ac13c23708aa346bb67f4d1b"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-short-large-before.json": {
+    "bytes": 25021610,
+    "sha256": "2d4438d2bd7e8c240e817e2b34c063b25a4630ade540f0a2fa4947f45a135af1"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-short-large-before.log": {
+    "bytes": 357,
+    "sha256": "a81c22a1ebc48c3922a4947b48ebe6b49413948de3ae834fad3dcf5ebe4d8f0b"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-short-large-before.process.json": {
+    "bytes": 4384721,
+    "sha256": "930c695d5fa9d46e8b674fbc12d1689671da0831cd244d2420a1cb8d0abc58ab"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-short-large-before.provider.log": {
+    "bytes": 72,
+    "sha256": "73391961bb64be9b7575f0748971c401bd830b35a1a47976a9ff6885193f2698"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-short-large-before.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "ac700ca2446af411a87f99e531ecc78d041604d6ac13c23708aa346bb67f4d1b"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-short-large-comparison.json": {
+    "bytes": 55826,
+    "sha256": "fc604efc7911501f0cb430e1952ba7b394a85aee6229a2b8d71f9089ba6ad494"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-short-small-after.json": {
+    "bytes": 6883674,
+    "sha256": "cc440f93e77b6df96aa9701c70669ffd27b0f91fc2e3760e90764573e4b3d31e"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-short-small-after.log": {
+    "bytes": 356,
+    "sha256": "d2e3d3a2bea2391e6e93364f8e4a3ff14a6fdbc0db47d671db85aefd6f59ba62"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-short-small-after.process.json": {
+    "bytes": 1263052,
+    "sha256": "20811c1bd4c1ceda8ad4d7dd0e6d2d15e7c9814125c2c59b80b7ce66cfb7f5ad"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-short-small-after.provider.log": {
+    "bytes": 72,
+    "sha256": "718a4e12f7e7c98f27d23aeeb193f8740f806bfa89a75101d0533f6b95a8942b"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-short-small-after.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "ca6b07849eebc1191191904d114be727c2d4199565fe4e4c83f359a96b384181"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-short-small-before.json": {
+    "bytes": 6883669,
+    "sha256": "b9072fab767402b229392bfad0dd4b75750a0d827203c23e1a44aafd1f8c8711"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-short-small-before.log": {
+    "bytes": 356,
+    "sha256": "16a97e43726cc9ecda681c234918b6ed14491e57c1ac51112d55bc8f07a4ac47"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-short-small-before.process.json": {
+    "bytes": 1263054,
+    "sha256": "ff342e857a1e624d76228b4a5dceb911fdb75ebd802cff7f0630f0f33e663924"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-short-small-before.provider.log": {
+    "bytes": 72,
+    "sha256": "219e623bd3c5721cacf05e1cb2ed2d1fa97a0fedc99df50dcca6bb043841771b"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-short-small-before.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "ca6b07849eebc1191191904d114be727c2d4199565fe4e4c83f359a96b384181"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-short-small-comparison.json": {
+    "bytes": 23458,
+    "sha256": "5163daa4e99f29729fccfb83625127b4ea0a016b2533b2593147915163d4b4d8"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-stream-after.json": {
+    "bytes": 224201,
+    "sha256": "dd90a59817c27c8f0006bf7f0bc73ed718476ae220c97743d1bcb756e230c256"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-stream-after.log": {
+    "bytes": 351,
+    "sha256": "0fc94cbe7281bc220105f658ee3490213a9fd9757c8587ff9031ffac405bc4e7"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-stream-after.process.json": {
+    "bytes": 67029,
+    "sha256": "15ad1b898e793f33ab278b5f6e56db34da77767e55d9f24f4c429a40cae51e16"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-stream-after.provider.log": {
+    "bytes": 67,
+    "sha256": "06409c8850d72f986a20dedc092a3812fda8f5926f318b10e75de76e33d43f2b"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-stream-after.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "f186c9b9665c77a0c115e7432006ee399e55e7bf064c13d88881d55c5daf1c7b"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-stream-before.json": {
+    "bytes": 224202,
+    "sha256": "9249fb09f9d74cc5a360b2f2103bab02deb31f78b41b97983f73ace7a31a9ac6"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-stream-before.log": {
+    "bytes": 351,
+    "sha256": "c6c5db5ae13796c09336a8a28e05697eef508ac03b9e0b929d2bd995b6786cf0"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-stream-before.process.json": {
+    "bytes": 67032,
+    "sha256": "cc48a6949877482865cae0aa139b22ee77790b7220da0b0088dd5d5bcf002d57"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-stream-before.provider.log": {
+    "bytes": 67,
+    "sha256": "cac916f998b74306302dc415ecebe8d0eb167c6267db3045cee8b676e36e8535"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-stream-before.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "f186c9b9665c77a0c115e7432006ee399e55e7bf064c13d88881d55c5daf1c7b"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-stream-comparison.json": {
+    "bytes": 920,
+    "sha256": "be5d23e49c12b9b62b9a7649f6d43f74fb9d44a13f73d439fb477c68e7a90f29"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-tool-after.json": {
+    "bytes": 360404,
+    "sha256": "0bd5c8f54a93b1e93bf5885bddf89073fa1c045f986c1d339fa8ab0a819cc9a7"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-tool-after.log": {
+    "bytes": 349,
+    "sha256": "ac8aa632ef7f7deab09ecb82a0ef3427627797410ed91eb86d663fc67e78df54"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-tool-after.process.json": {
+    "bytes": 45365,
+    "sha256": "3023a09b3fc7e12b2534ac03988c63994bdf70f089c95e581415cf4fe9a4c062"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-tool-after.provider.log": {
+    "bytes": 65,
+    "sha256": "cb159db6672503f8f6a5bf74d466958c3ce84533050718e0b189445ce166d867"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-tool-after.provider.stdout": {
+    "bytes": 26234,
+    "sha256": "8ed82be1420ab862f02ac617a95d945ddc0da95efb38ecd201921533210e1d68"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-tool-before.json": {
+    "bytes": 360404,
+    "sha256": "1d70666f93cf2dc17e1f0d185172a2a3303a6ad799a79750f638eaa2f6e203b8"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-tool-before.log": {
+    "bytes": 349,
+    "sha256": "70ac34ab1147ae51402966c07e78e71fbdcf9fcce7fbdd74c074eed5a4bcd0d4"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-tool-before.process.json": {
+    "bytes": 45367,
+    "sha256": "7691d8ce4a0b463971da11ff624696ae75d2debc080e8808938ae0e7dadd54d4"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-tool-before.provider.log": {
+    "bytes": 65,
+    "sha256": "d74d59ad5b985881bd62df392b810f63c2461b20b6793c867c95cc7a2286ac58"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-tool-before.provider.stdout": {
+    "bytes": 26234,
+    "sha256": "d35bceab9e883cd9c273d54e302a7fcb632223b7f654e2286f5bd489b99bd2dc"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/1-tool-comparison.json": {
+    "bytes": 1495,
+    "sha256": "ef63ab990f72fd54f0909f189b160136a03cf48031df732ba0a3773b97046240"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-cancel-after.json": {
+    "bytes": 208296,
+    "sha256": "85661993a87f15d96e55216752e28281aaf4218292bc4d9794a0a88ede251488"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-cancel-after.log": {
+    "bytes": 351,
+    "sha256": "ae59269a75b700e59e2a54d57880017bfafea7a6e9f329590a65f3952f177604"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-cancel-after.process.json": {
+    "bytes": 22818,
+    "sha256": "6eae101c0d33ad1301d3d5c0c572f63ccc65d70386cab3f9a813ff31a71295ca"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-cancel-after.provider.log": {
+    "bytes": 67,
+    "sha256": "ae3ad1866a5f4a2804c815a05beb0c71356d12a241a4c60d4682e602478cf2dd"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-cancel-after.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "3bc0b6f171057c1ca5a1cf2f3d9ff5613a6473957a1a741d4dd124561d0f5def"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-cancel-before.json": {
+    "bytes": 208296,
+    "sha256": "236c9250351eea2b24dc16301fc252f9282ec31cc0517f163475688e87ca153a"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-cancel-before.log": {
+    "bytes": 351,
+    "sha256": "efba98e14d67e55698a5241d2580bd952362143a94420c22278add4caf54b76a"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-cancel-before.process.json": {
+    "bytes": 22819,
+    "sha256": "bc8d5209c6108b4832217f2bedc286ba0c44709a3c5f385615bd5db9a408e713"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-cancel-before.provider.log": {
+    "bytes": 67,
+    "sha256": "2b6f91e07a0d03f120b3dce88e15b4933f9a9a6e0b3a0af6934d0fbb03c02e9b"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-cancel-before.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "3bc0b6f171057c1ca5a1cf2f3d9ff5613a6473957a1a741d4dd124561d0f5def"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-cancel-comparison.json": {
+    "bytes": 920,
+    "sha256": "a97d7be940e14ca1d56df9cc685018f5a3497dc86f105e46fd33773738268fff"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-large-after.json": {
+    "bytes": 284346,
+    "sha256": "918f7ebcbc7ac2150e1d356ac86a739ba7fdf48817c2858f688639a6f44c82a1"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-large-after.log": {
+    "bytes": 350,
+    "sha256": "17344afdc84dcae236ff162d3f48d968e1c73d9521e0e176e31fa56ff09ba01d"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-large-after.process.json": {
+    "bytes": 44585,
+    "sha256": "f178733fa10d5c19c7495b86106ca5aa6ad4b9ce153f5992333370daabdbd39e"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-large-after.provider.log": {
+    "bytes": 66,
+    "sha256": "d868baa33b2673fd8035c8d8e5ea365cbc7f350c7f47fa2af5fd5c40704de9b0"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-large-after.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "9c728d045f0e27e021ba07fdbadce1a6ff35982d47c065aa262638c09b3f0542"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-large-before.json": {
+    "bytes": 284347,
+    "sha256": "b94163657f2258ae302cd273f94376ca2437803b1632afe62c24cfd48526961a"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-large-before.log": {
+    "bytes": 350,
+    "sha256": "49bd7b4eafbea6d5a62c5ce0791f3f5b34f3f0ed5fa661e82ab1313e457d79d5"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-large-before.process.json": {
+    "bytes": 44587,
+    "sha256": "682b6d406c547f1f7b750a984d6da351195d3c543e389cb1af4fa34f2e1752a6"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-large-before.provider.log": {
+    "bytes": 66,
+    "sha256": "97edc05d23811f2bc1bb63bbdc6d13586cadb5c87b4bb70828c99deb55d3c4b4"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-large-before.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "9c728d045f0e27e021ba07fdbadce1a6ff35982d47c065aa262638c09b3f0542"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-large-comparison.json": {
+    "bytes": 919,
+    "sha256": "f74e506640acbda3b0e65f6510cb2460cd0091367b928a8425ac604ce2562099"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-short-large-after.json": {
+    "bytes": 25021524,
+    "sha256": "25b652c95b7dea644abcaa37a976461091919b2b2ef529482b97acdaeddda692"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-short-large-after.log": {
+    "bytes": 357,
+    "sha256": "502f5959b58386b7a2f5c9c47e9f7690df7a31a2e043f3bcfb49dd35413f1554"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-short-large-after.process.json": {
+    "bytes": 4384719,
+    "sha256": "b4f6685fe549dd4ae9d5b93520dbfa3672062b9749559055ac0c3b949330bff7"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-short-large-after.provider.log": {
+    "bytes": 72,
+    "sha256": "ecc9d12e8248ca86000ef9e4d8911289f975a481c73e8ad9ae88497c99eacd82"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-short-large-after.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "ac700ca2446af411a87f99e531ecc78d041604d6ac13c23708aa346bb67f4d1b"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-short-large-before.json": {
+    "bytes": 25021507,
+    "sha256": "8724e4852c7d2530dce021b0986aa84c0a4a18514cb95d8db95065c94d69fe1c"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-short-large-before.log": {
+    "bytes": 357,
+    "sha256": "74b939b5a85164a594cc5a41eac4980f1a48227655beb077ad24f9b3498cabba"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-short-large-before.process.json": {
+    "bytes": 4384720,
+    "sha256": "9d042a4099c43affac820603b9b15f84243d897550e7b53a485d4f462c00924b"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-short-large-before.provider.log": {
+    "bytes": 72,
+    "sha256": "068013e73917f55b235743a7120ff13789ce9c0e99ba5fff1d913b9113c44ec0"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-short-large-before.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "ac700ca2446af411a87f99e531ecc78d041604d6ac13c23708aa346bb67f4d1b"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-short-large-comparison.json": {
+    "bytes": 55826,
+    "sha256": "fc604efc7911501f0cb430e1952ba7b394a85aee6229a2b8d71f9089ba6ad494"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-short-small-after.json": {
+    "bytes": 6883673,
+    "sha256": "f4fc2ae7a8fee5b3cdd47a711c69abceb807f3108cc63a0f4e00a0b1f99eb8c8"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-short-small-after.log": {
+    "bytes": 356,
+    "sha256": "d3b1dc10bc993ef828daf14aa19bc910c350c95b42a3a030dd05848f5103fd58"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-short-small-after.process.json": {
+    "bytes": 1263052,
+    "sha256": "948fe2f0c0be8ab578c99ee2cd02e3ed638fb354fb4fd96a06b0a493fd775200"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-short-small-after.provider.log": {
+    "bytes": 72,
+    "sha256": "9283121b0e71d9ca5a31592117d2bbec1ac5559b147d36064e6f150c9ab82d8e"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-short-small-after.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "ca6b07849eebc1191191904d114be727c2d4199565fe4e4c83f359a96b384181"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-short-small-before.json": {
+    "bytes": 6883676,
+    "sha256": "cf17962cdf6f73260b4f940d5e3a6055326a430a4bbb26f30f7a956febd50651"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-short-small-before.log": {
+    "bytes": 356,
+    "sha256": "9dbd13566b49f60ec5485f2f2ea62597500351a7f5831322bf00ff935a9eff44"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-short-small-before.process.json": {
+    "bytes": 1263054,
+    "sha256": "64e2a2695dfdb7c93c03e7c3c6286b9c46aef8b39134e452416c4ce62927b5bd"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-short-small-before.provider.log": {
+    "bytes": 72,
+    "sha256": "3e3698077f5959106a46852b6fe2b02c01bae431b4b76f360f0466cd830a495c"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-short-small-before.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "ca6b07849eebc1191191904d114be727c2d4199565fe4e4c83f359a96b384181"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-short-small-comparison.json": {
+    "bytes": 23458,
+    "sha256": "5163daa4e99f29729fccfb83625127b4ea0a016b2533b2593147915163d4b4d8"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-stream-after.json": {
+    "bytes": 224203,
+    "sha256": "63a83b2652858146b74549f060d18a8c020606282c1eab150871b73a9af0c0f3"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-stream-after.log": {
+    "bytes": 351,
+    "sha256": "55e2b2f6429b7f95119840b069f2c5c105b1ae767ba958fdf406b45ce775d1dd"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-stream-after.process.json": {
+    "bytes": 67029,
+    "sha256": "bc72ada48c99cb7f6c3b08b17da7c9c005ffb1ed42f56ae19a5f714b2bda3e44"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-stream-after.provider.log": {
+    "bytes": 67,
+    "sha256": "735879009cc274c36476ae2924c507edebfb3d3b92558d53a7e063ceb8a5da0e"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-stream-after.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "f186c9b9665c77a0c115e7432006ee399e55e7bf064c13d88881d55c5daf1c7b"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-stream-before.json": {
+    "bytes": 224201,
+    "sha256": "9d0a08d9f69dd194f22d41ac4ea3f6147d99f3ccb6e544e60383cbb786de7b4c"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-stream-before.log": {
+    "bytes": 351,
+    "sha256": "88ba642e1695e8c38fbecff07e6fe60df8a462e1b622e5f31ecc63104b148dac"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-stream-before.process.json": {
+    "bytes": 67032,
+    "sha256": "c86526833703feed2b705f53f76a0103c469a362466af6129008dfa74e3ae87e"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-stream-before.provider.log": {
+    "bytes": 67,
+    "sha256": "4da07a3933968d3f3d7713bdbd8f2e088e9eaa0cd7269b077008af1032cab095"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-stream-before.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "f186c9b9665c77a0c115e7432006ee399e55e7bf064c13d88881d55c5daf1c7b"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-stream-comparison.json": {
+    "bytes": 920,
+    "sha256": "be5d23e49c12b9b62b9a7649f6d43f74fb9d44a13f73d439fb477c68e7a90f29"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-tool-after.json": {
+    "bytes": 360416,
+    "sha256": "c6d56d4c13d8116d25e72e3283e1dd2098e00e1605876263b10d56f4e1d5ff39"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-tool-after.log": {
+    "bytes": 349,
+    "sha256": "1d98350edb4a7f7886ac283e3cb8df4aef87020e3f267280e5aa7f1e746b6153"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-tool-after.process.json": {
+    "bytes": 45366,
+    "sha256": "803ab83a329e68c48052055a9e0d85d3fef9991ea425b8914f8430d950ea5ec5"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-tool-after.provider.log": {
+    "bytes": 65,
+    "sha256": "7b6f8d89ce04ab61b727e8687336cc2cf3270f164b36a4a15c079c699635b252"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-tool-after.provider.stdout": {
+    "bytes": 26234,
+    "sha256": "213f6916dda0d8b26ada46a19e82f2f62adb11e8efb9125f00220b84e1632e37"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-tool-before.json": {
+    "bytes": 360416,
+    "sha256": "0860ed2c5ccaa90420559df55f29b453bd7a20a656345bed7b3a986a0a8e6972"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-tool-before.log": {
+    "bytes": 349,
+    "sha256": "d71085387077b0423c8bb3f5bc65526d5a0fdf866af527e380c2f8ddb2a41550"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-tool-before.process.json": {
+    "bytes": 45367,
+    "sha256": "5f991d794881268fc8a52619cacc099cd03b8de82d056d322e41fc7fca5b0b13"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-tool-before.provider.log": {
+    "bytes": 65,
+    "sha256": "944d6cdeb341412f9da2ed6091df3c3acbf4e007d9e4baf1f4b82778984d635e"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-tool-before.provider.stdout": {
+    "bytes": 26234,
+    "sha256": "d7005758cd08f36d9a1911d0c8f9aeffb3884c3165511b12c4a2583ffaaea9e8"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/2-tool-comparison.json": {
+    "bytes": 1495,
+    "sha256": "ef63ab990f72fd54f0909f189b160136a03cf48031df732ba0a3773b97046240"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber/manifest.json": {
+    "bytes": 824,
+    "sha256": "2ee4c557c08407e55eef9af0307cc703977461fd8fa45dc2338b8ed3d2a50149"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber-cohort-manifest.json": {
+    "bytes": 26589,
+    "sha256": "d9080195ae88aa54a86e2084410ad2133c4d15717103d4de1429171a2461dbaf"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber-helper-restoration.jsonl": {
+    "bytes": 250994,
+    "sha256": "3fd708bf976f322fdde4f2cd58e3fcd1e7975e9cf27f43da9f5b5b7c542c4bf8"
+  },
+  "products/native-baseline-vs-scoped-no-live-subscriber-product-intervals.jsonl": {
+    "bytes": 13134,
+    "sha256": "868fdc70d1db52497a522235568641110b15310398e12f50cbb7a1beb2b7b505"
+  },
+  "source-identities.json": {
+    "bytes": 3114,
+    "sha256": "1e26bac2d6a93426cb345f2cb1412a67ce54d0d3926fd6b7adaac8157776d2ae"
+  },
+  "three-build-verification.json": {
+    "bytes": 9506,
+    "sha256": "bd39ee1045b792c9738154257ffa860a7fe6ba3fe72cd8eff4ce91ed1aa67d67"
+  }
+}

@@ -1,0 +1,93 @@
+{
+  "start_utc": "2026-10-20T02:44:02.336711+00:00",
+  "runs": [
+    {
+      "candidate": "geometry",
+      "mode": "no-live-subscriber",
+      "argv": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "/workspace/pr485-study/run-native-cohort.py",
+        "--before",
+        "/workspace/pr485-study/evidence/build-baseline/conformance",
+        "--after",
+        "/workspace/pr485-study/evidence/build-geometry/conformance",
+        "--output",
+        "/workspace/pr485-study/evidence/products/native-baseline-vs-geometry-no-live-subscriber",
+        "--pairs",
+        "3",
+        "--observer-mode",
+        "no-live-subscriber"
+      ],
+      "start_utc": "2026-10-20T02:44:02.336803+00:00",
+      "exit": 0,
+      "end_utc": "2026-10-20T02:47:25.290813+00:00"
+    },
+    {
+      "candidate": "geometry",
+      "mode": "live-subscriber",
+      "argv": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "/workspace/pr485-study/run-native-cohort.py",
+        "--before",
+        "/workspace/pr485-study/evidence/build-baseline/conformance",
+        "--after",
+        "/workspace/pr485-study/evidence/build-geometry/conformance",
+        "--output",
+        "/workspace/pr485-study/evidence/products/native-baseline-vs-geometry-live-subscriber",
+        "--pairs",
+        "3",
+        "--observer-mode",
+        "live-subscriber"
+      ],
+      "start_utc": "2026-10-20T02:47:25.293399+00:00",
+      "exit": 0,
+      "end_utc": "2026-10-20T02:51:44.264564+00:00"
+    },
+    {
+      "candidate": "scoped",
+      "mode": "no-live-subscriber",
+      "argv": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "/workspace/pr485-study/run-native-cohort.py",
+        "--before",
+        "/workspace/pr485-study/evidence/build-baseline/conformance",
+        "--after",
+        "/workspace/pr485-study/evidence/build-scoped/conformance",
+        "--output",
+        "/workspace/pr485-study/evidence/products/native-baseline-vs-scoped-no-live-subscriber",
+        "--pairs",
+        "3",
+        "--observer-mode",
+        "no-live-subscriber"
+      ],
+      "start_utc": "2026-10-20T02:51:44.276383+00:00",
+      "exit": 0,
+      "end_utc": "2026-10-20T02:55:13.550675+00:00"
+    },
+    {
+      "candidate": "scoped",
+      "mode": "live-subscriber",
+      "argv": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "/workspace/pr485-study/run-native-cohort.py",
+        "--before",
+        "/workspace/pr485-study/evidence/build-baseline/conformance",
+        "--after",
+        "/workspace/pr485-study/evidence/build-scoped/conformance",
+        "--output",
+        "/workspace/pr485-study/evidence/products/native-baseline-vs-scoped-live-subscriber",
+        "--pairs",
+        "3",
+        "--observer-mode",
+        "live-subscriber"
+      ],
+      "start_utc": "2026-10-20T02:55:13.553597+00:00",
+      "exit": 0,
+      "end_utc": "2026-10-20T02:59:00.743557+00:00"
+    }
+  ],
+  "matrix": "2 candidates x 2 modes x 3 alternating pairs x 6 cases x 2 variants = 144 products",
+  "smoke_excluded": true,
+  "end_utc": "2026-10-20T02:59:00.745491+00:00",
+  "complete": true
+}

@@ -1,0 +1,73 @@
+{
+  "head": "31668f7a74b63446c538e00ed41ebfc42f0bc1a8",
+  "production_tree": "020d4c6334042f243e412e522103ee3d0e1da555",
+  "harness": {
+    "tests/common/provider_emulator.rs": "cb055ee1f9c9bc55c8af5cae080bb8564f2417226bacab76159f837261a2e47e",
+    "tests/conformance/agent_loop/runtime_benchmark.rs": "d71e6c80216b128927e09828631135b00b9b64748625fdb9fb2e5e9eb6c660f6",
+    "tests/conformance/agent_loop/runtime_benchmark/aligned.rs": "751fa58a98c9067eecd5e9a6c3eee8b6ec35b8987d1cd9a6f4cdc28915c08133",
+    "tests/conformance/agent_loop/runtime_benchmark/expected_tools.json": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d",
+    "tests/conformance/agent_loop/runtime_benchmark/profiling.rs": "12362c4abf9f80deed923b77855a2529d4aeb427cfffe39d6953cad823de0c66",
+    "tests/conformance/agent_loop/runtime_benchmark/request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+  },
+  "start_utc": "2026-10-20T02:20:30.680691+00:00",
+  "commands": [
+    [
+      "cargo",
+      "clean",
+      "--release",
+      "--package",
+      "rustx"
+    ],
+    [
+      "cargo",
+      "test",
+      "--release",
+      "--locked",
+      "--test",
+      "conformance",
+      "--no-run",
+      "--message-format=json"
+    ]
+  ],
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+  "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)\n",
+  "build_environment": {
+    "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+    "CARGO_PROFILE_RELEASE_DEBUG": "0",
+    "RUSTFLAGS": "-Copt-level=3 -Cdebuginfo=0",
+    "CARGO_BUILD_JOBS": "2"
+  },
+  "clean_exit": 0,
+  "build_exit": 0,
+  "root_artifacts": [
+    {
+      "name": "rustx",
+      "kind": [
+        "lib"
+      ],
+      "source_path": "/workspace/pr485-study/repo/src/lib.rs",
+      "fresh": false
+    },
+    {
+      "name": "rustx",
+      "kind": [
+        "bin"
+      ],
+      "source_path": "/workspace/pr485-study/repo/src/main.rs",
+      "fresh": false
+    },
+    {
+      "name": "conformance",
+      "kind": [
+        "test"
+      ],
+      "source_path": "/workspace/pr485-study/repo/tests/conformance/main.rs",
+      "fresh": false
+    }
+  ],
+  "binary": "/workspace/pr485-study/evidence/build-scoped/conformance",
+  "sha256": "6e8ea40f0c64a698aa527b52db9a9a10a2deb516d3863180590bfa553ef358aa",
+  "library_sha256": "b53c656b3bbd3e76466a9301bd0b4cf26745a130a44aade95556ba00a229a737",
+  "verified": true,
+  "end_utc": "2026-10-20T02:41:28.418940+00:00"
+}
