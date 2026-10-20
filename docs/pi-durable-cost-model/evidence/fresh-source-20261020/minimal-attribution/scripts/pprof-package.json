@@ -1,0 +1,7 @@
+{
+  "url": "https://deb.debian.org/debian/pool/main/g/google-perftools/google-perftools_2.16-1_all.deb",
+  "sha256": "3885d501046d67c2c8787579828cddff98f0fdc544f9a528de93f828a5a2364b",
+  "bytes": 280312,
+  "version": "2.16-1",
+  "local_unpack_only": true
+}

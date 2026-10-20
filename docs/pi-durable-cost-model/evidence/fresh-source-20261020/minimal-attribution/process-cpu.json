@@ -1,0 +1,82 @@
+[
+  {
+    "run": "baseline-control",
+    "role": "native",
+    "pid": 36124,
+    "user_s": 16.30567,
+    "system_s": 3.220686,
+    "total_s": 19.526356,
+    "wait4_status": 0,
+    "maxrss_kib": 385436
+  },
+  {
+    "run": "baseline-control",
+    "role": "provider-command-including-waited-descendants",
+    "pid": 36130,
+    "user_s": 0.504527,
+    "system_s": 0.183646,
+    "total_s": 0.6881729999999999,
+    "wait4_status": 0,
+    "maxrss_kib": 36660
+  },
+  {
+    "run": "geometry-control",
+    "role": "native",
+    "pid": 36148,
+    "user_s": 28.301346,
+    "system_s": 5.892241,
+    "total_s": 34.193587,
+    "wait4_status": 0,
+    "maxrss_kib": 385788
+  },
+  {
+    "run": "geometry-control",
+    "role": "provider-command-including-waited-descendants",
+    "pid": 36154,
+    "user_s": 0.532733,
+    "system_s": 0.277773,
+    "total_s": 0.810506,
+    "wait4_status": 0,
+    "maxrss_kib": 128704
+  },
+  {
+    "run": "geometry-cpu",
+    "role": "native",
+    "pid": 36165,
+    "user_s": 14.257449,
+    "system_s": 2.6811629999999997,
+    "total_s": 16.938612,
+    "wait4_status": 0,
+    "maxrss_kib": 414704
+  },
+  {
+    "run": "geometry-cpu",
+    "role": "provider-command-including-waited-descendants",
+    "pid": 36172,
+    "user_s": 0.44962199999999997,
+    "system_s": 0.087589,
+    "total_s": 0.537211,
+    "wait4_status": 0,
+    "maxrss_kib": 129544
+  },
+  {
+    "run": "baseline-cpu",
+    "role": "native",
+    "pid": 36195,
+    "user_s": 18.461591,
+    "system_s": 3.650939,
+    "total_s": 22.11253,
+    "wait4_status": 0,
+    "maxrss_kib": 411256
+  },
+  {
+    "run": "baseline-cpu",
+    "role": "provider-command-including-waited-descendants",
+    "pid": 36202,
+    "user_s": 0.333124,
+    "system_s": 0.112414,
+    "total_s": 0.445538,
+    "wait4_status": 0,
+    "maxrss_kib": 129544
+  }
+]

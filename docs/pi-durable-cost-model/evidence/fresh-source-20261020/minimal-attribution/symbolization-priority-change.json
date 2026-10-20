@@ -1,0 +1,8 @@
+{
+  "utc": "2026-10-20T04:58:01.074933+00:00",
+  "stopped_offline_warm_symbolizer_pids": [
+    36223,
+    36425
+  ],
+  "reason": "Prioritize required geometry steady profile; original GNU addr2line is slow on large optimized binaries. No product/profile interrupted,rawdata preserved."
+}

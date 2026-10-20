@@ -1,0 +1,9 @@
+[
+  "/workspace/pr485-study/diagnostic-tools/unpacked/usr/bin/google-pprof",
+  "--text",
+  "--cum",
+  "--no_strip_temp",
+  "--nodecount=100",
+  "/workspace/pr485-study/evidence/build-baseline/conformance",
+  "/workspace/pr485-study/evidence/minimal-attribution-20261020/baseline-cpu/before_measured_turns.cpu"
+]

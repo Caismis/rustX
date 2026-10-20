@@ -1,0 +1,256 @@
+{
+  "geometry-cpu": {
+    "after_driver_drop.cpu": {
+      "samples": 1,
+      "period_us": 4000,
+      "stack_records": 1,
+      "max_recorded_stack_depth": 21,
+      "bytes": 11358,
+      "sha256": "f770df223b266d424cce5675007b0571d9acfb4c6d006fc00f72a95a127d40f4",
+      "leaf_modules": {
+        "/usr/lib/x86_64-linux-gnu/libc.so.6": 1
+      }
+    },
+    "after_final_writer_close.cpu": {
+      "samples": 639,
+      "period_us": 4000,
+      "stack_records": 579,
+      "max_recorded_stack_depth": 46,
+      "bytes": 150998,
+      "sha256": "e767cdf75dee8056a9aa8dbd6db8c756690276e9334494d6ea997b2be2929611",
+      "leaf_modules": {
+        "/workspace/pr485-study/evidence/build-geometry/conformance": 408,
+        "/usr/lib/x86_64-linux-gnu/libc.so.6": 231
+      }
+    },
+    "after_initialization.cpu": {
+      "samples": 1303,
+      "period_us": 4000,
+      "stack_records": 1253,
+      "max_recorded_stack_depth": 53,
+      "bytes": 328580,
+      "sha256": "f7e2e252703377d0f5d1e0bde44c1bdc4b9a155bd55e42726150e2b1398f7db4",
+      "leaf_modules": {
+        "/usr/lib/x86_64-linux-gnu/libc.so.6": 498,
+        "/workspace/pr485-study/evidence/build-geometry/conformance": 805
+      }
+    },
+    "after_late_snapshot.cpu": {
+      "samples": 607,
+      "period_us": 4000,
+      "stack_records": 570,
+      "max_recorded_stack_depth": 43,
+      "bytes": 149478,
+      "sha256": "f36396f6ee6ca544adf668cbf94f2e65265b5c7e2f05a19f7f28ced315889eb1",
+      "leaf_modules": {
+        "/workspace/pr485-study/evidence/build-geometry/conformance": 379,
+        "/usr/lib/x86_64-linux-gnu/libc.so.6": 228
+      }
+    },
+    "after_provider_start.cpu": {
+      "samples": 47,
+      "period_us": 4000,
+      "stack_records": 47,
+      "max_recorded_stack_depth": 147,
+      "bytes": 39120,
+      "sha256": "5ad151371659a5040fc4ff8376f1a8dee62cf9c427acb58ec3b752f3203e857f",
+      "leaf_modules": {
+        "/usr/lib/x86_64-linux-gnu/libc.so.6": 43,
+        "/workspace/pr485-study/evidence/build-geometry/conformance": 4
+      }
+    },
+    "after_reopen_verification.cpu": {
+      "samples": 0,
+      "period_us": 4000,
+      "stack_records": 0,
+      "max_recorded_stack_depth": 0,
+      "bytes": 11174,
+      "sha256": "92c85d1755b487f027874a68f0b03ea9f00924bf76193d3142193db3753a5bc9",
+      "leaf_modules": {}
+    },
+    "after_shutdown.cpu": {
+      "samples": 8,
+      "period_us": 4000,
+      "stack_records": 8,
+      "max_recorded_stack_depth": 45,
+      "bytes": 12878,
+      "sha256": "164d8f10dd694f4db4c441a1c25f52bcfe04109adeaad6ded84352dd0b08052e",
+      "leaf_modules": {
+        "/usr/lib/x86_64-linux-gnu/libc.so.6": 5,
+        "/workspace/pr485-study/evidence/build-geometry/conformance": 3
+      }
+    },
+    "after_turns.cpu": {
+      "samples": 3,
+      "period_us": 4000,
+      "stack_records": 3,
+      "max_recorded_stack_depth": 38,
+      "bytes": 12132,
+      "sha256": "fbef112540433ac81709ebf24370ee6895cdfcfeab29c0703970536be6e6d925",
+      "leaf_modules": {
+        "/usr/lib/x86_64-linux-gnu/libc.so.6": 3
+      }
+    },
+    "after_verification.cpu": {
+      "samples": 0,
+      "period_us": 4000,
+      "stack_records": 0,
+      "max_recorded_stack_depth": 0,
+      "bytes": 11454,
+      "sha256": "750c1e2ea27b59016a76d47c28f28ce0d6bacd7b381a0c087f6988c86932c332",
+      "leaf_modules": {}
+    },
+    "before_initialization.cpu": {
+      "samples": 0,
+      "period_us": 4000,
+      "stack_records": 0,
+      "max_recorded_stack_depth": 0,
+      "bytes": 8680,
+      "sha256": "1fc5198d253248951ce1a655d62ec611ebcc088b9d626bc0de640099b5a6921d",
+      "leaf_modules": {}
+    },
+    "before_measured_turns.cpu": {
+      "samples": 710,
+      "period_us": 4000,
+      "stack_records": 687,
+      "max_recorded_stack_depth": 60,
+      "bytes": 183708,
+      "sha256": "97e95cd2af798318113778e052c74f5b3308a2b9ccbc6f9671998536f33c34e0",
+      "leaf_modules": {
+        "/workspace/pr485-study/evidence/build-geometry/conformance": 447,
+        "/usr/lib/x86_64-linux-gnu/libc.so.6": 261,
+        "no-file-map": 2
+      }
+    }
+  },
+  "baseline-cpu": {
+    "after_driver_drop.cpu": {
+      "samples": 2,
+      "period_us": 4000,
+      "stack_records": 2,
+      "max_recorded_stack_depth": 30,
+      "bytes": 10950,
+      "sha256": "efebdfba3603e418c39b602969e7b44bdd87834ff0de5baec99363979afd00de",
+      "leaf_modules": {
+        "/usr/lib/x86_64-linux-gnu/libc.so.6": 2
+      }
+    },
+    "after_final_writer_close.cpu": {
+      "samples": 768,
+      "period_us": 4000,
+      "stack_records": 684,
+      "max_recorded_stack_depth": 47,
+      "bytes": 171714,
+      "sha256": "5ab63d808653ae5ab96828c888a89256beaaefb1d5b5ba5ce4c5b026781d1e78",
+      "leaf_modules": {
+        "/workspace/pr485-study/evidence/build-baseline/conformance": 439,
+        "/usr/lib/x86_64-linux-gnu/libc.so.6": 329
+      }
+    },
+    "after_initialization.cpu": {
+      "samples": 1332,
+      "period_us": 4000,
+      "stack_records": 1268,
+      "max_recorded_stack_depth": 66,
+      "bytes": 333588,
+      "sha256": "671c229c347e524d339a4e6a839da77bb3f28559817110120e87784941113f96",
+      "leaf_modules": {
+        "/workspace/pr485-study/evidence/build-baseline/conformance": 833,
+        "/usr/lib/x86_64-linux-gnu/libc.so.6": 497,
+        "no-file-map": 2
+      }
+    },
+    "after_late_snapshot.cpu": {
+      "samples": 630,
+      "period_us": 4000,
+      "stack_records": 595,
+      "max_recorded_stack_depth": 47,
+      "bytes": 155870,
+      "sha256": "9a1588de9d79b27721383bc4b026bc8e2714c9d376ba3a6f4cc1fb62c91f8efd",
+      "leaf_modules": {
+        "/workspace/pr485-study/evidence/build-baseline/conformance": 402,
+        "/usr/lib/x86_64-linux-gnu/libc.so.6": 228
+      }
+    },
+    "after_provider_start.cpu": {
+      "samples": 37,
+      "period_us": 4000,
+      "stack_records": 37,
+      "max_recorded_stack_depth": 140,
+      "bytes": 33464,
+      "sha256": "8efc3377e79729d6aea6031173dc1cd913270e14aa668e0aad8cb72745ff4dbd",
+      "leaf_modules": {
+        "/usr/lib/x86_64-linux-gnu/libc.so.6": 26,
+        "/workspace/pr485-study/evidence/build-baseline/conformance": 11
+      }
+    },
+    "after_reopen_verification.cpu": {
+      "samples": 1,
+      "period_us": 4000,
+      "stack_records": 1,
+      "max_recorded_stack_depth": 21,
+      "bytes": 10082,
+      "sha256": "7c8280aee8ff00e2cac49168316caa98fbfa2f04eef0169ee15499ed9ac61c43",
+      "leaf_modules": {
+        "/usr/lib/x86_64-linux-gnu/libc.so.6": 1
+      }
+    },
+    "after_shutdown.cpu": {
+      "samples": 7,
+      "period_us": 4000,
+      "stack_records": 7,
+      "max_recorded_stack_depth": 23,
+      "bytes": 11750,
+      "sha256": "9f15407755a15d71188b9f6c00f0cd89473079b7ce43bb53b5e81c096080096b",
+      "leaf_modules": {
+        "/usr/lib/x86_64-linux-gnu/libc.so.6": 4,
+        "/workspace/pr485-study/evidence/build-baseline/conformance": 3
+      }
+    },
+    "after_turns.cpu": {
+      "samples": 3,
+      "period_us": 4000,
+      "stack_records": 3,
+      "max_recorded_stack_depth": 25,
+      "bytes": 11284,
+      "sha256": "7425223549ad4b2e121e21887a2331d0644ac97493956b2d780c2bd5647df0b7",
+      "leaf_modules": {
+        "/usr/lib/x86_64-linux-gnu/libc.so.6": 1,
+        "/workspace/pr485-study/evidence/build-baseline/conformance": 2
+      }
+    },
+    "after_verification.cpu": {
+      "samples": 1,
+      "period_us": 4000,
+      "stack_records": 1,
+      "max_recorded_stack_depth": 21,
+      "bytes": 10942,
+      "sha256": "9b837ef32960cadf6aebe382939264a24af7ed38a5620d30d791fd02c8bafba7",
+      "leaf_modules": {
+        "/usr/lib/x86_64-linux-gnu/libc.so.6": 1
+      }
+    },
+    "before_initialization.cpu": {
+      "samples": 0,
+      "period_us": 4000,
+      "stack_records": 0,
+      "max_recorded_stack_depth": 0,
+      "bytes": 8680,
+      "sha256": "a5464ec66126efe4dbced064f67857c966f4cb37541176beac72c5618f382a9c",
+      "leaf_modules": {}
+    },
+    "before_measured_turns.cpu": {
+      "samples": 733,
+      "period_us": 4000,
+      "stack_records": 700,
+      "max_recorded_stack_depth": 54,
+      "bytes": 183796,
+      "sha256": "6f8253588af9604ba5b052807fe6a250c28c099a0f576477cfcbca69b2eae6f9",
+      "leaf_modules": {
+        "/usr/lib/x86_64-linux-gnu/libc.so.6": 296,
+        "/workspace/pr485-study/evidence/build-baseline/conformance": 434,
+        "no-file-map": 3
+      }
+    }
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "path": "/workspace/pr485-study/delivery/pr485-minimal-attribution-20261020.tar.xz",
+  "bytes": 448404,
+  "sha256": "b8b94193dc5efe4964120634965031c2c669fd199aa30b6c5bea5b0146d8f345",
+  "verified_members": 93,
+  "uncompressed_payload_bytes": 129398890,
+  "one_archive_attempt": true,
+  "start_utc": "2026-10-20T05:04:37.972302+00:00",
+  "end_utc": "2026-10-20T05:05:40.073793+00:00",
+  "usable_bytes_after": 9587589120,
+  "inactive_zombies": [
+    {
+      "pid": 36425,
+      "comm": "google-pprof",
+      "state": "Z"
+    }
+  ],
+  "archive_path": "pr485-minimal-attribution-20261020.tar.xz",
+  "library_file_id": "libfile_79e64bf74eac8191bb62505e23d8f2f4",
+  "library_file_id_os": "file_00000000e0cc8230af5d3777362669a4",
+  "library_path": "/pr485-minimal-attribution-20261020.tar.xz",
+  "diagnostic_fixture_commit": "cef4d78ad234b8cf60acb563a5e42bc0263ea0bf",
+  "diagnostic_fixture_browser_execution": "pending exact-SHA independent review,not executed",
+  "public_csv_lf_normalization": [
+    "run-summary.csv",
+    "process-cpu.csv",
+    "phase-summary.csv"
+  ],
+  "csv_parsed_cells_verified_equal": true
+}

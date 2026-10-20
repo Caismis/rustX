@@ -1,0 +1,8 @@
+{
+  "url": "https://deb.debian.org/debian/pool/main/g/google-perftools/libgoogle-perftools4t64_2.16-1_amd64.deb",
+  "sha256": "950cecafb550949e37650cf5e42c7e06086269537f5dbe1f956c43662f5c7f19",
+  "bytes": 193944,
+  "upstream_version": "2.16",
+  "installation": "local unpack only; no system installation/security changes",
+  "utc": "2026-10-20T04:50:58.887349+00:00"
+}

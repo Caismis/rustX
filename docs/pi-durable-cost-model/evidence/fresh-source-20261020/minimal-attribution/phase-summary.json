@@ -1,0 +1,182 @@
+[
+  {
+    "run": "baseline-control",
+    "phase": "all-96-turns",
+    "wall_s": 9.854779,
+    "native_cpu_s": 11.94,
+    "wchar": 307162768,
+    "write_bytes": 234000384,
+    "read_bytes": 0
+  },
+  {
+    "run": "baseline-control",
+    "phase": "late-snapshot",
+    "wall_s": 0.027139,
+    "native_cpu_s": 0.02999999999999936,
+    "wchar": 0,
+    "write_bytes": 0,
+    "read_bytes": 0
+  },
+  {
+    "run": "baseline-control",
+    "phase": "request-verification",
+    "wall_s": 3.561757,
+    "native_cpu_s": 3.3900000000000006,
+    "wchar": 112,
+    "write_bytes": 0,
+    "read_bytes": 0
+  },
+  {
+    "run": "baseline-control",
+    "phase": "reopen-verification",
+    "wall_s": 3.330035,
+    "native_cpu_s": 3.3199999999999985,
+    "wchar": 8,
+    "write_bytes": 32768,
+    "read_bytes": 0
+  },
+  {
+    "run": "baseline-control",
+    "phase": "cleanup",
+    "wall_s": 0.006152,
+    "native_cpu_s": 0.010000000000001563,
+    "wchar": 0,
+    "write_bytes": 0,
+    "read_bytes": 0
+  },
+  {
+    "run": "geometry-control",
+    "phase": "all-96-turns",
+    "wall_s": 22.111636,
+    "native_cpu_s": 27.029999999999998,
+    "wchar": 308368984,
+    "write_bytes": 234299392,
+    "read_bytes": 0
+  },
+  {
+    "run": "geometry-control",
+    "phase": "late-snapshot",
+    "wall_s": 0.027979,
+    "native_cpu_s": 0.030000000000001137,
+    "wchar": 0,
+    "write_bytes": 0,
+    "read_bytes": 0
+  },
+  {
+    "run": "geometry-control",
+    "phase": "request-verification",
+    "wall_s": 3.224456,
+    "native_cpu_s": 3.1900000000000013,
+    "wchar": 184,
+    "write_bytes": 0,
+    "read_bytes": 0
+  },
+  {
+    "run": "geometry-control",
+    "phase": "reopen-verification",
+    "wall_s": 3.001915,
+    "native_cpu_s": 3.0100000000000016,
+    "wchar": 8,
+    "write_bytes": 36864,
+    "read_bytes": 0
+  },
+  {
+    "run": "geometry-control",
+    "phase": "cleanup",
+    "wall_s": 0.006122,
+    "native_cpu_s": 0.0,
+    "wchar": 0,
+    "write_bytes": 57344,
+    "read_bytes": 0
+  },
+  {
+    "run": "geometry-cpu",
+    "phase": "all-96-turns",
+    "wall_s": 8.455343,
+    "native_cpu_s": 10.16,
+    "wchar": 306012497,
+    "write_bytes": 234737664,
+    "read_bytes": 0
+  },
+  {
+    "run": "geometry-cpu",
+    "phase": "late-snapshot",
+    "wall_s": 0.023,
+    "native_cpu_s": 0.019999999999999574,
+    "wchar": 183792,
+    "write_bytes": 184320,
+    "read_bytes": 0
+  },
+  {
+    "run": "geometry-cpu",
+    "phase": "request-verification",
+    "wall_s": 2.899398,
+    "native_cpu_s": 2.869999999999999,
+    "wchar": 17857,
+    "write_bytes": 12288,
+    "read_bytes": 0
+  },
+  {
+    "run": "geometry-cpu",
+    "phase": "reopen-verification",
+    "wall_s": 2.935348,
+    "native_cpu_s": 2.9399999999999995,
+    "wchar": 17214,
+    "write_bytes": 45056,
+    "read_bytes": 0
+  },
+  {
+    "run": "geometry-cpu",
+    "phase": "cleanup",
+    "wall_s": 0.010394,
+    "native_cpu_s": 0.010000000000001563,
+    "wchar": 151057,
+    "write_bytes": 151552,
+    "read_bytes": 0
+  },
+  {
+    "run": "baseline-cpu",
+    "phase": "all-96-turns",
+    "wall_s": 8.116538,
+    "native_cpu_s": 9.94,
+    "wchar": 305833304,
+    "write_bytes": 233287680,
+    "read_bytes": 0
+  },
+  {
+    "run": "baseline-cpu",
+    "phase": "late-snapshot",
+    "wall_s": 0.026255,
+    "native_cpu_s": 0.030000000000001137,
+    "wchar": 183878,
+    "write_bytes": 184320,
+    "read_bytes": 0
+  },
+  {
+    "run": "baseline-cpu",
+    "phase": "request-verification",
+    "wall_s": 3.192298,
+    "native_cpu_s": 3.139999999999999,
+    "wchar": 17117,
+    "write_bytes": 12288,
+    "read_bytes": 0
+  },
+  {
+    "run": "baseline-cpu",
+    "phase": "reopen-verification",
+    "wall_s": 7.104912,
+    "native_cpu_s": 7.42,
+    "wchar": 17676,
+    "write_bytes": 49152,
+    "read_bytes": 0
+  },
+  {
+    "run": "baseline-cpu",
+    "phase": "cleanup",
+    "wall_s": 0.050297,
+    "native_cpu_s": 0.03999999999999915,
+    "wchar": 171773,
+    "write_bytes": 172032,
+    "read_bytes": 0
+  }
+]

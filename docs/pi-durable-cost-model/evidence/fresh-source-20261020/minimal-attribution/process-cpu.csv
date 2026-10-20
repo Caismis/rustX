@@ -1,0 +1,9 @@
+run,role,pid,user_s,system_s,total_s,wait4_status,maxrss_kib
+baseline-control,native,36124,16.30567,3.220686,19.526356,0,385436
+baseline-control,provider-command-including-waited-descendants,36130,0.504527,0.183646,0.6881729999999999,0,36660
+geometry-control,native,36148,28.301346,5.892241,34.193587,0,385788
+geometry-control,provider-command-including-waited-descendants,36154,0.532733,0.277773,0.810506,0,128704
+geometry-cpu,native,36165,14.257449,2.6811629999999997,16.938612,0,414704
+geometry-cpu,provider-command-including-waited-descendants,36172,0.44962199999999997,0.087589,0.537211,0,129544
+baseline-cpu,native,36195,18.461591,3.650939,22.11253,0,411256
+baseline-cpu,provider-command-including-waited-descendants,36202,0.333124,0.112414,0.445538,0,129544

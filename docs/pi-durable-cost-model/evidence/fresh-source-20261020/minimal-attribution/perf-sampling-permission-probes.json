@@ -1,0 +1,16 @@
+[
+  {
+    "event": "software_cpu_clock_user_sampling",
+    "fd": 3,
+    "errno": 0,
+    "error": null,
+    "probe_only_disabled": true
+  },
+  {
+    "event": "hardware_cpu_cycles_user_sampling",
+    "fd": -1,
+    "errno": 2,
+    "error": "No such file or directory",
+    "probe_only_disabled": true
+  }
+]

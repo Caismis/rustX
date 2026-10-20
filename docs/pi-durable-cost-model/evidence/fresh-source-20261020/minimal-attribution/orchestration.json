@@ -1,0 +1,803 @@
+{
+  "start_utc": "2026-10-20T04:51:51.636804+00:00",
+  "scope": "Diagnostics only; not formal speed ratios. Unchanged fixed live short-large workload, preserved O3/debug0 binaries. Controls have no preload/socket; profiles use published gperftools250Hz/system allocator workflow. All runs serial, no builds/compression overlap.",
+  "source_hashes": {
+    "/workspace/pr485-study/repo/benchmarks/runtime/profiling/run.py": "86f09577f59300caa56d421477df026a7147ec410d006cf54081189e013f02fb",
+    "/workspace/pr485-study/repo/benchmarks/runtime/controller.py": "15f783a12b44b79583faedab93040fa1f3679f9893ccbeefb955216bd076938a",
+    "/workspace/pr485-study/repo/benchmarks/runtime/observer_oracle.py": "354ff938d3c30b9293ce699ed0cef7e74b1932a73e3f41bc0d8d9c07834a7721"
+  },
+  "outer_driver_sha256": "98a4f51a5e2da5c947b89c9c11fe36c17d74824da8bb3275ec811760e20df8a6",
+  "profiler_library_sha256": "d0267bebfdc0f35a8cc93dc28fa38aeb36edc57f96122ba20a671f53b0832936",
+  "bridge_source_sha256": "6ebc0727e42f90d750ddd0531fb12de391db356814197c84cb8038ad10a4670f",
+  "bridge_sha256": "d5d31576449c9f8647a05764045838ec157ddabaf0cd99d29c650af971f44a25",
+  "process_accounting_scope": "wait4 for direct product/provider command; waited descendants may be included in provider-command rusage. Descendant/self proc samples are separate and must not be summed again with ancestor rusage. Self controller CPU delta excludes children. Polling250ms can miss final descendant CPU; exact unavailable is not zero.",
+  "runs": [
+    {
+      "label": "baseline",
+      "mode": "control",
+      "preflight": {
+        "utc": "2026-10-20T04:51:51.640600+00:00",
+        "usable_bytes": 9891012608,
+        "active_products_builds_compression_profilers": []
+      },
+      "binary_identity": {
+        "head": "623b41b869a95c888eb04f907cbf607232699a2f",
+        "production_tree": "19ff7d6bd64993a6b9fc08bbcd687787dacfe08e",
+        "harness": {
+          "tests/common/provider_emulator.rs": "cb055ee1f9c9bc55c8af5cae080bb8564f2417226bacab76159f837261a2e47e",
+          "tests/conformance/agent_loop/runtime_benchmark.rs": "d71e6c80216b128927e09828631135b00b9b64748625fdb9fb2e5e9eb6c660f6",
+          "tests/conformance/agent_loop/runtime_benchmark/aligned.rs": "751fa58a98c9067eecd5e9a6c3eee8b6ec35b8987d1cd9a6f4cdc28915c08133",
+          "tests/conformance/agent_loop/runtime_benchmark/expected_tools.json": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d",
+          "tests/conformance/agent_loop/runtime_benchmark/profiling.rs": "12362c4abf9f80deed923b77855a2529d4aeb427cfffe39d6953cad823de0c66",
+          "tests/conformance/agent_loop/runtime_benchmark/request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+        },
+        "start_utc": "2026-10-20T01:10:38.299342+00:00",
+        "commands": [
+          [
+            "cargo",
+            "clean",
+            "--release",
+            "--package",
+            "rustx"
+          ],
+          [
+            "cargo",
+            "test",
+            "--release",
+            "--locked",
+            "--test",
+            "conformance",
+            "--no-run",
+            "--message-format=json"
+          ]
+        ],
+        "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+        "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)\n",
+        "build_environment": {
+          "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+          "CARGO_PROFILE_RELEASE_DEBUG": "0",
+          "RUSTFLAGS": "-Copt-level=3 -Cdebuginfo=0",
+          "CARGO_BUILD_JOBS": "2"
+        },
+        "clean_exit": 0,
+        "build_exit": 0,
+        "root_artifacts": [
+          {
+            "name": "rustx",
+            "kind": [
+              "lib"
+            ],
+            "source_path": "/workspace/pr485-study/repo/src/lib.rs",
+            "fresh": false
+          },
+          {
+            "name": "rustx",
+            "kind": [
+              "bin"
+            ],
+            "source_path": "/workspace/pr485-study/repo/src/main.rs",
+            "fresh": false
+          },
+          {
+            "name": "conformance",
+            "kind": [
+              "test"
+            ],
+            "source_path": "/workspace/pr485-study/repo/tests/conformance/main.rs",
+            "fresh": false
+          }
+        ],
+        "binary": "/workspace/pr485-study/evidence/build-baseline/conformance",
+        "sha256": "711b5af1ac3500e36f0f1bd827d108fb975a088b5e24a8d3a99218d7812ed388",
+        "library_sha256": "c529acd9a2f6d18fb297e0c38facfdd46597ce04e1c44890d0048ed9e99dffb6",
+        "verified": true,
+        "end_utc": "2026-10-20T01:57:15.845286+00:00"
+      },
+      "helpers_restored": [],
+      "ready": {
+        "utc": "2026-10-20T04:51:55.757978+00:00",
+        "usable_bytes": 9891012608,
+        "active_products_builds_compression_profilers": []
+      },
+      "argv": [
+        "python3",
+        "/workspace/pr485-study/repo/benchmarks/runtime/profiling/run.py",
+        "--binary",
+        "/workspace/pr485-study/evidence/build-baseline/conformance",
+        "--profiler-root",
+        "/workspace/pr485-study/diagnostic-tools",
+        "--output",
+        "/workspace/pr485-study/evidence/minimal-attribution-20261020/baseline-control",
+        "--mode",
+        "control",
+        "--case",
+        "short-large",
+        "--observer-mode",
+        "live-subscriber"
+      ],
+      "start_utc": "2026-10-20T04:51:55.758334+00:00",
+      "start_monotonic_ns": 13528264270592,
+      "completed": true,
+      "end_utc": "2026-10-20T04:52:15.019267+00:00",
+      "end_monotonic_ns": 13547525215729,
+      "wait4": [
+        {
+          "pid": 36124,
+          "argv": [
+            "/workspace/pr485-study/evidence/build-baseline/conformance",
+            "agent_loop::runtime_benchmark::measure_runtime",
+            "--exact",
+            "--ignored",
+            "--nocapture"
+          ],
+          "wait4_status": 0,
+          "user_seconds": 16.30567,
+          "system_seconds": 3.220686,
+          "maxrss_kib": 385436,
+          "minor_faults": 84150,
+          "major_faults": 0,
+          "voluntary_switches": 23027,
+          "involuntary_switches": 1320
+        },
+        {
+          "pid": 36130,
+          "argv": [
+            "uv",
+            "run",
+            "--project",
+            "/workspace/pr485-study/repo/test-support/fake-provider",
+            "--frozen",
+            "fake-provider",
+            "--scenario",
+            "runtime_benchmark_short-large",
+            "--workspace",
+            "/workspace/pr485-study/evidence/minimal-attribution-20261020/baseline-control/.tmpJ0a5sf/workspace",
+            "--port",
+            "0"
+          ],
+          "wait4_status": 0,
+          "user_seconds": 0.504527,
+          "system_seconds": 0.183646,
+          "maxrss_kib": 36660,
+          "minor_faults": 16083,
+          "major_faults": 0,
+          "voluntary_switches": 177,
+          "involuntary_switches": 65
+        }
+      ],
+      "children": [
+        {
+          "pid": 36124,
+          "argv": [
+            "/workspace/pr485-study/evidence/build-baseline/conformance",
+            "agent_loop::runtime_benchmark::measure_runtime",
+            "--exact",
+            "--ignored",
+            "--nocapture"
+          ]
+        },
+        {
+          "pid": 36130,
+          "argv": [
+            "uv",
+            "run",
+            "--project",
+            "/workspace/pr485-study/repo/test-support/fake-provider",
+            "--frozen",
+            "fake-provider",
+            "--scenario",
+            "runtime_benchmark_short-large",
+            "--workspace",
+            "/workspace/pr485-study/evidence/minimal-attribution-20261020/baseline-control/.tmpJ0a5sf/workspace",
+            "--port",
+            "0"
+          ]
+        }
+      ],
+      "controller_self_cpu_seconds": 1.3867550000000002,
+      "space_after": {
+        "utc": "2026-10-20T04:52:15.280314+00:00",
+        "usable_bytes": 9859317760,
+        "active_products_builds_compression_profilers": []
+      }
+    },
+    {
+      "label": "geometry",
+      "mode": "control",
+      "preflight": {
+        "utc": "2026-10-20T04:52:15.282393+00:00",
+        "usable_bytes": 9859313664,
+        "active_products_builds_compression_profilers": []
+      },
+      "binary_identity": {
+        "head": "89d6b618eeba8afaf4b95af4406057330baa60a6",
+        "production_tree": "7e227b5b08958c0642e2af0e7209af73cd1208e9",
+        "harness": {
+          "tests/common/provider_emulator.rs": "cb055ee1f9c9bc55c8af5cae080bb8564f2417226bacab76159f837261a2e47e",
+          "tests/conformance/agent_loop/runtime_benchmark.rs": "d71e6c80216b128927e09828631135b00b9b64748625fdb9fb2e5e9eb6c660f6",
+          "tests/conformance/agent_loop/runtime_benchmark/aligned.rs": "751fa58a98c9067eecd5e9a6c3eee8b6ec35b8987d1cd9a6f4cdc28915c08133",
+          "tests/conformance/agent_loop/runtime_benchmark/expected_tools.json": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d",
+          "tests/conformance/agent_loop/runtime_benchmark/profiling.rs": "12362c4abf9f80deed923b77855a2529d4aeb427cfffe39d6953cad823de0c66",
+          "tests/conformance/agent_loop/runtime_benchmark/request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+        },
+        "start_utc": "2026-10-20T01:58:23.787935+00:00",
+        "commands": [
+          [
+            "cargo",
+            "clean",
+            "--release",
+            "--package",
+            "rustx"
+          ],
+          [
+            "cargo",
+            "test",
+            "--release",
+            "--locked",
+            "--test",
+            "conformance",
+            "--no-run",
+            "--message-format=json"
+          ]
+        ],
+        "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+        "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)\n",
+        "build_environment": {
+          "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+          "CARGO_PROFILE_RELEASE_DEBUG": "0",
+          "RUSTFLAGS": "-Copt-level=3 -Cdebuginfo=0",
+          "CARGO_BUILD_JOBS": "2"
+        },
+        "clean_exit": 0,
+        "build_exit": 0,
+        "root_artifacts": [
+          {
+            "name": "rustx",
+            "kind": [
+              "lib"
+            ],
+            "source_path": "/workspace/pr485-study/repo/src/lib.rs",
+            "fresh": false
+          },
+          {
+            "name": "rustx",
+            "kind": [
+              "bin"
+            ],
+            "source_path": "/workspace/pr485-study/repo/src/main.rs",
+            "fresh": false
+          },
+          {
+            "name": "conformance",
+            "kind": [
+              "test"
+            ],
+            "source_path": "/workspace/pr485-study/repo/tests/conformance/main.rs",
+            "fresh": false
+          }
+        ],
+        "binary": "/workspace/pr485-study/evidence/build-geometry/conformance",
+        "sha256": "d25cae1955161392e1ecfde60b1fcdf87ee17577ee4531da1dac133391dbd4a1",
+        "library_sha256": "c72106cd7f3b0a1b8c930b2d5f109110e1c88c8bc8b362ca934555190d9aebbd",
+        "verified": true,
+        "end_utc": "2026-10-20T02:18:45.012790+00:00"
+      },
+      "helpers_restored": [
+        "/workspace/pr485-study/target/release/rustx",
+        "/workspace/pr485-study/target/release/interactive-supervisor",
+        "/workspace/pr485-study/target/release/bash-supervisor",
+        "/workspace/pr485-study/target/release/deps/conformance-24da1f0a9d82f33c"
+      ],
+      "ready": {
+        "utc": "2026-10-20T04:52:19.694554+00:00",
+        "usable_bytes": 9860173824,
+        "active_products_builds_compression_profilers": []
+      },
+      "argv": [
+        "python3",
+        "/workspace/pr485-study/repo/benchmarks/runtime/profiling/run.py",
+        "--binary",
+        "/workspace/pr485-study/evidence/build-geometry/conformance",
+        "--profiler-root",
+        "/workspace/pr485-study/diagnostic-tools",
+        "--output",
+        "/workspace/pr485-study/evidence/minimal-attribution-20261020/geometry-control",
+        "--mode",
+        "control",
+        "--case",
+        "short-large",
+        "--observer-mode",
+        "live-subscriber"
+      ],
+      "start_utc": "2026-10-20T04:52:19.694884+00:00",
+      "start_monotonic_ns": 13552200831485,
+      "completed": true,
+      "end_utc": "2026-10-20T04:52:49.940562+00:00",
+      "end_monotonic_ns": 13582446510512,
+      "wait4": [
+        {
+          "pid": 36148,
+          "argv": [
+            "/workspace/pr485-study/evidence/build-geometry/conformance",
+            "agent_loop::runtime_benchmark::measure_runtime",
+            "--exact",
+            "--ignored",
+            "--nocapture"
+          ],
+          "wait4_status": 0,
+          "user_seconds": 28.301346,
+          "system_seconds": 5.892241,
+          "maxrss_kib": 385788,
+          "minor_faults": 84296,
+          "major_faults": 0,
+          "voluntary_switches": 23262,
+          "involuntary_switches": 1747
+        },
+        {
+          "pid": 36154,
+          "argv": [
+            "uv",
+            "run",
+            "--project",
+            "/workspace/pr485-study/repo/test-support/fake-provider",
+            "--frozen",
+            "fake-provider",
+            "--scenario",
+            "runtime_benchmark_short-large",
+            "--workspace",
+            "/workspace/pr485-study/evidence/minimal-attribution-20261020/geometry-control/.tmpIot7ex/workspace",
+            "--port",
+            "0"
+          ],
+          "wait4_status": 0,
+          "user_seconds": 0.532733,
+          "system_seconds": 0.277773,
+          "maxrss_kib": 128704,
+          "minor_faults": 16086,
+          "major_faults": 0,
+          "voluntary_switches": 179,
+          "involuntary_switches": 73
+        }
+      ],
+      "children": [
+        {
+          "pid": 36148,
+          "argv": [
+            "/workspace/pr485-study/evidence/build-geometry/conformance",
+            "agent_loop::runtime_benchmark::measure_runtime",
+            "--exact",
+            "--ignored",
+            "--nocapture"
+          ]
+        },
+        {
+          "pid": 36154,
+          "argv": [
+            "uv",
+            "run",
+            "--project",
+            "/workspace/pr485-study/repo/test-support/fake-provider",
+            "--frozen",
+            "fake-provider",
+            "--scenario",
+            "runtime_benchmark_short-large",
+            "--workspace",
+            "/workspace/pr485-study/evidence/minimal-attribution-20261020/geometry-control/.tmpIot7ex/workspace",
+            "--port",
+            "0"
+          ]
+        }
+      ],
+      "controller_self_cpu_seconds": 4.116233999999999,
+      "space_after": {
+        "utc": "2026-10-20T04:52:50.227608+00:00",
+        "usable_bytes": 9828433920,
+        "active_products_builds_compression_profilers": []
+      }
+    },
+    {
+      "label": "geometry",
+      "mode": "cpu",
+      "preflight": {
+        "utc": "2026-10-20T04:52:50.229499+00:00",
+        "usable_bytes": 9828433920,
+        "active_products_builds_compression_profilers": []
+      },
+      "binary_identity": {
+        "head": "89d6b618eeba8afaf4b95af4406057330baa60a6",
+        "production_tree": "7e227b5b08958c0642e2af0e7209af73cd1208e9",
+        "harness": {
+          "tests/common/provider_emulator.rs": "cb055ee1f9c9bc55c8af5cae080bb8564f2417226bacab76159f837261a2e47e",
+          "tests/conformance/agent_loop/runtime_benchmark.rs": "d71e6c80216b128927e09828631135b00b9b64748625fdb9fb2e5e9eb6c660f6",
+          "tests/conformance/agent_loop/runtime_benchmark/aligned.rs": "751fa58a98c9067eecd5e9a6c3eee8b6ec35b8987d1cd9a6f4cdc28915c08133",
+          "tests/conformance/agent_loop/runtime_benchmark/expected_tools.json": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d",
+          "tests/conformance/agent_loop/runtime_benchmark/profiling.rs": "12362c4abf9f80deed923b77855a2529d4aeb427cfffe39d6953cad823de0c66",
+          "tests/conformance/agent_loop/runtime_benchmark/request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+        },
+        "start_utc": "2026-10-20T01:58:23.787935+00:00",
+        "commands": [
+          [
+            "cargo",
+            "clean",
+            "--release",
+            "--package",
+            "rustx"
+          ],
+          [
+            "cargo",
+            "test",
+            "--release",
+            "--locked",
+            "--test",
+            "conformance",
+            "--no-run",
+            "--message-format=json"
+          ]
+        ],
+        "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+        "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)\n",
+        "build_environment": {
+          "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+          "CARGO_PROFILE_RELEASE_DEBUG": "0",
+          "RUSTFLAGS": "-Copt-level=3 -Cdebuginfo=0",
+          "CARGO_BUILD_JOBS": "2"
+        },
+        "clean_exit": 0,
+        "build_exit": 0,
+        "root_artifacts": [
+          {
+            "name": "rustx",
+            "kind": [
+              "lib"
+            ],
+            "source_path": "/workspace/pr485-study/repo/src/lib.rs",
+            "fresh": false
+          },
+          {
+            "name": "rustx",
+            "kind": [
+              "bin"
+            ],
+            "source_path": "/workspace/pr485-study/repo/src/main.rs",
+            "fresh": false
+          },
+          {
+            "name": "conformance",
+            "kind": [
+              "test"
+            ],
+            "source_path": "/workspace/pr485-study/repo/tests/conformance/main.rs",
+            "fresh": false
+          }
+        ],
+        "binary": "/workspace/pr485-study/evidence/build-geometry/conformance",
+        "sha256": "d25cae1955161392e1ecfde60b1fcdf87ee17577ee4531da1dac133391dbd4a1",
+        "library_sha256": "c72106cd7f3b0a1b8c930b2d5f109110e1c88c8bc8b362ca934555190d9aebbd",
+        "verified": true,
+        "end_utc": "2026-10-20T02:18:45.012790+00:00"
+      },
+      "helpers_restored": [],
+      "ready": {
+        "utc": "2026-10-20T04:52:52.885985+00:00",
+        "usable_bytes": 9828433920,
+        "active_products_builds_compression_profilers": []
+      },
+      "argv": [
+        "python3",
+        "/workspace/pr485-study/repo/benchmarks/runtime/profiling/run.py",
+        "--binary",
+        "/workspace/pr485-study/evidence/build-geometry/conformance",
+        "--profiler-root",
+        "/workspace/pr485-study/diagnostic-tools",
+        "--output",
+        "/workspace/pr485-study/evidence/minimal-attribution-20261020/geometry-cpu",
+        "--mode",
+        "cpu",
+        "--case",
+        "short-large",
+        "--observer-mode",
+        "live-subscriber"
+      ],
+      "start_utc": "2026-10-20T04:52:52.886216+00:00",
+      "start_monotonic_ns": 13585392150698,
+      "completed": true,
+      "end_utc": "2026-10-20T04:53:09.380861+00:00",
+      "end_monotonic_ns": 13601886819841,
+      "wait4": [
+        {
+          "pid": 36165,
+          "argv": [
+            "env",
+            "LD_PRELOAD=/workspace/pr485-study/diagnostic-tools/bridge.so:/workspace/pr485-study/diagnostic-tools/unpacked/usr/lib/x86_64-linux-gnu/libprofiler.so.0",
+            "RUSTX_BENCH_PROFILE_SOCKET=/workspace/pr485-study/evidence/minimal-attribution-20261020/geometry-cpu/control.sock",
+            "RUSTX_BENCH_PROFILE_DIR=/workspace/pr485-study/evidence/minimal-attribution-20261020/geometry-cpu",
+            "CPUPROFILE_FREQUENCY=250",
+            "/workspace/pr485-study/evidence/build-geometry/conformance",
+            "agent_loop::runtime_benchmark::measure_runtime",
+            "--exact",
+            "--ignored",
+            "--nocapture"
+          ],
+          "wait4_status": 0,
+          "user_seconds": 14.257449,
+          "system_seconds": 2.6811629999999997,
+          "maxrss_kib": 414704,
+          "minor_faults": 90919,
+          "major_faults": 0,
+          "voluntary_switches": 24486,
+          "involuntary_switches": 1406
+        },
+        {
+          "pid": 36172,
+          "argv": [
+            "uv",
+            "run",
+            "--project",
+            "/workspace/pr485-study/repo/test-support/fake-provider",
+            "--frozen",
+            "fake-provider",
+            "--scenario",
+            "runtime_benchmark_short-large",
+            "--workspace",
+            "/workspace/pr485-study/evidence/minimal-attribution-20261020/geometry-cpu/.tmp7OOzE2/workspace",
+            "--port",
+            "0"
+          ],
+          "wait4_status": 0,
+          "user_seconds": 0.44962199999999997,
+          "system_seconds": 0.087589,
+          "maxrss_kib": 129544,
+          "minor_faults": 16076,
+          "major_faults": 0,
+          "voluntary_switches": 184,
+          "involuntary_switches": 45
+        }
+      ],
+      "children": [
+        {
+          "pid": 36165,
+          "argv": [
+            "env",
+            "LD_PRELOAD=/workspace/pr485-study/diagnostic-tools/bridge.so:/workspace/pr485-study/diagnostic-tools/unpacked/usr/lib/x86_64-linux-gnu/libprofiler.so.0",
+            "RUSTX_BENCH_PROFILE_SOCKET=/workspace/pr485-study/evidence/minimal-attribution-20261020/geometry-cpu/control.sock",
+            "RUSTX_BENCH_PROFILE_DIR=/workspace/pr485-study/evidence/minimal-attribution-20261020/geometry-cpu",
+            "CPUPROFILE_FREQUENCY=250",
+            "/workspace/pr485-study/evidence/build-geometry/conformance",
+            "agent_loop::runtime_benchmark::measure_runtime",
+            "--exact",
+            "--ignored",
+            "--nocapture"
+          ]
+        },
+        {
+          "pid": 36172,
+          "argv": [
+            "uv",
+            "run",
+            "--project",
+            "/workspace/pr485-study/repo/test-support/fake-provider",
+            "--frozen",
+            "fake-provider",
+            "--scenario",
+            "runtime_benchmark_short-large",
+            "--workspace",
+            "/workspace/pr485-study/evidence/minimal-attribution-20261020/geometry-cpu/.tmp7OOzE2/workspace",
+            "--port",
+            "0"
+          ]
+        }
+      ],
+      "controller_self_cpu_seconds": 1.0022859999999998,
+      "space_after": {
+        "utc": "2026-10-20T04:53:09.712054+00:00",
+        "usable_bytes": 9795813376,
+        "active_products_builds_compression_profilers": []
+      }
+    },
+    {
+      "label": "baseline",
+      "mode": "cpu",
+      "preflight": {
+        "utc": "2026-10-20T04:53:09.717007+00:00",
+        "usable_bytes": 9795809280,
+        "active_products_builds_compression_profilers": []
+      },
+      "binary_identity": {
+        "head": "623b41b869a95c888eb04f907cbf607232699a2f",
+        "production_tree": "19ff7d6bd64993a6b9fc08bbcd687787dacfe08e",
+        "harness": {
+          "tests/common/provider_emulator.rs": "cb055ee1f9c9bc55c8af5cae080bb8564f2417226bacab76159f837261a2e47e",
+          "tests/conformance/agent_loop/runtime_benchmark.rs": "d71e6c80216b128927e09828631135b00b9b64748625fdb9fb2e5e9eb6c660f6",
+          "tests/conformance/agent_loop/runtime_benchmark/aligned.rs": "751fa58a98c9067eecd5e9a6c3eee8b6ec35b8987d1cd9a6f4cdc28915c08133",
+          "tests/conformance/agent_loop/runtime_benchmark/expected_tools.json": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d",
+          "tests/conformance/agent_loop/runtime_benchmark/profiling.rs": "12362c4abf9f80deed923b77855a2529d4aeb427cfffe39d6953cad823de0c66",
+          "tests/conformance/agent_loop/runtime_benchmark/request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+        },
+        "start_utc": "2026-10-20T01:10:38.299342+00:00",
+        "commands": [
+          [
+            "cargo",
+            "clean",
+            "--release",
+            "--package",
+            "rustx"
+          ],
+          [
+            "cargo",
+            "test",
+            "--release",
+            "--locked",
+            "--test",
+            "conformance",
+            "--no-run",
+            "--message-format=json"
+          ]
+        ],
+        "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+        "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)\n",
+        "build_environment": {
+          "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+          "CARGO_PROFILE_RELEASE_DEBUG": "0",
+          "RUSTFLAGS": "-Copt-level=3 -Cdebuginfo=0",
+          "CARGO_BUILD_JOBS": "2"
+        },
+        "clean_exit": 0,
+        "build_exit": 0,
+        "root_artifacts": [
+          {
+            "name": "rustx",
+            "kind": [
+              "lib"
+            ],
+            "source_path": "/workspace/pr485-study/repo/src/lib.rs",
+            "fresh": false
+          },
+          {
+            "name": "rustx",
+            "kind": [
+              "bin"
+            ],
+            "source_path": "/workspace/pr485-study/repo/src/main.rs",
+            "fresh": false
+          },
+          {
+            "name": "conformance",
+            "kind": [
+              "test"
+            ],
+            "source_path": "/workspace/pr485-study/repo/tests/conformance/main.rs",
+            "fresh": false
+          }
+        ],
+        "binary": "/workspace/pr485-study/evidence/build-baseline/conformance",
+        "sha256": "711b5af1ac3500e36f0f1bd827d108fb975a088b5e24a8d3a99218d7812ed388",
+        "library_sha256": "c529acd9a2f6d18fb297e0c38facfdd46597ce04e1c44890d0048ed9e99dffb6",
+        "verified": true,
+        "end_utc": "2026-10-20T01:57:15.845286+00:00"
+      },
+      "helpers_restored": [
+        "/workspace/pr485-study/target/release/interactive-supervisor",
+        "/workspace/pr485-study/target/release/rustx",
+        "/workspace/pr485-study/target/release/bash-supervisor",
+        "/workspace/pr485-study/target/release/deps/conformance-24da1f0a9d82f33c"
+      ],
+      "ready": {
+        "utc": "2026-10-20T04:53:13.665498+00:00",
+        "usable_bytes": 9794957312,
+        "active_products_builds_compression_profilers": []
+      },
+      "argv": [
+        "python3",
+        "/workspace/pr485-study/repo/benchmarks/runtime/profiling/run.py",
+        "--binary",
+        "/workspace/pr485-study/evidence/build-baseline/conformance",
+        "--profiler-root",
+        "/workspace/pr485-study/diagnostic-tools",
+        "--output",
+        "/workspace/pr485-study/evidence/minimal-attribution-20261020/baseline-cpu",
+        "--mode",
+        "cpu",
+        "--case",
+        "short-large",
+        "--observer-mode",
+        "live-subscriber"
+      ],
+      "start_utc": "2026-10-20T04:53:13.665687+00:00",
+      "start_monotonic_ns": 13606171634402,
+      "completed": true,
+      "end_utc": "2026-10-20T04:53:35.522690+00:00",
+      "end_monotonic_ns": 13628028648971,
+      "wait4": [
+        {
+          "pid": 36195,
+          "argv": [
+            "env",
+            "LD_PRELOAD=/workspace/pr485-study/diagnostic-tools/bridge.so:/workspace/pr485-study/diagnostic-tools/unpacked/usr/lib/x86_64-linux-gnu/libprofiler.so.0",
+            "RUSTX_BENCH_PROFILE_SOCKET=/workspace/pr485-study/evidence/minimal-attribution-20261020/baseline-cpu/control.sock",
+            "RUSTX_BENCH_PROFILE_DIR=/workspace/pr485-study/evidence/minimal-attribution-20261020/baseline-cpu",
+            "CPUPROFILE_FREQUENCY=250",
+            "/workspace/pr485-study/evidence/build-baseline/conformance",
+            "agent_loop::runtime_benchmark::measure_runtime",
+            "--exact",
+            "--ignored",
+            "--nocapture"
+          ],
+          "wait4_status": 0,
+          "user_seconds": 18.461591,
+          "system_seconds": 3.650939,
+          "maxrss_kib": 411256,
+          "minor_faults": 89890,
+          "major_faults": 0,
+          "voluntary_switches": 24389,
+          "involuntary_switches": 1440
+        },
+        {
+          "pid": 36202,
+          "argv": [
+            "uv",
+            "run",
+            "--project",
+            "/workspace/pr485-study/repo/test-support/fake-provider",
+            "--frozen",
+            "fake-provider",
+            "--scenario",
+            "runtime_benchmark_short-large",
+            "--workspace",
+            "/workspace/pr485-study/evidence/minimal-attribution-20261020/baseline-cpu/.tmplKN98n/workspace",
+            "--port",
+            "0"
+          ],
+          "wait4_status": 0,
+          "user_seconds": 0.333124,
+          "system_seconds": 0.112414,
+          "maxrss_kib": 129544,
+          "minor_faults": 16075,
+          "major_faults": 0,
+          "voluntary_switches": 186,
+          "involuntary_switches": 59
+        }
+      ],
+      "children": [
+        {
+          "pid": 36195,
+          "argv": [
+            "env",
+            "LD_PRELOAD=/workspace/pr485-study/diagnostic-tools/bridge.so:/workspace/pr485-study/diagnostic-tools/unpacked/usr/lib/x86_64-linux-gnu/libprofiler.so.0",
+            "RUSTX_BENCH_PROFILE_SOCKET=/workspace/pr485-study/evidence/minimal-attribution-20261020/baseline-cpu/control.sock",
+            "RUSTX_BENCH_PROFILE_DIR=/workspace/pr485-study/evidence/minimal-attribution-20261020/baseline-cpu",
+            "CPUPROFILE_FREQUENCY=250",
+            "/workspace/pr485-study/evidence/build-baseline/conformance",
+            "agent_loop::runtime_benchmark::measure_runtime",
+            "--exact",
+            "--ignored",
+            "--nocapture"
+          ]
+        },
+        {
+          "pid": 36202,
+          "argv": [
+            "uv",
+            "run",
+            "--project",
+            "/workspace/pr485-study/repo/test-support/fake-provider",
+            "--frozen",
+            "fake-provider",
+            "--scenario",
+            "runtime_benchmark_short-large",
+            "--workspace",
+            "/workspace/pr485-study/evidence/minimal-attribution-20261020/baseline-cpu/.tmplKN98n/workspace",
+            "--port",
+            "0"
+          ]
+        }
+      ],
+      "controller_self_cpu_seconds": 2.914752,
+      "space_after": {
+        "utc": "2026-10-20T04:53:36.126610+00:00",
+        "usable_bytes": 9762291712,
+        "active_products_builds_compression_profilers": []
+      }
+    }
+  ],
+  "end_utc": "2026-10-20T04:53:36.130629+00:00"
+}

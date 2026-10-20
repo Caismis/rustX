@@ -1,0 +1,10 @@
+{
+  "probe": "perf_event_open on self,software CPU_CLOCK,exclude_kernel/exclude_hv,disabled,no sampling started",
+  "syscall": 298,
+  "fd_return": 3,
+  "errno": 0,
+  "error": null,
+  "perf_cli_installed": false,
+  "perf_event_paranoid": "2",
+  "no_security_settings_changed": true
+}
