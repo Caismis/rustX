@@ -11,8 +11,8 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    WorkflowBlockInstance, WorkflowBlockProgram, WorkflowExecutionOutcome, WorkflowId,
-    WorkflowLoopExit, WorkflowNodeInstance, WorkflowNodeProgram, WorkflowRunId,
+    WorkflowBlockInstance, WorkflowExecutionOutcome, WorkflowId, WorkflowLoopExit,
+    WorkflowNodeInstance, WorkflowNodeProgram, WorkflowRunId,
 };
 use crate::runtime::identity::{SubagentId, ToolCallId};
 
@@ -48,6 +48,7 @@ pub struct WorkflowRunView {
     pub resource_revision: crate::runtime::identity::RuntimeResourceRevision,
     pub tool_call_id: ToolCallId,
     pub state: WorkflowState,
+    // Started blocks and nodes in native admission order, never definition order.
     pub instances: Vec<WorkflowInstanceView>,
     #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub omitted_instances: u64,
@@ -123,7 +124,7 @@ impl WorkflowInstanceView {
             visit: node.as_ref().map(|_| 0),
             node,
             kind,
-            state: WorkflowState::Pending,
+            state: WorkflowState::Running,
             child: None,
             child_agent_id: None,
             invocation: None,
@@ -135,6 +136,24 @@ impl WorkflowInstanceView {
             checks_passed: None,
             review_accepted: None,
         }
+    }
+
+    pub(super) fn started(node: &WorkflowNodeInstance, program: &WorkflowNodeProgram) -> Self {
+        let kind = match program {
+            WorkflowNodeProgram::Agent(_) => WorkflowNodeKind::Agent,
+            WorkflowNodeProgram::Tool { .. } => WorkflowNodeKind::Tool,
+            WorkflowNodeProgram::Branch { .. } => WorkflowNodeKind::Branch,
+            WorkflowNodeProgram::Parallel { .. } => WorkflowNodeKind::Parallel,
+            WorkflowNodeProgram::Review { .. } => WorkflowNodeKind::Review,
+            WorkflowNodeProgram::Loop { .. } => WorkflowNodeKind::Loop,
+            WorkflowNodeProgram::Return { .. } => WorkflowNodeKind::Return,
+        };
+        let mut view = Self::new(node.block.clone(), Some(node.node.clone()), kind);
+        view.visit = Some(node.visit);
+        if let WorkflowNodeProgram::Loop { max_iterations, .. } = program {
+            view.iterations_max = Some(*max_iterations);
+        }
+        view
     }
 }
 
@@ -354,33 +373,13 @@ impl WorkflowReadModel {
         });
     }
 
-    pub(super) fn block(
-        &self,
-        id: &WorkflowRunId,
-        block: &WorkflowBlockProgram,
-        instance: &WorkflowBlockInstance,
-    ) {
+    pub(super) fn block(&self, id: &WorkflowRunId, instance: &WorkflowBlockInstance) {
         self.update(id, |run| {
-            let mut view =
-                WorkflowInstanceView::new(instance.clone(), None, WorkflowNodeKind::Block);
-            view.state = WorkflowState::Running;
-            run.instances.push(view);
-            for (key, node) in &block.nodes {
-                let kind = match node {
-                    WorkflowNodeProgram::Agent(_) => WorkflowNodeKind::Agent,
-                    WorkflowNodeProgram::Tool { .. } => WorkflowNodeKind::Tool,
-                    WorkflowNodeProgram::Branch { .. } => WorkflowNodeKind::Branch,
-                    WorkflowNodeProgram::Parallel { .. } => WorkflowNodeKind::Parallel,
-                    WorkflowNodeProgram::Review { .. } => WorkflowNodeKind::Review,
-                    WorkflowNodeProgram::Loop { .. } => WorkflowNodeKind::Loop,
-                    WorkflowNodeProgram::Return { .. } => WorkflowNodeKind::Return,
-                };
-                let mut view = WorkflowInstanceView::new(instance.clone(), Some(key.clone()), kind);
-                if let WorkflowNodeProgram::Loop { max_iterations, .. } = node {
-                    view.iterations_max = Some(*max_iterations);
-                }
-                run.instances.push(view);
-            }
+            run.instances.push(WorkflowInstanceView::new(
+                instance.clone(),
+                None,
+                WorkflowNodeKind::Block,
+            ));
         });
     }
 
@@ -437,11 +436,6 @@ fn bound(run: &mut WorkflowRunView) {
             .instances
             .iter()
             .position(|node| matches!(node.state, WorkflowState::Settled { .. }))
-            .or_else(|| {
-                run.instances
-                    .iter()
-                    .position(|node| matches!(node.state, WorkflowState::Pending))
-            })
             .or_else(|| (!run.instances.is_empty()).then_some(0));
         let Some(index) = index else {
             break;
@@ -542,12 +536,12 @@ mod tests {
         }
         assert_eq!(
             owner.snapshot().runs[0].instances[0].state,
-            WorkflowState::Pending
+            WorkflowState::Running
         );
-        owner.node(&node, |row| row.state = WorkflowState::Running);
+        owner.node(&node, |row| row.state = WorkflowState::Draining);
         assert_eq!(
             owner.snapshot().runs[0].instances[0].state,
-            WorkflowState::Running
+            WorkflowState::Draining
         );
     }
 

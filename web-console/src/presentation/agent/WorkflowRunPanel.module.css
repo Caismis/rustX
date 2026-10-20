@@ -1,16 +1,14 @@
 /* Copyright (c) 2026 DeepSeek. MIT. WorkflowRunPanel chrome adapted; see PROVENANCE.md. */
 .root { width: 100%; min-width: 0; color: var(--dsw-alias-label-secondary); }
-.runHeader, .phaseHeader { box-sizing: border-box; display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; height: 32px; }
+.runHeader { box-sizing: border-box; display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; height: 32px; }
 .runHeader { padding: 0 8px; border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-module-platform); }
-.runHeader:focus-visible, .phaseHeader:focus-visible { outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: -2px; border-radius: var(--dsw-radius-md); }
+.runHeader:focus-visible { outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: -2px; border-radius: var(--dsw-radius-md); }
 .leading { margin-right: 0; color: inherit; }
 .title { overflow: hidden; flex: 0 1 auto; min-width: 0; max-width: 42%; color: inherit; font-weight: 510; text-overflow: ellipsis; white-space: nowrap; }
 .summary { overflow: hidden; flex: 1; min-width: 0; font-size: var(--dsh-content-font-size-secondary, 13px); text-overflow: ellipsis; white-space: nowrap; }
 .statusTail { display: inline-flex; flex: none; align-items: center; gap: 4px; max-width: 45%; font-size: 11px; font-weight: 510; white-space: nowrap; overflow: hidden; }
-.phaseStatus { flex: none; max-width: 42%; overflow: hidden; font-size: var(--dsh-content-font-size-secondary, 13px); text-align: right; text-overflow: ellipsis; white-space: nowrap; }
 .separator { flex: none; width: 2px; height: 2px; border-radius: 50%; background: var(--dsw-alias-label-tertiary); }
-.phaseList { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 4px 0 0 16px; }
-.members { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding-left: 16px; }
+.nodes { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 4px 0 0 16px; }
 .member { display: flex; align-items: center; gap: 12px; width: 100%; min-width: 0; min-height: calc(24px + var(--dsh-content-font-delta, 0px)); color: var(--dsw-alias-label-secondary); box-sizing: border-box; padding: 0; border: 0; border-radius: var(--dsw-radius-sm); background: transparent; font: inherit; text-align: left; }
 .memberHost { display: block; min-width: 0; }
 .memberButton { cursor: pointer; }
@@ -24,4 +22,4 @@
 .kind, .budget, .empty { color: var(--dsw-alias-label-tertiary); font-size: var(--dsh-content-font-size-secondary, 13px); line-height: calc(20px + var(--dsh-content-font-delta-secondary, 0px)); overflow-wrap: anywhere; }
 .budget { padding: 4px 0; }
 .memberStatus { flex: none; max-width: 42%; overflow: hidden; font-size: var(--dsh-content-font-size-secondary, 13px); text-align: right; text-overflow: ellipsis; white-space: nowrap; }
-@media (max-width: 560px) { .phaseList, .members { padding-left: 12px; } .member { gap: 6px; } }
+@media (max-width: 560px) { .nodes { padding-left: 12px; } .member { gap: 6px; } }

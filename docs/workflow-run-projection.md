@@ -15,8 +15,14 @@ outer ToolCallId. Replacing a definition does not relabel an admitted program.
 Instances contain concrete block paths and invocation vectors; Loop iterations
 append a fresh one-based component and Parallel branches have distinct static
 paths. There is no authoritative current-node slot. All seven node kinds and
-block instances share the same executor boundaries. Pending rows mean not yet
-admitted, including unselected successors; they do not promise future work.
+block instances share the same executor boundaries. A node row is appended only
+after its native cancellation/budget admission succeeds. Unselected successors
+and nodes cancelled before admission have no row. The instance vector retains
+native start order across blocks, Parallel branches and concrete Loop iterations;
+later wait/terminal updates do not move rows. The WebUI presents node rows in
+that order rather than regrouping them by definition block. Nested rows retain
+their block path and invocation identity. The visible node count counts retained
+admitted nodes, while step/Agent budget consumption remains a separate measure.
 
 Node waits distinguish Tool, Agent, capacity, workspace, Questionnaire,
 Approval, Review and settlement. Native ToolInvocationId and child references
@@ -74,7 +80,7 @@ replacement converge without a client-side Workflow interpreter.
 | Runtime Client replay | configured event count (default 4096); Workflow payloads additionally capped at 16 MiB |
 | Program block nesting | existing maximum 8 |
 
-Finished rows retire first, then pending rows, then other rows if necessary to
+Finished rows retire first, then other rows if necessary to
 honor byte/count bounds. omitted_instances records omissions explicitly. Old
 terminal run records retire before active records; omitted_runs records run
 omissions. Records contain no WorkflowRun, future, waiter, cancellation token,

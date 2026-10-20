@@ -210,6 +210,28 @@ async fn explicit_outcomes_select_only_the_matching_successor_with_the_full_valu
         );
         assert_eq!(checker.starts.load(Ordering::SeqCst), count);
         let events = observations.borrow();
+        let displayed: Vec<_> = run
+            .instances
+            .iter()
+            .filter_map(|row| {
+                row.node.as_ref().map(|node| WorkflowNodeInstance {
+                    block: row.block.clone(),
+                    node: node.clone(),
+                    visit: row.visit.unwrap(),
+                })
+            })
+            .collect();
+        let started: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                RuntimeEvent::WorkflowNodeStarted { instance } => Some(instance.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            displayed, started,
+            "loop iterations and selected successors retain native start order"
+        );
         let selected: Vec<_> = events
             .iter()
             .filter_map(|event| match event {
@@ -812,6 +834,28 @@ async fn nested_loops_inside_parallel_have_bounded_counts_and_inherited_identity
         .collect::<Vec<_>>();
     assert_eq!(instances.len(), 18);
     let native = runtime.read_model.snapshot();
+    let displayed: Vec<_> = native.runs[0]
+        .instances
+        .iter()
+        .filter_map(|row| {
+            row.node.as_ref().map(|node| WorkflowNodeInstance {
+                block: row.block.clone(),
+                node: node.clone(),
+                visit: row.visit.unwrap(),
+            })
+        })
+        .collect();
+    let started: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            RuntimeEvent::WorkflowNodeStarted { instance } => Some(instance.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        displayed, started,
+        "parallel branches and nested loop bodies must not regroup the path"
+    );
     let blocks: BTreeSet<_> = native.runs[0]
         .instances
         .iter()

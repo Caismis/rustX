@@ -3706,3 +3706,44 @@ Verification commands: focused eight-file Vitest run (110 tests), native
 TypeScript, i18n, provenance/notices, production build and the repository pinned
 browser runner. No reference baselines, comparison tolerances or TUI interaction
 logic changed. Other browser engines and operating systems were not exercised.
+
+### Workflow execution path (2026-10-20)
+
+Reference: the same DSH revision's `ui-workflow-run/workflow-definition.ts`
+adds members only on actual Agent start. rustX now appends its own typed node
+records only after native cancellation/budget admission, under the same lock
+that orders parallel admissions. Block entry no longer pre-registers graph
+nodes. Unselected branches and nodes cancelled before admission have no row;
+the existing native cut preserves start order through waits, settlement and
+reconnect without browser clocks or Journal reconstruction.
+
+Chat displays one chronological list across concrete blocks and Loop iterations,
+with scoped paths/instance markers on nested nodes. Definition-block grouping
+and the unused "Not run" labels were removed. Exact native identities keep rows
+and focused one-shot links stable during updates; review state and consumed
+execution budgets retain their independent meaning. TUI formatting, expansion,
+focus and navigation code is unchanged.
+
+The rendered target flow is: start Workflow -> see only its admitted child ->
+wait at Review -> reconnect with the same ordered path -> accept/reject -> see
+only the chosen successor in start order. Browser plugin not available; use the
+repository's pinned Playwright Linux Chromium with production preview at
+`http://127.0.0.1:5273` and fixture origin at port 5274.
+
+Validation passed: 124 native Workflow/read-source tests, 72 WebUI tests across
+five focused files, 56 TUI projection tests, WebUI TypeScript, i18n, production
+build, 311 source records and notices for 267 production entries. The native
+tests compare real nested Loop/Parallel start facts against display order, test
+both branch choices and reject phantom rows before/cancelled admission. The
+React checks cover interleaved/repeated identities and focused child settlement.
+Edited Rust files pass rustfmt; the repository-wide formatting check still
+reports the existing unrelated signature in `runtime_client/projection.rs`.
+
+All three real native browser cases passed, including English/light desktop
+(1440x1000), Chinese/dark narrow (390x1000), accept/reject, reconnect, child Chat
+and Trace inspection, and terminal collapse. Page identity, meaningful content,
+absence of framework overlays, relevant console health and user interactions
+passed. Completed screenshots were visually reviewed:
+`/tmp/rustx-workflow-completed-en.png` and
+`/tmp/rustx-workflow-completed-zh.png`. No screenshot baselines or comparator
+tolerances changed. Other browser engines and operating systems were not tested.

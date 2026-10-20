@@ -2,8 +2,6 @@
 export const en = {
   "workflow.omitted-runs": "{count} earlier runs are no longer available in the current activity view.",
   "workflow.nodes": "Nodes {count}",
-  "workflow.not-run": "Not run",
-  "workflow.main": "Main flow",
   "workflow.empty": "No node activity yet",
   "workflow.iteration": "Iteration {current} · Limit {max}",
   "workflow.loop.satisfied": "Condition met",
@@ -310,8 +308,6 @@ export type CommonKey = keyof typeof en;
 export const zh = {
   "workflow.omitted-runs": "当前活动视图已不再保留 {count} 次较早的运行。",
   "workflow.nodes": "{count} 个节点",
-  "workflow.not-run": "未执行",
-  "workflow.main": "主流程",
   "workflow.empty": "尚无节点活动",
   "workflow.iteration": "第 {current} 次迭代 · 上限 {max} 次",
   "workflow.loop.satisfied": "条件已满足",

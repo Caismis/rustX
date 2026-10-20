@@ -82,7 +82,6 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     await expect(page.getByText('workflow conformance complete', { exact: true })).toBeVisible();
     await expect(run).toContainText('completed');
     await run.getByRole('button').first().click();
-    await run.getByRole('button', { name: /Main flow/ }).click();
     await expect(run.getByRole('button', { name: 'View review', exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });

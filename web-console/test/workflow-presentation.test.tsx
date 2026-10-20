@@ -10,9 +10,10 @@ import { interaction, snapshot } from './fixture';
 import { nativeTool } from './native-tool-cases';
 afterEach(cleanup);
 
-it('shows every native node while waiting, labels the budget correctly, and collapses only on native settlement', () => {
+it('shows the admitted path while waiting, labels the budget correctly, and collapses only on native settlement', () => {
   const run = workflowRun(), ui = render(<WorkflowRunPanel run={run}/>);
-  for (const name of ['read', 'triage', 'analyze', 'gate', 'loop', 'done']) expect(ui.getByText(name)).toBeTruthy();
+  for (const name of ['read', 'triage', 'analyze', 'gate']) expect(ui.getByText(name)).toBeTruthy();
+  expect(ui.container.querySelectorAll('[data-workflow-node]')).toHaveLength(4);
   expect(ui.container.textContent).toContain('Steps used 9 · Limit 10 · Agent calls 2');
   expect(ui.container.textContent).not.toContain('9 / 10');
   run.steps_consumed = 10; ui.rerender(<WorkflowRunPanel run={run}/>);
@@ -20,19 +21,39 @@ it('shows every native node while waiting, labels the budget correctly, and coll
   run.state = { type: 'settled', outcome: 'completed' }; run.instances[0].state = run.state;
   ui.rerender(<WorkflowRunPanel run={run}/>);
   expect(ui.getByRole('button').getAttribute('aria-expanded')).toBe('false');
-  fireEvent.click(ui.getByRole('button')); fireEvent.click(ui.getByRole('button', { name: /Main flow/ }));
-  expect(ui.getAllByText('Not run').length).toBeGreaterThan(0);
+  fireEvent.click(ui.getByRole('button'));
+  expect(ui.container.querySelectorAll('[data-workflow-node]')).toHaveLength(4);
+  expect(ui.queryByText('Not run')).toBeNull();
   expect(ui.container.querySelector('pre')).toBeNull();
 });
 it('keeps abnormal and loop outcomes visible and does not create Agent controls for finite activations', () => {
   const run = workflowRun(); run.state = { type: 'settled', outcome: 'failed' };
   run.instances[4].state = { type: 'settled', outcome: 'denied' };
-  run.instances[5] = { ...run.instances[5], iteration: 3, iterations_max: 3, loop_exit: 'exhausted', checks_passed: false };
+  run.instances.push({ ...run.instances[4], node: 'loop', kind: 'loop', iteration: 3, iterations_max: 3, loop_exit: 'exhausted', checks_passed: false });
   run.instances[1].child = 'finite-activation';
   const ui = render(<WorkflowRunPanel run={run}/>);
   expect(ui.getByText(/Iteration limit reached/)).toBeTruthy();
   expect(ui.getByText(/Checks failed/)).toBeTruthy();
   expect(ui.container.querySelector('[data-workflow-activation-id="finite-activation"] button')).toBeNull();
+});
+it('keeps interleaved branches and repeated loop nodes in native start order across updates', () => {
+  const run = workflowRun(), root = run.instances[0].block;
+  const branch = (name: string, iteration: number) => ({ ...root,
+    definition: { ...root.definition, blocks: ['fork', name, 'repeat', 'body'] }, invocations: [0, 0, iteration] });
+  const node = (name: string, block = root) => ({ ...run.instances[1], node: name, block });
+  run.instances = [run.instances[0], node('fork'), node('read', branch('zeta', 1)), node('read', branch('alpha', 1)), node('read', branch('zeta', 2))];
+  const ui = render(<WorkflowRunPanel run={run}/>);
+  const rows = () => [...ui.container.querySelectorAll('[data-workflow-node]')];
+  const initial = rows();
+  expect(initial.map(row => row.textContent)).toEqual([
+    expect.stringContaining('fork'), expect.stringContaining('fork / zeta / repeat / body · 0.1'),
+    expect.stringContaining('fork / alpha / repeat / body · 0.1'), expect.stringContaining('fork / zeta / repeat / body · 0.2'),
+  ]);
+  run.instances[2].state = { type: 'settled', outcome: 'failed' };
+  run.instances.push(node('done'));
+  ui.rerender(<WorkflowRunPanel run={run}/>);
+  expect(rows().slice(0, 4)).toEqual(initial);
+  expect(rows().map(row => row.getAttribute('data-workflow-node'))).toEqual(['fork', 'read', 'read', 'read', 'done']);
 });
 it('places the run next to its exact native call, without inheriting an adjacent Attempt or another conversation', () => {
   const run = workflowRun(), s = snapshot();
@@ -82,18 +103,6 @@ it('annotates a running node only from the matching native pending review, witho
   expect(gate.textContent).not.toContain('Waiting for review');
   expect(run.instances[4].state).toEqual({ type: 'running' });
 });
-it('defers a clean collapse while a block header owns focus and lets the reader close it once', () => {
-  const run = workflowRun(), ui = render(<WorkflowRunPanel run={run}/>);
-  act(() => ui.getByRole('button', { name: /Main flow/ }).focus());
-  run.state = { type: 'settled', outcome: 'completed' }; run.instances[0].state = run.state;
-  ui.rerender(<WorkflowRunPanel run={run}/>);
-  const root = ui.getByRole('button', { name: /file_checkup/ });
-  expect(root.getAttribute('aria-expanded')).toBe('true');
-  expect(fireEvent.mouseDown(root)).toBe(false);
-  fireEvent.click(root);
-  expect(root.getAttribute('aria-expanded')).toBe('false');
-});
-
 it('opens only the exact running Workflow child, retires its link after settlement, and preserves keyboard focus', async () => {
   const run = workflowRun();
   const node = run.instances[1]; node.kind = 'agent'; node.child = 'finite-child'; node.child_agent_id = 'finite-agent'; node.state = { type: 'running' };
@@ -105,9 +114,12 @@ it('opens only the exact running Workflow child, retires its link after settleme
   expect(openWorkflow).toHaveBeenCalledWith('finite-agent', 'finite-child', 'read');
   await act(async () => {});
   node.state = { type: 'settled', outcome: 'completed' };
+  run.state = node.state;
   ui.rerender(<SubagentContext value={context}><WorkflowRunPanel run={run}/></SubagentContext>);
   expect(ui.getByRole('button', { name: 'View read' }).getAttribute('aria-disabled')).toBe('true');
+  expect(ui.getByRole('button', { name: /file_checkup/ }).getAttribute('aria-expanded')).toBe('true');
   fireEvent.click(button); expect(openWorkflow).toHaveBeenCalledTimes(1);
   act(() => button.blur());
   expect(ui.queryByRole('button', { name: 'View read' })).toBeNull();
+  expect(ui.getByRole('button', { name: /file_checkup/ }).getAttribute('aria-expanded')).toBe('false');
 });

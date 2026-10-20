@@ -6,9 +6,9 @@ export function workflowRun(): WorkflowRunView {
     state: { type: 'waiting', reason: 'review' }, steps_consumed: 9, steps_max: 10, agents_consumed: 2, omitted_instances: 0,
     instances: [
       { block, kind: 'block', state: { type: 'waiting', reason: 'review' } },
-      ...(['read', 'triage', 'analyze', 'gate', 'loop', 'done', 'rejected'] as const).map((node, index) => ({ block, node, visit: 1,
-        kind: (['tool', 'branch', 'parallel', 'review', 'loop', 'return', 'return'] as const)[index],
-        state: index < 3 ? { type: 'settled' as const, outcome: 'completed' as const } : index === 3 ? { type: 'waiting' as const, reason: 'review' as const } : { type: 'pending' as const },
+      ...(['read', 'triage', 'analyze', 'gate'] as const).map((node, index) => ({ block, node, visit: 1,
+        kind: (['tool', 'branch', 'parallel', 'review'] as const)[index],
+        state: index < 3 ? { type: 'settled' as const, outcome: 'completed' as const } : { type: 'waiting' as const, reason: 'review' as const },
       })),
     ],
   };
