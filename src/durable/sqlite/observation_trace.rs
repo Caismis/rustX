@@ -139,7 +139,13 @@ fn encode(value: &impl serde::Serialize) -> Result<Vec<u8>, ConversationStoreErr
     crate::runtime_client::checkpoint::bounded_bytes(value, HEADER_ENCODED_MAX)
         .ok_or_else(|| storage("native Trace header exceeds bound"))
 }
-type HeaderRow = (Option<Vec<u8>>, Option<String>, String, Option<u64>);
+type HeaderRow = (
+    Option<Vec<u8>>,
+    Option<String>,
+    String,
+    Option<u64>,
+    Option<String>,
+);
 
 pub(super) fn header(
     connection: &Connection,
@@ -151,17 +157,26 @@ pub(super) fn header(
             "Trace source beyond original J cut".into(),
         ));
     }
-    let row:Option<HeaderRow>=connection.prepare_cached("SELECT observation_trace_fact,observation_kind,event_timestamp,observation_trace_owner FROM events WHERE sequence=?1").map_err(|error|storage(error.to_string()))?.query_row(
-        [sequence],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?))).optional().map_err(|error|storage(error.to_string()))?;
-    let (bytes, kind, time, owner) = row.ok_or_else(|| {
+    let row:Option<HeaderRow>=connection.prepare_cached("SELECT observation_trace_fact,observation_kind,event_timestamp,observation_trace_owner,(SELECT owner_kind FROM request_owners WHERE start_sequence=e.sequence OR terminal_sequence=e.sequence) FROM events e WHERE sequence=?1").map_err(|error|storage(error.to_string()))?.query_row(
+        [sequence],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?))).optional().map_err(|error|storage(error.to_string()))?;
+    let (bytes, kind, time, owner, source_owner) = row.ok_or_else(|| {
         ConversationStoreError::InvalidReference("original Trace J absent".into())
     })?;
     let header: TraceFactHeader =
         decode(&bytes.ok_or_else(|| storage("native Trace fact header unavailable"))?)?;
+    let source_owner = source_owner
+        .map(|value| {
+            serde_json::from_value::<crate::durable::observation::RequestOwnerKind>(
+                serde_json::Value::String(value),
+            )
+            .map_err(|_| storage("original request owner is corrupt"))
+        })
+        .transpose()?;
     if header.sequence != sequence
         || Some(header.kind.as_str()) != kind.as_deref()
         || header.timestamp.to_rfc3339() != time
         || header.owner_anchor != owner
+        || header.owner.as_ref() != source_owner.as_ref()
     {
         return Err(storage(
             "native Trace fact header disagrees with original J",
@@ -180,7 +195,7 @@ pub(super) fn facts(
         ));
     }
     let through = cut.read.journal;
-    if matches!(query.scope, TraceFactScope::All) {
+    if matches!(query.scope, TraceFactScope::All | TraceFactScope::Agent) {
         let missing:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_trace_holes_idx WHERE observation_trace_fact_required=1 AND observation_trace_fact IS NULL AND sequence>?1 AND sequence<=?2 AND sequence<?3)",params![query.after,through,query.before.unwrap_or(through.saturating_add(1))],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
         if missing {
             return Err(storage("native Trace fact header unavailable"));
@@ -188,7 +203,7 @@ pub(super) fn facts(
     }
     let before = query.before.unwrap_or(through.saturating_add(1));
     let owner = match query.scope {
-        TraceFactScope::All => None,
+        TraceFactScope::All | TraceFactScope::Agent => None,
         TraceFactScope::Owner { anchor_sequence } => {
             if !header(connection, anchor_sequence, through)?
                 .kind
@@ -205,14 +220,25 @@ pub(super) fn facts(
             Some(anchor_sequence)
         }
     };
+    // Required membership is written with the original event before optional
+    // Trace capture. It excludes auxiliary facts while retaining primary facts
+    // whose header or ownership is missing, so those failures remain visible.
     // Seek only bounded numeric candidates per closed kind, then fetch <=32
     // headers. No original body and no growing multi-kind sort is read.
     let mut sequences = Vec::with_capacity(query.limit * query.kinds.len());
     for kind in &query.kinds {
-        let (index, predicate) = if owner.is_some() {
-            ("events_trace_owner_idx", "observation_trace_owner=?5")
-        } else {
-            ("events_trace_kind_idx", "1=1")
+        let (index, predicate) = match query.scope {
+            TraceFactScope::Owner { .. } => {
+                ("events_trace_owner_idx", "observation_trace_owner=?5")
+            }
+            TraceFactScope::Agent => (
+                "events_primary_trace_kind_idx",
+                "observation_trace_fact_required=1 AND observation_kind IN ('model_request_started','model_request_completed','model_request_failed')",
+            ),
+            TraceFactScope::All => (
+                "events_primary_trace_kind_idx",
+                "observation_trace_fact_required=1",
+            ),
         };
         let sql = format!(
             "SELECT sequence FROM events INDEXED BY {index} WHERE observation_kind=?1 AND sequence<?2 AND sequence>?3 AND sequence<=?4 AND {predicate} ORDER BY sequence {} LIMIT ?6",
@@ -370,6 +396,21 @@ fn value_source(
 }
 
 pub(super) fn required(event: &crate::events::types::RuntimeEventEnvelope) -> bool {
+    match &event.event {
+        crate::events::types::RuntimeEvent::ModelRequestStarted { owner, .. }
+        | crate::events::types::RuntimeEvent::ModelRequestCompleted { owner, .. }
+        | crate::events::types::RuntimeEvent::ModelRequestFailed { owner, .. } => {
+            if !matches!(
+                owner,
+                crate::model::snapshot::ModelRequestOwner::Agent { .. }
+            ) {
+                return false;
+            }
+        }
+        crate::events::types::RuntimeEvent::AuxiliaryCallStarted { .. }
+        | crate::events::types::RuntimeEvent::AuxiliaryCallSettled { .. } => return false,
+        _ => {}
+    }
     super::observation_event::native_kind(&event.event)
         .ok()
         .and_then(|kind| TraceFactKind::parse(&kind))

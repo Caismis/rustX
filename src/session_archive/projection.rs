@@ -173,6 +173,111 @@ fn finish_reason(reason: &crate::model::ModelFinishReason) -> Value {
         | ModelFinishReason::Refusal => json!(reason),
     }
 }
+
+fn auxiliary_finish_reason(reason: crate::model::auxiliary::AuxiliaryFinishReason) -> Value {
+    json!({"type":reason})
+}
+
+fn auxiliary_input(input: &crate::model::auxiliary::AuxiliaryInputEvidence) -> Value {
+    use crate::model::auxiliary::AuxiliaryInputEvidence;
+    match input {
+        AuxiliaryInputEvidence::Temporary => json!({"mode":"temporary"}),
+        AuxiliaryInputEvidence::Historical { cut } => json!({"mode":"historical","cut":{
+            "conversation_id":cut.conversation_id, "ledger":cut.ledger,
+            "journal":cut.journal, "transcript":cut.transcript,
+            "projection_activation":cut.projection_activation,
+        }}),
+    }
+}
+
+fn auxiliary_business_source(source: &crate::model::auxiliary::AuxiliaryBusinessSource) -> Value {
+    use crate::model::auxiliary::AuxiliaryBusinessSource;
+    match source {
+        AuxiliaryBusinessSource::Independent => json!({"kind":"independent"}),
+        AuxiliaryBusinessSource::Business {
+            namespace,
+            reference,
+        } => {
+            json!({"kind":"business","namespace":namespace,"reference":reference})
+        }
+        AuxiliaryBusinessSource::Compaction { operation_id } => {
+            json!({"kind":"compaction","operation_id":operation_id})
+        }
+        AuxiliaryBusinessSource::HumanMessage { message_id } => {
+            json!({"kind":"human_message","message_id":message_id})
+        }
+    }
+}
+
+fn auxiliary_call(call: &crate::model::auxiliary::AuxiliaryCallAudit) -> Value {
+    json!({
+        "call_id":call.call_id, "purpose":call.purpose, "trigger":call.trigger,
+        "business_source":auxiliary_business_source(&call.business_source),
+        "input":auxiliary_input(&call.input),
+        "semantic_input_fingerprint":call.semantic_input_fingerprint,
+        "invocation_fingerprint":call.invocation_fingerprint,
+        "selected_message_ids":call.selected_message_ids,
+        "started_sequence":call.started_sequence, "settled_sequence":call.settled_sequence,
+        "outcome":call.outcome,
+    })
+}
+
+fn auxiliary_request(request: &crate::model::auxiliary::AuxiliaryRequestAudit) -> Value {
+    json!({
+        "call_id":request.call_id,"ordinal":request.ordinal,"request_id":request.request_id,
+        "model":request.model,"started_sequence":request.started_sequence,
+        "terminal_sequence":request.terminal_sequence,"local_terminal":request.local_terminal,
+        "normalized_failure_kind":request.normalized_failure_kind,
+        "generation":request.generation,"usage":request.usage,
+        "request_evidence":request.request_evidence.as_ref().map(auxiliary_request_evidence),
+    })
+}
+
+/// Inherited native audit is projected explicitly just like local Journal facts.
+pub(super) fn inherited_auxiliary_record(mut value: Value) -> std::io::Result<Value> {
+    use crate::model::auxiliary::AuxiliaryAuditFact;
+    let fact = value
+        .get_mut("fact")
+        .ok_or_else(|| std::io::Error::other("inherited auxiliary audit has no fact"))?;
+    let native: AuxiliaryAuditFact =
+        serde_json::from_value(fact.take()).map_err(std::io::Error::other)?;
+    *fact = match &native {
+        AuxiliaryAuditFact::CallStarted(call) => json!({"CallStarted":auxiliary_call(call)}),
+        AuxiliaryAuditFact::CallSettled(call) => json!({"CallSettled":auxiliary_call(call)}),
+        AuxiliaryAuditFact::RequestStarted(request) => {
+            json!({"RequestStarted":auxiliary_request(request)})
+        }
+        AuxiliaryAuditFact::RequestSettled(request) => {
+            json!({"RequestSettled":auxiliary_request(request)})
+        }
+    };
+    Ok(value)
+}
+
+fn auxiliary_request_evidence(
+    evidence: &crate::model::auxiliary::AuxiliaryRequestEvidence,
+) -> Value {
+    use crate::model::auxiliary::AuxiliaryObservedProviderTerminal;
+    let observed = evidence
+        .observed_provider_terminal
+        .as_ref()
+        .map(|terminal| match terminal {
+            AuxiliaryObservedProviderTerminal::Completed {
+                finish_reason: reason,
+            } => json!({"type":"completed","finish_reason":auxiliary_finish_reason(*reason)}),
+            AuxiliaryObservedProviderTerminal::Failed { kind } => {
+                json!({"type":"failed","kind":kind})
+            }
+        });
+    json!({
+        "request_id":evidence.request_id,
+        "observed_provider_terminal":observed,
+        "usage":evidence.usage,
+        "usage_completeness":evidence.usage_completeness,
+        "remote_execution_uncertainty":evidence.remote_execution_uncertainty,
+    })
+}
+
 fn model_error(error: &crate::model::error::ModelError) -> Value {
     json!({"kind": error.kind, "retry_disposition":error.retry_disposition,
         "retry_after_ms":error.retry_after_ms, "context_overflow":error.context_overflow,
@@ -215,6 +320,27 @@ fn runtime_error(error: &crate::runtime::types::RuntimeError) -> Value {
 fn event(event: &crate::events::types::RuntimeEvent) -> Value {
     use crate::events::types::RuntimeEvent;
     match event {
+        RuntimeEvent::AuxiliaryCallStarted {
+            call_id,
+            purpose,
+            trigger,
+            business_source,
+            input,
+            semantic_input_fingerprint,
+            invocation_fingerprint,
+            selected_message_ids,
+        } => json!({
+            "type":"auxiliary_call_started", "call_id":call_id,
+            "purpose":purpose, "trigger":trigger, "business_source":auxiliary_business_source(business_source), "input":auxiliary_input(input),
+            "semantic_input_fingerprint":semantic_input_fingerprint,
+            "invocation_fingerprint":invocation_fingerprint, "selected_message_ids":selected_message_ids,
+        }),
+        RuntimeEvent::AuxiliaryCallSettled {
+            call_id,
+            outcome,
+            request_evidence,
+        } => json!({"type":"auxiliary_call_settled","call_id":call_id,"outcome":outcome,
+                "request_evidence":request_evidence.as_ref().map(auxiliary_request_evidence)}),
         RuntimeEvent::AttemptCompleted {
             attempt_id,
             finish_reason: reason,
@@ -222,20 +348,22 @@ fn event(event: &crate::events::types::RuntimeEvent) -> Value {
             json!({"type":"attempt_completed","attempt_id":attempt_id,"finish_reason":finish_reason(reason)})
         }
         RuntimeEvent::ModelRequestCompleted {
+            owner,
             request_id,
             finish_reason: reason,
             usage,
             generation,
         } => {
-            json!({"type":"model_request_completed","request_id":request_id,"finish_reason":finish_reason(reason),"usage":usage,"generation":generation})
+            json!({"type":"model_request_completed","owner":owner,"request_id":request_id,"finish_reason":finish_reason(reason),"usage":usage,"generation":generation})
         }
         RuntimeEvent::ModelRequestFailed {
+            owner,
             request_id,
             error,
             usage,
             generation,
         } => {
-            json!({"type":"model_request_failed","request_id":request_id,"error":model_error(error),"usage":usage,"generation":generation})
+            json!({"type":"model_request_failed","owner":owner,"request_id":request_id,"error":model_error(error),"usage":usage,"generation":generation})
         }
         RuntimeEvent::AttemptFailed { attempt_id, error } => {
             json!({"type":"attempt_failed","attempt_id":attempt_id,"error":attempt_failure(error)})
@@ -374,7 +502,9 @@ pub(super) fn checkpoint(checkpoint: &crate::durable::projection::ProjectionChec
         "checkpoint_id":checkpoint.candidate.checkpoint_id,"candidate_fingerprint":checkpoint.fingerprint,
         "expected_head":checkpoint.candidate.expected_head,"read_cut":checkpoint.candidate.read_cut,
         "base_frontier":checkpoint.candidate.base_frontier,"items":items,
-        "summary_metadata":checkpoint.candidate.summary_metadata,"activation":checkpoint.activation,"occupancy":checkpoint.occupancy})
+        "summary_metadata":checkpoint.candidate.summary_metadata,
+        "summary_generation":checkpoint.candidate.summary_generation,
+        "activation":checkpoint.activation,"occupancy":checkpoint.occupancy})
 }
 
 #[cfg(test)]
@@ -485,5 +615,45 @@ mod tests {
             name: "AUTHORED_NAME_SECRET".into(),
         };
         assert_eq!(runtime_error(&authored)["name"], "AUTHORED_NAME_SECRET");
+    }
+    #[test]
+    fn inherited_auxiliary_provider_finish_diagnostic_is_projected_out() {
+        use crate::model::auxiliary::*;
+        let private = "PRIVATE_PROVIDER_FINISH";
+        let provider_finish = crate::model::ModelFinishReason::Other {
+            reason: private.into(),
+        };
+        let request_id = crate::runtime::identity::RequestId::new("request");
+        let request = AuxiliaryRequestAudit {
+            call_id: crate::runtime::identity::AuxiliaryCallId::generate(),
+            ordinal: 0,
+            request_id: request_id.clone(),
+            model: "model".into(),
+            started_sequence: 1,
+            terminal_sequence: Some(2),
+            local_terminal: Some(AuxiliaryRequestTerminal::Completed),
+            normalized_failure_kind: None,
+            generation: None,
+            usage: None,
+            request_evidence: Some(AuxiliaryRequestEvidence {
+                request_id,
+                observed_provider_terminal: Some(AuxiliaryObservedProviderTerminal::Completed {
+                    finish_reason: AuxiliaryFinishReason::from(&provider_finish),
+                }),
+                usage: None,
+                usage_completeness: AuxiliaryUsageCompleteness::Unreported,
+                remote_execution_uncertainty: false,
+            }),
+        };
+        let projected = inherited_auxiliary_record(json!({
+            "origin":{"type":"inherited"}, "fact":AuxiliaryAuditFact::RequestSettled(request),
+        }))
+        .unwrap();
+        assert!(!projected.to_string().contains(private));
+        assert_eq!(
+            projected["fact"]["RequestSettled"]["request_evidence"]["observed_provider_terminal"]["finish_reason"]
+                ["type"],
+            "other"
+        );
     }
 }

@@ -79,11 +79,13 @@ pub(crate) fn read(
     match events.first().map(|event| &event.event) {
         Some(
             RuntimeEvent::ModelRequestCompleted {
+                owner: crate::model::snapshot::ModelRequestOwner::Agent { .. },
                 request_id,
                 usage: Some(usage),
                 ..
             }
             | RuntimeEvent::ModelRequestFailed {
+                owner: crate::model::snapshot::ModelRequestOwner::Agent { .. },
                 request_id,
                 usage: Some(usage),
                 ..
@@ -92,7 +94,7 @@ pub(crate) fn read(
         Some(RuntimeEvent::CompactionCompleted { occupancy, .. }) => Ok(occupancy.clone()),
         None => store.load_inherited_occupancy(),
         Some(_) => Err(ConversationStoreError::InvalidReference(
-            "context reading index returned non-qualifying Journal evidence".into(),
+            "context reading index returned non-primary Journal evidence".into(),
         )),
     }
 }

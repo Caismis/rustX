@@ -364,7 +364,7 @@ describe("inbound provenance", () => {
   });
 
   for (const inherited of [false,true]) it(`presents ${inherited ? "inherited" : "local"} projection provenance separately from canonical facts`, () => {
-    const state=stateOf({messages:[userMessage("real","canonical fact")],context:{compaction_count:0,compaction_in_progress:false,projection_head:{checkpoint_id:"checkpoint",activation_id:"2",base_frontier:"100",activation_ledger:"101",origin:{conversation_id:"source",activation:"7",completed_journal:"200"},destination_installation:inherited ? "installation" : null,original_items:1,derived_items:1,summary_preview:{text:"summary body",truncated:false}}}});
+    const state=stateOf({messages:[userMessage("real","canonical fact")],context:{compaction_count:0,compaction_in_progress:false,projection_head:{checkpoint_id:"checkpoint",activation_id:"2",base_frontier:"100",activation_ledger:"101",transcript_anchor:"1",origin:{conversation_id:"source",activation:"7",completed_journal:"200"},destination_installation:inherited ? "installation" : null,original_items:1,derived_items:1,summary_preview:{text:"summary body",truncated:false}}}});
     const blocks=renderTranscript(state,prefs());
     assert.match(transcriptString(state),inherited ? /Inherited model projection/ : /Local model projection/);
     assert.match(transcriptString(state),/summary body/);

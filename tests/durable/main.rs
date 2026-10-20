@@ -96,6 +96,7 @@ fn checkpoint(
                 base_frontier: history.cut.ledger,
                 items,
                 summary_metadata: None,
+                summary_generation: None,
             },
             owner: store.projection_owner(None).unwrap(),
             tokens_before: rustx::runtime::TokenMeasurement {

@@ -1683,7 +1683,13 @@ pub(crate) mod tests {
                 .expect("events")
                 .events
                 .iter()
-                .any(|event| matches!(event.event, RuntimeEvent::ModelRequestStarted { .. }))
+                .any(|event| matches!(
+                    event.event,
+                    RuntimeEvent::ModelRequestStarted {
+                        owner: crate::model::snapshot::ModelRequestOwner::Agent { .. },
+                        ..
+                    }
+                ))
         );
         let events = runtime
             .tool_runtime()
@@ -1805,7 +1811,13 @@ pub(crate) mod tests {
                 .expect("events")
                 .events
                 .iter()
-                .any(|event| matches!(event.event, RuntimeEvent::ModelRequestStarted { .. }))
+                .any(|event| matches!(
+                    event.event,
+                    RuntimeEvent::ModelRequestStarted {
+                        owner: crate::model::snapshot::ModelRequestOwner::Agent { .. },
+                        ..
+                    }
+                ))
         );
         let events = runtime
             .tool_runtime()

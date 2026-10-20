@@ -42,7 +42,7 @@ impl TraceProjection<'_> {
         let Some(previous) = self
             .store
             .read_presentation_events(&FactQuery {
-                scope: FactScope::All,
+                scope: FactScope::AgentRequest,
                 kinds: vec!["model_request_started"],
                 before: Some(anchor_sequence),
                 after: 0,

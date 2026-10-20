@@ -677,6 +677,14 @@ pub(in crate::durable::sqlite) fn index_event(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
 ) -> Result<(), ConversationStoreError> {
+    if event.event.is_auxiliary_model_request()
+        || matches!(
+            event.event,
+            E::AuxiliaryCallStarted { .. } | E::AuxiliaryCallSettled { .. }
+        )
+    {
+        return Ok(());
+    }
     let Some(kind) =
         TraceFactKind::parse(&super::super::observation_event::native_kind(&event.event)?)
     else {
@@ -732,6 +740,10 @@ pub(in crate::durable::sqlite) fn index_event(
         sequence: event.sequence,
         timestamp: event.timestamp,
         kind,
+        owner: event
+            .event
+            .model_request_owner()
+            .map(crate::durable::observation::RequestOwnerKind::from),
         owner_anchor: terminal_owner(connection, event)?,
         location: location(connection, event)?,
         fact: data(connection, event, &mut fields)?,
@@ -776,6 +788,10 @@ pub(in crate::durable::sqlite) fn request_core(
         sequence: event.sequence,
         timestamp: event.timestamp,
         kind: TraceFactKind::ModelRequestStarted,
+        owner: event
+            .event
+            .model_request_owner()
+            .map(crate::durable::observation::RequestOwnerKind::from),
         owner_anchor: Some(event.sequence),
         location: location(connection, event)?,
         bootstrap: None,

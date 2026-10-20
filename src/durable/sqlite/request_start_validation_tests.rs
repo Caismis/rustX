@@ -169,6 +169,9 @@ fn t14_t19_validated_fresh_start_cannot_cross_transaction_or_request_identity() 
     ));
     let mut different_request = event;
     different_request.event = RuntimeEvent::ModelRequestStarted {
+        owner: ModelRequestOwner::Agent {
+            identity: snapshot.identity.clone(),
+        },
         request_id: RequestId::new("unrelated-request"),
         model: snapshot.invocation.model.clone(),
     };

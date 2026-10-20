@@ -305,7 +305,7 @@ it('selected Projection provenance uses its returned cut and rejects a held rang
  const source:TraceFieldSource={type:'value',field:'provenance',domain:'context.projections.1.items.0.provenance',item_offset:0,path:[],encoded_bytes:'2'};
  const detail=(id:string,revision:string):import('../../protocol/app-server/v51.ts').ProjectionDetail=>({
   read_cut:checkpoint(snapshot(),revision).read_cut,
-  checkpoint:{checkpoint_id:id,activation_id:'1',base_frontier:'1',activation_ledger:'1',origin:{conversation_id:h.target.conversation_id,activation:'1',completed_journal:'1'},destination_installation:null,original_items:0,derived_items:1,summary_preview:null},
+  checkpoint:{checkpoint_id:id,activation_id:'1',base_frontier:'1',activation_ledger:'1',transcript_anchor:'1',origin:{conversation_id:h.target.conversation_id,activation:'1',completed_journal:'1'},destination_installation:null,original_items:0,derived_items:1,summary_preview:null},
   next_item:null,items:[{occurrence:{checkpoint_id:id,item_index:0},content:{request_occurrence:null,role:'user',message_id:null,source:null,provenance:{type:'derived',sources:[],checkpoint_sources:[],transformations:['summary'],truncated:false},provenance_source:source,blocks:[],truncated:true}}],
  });
  const opening=h.dispatcher.submit('/context projection original');const request=await nextRequest(h,'session/projectionDetail');

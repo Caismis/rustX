@@ -231,6 +231,14 @@ pub(crate) fn request_outcome(
     event: &crate::events::types::RuntimeEvent,
 ) -> Option<RequestOutcomeSource<'_>> {
     use crate::events::types::RuntimeEvent;
+    if event.is_auxiliary_model_request()
+        || matches!(
+            event,
+            RuntimeEvent::AuxiliaryCallStarted { .. } | RuntimeEvent::AuxiliaryCallSettled { .. }
+        )
+    {
+        return None;
+    }
     let (usage, generation, failure) = match event {
         RuntimeEvent::ModelRequestCompleted {
             usage, generation, ..
