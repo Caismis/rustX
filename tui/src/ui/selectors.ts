@@ -14,7 +14,8 @@ import {
   type LocalEffect,
   type Opener,
 } from "../app-server/delivery-files.ts";
-import type { CommandDispatcher, CommandOutcome } from "../commands/dispatcher.ts";
+import type { CommandDispatcher } from "../commands/dispatcher.ts";
+import type { CommandOutcome } from "../commands/outcome.ts";
 import type { DeliveryPage } from "../presentation/deliveries.ts";
 import type { CatalogModelView, SessionSummaryView, SessionUserMessageBoundaryObservation, SessionView } from "../protocol/app-server.ts";
 import { sanitizeField } from "../sanitize.ts";
@@ -25,7 +26,7 @@ import type { PopupContent } from "./components/popup-frame.ts";
 import { ResumeSelector } from "./components/resume-selector.ts";
 import { BoundarySelector } from "./components/session-selector.ts";
 import { TreeSelector, type TreeSelection } from "./components/tree-selector.ts";
-import { compactDiagnostic } from "./diagnostic-text.ts";
+import { compactDiagnostic } from "../diagnostic-text.ts";
 import type { PresentationLease } from "./presentation-lease.ts";
 import type { SessionDeletionWorkflow } from "./session-deletion-workflow.ts";
 

@@ -58,12 +58,9 @@ import {
 } from "@earendil-works/pi-tui";
 
 import { SlashCommandAutocompleteProvider } from "../commands/autocomplete.ts";
-import {
-  CommandDispatcher,
-  type DebugDiagnostics,
-  type ExpandTarget,
-  type PreferenceChange,
-} from "../commands/dispatcher.ts";
+import { CommandDispatcher } from "../commands/dispatcher.ts";
+import type { ExpandTarget, PreferenceChange } from "../commands/outcome.ts";
+import type { DebugDiagnostics } from "../commands/presentation.ts";
 import { sessionLabel } from "../presentation/selectors.ts";
 import { correlateTools } from "../presentation/tools.ts";
 import type { PresentationState } from "../presentation/state.ts";
@@ -86,7 +83,7 @@ import {
   hasSubagentSelection,
 } from "./subagent-navigation.ts";
 import { SelectorSurfaces } from "./selectors.ts";
-import { compactDiagnostic } from "./diagnostic-text.ts";
+import { compactDiagnostic } from "../diagnostic-text.ts";
 import { InspectionView } from "./components/inspection-view.ts";
 import { SessionDeletionWorkflow } from "./session-deletion-workflow.ts";
 import type { ResumeSelector } from "./components/resume-selector.ts";

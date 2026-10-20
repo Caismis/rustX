@@ -28,7 +28,7 @@ import {
   workingStatus,
 } from "../src/ui/components/status.ts";
 import { plainText } from "../src/ui/theme.ts";
-import { renderModel } from "../src/commands/dispatcher.ts";
+import { renderModel } from "../src/commands/presentation.ts";
 import type { InteractionRequest } from "../src/protocol/app-server.ts";
 import {
   DEFAULT_PREVIEW_CHARS,

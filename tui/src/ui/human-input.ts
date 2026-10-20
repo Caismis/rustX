@@ -2,7 +2,7 @@ import { validateInteractionBody } from "../../../protocol/app-server/interactio
 import type { CheckpointPage, RuntimeClientInteractionHeader } from "../../../protocol/app-server/v50.ts";
 import type { SizeValue } from "@earendil-works/pi-tui";
 import type { AppServerSession } from "../app-server/session.ts";
-import type { PreferenceChange } from "../commands/dispatcher.ts";
+import type { PreferenceChange } from "../commands/outcome.ts";
 import { displayInteraction, hasInteractionBody, type DisplayInteraction } from "../presentation/interaction-display.ts";
 import { findPendingInteraction, reconcileInteractionFocus, sameInteractionRef } from "../presentation/interaction-focus.ts";
 import type { PresentationState } from "../presentation/state.ts";
@@ -10,7 +10,7 @@ import type { InteractionRef, InteractionResponse, RoutedInteraction } from "../
 import { HumanInteractionOverlay } from "./components/hitl.ts";
 import type { PopupContent } from "./components/popup-frame.ts";
 import type { PresentationLease } from "./presentation-lease.ts";
-import { compactDiagnostic } from "./diagnostic-text.ts";
+import { compactDiagnostic } from "../diagnostic-text.ts";
 import { interactionKey, type PresentationPreferences } from "./preferences.ts";
 
 /** What the human-input controller reads from and asks of the terminal app. */
