@@ -1,5 +1,6 @@
 //! Finite catalog observation. Immutable metadata remains in the native catalog;
 //! byte reads slice the retained original string without cloning a whole Node.
+use super::projection::validate_page_limit;
 use super::{
     LineageSide, SessionCatalog, SessionError, SessionId, SessionNodeId, SessionNodeOrigin,
 };
@@ -143,7 +144,7 @@ impl SessionCatalog {
         offset: usize,
         limit: usize,
     ) -> Result<(Vec<SessionNodeObservation>, Option<usize>), SessionError> {
-        super::validate_page_limit(limit, super::SESSION_TREE_PAGE_LIMIT)?;
+        validate_page_limit(limit, super::SESSION_TREE_PAGE_LIMIT)?;
         self.snapshot(session_id)?;
         let nodes = self.node_observation_index.get(session_id).ok_or_else(|| {
             SessionError::UnknownSession {

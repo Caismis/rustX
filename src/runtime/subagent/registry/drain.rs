@@ -8,7 +8,6 @@ use super::SubagentRegistry;
 use super::agents;
 use super::observation::SubagentPublication;
 use super::observation::SubagentSnapshot;
-use crate::runtime::ConversationInboundMailbox;
 use crate::runtime::identity::SubagentId;
 use crate::runtime::types::CancellationReason;
 use std::sync::PoisonError;
@@ -67,7 +66,10 @@ impl SubagentRegistry {
     }
 
     #[cfg(test)]
-    pub(crate) fn fresh_with_mailbox_for_test(&self, mailbox: ConversationInboundMailbox) -> Self {
+    pub(crate) fn fresh_with_mailbox_for_test(
+        &self,
+        mailbox: crate::runtime::inbound::ConversationInboundMailbox,
+    ) -> Self {
         let mut config = self.config.clone();
         config.mailbox = mailbox;
         Self::new(config)

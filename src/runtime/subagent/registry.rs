@@ -58,7 +58,6 @@ use crate::runtime::{MonotonicClock, RuntimeClock};
 use super::SubagentTerminalState;
 use super::activity::{SubagentExecutionProfile, SubagentObservation};
 use super::catalog::{NamedAgentDefinitionDigest, SubagentName};
-use super::process::StagedChild;
 use super::process::SubagentSpawnPlan;
 use super::resolver::ResolvedSubagentSpec;
 use super::resolver::SubagentExecutionProfileDigest;
@@ -595,7 +594,7 @@ struct RegistryState {
     /// Test seam: pre-staged children `prepare` consumes instead of
     /// spawning the real child binary.
     #[cfg(test)]
-    staged_overrides: std::collections::VecDeque<StagedChild>,
+    staged_overrides: std::collections::VecDeque<super::process::StagedChild>,
     #[cfg(test)]
     prepared_policies: Vec<super::InheritedExecutionPolicy>,
     /// Signals the production allocation attempt; substitutes only process

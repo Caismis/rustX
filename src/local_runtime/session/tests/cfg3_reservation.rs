@@ -11,7 +11,7 @@
 //! delivery report. Process-death R05 lives in `runtime::local_storage::tests`
 //! because it must fork the real test binary.
 
-use super::super::conversation_database_path;
+use super::super::creation::conversation_database_path;
 use super::*;
 use crate::durable::conversation_store_opens_on_this_thread;
 use crate::local_runtime::session::LineageSide;
