@@ -503,8 +503,7 @@ it('a failed child read retains content and draft, exposes explicit recovery, an
   const second = await server.waitFor('agent/observe', 2);
   const input = ui.getByRole('textbox', { name: 'Message Agent Worker' }) as HTMLTextAreaElement;
   fireEvent.change(input, { target: { value: 'Retained child draft' } });
-  const model = ui.getByRole('button', { name: 'Model and thinking effort' }) as HTMLButtonElement;
-  expect(model.disabled).toBe(true); expect(model.textContent).toContain('child/own-model');
+  expect(ui.queryByRole('button', { name: 'Model and thinking effort' })).toBeNull();
   expect((ui.getByRole('button', { name: 'Workspace permissions' }) as HTMLButtonElement).disabled).toBe(true);
   const diagnostic = 'child observation: Connection reset by peer (os error 104)';
   await act(async () => server.socket.deliver({ jsonrpc: '2.0', id: second.id, error: { code: -32000, message: 'Operation rejected', data: { kind: 'observation_unavailable', diagnostic } } }));

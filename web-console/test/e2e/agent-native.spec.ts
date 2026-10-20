@@ -49,6 +49,10 @@ test('native interrupt and wait capture one activation; the same Agent resumes w
     const first = await agent.getAttribute('data-activation-id');
     await page.getByRole('button', { name: 'Transcript', exact: true }).click();
     await expect(agent.getByText('WEB_AGENT_CHILD: review the workspace', { exact: true })).toBeVisible();
+    const delegatedTask = agent.getByRole('article', { name: 'Message from parent agent', exact: true }).filter({ hasText: 'WEB_AGENT_CHILD: review the workspace' });
+    await expect(delegatedTask).toBeVisible();
+    await expect(delegatedTask.getByRole('button', { name: 'Copy', exact: true })).toBeAttached();
+    await expect(agent.getByRole('button', { name: 'Model and thinking effort', exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: 'Wait for activation', exact: true }).click();
     await agent.getByRole('button', { name: 'Stop', exact: true }).click();
     await expect(agent).toHaveAttribute('data-agent-state', 'inactive');

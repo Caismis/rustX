@@ -238,8 +238,12 @@ checkpoint; a transport error while still Active remains an observation failure,
 not an execution outcome. Web child views preserve the last coherent content and
 draft, offer explicit status-read recovery with diagnostic details, and never
 replay a message or control mutation to recover a read. Continuable children keep
-Send primary with a separate Stop button. Model and permission labels come from
-the exact child checkpoint and remain read-only under the current child API.
+Send primary with a separate Stop button. The permission label comes from the
+exact child checkpoint and remains read-only under the current child API. Child
+composers have no model selector. The direct parent's ordinary tasks and guidance
+use the same user bubble, timestamp and copy action as human messages; their
+native Agent provenance stays intact. Other Agent reports and injected context
+retain their own context presentation.
 
 The TUI command dispatcher owns one pending Agent message submission per
 attachment. Repeated Enter while its preserved draft awaits an outcome sends

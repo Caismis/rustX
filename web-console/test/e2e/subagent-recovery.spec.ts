@@ -22,8 +22,7 @@ for (const theme of ['dark', 'light'] as const) for (const width of [1440, 390])
   await expect(child.getByText('Retained source evidence.', { exact: true })).toBeAttached();
   await expect(child.getByRole('button', { name: zh ? '发送' : 'Send', exact: true })).toBeDisabled();
   await expect(stop).toBeEnabled();
-  const model = child.getByRole('button', { name: zh ? '模型与思考强度' : 'Model and thinking effort', exact: true });
-  await expect(model).toBeDisabled(); await expect(model).toContainText('child/own-model');
+  await expect(child.getByRole('button', { name: zh ? '模型与思考强度' : 'Model and thinking effort', exact: true })).toHaveCount(0);
   await expect(child.getByRole('button', { name: zh ? '工作区权限' : 'Workspace permissions', exact: true })).toBeDisabled();
   await input.fill('Keep my child draft');
   await expect(child.getByRole('button', { name: zh ? '插话' : 'Steer', exact: true })).toBeEnabled();

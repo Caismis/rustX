@@ -3328,3 +3328,52 @@ same row, and the native model/permission seats collapse on narrow layouts.
 Evidence: `/tmp/rustx-child-{recovery,reconnecting,recovered}-{dark,light}-{1440,390}.png`.
 No screenshot references or comparison policies changed. Other browser engines
 were not exercised.
+
+### Direct-parent tasks use the child UserMessage seat (2026-10-20)
+
+Reference: the supplied DSH child-view screenshot and Harness
+`ui-chat/src/client/chat/MessageItem.tsx` (`UserMessageNodeView` /
+`UserStyleBubble`) at `687f282e8625c6b8d11ff58211a90524be2e4317`. The reference
+shows the parent task as an expanded, right-aligned user bubble with ordinary
+timestamp/copy actions. The local predicate admitted only Human sources, so a
+child's actual `Agent(parent)` task and follow-up guidance instead became folded
+Context rows. The shared native adapter now uses the exact receiver's direct
+parent identity for this presentation decision. Body, whitespace, flow spacing,
+actions and current-message visibility reuse the existing UserMessage seat.
+No canonical source, native role, turn ownership or trajectory classification is
+rewritten. Sibling/child reports and injected Context keep their own presentation.
+Nested-child tests require a match to the direct parent, and canonical-head to
+journal settlement retains the same bubble and Copy button nodes.
+
+The child model selector introduced in the previous change is removed at the
+user's explicit request, including when a native child checkpoint contains model
+settings. The shared ordinary composer placeholder replaces the extra inactive
+resume prompt; its obsolete bilingual dictionary entries are removed. The exact
+native permission label and independent Send/Stop behavior remain in the child
+seat. These changes apply to both the main conversation and sidebar child view.
+
+TypeScript, i18n ownership, production build, all 81 focused frontend checks,
+307 source records and notices for 264 packages passed. Historical source pins
+and screenshot comparison policies are unchanged. No native or TUI source changed.
+
+Browser plugin not available: QA used the pinned Playwright 1.63 Linux Chromium
+container, fixture origin `http://127.0.0.1:5274`, production preview origin
+`http://127.0.0.1:5273`. All 44 browser scenarios passed. The real native child
+launch/interrupt/wait/resume workflow now asserts that its delegated task uses
+the parent-message UserMessage article and has Copy, with no child model control.
+Four new reference-driven flows cover 1440x1000 English and 390x1000 Chinese in
+both themes: enter a child, read initial task and follow-up guidance, verify
+right alignment/wrapping/native timestamps, copy the exact original multiline
+text to the clipboard, switch to trajectory and back with the draft preserved,
+return to the parent with its draft preserved, then open the same child in the
+sidebar. Both child mounts have user bubbles and no model selector, while the
+parent's returned Agent report remains contextual. Page identity, meaningful
+content, console/error-overlay health and viewport bounds passed.
+
+Visually inspected main desktop dark, main narrow light and sidebar desktop
+dark screenshots against the supplied reference: shared rounded user bubble,
+ordinary message footer, preserved line breaks and neutral composer. Evidence:
+`/tmp/rustx-parent-bubbles-{main,aside}-{dark,light}-{1440,390}.png`.
+Existing root strict references, child recovery and child trajectory checks also
+passed; no screenshot baselines changed. Other browser engines were not tested.
+The existing large-chunk build warning remains.

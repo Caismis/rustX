@@ -23,7 +23,6 @@ import { ComposerSeat } from '../agent/ComposerSeat';
 import { AgentComposer } from '../agent/AgentComposer';
 import { SubagentObservationNotice } from '../agent/SubagentObservationNotice';
 import { PermissionSelect } from '../../presentation/agent/PermissionSelect';
-import { ModelSelect } from '../../presentation/agent/ModelSelect';
 import { ArtifactResources } from '../../client/artifacts';
 import { IconRefreshOutline14, IconClockOutline16, IconCloseOutline16 } from '../../presentation/primitives/icons';
 
@@ -101,7 +100,6 @@ export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible
   const acceptsMessage = agent.state === 'active' || agent.state === 'inactive';
   const observationError = transcriptError?.owner === viewOwner ? transcriptError : undefined;
   const childSnapshot = conversation?.activationId === agent.activation_id ? conversation.snapshot : undefined;
-  const childModel = childSnapshot?.model;
   return <AgentConversationContext.Provider value={agent}><ArtifactContext.Provider value={artifacts}><PreviewContext.Provider value={scopedPreview}><section className={css.agentConversation} data-agent-id={agent.agent_id} data-agent-state={agent.state} data-view={mode} data-activation-id={agent.current_activation ?? undefined} aria-label={tx('common:activity.agent-label', { name: agent.agent })}>
     <div hidden={mode !== 'chat'} className={css.agentChat}><JournalSourceProvider content={conversation?.content} messages={conversation?.snapshot?.messages} transcript={conversation?.snapshot?.transcript} source={client&&admission&&conversation?.checkpoint ? {client,target:admission.target,agentId:agent.agent_id,cut:()=>conversation.checkpoint?.read_cut,owned:ownsContent} : undefined}><ToolInspectionContext value={inspect}><SubagentChat client={client} sessionId={sessionId} admission={admission} agent={agent} snapshot={conversation?.snapshot} workflows={workflows.snapshot} visible={visible && mode === 'chat'}>
       {transcriptLoading && !conversation && <p role="status">{tx('common:activity.reading')}</p>}
@@ -123,9 +121,8 @@ export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible
         disabled={!client || !sessionId || !client.isAttachmentObservationCurrent(sessionId, admission)} retry={() => refreshTranscript(value => value + 1)}/>}
       {!client && <div role="status"><StateDot state={agentDot(agent)}/>{agentStatus(agent, tx)}</div>}
       {unavailable && <div className={css.readOnly} role="status"><strong>{tx('common:subagents.read-only-title')}</strong><span>{tx('common:subagents.read-only')}</span></div>}
-      {client && sessionId && <div hidden={unavailable}><AgentComposer separateStop placeholder={agent.state === 'inactive' ? tx('common:subagents.reply-placeholder') : undefined}
+      {client && sessionId && <div hidden={unavailable}><AgentComposer separateStop
         permission={childSnapshot && <PermissionSelect value={childSnapshot.effective_approval_mode} disabled choose={() => {}}/>}
-        model={childModel?.effective && <ModelSelect choices={[]} current={childModel.effective.model} effectiveProfile={childModel.effective.profile ?? undefined} disabled loading={false} load={() => {}} choose={async () => false}/>}
         messageLabel={tx('common:activity.message-label', { name: agent.title })} busyEnterBehavior="steer" binding={`${sessionId}:${agent.agent_id}`}
         disabled={request.disabled && !request.pending || !acceptsMessage} busy={request.pending} active={agentRunning(agent)}
         uploadPolicy={client.getSnapshot().capabilities?.upload_policy}

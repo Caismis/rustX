@@ -1,5 +1,6 @@
 import { isRuntimeStatusContext } from '../../bindings/agent-status';
-import { InboundMessage } from './InboundMessage';
+import { InboundMessage, isUserBubble } from './InboundMessage';
+import { AgentConversationContext } from './subagent-context';
 import { useConversationPreferences } from '../conversation-preferences';
 import { useTranslation } from '../../locale/react';
 import type { MessageBlock, UserContentBlock, AssistantContentBlock, InFlightBlock } from '../../../../protocol/app-server/v51';
@@ -11,7 +12,7 @@ import { Reasoning } from '../../presentation/agent/Reasoning';
 import { Tool } from './Tool';
 import { CanonicalTool } from './CanonicalTool';
 import type { ForegroundToolExecution } from '../../../../protocol/app-server/v51';
-import type { ReactNode } from 'react';
+import { useContext, type ReactNode } from 'react';
 import { messageContentBinding, useContentSource } from './ObservationSource';
 import { SourceContent } from './SourceContent';
 
@@ -45,10 +46,10 @@ function MessageText({ messageId, publicationStream, index, text, markdown, stre
   return binding && deferred && source ? <SourceContent bindings={[{...binding,deferred:true}]} owned={source.owned} read={read} fallback={render(text)}>{render}</SourceContent> : render(text);
 }
 export function Message({ message, publicationStream, tools = [], actions, streaming = false, stopped = false, blocks, reasoningHidden = false, include }: { reasoningHidden?: boolean; message: MessageBlock; publicationStream?: string; tools?: ForegroundToolExecution[]; actions?: ReactNode; streaming?: boolean; stopped?: boolean; blocks?: (AssistantContentBlock | InFlightBlock)[]; include?: readonly number[] }) {
-  const tx = useTranslation();
+  const tx = useTranslation(), receiver = useContext(AgentConversationContext);
   if (message.role === 'tool' || isRuntimeStatusContext(message)) return null; // Results belong to the native call projection, never paired here.
   if (message.role === 'user' && message.kind && message.kind !== 'message') return <details><summary>{tx('agent:message.context')}{' '}{Object.keys(message.kind)[0]}</summary><Content messageId={message.id} blocks={message.content} markdown/></details>;
-  if (message.role === 'user' && message.source !== 'human') return <InboundMessage message={message}/>;
-  return message.role === 'user' ? <UserMessage label={tx('agent:message.your-message')} actions={actions}><Content messageId={message.id} blocks={message.content}/></UserMessage>
+  if (message.role === 'user' && !isUserBubble(message, receiver?.parent_agent_id)) return <InboundMessage message={message}/>;
+  return message.role === 'user' ? <UserMessage label={tx(message.source === 'human' ? 'agent:message.your-message' : 'common:subagents.parent-message')} actions={actions}><Content messageId={message.id} blocks={message.content}/></UserMessage>
     : <AssistantMessage label={tx(stopped ? 'agent:message.incomplete-response' : streaming ? 'agent:agent-transcript.streaming-response' : 'agent:message.assistant-response')} stopped={stopped ? tx('agent:turn-process.stopped') : undefined} actions={actions}><Content messageId={message.id} publicationStream={publicationStream} blocks={blocks ?? message.content} markdown tools={tools} streaming={streaming} reasoningHidden={reasoningHidden} include={include}/></AssistantMessage>;
 }

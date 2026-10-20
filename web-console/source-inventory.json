@@ -3489,7 +3489,7 @@
           "treatment": "Task count, stop confirmation, duration and output disclosure wording follows the Harness job menu."
         }
       ],
-      "local_sha256": "25cd4894eee3d95ad60073686559a94d9a0226cfb434c4239c2568b782b0e7ba"
+      "local_sha256": "7077da8a5da787b39f15bb55a2166296fd4435dda6e04552ea650fba1a350006"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -6698,7 +6698,7 @@
       "upstream": "packages/client/ui-subagent/src/client/SubagentReadOnlyComposer.tsx",
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
       "upstream_sha256": "154098fe5d9f78a064eba197a3cf952506a57a45a38d7e0e50862a3e95fac934",
-      "treatment": "Read-only child composer title/body frame adapted to native unavailable state; rustX registry, exact child observation cuts and controls retain authority.",
+      "treatment": "Read-only child composer title/body frame adapted to native unavailable state; rustX registry, exact child observation cuts and controls retain authority. Child follow-up: remove the child model selector and the separate resume placeholder at user request; ordinary parent task/guidance messages reuse the existing UserMessage bubble and actions through child-scoped provenance.",
       "destination": "web-console/src/app/components/ActivityCards.tsx",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -6710,7 +6710,6 @@
         "../../client/session-lifecycle/port",
         "../../locale/react",
         "../../locale/translation",
-        "../../presentation/agent/ModelSelect",
         "../../presentation/agent/PermissionSelect",
         "../../presentation/primitives/StateDot",
         "../../presentation/primitives/icons",
@@ -6736,7 +6735,7 @@
         "Harness Cordis slots, stores and plugin runtime",
         "Harness Agent execution and session observation authority"
       ],
-      "local_sha256": "05b68699dd975eaa20461fe02c5637dfe1fdd44563c79922ff33a86d5f7e9b84",
+      "local_sha256": "a0eba877c22787391e1a284aa3c520fcad940b18846a314385f6ce46c403ec30",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
