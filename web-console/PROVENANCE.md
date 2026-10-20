@@ -2916,3 +2916,50 @@ the localized native Rename captures were inspected. Build, Web typecheck, i18n,
 302 source records and 264 package notices passed; the existing large-chunk
 build warning remains. URLs were `http://127.0.0.1:5273` and
 `http://127.0.0.1:5274`; Chromium was the rendered browser authority.
+
+## Model menu material (2026-10-20)
+
+Reference: Harness `687f282e8625c6b8d11ff58211a90524be2e4317`,
+`ui-theme/src/styles/design-platform.css` and
+`ui-theme/src/styles/gradient-shadow-text.css`. `MenuSurface` already consumes
+DSH menu fill and blur tokens, but the older local theme lacks their global
+values. This leaves the ModelSelect material transparent. Port the light/dark
+menu material tokens at their theme owner, keeping native model-selection
+behavior and the TUI unchanged.
+
+Browser plugin not available; use the repository's pinned Playwright browser.
+Flow under test: new-conversation workspace selection → open ModelSelect root →
+model and thinking-effort panes → select effort/model → retain draft and focus.
+Check actual material paint, viewport containment and stable Composer geometry
+in both themes at desktop/narrow widths. Existing attached-Session model-menu
+checks cover pending native confirmation, keyboard navigation and geometry.
+
+Mismatch evidence: the initial root/model/effort material computed to
+`rgba(0, 0, 0, 0)` with `backdrop-filter: none`, reproducing the supplied image.
+After the theme fix, all three panes consume the reference's 58% light / 45%
+dark fill and `blur(40px) saturate(150%)`. The menu remains inside the viewport,
+Composer geometry and draft text are unchanged, and both choices restore focus.
+The workspace tab context menu also receives the same shared material and
+continues to dismiss with Escape; the task-menu checks remain green.
+
+Only `agent-selectors-light-linux.png` changed. Enabling the reference's blur
+also changes Chromium's compositing and text rasterization outside the menu.
+A controlled browser check disabled just the two new material tokens before
+opening the same pane: its decoded RGBA screenshot exactly matched the original
+checked-in reference. This proves the extra text pixels follow the restored
+material, without a typography/layout change. The refreshed stable screenshot
+passed the subsequent normal strict comparison. No comparator, tolerances or
+noise allowances changed; the two closed-menu dark references are identical.
+
+Verification: 20 existing model-selection unit checks, the four new-conversation
+rendered flows (1440/390px, light/dark), the material/control + tab-menu flow, and
+all six selected existing browser regressions passed. Those regressions cover
+pending native selection, keyboard/return focus, narrow ModelSelect, reference
+screenshots and task menus. Build, TypeScript, i18n, 302 source records and 264
+package notices passed. The existing large-chunk build warning remains. Page
+identity, meaningful content, console/error-overlay health, actual selection
+and overflow checks passed. Browser URLs were `http://127.0.0.1:5273` and
+`http://127.0.0.1:5274`; Chromium was the rendered authority. Evidence lives at
+`/tmp/rustx-model-surface-{before,after}-<pane>-<theme>-<width>.png` and
+`/tmp/rustx-model-surface-control-{old,new}.png`. Other engines and macOS were
+not exercised. No protocol, React behavior or TUI changes.

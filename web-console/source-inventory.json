@@ -2473,7 +2473,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "db3b2436022d04f5ff78aa87eca26fc3595da61f9e19ad7f7e0b4bef8a658809",
+      "local_sha256": "2587f1cd3b3114a09a88b237fe56677e240e4d8296df744b51571a86939758c7",
       "retained_dependencies": [],
       "classification": "A",
       "additional_sources": [
@@ -2482,6 +2482,12 @@
           "upstream": "packages/client/ui-theme/src/styles/design-platform.css",
           "upstream_sha256": "809b20ae477324fdf5181a2d338655a19919cabbf1b0e60adc149908462c5a66",
           "treatment": "Deep-diving light/dark text and shimmer color tokens."
+        },
+        {
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream": "packages/client/ui-theme/src/styles/design-platform.css",
+          "upstream_sha256": "809b20ae477324fdf5181a2d338655a19919cabbf1b0e60adc149908462c5a66",
+          "treatment": "Restore shared MenuSurface material: light/dark fill and backdrop blur tokens at their global theme owners."
         }
       ]
     },
@@ -2500,7 +2506,15 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "d0921a6a4200b90bdaf4067892a3c396ac0a60602a72130826c81a63d6a35f15"
+      "local_sha256": "bb79cba8e988d7bd25ed7d0189e29035aef3cc5f52811858a6dff76dddac2f62",
+      "additional_sources": [
+        {
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream": "packages/client/ui-theme/src/styles/gradient-shadow-text.css",
+          "upstream_sha256": "b6e1e8387edbfa60ec03bb29aad7c01245c0adbd22229d5a6f2916caa7e7b427",
+          "treatment": "Restore shared MenuSurface material: light/dark fill and backdrop blur tokens at their global theme owners."
+        }
+      ]
     },
     {
       "destination": "web-console/src/presentation/theme/scrollbar.css",
