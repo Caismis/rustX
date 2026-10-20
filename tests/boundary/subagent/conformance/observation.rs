@@ -170,7 +170,7 @@ async fn t18_live_durable_only_and_reactivation_preserve_source_and_execution_id
 /// The physical inspection read starts while the child is live. A real Registry
 /// settlement before the socket closes authorizes a source transition; the same
 /// closed socket while execution remains active must stay unavailable.
-async fn closing_inspection_case(settle: bool, following: bool) {
+async fn closing_inspection_case(settle: bool, following: bool, trace_detail: bool) {
     let directory = inspection_tempdir().unwrap();
     let (parent, host) = parent_runtime_host_plane(
         &directory,
@@ -219,11 +219,32 @@ async fn closing_inspection_case(settle: bool, following: bool) {
         );
     let mut release = Some(release);
     let mut serve = Some(wired.serve);
-    let read = attachment.handle_request_async(RuntimeClientRequest::AgentObserve {
-        id: crate::runtime_client::RequestId::new(461),
-        agent_id: agent.clone(),
-        after,
-    });
+    let record_id = child
+        .host
+        .checkpoint()
+        .unwrap()
+        .snapshot
+        .trace
+        .records
+        .iter()
+        .find(|record| record.kind == crate::runtime_client::trace::TraceKind::Request)
+        .expect("parked child has a native request record")
+        .id
+        .clone();
+    let request = if trace_detail {
+        RuntimeClientRequest::AgentTraceDetail {
+            id: crate::runtime_client::RequestId::new(461),
+            agent_id: agent.clone(),
+            record_id: record_id.clone(),
+        }
+    } else {
+        RuntimeClientRequest::AgentObserve {
+            id: crate::runtime_client::RequestId::new(461),
+            agent_id: agent.clone(),
+            after,
+        }
+    };
+    let read = attachment.handle_request_async(request);
     let close = async {
         let (stream, _) = listener.accept().await.unwrap();
         let mut stream = tokio::io::BufReader::new(stream);
@@ -273,7 +294,16 @@ async fn closing_inspection_case(settle: bool, following: bool) {
     let (response, ()) = tokio::time::timeout(LIVENESS, async { tokio::join!(read, close) })
         .await
         .unwrap();
-    if settle {
+    if trace_detail && settle {
+        let Some(RuntimeClientResult::DomainPage { page }) = &response.result else {
+            panic!("Trace detail must consume the terminal handoff: {response:?}")
+        };
+        assert_eq!(page.read_cut.conversation_id, conversation);
+        assert_eq!(page.read_cut.activation_id.as_ref(), Some(&activation));
+        assert_eq!(page.read_cut.revision, 0, "detail uses the retained source");
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].identity, record_id);
+    } else if settle {
         assert!(
             matches!(
                 response.result,
@@ -333,14 +363,19 @@ async fn closing_inspection_case(settle: bool, following: bool) {
 async fn live_inspection_close_after_settlement_requires_retained_source_for_initial_and_following_reads()
  {
     for following in [false, true] {
-        closing_inspection_case(true, following).await;
+        closing_inspection_case(true, following, false).await;
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn trace_detail_read_started_live_recovers_the_same_child_after_settlement() {
+    closing_inspection_case(true, false, true).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn live_inspection_close_while_active_does_not_invent_retained_source_or_execution_outcome() {
     for following in [false, true] {
-        closing_inspection_case(false, following).await;
+        closing_inspection_case(false, following, false).await;
     }
 }
 

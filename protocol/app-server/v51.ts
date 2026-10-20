@@ -90,7 +90,13 @@ export type Request1 =
       params: {
         target: AttachmentTarget;
         operation_id: string;
-        files: UploadMetadata[];
+        /**
+         * One file per wire operation keeps committed receipts recoverable within a record.
+         *
+         * @minItems 1
+         * @maxItems 1
+         */
+        files: [UploadMetadata];
       };
     }
   | {

@@ -182,6 +182,8 @@ pub enum Method {
     SessionUploadPrepare {
         target: AttachmentTarget,
         operation_id: String,
+        /// One file per wire operation keeps committed receipts recoverable within a record.
+        #[schemars(length(min = 1, max = 1))]
         files: Vec<crate::local_runtime::session::uploads::UploadMetadata>,
     },
     #[serde(rename = "session/uploadStatus")]

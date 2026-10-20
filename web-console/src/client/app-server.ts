@@ -2231,7 +2231,7 @@ export class AppServerClient {
     try { target = this.target(id); } catch (error) { throw new UploadFailure('failed', error); }
     const policy = this.state.capabilities?.upload_policy;
     if (!policy) throw new UploadFailure('failed', 'Upload policy unavailable');
-    if (!files.length || files.some(file => !Number.isSafeInteger(file.size) || file.size < 0)) throw new UploadFailure('failed', 'Invalid upload selection');
+    if (files.length !== 1 || files.some(file => !Number.isSafeInteger(file.size) || file.size < 0)) throw new UploadFailure('failed', 'Invalid upload selection');
     const admission = this.state.views[id]?.attachmentObservation;
     const current = () => (!evidence || evidence.current()) && this.isAttachmentControlCurrent(id, admission) && sameTarget(admission?.target, target);
     if (!current()) throw new UploadFailure('failed', 'Upload authority changed');
@@ -2244,7 +2244,7 @@ export class AppServerClient {
     };
     let transfer;
     try {
-      ({ transfer } = await this.request({ method: 'session/uploadPrepare', params: { target, operation_id: operationId, files: files.map(file => ({ name: file.name, size: file.size })) } }, 'upload_prepared', undefined, current));
+      ({ transfer } = await this.request({ method: 'session/uploadPrepare', params: { target, operation_id: operationId, files: [{ name: files[0].name, size: files[0].size }] } }, 'upload_prepared', undefined, current));
     } catch (error) {
       if (error instanceof RequestNotDispatched) throw new UploadFailure('failed', error);
       // A server refusal published no new preparation, but the exact operation

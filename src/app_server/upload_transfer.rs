@@ -187,6 +187,9 @@ pub(super) async fn prepare(
     files: Vec<UploadMetadata>,
 ) -> io::Result<UploadDescriptor> {
     validate_operation(&operation)?;
+    if files.len() != 1 {
+        return Err(invalid("one file is required per upload operation"));
+    }
     validate_metadata(&files)?;
     route
         .attachment

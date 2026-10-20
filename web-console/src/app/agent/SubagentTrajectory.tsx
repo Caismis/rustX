@@ -22,7 +22,7 @@ export function SubagentTrajectory({ agent, client, sessionId, visible, ref, obs
   useImperativeHandle(ref, () => ({ locate: locator => reader?.locate(locator) ?? Promise.resolve(false) }), [reader]);
   const cache = useSyncExternalStore(reader?.subscribe ?? noSubscription, () => reader?.snapshot());
 
-  useEffect(() => { if (visible) void reader?.refresh().then(() => reader.initial()); }, [reader, visible, agent.activation_id, agent.state, agent.observation.revision, observationRevision]);
+  useEffect(() => { if (visible) void reader?.refresh(agent.state).then(() => reader.initial()); }, [reader, visible, agent.activation_id, agent.state, agent.observation.revision, observationRevision]);
   if (!reader || !cache) return null;
   return <>{cache.loading && cache.page.records.length === 0 && <p role="status">{tx('common:activity.reading')}</p>}{cache.error && <Button size="sm" onClick={() => void reader.refresh()}>{tx('trajectory:toolbar.refresh')}</Button>}
     <Trajectory cache={cache} onLatest={() => void reader.latest().then(() => reader.initial())} onSelect={reader.select} loadEarlier={() => void reader.earlier()} onLoadDetail={id => void reader.detail(id)}/></>;

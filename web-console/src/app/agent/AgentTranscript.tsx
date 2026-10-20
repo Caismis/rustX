@@ -24,7 +24,8 @@ import { agentStatusPlacement, isRuntimeStatusContext, statusesAt } from '../../
 import { TranscriptContinuation } from './TranscriptContinuation';
 import { Feedback } from '../components/ConversationFeedback';
 import { AgentStatusAnnotation } from './AgentStatus';
-import { Message } from './Message';
+import { Message, Content } from './Message';
+import { messageContinuation, useMessageBlocks } from './message-blocks';
 import { AssistantMessage, UserMessage } from '../../presentation/agent/Message';
 import { ForkPoint, type ForkPointInfo, type ForkOrigin } from './ForkPoint';
 import { ToolDeliveries } from '../components/Artifact';
@@ -85,8 +86,23 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
       && binding.content_ref.representation === 'utf8_text'
       && (binding.deferred || entry.item.audit.content.some(block => block.block_index === binding.content_ref.source.block_index
         && block.kind !== 'proposed_tool_call' && new TextEncoder().encode(block.text).length !== binding.content_ref.readable_end)));
-  const { messages, streaming } = conversation(snapshot);
-  const loaded = transcriptPresentation(history, snapshot.transcript);
+  const canonical = conversation(snapshot);
+  const original = transcriptPresentation(history, snapshot.transcript);
+  const page = history?.page ?? snapshot.transcript;
+  const allDescriptors = deferredToolDescriptors(snapshot.message_descriptors ?? [], page, [], !!history?.window);
+  const candidates = new Map([...canonical.messages, ...original.flatMap(entry => entry.item.type === 'message' ? [entry.item.message] : [])].map(message => [message.id, message]));
+  const requests = [...candidates.values()].flatMap(message => { const request = messageContinuation(message, allDescriptors, page); return request ? [request] : []; });
+  const blockPages = useMessageBlocks(requests);
+  const enrich = (message: MessageBlock): MessageBlock => {
+    const request = messageContinuation(message, allDescriptors, page), suffix = request && blockPages.blocks(request);
+    return suffix && message.role !== 'tool' ? { ...message, content: [...message.content, ...suffix] } as MessageBlock : message;
+  };
+  const messages = canonical.messages.map(enrich), streaming = canonical.streaming;
+  const loaded = original.map(entry => {
+    if (entry.item.type !== 'message') return entry;
+    const message = enrich(entry.item.message);
+    return message === entry.item.message ? entry : { ...entry, item: { ...entry.item, message } };
+  });
   const heads: RuntimeClientTranscriptEntry[] = history?.window ? [] : publicationHeads.filter(head => head.read_cut.read.conversation_id === snapshot.conversation_id && !loaded.some(entry => entry.cursor === head.transcript_cursor))
     .map(head => ({ cursor: head.transcript_cursor, item: { type: 'publication_audit', audit: head.audit } }));
   const entries = heads.length ? [...loaded, ...heads].sort((a,b) => BigInt(a.cursor) < BigInt(b.cursor) ? -1 : 1) : loaded;
@@ -306,6 +322,7 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
           return <div className={css.flow} hidden={!verbose && !!owner && process.groups.get(owner)?.owner.outcome === 'completed' && !expanded.has(owner) && !(seat?.kind === 'status' && seat.statusId === statusIdentity(status))} key={statusIdentity(status)}>{seat?.kind === 'status' && seat.statusId === statusIdentity(status) && disclosure(owner!)}<div hidden={!verbose && !!owner && process.groups.get(owner)?.owner.outcome === 'completed' && !expanded.has(owner)}><AgentStatusAnnotation status={status}/></div></div>;
         })}</>}/>{runPanels}</div>;
     })}
+    {blockPages.errors.map(error => <p role="alert" key={error}>{error} <button type="button" onClick={blockPages.retry}>{tx('agent:message.retry-content')}</button></p>)}
     {descriptors.filter(descriptor=>descriptor.deliveries && (descriptor.identity==null||!durableIds.has(descriptor.identity))).map(descriptor=><DeliveryHead key={`deliveries:${canonicalLocatorKey(descriptor.locator)}`} head={descriptor.deliveries!}/>)}
     {descriptors.filter(descriptor => history?.window || descriptor.identity == null || !messages.some(message => message.id === descriptor.identity)).map(descriptor => <section key={canonicalLocatorKey(descriptor.locator)} data-canonical-locator={JSON.stringify(descriptor.locator)}>
       {descriptorOwner(descriptor)}
@@ -325,8 +342,17 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
 
 function DescriptorContent({ descriptor }: { descriptor: RuntimeClientMessageDescriptor }) {
   const { source, read } = useContentSource(), tx = useTranslation();
+  const hasBlocks = descriptor.collections.some(frontier => frontier.domain.endsWith('.blocks'));
+  const request = { locator: descriptor.locator, offset: 0, total: descriptor.block_count };
+  const native = useMessageBlocks(hasBlocks ? [request] : []), blocks = hasBlocks ? native.blocks(request) : undefined;
   const bindings = descriptor.content.filter(binding => binding.content_ref.representation === 'utf8_text' && binding.content_ref.source.component === 'payload');
-  if (!source || !bindings.length) return null;
+  if (!source || !hasBlocks && !bindings.length) return null;
+  if (native.errors.length) return <p role="alert">{native.errors.join("\n")} <button type="button" onClick={native.retry}>{tx('agent:message.retry-content')}</button></p>;
+  if (blocks) {
+    const attachments = blocks.flatMap((block,index) => ['uploaded_file','image','file'].includes(block.type) ? [index] : []);
+    return descriptor.role === 'user' ? <UserMessage label={tx('agent:message.your-message')} attachments={<Content blocks={blocks} include={attachments} messageAttachments/>}><Content blocks={blocks} include={blocks.map((_,index)=>index).filter(index=>!attachments.includes(index))}/></UserMessage>
+      : <AssistantMessage label={tx('agent:message.assistant-response')}><Content messageId={descriptor.identity ?? undefined} blocks={blocks} include={blocks.flatMap((block,index)=>block.type==='tool_call'?[]:[index])} markdown/></AssistantMessage>;
+  }
   const content = <SourceContent explicit bindings={bindings} owned={source.owned} read={read}>{text => <MarkdownText text={text}/>}</SourceContent>;
   return descriptor.role === 'user' ? <UserMessage label={tx('agent:message.your-message')}>{content}</UserMessage>
     : <AssistantMessage label={tx('agent:message.assistant-response')}>{content}</AssistantMessage>;

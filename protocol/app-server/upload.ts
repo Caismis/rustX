@@ -19,6 +19,7 @@ export function uploadUrl(transfer: UploadDescriptor, endpoint?: string): string
 /** One chunk in flight, no queue, retries, redirects, base64 or storage staging.
  * "settled" only asks the caller to read the native outcome; it is not a receipt. */
 export function transferUpload(transfer: UploadDescriptor, files: readonly Blob[], policy: UploadPolicy, endpoint?: string): Promise<void> {
+  if (files.length !== 1) return Promise.reject(new Error('One file is required per upload operation'));
   const url = uploadUrl(transfer, endpoint);
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(url, 'rustx.session-upload.v1');

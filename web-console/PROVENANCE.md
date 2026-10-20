@@ -3874,3 +3874,38 @@ delegation passes locally and in the preceding exact-head Linux boundary job;
 its failure path now records the last authoritative snapshot and all three
 completion predicates. Final rendered acceptance and the final exact-head FULL
 CI result are recorded in PR #488.
+
+## PR #488: deferred history, message blocks, terminal Trace and upload receipts
+
+The four follow-up review boundaries retain rustX's native owners and the existing
+Harness presentation pins. Transcript aggregation now keeps both native inline and
+deferred positions, their exact content bindings and collection frontiers. A newer
+representation replaces its former representation at the same transcript position.
+Normal Chat seats consume canonical message block continuation before segmenting
+assistant replies; the first 32 attachments no longer hide their following text.
+Reads use bounded native pages at their captured live/retained cut, including child
+activation scope, and reuse the existing canonical collection/content validation.
+Live continuations stay on the live checkpoint owner; frozen readers keep their
+retained cut. A failed live cut retries after the native checkpoint advances,
+without rereading already successful immutable blocks. They do not add generic
+pagination controls or transport metadata to normal Chat.
+
+Child Trace detail consumes only an owner-confirmed live-to-durable resync, with
+one original absolute deadline and the same child/activation. Resident inspectors
+keep successful immutable content while lifecycle changes, terminal child refresh
+(including already-completed records) or explicit selection allow failed reads to recover. Wire upload preparation admits exactly one file per
+operation (also reflected in the generated v51 schema); Composer multi-selection
+continues through independent queued operations. Native Session allocation and
+receipt authority are unchanged, and a lost acknowledgment remains read-repairable.
+The catalog/SQLite documentation versions are corrected to 16/74.
+
+Regression coverage uses the production AppServerClient, AgentReading, AgentTranscript,
+AgentTraceReader and Trajectory components; native tests cover the actual child
+TraceDetail read across settlement and reject an under-budget 2,400-file prepare
+whose complete Ready record would exceed the wire budget before allocation. The
+existing real commit/lost-ACK test also checks the complete single-file response
+with maximum admitted filename and request ID. Browser plugin not available;
+rendered verification uses the repository's pinned Playwright 1.63 Linux container,
+including a real native 32-file/33-block submission and reload, desktop/mobile Chat
+reading, upload interactions and resident Trace inspection. Screenshot tolerances
+and Harness source pins are unchanged.

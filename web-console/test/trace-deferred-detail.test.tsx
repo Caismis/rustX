@@ -174,3 +174,40 @@ it('rejects a selected page cursor that differs from its exact returned read cut
  expect(server.client.getSnapshot().views.A.trace!.details['trace:4'].page).toBeDefined();
  expect(server.requests.filter(row=>row.request.method==='conversation/checkpointValueRead')).toHaveLength(0);
 });
+
+it.each(['terminal refresh','owner terminal refresh','explicit reselect'] as const)('a resident child inspector retries a failed detail after %s without rebuilding its reader',async recovery=>{
+ const {useSyncExternalStore}=await import('react');
+ const server=new Server();servers.push(server);await server.attached('A');
+ const cut={...checkpoint(snapshot('child')).read_cut,activation_id:'activation-child'};
+ let row:import('../../protocol/app-server/v51').TraceRecord={...record(),state:recovery==='owner terminal refresh'?'completed':'running'};
+ server.handlers.set('agent/trace',()=>({type:'trace',page:{read_cut:cut,records:[row],next_cursor:null}}));
+ server.held.add('agent/traceDetail');
+ const original=nativeTraceFixture(row,requestDetail(4),cut);
+ server.handlers.set('conversation/checkpointPage',request=>{if(request.method!=='conversation/checkpointPage')throw Error('page');return {type:'checkpoint_page',page:original.original.page(cut,request.params.domain,request.params.offset,()=>true)};});
+ server.handlers.set('conversation/checkpointValueRead',request=>{if(request.method!=='conversation/checkpointValueRead')throw Error('value');return {type:'checkpoint_value_chunk',chunk:original.original.value(cut,request.params,request.params.offset,()=>true)};});
+ const reader=new AgentTraceReader(server.client,'A',server.client.getSnapshot().views.A.attachmentObservation!,{agent_id:'child',activation_id:'activation-child',child_conversation_id:cut.conversation_id,state:'active'});
+ await reader.refresh();reader.select(row.id);
+ function View(){const cache=useSyncExternalStore(reader.subscribe,reader.snapshot);return <Trajectory cache={cache} loadEarlier={()=>{}} onSelect={reader.select} onLoadDetail={reader.detail}/>;}
+ render(<View/>);
+ const failed=await server.waitFor('agent/traceDetail',1);
+ await act(async()=>server.socket.deliver({jsonrpc:'2.0',id:failed.id,error:{code:-32000,message:'native child checkpoint is required for Trace inspection'}}));
+ await screen.findByText(/native child checkpoint is required/);
+ if(recovery==='terminal refresh'){
+  row={...row,state:'completed'};
+  await act(async()=>reader.refresh());
+ }else if(recovery==='owner terminal refresh'){
+  await act(async()=>reader.refresh('inactive'));
+ }else{
+  await act(async()=>{reader.select(undefined);});await act(async()=>{reader.select(row.id);});
+ }
+ const retry=await server.waitFor('agent/traceDetail',2);
+ await act(async()=>server.socket.success(retry,{type:'domain_page',page:descriptor(cut)}));
+ await waitFor(()=>expect(reader.snapshot().details[row.id].error).toBeUndefined());
+ expect(reader.snapshot().details[row.id].page).toEqual(descriptor(cut));
+ expect(screen.queryByText(/native child checkpoint is required/)).toBeNull();
+ // Successful immutable detail is retained over further lifecycle-only refreshes.
+ const body=reader.snapshot().details[row.id];await act(async()=>reader.refresh());
+ expect(reader.snapshot().details[row.id]).toBe(body);
+ expect(server.requests.filter(item=>item.request.method==='agent/traceDetail')).toHaveLength(2);
+ reader.retire();
+});

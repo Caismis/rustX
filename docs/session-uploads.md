@@ -143,7 +143,10 @@ each allocation, and adds the execution-ownership generation described in
 
 ### Control and data contract
 
-`session/uploadPrepare { target, operation_id, files: [{ name, size }] }` validates
+`session/uploadPrepare { target, operation_id, files: [{ name, size }] }` admits
+exactly one file per wire operation, ensuring its complete committed receipt stays
+within the record budget and can be recovered after a lost acknowledgment. The
+Composer queues multi-file selections as separate operations. Preparation validates
 the exact writable attachment, safe metadata, native policy and transfer capacity
 before receiving payload. `operation_id` is 32 lowercase hexadecimal characters,
 created and retained by the client before dispatch. A random 256-bit capability

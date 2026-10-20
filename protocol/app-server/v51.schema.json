@@ -5150,10 +5150,13 @@
                   "type": "string"
                 },
                 "files": {
+                  "description": "One file per wire operation keeps committed receipts recoverable within a record.",
                   "type": "array",
                   "items": {
                     "$ref": "#/$defs/UploadMetadata"
-                  }
+                  },
+                  "minItems": 1,
+                  "maxItems": 1
                 }
               },
               "additionalProperties": false,

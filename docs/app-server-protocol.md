@@ -1134,7 +1134,8 @@ bounded by `max_connections * 16` outstanding operations; refusal is
 
 ## Session workspace uploads (WEB-02A)
 
-`session/uploadPrepare { target, operation_id, files: [{ name, size }] }` returns
+`session/uploadPrepare { target, operation_id, files: [{ name, size }] }` accepts
+exactly one file per operation and returns
 `upload_prepared { transfer }`. `session/uploadStatus { target, operation_id }`
 returns `upload_status { outcome }`: absent, unresolved, failed, or ready with the
 original native receipts. Preparation uses exact attachment admission. Bytes use
@@ -2356,7 +2357,14 @@ ordinary workspace attachments without a product count/size cap, matching DSH.
 The carrier receives one chunk at a time into anonymous scratch storage and
 hands complete, verified file bodies to the existing native allocation owner.
 
+Each `session/uploadPrepare` operation admits exactly one file. Multi-file selections
+are queued as independent operations by the Composer; there is no selection count
+limit. The native Session upload owner still controls allocation, commit, and
+receipts. One bounded filename and one receipt per operation keep every committed
+wire upload recoverable through repeatable `session/uploadStatus` reads, including
+after a lost carrier acknowledgment.
+
 Web and TUI negotiate only `rustx.app-server.v51`; v50 and older peers are
-rejected explicitly. Runtime Client v71, Session catalog schema 15 and SQLite
-schema 49 are unchanged. There are no old policy fields, alternate upload paths
+rejected explicitly. Runtime Client v71, Session catalog schema 16 and SQLite
+schema 74 are unchanged. There are no old policy fields, alternate upload paths
 or compatibility handlers. See [Session-owned workspace uploads](session-uploads.md).

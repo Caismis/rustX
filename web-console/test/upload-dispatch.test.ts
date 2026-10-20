@@ -124,3 +124,9 @@ it.each(['current false', 'current throws', 'validation false', 'validation reje
     } finally { vi.useRealTimers(); }
   },
 );
+
+it('public upload refuses multi-file wire operations before preparation, status or byte transfer',async()=>{
+ const server=await connected();
+ await expect(server.client.upload('A',Array.from({length:2400},(_,n)=>new File([],`file-${n}.txt`)))).rejects.toMatchObject({state:'failed'});
+ expect(count(server,'session/uploadPrepare')).toBe(0);expect(count(server,'session/uploadStatus')).toBe(0);expect(server.carrierTransfers).toBe(0);
+});

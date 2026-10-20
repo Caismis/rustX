@@ -137,3 +137,51 @@ test('24 files including a six MiB document use the binary lane without a model 
     expect((await fixture.control('requests')).requests).toHaveLength(0);
   } finally { await page.close(); const report = await fixture.stop(false); expect(report.requestCount).toBe(0); expect(report.failures).toEqual([]); }
 });
+
+test('32 independent uploads keep their 33rd text block in live and reopened native Chat', async ({ page }) => {
+  const fixture = await startDogfood('web_upload_conformance');
+  const wire = await wireProbe(page), errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+  try {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await routeWorkspaceHost(page, fixture); await page.goto('/');
+    await connectRemote(page, fixture.endpoint, fixture.token);
+    await openEmptySession(page, fixture, 'Workspace A'); await selectedCheckpoint(page, wire);
+    const input = page.getByRole('textbox', { name: 'Message', exact: true });
+    const chat = page.getByLabel('Canonical conversation');
+    await input.fill('Use my uploaded files');
+    await page.getByLabel('Attach files').setInputFiles([
+      { name: 'acceptance.txt', mimeType: 'text/plain', buffer: Buffer.from('UPLOAD_NATIVE_SENTINEL') },
+      ...Array.from({ length: 31 }, (_, index) => ({ name: `continuation-${index}.txt`, mimeType: 'text/plain', buffer: Buffer.from(`file ${index}`) })),
+    ]);
+    await expect(page.locator('[data-attachment-state=ready]')).toHaveCount(32);
+    const prepares = wire.requests.filter(request => request.method === 'session/uploadPrepare');
+    expect(prepares).toHaveLength(32); expect(prepares.every(request => request.params.files.length === 1)).toBe(true);
+    await page.getByRole('button', { name: 'Send', exact: true }).click();
+    await page.getByRole('button', { name: 'Allow once', exact: true }).click();
+    await expect(chat.getByText('Source upload read through native Tool.', { exact: true })).toBeVisible();
+    await expectSettled(page, wire);
+    await expect(chat.getByText('Use my uploaded files', { exact: true })).toBeAttached();
+    await expect(chat.locator('[data-message-file]')).toHaveCount(32);
+    await page.reload(); await connectRemote(page, fixture.endpoint, fixture.token);
+    await expect(chat.getByText('Use my uploaded files', { exact: true })).toBeAttached();
+    await expect(chat.locator('[data-message-file]')).toHaveCount(32);
+    await expect(page).toHaveTitle(/rustX/); await expect(chat).toBeVisible();
+    await page.screenshot({ path: '/tmp/rustx-chat-33-blocks-1440.png' });
+    const collapse = page.getByRole('button', { name: 'Collapse Sidebar', exact: true });
+    if (await collapse.isVisible()) await collapse.click();
+    await page.setViewportSize({ width: 390, height: 844 });
+    if (await collapse.isVisible()) await collapse.click();
+    // The collapsed rail and frame borders leave over 320px for the viewport.
+    // Measure the viewport rather than its intentionally padded message column.
+    const viewport = page.locator('[data-conversation-scroll]').first();
+    await expect.poll(async () => (await viewport.boundingBox())?.width ?? 0).toBeGreaterThan(320);
+    await expect(chat.getByText('Use my uploaded files', { exact: true })).toBeVisible();
+    expect((await chat.getByText('Use my uploaded files', { exact: true }).boundingBox())!.height).toBeLessThan(40);
+    await expect(chat).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: '/tmp/rustx-chat-33-blocks-390.png' });
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
+  } finally { await page.close(); const report = await fixture.stop(false); expect(report.failures).toEqual([]); }
+});

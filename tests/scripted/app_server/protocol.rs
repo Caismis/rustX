@@ -8161,6 +8161,109 @@ async fn binary_carrier_rejects_bad_lengths_reuse_expiry_and_paths_before_alloca
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn wire_upload_rejects_a_receipt_oversized_batch_before_any_allocation() {
+    bounded(async {
+        use crate::app_server::transport::MAX_MESSAGE_BYTES;
+        use crate::local_runtime::session::uploads::{
+            UploadMetadata, UploadOutcome, UploadReceipt, UploadedFile,
+        };
+        use crate::message::content::UploadedFileRef;
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        let operation_id = "f".repeat(32);
+        let files: Vec<_> = (0..2400)
+            .map(|index| UploadMetadata {
+                name: format!("file-{index:04}-{}.txt", "a".repeat(65)),
+                size: 0,
+            })
+            .collect();
+        let call = Method::SessionUploadPrepare {
+            target: target.clone(),
+            operation_id: operation_id.clone(),
+            files: files.clone(),
+        };
+        let request = Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::Integer(9900),
+            call: call.clone(),
+        };
+        assert!(serde_json::to_vec(&request).unwrap().len() < MAX_MESSAGE_BYTES);
+        let batch = "a".repeat(32);
+        let outcome = UploadOutcome::Ready {
+            files: files
+                .iter()
+                .map(|file| UploadedFile {
+                    receipt: UploadReceipt {
+                        session_id: target.session_id.clone(),
+                        batch_id: batch.clone(),
+                        token: "b".repeat(32),
+                    },
+                    file: UploadedFileRef {
+                        batch_id: batch.clone(),
+                        name: file.name.clone(),
+                    },
+                    path: format!("/work/project/.agents/uploads/{batch}/{}", file.name),
+                })
+                .collect(),
+        };
+        let response = Success {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::Integer(9900),
+            result: MethodResult::UploadStatus { outcome },
+        };
+        assert!(
+            serde_json::to_vec(&response).unwrap().len() > MAX_MESSAGE_BYTES,
+            "the complete Ready record grows beyond its valid prepare request"
+        );
+        assert!(
+            serde_json::to_vec(&Response::Success(Box::new(response))).is_err(),
+            "the public encoder refuses this oversized Ready record"
+        );
+        rejected(&connection, call).await;
+        assert_eq!(
+            call_upload_outcome(&connection, target.clone(), operation_id).await,
+            UploadOutcome::Absent
+        );
+        assert!(
+            f.manager
+                .session_controller()
+                .catalog
+                .lock()
+                .await
+                .upload_registry(&target.session_id)
+                .unwrap()
+                .allocations
+                .is_empty()
+        );
+        connection.close();
+        f.close().await;
+    })
+    .await;
+}
+
+async fn call_upload_outcome(
+    connection: &AppServerConnection,
+    target: AttachmentTarget,
+    operation_id: String,
+) -> crate::local_runtime::session::uploads::UploadOutcome {
+    let MethodResult::UploadStatus { outcome } = call(
+        connection,
+        9901,
+        Method::SessionUploadStatus {
+            target,
+            operation_id,
+        },
+    )
+    .await
+    else {
+        panic!("upload status")
+    };
+    outcome
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn binary_ready_commit_precedes_lost_reply_and_exact_read_repair() {
     bounded(async {
         use crate::local_runtime::session::uploads::UploadOutcome;
@@ -8177,7 +8280,7 @@ async fn binary_ready_commit_precedes_lost_reply_and_exact_read_repair() {
             binary_upload(
                 &caller,
                 upload_target,
-                "lost-ready.md",
+                &format!("{}.md", "a".repeat(252)),
                 b"# durable before reply",
             )
             .await
@@ -8198,6 +8301,21 @@ async fn binary_ready_commit_precedes_lost_reply_and_exact_read_repair() {
         assert!(allocation.ready);
         let operation_id = allocation.operation_id.clone().unwrap();
         let original = registry.receipts(&target.session_id, batch).unwrap();
+        assert_eq!(original.len(), 1);
+        let encoded = serde_json::to_vec(&Response::Success(Box::new(Success {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("x".repeat(254)),
+            result: MethodResult::UploadStatus {
+                outcome: UploadOutcome::Ready {
+                    files: original.clone(),
+                },
+            },
+        })))
+        .unwrap();
+        assert!(
+            encoded.len() < crate::app_server::transport::MAX_MESSAGE_BYTES,
+            "even the longest admitted filename and request id leave a bounded complete receipt"
+        );
         assert!(
             controller
                 .uploaded_content(&target.session_id, &[original[0].receipt.clone()])

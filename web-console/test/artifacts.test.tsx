@@ -62,16 +62,19 @@ it('mixed draft order and failed admission retain text and attachments, with det
 });
 
 const completed = (name: string, token: string): UploadedFile => ({ receipt: { session_id: 'A', batch_id: 'batch', token }, file: { batch_id: 'batch', name }, path: `/workspace/.agents/uploads/A/batch/${name}` });
-it('native batch upload preserves order and Send references receipts without a modality preflight', async () => {
+it('single-file transfers preserve selection order and Send references receipts without a modality preflight', async () => {
   await server.attached('A'); server.held.add('session/uploadPrepare');
   const files = [new File(['x'], 'first.png', { type: 'image/png' }), new File(['y'], 'second.txt')];
   for (const file of files) Object.defineProperty(file, 'arrayBuffer', { value: async () => new Uint8Array([1]).buffer });
-  const work = server.client.upload('A', files);
-  const upload = await server.waitFor('session/uploadPrepare', 1);
-  const uploaded = [completed('first.png', 'one'), completed('second.txt', 'two')];
-  server.handlers.set('session/uploadStatus', () => ({ type: 'upload_status', outcome: { state: 'ready', files: uploaded } }));
-  server.reply(upload);
-  const receipts = (await work).map(item => item.receipt);
+  const receipts: UploadedFile['receipt'][] = [];
+  for (const [index,file] of files.entries()) {
+    const work = server.client.upload('A', [file]);
+    const upload = await server.waitFor('session/uploadPrepare', index + 1);
+    expect(upload.params).toMatchObject({ files: [{name:file.name,size:file.size}] });
+    server.handlers.set('session/uploadStatus', () => ({ type: 'upload_status', outcome: { state: 'ready', files: [completed(file.name,index === 0 ? 'one' : 'two')] } }));
+    server.reply(upload);
+    receipts.push(...(await work).map(item => item.receipt));
+  }
   await server.client.send('A', 'text', receipts);
   const turns = server.requests.filter(item => item.request.method === 'turn/start');
   expect(turns).toHaveLength(1);

@@ -20,7 +20,7 @@ export async function readTraceValue(reader: TraceFieldReader, cut: CheckpointRe
   if (!current()) throw Error('Trace content view was replaced.');
   return { text: parts.join(''), representation };
 }
-async function readBinding(reader: TraceFieldReader, cut: CheckpointReadCut, binding: ContentBinding, current: () => boolean): Promise<unknown> {
+export async function readBinding(reader: Pick<TraceFieldReader, 'content'>, cut: CheckpointReadCut, binding: ContentBinding, current: () => boolean): Promise<unknown> {
   const cache = new ContentCache((ref, offset, _max, owned) => reader.content(cut, ref, offset, owned));
   try {
     const text = await readContentText(cache, binding.content_ref, current);
@@ -45,13 +45,13 @@ function checkPage(page: CheckpointPage, cut: CheckpointReadCut, domain: string)
   if (page.domain !== domain || page.cursor !== cut.revision || JSON.stringify(page.read_cut) !== JSON.stringify(cut)
     || !Array.isArray(page.items) || page.items.length > 32 || new TextEncoder().encode(JSON.stringify(page)).length > 786432) throw Error('Original Trace content page changed.');
 }
-export async function readTraceCollection(reader: TraceFieldReader, cut: CheckpointReadCut, frontier: Pick<CollectionFrontier, 'domain' | 'total'>, current: () => boolean, first?: CheckpointPage) {
-  const items: CheckpointPageItem[] = []; let offset = 0;
+export async function readTraceCollection(reader: Pick<TraceFieldReader, 'page'>, cut: CheckpointReadCut, frontier: Pick<CollectionFrontier, 'domain' | 'total'>, current: () => boolean, first?: CheckpointPage, start = 0) {
+  const items: CheckpointPageItem[] = []; let offset = start;
   do {
     if (!current()) throw Error('Trace content view was replaced.');
-    const page = offset === 0 && first ? first : await reader.page(cut, frontier.domain, offset, current);
+    const page = offset === start && first ? first : await reader.page(cut, frontier.domain, offset, current);
     if (!current()) throw Error('Trace content view was replaced.');
-    checkPage(page, cut, frontier.domain); validateCanonicalInspectionPage(page, offset, frontier.total, offset !== 0);
+    checkPage(page, cut, frontier.domain); validateCanonicalInspectionPage(page, offset, frontier.total, offset !== 0 && BigInt(offset) < BigInt(frontier.total));
     items.push(...page.items);
     if (page.next_offset == null) return items;
     offset = Number(page.next_offset);

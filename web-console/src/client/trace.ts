@@ -193,7 +193,10 @@ function boundDetails(
 export function selectTrace(cache: TraceCache, id?: string): TraceCache {
   const selection = cache.page.records.find(record => record.id === id)
     ?? (cache.selection?.id === id ? cache.selection : undefined);
-  return { ...cache, selection, readCuts:retainedCuts(cache.readCuts??{},cache.page.records,selection),details: boundDetails(cache.details, id) };
+  const details = { ...cache.details };
+  // An explicit selection is a fresh read opportunity after a failed inspection.
+  if (id && details[id]?.error) details[id] = { ...details[id], error: undefined, stale: true };
+  return { ...cache, selection, readCuts:retainedCuts(cache.readCuts??{},cache.page.records,selection),details: boundDetails(details, id) };
 }
 
 /** Records a detail request so a late or superseded reply can be rejected. */
@@ -294,7 +297,8 @@ export function refreshTrace(previous: TraceCache | undefined, page: TracePage, 
   const unchanged = (id: string) => old.get(id) === latest.get(id) || contentIdentity(old.get(id)) === contentIdentity(latest.get(id));
   for (const id of Object.keys(readCuts)) if (previous.readCuts?.[id] && unchanged(id)) readCuts[id] = previous.readCuts[id];
   const details = Object.fromEntries(Object.entries(previous.details).map(([id, entry]) =>
-    [id, unchanged(id) ? entry : { ...entry, stale: true, error: undefined }],
+    [id, unchanged(id) && !(entry.error && old.get(id)?.state !== latest.get(id)?.state)
+      ? entry : { ...entry, stale: true, error: undefined }],
   ));
   return { ...previous, selection, details, readCuts:retainedCuts(readCuts,records,selection),page: { read_cut:null,records, next_cursor: previous.page.next_cursor } };
 }

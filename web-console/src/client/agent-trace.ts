@@ -37,7 +37,13 @@ export class AgentTraceReader {
   private publish(cache: TraceCache) { this.cache = cache; this.listeners.forEach(listener => listener()); }
   retire() { this.live = false; this.listeners.clear(); }
   select = (id?: string) => this.publish(selectTrace(this.cache, id));
-  refresh = async () => {
+  refresh = async (state = this.scope.state) => {
+    this.scope = { ...this.scope, state };
+    if (state === 'inactive' || state === 'unavailable') {
+      const details = Object.fromEntries(Object.entries(this.cache.details).map(([id, entry]) =>
+        [id, entry.error ? { ...entry, error: undefined, stale: true } : entry]));
+      if (Object.values(this.cache.details).some(entry => entry.error)) this.publish({ ...this.cache, details });
+    }
     this.dirty = true;
     if (this.busy || !this.current()) return;
     this.busy = true;
