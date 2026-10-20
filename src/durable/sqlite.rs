@@ -681,17 +681,15 @@ impl SqliteConversationStore {
         message: &MessageId,
         include: bool,
     ) -> Result<super::reading::LineageReadCut, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|e| storage(e.to_string()))?;
-        lineage::read_at(
-            &transaction,
-            &self.conversation_id,
-            revision,
-            None,
-            Some((message, include)),
-        )
+        self.read_transaction(|transaction| {
+            lineage::read_at(
+                transaction,
+                &self.conversation_id,
+                revision,
+                None,
+                Some((message, include)),
+            )
+        })
     }
 
     /// Bound a management traversal while unrelated execution may append events.
@@ -992,6 +990,33 @@ impl SqliteConversationStore {
             presentation: self.read_cancel.is_some(),
             changes,
             observer: &self.journal_observer,
+        })
+    }
+
+    /// Runs `read` inside one native read snapshot: the leased connection opens
+    /// one deferred read transaction, and dropping it rolls the snapshot back.
+    fn read_transaction<T>(
+        &self,
+        read: impl FnOnce(&Transaction<'_>) -> Result<T, ConversationStoreError>,
+    ) -> Result<T, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        read(&transaction)
+    }
+
+    /// The bounded observation read-cut lifecycle: validate the authentic
+    /// native `cut` and run `read` in the same read snapshot, so no query can
+    /// observe state the cut does not own.
+    fn read_at_cut<T>(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        read: impl FnOnce(&Transaction<'_>) -> Result<T, ConversationStoreError>,
+    ) -> Result<T, ConversationStoreError> {
+        self.read_transaction(|transaction| {
+            observation::validate(transaction, &self.conversation_id, cut)?;
+            read(transaction)
         })
     }
 
@@ -2553,22 +2578,20 @@ impl CanonicalStore for SqliteConversationStore {
         .collect()
     }
     fn load_head(&self) -> Result<DurableConversationHead, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|error| storage(error.to_string()))?;
-        #[cfg(test)]
-        if let Some(probe) = self.head_read_probe.lock().unwrap().take() {
-            transaction
-                .query_row(
-                    "SELECT schema_version FROM rustx_store WHERE id=1",
-                    [],
-                    |row| row.get::<_, i64>(0),
-                )
-                .map_err(|error| storage(error.to_string()))?;
-            probe();
-        }
-        load_head(&transaction)
+        self.read_transaction(|transaction| {
+            #[cfg(test)]
+            if let Some(probe) = self.head_read_probe.lock().unwrap().take() {
+                transaction
+                    .query_row(
+                        "SELECT schema_version FROM rustx_store WHERE id=1",
+                        [],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .map_err(|error| storage(error.to_string()))?;
+                probe();
+            }
+            load_head(transaction)
+        })
     }
     fn messages_are_human_inputs(&self, ids: &[MessageId]) -> Result<bool, ConversationStoreError> {
         let connection = self.lock()?;
@@ -2933,20 +2956,22 @@ impl CanonicalStore for SqliteConversationStore {
         })
     }
     fn load_inspection_seed(&self) -> Result<super::InspectionSeed, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|e| storage(e.to_string()))?;
-        let head = load_head(&transaction)?;
-        let ids = reconstruct_surface(&transaction, head.revision)?;
-        Ok(super::InspectionSeed {
-            messages: ids
-                .iter()
-                .map(|id| load_message(&transaction, id))
-                .collect::<Result<_, _>>()?,
-            canonical: load_canonical_rows(&transaction)?,
-            transcript: load_transcript_page(&transaction, None, TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT)?,
-            journal_through: journal_prefix(&transaction)?,
+        self.read_transaction(|transaction| {
+            let head = load_head(transaction)?;
+            let ids = reconstruct_surface(transaction, head.revision)?;
+            Ok(super::InspectionSeed {
+                messages: ids
+                    .iter()
+                    .map(|id| load_message(transaction, id))
+                    .collect::<Result<_, _>>()?,
+                canonical: load_canonical_rows(transaction)?,
+                transcript: load_transcript_page(
+                    transaction,
+                    None,
+                    TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT,
+                )?,
+                journal_through: journal_prefix(transaction)?,
+            })
         })
     }
     fn load_transcript_snapshot(
@@ -3054,11 +3079,7 @@ impl CanonicalStore for SqliteConversationStore {
         before: Option<TranscriptCursor>,
         limit: usize,
     ) -> Result<TranscriptPage, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|error| storage(error.to_string()))?;
-        load_transcript_page(&transaction, before, limit)
+        self.read_transaction(|transaction| load_transcript_page(transaction, before, limit))
     }
 }
 
@@ -4130,11 +4151,9 @@ impl ProjectionStore for SqliteConversationStore {
     fn compaction_resource_cut(
         &self,
     ) -> Result<crate::context::resources::ResourceReadCut, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|e| storage(e.to_string()))?;
-        compaction_resources::cut(&transaction, &self.conversation_id)
+        self.read_transaction(|transaction| {
+            compaction_resources::cut(transaction, &self.conversation_id)
+        })
     }
     fn compaction_message_page(
         &self,
@@ -4143,11 +4162,16 @@ impl ProjectionStore for SqliteConversationStore {
         ids: Option<&[MessageId]>,
         limits: crate::context::resources::ResourceLimits,
     ) -> Result<crate::context::resources::ResourcePage<MessageBlock>, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|e| storage(e.to_string()))?;
-        compaction_resources::messages(&transaction, &self.conversation_id, cut, after, ids, limits)
+        self.read_transaction(|transaction| {
+            compaction_resources::messages(
+                transaction,
+                &self.conversation_id,
+                cut,
+                after,
+                ids,
+                limits,
+            )
+        })
     }
     fn compaction_dependency(
         &self,
@@ -4156,18 +4180,16 @@ impl ProjectionStore for SqliteConversationStore {
         body_required: bool,
         limits: crate::context::resources::ResourceLimits,
     ) -> Result<crate::context::checkpoint::CanonicalDependency, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|e| storage(e.to_string()))?;
-        compaction_resources::dependency(
-            &transaction,
-            &self.conversation_id,
-            cut,
-            source,
-            body_required,
-            limits,
-        )
+        self.read_transaction(|transaction| {
+            compaction_resources::dependency(
+                transaction,
+                &self.conversation_id,
+                cut,
+                source,
+                body_required,
+                limits,
+            )
+        })
     }
     fn compaction_trajectory_page(
         &self,
@@ -4178,11 +4200,9 @@ impl ProjectionStore for SqliteConversationStore {
         crate::context::resources::ResourcePage<crate::context::resources::TrajectoryMessage>,
         ConversationStoreError,
     > {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|e| storage(e.to_string()))?;
-        compaction_resources::trajectory(&transaction, &self.conversation_id, cut, after, limits)
+        self.read_transaction(|transaction| {
+            compaction_resources::trajectory(transaction, &self.conversation_id, cut, after, limits)
+        })
     }
     fn compaction_event_page(
         &self,
@@ -4191,11 +4211,9 @@ impl ProjectionStore for SqliteConversationStore {
         limits: crate::context::resources::ResourceLimits,
     ) -> Result<crate::context::resources::ResourcePage<RuntimeEventEnvelope>, ConversationStoreError>
     {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|e| storage(e.to_string()))?;
-        compaction_resources::events(&transaction, &self.conversation_id, cut, after, limits)
+        self.read_transaction(|transaction| {
+            compaction_resources::events(transaction, &self.conversation_id, cut, after, limits)
+        })
     }
     fn inherited_responses_for(
         &self,
@@ -4222,50 +4240,40 @@ impl ProjectionStore for SqliteConversationStore {
         ledger: crate::context::resources::LedgerFrontier,
         activation: crate::context::checkpoint::ProjectionActivationId,
     ) -> Result<super::reading::LineageReadCut, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|e| storage(e.to_string()))?;
-        lineage::read_at(
-            &transaction,
-            &self.conversation_id,
-            SurfaceRevision::new(ledger.0),
-            Some(activation),
-            None,
-        )
+        self.read_transaction(|transaction| {
+            lineage::read_at(
+                transaction,
+                &self.conversation_id,
+                SurfaceRevision::new(ledger.0),
+                Some(activation),
+                None,
+            )
+        })
     }
     fn read_lineage_cut(
         &self,
         revision: SurfaceRevision,
     ) -> Result<super::reading::LineageReadCut, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|error| storage(error.to_string()))?;
-        lineage::read(&transaction, &self.conversation_id, revision)
+        self.read_transaction(|transaction| {
+            lineage::read(transaction, &self.conversation_id, revision)
+        })
     }
     fn projected_history(
         &self,
     ) -> Result<super::projection::HistoricalModelInput, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|e| storage(e.to_string()))?;
-        #[cfg(test)]
-        if Self::consume(&self.fail_projection_history_remaining) {
-            return Err(storage("fault injected: post-commit hot projection read"));
-        }
-        projection::selected_history(&transaction, &self.conversation_id, &self.conn.manifest)
+        self.read_transaction(|transaction| {
+            #[cfg(test)]
+            if Self::consume(&self.fail_projection_history_remaining) {
+                return Err(storage("fault injected: post-commit hot projection read"));
+            }
+            projection::selected_history(transaction, &self.conversation_id, &self.conn.manifest)
+        })
     }
     fn projection_at_journal_cut(
         &self,
         through: u64,
     ) -> Result<Option<super::projection::ProjectionCheckpoint>, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|e| storage(e.to_string()))?;
-        projection::at_journal_cut(&transaction, through)
+        self.read_transaction(|transaction| projection::at_journal_cut(transaction, through))
     }
     fn compaction_checkpoint_at(
         &self,
@@ -4279,26 +4287,24 @@ impl ProjectionStore for SqliteConversationStore {
                 "foreign checkpoint resource cut".into(),
             ));
         }
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|e| storage(e.to_string()))?;
-        compaction_resources::validate(&transaction, &self.conversation_id, cut, limits)?;
-        let bytes:Option<u64>=transaction.query_row(
-            "SELECT octet_length(c.candidate_json)+octet_length(a.activation_json)+coalesce(octet_length(c.occupancy_json),0) FROM projection_checkpoints c JOIN projection_activations a ON a.checkpoint_id=c.checkpoint_id WHERE c.checkpoint_id=?1 AND a.activation<=?2",
-            params![id.as_str(),seq_to_i64(cut.projection_activation.0)?],|row|row.get(0),
-        ).optional().map_err(|e|storage(e.to_string()))?;
-        let bytes = bytes.ok_or_else(|| {
-            ConversationStoreError::InvalidReference(
-                "checkpoint is absent at Resource Read Cut".into(),
-            )
-        })?;
-        if bytes > limits.record_bytes as u64 || bytes > limits.page_bytes as u64 {
-            return Err(crate::context::resources::bound(
-                "checkpoint record exceeds resource materialization bound",
-            ));
-        }
-        projection::checkpoint(&transaction, id)
+        self.read_transaction(|transaction| {
+            compaction_resources::validate(transaction, &self.conversation_id, cut, limits)?;
+            let bytes:Option<u64>=transaction.query_row(
+                "SELECT octet_length(c.candidate_json)+octet_length(a.activation_json)+coalesce(octet_length(c.occupancy_json),0) FROM projection_checkpoints c JOIN projection_activations a ON a.checkpoint_id=c.checkpoint_id WHERE c.checkpoint_id=?1 AND a.activation<=?2",
+                params![id.as_str(),seq_to_i64(cut.projection_activation.0)?],|row|row.get(0),
+            ).optional().map_err(|e|storage(e.to_string()))?;
+            let bytes = bytes.ok_or_else(|| {
+                ConversationStoreError::InvalidReference(
+                    "checkpoint is absent at Resource Read Cut".into(),
+                )
+            })?;
+            if bytes > limits.record_bytes as u64 || bytes > limits.page_bytes as u64 {
+                return Err(crate::context::resources::bound(
+                    "checkpoint record exceeds resource materialization bound",
+                ));
+            }
+            projection::checkpoint(transaction, id)
+        })
     }
     fn compaction_request(
         &self,
@@ -4307,41 +4313,35 @@ impl ProjectionStore for SqliteConversationStore {
         limits: crate::context::resources::ResourceLimits,
     ) -> Result<crate::model::RequestSnapshot, ConversationStoreError> {
         limits.validate()?;
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|e| storage(e.to_string()))?;
-        let bytes: Option<u64> = transaction.query_row("SELECT octet_length(snapshot_json) FROM request_snapshots WHERE request_id=?1 AND started_sequence<=?2",params![request.as_str(),seq_to_i64(cut.journal.0)?],|row|row.get(0)).optional().map_err(|e|storage(e.to_string()))?;
-        if cut.conversation_id != self.conversation_id {
-            return Err(ConversationStoreError::InvalidReference(
-                "foreign frozen request Resource Read Cut".into(),
-            ));
-        }
-        let bytes = bytes.ok_or_else(|| {
-            ConversationStoreError::InvalidReference(
-                "request is absent at the Resource Read Cut".into(),
+        self.read_transaction(|transaction| {
+            let bytes: Option<u64> = transaction.query_row("SELECT octet_length(snapshot_json) FROM request_snapshots WHERE request_id=?1 AND started_sequence<=?2",params![request.as_str(),seq_to_i64(cut.journal.0)?],|row|row.get(0)).optional().map_err(|e|storage(e.to_string()))?;
+            if cut.conversation_id != self.conversation_id {
+                return Err(ConversationStoreError::InvalidReference(
+                    "foreign frozen request Resource Read Cut".into(),
+                ));
+            }
+            let bytes = bytes.ok_or_else(|| {
+                ConversationStoreError::InvalidReference(
+                    "request is absent at the Resource Read Cut".into(),
+                )
+            })?;
+            if bytes > limits.record_bytes as u64 || bytes > limits.page_bytes as u64 {
+                return Err(crate::context::resources::bound(
+                    "historical frozen request exceeds materialization bound",
+                ));
+            }
+            load_request_snapshot_bounded(
+                transaction,
+                &self.conversation_id,
+                request,
+                limits.record_bytes.min(limits.page_bytes),
             )
-        })?;
-        if bytes > limits.record_bytes as u64 || bytes > limits.page_bytes as u64 {
-            return Err(crate::context::resources::bound(
-                "historical frozen request exceeds materialization bound",
-            ));
-        }
-        load_request_snapshot_bounded(
-            &transaction,
-            &self.conversation_id,
-            request,
-            limits.record_bytes.min(limits.page_bytes),
-        )
+        })
     }
     fn projection_head(
         &self,
     ) -> Result<Option<super::projection::ProjectionCheckpoint>, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|e| storage(e.to_string()))?;
-        projection::head(&transaction)
+        self.read_transaction(|transaction| projection::head(transaction))
     }
     fn projection_checkpoint(
         &self,
@@ -4354,11 +4354,7 @@ impl ProjectionStore for SqliteConversationStore {
         after: crate::context::checkpoint::ProjectionActivationId,
         limit: usize,
     ) -> Result<Vec<super::projection::ProjectionCheckpoint>, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|e| storage(e.to_string()))?;
-        projection::timeline(&transaction, after, limit)
+        self.read_transaction(|transaction| projection::timeline(transaction, after, limit))
     }
     fn projection_timeline_at_journal_cut(
         &self,
@@ -4366,22 +4362,18 @@ impl ProjectionStore for SqliteConversationStore {
         after: crate::context::checkpoint::ProjectionActivationId,
         limit: usize,
     ) -> Result<super::projection::ProjectionTimelinePage, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|e| storage(e.to_string()))?;
-        projection::timeline_at_journal_cut(&transaction, through, after, limit)
+        self.read_transaction(|transaction| {
+            projection::timeline_at_journal_cut(transaction, through, after, limit)
+        })
     }
     fn projection_checkpoint_at_journal_cut(
         &self,
         through: u64,
         id: &crate::runtime::identity::CheckpointId,
     ) -> Result<super::projection::ProjectionCheckpoint, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|e| storage(e.to_string()))?;
-        projection::checkpoint_at_journal_cut(&transaction, through, id)
+        self.read_transaction(|transaction| {
+            projection::checkpoint_at_journal_cut(transaction, through, id)
+        })
     }
     fn projection_owner(
         &self,
@@ -4453,12 +4445,9 @@ impl ObservationStore for SqliteConversationStore {
         cut: &crate::durable::observation::ObservationReadCut,
         query: &crate::durable::observation::TraceFactQuery,
     ) -> Result<Vec<crate::durable::observation::TraceFactHeader>, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|error| storage(error.to_string()))?;
-        observation::validate(&transaction, &self.conversation_id, cut)?;
-        observation_trace::facts(&transaction, cut, query)
+        self.read_at_cut(cut, |transaction| {
+            observation_trace::facts(transaction, cut, query)
+        })
     }
     fn observation_request_accepted_at(
         &self,
@@ -4466,18 +4455,15 @@ impl ObservationStore for SqliteConversationStore {
         source_sequence: u64,
     ) -> Result<Option<crate::observation::content::CanonicalContentLocator>, ConversationStoreError>
     {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|error| storage(error.to_string()))?;
-        observation::validate(&transaction, &self.conversation_id, cut)?;
-        observation_request::validate_start(&transaction, source_sequence, cut.read.journal)?;
-        let position:Option<u64>=transaction.query_row("SELECT observation_accepted_ledger FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence=?1",[source_sequence],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?.flatten();
-        Ok(position
-            .filter(|position| *position <= cut.ledger_through)
-            .map(|position| {
-                crate::observation::content::CanonicalContentLocator::ByLedgerPosition { position }
-            }))
+        self.read_at_cut(cut, |transaction| {
+            observation_request::validate_start(transaction, source_sequence, cut.read.journal)?;
+            let position:Option<u64>=transaction.query_row("SELECT observation_accepted_ledger FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence=?1",[source_sequence],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?.flatten();
+            Ok(position
+                .filter(|position| *position <= cut.ledger_through)
+                .map(|position| {
+                    crate::observation::content::CanonicalContentLocator::ByLedgerPosition { position }
+                }))
+        })
     }
     fn observation_request_summary_at(
         &self,
@@ -4512,12 +4498,9 @@ impl ObservationStore for SqliteConversationStore {
         cut: &crate::durable::observation::ObservationReadCut,
         position: u64,
     ) -> Result<crate::durable::observation::TraceCanonicalSummary, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|error| storage(error.to_string()))?;
-        observation::validate(&transaction, &self.conversation_id, cut)?;
-        observation_trace::canonical(&transaction, cut, position)
+        self.read_at_cut(cut, |transaction| {
+            observation_trace::canonical(transaction, cut, position)
+        })
     }
     fn observation_trace_tool_result(
         &self,
@@ -4525,36 +4508,27 @@ impl ObservationStore for SqliteConversationStore {
         occurrence: &crate::events::types::ToolObservationOccurrence,
     ) -> Result<Option<crate::durable::observation::TraceCanonicalSummary>, ConversationStoreError>
     {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|error| storage(error.to_string()))?;
-        observation::validate(&transaction, &self.conversation_id, cut)?;
-        observation_trace::tool_result(&transaction, cut, occurrence)
+        self.read_at_cut(cut, |transaction| {
+            observation_trace::tool_result(transaction, cut, occurrence)
+        })
     }
     fn observation_trace_tool_proposal(
         &self,
         cut: &crate::durable::observation::ObservationReadCut,
         occurrence: &crate::events::types::ToolObservationOccurrence,
     ) -> Result<crate::durable::observation::TraceToolProposalSummary, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|error| storage(error.to_string()))?;
-        observation::validate(&transaction, &self.conversation_id, cut)?;
-        observation_trace::proposal(&transaction, cut, occurrence)
+        self.read_at_cut(cut, |transaction| {
+            observation_trace::proposal(transaction, cut, occurrence)
+        })
     }
     fn observation_trace_tool_definition(
         &self,
         cut: &crate::durable::observation::ObservationReadCut,
         occurrence: &crate::events::types::ToolObservationOccurrence,
     ) -> Result<Option<crate::observation::trace::TraceFieldSource>, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|error| storage(error.to_string()))?;
-        observation::validate(&transaction, &self.conversation_id, cut)?;
-        observation_trace::tool_definition(&transaction, cut, occurrence)
+        self.read_at_cut(cut, |transaction| {
+            observation_trace::tool_definition(transaction, cut, occurrence)
+        })
     }
     fn observation_trace_adoption(
         &self,
@@ -4563,12 +4537,9 @@ impl ObservationStore for SqliteConversationStore {
         offset: u64,
         limit: usize,
     ) -> Result<crate::durable::observation::TraceAdoptionPage, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|error| storage(error.to_string()))?;
-        observation::validate(&transaction, &self.conversation_id, cut)?;
-        observation_trace::adoption_page(&transaction, cut, source_sequence, offset, limit)
+        self.read_at_cut(cut, |transaction| {
+            observation_trace::adoption_page(transaction, cut, source_sequence, offset, limit)
+        })
     }
     fn observation_request_context_at(
         &self,
@@ -4577,12 +4548,9 @@ impl ObservationStore for SqliteConversationStore {
         offset: u64,
         limit: usize,
     ) -> Result<crate::durable::observation::TraceRequestContextPage, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|error| storage(error.to_string()))?;
-        observation::validate(&transaction, &self.conversation_id, cut)?;
-        observation_trace::context(&transaction, cut, source_sequence, offset, limit)
+        self.read_at_cut(cut, |transaction| {
+            observation_trace::context(transaction, cut, source_sequence, offset, limit)
+        })
     }
     fn request_summary_header_at(
         &self,
@@ -5589,33 +5557,25 @@ impl ObservationStore for SqliteConversationStore {
     fn conversation_read_cut(
         &self,
     ) -> Result<super::reading::ConversationReadCut, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|error| storage(error.to_string()))?;
-        reading::cut(&transaction, &self.conversation_id)
+        self.read_transaction(|transaction| reading::cut(transaction, &self.conversation_id))
     }
     fn observation_turns(
         &self,
         offset: Option<u64>,
         limit: usize,
     ) -> Result<crate::observation::turn::ObservedTurnPage, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|error| storage(error.to_string()))?;
-        observation_turn::page(&transaction, &self.conversation_id, offset, limit)
+        self.read_transaction(|transaction| {
+            observation_turn::page(transaction, &self.conversation_id, offset, limit)
+        })
     }
     fn observation_file_delivery(
         &self,
         locator: &crate::observation::content::CanonicalContentLocator,
         index: u64,
     ) -> Result<crate::durable::observation::NativeFileDelivery, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|error| storage(error.to_string()))?;
-        observation_delivery::selected(&transaction, &self.conversation_id, locator, index)
+        self.read_transaction(|transaction| {
+            observation_delivery::selected(transaction, &self.conversation_id, locator, index)
+        })
     }
     fn observation_deliveries(
         &self,
@@ -5626,18 +5586,15 @@ impl ObservationStore for SqliteConversationStore {
     ) -> Result<crate::observation::delivery::RuntimeClientDeliveryHead, ConversationStoreError>
     {
         content::validate_canonical_locator(locator)?;
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|error| storage(error.to_string()))?;
-        observation::validate(&transaction, &self.conversation_id, cut)?;
-        let position = content::canonical_position(&transaction, locator)?;
-        if position > cut.ledger_through {
-            return Err(ConversationStoreError::InvalidReference(
-                "delivery beyond captured canonical cut".into(),
-            ));
-        }
-        observation_delivery::head(&transaction, position, offset, limit)
+        self.read_at_cut(cut, |transaction| {
+            let position = content::canonical_position(transaction, locator)?;
+            if position > cut.ledger_through {
+                return Err(ConversationStoreError::InvalidReference(
+                    "delivery beyond captured canonical cut".into(),
+                ));
+            }
+            observation_delivery::head(transaction, position, offset, limit)
+        })
     }
     fn observation_delivery_read(
         &self,
@@ -5648,40 +5605,33 @@ impl ObservationStore for SqliteConversationStore {
         max_bytes: u32,
     ) -> Result<crate::durable::observation::ObservationValueChunk, ConversationStoreError> {
         content::validate_canonical_locator(locator)?;
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|error| storage(error.to_string()))?;
-        observation::validate(&transaction, &self.conversation_id, cut)?;
-        let position = content::canonical_position(&transaction, locator)?;
-        if position > cut.ledger_through {
-            return Err(ConversationStoreError::InvalidReference(
-                "delivery beyond captured canonical cut".into(),
-            ));
-        }
-        observation_delivery::read(&transaction, position, index, offset, max_bytes)
+        self.read_at_cut(cut, |transaction| {
+            let position = content::canonical_position(transaction, locator)?;
+            if position > cut.ledger_through {
+                return Err(ConversationStoreError::InvalidReference(
+                    "delivery beyond captured canonical cut".into(),
+                ));
+            }
+            observation_delivery::read(transaction, position, index, offset, max_bytes)
+        })
     }
     fn conversation_turns(
         &self,
         offset: usize,
         limit: usize,
     ) -> Result<super::reading::ConversationTurnPage, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|error| storage(error.to_string()))?;
-        reading::turns(&transaction, &self.conversation_id, offset, limit)
+        self.read_transaction(|transaction| {
+            reading::turns(transaction, &self.conversation_id, offset, limit)
+        })
     }
     fn conversation_window(
         &self,
         at: &super::reading::ConversationWindowAt,
         limit: usize,
     ) -> Result<super::reading::DurableConversationWindow, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|error| storage(error.to_string()))?;
-        reading::window(&transaction, &self.conversation_id, at, limit)
+        self.read_transaction(|transaction| {
+            reading::window(transaction, &self.conversation_id, at, limit)
+        })
     }
     fn goal_observation_view(
         &self,
@@ -5712,20 +5662,18 @@ impl ObservationStore for SqliteConversationStore {
         offset: u64,
         max_bytes: u32,
     ) -> Result<super::observation::ObservationValueChunk, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|error| storage(error.to_string()))?;
-        observation_projection::provenance_read(
-            &transaction,
-            &self.conversation_id,
-            cut,
-            activation,
-            item,
-            path,
-            offset,
-            max_bytes,
-        )
+        self.read_transaction(|transaction| {
+            observation_projection::provenance_read(
+                transaction,
+                &self.conversation_id,
+                cut,
+                activation,
+                item,
+                path,
+                offset,
+                max_bytes,
+            )
+        })
     }
     fn observation_projection_head(
         &self,
@@ -5734,11 +5682,7 @@ impl ObservationStore for SqliteConversationStore {
         Option<crate::observation::head::RuntimeClientProjectionHeadView>,
         ConversationStoreError,
     > {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|error| storage(error.to_string()))?;
-        observation_projection::read(&transaction, through)
+        self.read_transaction(|transaction| observation_projection::read(transaction, through))
     }
     fn mark_observation_ready(&self, first: u64, last: u64) -> Result<(), ConversationStoreError> {
         if first == 0 || first > last {
