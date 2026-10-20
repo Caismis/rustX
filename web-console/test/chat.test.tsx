@@ -99,7 +99,6 @@ it('Subagent and Workflow cards bind native identities and lifecycle facts witho
   expect(run.textContent).toContain('completed');
   expect(run.querySelector('[data-workflow-activation-id]')).toBeNull();
   fireEvent.click(run.querySelector('[data-disclosure-row]')!);
-  fireEvent.click(run.querySelectorAll('[data-disclosure-row]')[1]);
   expect(run.querySelector('[data-workflow-activation-id="workflow-review"]')?.textContent).toContain('completed');
   expect(ui.container.querySelector('pre')).toBeNull();
   expect(ui.container.textContent).not.toMatch(/private-|Todo|Goal|Trace/);

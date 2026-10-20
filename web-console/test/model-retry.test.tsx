@@ -246,7 +246,7 @@ it('retry progress retains the disclosed original failure cut while a newer nati
   expect(request.params).toMatchObject({cut:old,domain:'journal.5',path:['event','error'],max_bytes:65536});
   const next=checkpoint(structuredClone(state),'14');
   await act(async()=>server.socket.deliver({jsonrpc:'2.0',method:'session/event',params:{target:server.target('A'),cursor:'14',event:{type:'checkpoint_advanced',transition:'native-next-head',checkpoint:next}}}));
-  expect(server.client.getSnapshot().views.A.trace!.readCuts!['trace:0']).toEqual(next.read_cut);
+  expect(server.client.getSnapshot().views.A.trace!.readCuts!['trace:0']).toEqual(old);
   await act(async()=>server.socket.success(request,originalFailureChunk(request)));
   await waitFor(()=>expect(ui.getByText('Fixture model response timeout')).toBeTruthy());
   expect(server.requests.filter(row=>row.request.method==='conversation/checkpointValueRead')).toHaveLength(1);

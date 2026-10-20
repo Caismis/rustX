@@ -14,9 +14,17 @@ for (const { locale, theme, width } of [
   await expect(page).toHaveTitle('Workspace panel');
   await page.locator('[data-preview-toggle]').click();
   const panel = page.locator('[data-workbench]');
+  const openOffice = async (name: string) => {
+    const converted = page.waitForResponse(response => response.url().endsWith('/workbench')
+      && response.request().method() === 'POST' && response.request().postDataJSON()?.call?.request?.kind === 'office'
+      && response.request().postDataJSON()?.call?.request?.path === `docs/${name}`);
+    await panel.getByRole('button', { name, exact: true }).click();
+    const response = await converted;
+    expect(response.ok()).toBe(true); await response.finished();
+  };
   await panel.getByRole('button', { name: locale === 'zh' ? /^工作区文件/ : /^Workspace files/ }).click();
   await panel.getByRole('button', { name: 'docs', exact: true }).click();
-  await panel.getByRole('button', { name: 'slides.pptx', exact: true }).click();
+  await openOffice('slides.pptx');
   const port = panel.locator('[data-document-zoom-scrollport]'), frame = panel.locator('[data-document-zoom-frame]');
   const first = panel.locator('[data-pdf-page="1"]'), second = panel.locator('[data-pdf-page="2"]');
   await expect(first.locator('.textLayer')).toContainText('slide 1');
@@ -42,7 +50,7 @@ for (const { locale, theme, width } of [
   await expect(second.locator('.textLayer')).toContainText('slide 2');
   const saved = await port.evaluate(node => node.scrollTop);
   await panel.getByRole('tab', { name: locale === 'zh' ? /^文件/ : /^Files/ }).click();
-  await panel.getByRole('button', { name: 'linked.docx', exact: true }).click();
+  await openOffice('linked.docx');
   await expect(panel.locator('[data-pdf-page="1"] .textLayer')).toContainText('rustX document preview');
   await panel.getByRole('tab', { name: /^slides.pptx/ }).click();
   await expect(second.locator('.textLayer')).toContainText('slide 2');

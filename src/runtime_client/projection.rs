@@ -1586,8 +1586,9 @@ fn projection_head_view(
 
 pub(crate) fn checkpoint_view(
     store: &dyn crate::durable::ConversationStore,
-    checkpoint: crate::durable::projection::ProjectionCheckpoint,
-) -> Result<super::snapshot::RuntimeClientProjectionHeadView, crate::durable::ConversationStoreError> {
+    checkpoint: &crate::durable::projection::ProjectionCheckpoint,
+) -> Result<super::snapshot::RuntimeClientProjectionHeadView, crate::durable::ConversationStoreError>
+{
     let summary_preview = checkpoint
         .candidate
         .items

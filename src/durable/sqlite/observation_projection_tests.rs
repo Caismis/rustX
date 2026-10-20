@@ -100,7 +100,7 @@ fn compaction_marker_keeps_its_original_transcript_boundary_as_history_grows() {
     let page = crate::runtime_client::projection_history::page(
         &store,
         later.completed.sequence,
-        Default::default(),
+        crate::context::checkpoint::ProjectionActivationId::default(),
         16,
     )
     .unwrap();

@@ -170,7 +170,7 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
       if (owner.snapshot()?.incarnation === ticket.incarnation) setError(String(cause));
     }
   };
-  return <div ref={root} className={css.root}>
+  return <div ref={root} className={css.root} data-file-drop-owner="">
     {uploadNotice && <Toast key={noticeSequence} text={uploadNotice} icon={<IconWarningOutline16/>} anchor={root.current} onDone={() => setUploadNotice('')}/>}
     {error && <p role="alert">{error}</p>}
     {!restoreSupported && <p role="alert">{tx('agent:agent-composer.cannot-restore-this-ordered-native-input-in-the-flat-web-editor')}</p>}
@@ -179,7 +179,7 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
       {menu && <CommandMenu rows={rows} active={highlight} select={selectMenu} highlight={trigger.highlight}
         fileDescription={uploadPolicy ? undefined : tx('agent:upload.policy')} />}
       {restored.map((receipt, index) => <div key={JSON.stringify([receipt.batch_id, receipt.token])}><span>{tx('agent:agent-composer.native-restored-upload-batch')}{' '}{receipt.batch_id}</span><Button disabled={disabled || busy} onClick={() => editor && owner.removeRestored(editor.incarnation, index)}>{tx('agent:agent-composer.remove-draft-upload')}</Button></div>)}
-      <ComposerAttachments files={files} canAcceptDrop={!disabled && !busy && !!editor && !!uploadPolicy} onAddFiles={pick}
+      <ComposerAttachments dropOwner={root} files={files} canAcceptDrop={!disabled && !busy && !!editor && !!uploadPolicy} onAddFiles={pick}
         onRemove={firstSubmission && onRetainedRemove ? onRetainedRemove : disabled || busy ? undefined : id => { intake.remove(id); if (editor) owner.attachmentsEdited(editor.incarnation); }}
         onRetry={!onRetainedRecover && (disabled || busy) ? undefined : id => { if (onRetainedRecover) onRetainedRecover(true); else void intake.upload(id, port); }}
         onReconcile={!onRetainedRecover && (disabled || busy) ? undefined : id => { if (onRetainedRecover) onRetainedRecover(false); else void intake.reconcile(id, port); }}/>

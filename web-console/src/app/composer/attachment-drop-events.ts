@@ -8,6 +8,7 @@ import { transferInputs, type IntakeInput } from '../../client/uploads'
  * @param onAddFiles - attachment intake callback.
  * @param dragDepth - the view's retained nested-drag counter.
  * @param setDragActive - publish whether a file drag is active.
+ * @param owner - the retained composer's DOM owner, including its visibility.
  * @returns cleanup for exactly these listeners.
  */
 export function installDocumentDropEvents(
@@ -15,7 +16,19 @@ export function installDocumentDropEvents(
   onAddFiles: (inputs: IntakeInput[]) => void,
   dragDepth: { current: number },
   setDragActive: (active: boolean) => void,
+  owner: { readonly current: HTMLElement | null },
 ): () => void {
+  const visible = (node: Element | null): boolean => !!node && !node.closest('[hidden], [inert]')
+  const owns = (event: globalThis.DragEvent): boolean => {
+    const element = owner.current
+    if (!element?.isConnected || !visible(element) || event.defaultPrevented) return false
+    const target = event.target instanceof Element ? event.target.closest('[data-file-drop-owner]') : null
+    if (target) return target === element
+    const focused = document.activeElement?.closest('[data-file-drop-owner]') ?? null
+    // A targeted or focused pane wins. Otherwise the first visible listener
+    // claims the document drop by preventing its default, exactly once.
+    return !visible(focused) || focused === element
+  }
   const fileTransfer = (event: globalThis.DragEvent): DataTransfer | null => {
     const dataTransfer = event.dataTransfer
     if (dataTransfer === null || !dataTransfer.types.includes('Files')) return null
@@ -27,6 +40,7 @@ export function installDocumentDropEvents(
   }
   const onDragEnter = (event: globalThis.DragEvent): void => {
     if (fileTransfer(event) === null) return
+    if (!owns(event)) { reset(); return }
     event.preventDefault()
     dragDepth.current += 1
     setDragActive(true)
@@ -34,6 +48,7 @@ export function installDocumentDropEvents(
   const onDragOver = (event: globalThis.DragEvent): void => {
     const dataTransfer = fileTransfer(event)
     if (dataTransfer === null) return
+    if (!owns(event)) { reset(); return }
     event.preventDefault()
     dataTransfer.dropEffect = canAcceptDrop ? 'copy' : 'none'
   }
@@ -48,8 +63,9 @@ export function installDocumentDropEvents(
   const onDrop = (event: globalThis.DragEvent): void => {
     const dataTransfer = fileTransfer(event)
     if (dataTransfer === null) return
-    event.preventDefault()
     reset()
+    if (!owns(event)) return
+    event.preventDefault()
     if (canAcceptDrop) {
       onAddFiles(transferInputs(dataTransfer))
     }

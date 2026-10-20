@@ -3747,3 +3747,63 @@ passed. Completed screenshots were visually reviewed:
 `/tmp/rustx-workflow-completed-en.png` and
 `/tmp/rustx-workflow-completed-zh.png`. No screenshot baselines or comparator
 tolerances changed. Other browser engines and operating systems were not tested.
+
+### Pre-PR self-review (2026-10-20)
+
+The complete branch was reviewed against `origin/main`, including native child
+inspection/control separation, compaction transcript anchors, history repair,
+model confirmation, response retry, upload settlement and document lifetimes.
+The review found that every retained Composer registered document drag listeners,
+including hidden parent/child views. A failing reproduction produced two portal
+overlays for one drag. Document drops now belong to the visible targeted or
+focused Composer; otherwise the first visible owner claims the event once.
+Hidden/inert owners and already-handled events cannot upload or render a mask.
+Native upload admission, receipts and uncertain settlement are unchanged.
+
+The regression checks actual parent/child resident switching and exact upload
+preparation counts, as well as direct target/focus selection in the unit suite.
+The full unit pass also exposed outdated Workflow disclosure, retained Trace-cut
+and PDF owner fixtures. They now assert the current single ordered node list,
+coherent immutable read cut and page-size loading contract. Native inspection
+checks and nested-path assertions were separated to satisfy strict lint without
+disabling rules; immutable checkpoint display conversion borrows its input.
+
+Office acceptance now waits for the real Host conversion response before checking
+rendered pages. This fixes the cold-start race without increasing assertion
+timeouts or altering screenshot comparators. All four locale/theme/viewport
+Office cases passed after this change. The other 25 selected browser cases
+passed, including attachment intake, resident child navigation, Stop, retry,
+session actions, model confirmation, compaction, history refresh and live Trace.
+
+Browser plugin not available: validation uses the same pinned Playwright 1.63
+Linux image, fonts and read-only Node modules as `scripts/browser-tests.sh`,
+preview origin `http://127.0.0.1:5273` and fixture origin at port 5274. The current
+all-feature Rust executables were reused while the complete native test command
+owned Cargo's lock, avoiding a feature-changing rebuild during its execution.
+The drop-ownership screenshot was visually reviewed:
+`/tmp/rustx-review-drop-owner.png`. No reference image changed.
+
+Verified: 3050 WebUI tests (4 existing skips), 1180 TUI tests (1 existing skip),
+41 dev-launcher tests, all four TypeScript surfaces, production build, i18n,
+311 source records, 267 dependency notice entries, repository-wide rustfmt and
+all-target/all-feature Clippy. Full native results are recorded in the PR.
+
+The affected native module pass completed with 324 tests passing and one existing
+skip, including Workflow ordering/inspection, App Server transport, Runtime Client
+projection and the shared Workflow wire round-trip. Its shared JSON sample now
+includes the nullable `child_agent_id` field, matching native serialization; the
+six TUI Workflow projection tests passed against that updated sample.
+
+The local all-target/all-feature safety-net run was not a clean pass: 4389 tests
+passed, four were ignored, the stale sample failed, and two outer liveness guards
+expired. The sample was repaired and passed; the unchanged model-selection and
+large-write progress cases passed individually. A repeated combined run again
+expired the model-selection guard and a delivery-access guard, and was stopped.
+The unchanged delivery-access case passed individually as well. No product
+deadline or test assertion was weakened. Per `tests/README.md`, outer watchdog
+expiry is a harness failure rather than a semantic verdict; the final PR is
+promoted to FULL verification on its committed head.
+
+The final protocol regeneration/check passed with no generated-file drift;
+all-target/all-feature Clippy and repository-wide formatting also passed after
+the shared fixture correction.

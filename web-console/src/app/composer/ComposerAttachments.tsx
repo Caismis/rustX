@@ -12,14 +12,15 @@ import css from '../../presentation/attachments/ComposerAttachments.module.css';
 
 type Attachment = Pick<IntakeFile, 'id' | 'name' | 'file' | 'status'>;
 /** DSH attachment presentation over the native draft/receipt owner. */
-export function ComposerAttachments({ files, canAcceptDrop, onAddFiles, onRemove, onRetry, onReconcile }: {
+export function ComposerAttachments({ files, canAcceptDrop, onAddFiles, onRemove, onRetry, onReconcile, dropOwner }: {
   files: readonly Attachment[]; canAcceptDrop: boolean; onAddFiles: (inputs: IntakeInput[]) => void;
+  dropOwner: { readonly current: HTMLElement | null };
   onRemove?: (id: string) => void; onRetry?: (id: string) => void; onReconcile?: (id: string) => void;
 }) {
   const tx = useTranslation();
   const [dragActive, setDragActive] = useState(false);
   const depth = useRef(0);
-  useEffect(() => installDocumentDropEvents(canAcceptDrop, onAddFiles, depth, setDragActive), [canAcceptDrop, onAddFiles]);
+  useEffect(() => installDocumentDropEvents(canAcceptDrop, onAddFiles, depth, setDragActive, dropOwner), [canAcceptDrop, onAddFiles, dropOwner]);
   return <>
     {dragActive && <DropOverlay disabled={!canAcceptDrop} labels={{ title: tx(canAcceptDrop ? 'agent:upload.drop' : 'agent:upload.dropBlocked') }}/>}
     {files.length > 0 && <div className={css.rail}>

@@ -45,6 +45,7 @@
               "outcome": "completed"
             },
             "child": null,
+            "child_agent_id": null,
             "invocation": null,
             "tool_id": null,
             "interaction": null,

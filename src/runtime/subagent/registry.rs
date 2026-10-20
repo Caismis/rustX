@@ -6047,7 +6047,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_workflow_child_closes_native_lifecycle_without_parent_inbound() {
+    async fn workflow_child_inspection_does_not_grant_durable_agent_controls() {
         let plane = plane(4);
         let child = stage_exit0(&plane);
         let accepted = start(
@@ -6090,6 +6090,28 @@ mod tests {
                 .agent_workspace(&accepted.child_agent_id)
                 .is_some()
         );
+        child
+            .complete(
+                ChildResultStatus::Succeeded,
+                Some(r#"{"summary":"answer"}"#),
+            )
+            .await;
+        plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .expect("settled");
+    }
+
+    #[tokio::test]
+    async fn a_workflow_child_closes_native_lifecycle_without_parent_inbound() {
+        let plane = plane(4);
+        let child = stage_exit0(&plane);
+        let accepted = start(
+            &plane,
+            &workflow_spec(&plane.conversation_id, "return a structured result"),
+        )
+        .await;
         child
             .complete(
                 ChildResultStatus::Succeeded,

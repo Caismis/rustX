@@ -266,3 +266,24 @@ it('document drop overlay balances nested drags, ignores text and blocks unavail
   fireEvent(window, new Event('dragend'));
   expect(ui.queryByRole('status')).toBeNull();
 });
+
+it('one file drop belongs to the visible composer, then to its targeted or focused pane', () => {
+  const parent = new AttachmentIntake(), child = new AttachmentIntake();
+  const props = { uploadPolicy: policy, disabled: false, busy: false, active: false, onDraftSend: async () => false, onUpload: async () => [], onSend: async () => false, onCancel: () => {} };
+  const surface = (hidden: boolean) => <>
+    <div hidden={hidden}><AgentComposer {...props} intakeOwner={parent} messageLabel="Parent input"/></div>
+    <AgentComposer {...props} intakeOwner={child} messageLabel="Child input"/>
+  </>;
+  const ui = render(surface(true));
+  const dataTransfer = { types: ['Files'], files: [file()], items: [], dropEffect: 'none' };
+  fireEvent.dragEnter(document.body, { dataTransfer });
+  expect(ui.getAllByRole('status')).toHaveLength(1);
+  fireEvent.drop(document.body, { dataTransfer });
+  expect(parent.snapshot()).toHaveLength(0); expect(child.snapshot()).toHaveLength(1);
+  ui.rerender(surface(false));
+  ui.getByLabelText('Child input').focus();
+  fireEvent.drop(document.body, { dataTransfer });
+  expect(parent.snapshot()).toHaveLength(0); expect(child.snapshot()).toHaveLength(2);
+  fireEvent.drop(ui.getByLabelText('Parent input'), { dataTransfer });
+  expect(parent.snapshot()).toHaveLength(1); expect(child.snapshot()).toHaveLength(2);
+});
