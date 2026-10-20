@@ -25,10 +25,10 @@ export function ConversationStatus({ client, sessionId, recover }: { client: App
 }
 
 /** Execution admission belongs at the resident composer seat, never the shell. */
-export function ConversationSeat({ client, host, authority, associations, sessionId, initialWorkspace, workspacePicked, draftOwner, binding, current, executable, consumed, restored, preparePublication, onCommand }: {
+export function ConversationSeat({ client, host, authority, associations, sessionId, initialWorkspace, workspacePicked, draftOwner, binding, current, executable, transitioning = false, consumed, restored, preparePublication, onCommand }: {
   client: AppServerClient; host: ProductHostWorkspaces; authority: WorkspaceAuthority; associations: WorkspaceAssociations; sessionId?: string; initialWorkspace?: string;
   workspacePicked?: (id: string) => void;
-  draftOwner?: ComposerDraft; executable: boolean; binding: string; current: () => boolean; consumed?: { id: string; sequence: number };
+  draftOwner?: ComposerDraft; executable: boolean; transitioning?: boolean; binding: string; current: () => boolean; consumed?: { id: string; sequence: number };
   restored?: { conversation: string; content: UserInputBlock[] }; preparePublication: () => ((id: string) => (() => boolean) | void);
   onCommand: (id: CommandId) => void;
 }) {
@@ -42,7 +42,7 @@ export function ConversationSeat({ client, host, authority, associations, sessio
   const [failure, setFailure] = useState<{ owner: string; message: string }>();
   const error = failure?.owner === owner ? failure.message : undefined;
   const attached = state.connection === 'connected' && !!view && client.isAttachmentControlCurrent(view.id, view.attachmentObservation);
-  const disabled = !attached || !executable || !!view?.modelMutation || !!view?.snapshot?.shutting_down || !!view?.snapshot?.durability_failure;
+  const disabled = transitioning || !attached || !executable || !!view?.modelMutation || !!view?.snapshot?.shutting_down || !!view?.snapshot?.durability_failure;
   return <ComposerSeat>
     <div hidden={view?.observationState === 'following' && !!view.snapshot?.pending_interactions?.length}>
       <ConversationComposer draftOwner={draftOwner} client={client} host={host} authority={authority} associations={associations} initialWorkspace={initialWorkspace} workspacePicked={workspacePicked} binding={binding} activeView={view} current={current} consumed={consumed} preparePublication={preparePublication}

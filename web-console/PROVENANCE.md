@@ -2763,3 +2763,43 @@ were removed. Screenshots were inspected from `/tmp/rustx-upload-drop-1440.png`,
 `/tmp/rustx-upload-drop-390.png`, `/tmp/rustx-upload-rail-1440.png`,
 `/tmp/rustx-upload-rail-390.png`, `/tmp/rustx-upload-pending.png`, and
 `/tmp/rustx-upload-failed.png`. The existing bundle-size build warning remains.
+
+## Message Regenerate reading handoff (2026-10-20)
+
+Reference inspection: DeepSeek Harness `687f282e8625c6b8d11ff58211a90524be2e4317`,
+`ui-chat/src/client/chat/TurnTailNodeView.tsx`, `MessageIconActions.tsx` and
+`ChatView.tsx`. The current Harness built-in message strip exposes Copy and Fork;
+its model-request retry assembler is not a user Regenerate action. rustX retains
+its native sibling-branch replay while following the user's explicit interaction
+contract: click Regenerate → remove the selected response and later output from
+the reading surface immediately → show the existing Harness generation chrome →
+replace it with the newly accepted native replay and its streaming response.
+
+| Mismatch | Local treatment |
+| --- | --- |
+| The old response stayed visible until Branch/Switch/Attach completed | Capture a finite reading prefix synchronously with the Shell intent, retaining the exact adopted User input and earlier rows. Native response/process metadata defines the cut; an unloaded input never borrows its neighbour. |
+| Attachment replacement destroyed the Chat viewport and briefly exposed an empty shell | Keep the Session's viewport mounted. A new native attachment resets reading intent through the existing single-frame scroll owner, without reconstructing the surface. |
+| Acknowledgement and canonical observation can arrive in either order | The Shell owns the disposable prefix through the native accepted MessageId and exact target handoff. Only that input's observed native message/descriptor retires the prefix. Failure, route replacement and authority changes retire it independently; no native effect is rolled back or replayed. |
+| Send and response actions could race the native lineage preparation | Disable their existing controls while the prefix owns the reading handoff. Input replay still uses only the native returned editor content, once. |
+
+No protocol, native execution or TUI interaction changes. The original lineage
+remains accessible from Session tree. Browser plugin not available in this
+session; rendered QA uses the repository's pinned Playwright Chromium container.
+The flow under test is: completed response → Regenerate → hold each real native
+Branch/Switch/Attach/turn-start acknowledgement → retained prompt and earlier
+reading with no old response → new native streaming and settled reply.
+Desktop English/light and 390px Chinese/dark runs record animation-frame checks
+and screenshots outside the repository. Existing screenshot references and
+comparison tolerances are unchanged.
+
+Verification: the full Web suite passed 2,966 tests (four existing skips), then
+117 focused command/retry/scroll checks passed after adding acknowledgement-order
+and deferred-descriptor coverage. Typecheck, build, i18n, source/notice checks and
+all 55 provider tests passed. All 23 existing Agent browser checks passed; the
+final eight native/browser checks passed for upload-bearing and inherited Retry,
+original lineage/Fork, both localized Regenerate frame probes, both Stop flows,
+both compaction flows and turn navigation. Page identity, meaningful content,
+error-overlay/console health and horizontal-overflow checks passed. Screenshots
+`/tmp/rustx-retry-pending-{1440,390}.png` and
+`/tmp/rustx-retry-streaming-{1440,390}.png` were visually inspected. No reference
+pixels or comparator tolerances changed. The existing bundle-size warning remains.

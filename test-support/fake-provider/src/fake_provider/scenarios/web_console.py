@@ -70,6 +70,21 @@ def web_commands() -> Scenario:
 SCENARIOS["web_commands"] = web_commands
 
 
+def web_response_retry() -> Scenario:
+    """Keep an earlier turn while a native sibling replay replaces this response."""
+    def expected(prompt: str, **kwargs) -> Expect:
+        return Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=(prompt,), **kwargs)
+    return Scenario("web_response_retry",
+                    Step(expected("Earlier question"), Stream(Text("Earlier answer stays."), Finish())),
+                    Step(expected("Retry this question"), Stream(Text("## Original response\n\nOld reply to replace."), Finish())),
+                    Step(expected("Retry this question", body_excludes=("Original response", "Old reply to replace.")),
+                         Stream(Gate("replay-request"), Text("## New response\n\nGenerating the replacement."),
+                                Gate("replay-streaming"), Text("\n\nReplacement complete."), Finish())))
+
+
+SCENARIOS["web_response_retry"] = web_response_retry
+
+
 def web_composer_context() -> Scenario:
     """Native Todo and Goal owners feed the composer docks; one Human input waits in the mailbox.
 

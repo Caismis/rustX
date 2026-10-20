@@ -172,8 +172,14 @@ describe('successful command draft consumption', () => {
     const request = await server.waitFor(method, 1);
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(request).toMatchObject({ params: { side } });
-    expect(screen.getByRole('button', { name })).toHaveProperty('disabled', true);
-    fireEvent.click(screen.getByRole('button', { name }));
+    if (name === 'Regenerate') {
+      expect(screen.queryByText('Original assistant response')).toBeNull();
+      expect(screen.queryByRole('button', { name })).toBeNull();
+      expect(document.querySelector('[data-chat-running]')?.textContent).toContain('Deep diving');
+    } else {
+      expect(screen.getByRole('button', { name })).toHaveProperty('disabled', true);
+      fireEvent.click(screen.getByRole('button', { name }));
+    }
     await act(async () => server.reply(request));
     // Regenerate leaves for the new branch, where this response no longer exists.
     await waitFor(() => expect((screen.queryByRole('button', { name }) as HTMLButtonElement | null)?.disabled ?? false).toBe(false));
@@ -185,6 +191,36 @@ describe('successful command draft consumption', () => {
     await act(async () => fireEvent.click(await screen.findByRole('option', { name: /fixture\/second/ })));
     expect(input).toHaveProperty('value', ''); expect(screen.queryByRole('dialog')).toBeNull();
     expect(document.activeElement).toBe(input);
+  });
+  it('a rejected Retry restores the original reply in the resident viewport and sends no replay', async () => {
+    await subject();
+    localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
+    render(<App client={server.client} workspaceHost={server.workspaceHost}/>);
+    const surface = document.querySelector('.chat-reading-surface');
+    server.held.add('session/branch');
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Regenerate' })));
+    const request = await server.waitFor('session/branch', 1);
+    expect(screen.queryByText('Original assistant response')).toBeNull();
+    expect(document.querySelector('.chat-reading-surface')).toBe(surface);
+    await act(async () => server.socket.deliver({ jsonrpc: '2.0', id: request.id, error: { code: -32602, message: 'Historical boundary refused' } }));
+    expect(await screen.findByText('Original assistant response')).toBeTruthy();
+    expect(document.querySelector('.chat-reading-surface')).toBe(surface);
+    expect(document.querySelector('[data-chat-running]')).toBeNull();
+    expect(methods()).not.toContain('turn/start');
+    expect(methods()).not.toContain('session/switchNode');
+  });
+  it('leaving during Retry retires its reading prefix and a late commit cannot send input or replace the new route', async () => {
+    await subject();
+    localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A', 'B'] }));
+    render(<App client={server.client} workspaceHost={server.workspaceHost}/>);
+    server.held.add('session/branch');
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Regenerate' })));
+    const request = await server.waitFor('session/branch', 1), response = server.commit(request);
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session B' })));
+    await act(async () => server.socket.deliver(response));
+    expect(screen.getByRole('button', { name: 'Open Session B', current: 'page' })).toBeTruthy();
+    expect(document.querySelector('[data-chat-running]')).toBeNull();
+    expect(methods()).not.toContain('turn/start'); expect(methods()).not.toContain('session/switchNode');
   });
   it('dismissal preserves a fuzzy invocation', async () => {
     const input = await open('/mdl');
@@ -618,6 +654,30 @@ describe('typed native operations and continuation fencing', () => {
     await vi.waitFor(() => expect(navigation.actor.getSnapshot().context.error).toContain('Invalid historical Surface revision'));
     expect(navigation.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'A' });
     expect(server.client.target('A')).toBe(original); expect(methods().filter(method => method === 'session/fork')).toHaveLength(1);
+  });
+  it.each(['before', 'after'] as const)('Retry retires its prefix when canonical adoption arrives %s the acknowledgement, with no mounted Chat', async order => {
+    const { navigation, fixture } = await subject();
+    const response = fixture.original.transcript.entries![0].completed_response!;
+    server.held.add('turn/start');
+    navigation.actor.send({ type: 'OPEN', destination: { kind: 'transition', sessionId: 'A', action: 'retry', response } });
+    const request = await server.waitFor('turn/start', 1);
+    expect(navigation.actor.getSnapshot().context.retry).toBeTruthy();
+    const adopt = async () => {
+      const view = server.client.getSnapshot().views.A;
+      const state = structuredClone(view.snapshot!);
+      state.messages.push({ id: 'accepted-user', role: 'user', source: 'human', content: [{ type: 'text', text: 'Try this' }] });
+      server.snapshots.set('A', state); server.nodeSnapshots.set(view.nodeId!, state);
+      await server.client.refresh('A');
+    };
+    if (order === 'before') await adopt();
+    server.reply(request);
+    await vi.waitFor(() => expect(navigation.actor.getSnapshot().matches('idle')).toBe(true));
+    if (order === 'after') {
+      expect(navigation.actor.getSnapshot().context.retry?.replay?.messageId).toBe('accepted-user');
+      await adopt();
+    }
+    expect(navigation.actor.getSnapshot().context.retry).toBeUndefined();
+    expect(methods().filter(method => method === 'turn/start')).toHaveLength(1);
   });
   it('an unavailable historical message cannot be replaced with another displayed boundary', async () => {
     const { navigation } = await subject();

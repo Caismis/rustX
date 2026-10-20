@@ -12,6 +12,23 @@ import { railAwareResizeObserver } from './turn-navigator-fixture';
 let resize: () => void;
 const disconnect = vi.fn();
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+it('a native scope change retires detached navigation and follows the new tail without replacing the viewport', () => {
+  let frame: FrameRequestCallback | undefined;
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frame = callback; return 1; });
+  vi.stubGlobal('cancelAnimationFrame', () => {});
+  vi.stubGlobal('ResizeObserver', railAwareResizeObserver(() => {}));
+  let controller: ChatViewport | null = null;
+  const ui = render(<ChatViewport ref={value => { controller = value; }} resetKey="original"><div data-chat-anchor-key="prompt">Question</div></ChatViewport>);
+  const el = ui.container.querySelector('.conversation-scroll') as HTMLElement;
+  Object.defineProperties(el, { scrollHeight: { get: () => 600 }, clientHeight: { get: () => 200 } });
+  const flush = () => { const callback = frame; frame = undefined; act(() => callback?.(0)); };
+  flush(); expect(el.scrollTop).toBe(400);
+  let ticket: ReturnType<ChatViewport['beginNavigation']>;
+  act(() => { ticket = controller!.beginNavigation(); });
+  ui.rerender(<ChatViewport ref={value => { controller = value; }} resetKey="replay"><div data-chat-anchor-key="prompt">Question</div><div>New response</div></ChatViewport>);
+  expect(ui.container.querySelector('.conversation-scroll')).toBe(el);
+  expect(ticket!.current()).toBe(false); flush(); expect(el.scrollTop).toBe(400);
+});
 it('preserves the stable reading anchor for prepend and growth, follows only at bottom', () => {
   vi.stubGlobal('ResizeObserver', class { constructor(callback: () => void) { resize = callback; } observe() {} disconnect = disconnect; });
   let frame: FrameRequestCallback | undefined;

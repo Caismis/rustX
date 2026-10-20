@@ -90,16 +90,17 @@ export class CommandSession {
     const editorContent = result.editor ? await readEditor(result.editor,
       async (block_index, offset) => (await this.client.request({ method: 'session/editorRead', params: { locator: result.editor!, block_index, offset, max_bytes: 65_536 } }, 'editor_page', undefined, continuing)).page,
       continuing) : [];
+    let replay: { target: AttachmentTarget; messageId: string } | undefined;
     if (action === 'retry') {
       if (!editorContent.length) throw new Error('Branch has no native editor input; execution refused.');
       // Native cut excludes the selected User message. Submit the native returned
       // input exactly once, including #319 receipts, to the new Conversation.
-      await this.client.sendContent(session.id, editorContent, 'send', undefined, continuing);
+      const accepted = await this.client.sendContent(session.id, editorContent, 'send', undefined, continuing);
+      replay = { target, messageId: accepted.message_id };
       if (!continuing() || !sameTarget(this.client.getSnapshot().views[session.id]?.target, target)) return;
     }
-    await this.client.listSessions();
     if (!continuing() || !sameTarget(this.client.getSnapshot().views[session.id]?.target, target)) return;
-    return { session, content: action === 'retry' ? [] : editorContent };
+    return { session, content: action === 'retry' ? [] : editorContent, replay };
   }
   async tools() {
     this.requireCurrent();

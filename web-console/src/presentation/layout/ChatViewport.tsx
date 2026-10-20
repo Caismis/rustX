@@ -6,6 +6,8 @@ import { IconChevronDownOutline14 } from '../primitives/icons/index.tsx';
 interface Anchor { key: string; top: number }
 interface ReadingPosition { anchors: Anchor[]; top: number }
 interface ViewportProps {
+  /** Native reading scope changes reset intent without destroying the surface. */
+  resetKey?: string;
   children: ReactNode;
   overlay?: ReactNode;
   latestLabel?: string;
@@ -197,6 +199,13 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
   }
   componentDidUpdate(_previous: Readonly<ViewportProps>, _state: unknown, before: { first?: string; position?: ReadingPosition }) {
     if (this.scroller()?.closest('[hidden]')) return;
+    if (_previous.resetKey !== this.props.resetKey) {
+      this.retireNavigation();
+      this.following = true; this.reading = undefined;
+      this.writtenTop = this.scroller()?.scrollTop ?? 0;
+      if (this.state.detached) this.setState({ detached: false });
+      this.markLayoutDirty(); return;
+    }
     const rows = this.rows();
     if (!this.explicitLatest && before.first && rows[0]?.dataset.chatAnchorKey !== before.first && rows.some(row => row.dataset.chatAnchorKey === before.first)) {
       if (this.following) this.reading = before.position;
