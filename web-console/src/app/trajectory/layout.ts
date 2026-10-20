@@ -143,10 +143,10 @@ export function projectTrajectory(tx: Translate, records: readonly TraceRecord[]
   const turns = new Map<string, TrajectoryTurnModel>();
   const groups = new Map<string, TrajectoryGroupModel>();
   for (const record of records) {
-    // Questions and approvals are already represented by their Tool execution.
-    // Keep interaction lifecycle audits in Trace, not as duplicate trajectory
-    // rows or timeline spans (including when the owning Tool is on another page).
-    if (record.kind === 'interaction') continue;
+    // Harness shows Agent interactions as Tool calls and delivered Context.
+    // Native activation and interaction lifecycle audits remain in Trace, not
+    // as duplicate rows, spans or empty Turns when their Tool is on another page.
+    if (record.kind === 'interaction' || record.kind === 'subagent') continue;
     const attempt = traceAttemptKey(record.location), step = traceStepKey(record.location);
     if (attempt == null) {
       sections.push({ kind: 'outside', record, cells: cellsOf(tx, record) });

@@ -322,7 +322,7 @@ it.each(['en', 'zh'] as const)('T1-08 Calls summary localizes in %s and leaves n
   // Harness names the folded calls by count and Tool name, never by lifecycle.
   expect(summary.summary).toBe(locale === 'en' ? '5 tool calls · same name' : '5 个工具调用 · same name');
   expect(executions.map(record => record.state)).toEqual(states);
-  for (const domain of domains) expect(visible.some(item => item.type === 'RecordRow' && item.record.id === domain.id)).toBe(true);
+  for (const domain of domains) expect(visible.some(item => item.type === 'RecordRow' && item.record.id === domain.id)).toBe(domain.kind !== 'subagent');
   expect(visible.find((item): item is InspectableDisplayItem => item.type === 'RecordRow' && item.record.id === 'trace:20')?.label).toBe(tx('trajectory:copy.compacting'));
   for (const state of ['incomplete', 'failed', 'completed'] as const) {
     const item = flattenTrajectory(tx, projectTrajectory(tx, [traceRecord(21, { kind: 'compaction', request: null, state })])).find(item => item.type === 'RecordRow')!;
@@ -1360,20 +1360,48 @@ it('424 compact: summary counts the folded Turn\'s Tool records, as Harness does
   expect(rows.some(row => row.item?.owner_record_id === 'trace:706')).toBe(false);
 });
 
-it('Agent activations retain separate trace records correlated to one durable Agent across replay', () => {
-  const records = ['activation-a', 'activation-b', 'activation-c'].map((activation_id, n) => traceRecord(n, {
-    kind: 'subagent', request: null, agent_id: 'durable-agent', activation_id, native_id: activation_id,
-    activation_origin: n === 0 ? { kind: 'creation_tool', tool_call_id: 'actual-create-call' } : n === 1 ? { kind: 'message_tool', tool_call_id: 'actual-message-call' } : { kind: 'client_control' },
-    originating_tool_call_id: n === 0 ? 'actual-create-call' : n === 1 ? 'actual-message-call' : null,
+it.each([false, true])('Agent interactions use Tool/Context rows without activation activity (scoped: %s)', scoped => {
+  const tx = translator('en');
+  const tool = traceTool(0, { tool: { ...traceTool(0).tool!, name: 'subagent', tool_id: 'tool-subagent' } });
+  const context = traceRecord(5, { kind: 'context', request: null, agent_id: 'durable-agent', preview: { text: 'Agent sent message: canonical child report', truncated: false } });
+  const audits = ['running', 'completed', 'failed', 'cancelled'].map((state, n) => traceRecord(n + 1, {
+    kind: 'subagent', request: null, agent_id: 'durable-agent', activation_id: `activation-${n}`, state: state as TraceRecord['state'],
+    location: scoped ? { attempt_id: 'lifecycle-only-turn', step_id: '1' } : {},
+    originating_tool_call_id: tool.tool!.call_id, preview: { text: 'internal-activation-audit', truncated: false },
   }));
-  const ui = show(cacheOf(records));
-  for (const record of records) {
-    fireEvent.click(row('RecordRow', record.id));
-    expect(row('RecordRow', record.id).getAttribute('aria-selected')).toBe('true');
-    expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual(['Summary', 'Preview', 'Timing']);
+  const records = [tool, ...audits, context], original = JSON.stringify(records);
+  const projection = projectTrajectory(tx, records);
+  expect(flattenTrajectory(tx, projection).filter(isInspectable).map(item => item.record.id)).toEqual([tool.id, context.id]);
+  expect(searchItems(projection, 'internal-activation-audit')?.size).toBe(0);
+  expect(searchItems(projection, 'subagent')?.size).toBe(1);
+  expect(searchItems(projection, 'canonical child report')?.size).toBe(1);
+  for (const mode of ['sequence', 'duration'] as const) {
+    expect(trajectoryTimeline(tx, projection, mode)?.spans.map(span => span.id)).toEqual([tool.id, context.id]);
+    expect(trajectoryTimeline(tx, projectTrajectory(tx, audits), mode)).toBeNull();
   }
-  ui.rerender(<Trajectory cache={cacheOf(structuredClone(records))} loadEarlier={noop} onSelect={noop} onLoadDetail={noop}/>);
-  expect(document.querySelectorAll('[data-display-type="RecordRow"]')).toHaveLength(3);
+  expect(projectTrajectory(tx, audits).sections).toEqual([]);
+  const load = vi.fn(), ui = show(cacheOf(records), load);
+  expect(document.querySelector('[data-kind="subagent"]')).toBeNull();
+  expect(document.querySelector('[data-timeline-span="subagent"]')).toBeNull();
+  expect(screen.queryByText('SUBAGENT')).toBeNull();
+  expect(row('RecordRow', context.id).textContent).toContain('CONTEXT');
+  fireEvent.click(row('RecordRow', tool.id));
+  expect(row('RecordRow', tool.id).getAttribute('aria-selected')).toBe('true');
+  const reads = load.mock.calls.length;
+  ui.rerender(<Trajectory cache={cacheOf(structuredClone(records))} loadEarlier={noop} onSelect={noop} onLoadDetail={load}/>);
+  expect(row('RecordRow', tool.id).getAttribute('aria-selected')).toBe('true');
+  expect(load).toHaveBeenCalledTimes(reads);
+  expect(JSON.stringify(records)).toBe(original);
+});
+
+it('activation-only native pages and selection produce no trajectory row or Inspector', () => {
+  const record = traceRecord(0, { kind: 'subagent', request: null, agent_id: 'agent', activation_id: 'activation' });
+  const cache = selectTrace(cacheOf([record]), record.id), load = vi.fn();
+  show(cache, load);
+  expect(row('RecordRow', record.id)).toBeNull();
+  expect(screen.queryByRole('complementary', { name: 'Event details' })).toBeNull();
+  expect(load).not.toHaveBeenCalled();
+  expect(cache.page.records).toEqual([record]);
 });
 
 
@@ -1613,7 +1641,7 @@ it('checkpoint summaries and unscoped reused history display Between turns witho
   expect(JSON.stringify(records)).toBe(original);
 });
 
-it.each(['subagent', 'background', 'workflow', 'tool'] as const)('unscoped %s activity is not a between-turn section or an inferred nearby Turn', kind => {
+it.each(['background', 'workflow', 'tool'] as const)('unscoped %s activity is not a between-turn section or an inferred nearby Turn', kind => {
   const records = [
     traceRecord(0, { kind: 'user', request: null, location: {}, preview: { text: 'Reused original context', truncated: false } }),
     traceRecord(1, { kind: 'compaction', request: null, location: {} }),
@@ -1640,8 +1668,8 @@ it.each(['subagent', 'background', 'workflow', 'tool'] as const)('unscoped %s ac
   expect(JSON.stringify(records)).toBe(original);
 });
 
-it('native-owned child activity retains its actual Turn/Step across folding and selection', () => {
-  const records = [traceRecord(1, { kind: 'user', request: null }), traceRecord(2, { kind: 'subagent', request: null, agent_id: 'child', activation_id: 'activation' })];
+it('native-owned Agent Tool retains its actual Turn/Step across folding and selection', () => {
+  const records = [traceRecord(1, { kind: 'user', request: null }), traceTool(2, { tool: { ...traceTool(2).tool!, name: 'subagent', tool_id: 'tool-subagent' } })];
   show(cacheOf(records));
   fireEvent.click(row('RecordRow', 'trace:2'));
   const inspector = within(screen.getByRole('complementary', { name: 'Event details' }));

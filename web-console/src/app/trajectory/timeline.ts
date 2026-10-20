@@ -72,7 +72,7 @@ export function timelineProjectionRevision(model: TrajectoryTimelineModel | null
 
 /** Lanes group related activity, exactly as the Harness overview does. */
 function laneOf(kind: TraceKind): number {
-  if (kind === 'tool' || kind === 'background' || kind === 'subagent' || kind === 'workflow') return 2;
+  if (kind === 'tool' || kind === 'background' || kind === 'workflow') return 2;
   if (kind === 'request' || kind === 'compaction') return 1;
   return 0;
 }

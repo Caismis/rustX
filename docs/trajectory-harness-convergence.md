@@ -130,7 +130,7 @@ protocol fallback, runtime events or storage migration are added.
 
 The permanent Overview/help/reset row is removed. Input/Model/Tools occupy a
 compact 50px region with a 44px label column. User is blue, native Request violet,
-Tool amber, errors red; Background/Subagent/Workflow distinctions remain.
+Tool amber, errors red; Background/Workflow distinctions remain.
 `+` zooms and `Home` resets; drag, wheel, arrow and Escape ownership is unchanged.
 Localized hover/accessible help describes the keys. The native Request owns the
 Model lane. Accepted Assistant is not a duplicate generation span, and Context
@@ -148,9 +148,15 @@ bounded/truncated explanations. No completeness information is suppressed.
 
 Between-turn membership is semantic: compaction checkpoints and unscoped reused
 conversation material receive that label. Missing native ownership alone does
-not place Subagent, Background, Workflow or Tool activities between Turns, nor
+not place Background, Workflow or Tool activities between Turns, nor
 does it justify assigning a nearby Turn. The ledger, Inspector and bilingual
 search share this classification; native Turn/Step ownership remains authoritative.
+
+Agent interactions follow Harness's Tool/Context presentation. Native Subagent
+activation lifecycle records stay in the Trace cache but do not produce separate
+trajectory rows, Inspector targets, search results, timeline spans or empty
+Turn/Step sections. Delegation/control Tools, delivered Context messages and
+child conversation navigation retain their existing identities and behavior.
 
 ## Pinned Harness mapping
 

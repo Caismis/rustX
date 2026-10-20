@@ -84,15 +84,20 @@ test('native interrupt and wait capture one activation; the same Agent resumes w
     await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
     const trajectory = page.getByRole('region', { name: 'Trajectory', exact: true });
     const activations = trajectory.locator('[data-display-type="RecordRow"][data-kind="subagent"]');
-    await expect(activations).toHaveCount(2);
+    await expect(activations).toHaveCount(0);
+    await expect(trajectory.locator('[data-timeline-span="subagent"]')).toHaveCount(0);
+    const call = trajectory.locator('[data-kind="tool"]').filter({ hasText: /subagent/ }).first();
+    await expect(call).toBeVisible();
+    await expect(trajectory.locator('[data-kind="context"]').first()).toBeVisible();
     const inspector = trajectory.getByRole('complementary', { name: 'Event details' });
-    // Each activation is its own selectable record with Harness's generic tabs.
+    // Harness retains the actual delegation Tool and delivered Context, with
+    // activation lifecycle represented by the existing Agent controls.
     expect(agentId).toBeTruthy();
-    for (let index = 0; index < 2; index++) {
-      await activations.nth(index).click();
-      await expect(activations.nth(index)).toHaveAttribute('aria-selected', 'true');
-      await expect(inspector.getByRole('tab')).toHaveText(['Summary', 'Preview', 'Timing']);
-    }
+    await call.click();
+    await expect(call).toHaveAttribute('aria-selected', 'true');
+    await inspector.getByRole('tab', { name: 'Result', exact: true }).click();
+    await expect(inspector.getByRole('tabpanel')).toContainText(agentId!);
+    await page.screenshot({ path: '/tmp/rustx-agent-native-trajectory.png' });
     expect(errors).toEqual([]);
     passed = true;
   } catch (error) { console.error(fixture.diagnostics()); throw error; }

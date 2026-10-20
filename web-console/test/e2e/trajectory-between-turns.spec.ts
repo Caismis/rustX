@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 const origin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
-for (const [width, locale] of [[1440, 'en'], [390, 'zh']] as const) test(`native child activity is not a between-turn section (${width}, ${locale})`, async ({ page }) => {
+for (const [width, locale] of [[1440, 'en'], [390, 'zh']] as const) test(`native activity is not a between-turn section (${width}, ${locale})`, async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
@@ -12,19 +12,18 @@ for (const [width, locale] of [[1440, 'en'], [390, 'zh']] as const) test(`native
   const between = locale === 'zh' ? '轮次之间' : 'Between turns';
   const ledger = page.getByRole('table', { name: locale === 'zh' ? '追踪明细' : 'Trace ledger', exact: true });
   const row = (id: number) => ledger.locator(`[data-display-type="RecordRow"][data-owner="trace:${id}"]`);
-  await expect(row(12)).toBeVisible();
-  await expect(row(12)).not.toHaveAttribute('data-between-turns');
+  await expect(row(12)).toHaveCount(0);
   await expect(row(13)).not.toHaveAttribute('data-between-turns');
   await expect(row(0)).toHaveAttribute('data-between-turns', 'true');
   await expect(row(10)).toHaveAttribute('data-between-turns', 'true');
-  await row(12).click();
+  await row(13).click();
   const inspector = page.getByRole('complementary', { name: locale === 'zh' ? '事件详情' : 'Event details', exact: true });
   await expect(inspector).toBeVisible();
   await expect(inspector).not.toContainText(between);
-  await expect(row(12)).toHaveAttribute('aria-selected', 'true');
-  await page.screenshot({ path: `/tmp/rustx-trajectory-child-section-${width}.png` });
+  await expect(row(13)).toHaveAttribute('aria-selected', 'true');
+  await page.screenshot({ path: `/tmp/rustx-trajectory-native-section-${width}.png` });
   await inspector.getByRole('button', { name: locale === 'zh' ? '关闭详情' : 'Close details', exact: true }).click();
-  await expect(row(12)).toBeFocused();
+  await expect(row(13)).toBeFocused();
   const before = await page.locator('[data-detail-reads]').getAttribute('data-detail-reads');
   const search = page.getByRole('searchbox');
   await search.fill(between);
@@ -34,7 +33,7 @@ for (const [width, locale] of [[1440, 'en'], [390, 'zh']] as const) test(`native
   await row(10).click(); await expect(inspector).toContainText(between);
   await page.screenshot({ path: `/tmp/rustx-trajectory-between-section-${width}.png` });
   await inspector.getByRole('button', { name: locale === 'zh' ? '关闭详情' : 'Close details', exact: true }).click();
-  await search.fill(''); await expect(row(12)).toBeVisible();
+  await search.fill(''); await expect(row(13)).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
 });

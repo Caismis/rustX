@@ -30,14 +30,13 @@ export function isErrorRecord(record: TraceRecord): boolean {
 /**
  * Compact labels for the kinds that share no Harness glyph.
  *
- * `background`, `subagent`, `workflow` and `interaction` are rustX-specific
+ * `background` and `workflow` are rustX-specific
  * evidence with no distinct icon, so at narrow widths the icon alone cannot
  * tell them apart. They keep a short visible word instead.
  */
 function narrowLabel(tx: Translate, kind: CellKind): string | undefined {
   switch (kind) {
     case 'background': return tx('trajectory:short.background');
-    case 'subagent': return tx('trajectory:short.subagent');
     case 'workflow': return tx('trajectory:short.workflow');
     case 'interaction': return tx('trajectory:short.interaction');
     default: return undefined;

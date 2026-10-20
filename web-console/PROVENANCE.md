@@ -3187,3 +3187,54 @@ including English/light and Chinese/dark native compaction continuation. TypeScr
 production build, i18n ownership, all 303 source records and notices for 264
 packages passed. No native protocol, runtime or TUI source changed. Other browser
 engines were not exercised; the existing large-chunk build warning remains.
+
+### Agent interactions use Tool and Context instead of activation activity (2026-10-20)
+
+Reference: Harness `ui-trajectory/src/client/index.ts` and
+`trajectory-message-definitions.ts` at
+`687f282e8625c6b8d11ff58211a90524be2e4317`. Its registered trajectory definitions
+publish messages, requests, Tools and compaction; messages from an Agent enter as
+Context. There is no separate Agent activation activity row. The prior local fix
+removed an incorrect between-turn label but still exposed this extra native
+lifecycle dimension as a selectable row and Tools-lane span.
+
+The shared Web projection now excludes native `subagent` activation records
+before constructing sections, as it already excludes interaction lifecycle
+audits. Ledger rows, Inspector targets, bilingual search, both timeline modes
+and Turn/Step membership therefore agree, including activation-only pages.
+Obsolete activation-specific narrow labels and the timeline style were removed.
+Actual delegation/control Tool calls and delivered Context messages retain their
+native identities, scope and detail reads. Trace cache facts and Agent controls
+remain intact; records are not relabeled as invented Context.
+
+Browser plugin not available: QA used the pinned Playwright 1.63 Linux Chromium
+container, fixture origin `http://127.0.0.1:5274` and production preview origin
+`http://127.0.0.1:5273`. The dedicated `/test/fixtures/trajectory.html?agent-interactions`
+flow includes running/completed/cancelled/failed activations with and without
+scope: open trajectory, search the actual Tool, inspect its recorded result,
+close and restore keyboard focus, search the delivered Context, then apply a
+lifecycle refresh. Desktop 1440x844 English/dark and narrow 390x844 Chinese/light
+passed meaningful page identity, console/error-overlay health, viewport bounds,
+unchanged native record count and absence of activation rows/spans/search hits.
+Evidence: `/tmp/rustx-agent-trajectory-{1440,390}.png`.
+
+The real native continuation scenario also passed: create a child, wait and
+interrupt its initial activation, resume the same Agent, wait for success, return
+to the parent and inspect the original delegation Tool result. Parent trajectory
+retains the Tool and delivered Context without the two activation audit rows.
+Evidence: `/tmp/rustx-agent-native-trajectory.png`. Existing child navigation,
+draft retention, receipts, independent child trajectory and native compaction
+continuation passed alongside the full trajectory browser suite: 56 scenarios.
+
+All four before-edit ledger/Inspector screenshot scenarios passed. After visual
+review of the intended row removal and timeline redistribution, 13 affected
+references were refreshed, with no comparison tolerance/noise-policy changes.
+Pixel differences are confined to timeline y=72..121, removed/moved activity rows
+and their old bottom boundary at y=573..642; the two resize references also
+receive the existing User/compaction between-turn gutter labels at x=0..71.
+All strict screenshot replays passed as part of the 56-scenario run.
+
+All 139 focused trajectory/timing tests, TypeScript, production build, i18n
+ownership, 303 source records and notices for 264 packages passed. No native
+protocol, runtime or TUI source changed. Other browser engines were not exercised;
+the existing large-chunk build warning remains.

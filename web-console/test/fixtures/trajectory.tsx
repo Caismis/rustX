@@ -38,6 +38,16 @@ const records = [
   traceRecord(13, { kind: 'workflow', request: null, location: {}, preview: text('Release checklist run') }),
 ];
 const params = new URLSearchParams(location.search);
+const agentInteractions = params.has('agent-interactions');
+const agentCall = traceTool(30, { tool: { ...traceTool(30).tool!, name: 'subagent', tool_id: 'tool-subagent', arguments: text('{"agent":"explore","task":"Review the parser"}') }, preview: text('Started background agent parser-review') });
+const agentRecords = [
+  records[0]!, agentCall,
+  ...['running', 'completed', 'cancelled', 'failed'].map((state, n) => traceRecord(n + 31, {
+    kind: 'subagent', request: null, agent_id: 'parser-review', activation_id: `activation-${n}`, state: state as TraceRecord['state'],
+    location: n % 2 ? {} : { attempt_id: 'lifecycle-only-turn', step_id: 'audit' }, preview: text('Internal Agent activation audit'),
+  })),
+  traceRecord(35, { kind: 'context', request: null, agent_id: 'parser-review', preview: text('Agent parser-review sent a message: parser review completed.') }),
+];
 const backgroundJobs = params.has('background-jobs');
 const backgroundRecords = [
   traceTool(20),
@@ -75,7 +85,7 @@ const retainedRecords = [
   traceRecord(4, { kind: 'user', request: null, location: {}, preview: text('Second input') }),
   traceRecord(5, { kind: 'assistant', request: null, location: { attempt_id: 'attempt-b', step_id: '1' }, preview: text('Second response') }),
 ];
-const snapshot = { records: backgroundJobs ? backgroundRecords : retainedInputs ? retainedRecords : stepLess ? stepLessRecords().slice(1) : ordered ? orderedRecords : chrome ? chromeRecords : params.has('ledger') ? semanticLedgerRecords() : mixedRecords ?? (long || threshold ? Array.from({ length: long ? 480 : 90 }, (_, n) => toolFirst && n === 0 ? traceTool(100) : request(n + 100, !threshold && n % 7 === 0 ? 'changed' : 'unchanged', 'unchanged')) : params.has('structural-search') ? structuralSearchRecords() : records), next_cursor: 'older' };
+const snapshot = { records: agentInteractions ? agentRecords : backgroundJobs ? backgroundRecords : retainedInputs ? retainedRecords : stepLess ? stepLessRecords().slice(1) : ordered ? orderedRecords : chrome ? chromeRecords : params.has('ledger') ? semanticLedgerRecords() : mixedRecords ?? (long || threshold ? Array.from({ length: long ? 480 : 90 }, (_, n) => toolFirst && n === 0 ? traceTool(100) : request(n + 100, !threshold && n % 7 === 0 ? 'changed' : 'unchanged', 'unchanged')) : params.has('structural-search') ? structuralSearchRecords() : records), next_cursor: agentInteractions ? null : 'older' };
 function Fixture() {
   const [cache, setCache] = useState(() => replaceTrace(snapshot));
   const [reads, setReads] = useState(0); const [pages, setPages] = useState(0);
@@ -110,6 +120,12 @@ function Fixture() {
           if (detail.tool && !backgroundJobs) {
             detail.tool.source!.text = text('git diff --stat');
             detail.tool.result!.blocks = [{ type: 'json', value: { value: { files: 3, insertions: 28 }, truncated: false } }, { type: 'text', text: text('Review complete.') }];
+          }
+          if (agentInteractions && detail.tool) {
+            detail.tool.name = record.tool!.name; detail.tool.tool_id = record.tool!.tool_id!;
+            detail.tool.arguments = { value: JSON.parse(record.tool!.arguments!.text), truncated: false };
+            detail.tool.source = null;
+            detail.tool.result!.blocks = [{ type: 'json', value: { value: { agent_id: 'parser-review', activation_id: 'activation-0', state: 'active' }, truncated: false } }];
           }
           if (params.has('parity')) {
             if (record.kind === 'assistant') detail.messages = [{ message_id: record.message_id!, role: 'assistant', truncated: false, blocks: [
