@@ -1,0 +1,37 @@
+Optional future design only — not launched, not an optimization acceptance test.
+
+Question: does the previously observed geometry steady live short-large regression
+reappear under one small order-balanced unprofiled block on this same machine?
+
+Exactly four serial products: baseline, geometry, geometry, baseline (ABBA).
+Use the preserved existing conformance binaries at their recorded exact SHA.
+Use the unchanged published benchmarks/runtime/profiling/run.py mode=control,
+case=short-large, observer-mode=live-subscriber:64 fixed warm-up+32 measured
+turns, same local HTTP/SSE fake provider, fixed model-facing time and full oracle.
+No LD_PRELOAD, profile socket, tcmalloc, CPU profile or real model API. Do not
+rebuild, change inputs/deadlines or run a browser/matrix alongside this block.
+
+Use a new output directory and preserve all earlier runs. Verify source, binary,
+matching helper and shared-library hashes outside each product; restore helpers
+before timing. Keep CPU quota/runtime environment fixed and record pressure,
+all actual commands and UTC/monotonic boundaries. Require strict >5GiB workspace
+and Docker backing-store free capacity and no overlapping builds/compression/
+profilers/products. Stop on any semantic/identity/space failure; no retry or
+replacement of an adverse/incomplete run.
+
+Primary observations:paired steady mean settled wall and process CPU/turn.
+Pair1 is adjacent A->B; pair2 adjacent B->A, always report geometry/baseline.
+Show both raw paired ratios and their range; n=2 is insufficient for a strong
+confidence/acceptance claim. Preserve per-turn/quartile behavior and uncertainty.
+Treat mixed directions or substantial within-run variation as inconclusive;
+do not extend the block automatically to obtain a preferred result.
+
+Keep warm-up, first-consumed publication, steady consumed notification counts,
+late validation, request verification, shutdown, writer close, reopen, cleanup,
+final JSON/OS exit and provider teardown separate. Actual wait4 process CPU
+through exit is useful but is not routine-turn CPU. Sampled memory is not a true
+peak; process writes are not device writes. Count provider descendants once.
+No profiler-overhead or geometry-causal conclusion from this four-run block.
+
+Only launch if subsequently requested by the coordinator; current work is
+offline symbolization and the retained incomplete browser diagnostic attempt.

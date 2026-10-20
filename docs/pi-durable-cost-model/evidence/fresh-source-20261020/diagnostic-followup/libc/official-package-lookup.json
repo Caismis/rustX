@@ -1,0 +1,58 @@
+[
+  {
+    "url": "https://deb.debian.org/debian/pool/main/g/glibc/libc6-dbg_2.41-12+deb13u3_amd64.deb",
+    "error": "<HTTPError 404: 'Not Found'>"
+  },
+  {
+    "url": "https://security.debian.org/debian-security/pool/updates/main/g/glibc/libc6-dbg_2.41-12+deb13u3_amd64.deb",
+    "error": "<HTTPError 404: 'Not Found'>"
+  },
+  {
+    "url": "https://snapshot.debian.org/mr/binary/libc6-dbg/2.41-12%2Bdeb13u3/binfiles",
+    "status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "date": "Tue, 20 Oct 2026 05:15:20 GMT",
+      "content-length": "689"
+    },
+    "body": {
+      "_comment": "foo",
+      "binary": "libc6-dbg",
+      "binary_version": "2.41-12+deb13u3",
+      "result": [
+        {
+          "architecture": "riscv64",
+          "hash": "a9bb61a75a549b2974b907a7c6128883c1af3579"
+        },
+        {
+          "architecture": "amd64",
+          "hash": "a9db5c76b23e2a1617997a10f07796b38bc3286d"
+        },
+        {
+          "architecture": "armhf",
+          "hash": "cbd16eaeef520981c425f5d4c60700b5404ec620"
+        },
+        {
+          "architecture": "ppc64el",
+          "hash": "c49e01e69eefb248cd69c765a94656b1102303aa"
+        },
+        {
+          "architecture": "i386",
+          "hash": "d18d27e6c72153f111ba0be26bba41bb979c1b76"
+        },
+        {
+          "architecture": "armel",
+          "hash": "f386e09f3ae52fef6509e9cdf6282ddeafd109d4"
+        },
+        {
+          "architecture": "s390x",
+          "hash": "5e93ae7c6e157ddbe8d89259f5795e9eeccf069e"
+        },
+        {
+          "architecture": "arm64",
+          "hash": "0ad843e9ae3e00b2838dd3dbe98193d452a687b2"
+        }
+      ]
+    }
+  }
+]

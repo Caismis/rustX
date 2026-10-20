@@ -1,0 +1,140 @@
+{
+  "scope": "Explicit public allowlist; no raw browser console/close text/private fixture metadata. This manifest excludes itself.",
+  "files": [
+    {
+      "path": "README.md",
+      "bytes": 10734,
+      "sha256": "06b128346dc0dba4f3d6eb298f6a3c07dc5378a228049f89f9ab1bc54b66c1f1"
+    },
+    {
+      "path": "browser-replay-summary.json",
+      "bytes": 6183,
+      "sha256": "510a16ed15fe1cd6479366c0bdcad16ac22a0c6fea992f2939c8474e8dc9b532"
+    },
+    {
+      "path": "libc/address-resolution.json",
+      "bytes": 68483,
+      "sha256": "cf42710e8f1b19054f78c89b6cc129f96194b4551cad85dd4407c41c65552f94"
+    },
+    {
+      "path": "libc/baseline-addr2line.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "libc/baseline-addr2line.stdout",
+      "bytes": 10296,
+      "sha256": "ea2aa5cfb7e38617226c0bef937ddea7e4589bb290d0c601f641793c69819ac6"
+    },
+    {
+      "path": "libc/debug-identity.json",
+      "bytes": 682,
+      "sha256": "857e2203a88de55df163a252f98de39d56e9caa7613107db75184a867158377a"
+    },
+    {
+      "path": "libc/debug-package-provenance.json",
+      "bytes": 737,
+      "sha256": "870f9949f8aef23c0d50cb5f6e5fda8081868bd537679a1fffbb94fd21b7b7eb"
+    },
+    {
+      "path": "libc/debug-readelf-stderr.txt",
+      "bytes": 56,
+      "sha256": "abcdeb6c1855d19fda4ecf2e7d86343aea66c98f4b85347d336d5e76fb8b61ab"
+    },
+    {
+      "path": "libc/download-provenance.json",
+      "bytes": 519,
+      "sha256": "918675ab029270e49f9d8ed82d8ba5074bf61bfc6c49defb2b83e00521bb546f"
+    },
+    {
+      "path": "libc/geometry-addr2line.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "libc/geometry-addr2line.stdout",
+      "bytes": 9161,
+      "sha256": "67002496cea0dcae0f7e8377db7ce7b59fa1f59c290413c71096dc37c26a559a"
+    },
+    {
+      "path": "libc/libc-identity-match.json",
+      "bytes": 941,
+      "sha256": "bddd2dfa21fd638d1eb5dac577ad715a6b7920dcccbe31fa9c673739aa7fce98"
+    },
+    {
+      "path": "libc/libc.debug",
+      "bytes": 4302792,
+      "sha256": "183cfa015bb32959c19e41514b708f5de9a585f69601113000ee85603773a813"
+    },
+    {
+      "path": "libc/libc6-dbg_2.41-12+deb13u3_amd64.deb",
+      "bytes": 7394092,
+      "sha256": "5a6ab1e991c0240ddc7faade86c571601d136968ecb0d1ef7c88d018f11826a7"
+    },
+    {
+      "path": "libc/official-package-lookup.json",
+      "bytes": 1668,
+      "sha256": "a1b1f122d51bdc6a3efbd4f120211462be0c7408db312aa19f2505e4457a068a"
+    },
+    {
+      "path": "libc/original-libc.so.6",
+      "bytes": 1995216,
+      "sha256": "fa430b8f298f817a266046af84a77533185ad6fc4406c7d3787b5a0a0c207826"
+    },
+    {
+      "path": "libc/resolved-libc-functions.csv",
+      "bytes": 3468,
+      "sha256": "73b022a2fcbf65f16d7181e2453c4b5588ba3c6baf32557ecad409107c43c5b3"
+    },
+    {
+      "path": "libc/summary.json",
+      "bytes": 11904,
+      "sha256": "092340bad82a3f1b4433083d130d1dd1aef8485dd88ea70986ef0edda9b270d7"
+    },
+    {
+      "path": "libc/symbolization-commands.json",
+      "bytes": 3399,
+      "sha256": "37dc616d43873fc25d7e5ff5a1e5cfd01195d71d0803b2bbc536c8884b1b9319"
+    },
+    {
+      "path": "native-reproduction-plan.txt",
+      "bytes": 2396,
+      "sha256": "dfcae67d377cdfe01fd226578d8714cab45d968000edd8ac68ef5ab266b570c0"
+    },
+    {
+      "path": "offline-reproduction-verification.json",
+      "bytes": 340,
+      "sha256": "e5ed627c47aa81ad79126b043c023af42d0805a0f19758dadb44db3d59de7400"
+    },
+    {
+      "path": "profiles/baseline-cpu/before_measured_turns.cpu",
+      "bytes": 183796,
+      "sha256": "6f8253588af9604ba5b052807fe6a250c28c099a0f576477cfcbca69b2eae6f9"
+    },
+    {
+      "path": "profiles/geometry-cpu/before_measured_turns.cpu",
+      "bytes": 183708,
+      "sha256": "97e95cd2af798318113778e052c74f5b3308a2b9ccbc6f9671998536f33c34e0"
+    },
+    {
+      "path": "profiles/steady-symbolization.json",
+      "bytes": 344796,
+      "sha256": "63db8dae42edda2b9f7e5f28b464f1089840b4cf7fea9c93946f39e87c2ac8ac"
+    },
+    {
+      "path": "resolve-libc-leaves.py",
+      "bytes": 5212,
+      "sha256": "f53abfce82b5313c4892e91b362581d36bcd2d053196c3f61541e5e2b086eec7"
+    },
+    {
+      "path": "run-browser-diagnostic-once.py",
+      "bytes": 9614,
+      "sha256": "6b0800cb60148b2eb593f32fae3c7efa4406cc0ab32ef356853bb10d52ac19a4"
+    },
+    {
+      "path": "sensitivity-check.json",
+      "bytes": 320,
+      "sha256": "d7560a45254133794037dbca4609506a5d7454e7828a0df69c37b9e861008953"
+    }
+  ]
+}

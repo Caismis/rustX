@@ -1,0 +1,19 @@
+{
+  "url": "https://snapshot.debian.org/file/a9db5c76b23e2a1617997a10f07796b38bc3286d",
+  "snapshot_sha1": "a9db5c76b23e2a1617997a10f07796b38bc3286d",
+  "version": "2.41-12+deb13u3",
+  "architecture": "amd64",
+  "started_utc": "2026-10-20T05:15:28.786619+00:00",
+  "installed": false,
+  "status": 200,
+  "final_url": "https://snapshot.debian.org/file/a9db5c76b23e2a1617997a10f07796b38bc3286d",
+  "headers": {
+    "last-modified": "Mon, 04 May 2026 03:16:31 GMT",
+    "etag": "\"70d32c-650f55b6e1b44\"",
+    "date": "Tue, 20 Oct 2026 05:15:29 GMT",
+    "content-length": "7394092"
+  },
+  "bytes": 7394092,
+  "sha256": "5a6ab1e991c0240ddc7faade86c571601d136968ecb0d1ef7c88d018f11826a7",
+  "ended_utc": "2026-10-20T05:15:31.022649+00:00"
+}

@@ -1,0 +1,15 @@
+{
+  "argv": [
+    "python3",
+    "resolve-libc-leaves.py",
+    "--profiles",
+    "profiles",
+    "--output",
+    "libc"
+  ],
+  "cwd": "/workspace/pr485-study/evidence/diagnostic-followup-20261020",
+  "exit": 0,
+  "summary_equal_to_first_resolution": true,
+  "product_executed": false,
+  "verified_utc": "2026-10-20T05:19:39.601236+00:00"
+}

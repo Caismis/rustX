@@ -1,0 +1,171 @@
+{
+  "run_id": "geometry-short-large-cef4d78a-20261020T051249Z",
+  "case": "short-large",
+  "fixture_commit": "cef4d78ad234b8cf60acb563a5e42bc0263ea0bf",
+  "source_head": "89d6b618eeba8afaf4b95af4406057330baa60a6",
+  "argv": [
+    "node",
+    "--experimental-transform-types",
+    "/workspace/pr485-study/diagnostic-fixture-review/benchmarks/pi-durable-inspector-fixture/v3/run.mjs",
+    "/workspace/pr485-study/repo",
+    "/workspace/pr485-study/evidence/build-geometry/host/inspector-host",
+    "short-large",
+    "/workspace/pr485-study/private-diagnostics/geometry-short-large-cef4d78a-20261020T051249Z/product"
+  ],
+  "cwd": "/workspace/pr485-study/repo",
+  "runtime_overrides": {
+    "TMPDIR": "/workspace/pr485-study/tmp",
+    "TZ": "UTC",
+    "LD_PRELOAD": null
+  },
+  "global_watchdog_seconds": 600,
+  "disk_guard_bytes_strict": 5368709120,
+  "product_start_utc": "2026-10-20T05:13:01.381543+00:00",
+  "product_end_utc": "2026-10-20T05:13:35.588564+00:00",
+  "product_start_monotonic_ns": 14793887563580,
+  "product_end_monotonic_ns": 14828094811837,
+  "fixture_pid": 37616,
+  "fixture_exit": -15,
+  "watchdog_trigger": {
+    "utc": "2026-10-20T05:13:34.581151+00:00",
+    "elapsed_s": 33.19774394900014,
+    "free_bytes": 5341106176,
+    "reason": "disk-guard"
+  },
+  "minimum_free_bytes": 5341106176,
+  "space_at_product_start": {
+    "paths": [
+      {
+        "path": "/workspace/pr485-study",
+        "device": 27,
+        "usable_bytes": 9472839680,
+        "total_bytes": 33770192896
+      },
+      {
+        "path": "/var/lib/docker",
+        "device": 27,
+        "usable_bytes": 9472839680,
+        "total_bytes": 33770192896
+      }
+    ],
+    "distinct_backing_filesystems": 1
+  },
+  "space_after": {
+    "paths": [
+      {
+        "path": "/workspace/pr485-study",
+        "device": 27,
+        "usable_bytes": 4733546496,
+        "total_bytes": 33770192896
+      },
+      {
+        "path": "/var/lib/docker",
+        "device": 27,
+        "usable_bytes": 4733530112,
+        "total_bytes": 33770192896
+      }
+    ],
+    "distinct_backing_filesystems": 1
+  },
+  "fixture_wait4": {
+    "user_seconds": 4.021278,
+    "system_seconds": 1.154152,
+    "maxrss_kib": 333524,
+    "minor_faults": 88635,
+    "major_faults": 0,
+    "scope": "Direct fixture Node plus waited descendant rusage may be included; do not sum again with descendant CPU."
+  },
+  "original_failure": {
+    "path": "/workspace/pr485-study/evidence/products/browser-baseline-vs-geometry-v2/1-short-large-geometry/failure.json",
+    "sha256": "c2c4e57116b767ab6808c4ee299976d016d19425fa7deed84484f6441f23cddc",
+    "bytes": 2544980
+  },
+  "original_failure_unchanged": true,
+  "native_binary_unchanged": true,
+  "fixture_unchanged": true,
+  "diagnostics_present": false,
+  "sample_present": false,
+  "failure_present": false,
+  "outer_driver_sha256": "6b0800cb60148b2eb593f32fae3c7efa4406cc0ab32ef356853bb10d52ac19a4",
+  "classification": "Incomplete environment/setup attempt; not a browser pass/failure, performance sample, or Native causal observation",
+  "browser_or_workload_started": false,
+  "container": {
+    "id": "53eb63192e4b90a01011f4df604c5a0fd9e9b91b62645f4c27321d2411877ca5",
+    "name": "/pr485-inspector-37616-1792473190432",
+    "created_utc": "2026-10-20T05:13:10.488409975Z",
+    "status_before_cleanup": "created",
+    "pid": 0,
+    "started_at": "0001-01-01T00:00:00Z",
+    "state_exitcode": 0,
+    "state_exitcode_is_not_product_success": true
+  },
+  "native_host_sha256": "fdfc4d0d9bf53d2a6796527486ddaa27a74ac82b4c65c276204b309ae842af30",
+  "native_library_sha256": "c72106cd7f3b0a1b8c930b2d5f109110e1c88c8bc8b362ca934555190d9aebbd",
+  "cleanup": {
+    "utc": "2026-10-20T05:14:03.698315+00:00",
+    "argv": [
+      "docker",
+      "rm",
+      "-f",
+      "53eb63192e4b"
+    ],
+    "returncode": 0
+  },
+  "lowest_post_exit_free_bytes_observed": 4388581376,
+  "free_bytes_after_cleanup_observed": 9471385600,
+  "process_snapshots": {
+    "count": 34,
+    "identities": [
+      {
+        "pid": 37616,
+        "starttime_ticks": "1479388",
+        "comm": "node",
+        "first_utc": "2026-10-20T05:13:01.389082+00:00",
+        "last_utc": "2026-10-20T05:13:34.580915+00:00",
+        "last_state": "S",
+        "last_sampled_cpu_s": 5.13
+      }
+    ],
+    "scope": "Only fixture Node captured. Child discovery produced no child snapshots; missing Native/provider/preview counters or final exit records are not evidence of no activity/exit."
+  },
+  "native_post_stop": {
+    "pid": 37628,
+    "starttime_ticks": "1479743",
+    "state": "Z",
+    "raw_proc_exit_code_field52": 0,
+    "cpu_s": 0.72,
+    "scope": "Matching PID/starttime zombie proc stat, not parent wait4. Do not interpret absence of diagnostic child-exit records."
+  },
+  "missing": [
+    "diagnostics.json",
+    "sample.json",
+    "failure.json",
+    "browser WebSocket send/receive/close timestamps",
+    "current-row and all-loaded wire barrier observations",
+    "Node fixture event-loop histogram",
+    "Native/provider/preview final child-exit records",
+    "complete descendant counters",
+    "exclusive Docker vfs storage bytes"
+  ],
+  "private_capture_policy": "Raw fixture stdout/stderr, metadata and console/close text remain private; no console buffer available. Public outputs are explicit metadata allowlist.",
+  "limitations": [
+    "Metadata extraction precedes diagnostic timestamps and adds overhead",
+    "50000-event buffers retain beginning; inspect dropped counts for missing terminal events",
+    "Cleanup may prevent diagnostics.json; missing exit record is not absence of exit",
+    "Browser receive callback is not paint; original wire repair barrier remains limited"
+  ],
+  "owned_docker_events": 0,
+  "docker_events_scope": "No events returned for original interval; not proof of absence. Independent inspect established Created/PID0/notstarted.",
+  "vfs_du_action": {
+    "argv": [
+      "du",
+      "-x",
+      "-s",
+      "-B1",
+      "/var/lib/docker/vfs"
+    ],
+    "outcome": "permission denied; no escalation attempted",
+    "fallback": "Docker inspect plus shared backing filesystem free bytes; no exclusive VFS allocation claim"
+  },
+  "current_free_bytes": 9459507200
+}

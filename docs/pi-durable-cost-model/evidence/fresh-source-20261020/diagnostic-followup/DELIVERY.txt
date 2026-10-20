@@ -1,0 +1,8 @@
+The archive contains the exact debug package/ELF,original libc and the two unchanged steady profiles,plus the public summaries/scripts. Raw browser console/close text and private fixture metadata are excluded.
+
+Extract once,then offline reproduce:
+tar -xf pr485-diagnostic-followup-20261020.tar.xz
+cd diagnostic-followup-20261020
+python3 resolve-libc-leaves.py --profiles profiles --output libc
+
+Archive SHA-256: dd3bb52bf54afdd7dc8b1591c89782269dff45a114cb5cac63a53ca845788993

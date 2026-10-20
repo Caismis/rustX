@@ -1,0 +1,2924 @@
+[
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67ae5ee4",
+    "elf_vaddr": "0x8fee4",
+    "weighted_leaf_samples": 2,
+    "frames": [
+      {
+        "function": "__GI___lll_lock_wake_private",
+        "location": "./nptl/./nptl/lowlevellock.c:58"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67aebe63",
+    "elf_vaddr": "0x95e63",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "___pthread_mutex_lock",
+        "location": "./nptl/./nptl/pthread_mutex_lock.c:80 (discriminator 1)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67aebe88",
+    "elf_vaddr": "0x95e88",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "___pthread_mutex_lock",
+        "location": "./nptl/./nptl/pthread_mutex_lock.c:90"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67aebeb4",
+    "elf_vaddr": "0x95eb4",
+    "weighted_leaf_samples": 3,
+    "frames": [
+      {
+        "function": "lll_mutex_lock_optimized",
+        "location": "./nptl/./nptl/pthread_mutex_lock.c:48 (discriminator 2)"
+      },
+      {
+        "function": "___pthread_mutex_lock",
+        "location": "./nptl/./nptl/pthread_mutex_lock.c:93 (discriminator 2)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67aed76c",
+    "elf_vaddr": "0x9776c",
+    "weighted_leaf_samples": 7,
+    "frames": [
+      {
+        "function": "lll_mutex_unlock_optimized",
+        "location": "./nptl/./nptl/pthread_mutex_unlock.c:43 (discriminator 2)"
+      },
+      {
+        "function": "__GI___pthread_mutex_unlock_usercnt",
+        "location": "./nptl/./nptl/pthread_mutex_unlock.c:68 (discriminator 2)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67aed830",
+    "elf_vaddr": "0x97830",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "___pthread_mutex_unlock",
+        "location": "./nptl/./nptl/pthread_mutex_unlock.c:368"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af09ee",
+    "elf_vaddr": "0x9a9ee",
+    "weighted_leaf_samples": 61,
+    "frames": [
+      {
+        "function": "__syscall_cancel_arch",
+        "location": "./nptl/../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af4650",
+    "elf_vaddr": "0x9e650",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "alloc_perturb",
+        "location": "./malloc/./malloc/malloc.c:1987"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af4dc9",
+    "elf_vaddr": "0x9edc9",
+    "weighted_leaf_samples": 3,
+    "frames": [
+      {
+        "function": "unlink_chunk",
+        "location": "./malloc/./malloc/malloc.c:1615"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af4dce",
+    "elf_vaddr": "0x9edce",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "unlink_chunk",
+        "location": "./malloc/./malloc/malloc.c:1616"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af4ddd",
+    "elf_vaddr": "0x9eddd",
+    "weighted_leaf_samples": 3,
+    "frames": [
+      {
+        "function": "unlink_chunk",
+        "location": "./malloc/./malloc/malloc.c:1618 (discriminator 1)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af4de3",
+    "elf_vaddr": "0x9ede3",
+    "weighted_leaf_samples": 2,
+    "frames": [
+      {
+        "function": "unlink_chunk",
+        "location": "./malloc/./malloc/malloc.c:1615"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af4ee6",
+    "elf_vaddr": "0x9eee6",
+    "weighted_leaf_samples": 4,
+    "frames": [
+      {
+        "function": "malloc_consolidate",
+        "location": "./malloc/./malloc/malloc.c:4931"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af4ef0",
+    "elf_vaddr": "0x9eef0",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "malloc_consolidate",
+        "location": "./malloc/./malloc/malloc.c:4935"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af4ef8",
+    "elf_vaddr": "0x9eef8",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "malloc_consolidate",
+        "location": "./malloc/./malloc/malloc.c:4938"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af4f2a",
+    "elf_vaddr": "0x9ef2a",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "malloc_consolidate",
+        "location": "./malloc/./malloc/malloc.c:4949"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af4f3f",
+    "elf_vaddr": "0x9ef3f",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "malloc_consolidate",
+        "location": "./malloc/./malloc/malloc.c:4906"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af4f43",
+    "elf_vaddr": "0x9ef43",
+    "weighted_leaf_samples": 6,
+    "frames": [
+      {
+        "function": "malloc_consolidate",
+        "location": "./malloc/./malloc/malloc.c:4906"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af4f48",
+    "elf_vaddr": "0x9ef48",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "malloc_consolidate",
+        "location": "./malloc/./malloc/malloc.c:4907"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af4f77",
+    "elf_vaddr": "0x9ef77",
+    "weighted_leaf_samples": 4,
+    "frames": [
+      {
+        "function": "malloc_consolidate",
+        "location": "./malloc/./malloc/malloc.c:4912"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af4f89",
+    "elf_vaddr": "0x9ef89",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "malloc_consolidate",
+        "location": "./malloc/./malloc/malloc.c:4922"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af5040",
+    "elf_vaddr": "0x9f040",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_free_create_chunk",
+        "location": "./malloc/./malloc/malloc.c:4755"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af5065",
+    "elf_vaddr": "0x9f065",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_free_create_chunk",
+        "location": "./malloc/./malloc/malloc.c:4762"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af509a",
+    "elf_vaddr": "0x9f09a",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_free_create_chunk",
+        "location": "./malloc/./malloc/malloc.c:4801"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af50f5",
+    "elf_vaddr": "0x9f0f5",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_free_create_chunk",
+        "location": "./malloc/./malloc/malloc.c:4793 (discriminator 1)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af65a0",
+    "elf_vaddr": "0xa05a0",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "get_max_fast",
+        "location": "./malloc/./malloc/malloc.c:1796"
+      },
+      {
+        "function": "_int_free_chunk",
+        "location": "./malloc/./malloc/malloc.c:4582"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af65b7",
+    "elf_vaddr": "0xa05b7",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_free_chunk",
+        "location": "./malloc/./malloc/malloc.c:4574"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af65b8",
+    "elf_vaddr": "0xa05b8",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_free_chunk",
+        "location": "./malloc/./malloc/malloc.c:4574"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af65cc",
+    "elf_vaddr": "0xa05cc",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_free_chunk",
+        "location": "./malloc/./malloc/malloc.c:4593 (discriminator 1)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af6602",
+    "elf_vaddr": "0xa0602",
+    "weighted_leaf_samples": 2,
+    "frames": [
+      {
+        "function": "_int_free_chunk",
+        "location": "./malloc/./malloc/malloc.c:4617"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af6658",
+    "elf_vaddr": "0xa0658",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_free_chunk",
+        "location": "./malloc/./malloc/malloc.c:4679"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af6682",
+    "elf_vaddr": "0xa0682",
+    "weighted_leaf_samples": 2,
+    "frames": [
+      {
+        "function": "_int_free_chunk",
+        "location": "./malloc/./malloc/malloc.c:4665 (discriminator 2)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af66e0",
+    "elf_vaddr": "0xa06e0",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_free_chunk",
+        "location": "./malloc/./malloc/malloc.c:4640"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af66fd",
+    "elf_vaddr": "0xa06fd",
+    "weighted_leaf_samples": 6,
+    "frames": [
+      {
+        "function": "_int_free_chunk",
+        "location": "./malloc/./malloc/malloc.c:4643"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af72a9",
+    "elf_vaddr": "0xa12a9",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:3904"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af72af",
+    "elf_vaddr": "0xa12af",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:3904"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af730c",
+    "elf_vaddr": "0xa130c",
+    "weighted_leaf_samples": 2,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:3981 (discriminator 1)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af748b",
+    "elf_vaddr": "0xa148b",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4118"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af7492",
+    "elf_vaddr": "0xa1492",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4117"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af74da",
+    "elf_vaddr": "0xa14da",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4131"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af7527",
+    "elf_vaddr": "0xa1527",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4142 (discriminator 1)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af759b",
+    "elf_vaddr": "0xa159b",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4228"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af75b5",
+    "elf_vaddr": "0xa15b5",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4237"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af75b9",
+    "elf_vaddr": "0xa15b9",
+    "weighted_leaf_samples": 3,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4237"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af75fc",
+    "elf_vaddr": "0xa15fc",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4288"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af7616",
+    "elf_vaddr": "0xa1616",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4282"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af7690",
+    "elf_vaddr": "0xa1690",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:3987 (discriminator 16)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af7705",
+    "elf_vaddr": "0xa1705",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4038"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af772d",
+    "elf_vaddr": "0xa172d",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4046"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af7874",
+    "elf_vaddr": "0xa1874",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4194"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af78b1",
+    "elf_vaddr": "0xa18b1",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4545"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af78b2",
+    "elf_vaddr": "0xa18b2",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4545"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af78e9",
+    "elf_vaddr": "0xa18e9",
+    "weighted_leaf_samples": 2,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4315"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af7944",
+    "elf_vaddr": "0xa1944",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4392"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af7960",
+    "elf_vaddr": "0xa1960",
+    "weighted_leaf_samples": 2,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4413"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af7970",
+    "elf_vaddr": "0xa1970",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4419"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af7974",
+    "elf_vaddr": "0xa1974",
+    "weighted_leaf_samples": 3,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4422"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af7bac",
+    "elf_vaddr": "0xa1bac",
+    "weighted_leaf_samples": 4,
+    "frames": [
+      {
+        "function": "tcache_put",
+        "location": "./malloc/./malloc/malloc.c:3165"
+      },
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4073"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af7bec",
+    "elf_vaddr": "0xa1bec",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4037"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af7e14",
+    "elf_vaddr": "0xa1e14",
+    "weighted_leaf_samples": 3,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4431"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af7fec",
+    "elf_vaddr": "0xa1fec",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4324"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af8165",
+    "elf_vaddr": "0xa2165",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4173"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af8745",
+    "elf_vaddr": "0xa2745",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_free",
+        "location": "./malloc/./malloc/malloc.c:4699"
+      },
+      {
+        "function": "_int_realloc",
+        "location": "./malloc/./malloc/malloc.c:5054"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af8bc1",
+    "elf_vaddr": "0xa2bc1",
+    "weighted_leaf_samples": 2,
+    "frames": [
+      {
+        "function": "tcache_try_malloc",
+        "location": "./malloc/./malloc/malloc.c:3359"
+      },
+      {
+        "function": "__GI___libc_malloc",
+        "location": "./malloc/./malloc/malloc.c:3395"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af8bd0",
+    "elf_vaddr": "0xa2bd0",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "tcache_try_malloc",
+        "location": "./malloc/./malloc/malloc.c:3361"
+      },
+      {
+        "function": "__GI___libc_malloc",
+        "location": "./malloc/./malloc/malloc.c:3395"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af8bd5",
+    "elf_vaddr": "0xa2bd5",
+    "weighted_leaf_samples": 2,
+    "frames": [
+      {
+        "function": "tcache_try_malloc",
+        "location": "./malloc/./malloc/malloc.c:3361 (discriminator 1)"
+      },
+      {
+        "function": "__GI___libc_malloc",
+        "location": "./malloc/./malloc/malloc.c:3395 (discriminator 1)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af8bda",
+    "elf_vaddr": "0xa2bda",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "tcache_available",
+        "location": "./malloc/./malloc/malloc.c:3215"
+      },
+      {
+        "function": "tcache_try_malloc",
+        "location": "./malloc/./malloc/malloc.c:3363"
+      },
+      {
+        "function": "__GI___libc_malloc",
+        "location": "./malloc/./malloc/malloc.c:3395"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af8c09",
+    "elf_vaddr": "0xa2c09",
+    "weighted_leaf_samples": 5,
+    "frames": [
+      {
+        "function": "tcache_get_n",
+        "location": "./malloc/./malloc/malloc.c:3188"
+      },
+      {
+        "function": "tcache_get",
+        "location": "./malloc/./malloc/malloc.c:3201"
+      },
+      {
+        "function": "tcache_try_malloc",
+        "location": "./malloc/./malloc/malloc.c:3364"
+      },
+      {
+        "function": "__GI___libc_malloc",
+        "location": "./malloc/./malloc/malloc.c:3395"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af8c0d",
+    "elf_vaddr": "0xa2c0d",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "tcache_get_n",
+        "location": "./malloc/./malloc/malloc.c:3192"
+      },
+      {
+        "function": "tcache_get",
+        "location": "./malloc/./malloc/malloc.c:3201"
+      },
+      {
+        "function": "tcache_try_malloc",
+        "location": "./malloc/./malloc/malloc.c:3364"
+      },
+      {
+        "function": "__GI___libc_malloc",
+        "location": "./malloc/./malloc/malloc.c:3395"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af8c50",
+    "elf_vaddr": "0xa2c50",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__GI___libc_malloc",
+        "location": "./malloc/./malloc/malloc.c:3404"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af8c7d",
+    "elf_vaddr": "0xa2c7d",
+    "weighted_leaf_samples": 6,
+    "frames": [
+      {
+        "function": "__GI___libc_malloc",
+        "location": "./malloc/./malloc/malloc.c:3412 (discriminator 2)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af8c9c",
+    "elf_vaddr": "0xa2c9c",
+    "weighted_leaf_samples": 4,
+    "frames": [
+      {
+        "function": "__GI___libc_malloc",
+        "location": "./malloc/./malloc/malloc.c:3425 (discriminator 2)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af8ca5",
+    "elf_vaddr": "0xa2ca5",
+    "weighted_leaf_samples": 2,
+    "frames": [
+      {
+        "function": "__GI___libc_malloc",
+        "location": "./malloc/./malloc/malloc.c:3429 (discriminator 1)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af8f46",
+    "elf_vaddr": "0xa2f46",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_mid_memalign",
+        "location": "./malloc/./malloc/malloc.c:3702"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af9280",
+    "elf_vaddr": "0xa3280",
+    "weighted_leaf_samples": 2,
+    "frames": [
+      {
+        "function": "__GI___libc_free",
+        "location": "./malloc/./malloc/malloc.c:3441"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af9297",
+    "elf_vaddr": "0xa3297",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__GI___libc_free",
+        "location": "./malloc/./malloc/malloc.c:3437"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af92a2",
+    "elf_vaddr": "0xa32a2",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__GI___libc_free",
+        "location": "./malloc/./malloc/malloc.c:3453"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af92a6",
+    "elf_vaddr": "0xa32a6",
+    "weighted_leaf_samples": 4,
+    "frames": [
+      {
+        "function": "__GI___libc_free",
+        "location": "./malloc/./malloc/malloc.c:3449"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af92b3",
+    "elf_vaddr": "0xa32b3",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__GI___libc_free",
+        "location": "./malloc/./malloc/malloc.c:3470"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af9339",
+    "elf_vaddr": "0xa3339",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "tcache_free",
+        "location": "./malloc/./malloc/malloc.c:3252"
+      },
+      {
+        "function": "_int_free",
+        "location": "./malloc/./malloc/malloc.c:4695"
+      },
+      {
+        "function": "__GI___libc_free",
+        "location": "./malloc/./malloc/malloc.c:3476"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af9344",
+    "elf_vaddr": "0xa3344",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "tcache_free",
+        "location": "./malloc/./malloc/malloc.c:3253 (discriminator 1)"
+      },
+      {
+        "function": "_int_free",
+        "location": "./malloc/./malloc/malloc.c:4695 (discriminator 1)"
+      },
+      {
+        "function": "__GI___libc_free",
+        "location": "./malloc/./malloc/malloc.c:3476 (discriminator 1)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af9360",
+    "elf_vaddr": "0xa3360",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "tcache_free",
+        "location": "./malloc/./malloc/malloc.c:3265"
+      },
+      {
+        "function": "_int_free",
+        "location": "./malloc/./malloc/malloc.c:4695"
+      },
+      {
+        "function": "__GI___libc_free",
+        "location": "./malloc/./malloc/malloc.c:3476"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af936a",
+    "elf_vaddr": "0xa336a",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "tcache_free",
+        "location": "./malloc/./malloc/malloc.c:3265"
+      },
+      {
+        "function": "_int_free",
+        "location": "./malloc/./malloc/malloc.c:4695"
+      },
+      {
+        "function": "__GI___libc_free",
+        "location": "./malloc/./malloc/malloc.c:3476"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af93e3",
+    "elf_vaddr": "0xa33e3",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__GI___libc_free",
+        "location": "./malloc/./malloc/malloc.c:3480"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af93e5",
+    "elf_vaddr": "0xa33e5",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__GI___libc_free",
+        "location": "./malloc/./malloc/malloc.c:3480"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67af96f2",
+    "elf_vaddr": "0xa36f2",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__GI___libc_realloc",
+        "location": "./malloc/./malloc/malloc.c:3593 (discriminator 2)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67b561ea",
+    "elf_vaddr": "0x1001ea",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__GI___fstatat64",
+        "location": "./io/../sysdeps/unix/sysv/linux/fstatat64.c:161"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67b5a35a",
+    "elf_vaddr": "0x10435a",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "statx",
+        "location": "./io/../sysdeps/unix/sysv/linux/statx.c:28 (discriminator 1)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67b5aaa0",
+    "elf_vaddr": "0x104aa0",
+    "weighted_leaf_samples": 15,
+    "frames": [
+      {
+        "function": "__fcntl64_nocancel_adjusted",
+        "location": "./io/../sysdeps/unix/sysv/linux/fcntl_nocancel.c:63 (discriminator 1)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67b647b9",
+    "elf_vaddr": "0x10e7b9",
+    "weighted_leaf_samples": 31,
+    "frames": [
+      {
+        "function": "syscall",
+        "location": "./misc/../sysdeps/unix/sysv/linux/x86_64/syscall.S:38"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67bc84c0",
+    "elf_vaddr": "0x1724c0",
+    "weighted_leaf_samples": 2,
+    "frames": [
+      {
+        "function": "__memcmp_evex_movbe",
+        "location": "./string/../sysdeps/x86_64/multiarch/memcmp-evex-movbe.S:104"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67bc84da",
+    "elf_vaddr": "0x1724da",
+    "weighted_leaf_samples": 6,
+    "frames": [
+      {
+        "function": "__memcmp_evex_movbe",
+        "location": "./string/../sysdeps/x86_64/multiarch/memcmp-evex-movbe.S:132"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67bc84e1",
+    "elf_vaddr": "0x1724e1",
+    "weighted_leaf_samples": 2,
+    "frames": [
+      {
+        "function": "__memcmp_evex_movbe",
+        "location": "./string/../sysdeps/x86_64/multiarch/memcmp-evex-movbe.S:133"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67bc84e5",
+    "elf_vaddr": "0x1724e5",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__memcmp_evex_movbe",
+        "location": "./string/../sysdeps/x86_64/multiarch/memcmp-evex-movbe.S:134"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67bc84f0",
+    "elf_vaddr": "0x1724f0",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__memcmp_evex_movbe",
+        "location": "./string/../sysdeps/x86_64/multiarch/memcmp-evex-movbe.S:141"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67bc84f7",
+    "elf_vaddr": "0x1724f7",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__memcmp_evex_movbe",
+        "location": "./string/../sysdeps/x86_64/multiarch/memcmp-evex-movbe.S:155"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67bc8506",
+    "elf_vaddr": "0x172506",
+    "weighted_leaf_samples": 2,
+    "frames": [
+      {
+        "function": "__memcmp_evex_movbe",
+        "location": "./string/../sysdeps/x86_64/multiarch/memcmp-evex-movbe.S:166"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67bcaf1e",
+    "elf_vaddr": "0x174f1e",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__strchr_evex",
+        "location": "./string/../sysdeps/x86_64/multiarch/strchr-evex.S:110"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67bcbb1e",
+    "elf_vaddr": "0x175b1e",
+    "weighted_leaf_samples": 2,
+    "frames": [
+      {
+        "function": "__strlen_evex",
+        "location": "./string/../sysdeps/x86_64/multiarch/strlen-evex-base.S:82"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67bd1ac0",
+    "elf_vaddr": "0x17bac0",
+    "weighted_leaf_samples": 3,
+    "frames": [
+      {
+        "function": "__memcpy_avx512_unaligned_erms",
+        "location": "./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:256"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67bd1acf",
+    "elf_vaddr": "0x17bacf",
+    "weighted_leaf_samples": 3,
+    "frames": [
+      {
+        "function": "__memcpy_avx512_unaligned_erms",
+        "location": "./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:266"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67bd1af3",
+    "elf_vaddr": "0x17baf3",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__memcpy_avx512_unaligned_erms",
+        "location": "./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:287"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67bd1b00",
+    "elf_vaddr": "0x17bb00",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__memcpy_avx512_unaligned_erms",
+        "location": "./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:301"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67bd1b15",
+    "elf_vaddr": "0x17bb15",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__memcpy_avx512_unaligned_erms",
+        "location": "./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:316"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67bd1b44",
+    "elf_vaddr": "0x17bb44",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__memcpy_avx512_unaligned_erms",
+        "location": "./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:347"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67bd1b45",
+    "elf_vaddr": "0x17bb45",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__memcpy_avx512_unaligned_erms",
+        "location": "./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:354"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67bd1b4b",
+    "elf_vaddr": "0x17bb4b",
+    "weighted_leaf_samples": 2,
+    "frames": [
+      {
+        "function": "__memcpy_avx512_unaligned_erms",
+        "location": "./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:355"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67bd1b62",
+    "elf_vaddr": "0x17bb62",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__memcpy_avx512_unaligned_erms",
+        "location": "./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:364"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67bd1b67",
+    "elf_vaddr": "0x17bb67",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__memcpy_avx512_unaligned_erms",
+        "location": "./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:365"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67bd1b6d",
+    "elf_vaddr": "0x17bb6d",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__memcpy_avx512_unaligned_erms",
+        "location": "./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:367"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67bd1b83",
+    "elf_vaddr": "0x17bb83",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__memcpy_avx512_unaligned_erms",
+        "location": "./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:377"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67bd1bb7",
+    "elf_vaddr": "0x17bbb7",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__memcpy_avx512_unaligned_erms",
+        "location": "./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:387"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "baseline",
+    "absolute_pc": "0x7f2c67bd1e32",
+    "elf_vaddr": "0x17be32",
+    "weighted_leaf_samples": 3,
+    "frames": [
+      {
+        "function": "__memcpy_avx512_unaligned_erms",
+        "location": "./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:660"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f74ee4",
+    "elf_vaddr": "0x8fee4",
+    "weighted_leaf_samples": 2,
+    "frames": [
+      {
+        "function": "__GI___lll_lock_wake_private",
+        "location": "./nptl/./nptl/lowlevellock.c:58"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f7ae60",
+    "elf_vaddr": "0x95e60",
+    "weighted_leaf_samples": 2,
+    "frames": [
+      {
+        "function": "___pthread_mutex_lock",
+        "location": "./nptl/./nptl/pthread_mutex_lock.c:80 (discriminator 3)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f7ae63",
+    "elf_vaddr": "0x95e63",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "___pthread_mutex_lock",
+        "location": "./nptl/./nptl/pthread_mutex_lock.c:80 (discriminator 1)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f7aeb4",
+    "elf_vaddr": "0x95eb4",
+    "weighted_leaf_samples": 5,
+    "frames": [
+      {
+        "function": "lll_mutex_lock_optimized",
+        "location": "./nptl/./nptl/pthread_mutex_lock.c:48 (discriminator 2)"
+      },
+      {
+        "function": "___pthread_mutex_lock",
+        "location": "./nptl/./nptl/pthread_mutex_lock.c:93 (discriminator 2)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f7c72b",
+    "elf_vaddr": "0x9772b",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__GI___pthread_mutex_unlock_usercnt",
+        "location": "./nptl/./nptl/pthread_mutex_unlock.c:52 (discriminator 1)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f7c76c",
+    "elf_vaddr": "0x9776c",
+    "weighted_leaf_samples": 4,
+    "frames": [
+      {
+        "function": "lll_mutex_unlock_optimized",
+        "location": "./nptl/./nptl/pthread_mutex_unlock.c:43 (discriminator 2)"
+      },
+      {
+        "function": "__GI___pthread_mutex_unlock_usercnt",
+        "location": "./nptl/./nptl/pthread_mutex_unlock.c:68 (discriminator 2)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f7c784",
+    "elf_vaddr": "0x97784",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__GI___pthread_mutex_unlock_usercnt",
+        "location": "./nptl/./nptl/pthread_mutex_unlock.c:65"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f7f9ee",
+    "elf_vaddr": "0x9a9ee",
+    "weighted_leaf_samples": 56,
+    "frames": [
+      {
+        "function": "__syscall_cancel_arch",
+        "location": "./nptl/../sysdeps/unix/sysv/linux/x86_64/syscall_cancel.S:56"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f83dc9",
+    "elf_vaddr": "0x9edc9",
+    "weighted_leaf_samples": 3,
+    "frames": [
+      {
+        "function": "unlink_chunk",
+        "location": "./malloc/./malloc/malloc.c:1615"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f83ddd",
+    "elf_vaddr": "0x9eddd",
+    "weighted_leaf_samples": 3,
+    "frames": [
+      {
+        "function": "unlink_chunk",
+        "location": "./malloc/./malloc/malloc.c:1618 (discriminator 1)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f83de3",
+    "elf_vaddr": "0x9ede3",
+    "weighted_leaf_samples": 5,
+    "frames": [
+      {
+        "function": "unlink_chunk",
+        "location": "./malloc/./malloc/malloc.c:1615"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f83ee0",
+    "elf_vaddr": "0x9eee0",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "malloc_consolidate",
+        "location": "./malloc/./malloc/malloc.c:4931"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f83ee6",
+    "elf_vaddr": "0x9eee6",
+    "weighted_leaf_samples": 5,
+    "frames": [
+      {
+        "function": "malloc_consolidate",
+        "location": "./malloc/./malloc/malloc.c:4931"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f83ef0",
+    "elf_vaddr": "0x9eef0",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "malloc_consolidate",
+        "location": "./malloc/./malloc/malloc.c:4935"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f83f17",
+    "elf_vaddr": "0x9ef17",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "malloc_consolidate",
+        "location": "./malloc/./malloc/malloc.c:4942"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f83f43",
+    "elf_vaddr": "0x9ef43",
+    "weighted_leaf_samples": 2,
+    "frames": [
+      {
+        "function": "malloc_consolidate",
+        "location": "./malloc/./malloc/malloc.c:4906"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f83f64",
+    "elf_vaddr": "0x9ef64",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "malloc_consolidate",
+        "location": "./malloc/./malloc/malloc.c:4915"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f83f77",
+    "elf_vaddr": "0x9ef77",
+    "weighted_leaf_samples": 2,
+    "frames": [
+      {
+        "function": "malloc_consolidate",
+        "location": "./malloc/./malloc/malloc.c:4912"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f83f89",
+    "elf_vaddr": "0x9ef89",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "malloc_consolidate",
+        "location": "./malloc/./malloc/malloc.c:4922"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f83ff3",
+    "elf_vaddr": "0x9eff3",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "malloc_consolidate",
+        "location": "./malloc/./malloc/malloc.c:4933"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f84065",
+    "elf_vaddr": "0x9f065",
+    "weighted_leaf_samples": 2,
+    "frames": [
+      {
+        "function": "_int_free_create_chunk",
+        "location": "./malloc/./malloc/malloc.c:4762"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f855a0",
+    "elf_vaddr": "0xa05a0",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "get_max_fast",
+        "location": "./malloc/./malloc/malloc.c:1796"
+      },
+      {
+        "function": "_int_free_chunk",
+        "location": "./malloc/./malloc/malloc.c:4582"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f85638",
+    "elf_vaddr": "0xa0638",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_free_chunk",
+        "location": "./malloc/./malloc/malloc.c:4649"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f85652",
+    "elf_vaddr": "0xa0652",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_free_chunk",
+        "location": "./malloc/./malloc/malloc.c:4679"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f85696",
+    "elf_vaddr": "0xa0696",
+    "weighted_leaf_samples": 2,
+    "frames": [
+      {
+        "function": "_int_free_chunk",
+        "location": "./malloc/./malloc/malloc.c:4670 (discriminator 2)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f856fd",
+    "elf_vaddr": "0xa06fd",
+    "weighted_leaf_samples": 7,
+    "frames": [
+      {
+        "function": "_int_free_chunk",
+        "location": "./malloc/./malloc/malloc.c:4643"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f862af",
+    "elf_vaddr": "0xa12af",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:3904"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f862b8",
+    "elf_vaddr": "0xa12b8",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:3904"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f86400",
+    "elf_vaddr": "0xa1400",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4035"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f8649d",
+    "elf_vaddr": "0xa149d",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4118"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f864da",
+    "elf_vaddr": "0xa14da",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4131"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f86500",
+    "elf_vaddr": "0xa1500",
+    "weighted_leaf_samples": 4,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4138 (discriminator 1)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f8651a",
+    "elf_vaddr": "0xa151a",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4140 (discriminator 1)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f86531",
+    "elf_vaddr": "0xa1531",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4143 (discriminator 1)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f866a3",
+    "elf_vaddr": "0xa16a3",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:3987 (discriminator 18)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f86716",
+    "elf_vaddr": "0xa1716",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4043 (discriminator 1)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f8675e",
+    "elf_vaddr": "0xa175e",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4056 (discriminator 1)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f86949",
+    "elf_vaddr": "0xa1949",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4392"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f86950",
+    "elf_vaddr": "0xa1950",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4397"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f86960",
+    "elf_vaddr": "0xa1960",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4413"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f86993",
+    "elf_vaddr": "0xa1993",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4397"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f86b92",
+    "elf_vaddr": "0xa1b92",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4068"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f86ec3",
+    "elf_vaddr": "0xa1ec3",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "alloc_perturb",
+        "location": "./malloc/./malloc/malloc.c:1987"
+      },
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4480"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f870bc",
+    "elf_vaddr": "0xa20bc",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4541"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f870f4",
+    "elf_vaddr": "0xa20f4",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4514"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f87129",
+    "elf_vaddr": "0xa2129",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4163"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f87168",
+    "elf_vaddr": "0xa2168",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_malloc",
+        "location": "./malloc/./malloc/malloc.c:4173"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f87745",
+    "elf_vaddr": "0xa2745",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_free",
+        "location": "./malloc/./malloc/malloc.c:4699"
+      },
+      {
+        "function": "_int_realloc",
+        "location": "./malloc/./malloc/malloc.c:5054"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f87b90",
+    "elf_vaddr": "0xa2b90",
+    "weighted_leaf_samples": 2,
+    "frames": [
+      {
+        "function": "__GI___libc_malloc",
+        "location": "./malloc/./malloc/malloc.c:3385"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f87b92",
+    "elf_vaddr": "0xa2b92",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__GI___libc_malloc",
+        "location": "./malloc/./malloc/malloc.c:3385"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f87bd5",
+    "elf_vaddr": "0xa2bd5",
+    "weighted_leaf_samples": 2,
+    "frames": [
+      {
+        "function": "tcache_try_malloc",
+        "location": "./malloc/./malloc/malloc.c:3361 (discriminator 1)"
+      },
+      {
+        "function": "__GI___libc_malloc",
+        "location": "./malloc/./malloc/malloc.c:3395 (discriminator 1)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f87be1",
+    "elf_vaddr": "0xa2be1",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "tcache_available",
+        "location": "./malloc/./malloc/malloc.c:3215"
+      },
+      {
+        "function": "tcache_try_malloc",
+        "location": "./malloc/./malloc/malloc.c:3363"
+      },
+      {
+        "function": "__GI___libc_malloc",
+        "location": "./malloc/./malloc/malloc.c:3395"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f87c09",
+    "elf_vaddr": "0xa2c09",
+    "weighted_leaf_samples": 2,
+    "frames": [
+      {
+        "function": "tcache_get_n",
+        "location": "./malloc/./malloc/malloc.c:3188"
+      },
+      {
+        "function": "tcache_get",
+        "location": "./malloc/./malloc/malloc.c:3201"
+      },
+      {
+        "function": "tcache_try_malloc",
+        "location": "./malloc/./malloc/malloc.c:3364"
+      },
+      {
+        "function": "__GI___libc_malloc",
+        "location": "./malloc/./malloc/malloc.c:3395"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f87c0d",
+    "elf_vaddr": "0xa2c0d",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "tcache_get_n",
+        "location": "./malloc/./malloc/malloc.c:3192"
+      },
+      {
+        "function": "tcache_get",
+        "location": "./malloc/./malloc/malloc.c:3201"
+      },
+      {
+        "function": "tcache_try_malloc",
+        "location": "./malloc/./malloc/malloc.c:3364"
+      },
+      {
+        "function": "__GI___libc_malloc",
+        "location": "./malloc/./malloc/malloc.c:3395"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f87c1d",
+    "elf_vaddr": "0xa2c1d",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__GI___libc_malloc",
+        "location": "./malloc/./malloc/malloc.c:3432"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f87c7d",
+    "elf_vaddr": "0xa2c7d",
+    "weighted_leaf_samples": 9,
+    "frames": [
+      {
+        "function": "__GI___libc_malloc",
+        "location": "./malloc/./malloc/malloc.c:3412 (discriminator 2)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f87c83",
+    "elf_vaddr": "0xa2c83",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__GI___libc_malloc",
+        "location": "./malloc/./malloc/malloc.c:3414"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f87c9c",
+    "elf_vaddr": "0xa2c9c",
+    "weighted_leaf_samples": 11,
+    "frames": [
+      {
+        "function": "__GI___libc_malloc",
+        "location": "./malloc/./malloc/malloc.c:3425 (discriminator 2)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f87ca5",
+    "elf_vaddr": "0xa2ca5",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__GI___libc_malloc",
+        "location": "./malloc/./malloc/malloc.c:3429 (discriminator 1)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f87cbc",
+    "elf_vaddr": "0xa2cbc",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "arena_for_chunk",
+        "location": "./malloc/./malloc/arena.c:153"
+      },
+      {
+        "function": "__GI___libc_malloc",
+        "location": "./malloc/./malloc/malloc.c:3429"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f88280",
+    "elf_vaddr": "0xa3280",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__GI___libc_free",
+        "location": "./malloc/./malloc/malloc.c:3441"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f88291",
+    "elf_vaddr": "0xa3291",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__GI___libc_free",
+        "location": "./malloc/./malloc/malloc.c:3437"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f88297",
+    "elf_vaddr": "0xa3297",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__GI___libc_free",
+        "location": "./malloc/./malloc/malloc.c:3437"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f882a2",
+    "elf_vaddr": "0xa32a2",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__GI___libc_free",
+        "location": "./malloc/./malloc/malloc.c:3453"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f882a6",
+    "elf_vaddr": "0xa32a6",
+    "weighted_leaf_samples": 2,
+    "frames": [
+      {
+        "function": "__GI___libc_free",
+        "location": "./malloc/./malloc/malloc.c:3449"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f882c5",
+    "elf_vaddr": "0xa32c5",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "arena_for_chunk",
+        "location": "./malloc/./malloc/arena.c:153 (discriminator 2)"
+      },
+      {
+        "function": "__GI___libc_free",
+        "location": "./malloc/./malloc/malloc.c:3475 (discriminator 2)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f88300",
+    "elf_vaddr": "0xa3300",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_free_check",
+        "location": "./malloc/./malloc/malloc.c:4558"
+      },
+      {
+        "function": "_int_free",
+        "location": "./malloc/./malloc/malloc.c:4692"
+      },
+      {
+        "function": "__GI___libc_free",
+        "location": "./malloc/./malloc/malloc.c:3476"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f88360",
+    "elf_vaddr": "0xa3360",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "tcache_free",
+        "location": "./malloc/./malloc/malloc.c:3265"
+      },
+      {
+        "function": "_int_free",
+        "location": "./malloc/./malloc/malloc.c:4695"
+      },
+      {
+        "function": "__GI___libc_free",
+        "location": "./malloc/./malloc/malloc.c:3476"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f88389",
+    "elf_vaddr": "0xa3389",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "tcache_put",
+        "location": "./malloc/./malloc/malloc.c:3168"
+      },
+      {
+        "function": "tcache_free",
+        "location": "./malloc/./malloc/malloc.c:3267"
+      },
+      {
+        "function": "_int_free",
+        "location": "./malloc/./malloc/malloc.c:4695"
+      },
+      {
+        "function": "__GI___libc_free",
+        "location": "./malloc/./malloc/malloc.c:3476"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f883e9",
+    "elf_vaddr": "0xa33e9",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__GI___libc_free",
+        "location": "./malloc/./malloc/malloc.c:3480"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f883f0",
+    "elf_vaddr": "0xa33f0",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "_int_free",
+        "location": "./malloc/./malloc/malloc.c:4699"
+      },
+      {
+        "function": "__GI___libc_free",
+        "location": "./malloc/./malloc/malloc.c:3476"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93f8871b",
+    "elf_vaddr": "0xa371b",
+    "weighted_leaf_samples": 5,
+    "frames": [
+      {
+        "function": "__GI___libc_realloc",
+        "location": "./malloc/./malloc/malloc.c:3597 (discriminator 2)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93fc18e3",
+    "elf_vaddr": "0xdc8e3",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__GI___getdents64",
+        "location": "./dirent/../sysdeps/unix/sysv/linux/getdents64.c:32 (discriminator 1)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93fe46c7",
+    "elf_vaddr": "0xff6c7",
+    "weighted_leaf_samples": 2,
+    "frames": [
+      {
+        "function": "__GI___access",
+        "location": "./io/../sysdeps/unix/sysv/linux/access.c:27 (discriminator 1)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93fe935a",
+    "elf_vaddr": "0x10435a",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "statx",
+        "location": "./io/../sysdeps/unix/sysv/linux/statx.c:28 (discriminator 1)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93fe9837",
+    "elf_vaddr": "0x104837",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__unlink",
+        "location": "./io/../sysdeps/unix/sysv/linux/unlink.c:28 (discriminator 1)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93fe9aa0",
+    "elf_vaddr": "0x104aa0",
+    "weighted_leaf_samples": 11,
+    "frames": [
+      {
+        "function": "__fcntl64_nocancel_adjusted",
+        "location": "./io/../sysdeps/unix/sysv/linux/fcntl_nocancel.c:63 (discriminator 1)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93fe9bbc",
+    "elf_vaddr": "0x104bbc",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__GI___open64_nocancel",
+        "location": "./io/../sysdeps/unix/sysv/linux/open64_nocancel.c:39 (discriminator 1)"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93ff37b9",
+    "elf_vaddr": "0x10e7b9",
+    "weighted_leaf_samples": 18,
+    "frames": [
+      {
+        "function": "syscall",
+        "location": "./misc/../sysdeps/unix/sysv/linux/x86_64/syscall.S:38"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd93ff72e7",
+    "elf_vaddr": "0x1122e7",
+    "weighted_leaf_samples": 2,
+    "frames": [
+      {
+        "function": "__GI_shutdown",
+        "location": "./socket/../sysdeps/unix/syscall-template.S:120"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd940574c0",
+    "elf_vaddr": "0x1724c0",
+    "weighted_leaf_samples": 2,
+    "frames": [
+      {
+        "function": "__memcmp_evex_movbe",
+        "location": "./string/../sysdeps/x86_64/multiarch/memcmp-evex-movbe.S:104"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd940574da",
+    "elf_vaddr": "0x1724da",
+    "weighted_leaf_samples": 7,
+    "frames": [
+      {
+        "function": "__memcmp_evex_movbe",
+        "location": "./string/../sysdeps/x86_64/multiarch/memcmp-evex-movbe.S:132"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd940574e1",
+    "elf_vaddr": "0x1724e1",
+    "weighted_leaf_samples": 3,
+    "frames": [
+      {
+        "function": "__memcmp_evex_movbe",
+        "location": "./string/../sysdeps/x86_64/multiarch/memcmp-evex-movbe.S:133"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd9405750d",
+    "elf_vaddr": "0x17250d",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__memcmp_evex_movbe",
+        "location": "./string/../sysdeps/x86_64/multiarch/memcmp-evex-movbe.S:167"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd94059f00",
+    "elf_vaddr": "0x174f00",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__strchr_evex",
+        "location": "./string/../sysdeps/x86_64/multiarch/strchr-evex.S:97"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd9405a644",
+    "elf_vaddr": "0x175644",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__strcmp_evex",
+        "location": "./string/../sysdeps/x86_64/multiarch/strcmp-evex.S:1159"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd9405ab1e",
+    "elf_vaddr": "0x175b1e",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__strlen_evex",
+        "location": "./string/../sysdeps/x86_64/multiarch/strlen-evex-base.S:82"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd94060ac0",
+    "elf_vaddr": "0x17bac0",
+    "weighted_leaf_samples": 5,
+    "frames": [
+      {
+        "function": "__memcpy_avx512_unaligned_erms",
+        "location": "./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:256"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd94060acf",
+    "elf_vaddr": "0x17bacf",
+    "weighted_leaf_samples": 3,
+    "frames": [
+      {
+        "function": "__memcpy_avx512_unaligned_erms",
+        "location": "./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:266"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd94060b00",
+    "elf_vaddr": "0x17bb00",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__memcpy_avx512_unaligned_erms",
+        "location": "./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:301"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd94060b0f",
+    "elf_vaddr": "0x17bb0f",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__memcpy_avx512_unaligned_erms",
+        "location": "./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:313"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd94060b1c",
+    "elf_vaddr": "0x17bb1c",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__memcpy_avx512_unaligned_erms",
+        "location": "./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:319"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd94060b2a",
+    "elf_vaddr": "0x17bb2a",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__memcpy_avx512_unaligned_erms",
+        "location": "./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:325"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd94060b34",
+    "elf_vaddr": "0x17bb34",
+    "weighted_leaf_samples": 2,
+    "frames": [
+      {
+        "function": "__memcpy_avx512_unaligned_erms",
+        "location": "./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:343"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd94060b67",
+    "elf_vaddr": "0x17bb67",
+    "weighted_leaf_samples": 2,
+    "frames": [
+      {
+        "function": "__memcpy_avx512_unaligned_erms",
+        "location": "./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:365"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd94060cb6",
+    "elf_vaddr": "0x17bcb6",
+    "weighted_leaf_samples": 1,
+    "frames": [
+      {
+        "function": "__memcpy_avx512_unaligned_erms",
+        "location": "./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:484"
+      }
+    ],
+    "resolved": true
+  },
+  {
+    "variant": "geometry",
+    "absolute_pc": "0x7fdd94060e32",
+    "elf_vaddr": "0x17be32",
+    "weighted_leaf_samples": 4,
+    "frames": [
+      {
+        "function": "__memcpy_avx512_unaligned_erms",
+        "location": "./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:660"
+      }
+    ],
+    "resolved": true
+  }
+]

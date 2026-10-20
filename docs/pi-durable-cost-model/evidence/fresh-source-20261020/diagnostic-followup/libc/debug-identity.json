@@ -1,0 +1,14 @@
+{
+  "package_identity": "Package: libc6-dbg\nVersion: 2.41-12+deb13u3\nArchitecture: amd64\n",
+  "extracted_member": "./usr/lib/debug/.build-id/c4/95b62edadd6c356265942ec1282d98058a7b41.debug",
+  "debug_build_id": "c495b62edadd6c356265942ec1282d98058a7b41",
+  "debug_bytes": 4302792,
+  "debug_sha256": "183cfa015bb32959c19e41514b708f5de9a585f69601113000ee85603773a813",
+  "argv": [
+    "dpkg-deb",
+    "--fsys-tarfile",
+    "/workspace/pr485-study/evidence/libc-symbol-resolution-20261020/libc6-dbg_2.41-12+deb13u3_amd64.deb"
+  ],
+  "installed": false,
+  "scope": "Only exact matching debug ELF extracted; no package installation, product rebuild, or runtime library replacement"
+}

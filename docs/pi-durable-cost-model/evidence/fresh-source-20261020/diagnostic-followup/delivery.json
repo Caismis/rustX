@@ -1,0 +1,23 @@
+{
+  "path": "/workspace/pr485-study/delivery/pr485-diagnostic-followup-20261020.tar.xz",
+  "bytes": 10068648,
+  "sha256": "dd3bb52bf54afdd7dc8b1591c89782269dff45a114cb5cac63a53ca845788993",
+  "verified_members": 28,
+  "uncompressed_bytes": 14555104,
+  "one_archive_attempt": true,
+  "start_utc": "2026-10-20T05:20:02.341498+00:00",
+  "end_utc": "2026-10-20T05:20:08.244204+00:00",
+  "usable_bytes_after": 9434800128,
+  "raw_browser_capture_published": false,
+  "archive_path": "pr485-diagnostic-followup-20261020.tar.xz",
+  "library_file_id": "libfile_dfbc1f51eb2c81919222f4d3c2755e23",
+  "file_id": "file_00000000326082308286be07a7a51e3e",
+  "library_path": "/pr485-diagnostic-followup-20261020.tar.xz",
+  "diagnostic_run_id": "geometry-short-large-cef4d78a-20261020T051249Z",
+  "fixture_commit": "cef4d78ad234b8cf60acb563a5e42bc0263ea0bf",
+  "browser_capture_complete": false,
+  "browser_case_started": false,
+  "original_failure_preserved": true,
+  "product_rebuilds": 0,
+  "extra_native_products": 0
+}

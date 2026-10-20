@@ -1,0 +1,10 @@
+{
+  "fixture_stdout_bytes": 0,
+  "fixture_stderr_bytes": 178,
+  "pattern_findings": [],
+  "known_stderr_classes": [
+    "Node experimental warning"
+  ],
+  "raw_console_capture": "unavailable:diagnostics.json not written",
+  "policy": "Raw fixture data/private metadata retained privately; public report metadata only"
+}

@@ -1,0 +1,9 @@
+{
+  "started_utc": "2026-10-20T05:14:38.527601+00:00",
+  "url": "https://debuginfod.debian.net/buildid/c495b62edadd6c356265942ec1282d98058a7b41/debuginfo",
+  "required_build_id": "c495b62edadd6c356265942ec1282d98058a7b41",
+  "system_libc_sha256": "fa430b8f298f817a266046af84a77533185ad6fc4406c7d3787b5a0a0c207826",
+  "scope": "Official Debian exact-build-ID debug download,offline only; no installation or product rebuild",
+  "error": "<HTTPError 404: 'Not Found'>",
+  "ended_utc": "2026-10-20T05:14:40.587250+00:00"
+}

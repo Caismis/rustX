@@ -1,0 +1,24 @@
+[
+  {
+    "source": "baseline",
+    "recorded": {
+      "path": "/lib/x86_64-linux-gnu/libc.so.6",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+      "preserved": "/workspace/pr485-study/evidence/common-system-libraries/fa430b8f298f817a266046af84a77533185ad6fc4406c7d3787b5a0a0c207826-libc.so.6",
+      "sha256": "fa430b8f298f817a266046af84a77533185ad6fc4406c7d3787b5a0a0c207826",
+      "bytes": 1995216
+    },
+    "verified_current_and_preserved": true
+  },
+  {
+    "source": "geometry",
+    "recorded": {
+      "path": "/lib/x86_64-linux-gnu/libc.so.6",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+      "preserved": "/workspace/pr485-study/evidence/common-system-libraries/fa430b8f298f817a266046af84a77533185ad6fc4406c7d3787b5a0a0c207826-libc.so.6",
+      "sha256": "fa430b8f298f817a266046af84a77533185ad6fc4406c7d3787b5a0a0c207826",
+      "bytes": 1995216
+    },
+    "verified_current_and_preserved": true
+  }
+]
