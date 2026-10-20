@@ -27,7 +27,7 @@ The inode scan observed 50,139 unique file inodes across 78,806 file paths, no s
 | Consumer | Allocated file bytes | GiB | Treatment |
 |---|---:|---:|---|
 |evidence/products, original Native/browser raw results|4,755,128,320|4.429|Protected; retain all samples and failures|
-|three preserved build bundles combined|3,447,226,368|3.211|Protected exact binaries, libraries, logs and provenance|
+|three preserved build bundles combined|3,447,226,368|3.210|Protected exact binaries, libraries, logs and provenance|
 |active target compiler/runtime tree|2,612,637,696|2.433|Retain to avoid discarding the existing dependency compilation graph|
 |pnpm store, reachable unique file blocks|642,416,640|0.598|571,748,352 bytes shared via hardlinks; deleting the store alone would reclaim only about 70,668,288 file bytes|
 |xdg cache|126,705,664|0.118|Optional cache deletion would require explicit approval|
@@ -52,7 +52,7 @@ Deleting the full target could reclaim about 2.61 GB file blocks but would disca
 1. Retain every current artifact, cache, failure, image and binary. Reclaimed bytes in the recommended plan: **zero**. Deletion approval required: **none**.
 2. Add at least **3 GiB of usable persistent free capacity** to the current backing store. This does not require a new execution environment or recompile if the current volume can be expanded. Account for filesystem reservation: 3 GiB usable is not the same as a 3 GiB nominal disk increase.
 3. Before a separately authorized diagnostic replay, require **strictly more than 11.5 GiB available**: 6 GiB planned VFS preparation allowance + 0.5 GiB fresh case/output growth + the unchanged 5 GiB floor. The 6 GiB allowance is a conservative planning estimate above the observed/modelled approximately 4.7 GiB preparation, not a guaranteed measured peak. Current shortfall is 2,933,866,496 bytes (2.732 GiB); adding 3 GiB usable gives approximately 11.768 GiB available. Keep monitoring and stop if the original guard is breached.
-4. The stronger original target of **16 GiB available after setup** requires about **7.233 GiB** additional usable headroom instead. Prefer that if capacity provisioning allows it. If expansion is impossible and no specific cleanup mutation is approved, a larger persistent environment is necessary under the current VFS/pinning/retention constraints.
+4. The stronger original target of **16 GiB available after setup** requires about **7.232 GiB** additional usable headroom instead. Prefer that if capacity provisioning allows it. If expansion is impossible and no specific cleanup mutation is approved, a larger persistent environment is necessary under the current VFS/pinning/retention constraints.
 5. If relocating, copy and rehash the existing exact binaries/library/runtime/provenance bundles and reuse the fixed fixture/frontend on a matching x86_64, Node and system-library environment. Restore required helper paths. Do not launch Cargo simply to recreate already verified bytes; a runtime identity/preflight failure should be reported rather than silently rebuilding. New environment measurements cannot be divided by old-machine timings.
 
 No browser rerun is authorized or launched by this report. No deletion is requested as an immediate action. Any later cleanup option needs approval for its concrete paths; the expansion plan avoids that requirement.

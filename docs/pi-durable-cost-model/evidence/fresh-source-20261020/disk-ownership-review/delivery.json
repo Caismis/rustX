@@ -1,14 +1,15 @@
 {
   "scope": "Read-only attribution and candidate description; no deletion,source edit,build,container creation or browser rerun",
   "library_file_id": "libfile_72b13b459f708191a4181b5d2160a826",
-  "file_id": "file_00000000ce04823080e9d49b1c7aa87f",
+  "file_id": "file_00000000b5888230a746e1656d8a9b17",
   "library_path": "/pr485-disk-and-metadata-ownership-review-20261020.md",
-  "report_sha256": "fcdb9dfff833f9a78f1186089780c381ec102cbb2aa0520409cacd94352d4dbd",
+  "report_sha256": "a47f8dbaf84584b44a4af5207b8588d4b2935bc17b99c2c912652f05b4b4c4ee",
   "no_large_archive_generated": true,
   "deletions_performed": 0,
   "source_edits": false,
   "candidate_compiled": false,
   "recommended_extra_usable_capacity_bytes": 3221225472,
   "recommended_reclaimed_bytes": 0,
-  "recommended_deletion_approval_required": false
+  "recommended_deletion_approval_required": false,
+  "library_version": 1
 }
