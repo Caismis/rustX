@@ -1,8 +1,8 @@
 // Actual Native C/J receipts and finite Host checkpoints share one member owner.
 use super::*;
-use crate::runtime_client::checkpoint::RuntimeClientCheckpoint;
 use crate::observation::content::CanonicalContentLocator;
 use crate::observation::transcript::RuntimeClientMessageDescriptor;
+use crate::runtime_client::checkpoint::RuntimeClientCheckpoint;
 
 fn member_event(
     store: &dyn ConversationStore,

@@ -344,10 +344,16 @@ async fn t08_t12_t14_t19_cold_giant_turn_page_navigates_by_native_ordinal() {
     assert!(crate::observation::bounded::bounded_bytes(&window, 786_432).is_some());
 }
 
-fn read_local_owner(host: &RuntimeClientHost, checkpoint: &crate::runtime_client::checkpoint::RuntimeClientCheckpoint, original: &str) {
+fn read_local_owner(
+    host: &RuntimeClientHost,
+    checkpoint: &crate::runtime_client::checkpoint::RuntimeClientCheckpoint,
+    original: &str,
+) {
     use base64::Engine as _;
     let owner = checkpoint.snapshot.attempt.as_ref().unwrap();
-    let Some(AttemptIdentitySource::Journal {field, domain}) = &owner.attempt_id_source else {panic!("original native StartJ source")};
+    let Some(AttemptIdentitySource::Journal { field, domain }) = &owner.attempt_id_source else {
+        panic!("original native StartJ source")
+    };
     assert_eq!(field.sequence, 1);
     assert_eq!(field.path, ["attempt_id"]);
     let expected = serde_json::to_vec(original).unwrap();
@@ -355,14 +361,19 @@ fn read_local_owner(host: &RuntimeClientHost, checkpoint: &crate::runtime_client
     let mut offset = 0;
     let mut bytes = Vec::new();
     loop {
-        let chunk = host.inner.checkpoint_value_read(&checkpoint.read_cut, domain, 0, &field.path, offset, 65_536).unwrap();
+        let chunk = host
+            .inner
+            .checkpoint_value_read(&checkpoint.read_cut, domain, 0, &field.path, offset, 65_536)
+            .unwrap();
         assert_eq!(chunk.cut, checkpoint.read_cut);
         assert_eq!(chunk.path, field.path);
         assert_eq!(chunk.readable_end, field.encoded_bytes);
-        let part = base64::engine::general_purpose::STANDARD.decode(chunk.bytes_base64).unwrap();
+        let part = base64::engine::general_purpose::STANDARD
+            .decode(chunk.bytes_base64)
+            .unwrap();
         assert!(!part.is_empty() && part.len() <= 65_536);
         bytes.extend(part);
-        let Some(next) = chunk.next_offset else {break};
+        let Some(next) = chunk.next_offset else { break };
         assert!(next > offset);
         offset = next;
     }
@@ -371,6 +382,7 @@ fn read_local_owner(host: &RuntimeClientHost, checkpoint: &crate::runtime_client
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // one complete cold-owner checkpoint fixture
 fn t08_t12_t14_t19_cold_local_giant_j_owner_keeps_recorded_terminal_and_original_ranges() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("local-giant-j-owner.sqlite");
@@ -380,20 +392,70 @@ fn t08_t12_t14_t19_cold_local_giant_j_owner_keeps_recorded_terminal_and_original
     let attempt_id = AttemptId::new(&original);
     let writer = SqliteConversationStore::open(cid.clone(), &path).unwrap();
     writer.initialize(&[]).unwrap();
-    writer.append_event(durable_event(&cid, "giant-local-start", &attempt_id, RuntimeEvent::AttemptStarted {attempt_id: attempt_id.clone()})).unwrap();
+    writer
+        .append_event(durable_event(
+            &cid,
+            "giant-local-start",
+            &attempt_id,
+            RuntimeEvent::AttemptStarted {
+                attempt_id: attempt_id.clone(),
+            },
+        ))
+        .unwrap();
     let started_cut = writer.observation_read_cut().unwrap();
-    let started_store = Arc::new(SqliteConversationStore::open_existing(cid.clone(), &path).unwrap());
+    let started_store =
+        Arc::new(SqliteConversationStore::open_existing(cid.clone(), &path).unwrap());
     let started_host = RuntimeClientHost::new_durable(started_store, None).unwrap();
     let started = started_host.checkpoint().unwrap();
     assert_eq!(started.read_cut.source_cut.as_ref(), Some(&started_cut));
     assert_eq!(started.cursor.get(), 0);
-    assert!(started.snapshot.attempt.as_ref().unwrap().attempt_id.is_none());
-    assert_eq!(started.snapshot.attempt.as_ref().unwrap().phase, RuntimeClientAttemptPhase::Incomplete);
+    assert!(
+        started
+            .snapshot
+            .attempt
+            .as_ref()
+            .unwrap()
+            .attempt_id
+            .is_none()
+    );
+    assert_eq!(
+        started.snapshot.attempt.as_ref().unwrap().phase,
+        RuntimeClientAttemptPhase::Incomplete
+    );
     assert!(started_host.inner.runtime.is_none());
     read_local_owner(&started_host, &started, &original);
-    let message = MessageBlock::Assistant(crate::message::types::AssistantMessageBlock {id: MessageId::new("local-giant-owner-result"), content: vec![AssistantContentBlock::Text(crate::message::content::TextBlock {text: "positive original final C".into()})]});
-    writer.append_canonical_with_event(&message, durable_event(&cid, "giant-local-c", &attempt_id, RuntimeEvent::AssistantMessageCommitted {message_id: message.id().clone()})).unwrap();
-    writer.append_event(durable_event(&cid, "giant-local-terminal", &attempt_id, RuntimeEvent::AttemptCompleted {attempt_id: attempt_id.clone(), finish_reason: ModelFinishReason::Stop})).unwrap();
+    let message = MessageBlock::Assistant(crate::message::types::AssistantMessageBlock {
+        id: MessageId::new("local-giant-owner-result"),
+        content: vec![AssistantContentBlock::Text(
+            crate::message::content::TextBlock {
+                text: "positive original final C".into(),
+            },
+        )],
+    });
+    writer
+        .append_canonical_with_event(
+            &message,
+            durable_event(
+                &cid,
+                "giant-local-c",
+                &attempt_id,
+                RuntimeEvent::AssistantMessageCommitted {
+                    message_id: message.id().clone(),
+                },
+            ),
+        )
+        .unwrap();
+    writer
+        .append_event(durable_event(
+            &cid,
+            "giant-local-terminal",
+            &attempt_id,
+            RuntimeEvent::AttemptCompleted {
+                attempt_id: attempt_id.clone(),
+                finish_reason: ModelFinishReason::Stop,
+            },
+        ))
+        .unwrap();
     let final_cut = writer.observation_read_cut().unwrap();
     let original_j = writer.read_events(None, 32).unwrap().events;
     let original_c = writer.load_canonical().unwrap();
@@ -402,16 +464,48 @@ fn t08_t12_t14_t19_cold_local_giant_j_owner_keeps_recorded_terminal_and_original
     let host = RuntimeClientHost::new_durable(store.clone(), None).unwrap();
     let checkpoint = host.checkpoint().unwrap();
     let (rows, bytes) = SqliteConversationStore::trace_read_work();
-    assert!(rows > 0 && bytes < 262_144, "finite headers: {rows} rows/{bytes} bytes");
+    assert!(
+        rows > 0 && bytes < 262_144,
+        "finite headers: {rows} rows/{bytes} bytes"
+    );
     assert_eq!(checkpoint.cursor.get(), 0);
     assert_eq!(checkpoint.read_cut.source_cut.as_ref(), Some(&final_cut));
     let owner = checkpoint.snapshot.attempt.as_ref().unwrap();
     assert!(owner.attempt_id.is_none());
-    assert_eq!(owner.attempt_id_source, started.snapshot.attempt.as_ref().unwrap().attempt_id_source);
-    assert!(matches!(owner.phase, RuntimeClientAttemptPhase::Settled {outcome: crate::runtime_client::event::RuntimeClientOutcome::Completed {finish_reason: ModelFinishReason::Stop, finish_reason_deferred: false, finish_reason_source: None}}));
-    let entry = checkpoint.snapshot.transcript.entries.iter().find(|entry| entry.completed_response.is_some()).unwrap();
-    assert_eq!(entry.turn_process.as_ref().unwrap().attempt_id_source, owner.attempt_id_source);
-    assert_eq!(entry.completed_response.as_ref().unwrap().origin.attempt_id_source, owner.attempt_id_source);
+    assert_eq!(
+        owner.attempt_id_source,
+        started.snapshot.attempt.as_ref().unwrap().attempt_id_source
+    );
+    assert!(matches!(
+        owner.phase,
+        RuntimeClientAttemptPhase::Settled {
+            outcome: crate::runtime_client::event::RuntimeClientOutcome::Completed {
+                finish_reason: ModelFinishReason::Stop,
+                finish_reason_deferred: false,
+                finish_reason_source: None
+            }
+        }
+    ));
+    let entry = checkpoint
+        .snapshot
+        .transcript
+        .entries
+        .iter()
+        .find(|entry| entry.completed_response.is_some())
+        .unwrap();
+    assert_eq!(
+        entry.turn_process.as_ref().unwrap().attempt_id_source,
+        owner.attempt_id_source
+    );
+    assert_eq!(
+        entry
+            .completed_response
+            .as_ref()
+            .unwrap()
+            .origin
+            .attempt_id_source,
+        owner.attempt_id_source
+    );
     read_local_owner(&host, &checkpoint, &original);
     assert_eq!(started_host.checkpoint().unwrap(), started);
     assert_eq!(store.read_events(None, 32).unwrap().events, original_j);
@@ -425,22 +519,68 @@ fn t08_t14_t19_standalone_trace_keeps_the_attached_constructor_cut_after_later_c
     writer.initialize(&[]).unwrap();
     let original = "standalone-native-owner水\"\n".repeat(30_000);
     let attempt = AttemptId::new(&original);
-    writer.append_event(durable_event(writer.conversation_id(), "standalone-owner-start", &attempt, RuntimeEvent::AttemptStarted {attempt_id: attempt.clone()})).unwrap();
+    writer
+        .append_event(durable_event(
+            writer.conversation_id(),
+            "standalone-owner-start",
+            &attempt,
+            RuntimeEvent::AttemptStarted {
+                attempt_id: attempt.clone(),
+            },
+        ))
+        .unwrap();
     let host = RuntimeClientHost::new_durable(writer.clone(), None).unwrap();
     let checkpoint = host.checkpoint().unwrap();
-    let (attachment, _) = host.attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION).unwrap();
+    let (attachment, _) = host
+        .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .unwrap();
     let subscription = attachment.subscribe_events(checkpoint.cursor).unwrap();
-    let RuntimeClientResult::TracePage {page: before} = host.inner.trace_page(None, 32, Vec::new()).unwrap() else {panic!("native Trace page")};
+    let RuntimeClientResult::TracePage { page: before } =
+        host.inner.trace_page(None, 32, Vec::new()).unwrap()
+    else {
+        panic!("native Trace page")
+    };
     assert_eq!(before.read_cut.as_ref(), Some(&checkpoint.read_cut));
     assert_eq!(before.records.len(), 1);
-    assert_eq!(before.records[0].state, crate::observation::trace::TraceState::Incomplete);
-    let message = MessageBlock::Assistant(crate::message::types::AssistantMessageBlock {id: MessageId::new("standalone-later-c"), content: vec![AssistantContentBlock::Text(crate::message::content::TextBlock {text: "later original C".into()})]});
-    writer.append_canonical_with_event(&message, durable_event(writer.conversation_id(), "standalone-later-j", &attempt, RuntimeEvent::AssistantMessageCommitted {message_id: message.id().clone()})).unwrap();
-    let RuntimeClientResult::TracePage {page: after} = host.inner.trace_page(None, 32, vec![before.records[0].position.clone()]).unwrap() else {panic!("native Trace page")};
+    assert_eq!(
+        before.records[0].state,
+        crate::observation::trace::TraceState::Incomplete
+    );
+    let message = MessageBlock::Assistant(crate::message::types::AssistantMessageBlock {
+        id: MessageId::new("standalone-later-c"),
+        content: vec![AssistantContentBlock::Text(
+            crate::message::content::TextBlock {
+                text: "later original C".into(),
+            },
+        )],
+    });
+    writer
+        .append_canonical_with_event(
+            &message,
+            durable_event(
+                writer.conversation_id(),
+                "standalone-later-j",
+                &attempt,
+                RuntimeEvent::AssistantMessageCommitted {
+                    message_id: message.id().clone(),
+                },
+            ),
+        )
+        .unwrap();
+    let RuntimeClientResult::TracePage { page: after } = host
+        .inner
+        .trace_page(None, 32, vec![before.records[0].position.clone()])
+        .unwrap()
+    else {
+        panic!("native Trace page")
+    };
     assert_eq!(after.read_cut, before.read_cut);
     assert_eq!(after.records, before.records);
     assert_eq!(after.updates.len(), 1);
-    assert_eq!(after.updates[0].state, crate::observation::trace::TraceState::Incomplete);
+    assert_eq!(
+        after.updates[0].state,
+        crate::observation::trace::TraceState::Incomplete
+    );
     let returned = after.read_cut.unwrap();
     assert_eq!(returned, checkpoint.read_cut);
     let mut selected_checkpoint = checkpoint.clone();
@@ -449,11 +589,21 @@ fn t08_t14_t19_standalone_trace_keeps_the_attached_constructor_cut_after_later_c
     assert_eq!(host.checkpoint().unwrap(), checkpoint);
     assert!(matches!(subscription.try_next(), EventDelivery::Pending));
     let fresh = RuntimeClientHost::new_durable(writer.clone(), None).unwrap();
-    let RuntimeClientResult::TracePage {page: current} = fresh.inner.trace_page(None, 32, Vec::new()).unwrap() else {panic!("new native Trace owner")};
+    let RuntimeClientResult::TracePage { page: current } =
+        fresh.inner.trace_page(None, 32, Vec::new()).unwrap()
+    else {
+        panic!("new native Trace owner")
+    };
     assert_eq!(current.records.len(), 2);
     let fresh_cut = current.read_cut.unwrap();
-    assert_eq!(fresh_cut.source_cut.as_ref(), Some(&writer.observation_read_cut().unwrap()));
+    assert_eq!(
+        fresh_cut.source_cut.as_ref(),
+        Some(&writer.observation_read_cut().unwrap())
+    );
     assert!(fresh_cut.through > checkpoint.read_cut.through);
-    assert!(fresh_cut.source_cut.unwrap().ledger_through > checkpoint.read_cut.source_cut.unwrap().ledger_through);
+    assert!(
+        fresh_cut.source_cut.unwrap().ledger_through
+            > checkpoint.read_cut.source_cut.unwrap().ledger_through
+    );
     assert!(matches!(subscription.try_next(), EventDelivery::Pending));
 }
