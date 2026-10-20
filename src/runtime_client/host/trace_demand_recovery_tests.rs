@@ -7,9 +7,15 @@ use base64::Engine as _;
 
 async fn completed_trace_fixture() -> (HostFixture, RuntimeClientCheckpoint, CheckpointPage, String)
 {
+    completed_trace_fixture_with_tools(ToolRegistry::new()).await
+}
+
+async fn completed_trace_fixture_with_tools(
+    tools: ToolRegistry,
+) -> (HostFixture, RuntimeClientCheckpoint, CheckpointPage, String) {
     let (_, fixture) = host_fixture(
         vec![one_turn_stop(), one_turn_stop()],
-        ToolRegistry::new(),
+        tools,
         status_engine(),
     )
     .await;
@@ -391,12 +397,22 @@ impl Drop for TraceIndexFault {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn admitted_original_trace_read_survives_a_different_native_catalog_capture() {
     use crate::durable::ConversationStore as _;
-    let (fixture, checkpoint, original_page, original) = completed_trace_fixture().await;
+    let (tool, _started, _release) = ParkingBackgroundTool::new();
+    let definition = ToolDefinition {
+        execution_policy: ToolExecutionPolicy::ForegroundOnly,
+        ..tool.definition.clone()
+    };
+    let mut tools = ToolRegistry::new();
+    tools.register(definition, Arc::new(tool)).unwrap();
+    let (fixture, checkpoint, original_page, original) = completed_trace_fixture_with_tools(tools).await;
     let inner = Arc::clone(&fixture.host.inner);
     let store = fixture.store.as_ref().unwrap();
     let previous_catalog = store.cached_request_catalog_bytes().expect("original native cache entry");
     let reference = original_content_reference(&checkpoint, &original);
-    let (entered, release, pending) = hold_admitted_detail(&inner, &original_page);
+    let tools_domain = format!("{}.request.tools", original_page.domain);
+    let original_tools = inner.checkpoint_page(&original_page.read_cut, &tools_domain, 0, 32).unwrap();
+    assert!(original_tools.total > 0, "hold actual original Tool values rather than an empty catalog");
+    let (entered, release, pending) = hold_admitted_detail(&inner, &original_tools);
     tokio::time::timeout(STREAM_LIVENESS_GUARD, entered).await.unwrap().unwrap();
     // A real native RequestStart captures different frozen public definitions.
     // It advances J without mutating the old pending/canonical read epoch.
@@ -441,7 +457,11 @@ async fn admitted_original_trace_read_survives_a_different_native_catalog_captur
     inner.store.mark_observation_direct(committed.sequence, committed.sequence).unwrap();
     release.send(()).unwrap();
     let returned = pending.await.unwrap().unwrap();
-    assert_eq!(returned, original_page, "the already-admitted read retains its exact original cut and items");
+    assert_eq!(returned, original_tools, "the admitted Tools page retains its original cut and items");
+    let (sequence, _) = crate::runtime_client::trace_observation::selection(&original_page.domain).unwrap();
+    let old_tools = store.request_value_read_at(sequence, returned.read_cut.through,
+        &["tools".into()], 0, 65_536).unwrap();
+    assert_eq!(old_tools.bytes, previous_catalog, "old native Source bytes survive actual cache replacement");
     assert_original_content(&inner, &reference, &original);
     fixture.runtime.shutdown().await.unwrap();
     inner.drain_projection().await.unwrap();

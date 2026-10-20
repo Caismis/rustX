@@ -11,6 +11,9 @@ const CHUNK: u64 = 8192;
 mod spool;
 use spool::FactSpool;
 #[cfg(test)]
+#[path = "catalog_memory_tests.rs"]
+mod catalog_memory_tests;
+#[cfg(test)]
 #[path = "child_reference_tests.rs"]
 mod child_reference_tests;
 #[cfg(test)]
