@@ -69,7 +69,9 @@
     "pressure_full_avg10_stop_percent": 10,
     "pressure_stop_duration_seconds": 5,
     "build_timeout_seconds": 3600,
-    "sampling_seconds": 0.5
+    "sampling_seconds": 0.5,
+    "memory_current_stop_GiB": 14,
+    "missing_PSI": "record unavailable/null; usage and OOM events mandatory; no pressure-stall attribution"
   },
   "environment": {
     "CARGO_HOME": "/workspace/.cargo",

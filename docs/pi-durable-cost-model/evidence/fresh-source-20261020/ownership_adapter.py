@@ -168,19 +168,33 @@ def process_start(pid):
         return None
 
 
-def resources(workspace):
-    group = Path('/sys/fs/cgroup')
+def resources(workspace, group=None):
+    group = Path('/sys/fs/cgroup') if group is None else Path(group)
     stats = dict(line.split() for line in (group / 'memory.stat').read_text().splitlines())
     events = dict(line.split() for line in (group / 'memory.events').read_text().splitlines())
-    pressure = dict(word.split('=') for line in (group / 'memory.pressure').read_text().splitlines()
-                    if line.startswith('full ') for word in line.split()[1:])
+    # Usage and OOM signals are mandatory on every host. Missing/malformed input
+    # must fail closed, including when PSI is not exposed by the host kernel.
+    limit = int((group / 'memory.max').read_text())
+    current = int((group / 'memory.current').read_text())
+    anon, shmem = int(stats['anon']), int(stats['shmem'])
+    oom, oom_kill = int(events['oom']), int(events['oom_kill'])
+    if limit <= 2 * GIB or min(current, anon, shmem, oom, oom_kill) < 0:
+        raise ValueError('invalid required cgroup memory signals')
+    try:
+        pressure_text = (group / 'memory.pressure').read_text()
+    except FileNotFoundError:
+        full_avg10 = None  # Unavailable is not a zero-pressure observation.
+    else:
+        pressure = dict(word.split('=') for line in pressure_text.splitlines()
+                        if line.startswith('full ') for word in line.split()[1:])
+        full_avg10 = float(pressure['avg10'])
+        if not 0 <= full_avg10 <= 100:
+            raise ValueError('invalid PSI full avg10')
     disk = os.statvfs(workspace)
     return {'monotonic': time.monotonic(), 'free': disk.f_bavail * disk.f_frsize,
-            'memory_limit': int((group / 'memory.max').read_text()),
-            'memory_current': int((group / 'memory.current').read_text()),
-            'anon_shmem': int(stats['anon']) + int(stats['shmem']),
-            'full_avg10': float(pressure['avg10']),
-            'oom': int(events['oom']), 'oom_kill': int(events['oom_kill'])}
+            'memory_limit': limit, 'memory_current': current,
+            'anon_shmem': anon + shmem, 'psi_available': full_avg10 is not None,
+            'full_avg10': full_avg10, 'oom': oom, 'oom_kill': oom_kill}
 
 
 class Guard:
@@ -205,7 +219,7 @@ class Guard:
         self.failure = None
         self.diagnostic_errors = []
         self.owned = []
-        self.pressure_since = self.memory_since = None
+        self.pressure_since = self.memory_since = self.current_since = None
         self.done = threading.Event()
         self.lock = threading.Lock()
         self.thread = threading.Thread(target=self._monitor, daemon=True)
@@ -221,7 +235,9 @@ class Guard:
             'allocated_growth_cap_bytes': 2 * GIB if self.kind == 'build' else GIB,
             'evidence_cap_bytes': int(.75 * GIB), 'temporary_growth_cap_bytes': int(.25 * GIB),
             'deadline_monotonic': self.deadline, 'per_product_seconds': 180,
-            'memory_stop': 'anon+shmem >= limit-2GiB for 3s; memory full avg10 >=10% for 5s; any new oom/oom_kill event',
+            'memory_stop': 'memory.current or anon+shmem >= limit-2GiB for 3s; available PSI full avg10 >=10% for 5s; any new oom/oom_kill event',
+            'psi_available_at_entry': self.initial['psi_available'],
+            'missing_psi_policy': 'PSI unavailable is null, not zero; no pressure-stall attribution; memory safety relies on required usage/headroom and OOM events',
             'sampling_seconds': .5, 'scope': 'external watchdog; overhead not estimated'}, indent=2) + '\n')
         self.thread.start()
         return self
@@ -262,9 +278,12 @@ class Guard:
         if point['oom'] > self.initial['oom'] or point['oom_kill'] > self.initial['oom_kill']:
             return 'new-cgroup-oom-event'
         self.memory_since = (self.memory_since or now) if point['anon_shmem'] >= point['memory_limit'] - 2 * GIB else None
-        self.pressure_since = (self.pressure_since or now) if point['full_avg10'] >= 10 else None
+        self.current_since = (self.current_since or now) if point['memory_current'] >= point['memory_limit'] - 2 * GIB else None
+        self.pressure_since = (self.pressure_since or now) if point['full_avg10'] is not None and point['full_avg10'] >= 10 else None
         if self.memory_since is not None and now - self.memory_since >= 3:
             return 'anon-plus-shmem-within-2GiB-of-limit-for-3s'
+        if self.current_since is not None and now - self.current_since >= 3:
+            return 'memory-current-within-2GiB-of-limit-for-3s'
         if self.pressure_since is not None and now - self.pressure_since >= 5:
             return 'memory-full-avg10-at-least-10-percent-for-5s'
         return None

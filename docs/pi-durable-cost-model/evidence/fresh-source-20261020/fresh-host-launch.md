@@ -35,8 +35,18 @@ Resource limits remain: build entry 18 GiB, cohort entry 16 GiB, build growth
 2 GiB, cohort growth 1 GiB, 0.5-second sampling, one-hour build deadline, half-hour
 cohort deadline and 180-second product deadline. An additional build disk stop
 at 18 GiB gives a 2 GiB margin above the protected cohort reserve; the original
-6 GiB emergency stop remains for cohorts. Any new OOM event, anon+shmem >=14 GiB
-for three seconds, or memory full avg10 >=10% for five seconds stops owned work.
+6 GiB emergency stop remains for cohorts. Any new OOM event, memory.current or anon+shmem >=14 GiB
+for three seconds, or available PSI memory full avg10 >=10% for five seconds stops owned work.
 Observation/diagnostic failures retain fail-closed cleanup. Do not enlarge the
 2 GiB cold-build cap: if it stops the first build, report measured allocated
 use/free space and retained output before considering any revised budget.
+
+
+On hosts without `memory.pressure`, `psi_available=false` and `full_avg10=null`
+are recorded at entry and in every sample. This is not zero pressure and not
+coverage equivalent to PSI: pressure-stall attribution is absent. Memory safety
+instead relies on enforced cgroup usage/headroom and OOM event deltas. Finite
+`memory.max`, `memory.current`, `memory.stat` anon/shmem and `memory.events`
+oom/oom_kill remain mandatory; missing or malformed signals fail closed at entry
+or stop owned work during monitoring. Present but malformed/inaccessible PSI is
+an error, not silently treated as unavailable. No host/kernel settings change.

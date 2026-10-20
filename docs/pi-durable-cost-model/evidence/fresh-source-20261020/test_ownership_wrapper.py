@@ -71,7 +71,7 @@ class FullWrapperTests(unittest.TestCase):
             raise AssertionError('unexpected check_output: ' + repr(argv))
         def point(_):
             return {'monotonic': time.monotonic(), 'free': 32 * adapter.GIB, 'memory_limit': 16 * adapter.GIB,
-                    'memory_current': adapter.GIB, 'anon_shmem': adapter.GIB, 'full_avg10': 0., 'oom': 0, 'oom_kill': 0}
+                    'memory_current': adapter.GIB, 'anon_shmem': adapter.GIB, 'full_avg10': 0., 'psi_available': True, 'oom': 0, 'oom_kill': 0}
         real_iterdir = Path.iterdir
         def iterdir(path):
             return iter(()) if str(path) == '/proc' else real_iterdir(path)

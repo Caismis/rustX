@@ -105,7 +105,7 @@ class AdapterTests(unittest.TestCase):
     def point(self):
         return {'monotonic': time.monotonic(), 'free': 32 * adapter.GIB,
                 'memory_limit': 16 * adapter.GIB, 'memory_current': adapter.GIB,
-                'anon_shmem': adapter.GIB, 'full_avg10': 0., 'oom': 0, 'oom_kill': 0}
+                'anon_shmem': adapter.GIB, 'full_avg10': 0., 'psi_available': True, 'oom': 0, 'oom_kill': 0}
 
     def test_entry_gates_do_not_start_a_child_or_create_output(self):
         with patch.object(adapter, 'resources', return_value=self.point() | {'free': 9 * adapter.GIB}):

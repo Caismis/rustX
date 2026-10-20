@@ -110,7 +110,7 @@ class FreshHostTests(unittest.TestCase):
                         'fresh':False,'filenames':[str(target)],'features':[], 'profile':item['profile']})+'\n')
                 return types.SimpleNamespace(pid=999999999, wait=lambda:0, poll=lambda:0)
             point={'free':32*adapter.GIB, 'monotonic':time.monotonic(), 'oom':0,'oom_kill':0,
-                   'anon_shmem':0,'memory_limit':16*adapter.GIB,'full_avg10':0}
+                   'anon_shmem':0,'memory_limit':16*adapter.GIB,'full_avg10':0,'psi_available':True,'memory_current':0}
             with patch.object(adapter.subprocess,'check_output',side_effect=output), patch.object(adapter.subprocess,'Popen',side_effect=fake_build), patch.object(adapter,'sha',side_effect=digest), patch.object(adapter,'resources',return_value=point):
                 for label in adapter.SOURCES:
                     adapter.watch_build(root/('source-'+label), root/('build-'+label), root, label,
@@ -125,7 +125,7 @@ class FreshHostTests(unittest.TestCase):
         from unittest.mock import patch
         import time
         point={'free':32*adapter.GIB, 'monotonic':time.monotonic(), 'oom':0,'oom_kill':0,
-               'anon_shmem':0,'memory_limit':16*adapter.GIB,'full_avg10':0}
+               'anon_shmem':0,'memory_limit':16*adapter.GIB,'full_avg10':0,'psi_available':True,'memory_current':0}
         with tempfile.TemporaryDirectory() as tmp, patch.object(adapter,'resources',return_value=point):
             guard=adapter.Guard(tmp,Path(tmp)/'out','build')
             self.assertEqual(guard.reason(point,2*adapter.GIB+1),'allocated-disk-budget')
