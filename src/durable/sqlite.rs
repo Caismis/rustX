@@ -1529,6 +1529,14 @@ impl SqliteConversationStore {
             )
             .expect("force sequence");
     }
+
+    #[cfg(test)]
+    pub(crate) fn install_after_request_row_read_hook(
+        request_id: RequestId,
+        hook: impl FnOnce() + 'static,
+    ) {
+        auxiliary::install_after_request_row_read_hook(request_id, hook);
+    }
 }
 
 impl SqliteConversationStore {

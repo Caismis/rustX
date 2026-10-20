@@ -2697,6 +2697,45 @@ fn request_evidence_at_tx(
     Ok(Some(evidence.clone()))
 }
 
+#[cfg(test)]
+thread_local! {
+    static AFTER_REQUEST_ROW_READ:
+        std::cell::RefCell<Option<(RequestId, Box<dyn FnOnce()>)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(super) fn install_after_request_row_read_hook(
+    request_id: RequestId,
+    hook: impl FnOnce() + 'static,
+) {
+    AFTER_REQUEST_ROW_READ.with(|slot| {
+        assert!(
+            slot.borrow().is_none(),
+            "a request-row read hook is already installed on this thread"
+        );
+        *slot.borrow_mut() = Some((request_id, Box::new(hook)));
+    });
+}
+
+#[cfg(test)]
+fn after_request_row_read(request_id: &RequestId) {
+    let hook = AFTER_REQUEST_ROW_READ.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot
+            .as_ref()
+            .is_some_and(|(installed_request_id, _)| installed_request_id == request_id)
+        {
+            slot.take().map(|(_, hook)| hook)
+        } else {
+            None
+        }
+    });
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
 fn request_audit_at_tx(
     connection: &Connection,
     conversation_id: &ConversationId,
@@ -2710,6 +2749,8 @@ fn request_audit_at_tx(
     if request.started_sequence > cut.journal {
         return Ok(None);
     }
+    #[cfg(test)]
+    after_request_row_read(request_id);
     let call =
         call_audit_at_tx(connection, conversation_id, &request.call_id, cut)?.ok_or_else(|| {
             ConversationStoreError::InvalidReference(
@@ -3732,8 +3773,12 @@ impl SqliteConversationStore {
                 "auxiliary audit limit must be 1..={AUXILIARY_AUDIT_PAGE_LIMIT_MAX}"
             )));
         }
-        let connection = self.lock()?;
-        let total = audit_total_at_connection(&connection, cut)?;
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|error| storage(format!("auxiliary audit snapshot: {error}")))?;
+        // Pin one WAL snapshot for the cut, cursor and related authority rows.
+        let total = audit_total_at_connection(&transaction, cut)?;
         let after = after_offset.unwrap_or(0);
         if after > total {
             return Err(ConversationStoreError::InvalidReference(
@@ -3742,7 +3787,7 @@ impl SqliteConversationStore {
         }
         let mut previous_journal = 0;
         if after > 0 {
-            let anchor_sequence: Option<i64> = connection
+            let anchor_sequence: Option<i64> = transaction
                 .query_row(
                     "SELECT sequence FROM auxiliary_audit_facts
                      WHERE audit_offset=?1 AND sequence<=?2",
@@ -3760,7 +3805,7 @@ impl SqliteConversationStore {
                     "auxiliary audit cursor does not name a visible dense record".into(),
                 )
             })?;
-            let anchor = audit_fact_row(&connection, sequence_from_i64(anchor_sequence)?)?
+            let anchor = audit_fact_row(&transaction, sequence_from_i64(anchor_sequence)?)?
                 .ok_or_else(|| {
                     ConversationStoreError::InvalidReference(
                         "auxiliary audit cursor anchor has no indexed row".into(),
@@ -3772,7 +3817,7 @@ impl SqliteConversationStore {
                 ));
             }
             previous_journal = anchor.sequence;
-            let event = event_at_connection(&connection, anchor.sequence)?.ok_or_else(|| {
+            let event = event_at_connection(&transaction, anchor.sequence)?.ok_or_else(|| {
                 ConversationStoreError::InvalidReference(
                     "auxiliary audit cursor anchor has no Journal fact".into(),
                 )
@@ -3780,7 +3825,7 @@ impl SqliteConversationStore {
             validate_audit_fact_event(&event, &anchor)?;
             match anchor.kind.as_str() {
                 "call_started" | "call_settled" => {
-                    if call_audit_at_tx(&connection, &self.conversation_id, &anchor.call_id, cut)?
+                    if call_audit_at_tx(&transaction, &self.conversation_id, &anchor.call_id, cut)?
                         .is_none()
                     {
                         return Err(ConversationStoreError::InvalidReference(
@@ -3794,7 +3839,7 @@ impl SqliteConversationStore {
                             "auxiliary audit cursor request anchor has no RequestId".into(),
                         )
                     })?;
-                    if request_audit_at_tx(&connection, &self.conversation_id, request_id, cut)?
+                    if request_audit_at_tx(&transaction, &self.conversation_id, request_id, cut)?
                         .is_none()
                     {
                         return Err(ConversationStoreError::InvalidReference(
@@ -3811,7 +3856,7 @@ impl SqliteConversationStore {
         }
         let requested =
             i64::try_from(limit + 1).map_err(|_| storage("auxiliary audit page limit overflow"))?;
-        let mut statement = connection
+        let mut statement = transaction
             .prepare(
                 "SELECT sequence,audit_offset,kind,call_id,request_id,ordinal
                  FROM auxiliary_audit_facts
@@ -3888,7 +3933,7 @@ impl SqliteConversationStore {
                 ConversationStoreError::InvalidReference("auxiliary audit offset overflow".into())
             })?;
             previous_journal = row.sequence;
-            let event = event_at_connection(&connection, row.sequence)?.ok_or_else(|| {
+            let event = event_at_connection(&transaction, row.sequence)?.ok_or_else(|| {
                 ConversationStoreError::InvalidReference(
                     "auxiliary audit fact has no Journal event".into(),
                 )
@@ -3896,7 +3941,7 @@ impl SqliteConversationStore {
             validate_audit_fact_event(&event, &row)?;
             let fact = match row.kind.as_str() {
                 "call_started" => AuxiliaryAuditFact::CallStarted(
-                    call_audit_at_tx(&connection, &self.conversation_id, &row.call_id, cut)?
+                    call_audit_at_tx(&transaction, &self.conversation_id, &row.call_id, cut)?
                         .ok_or_else(|| {
                             ConversationStoreError::InvalidReference(
                                 "auxiliary Call start fact has no audit row".into(),
@@ -3904,7 +3949,7 @@ impl SqliteConversationStore {
                         })?,
                 ),
                 "call_settled" => AuxiliaryAuditFact::CallSettled(
-                    call_audit_at_tx(&connection, &self.conversation_id, &row.call_id, cut)?
+                    call_audit_at_tx(&transaction, &self.conversation_id, &row.call_id, cut)?
                         .ok_or_else(|| {
                             ConversationStoreError::InvalidReference(
                                 "auxiliary Call settlement fact has no audit row".into(),
@@ -3918,12 +3963,12 @@ impl SqliteConversationStore {
                         )
                     })?;
                     let audit =
-                        request_audit_at_tx(&connection, &self.conversation_id, request_id, cut)?
+                        request_audit_at_tx(&transaction, &self.conversation_id, request_id, cut)?
                             .ok_or_else(|| {
-                            ConversationStoreError::InvalidReference(
-                                "auxiliary request audit fact has no request row".into(),
-                            )
-                        })?;
+                                ConversationStoreError::InvalidReference(
+                                    "auxiliary request audit fact has no request row".into(),
+                                )
+                            })?;
                     if row.ordinal != Some(audit.ordinal) {
                         return Err(ConversationStoreError::InvalidReference(
                             "auxiliary audit ordinal disagrees with its request".into(),
@@ -4149,21 +4194,24 @@ impl SqliteConversationStore {
         request_id: &RequestId,
         cut: AuxiliaryAuditCut,
     ) -> Result<Option<AuxiliaryRequestAudit>, ConversationStoreError> {
-        let connection = self.lock()?;
-        let current = journal_prefix(&connection)?;
-        if cut.journal > current {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|error| storage(format!("auxiliary request audit snapshot: {error}")))?;
+        // The request, Call and owner rows must describe one committed state.
+        if cut.journal > journal_prefix(&transaction)? {
             return Err(ConversationStoreError::InvalidReference(
                 "auxiliary audit cut is in the future".into(),
             ));
         }
-        let audit = request_audit_at_tx(&connection, &self.conversation_id, request_id, cut)?;
+        let audit = request_audit_at_tx(&transaction, &self.conversation_id, request_id, cut)?;
         if audit.is_none() {
-            if let Some(owner) = owner_row_query(&connection, request_id)? {
-                validate_owner_row_tx(&connection, &self.conversation_id, request_id, &owner)?;
+            if let Some(owner) = owner_row_query(&transaction, request_id)? {
+                validate_owner_row_tx(&transaction, &self.conversation_id, request_id, &owner)?;
                 if matches!(owner.owner, ModelRequestOwner::Agent { .. }) {
                     return Ok(None);
                 }
-                if request_row_query(&connection, "request_id=?1", [request_id.as_str()])?
+                if request_row_query(&transaction, "request_id=?1", [request_id.as_str()])?
                     .is_some_and(|request| request.started_sequence > cut.journal)
                 {
                     return Ok(None);
@@ -4172,9 +4220,6 @@ impl SqliteConversationStore {
                     "auxiliary request {request_id} owner has no request index"
                 )));
             }
-            let transaction = connection
-                .unchecked_transaction()
-                .map_err(|error| storage(format!("auxiliary request audit probe: {error}")))?;
             if has_request_journal_fact_through_tx(&transaction, request_id, cut.journal)? {
                 return Err(ConversationStoreError::InvalidReference(format!(
                     "auxiliary request {request_id} has Journal evidence without its audit index"

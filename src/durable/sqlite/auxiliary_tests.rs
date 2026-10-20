@@ -1328,6 +1328,180 @@ fn dense_audit_offsets_and_total_are_independent_of_journal_sequence() {
 }
 
 #[test]
+fn auxiliary_reads_hold_a_wal_snapshot_across_request_settlement() {
+    const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("auxiliary-wal-snapshot.sqlite");
+    let conversation_id = ConversationId::generate();
+    let writer = SqliteConversationStore::open(conversation_id.clone(), &path).unwrap();
+    writer
+        .initialize(&[user_message("base", "base")])
+        .unwrap();
+    let audit_reader = SqliteConversationStore::open(conversation_id.clone(), &path).unwrap();
+    let request_reader = SqliteConversationStore::open(conversation_id, &path).unwrap();
+    let journal_mode: String = writer
+        .lock()
+        .unwrap()
+        .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(journal_mode, "wal");
+
+    let call_id = AuxiliaryCallId::generate();
+    let request_id = generated_request_id();
+    writer
+        .commit_auxiliary_call_start(&call_start(call_id.clone()), timestamp())
+        .unwrap();
+    writer
+        .commit_auxiliary_request_start(
+            &request_start(call_id.clone(), 0, request_id.clone()),
+            timestamp(),
+        )
+        .unwrap();
+    let open_cut = writer.auxiliary_audit_cut().unwrap();
+
+    let terminal_usage = usage(7, 3, 10);
+    let terminal = request_terminal(
+        &writer,
+        call_id.clone(),
+        0,
+        request_id.clone(),
+        true,
+        Some(terminal_usage.clone()),
+    );
+    let settled = call_terminal(
+        &writer,
+        call_id,
+        AuxiliaryCallOutcome::Completed,
+        Some(request_evidence(
+            request_id.clone(),
+            Some(AuxiliaryObservedProviderTerminal::Completed {
+                finish_reason: crate::model::auxiliary::AuxiliaryFinishReason::Stop,
+            }),
+            Some(terminal_usage),
+            AuxiliaryUsageCompleteness::Complete,
+            false,
+        )),
+    );
+
+    let (audit_ready_tx, audit_ready_rx) = std::sync::mpsc::sync_channel(1);
+    let (audit_release_tx, audit_release_rx) = std::sync::mpsc::sync_channel(1);
+    let audit_request_id = request_id.clone();
+    let audit_thread = std::thread::spawn(move || {
+        super::super::auxiliary::install_after_request_row_read_hook(
+            audit_request_id,
+            move || {
+                audit_ready_tx
+                    .send(())
+                    .expect("audit reader remained available after its request-row read");
+                audit_release_rx
+                    .recv_timeout(HANDSHAKE_TIMEOUT)
+                    .expect("audit reader was not released after request-row read");
+            },
+        );
+        audit_reader.read_auxiliary_audit(open_cut, None, 32)
+    });
+
+    let (request_ready_tx, request_ready_rx) = std::sync::mpsc::sync_channel(1);
+    let (request_release_tx, request_release_rx) = std::sync::mpsc::sync_channel(1);
+    let loaded_request_id = request_id.clone();
+    let request_reader_id = request_id.clone();
+    let load_thread = std::thread::spawn(move || {
+        super::super::auxiliary::install_after_request_row_read_hook(
+            loaded_request_id,
+            move || {
+                request_ready_tx
+                    .send(())
+                    .expect("request reader remained available after its request-row read");
+                request_release_rx
+                    .recv_timeout(HANDSHAKE_TIMEOUT)
+                    .expect("request reader was not released after request-row read");
+            },
+        );
+        request_reader.load_auxiliary_request(&request_reader_id, open_cut)
+    });
+
+    let audit_paused = audit_ready_rx.recv_timeout(HANDSHAKE_TIMEOUT);
+    let request_paused = request_ready_rx.recv_timeout(HANDSHAKE_TIMEOUT);
+    if audit_paused.is_err() || request_paused.is_err() {
+        let _ = audit_release_tx.send(());
+        let _ = request_release_tx.send(());
+        let audit_finished = audit_thread.join().is_ok();
+        let request_finished = load_thread.join().is_ok();
+        panic!(
+            "readers did not both pause after request-row reads: \
+             audit={audit_paused:?}, request={request_paused:?}, \
+             audit_finished={audit_finished}, request_finished={request_finished}"
+        );
+    }
+
+    let settlement_result = writer.commit_auxiliary_request_settlement(terminal, settled);
+    let _ = audit_release_tx.send(());
+    let _ = request_release_tx.send(());
+    let settlement = settlement_result.expect("the second connection must settle the WAL database");
+
+    let open_page = audit_thread
+        .join()
+        .expect("audit reader panicked")
+        .expect("archive audit must not treat concurrent settlement as corruption");
+    assert_eq!(open_page.cut, open_cut);
+    assert_eq!(open_page.total, 2);
+    assert_eq!(open_page.records.len(), 2);
+    let open_audit_request = match &open_page.records[1].fact {
+        AuxiliaryAuditFact::RequestStarted(request) => request.clone(),
+        other => panic!("expected an open request-start fact, got {other:?}"),
+    };
+    assert_eq!(open_audit_request.request_id, request_id);
+    assert_eq!(open_audit_request.terminal_sequence, None);
+    assert_eq!(open_audit_request.local_terminal, None);
+    assert_eq!(open_audit_request.request_evidence, None);
+
+    let open_loaded_request = load_thread
+        .join()
+        .expect("request reader panicked")
+        .expect("archive validation must not treat concurrent settlement as corruption")
+        .expect("the old cut must retain the admitted request");
+    assert_eq!(
+        open_loaded_request, open_audit_request,
+        "both archive entrypoints must observe the same open request"
+    );
+
+    let settled_cut = writer.auxiliary_audit_cut().unwrap();
+    let settled_page = writer
+        .read_auxiliary_audit(settled_cut, None, 32)
+        .unwrap();
+    assert_eq!(settled_page.total, 4);
+    assert_eq!(settled_page.records.len(), 4);
+    assert!(matches!(
+        &settled_page.records[2].fact,
+        AuxiliaryAuditFact::RequestSettled(request)
+            if request.local_terminal == Some(AuxiliaryRequestTerminal::Completed)
+    ));
+    assert!(matches!(
+        &settled_page.records[3].fact,
+        AuxiliaryAuditFact::CallSettled(call)
+            if call.outcome == Some(AuxiliaryCallOutcome::Completed)
+    ));
+
+    let settled_request = writer
+        .load_auxiliary_request(&request_id, settled_cut)
+        .unwrap()
+        .expect("the new cut must expose the settled request");
+    assert_eq!(
+        settled_request.terminal_sequence,
+        settlement
+            .request_terminal
+            .as_ref()
+            .map(|terminal| terminal.sequence)
+    );
+    assert_eq!(
+        settled_request.local_terminal,
+        Some(AuxiliaryRequestTerminal::Completed)
+    );
+    assert!(settled_request.request_evidence.is_some());
+}
+
+#[test]
 fn empty_auxiliary_audit_reports_zero_not_the_journal_frontier() {
     let store = store();
     store.initialize(&[]).unwrap();
