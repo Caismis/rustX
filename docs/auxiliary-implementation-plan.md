@@ -2,11 +2,11 @@
 
 ## Scope and development baseline
 
-Initial baseline synchronized: 2026-10-18; current upstream integration: 2026-10-19. AUX-01 storage and inspection are implemented and locally verified as of 2026-10-19, on top of plan commit `d46168f7e56157e2fb5bbed524ba81a80501920e`. Stages 2–4 remain planned. GitHub FULL and applicable macOS CI remain prerequisites for a merge-ready pull request.
+Initial baseline synchronized: 2026-10-18; current upstream integration: 2026-10-19. AUX-01 storage and inspection, review fixes and the CI Node pin are delivered through `4aedcda2c9415cec3cfd1b06d3539215009b2e09`, whose [FULL workflow](https://github.com/Caismis/rustX/actions/runs/39391027089) passed, including macOS full and Merge verification. Stages 2–4 remain planned. The proposed [AUX-02 implementation plan](aux-02-implementation-plan.md) defines the next increment and requires user review before implementation.
 
 Implement the auxiliary series as four working increments: [AUX-01 #473](https://github.com/Caismis/rustX/issues/473), [AUX-02 #474](https://github.com/Caismis/rustX/issues/474), [AUX-03 #475](https://github.com/Caismis/rustX/issues/475), and [AUX-04 #476](https://github.com/Caismis/rustX/issues/476). The issues own their detailed acceptance contracts; this document defines implementation order, code ownership, integration boundaries and verification gates.
 
-Use one development branch, `MiNisterPaX/rustX:aux-01-request-ownership`, for all stages. Fetch dependencies from `origin` (Caismis/rustX); push development commits to `fork` (MiNisterPaX/rustX). Preserve unrelated workspace changes. Do not create parallel long-lived AUX development branches or rewrite the existing published history. Each issue remains a separately reviewable, complete product increment; do not merge a half-converted owner/schema/reader transition. Reuse this branch for successive delivery gates, integrating actual upstream main between them.
+Keep AUX-01 on `MiNisterPaX/rustX:aux-01-request-ownership`. Develop AUX-02 on `MiNisterPaX/rustX:codex/aux-02-supervised-execution`, starting at the AUX-01 commit above. Fetch dependencies from `origin` (Caismis/rustX); push development commits to `fork` (MiNisterPaX/rustX). Preserve unrelated workspace changes and published history. Each issue remains a separately reviewable, complete product increment; do not merge a half-converted owner/schema/reader transition. Integrate actual upstream main containing the accepted prerequisite before the corresponding upstream delivery. AUX-02 work is performed by the primary agent without subagents or delegated workers.
 
 The initial synchronization baseline was upstream commit `3c355f152d405a201482d53b6e45497df4f44a7f`, including immutable-history compaction, bounded observation, CI improvements and WAL/NORMAL. The fork's starting commit is `c26fc0d00fd1b60a7505888ef3b01893939ff88d`, containing:
 - `8a4cbe8b29d861144d4d689e04b3903886843112`: auxiliary identities and closed request ownership.
@@ -135,7 +135,7 @@ focused results do not replace exact-head FULL or native macOS merge gates.
 
 ## Stage 2: AUX-02 supervised execution and Summary
 
-Start after AUX-01's coherent Store/reader gate. Implement the shared executor in native Runtime and replace Summary's old polling implementation.
+The proposed [detailed implementation plan](aux-02-implementation-plan.md) owns this stage's source inventory, ownership/state/lock protocol, commit gates and contract-to-test matrix. Implementation waits for user approval. Start from verified AUX-01 Store/reader contracts and implement the shared executor in native Runtime, replacing Summary's old polling implementation.
 
 1. Map the admission, dispatch, child registration, shutdown and durability-failure transitions to existing native owners and locks. Document each linearization point and lock order.
 2. Reserve process then Conversation capacity before expensive preparation. Initial total/general capacities are 32/24 per process and 4/3 per Conversation, preserving protected Compaction capacity. Return typed Busy immediately; no task queue or hold-and-wait acquisition.
@@ -192,7 +192,7 @@ generation admission at their declared cut.
 SQLite schema 74 identifies the combined semantic layout. Main schema 71 and AUX
 schema 73 are rejected unchanged. Archive v7 / Journal 5, local and inherited
 auxiliary-audit schema 2, Runtime Client 71 and App Server 50 are unchanged by
-this integration. Further stages continue on this branch; no compatibility
+this integration. AUX-02 continues on its dedicated branch defined above; no compatibility
 readers, reconstruction or migrations are added.
 
 ### Integration validation
