@@ -312,6 +312,14 @@ Every admitted Call also reserves its serialized required-write responsibility.
 Native owners retain these resources through physical work and confirmation;
 reply receivers and observers never own their release.
 
+An auxiliary required-write scope shares the existing ConnectionOwner and its
+native manifest/append-certificate ownership. Cancellation wakes its connection
+waiter and interrupts SQL only while that exact lease generation remains
+active. A delayed signal cannot interrupt a successor Agent lease. Existing
+settlement and confirmation use uncancelled Store authority. The Call's writer
+owner retains the exact submitted intent, completion evidence and real thread
+join; a lost reply cannot release its permits or establish noncommit.
+
 One Compaction budget spans all input shrink and carryover re-entry: twelve
 confirmed or unresolved starts, three shrinks and one five-minute monotonic
 deadline. A matching Store receipt confirms a start; only Store-proven

@@ -3208,6 +3208,14 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// Cancel this reader's connection waits and running `SQLite` queries.
     fn close_presentation_reader(&self);
 
+    /// A native required-write scope sharing the original connection owner.
+    /// Cancellation is confined to this scope's exact connection lease.
+    /// Already-owned settlement uses the original, uncancelled Store.
+    fn auxiliary_writer(&self) -> std::sync::Arc<dyn ConversationStore>;
+
+    /// Closes new work in this write scope and interrupts only its active lease.
+    fn cancel_auxiliary_writer(&self);
+
     #[cfg(test)]
     fn park_presentation_read_until_cancelled(&self, entered: tokio::sync::oneshot::Sender<()>);
 

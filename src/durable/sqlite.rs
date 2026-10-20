@@ -397,14 +397,18 @@ pub(crate) struct HiddenContextAuditFixture {
     pub audit: crate::durable::inbox::PublicationAuditReceipt,
 }
 
+/// Shared Journal observation binding retained by native scoped writers.
+type JournalObserverBinding = Option<(Arc<dyn super::presentation::JournalObserver>, u64)>;
+
 /// The native durable conversation authority for one conversation.
 pub struct SqliteConversationStore {
     conversation_id: ConversationId,
     conn: Arc<ConnectionOwner>,
     read_cancel: Option<Arc<AtomicBool>>,
+    write_cancel: Option<Arc<WriteCancellation>>,
     #[cfg(test)]
     read_progress_entered: Mutex<Option<std::sync::mpsc::Sender<()>>>,
-    journal_observer: Mutex<Option<(Arc<dyn super::presentation::JournalObserver>, u64)>>,
+    journal_observer: Arc<Mutex<JournalObserverBinding>>,
     lifecycle: Option<Arc<crate::runtime::local_storage::ConversationAccess>>,
     #[cfg(test)]
     pub(crate) fail_accept_remaining: Arc<AtomicUsize>,
@@ -466,17 +470,40 @@ struct ConnectionOwner {
     available: Mutex<Option<Connection>>,
     wake: Condvar,
     poisoned: AtomicBool,
+    lease_generation: AtomicU64,
+    active_interrupt: Mutex<Option<(u64, rusqlite::InterruptHandle)>>,
     manifest: Arc<manifest::Owner>,
     append_validation: Arc<append_validation::Owner>,
 }
+
+#[derive(Default)]
+struct WriteCancellation {
+    cancelled: Arc<AtomicBool>,
+    generation: AtomicU64,
+}
+
+#[cfg(test)]
+thread_local! {
+    static AUXILIARY_CONNECTION_WAIT: std::cell::RefCell<Option<std::sync::mpsc::SyncSender<()>>> = const { std::cell::RefCell::new(None) };
+}
+
 impl ConnectionOwner {
     #[cfg(test)]
     fn lock(&self) -> Result<ConnectionLease<'_>, ConversationStoreError> {
         self.acquire(None)
     }
+    #[cfg(test)]
     fn acquire(
         &self,
         cancelled: Option<&AtomicBool>,
+    ) -> Result<ConnectionLease<'_>, ConversationStoreError> {
+        self.acquire_scoped(cancelled, None)
+    }
+
+    fn acquire_scoped(
+        &self,
+        cancelled: Option<&AtomicBool>,
+        write_scope: Option<&WriteCancellation>,
     ) -> Result<ConnectionLease<'_>, ConversationStoreError> {
         let mut slot = self
             .available
@@ -487,14 +514,41 @@ impl ConnectionOwner {
                 return Err(storage("connection poisoned"));
             }
             if cancelled.is_some_and(|flag| flag.load(Ordering::Acquire)) {
-                return Err(storage("presentation read cancelled"));
+                return Err(storage(if write_scope.is_some() {
+                    "required write cancelled before connection acquisition"
+                } else {
+                    "presentation read cancelled"
+                }));
             }
             if let Some(connection) = slot.take() {
+                let Ok(previous) = self.lease_generation.fetch_update(
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                    |current| current.checked_add(1),
+                ) else {
+                    *slot = Some(connection);
+                    return Err(storage("connection lease generation exhausted"));
+                };
+                let generation = previous + 1;
+                *self
+                    .active_interrupt
+                    .lock()
+                    .expect("connection interrupt owner") =
+                    Some((generation, connection.get_interrupt_handle()));
+                if let Some(scope) = write_scope {
+                    scope.generation.store(generation, Ordering::Release);
+                }
                 return Ok(ConnectionLease {
                     connection: Some(connection),
                     owner: self,
                 });
             }
+            #[cfg(test)]
+            AUXILIARY_CONNECTION_WAIT.with(|probe| {
+                if let Some(entered) = probe.borrow_mut().take() {
+                    let _ = entered.send(());
+                }
+            });
             slot = blocking_wait(|| self.wake.wait(slot))
                 .map_err(|_| storage("connection poisoned"))?;
         }
@@ -606,7 +660,13 @@ impl Drop for ConnectionLease<'_> {
         if std::thread::panicking() {
             self.owner.poisoned.store(true, Ordering::Release);
         }
-        *self.owner.available.lock().expect("connection slot") = self.connection.take();
+        let mut slot = self.owner.available.lock().expect("connection slot");
+        *self
+            .owner
+            .active_interrupt
+            .lock()
+            .expect("connection interrupt owner") = None;
+        *slot = self.connection.take();
         self.owner.wake.notify_all();
     }
 }
@@ -617,9 +677,9 @@ impl Drop for ConnectionLease<'_> {
 /// Rollbacks and read-only guards produce no receipt.
 struct StoreGuard<'a> {
     connection: ConnectionLease<'a>,
-    presentation: bool,
+    cancellable: bool,
     changes: u64,
-    observer: &'a Mutex<Option<(Arc<dyn super::presentation::JournalObserver>, u64)>>,
+    observer: &'a Mutex<JournalObserverBinding>,
 }
 impl std::ops::Deref for StoreGuard<'_> {
     type Target = Connection;
@@ -644,7 +704,7 @@ fn journal_prefix(connection: &Connection) -> Result<u64, ConversationStoreError
 }
 impl Drop for StoreGuard<'_> {
     fn drop(&mut self) {
-        if self.presentation {
+        if self.cancellable {
             self.connection
                 .progress_handler(0, None::<fn() -> bool>)
                 .expect("restore SQLite progress policy");
@@ -894,6 +954,8 @@ impl SqliteConversationStore {
                 append_validation,
                 wake: Condvar::new(),
                 poisoned: AtomicBool::new(false),
+                lease_generation: AtomicU64::new(0),
+                active_interrupt: Mutex::new(None),
             }),
         ))
     }
@@ -903,9 +965,10 @@ impl SqliteConversationStore {
             conversation_id,
             conn,
             read_cancel: None,
+            write_cancel: None,
             #[cfg(test)]
             read_progress_entered: Mutex::new(None),
-            journal_observer: Mutex::new(None),
+            journal_observer: Arc::new(Mutex::new(None)),
             lifecycle: None,
             #[cfg(test)]
             head_read_probe: Mutex::new(None),
@@ -952,6 +1015,15 @@ impl SqliteConversationStore {
         }
     }
 
+    fn auxiliary_writer_scope(&self) -> Self {
+        let mut writer =
+            Self::from_connection_owner(self.conversation_id.clone(), self.conn.clone());
+        writer.write_cancel = Some(Arc::new(WriteCancellation::default()));
+        writer.lifecycle.clone_from(&self.lifecycle);
+        writer.journal_observer = self.journal_observer.clone();
+        writer
+    }
+
     fn lock(&self) -> Result<StoreGuard<'_>, ConversationStoreError> {
         #[cfg(debug_assertions)]
         if let Some(cancel) = &self.read_cancel
@@ -963,12 +1035,21 @@ impl SqliteConversationStore {
                 slot = self.conn.wake.wait(slot).expect("connection slot");
             }
         }
-        let connection = self.conn.acquire(self.read_cancel.as_deref())?;
-        if let Some(cancel) = &self.read_cancel {
-            connection
-                .busy_timeout(std::time::Duration::ZERO)
-                .map_err(|e| storage(e.to_string()))?;
-            let cancel = cancel.clone();
+        let cancellation = self.read_cancel.clone().or_else(|| {
+            self.write_cancel
+                .as_ref()
+                .map(|scope| scope.cancelled.clone())
+        });
+        let connection = self
+            .conn
+            .acquire_scoped(cancellation.as_deref(), self.write_cancel.as_deref())?;
+        let cancellable = cancellation.is_some();
+        if let Some(cancel) = cancellation {
+            if self.read_cancel.is_some() {
+                connection
+                    .busy_timeout(std::time::Duration::ZERO)
+                    .map_err(|e| storage(e.to_string()))?;
+            }
             #[cfg(test)]
             let mut entered = self.read_progress_entered.lock().unwrap().take();
             connection
@@ -990,7 +1071,7 @@ impl SqliteConversationStore {
         let changes = connection.total_changes();
         Ok(StoreGuard {
             connection,
-            presentation: self.read_cancel.is_some(),
+            cancellable,
             changes,
             observer: &self.journal_observer,
         })
@@ -3164,6 +3245,28 @@ impl ConversationStore for SqliteConversationStore {
         if let Some(cancel) = &self.read_cancel {
             let _slot = self.conn.available.lock().expect("connection slot");
             cancel.store(true, Ordering::Release);
+            self.conn.wake.notify_all();
+        }
+    }
+
+    fn auxiliary_writer(&self) -> Arc<dyn ConversationStore> {
+        Arc::new(self.auxiliary_writer_scope())
+    }
+
+    fn cancel_auxiliary_writer(&self) {
+        if let Some(scope) = &self.write_cancel {
+            let _slot = self.conn.available.lock().expect("connection slot");
+            scope.cancelled.store(true, Ordering::Release);
+            if let Some((generation, interrupt)) = self
+                .conn
+                .active_interrupt
+                .lock()
+                .expect("connection interrupt owner")
+                .as_ref()
+                && *generation == scope.generation.load(Ordering::Acquire)
+            {
+                interrupt.interrupt();
+            }
             self.conn.wake.notify_all();
         }
     }
@@ -14658,6 +14761,10 @@ mod tests {
     mod auxiliary_tests {
         include!("sqlite/auxiliary_tests.rs");
     }
+    mod auxiliary_writer_tests {
+        use super::*;
+        include!("sqlite/auxiliary_writer_tests.rs");
+    }
     #[allow(clippy::too_many_lines)]
     mod auxiliary_growth_tests {
         include!("sqlite/auxiliary_growth_tests.rs");
@@ -22016,6 +22123,8 @@ mod executor_wait_tests {
             available: Mutex::new(Some(Connection::open_in_memory().unwrap())),
             wake: Condvar::new(),
             poisoned: AtomicBool::new(false),
+            lease_generation: AtomicU64::new(0),
+            active_interrupt: Mutex::new(None),
         });
         // Declared first so a failing assertion still releases the lease
         // before the runtime waits for its worker on unwind.
@@ -22049,6 +22158,8 @@ mod presentation_cancellation_tests {
             available: Mutex::new(Some(Connection::open_in_memory().unwrap())),
             wake: Condvar::new(),
             poisoned: AtomicBool::new(false),
+            lease_generation: AtomicU64::new(0),
+            active_interrupt: Mutex::new(None),
         });
         let mut reader = SqliteConversationStore::from_connection_owner(
             ConversationId::new("conv_8307904d-d256-77de-8e8a-63789f0ed1a5"),
@@ -22093,6 +22204,8 @@ mod presentation_cancellation_tests {
             available: Mutex::new(Some(Connection::open_in_memory().unwrap())),
             wake: Condvar::new(),
             poisoned: AtomicBool::new(false),
+            lease_generation: AtomicU64::new(0),
+            active_interrupt: Mutex::new(None),
         });
         let writer = owner.lock().unwrap();
         let mut reader = SqliteConversationStore::from_connection_owner(
