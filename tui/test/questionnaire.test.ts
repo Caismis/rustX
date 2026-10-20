@@ -3,7 +3,8 @@ import { describe, it } from "node:test";
 
 import { visibleWidth } from "@earendil-works/pi-tui";
 
-import { QuestionnaireOverlay, scalarValidationError } from "../src/ui/components/questionnaire.ts";
+import { QuestionnaireOverlay } from "../src/ui/components/questionnaire.ts";
+import { scalarValidationError } from "../src/ui/components/questionnaire-answers.ts";
 import { readNumberDraft, readScalarAnswer } from "../../protocol/app-server/number.ts";
 import {
   finiteNumberFromWire,
