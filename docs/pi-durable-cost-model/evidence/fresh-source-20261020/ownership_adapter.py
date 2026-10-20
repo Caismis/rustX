@@ -1,4 +1,5 @@
 """Opt-in ownership mapping and outer safety controls; no workload implementation."""
+import argparse
 import hashlib
 import json
 import os
@@ -118,6 +119,7 @@ class Guard:
         self.initial_allocated = allocated(self.paths)
         self.initial_temp = allocated([self.workspace / 'tmp'])
         self.failure = None
+        self.diagnostic_errors = []
         self.owned = []
         self.pressure_since = self.memory_since = None
         self.done = threading.Event()
@@ -128,6 +130,7 @@ class Guard:
         self.output.mkdir(parents=True, exist_ok=False)
         (self.output / 'watchdog-config.json').write_text(json.dumps({
             'kind': self.kind, 'adapter_sha256': sha(__file__), 'initial': self.initial,
+            'evidence_directory': str(self.evidence), 'monitored_allocated_paths': [str(path) for path in self.paths],
             'entry_bytes': BUILD_ENTRY if self.kind == 'build' else COHORT_ENTRY,
             'hard_floor_bytes': 5 * GIB, 'soft_stop_bytes': 6 * GIB,
             'allocated_growth_cap_bytes': 2 * GIB if self.kind == 'build' else GIB,
@@ -198,6 +201,26 @@ class Guard:
             if sig == signal.SIGTERM:
                 time.sleep(2)
 
+    def _diagnostic(self, name, value):
+        try:
+            (self.output / name).write_text(json.dumps(value, indent=2) + '\n')
+        except Exception as error:
+            # Diagnostics must never prevent stopping an already-owned child.
+            self.diagnostic_errors.append({'file': name, 'error': repr(error)})
+
+    def _stop_owned(self):
+        try:
+            self._diagnostic('watchdog-stop.json', self.failure)
+        finally:
+            try:
+                self._shutdown()
+            finally:
+                self._diagnostic('owned-process-status.json', [
+                    {'pid': process.pid, 'start_ticks': start, 'process_group': group,
+                     'returncode': process.poll(),
+                     'same_process_still_present': start is not None and process_start(process.pid) == start}
+                    for process, start, group in self.owned])
+
     def _monitor(self):
         try:
             with (self.output / 'watchdog-resources.jsonl').open('w') as log:
@@ -215,13 +238,9 @@ class Guard:
                     self.done.wait(.5)
         except Exception as error:
             self.failure = {'reason': 'watchdog-observation-error', 'error': repr(error)}
-        if self.failure:
-            (self.output / 'watchdog-stop.json').write_text(json.dumps(self.failure, indent=2) + '\n')
-            self._shutdown()
-            (self.output / 'owned-process-status.json').write_text(json.dumps([
-                {'pid': process.pid, 'start_ticks': start, 'process_group': group, 'returncode': process.poll(),
-                 'same_process_still_present': start is not None and process_start(process.pid) == start}
-                for process, start, group in self.owned], indent=2) + '\n')
+        finally:
+            if self.failure:
+                self._stop_owned()
 
     def close(self):
         self.done.set()
@@ -239,8 +258,7 @@ class Guard:
         if active:
             if self.failure is None:
                 self.failure = {'reason': 'owner-exit-with-live-child'}
-                (self.output / 'watchdog-stop.json').write_text(json.dumps(self.failure, indent=2) + '\n')
-            self._shutdown()
+            self._stop_owned()
         self.check()
 
 
@@ -261,24 +279,59 @@ def comparison_runner(original, output):
     return run
 
 
-def cohort_arguments(argv):
+class _Once(argparse.Action):
+    def __call__(self, parser, namespace, values, option_string=None):
+        seen = getattr(namespace, '_seen_options', set())
+        if self.dest in seen:
+            parser.error('duplicate option: ' + option_string)
+        seen.add(self.dest)
+        namespace._seen_options = seen
+        setattr(namespace, self.dest, values)
+
+
+def parse_ownership_args(argv, workspace):
+    parser = argparse.ArgumentParser(allow_abbrev=False)
+    for name in ('before', 'after', 'output'):
+        parser.add_argument('--' + name, type=Path, action=_Once, required=True)
+    parser.add_argument('--pairs', type=int, action=_Once, default=3)
+    options = parser.parse_args(argv)
+    if options.pairs != 3:
+        parser.error('ownership mode requires three exploratory pairs')
+    for name in ('before', 'after', 'output'):
+        setattr(options, name, getattr(options, name).resolve())
+    workspace = Path(workspace).resolve()
+    products = (workspace / 'evidence/products').resolve()
+    if not products.is_relative_to(workspace) or not options.output.is_relative_to(products) or options.output == products:
+        parser.error('output must be a new cohort under workspace/evidence/products')
+    return options
+
+
+BLOCKS = [('live-main', 'live-subscriber', ['short-small', 'short-large']),
+          ('late-control', 'no-live-subscriber', ['short-large'])]
+
+
+def cohort_arguments(options, driver):
     """Exactly the reviewed 18-product schedule; one shared 30-minute guard."""
-    if any(option in argv for option in ('--case', '--observer-mode', '--pair-offset')):
-        raise ValueError('ownership mode uses the fixed two-block protocol; omit case/mode/offset')
-    if '--pairs' in argv and argv[argv.index('--pairs') + 1] != '3':
-        raise ValueError('ownership mode requires three exploratory pairs')
-    output_index = argv.index('--output') + 1
-    output = Path(argv[output_index])
     blocks = []
-    for name, mode, cases in [('live-main', 'live-subscriber', ['short-small', 'short-large']),
-                              ('late-control', 'no-live-subscriber', ['short-large'])]:
-        block = list(argv)
-        block[output_index] = str(output / name)
-        block += ['--observer-mode', mode]
+    for name, mode, cases in BLOCKS:
+        block = [str(driver), '--before', str(options.before), '--after', str(options.after),
+                 '--output', str(options.output / name), '--pairs', str(options.pairs), '--observer-mode', mode]
         for case in cases:
             block += ['--case', case]
         blocks.append(block)
     return blocks
+
+
+def expected_plan(options):
+    plan = []
+    for name, mode, cases in BLOCKS:
+        for pair in range(3):
+            for case in cases:
+                for side in (('before', 'after') if pair % 2 == 0 else ('after', 'before')):
+                    plan.append({'label': 'baseline' if side == 'before' else 'ownership',
+                                 'case': case, 'observer_mode': mode,
+                                 'stem': str(options.output / name / f'{pair}-{case}-{side}')})
+    return plan
 
 
 def watch_build(repo, output):

@@ -11,9 +11,11 @@ import subprocess
 import sys
 import time
 import traceback
-from ownership_adapter import Guard, accepted, cohort_arguments, comparison_runner, validate_candidate
+from ownership_adapter import Guard, accepted, cohort_arguments, comparison_runner, expected_plan, parse_ownership_args, validate_candidate
 
 root = Path('/workspace/pr485-study')
+candidate_build = os.environ.get('RUSTX_BENCH_CANDIDATE_BUILD')
+ownership_options = parse_ownership_args(sys.argv[1:], root) if candidate_build else None
 repo = root / 'repo'
 runtime = repo / 'benchmarks/runtime'
 os.environ['TMPDIR'] = str(root / 'tmp')
@@ -29,7 +31,6 @@ def sha(path):
 identities = {}
 build_identities = {}
 builds = [(label, root / 'evidence' / ('build-' + label)) for label in ('baseline', 'geometry', 'scoped')]
-candidate_build = os.environ.get('RUSTX_BENCH_CANDIDATE_BUILD')
 if candidate_build:
     builds.append(('ownership', Path(candidate_build).resolve()))
 for label, build in builds:
@@ -42,11 +43,15 @@ for label, build in builds:
         assert str(Path(identity['binary']).resolve()) not in identities
     build_identities[label] = identity
     identities[str(Path(identity['binary']).resolve())] = (label, preserved)
+if ownership_options is not None:
+    assert identities[str(ownership_options.before)][0] == 'baseline' and identities[str(ownership_options.after)][0] == 'ownership', 'ownership mode requires exact baseline/candidate pair'
 
 original_run = controller.run
 original_popen, original_subprocess_run = subprocess.Popen, subprocess.run
 guard = None
-output_arg = sys.argv[sys.argv.index('--output') + 1]
+plan = expected_plan(ownership_options) if ownership_options is not None else []
+attempts = []
+output_arg = str(ownership_options.output) if ownership_options is not None else sys.argv[sys.argv.index('--output') + 1]
 Path(output_arg).parent.mkdir(parents=True, exist_ok=True)
 restoration_log = Path(output_arg).with_name(Path(output_arg).name + '-helper-restoration.jsonl')
 interval_log = Path(output_arg).with_name(Path(output_arg).name + '-product-intervals.jsonl')
@@ -78,6 +83,11 @@ def guarded_run(argv, stem, case, env, project):
     if guard is not None:
         guard.check()
     label, preserved = identities[str(Path(argv[0]).resolve())]
+    if guard is not None:
+        actual = {'label': label, 'case': case, 'observer_mode': env.get('RUSTX_BENCH_OBSERVER_MODE'), 'stem': str(stem.resolve())}
+        if len(attempts) >= len(plan) or actual != plan[len(attempts)]:
+            raise RuntimeError('unexpected product identity/case/order/output; no product started')
+        attempts.append(actual)
     stat = os.statvfs(root)
     assert stat.f_bavail * stat.f_frsize >= 16 * 2**30, 'less than 16 GiB usable reserve'
     active = []
@@ -139,9 +149,6 @@ sys.argv[0] = str(runtime / 'compare-revisions.py')
 os.chdir(repo)
 try:
     if candidate_build:
-        before = str(Path(sys.argv[sys.argv.index('--before') + 1]).resolve())
-        after = str(Path(sys.argv[sys.argv.index('--after') + 1]).resolve())
-        assert identities[before][0] == 'baseline' and identities[after][0] == 'ownership', 'ownership mode requires exact baseline/candidate pair'
         guard = Guard(root, Path(output_arg + '-watchdog'), 'cohort', Path(output_arg)).start()
         def owned_popen(*args, **kwargs):
             guard.check()
@@ -156,8 +163,10 @@ try:
             'pair_order': ['AB', 'BA', 'AB'], 'order_imbalance': 'baseline first twice; candidate first once; exploratory n=3, no acceptance/significance claim',
             'watchdog': output_arg + '-watchdog', 'cohort_cap_seconds': 1800,
             'expected_product_count': 18,
+            'expected_plan': plan,
+            'canonical_blocks': cohort_arguments(ownership_options, runtime / 'compare-revisions.py'),
             'incomplete_policy': 'retain incomplete cohort; no replacement or automatic retry'}
-        for block_argv in cohort_arguments(sys.argv):
+        for block_argv in cohort_arguments(ownership_options, runtime / 'compare-revisions.py'):
             guard.check()
             sys.argv = block_argv
             try:
@@ -172,6 +181,8 @@ except Exception:
     raise
 finally:
     subprocess.Popen, subprocess.run = original_popen, original_subprocess_run
+    if candidate_build:
+        controller.run = original_run
     guard_error = None
     if guard is not None:
         try:
@@ -191,7 +202,12 @@ finally:
     if interval_log.exists():
         cohort['products'] = [json.loads(line) for line in interval_log.read_text().splitlines()]
     if candidate_build:
-        cohort['complete_18_products'] = len(cohort.get('products', [])) == 18 and all(product['accepted'] for product in cohort.get('products', [])) and not guard_error and 'adapter_error' not in cohort
+        cohort['attempted_plan'] = attempts
+        completed = [{key: product[key] for key in ('label', 'case', 'stem')} for product in cohort.get('products', [])]
+        expected_completed = [{key: item[key] for key in ('label', 'case', 'stem')} for item in plan]
+        cohort['complete_18_products'] = attempts == plan and completed == expected_completed and all(product['accepted'] for product in cohort.get('products', [])) and not guard_error and 'adapter_error' not in cohort
     cohort_path.write_text(json.dumps(cohort, indent=2) + '\n')
     if guard_error is not None:
         raise guard_error
+    if candidate_build and not cohort['complete_18_products'] and 'adapter_error' not in cohort:
+        raise RuntimeError('incomplete or mismatched final product plan; retained without replacement')

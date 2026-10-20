@@ -1,0 +1,27 @@
+{
+  "utc": "2026-10-20T08:39:05.155640+00:00",
+  "argv": [
+    "python3",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "docs/pi-durable-cost-model/evidence/fresh-source-20261020",
+    "-p",
+    "test_ownership*.py",
+    "-v"
+  ],
+  "exit": 0,
+  "scope": "17 unit/full-wrapper tests, tiny fake build metadata, no Cargo or native product/provider; only explicitly owned temporary Python child processes for shutdown tests",
+  "production_gates_GiB": {
+    "build": 18,
+    "cohort": 16
+  },
+  "source_sha256": {
+    "ownership_adapter.py": "16b5cf719c34431213d188595d8a9a3e10596fc1b206117fd53d24ad098cce6f",
+    "run-native-cohort.py": "edab919eaa625d66dca56d8ca49719c7135cd77ec4a086db617404ccf08aa222",
+    "test_ownership_adapter.py": "f17c22e838c28849d64f7363b7d42244309d2d3fd42787f89b58b46519781425",
+    "test_ownership_wrapper.py": "14279d277762901006a7512c28a35aca78b88fd204d7d7d69aff08cb5c5a8a92",
+    "ownership-driver-compare-revisions.py": "67b8f207f2e61348b84c0bc7fc190c6f40855abc45a0aaf177ed523e7df27c08"
+  }
+}

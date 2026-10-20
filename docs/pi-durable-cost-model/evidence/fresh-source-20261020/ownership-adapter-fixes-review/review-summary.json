@@ -1,0 +1,27 @@
+{
+  "utc": "2026-10-20T08:42:30.494722+00:00",
+  "reviewed_parent": "6b449d24634e8b4088cfd8d534d30c3852d91ec8",
+  "review_blocker_origin": "d9c31a37d38344db984ff0a76222a9a0b4378dd1",
+  "fixes": [
+    "ownership CLI parse once, no abbreviations/duplicates, equals normalized, parsed artifact/output validation, canonical driver argv and exact per-product/final plan",
+    "monitor and close guarantee owned shutdown through finally; diagnostics best-effort, ENOSPC injection tests with live owned child and surviving unrelated child"
+  ],
+  "tests": {
+    "distinct_passed": 17,
+    "failed": 0,
+    "full_wrapper_tests": 7,
+    "scope": "mock build metadata/controller and temporary owned Python children only"
+  },
+  "gates_GiB": {
+    "build": 18,
+    "cohort": 16
+  },
+  "workload_driver_sha256": "67b8f207f2e61348b84c0bc7fc190c6f40855abc45a0aaf177ed523e7df27c08",
+  "workload_unchanged": true,
+  "no_build_measurement_browser_or_cleanup": true,
+  "unuploaded_bundle_preserved_sha256": "062e0a05da4c73f0440550aeeb1eaaef10c90811deb8f91a02d16a02ca68d45c",
+  "library_retries_after_403": 0,
+  "binary_transfer_routes_attempted_after_403": 0,
+  "provenance": "../ownership-adapter-fixes-build-provenance.txt",
+  "available_bytes": 8069603328
+}

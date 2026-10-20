@@ -1,0 +1,103 @@
+Source-build configuration for a fresh saved rustX environment
+============================================================
+This is ordinary text provenance, not an executable transfer or private log.
+The Library export remains unuploaded after HTTP403. Do not retry it or use an
+alternate route. The new environment should compile both revisions from source.
+No build or native measurement was executed here while preparing these fixes.
+
+Source identities
+  Baseline: 623b41b869a95c888eb04f907cbf607232699a2f
+  Baseline src tree: 19ff7d6bd64993a6b9fc08bbcd687787dacfe08e
+  Reviewed ownership candidate: 1dfdf7e53bf20e1869099578b8f41c434e275961
+  Candidate src tree: 6b4e4e4b47592ab9369c364574331daac923ca4e
+  Cargo.lock SHA256 (both):
+    5a88074d3762bdf268b191882358bd58d48805a9c079806897dbcdc4a920da51
+
+Exact recorded toolchain
+  rustc 1.98.1 (48a229cea 2026-09-01)
+  rustc commit: 48a229ceaefd4985c50990b14116b6d856af0985
+  host/target: x86_64-unknown-linux-gnu
+  rustc LLVM: 22.1.8
+  cargo 1.98.1 (797e8a9bc 2026-08-05)
+
+Product profile
+  Cargo release, opt-level=3, debuginfo=0; features=[] (no --all-features,
+  issue-387-profile or mcp-fixture). The ordinary rustx library has test=false;
+  the integration conformance executable has test=true. A cfg(test) library
+  unit harness is not the product for these measurements.
+  Artifact profiles record debug_assertions=false and overflow_checks=false.
+  Original root rustc flags include -C opt-level=3, -C embed-bitcode=no,
+  -C strip=debuginfo, -Copt-level=3 and -Cdebuginfo=0.
+  There is no explicit --target, -Ctarget-cpu, -Clinker, -Clto,
+  -Ccodegen-units or incremental directory in the recorded root invocation.
+  Preserve the same defaults for both fresh builds; do not reuse the O0/lto-off
+  correctness configuration as an optimized production configuration.
+
+Recorded release/setup configuration
+  CARGO_PROFILE_RELEASE_OPT_LEVEL=3
+  CARGO_PROFILE_RELEASE_DEBUG=0
+  RUSTFLAGS=-Copt-level=3 -Cdebuginfo=0
+  CARGO_BUILD_JOBS=2
+  CARGO_TARGET_DIR=/workspace/pr485-study/target
+  CARGO_HOME=/workspace/.cargo
+  RUSTUP_HOME=/workspace/.rustup
+  RUSTUP_TOOLCHAIN=1.98.1 (explicit reproduction selection of the pinned
+    repository toolchain; not claimed as an independently saved env override)
+  TMPDIR=/workspace/pr485-study/tmp
+  BINDGEN_EXTRA_CLANG_ARGS=-isystem /usr/lib/gcc/x86_64-linux-gnu/14/include
+  LIBCLANG_PATH=/usr/lib/llvm-19/lib
+  CARGO_ENCODED_RUSTFLAGS was removed. Release incremental was not enabled;
+  use CARGO_INCREMENTAL=0 explicitly for both new optimized builds. Remove
+  correctness/profiling wrappers, LD_PRELOAD and profile-specific overrides.
+  These are configuration keys only; no credentials or environment dump is
+  included. A new environment may use its own isolated paths, consistently
+  recorded for both revisions and their preserved helper mapping.
+
+Exact recorded conformance build command
+  cargo test --release --locked --test conformance --no-run --message-format=json
+  Two jobs were selected through CARGO_BUILD_JOBS=2. Adding -vv in the fresh
+  build is useful to retain actual compiler commands and does not enable a
+  feature or change the product profile. --offline is appropriate only after
+  the pinned dependency inputs are available.
+  The old builder first invalidated root artifacts with cargo clean --release
+  --package rustx. This is historical provenance, not a cleanup instruction.
+  A fresh isolated target needs no deletion; require fresh:false on the ordinary
+  rustx library and conformance, validate their source paths, and retain output.
+
+Linker/native toolchain evidence
+  No explicit linker override is present in the recorded root command.
+  The preserved conformance ELF .comment identifies the final linker exactly:
+    Linker: LLD 22.1.8
+    LLVM source commit: 52ed14fcd56afc30f9cccd8ca8ce237c2eef7e04
+  It also records GCC (Debian 14.2.0-19) 14.2.0 and rustc 1.98.1.
+  Current /usr/bin/cc reports that same GCC version. GNU ld 2.44 is installed,
+  but is not claimed as the selected final linker. The exact cc-driver linker
+  command was not retained, so do not invent its arguments; retain fresh verbose
+  linker evidence in the new environment. Libclang 19 above is for bindgen and
+  is distinct from rustc's LLVM/LLD 22.1.8.
+
+Documented compiled helper paths
+  Old baseline source checkout: /workspace/pr485-study/repo
+  Integration CARGO_MANIFEST_DIR points to that checkout, including
+    /workspace/pr485-study/repo/test-support/fake-provider
+  The benchmark composition supplies CARGO_BIN_EXE_rustx as child_program:
+    /workspace/pr485-study/target/release/rustx
+  Supervisor targets:
+    /workspace/pr485-study/target/release/bash-supervisor
+    /workspace/pr485-study/target/release/interactive-supervisor
+  process_runner uses CARGO_BIN_EXE when supplied, otherwise sibling/parent
+  executable fallback. New source builds embed their actual checkout/target
+  paths; keep those paths available and verify/restore each revision's helpers
+  and shared runtime dependencies before each sample, outside controller.run.
+  Do not point the old baseline at candidate helpers or silently relocate paths.
+
+Fresh-host acceptance before timing
+  Record actual rustc/cargo/native linker, full source commit/src tree, Cargo
+  stdout/root invocations, opt-level/debuginfo/features, library/executable SHA,
+  helper map and the fixed workload/provider/oracle hashes for BOTH builds.
+  Python 3.12/uv uses the fake-provider frozen project; Node v24.19.0 runs the
+  comparator. Model-facing time remains 2026-10-19 00:00:00 in workload version 3.
+  Use no real model API. Generate fresh baseline/candidate samples on the same
+  new host, without comparison to this environment's old speed ratios.
+  Adapter fixes require independent review. Build/cohort entry reserves remain
+  18/16 GiB; no guardrail was lowered. Browser and local performance remain paused.

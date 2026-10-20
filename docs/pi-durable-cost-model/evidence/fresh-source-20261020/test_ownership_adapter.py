@@ -1,5 +1,6 @@
 """Metadata/fail-fast/watchdog checks. Never launch Cargo or native measurements."""
 import copy
+import errno
 import json
 import os
 from pathlib import Path
@@ -7,6 +8,7 @@ import runpy
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import types
 import unittest
@@ -90,14 +92,15 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(adapter.allocated([self.root, self.root]), sum(p.stat().st_blocks * 512 for p in [self.binary, self.library, one]))
 
     def test_schedule_is_fixed_and_bounded(self):
-        argv = ['compare.py', '--before', 'base', '--after', 'candidate', '--output', str(self.root / 'cohort'), '--pairs', '3']
-        blocks = adapter.cohort_arguments(argv)
+        argv = ['--before', 'base', '--after', 'candidate', '--output', str(self.root / 'evidence/products/cohort'), '--pairs', '3']
+        options = adapter.parse_ownership_args(argv, self.root)
+        blocks = adapter.cohort_arguments(options, 'compare.py')
         self.assertEqual(len(blocks), 2)
         self.assertEqual([block[block.index('--observer-mode') + 1] for block in blocks], ['live-subscriber', 'no-live-subscriber'])
         self.assertEqual([block.count('--case') for block in blocks], [2, 1])
         self.assertEqual(argv[-1], '3')
-        with self.assertRaises(ValueError): adapter.cohort_arguments(argv + ['--case', 'stream'])
-        with self.assertRaises(ValueError): adapter.cohort_arguments(argv[:-1] + ['4'])
+        with self.assertRaises(SystemExit): adapter.parse_ownership_args(argv + ['--case', 'stream'], self.root)
+        with self.assertRaises(SystemExit): adapter.parse_ownership_args(argv[:-1] + ['4'], self.root)
 
     def point(self):
         return {'monotonic': time.monotonic(), 'free': 32 * adapter.GIB,
@@ -148,6 +151,55 @@ class AdapterTests(unittest.TestCase):
                 if owned.poll() is None: owned.kill()
                 if unrelated.poll() is None: unrelated.terminate()
                 owned.wait(); unrelated.wait()
+
+    def write_failure_guard(self, monitor):
+        gate = threading.Event()
+        real_open, real_write = Path.open, Path.write_text
+        failures = []
+        class BrokenLog:
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def write(self, value):
+                gate.wait(4)
+                raise OSError(errno.ENOSPC, 'injected resource log full')
+            def flush(self): pass
+        def opened(path, *args, **kwargs):
+            if monitor and path.name == 'watchdog-resources.jsonl': return BrokenLog()
+            return real_open(path, *args, **kwargs)
+        def written(path, *args, **kwargs):
+            if path.name in ('watchdog-stop.json', 'owned-process-status.json'):
+                raise OSError(errno.ENOSPC, 'injected diagnostic full')
+            return real_write(path, *args, **kwargs)
+        with patch.object(adapter, 'resources', side_effect=lambda _: self.point()), \
+             patch.object(Path, 'open', opened), patch.object(Path, 'write_text', written), \
+             patch.object(threading, 'excepthook', lambda args: failures.append(args)):
+            guard = adapter.Guard(self.root, self.root / 'failed-writes', 'cohort').start()
+            owned = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], start_new_session=True)
+            unrelated = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], start_new_session=True)
+            try:
+                guard.register(owned)
+                if monitor:
+                    gate.set()
+                    owned.wait(timeout=6)
+                with self.assertRaises(RuntimeError): guard.close()
+                owned.wait(timeout=6)
+                self.assertIsNone(unrelated.poll())
+                self.assertTrue(guard.diagnostic_errors)
+                self.assertFalse(failures, 'logging failures must not escape monitoring')
+                self.assertEqual(guard.failure['reason'], 'watchdog-observation-error' if monitor else 'owner-exit-with-live-child')
+            finally:
+                gate.set()
+                guard.done.set()
+                guard.thread.join(timeout=6)
+                if owned.poll() is None: owned.kill()
+                if unrelated.poll() is None: unrelated.terminate()
+                owned.wait(); unrelated.wait()
+
+    def test_monitor_log_and_stop_diagnostic_failure_still_stop_owned_child(self):
+        self.write_failure_guard(monitor=True)
+
+    def test_close_stop_diagnostic_failure_still_stops_owned_child(self):
+        self.write_failure_guard(monitor=False)
 
 
 if __name__ == '__main__':
