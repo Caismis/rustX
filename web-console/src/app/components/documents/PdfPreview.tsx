@@ -30,7 +30,6 @@ export default function PdfPreview(props: PreviewViewStateProps & { bytes: Uint8
     node.addEventListener('scroll', saveScroll, { passive: true });
   }, [saveScroll]);
   const setPreference = useCallback((pdfZoom: ZoomPreference) => current.current.onViewStateChange({ pdfZoom }), []);
-  const failed = useCallback((code: string) => setError(code), []);
   useEffect(() => {
     const { bytes, signal } = props;
     if (signal.aborted) return;
@@ -52,12 +51,12 @@ export default function PdfPreview(props: PreviewViewStateProps & { bytes: Uint8
   return <ZoomViewport preference={preference} intrinsicWidth={loaded.sizes[0]?.width} horizontalInset={24}
     labels={{ controls: tx('artifacts:document.zoom'), menu: tx('artifacts:document.zoom'), out: tx('artifacts:workbench.zoom-out'), into: tx('artifacts:workbench.zoom-in'), fitWidth: tx('artifacts:workbench.fit-width'), value: percent => `${percent}%` }}
     signal={props.signal} scrollportRef={attachScroll} onPreference={setPreference} onRenderZoom={setRenderZoom}>
-    <section className={css.body} data-pdf-preview>{loaded.sizes.map((size, index) => <PdfPage key={index} owner={loaded.owner} page={index + 1} size={size} zoom={renderZoom} root={scroll} signal={props.signal} failed={failed}/>)}</section>
+    <section className={css.body} data-pdf-preview>{loaded.sizes.map((size, index) => <PdfPage key={index} owner={loaded.owner} page={index + 1} size={size} zoom={renderZoom} root={scroll} signal={props.signal}/>)}</section>
   </ZoomViewport>;
 }
 
-const PdfPage = memo(function PdfPage({ owner, page, size, zoom, root, signal, failed }: {
-  owner: PdfDocumentOwner; page: number; size: PdfPageSize; zoom: number; root: React.RefObject<HTMLElement | null>; signal: AbortSignal; failed: (code: string) => void;
+const PdfPage = memo(function PdfPage({ owner, page, size, zoom, root, signal }: {
+  owner: PdfDocumentOwner; page: number; size: PdfPageSize; zoom: number; root: React.RefObject<HTMLElement | null>; signal: AbortSignal;
 }) {
   const tx = useTranslation(), host = useRef<HTMLDivElement>(null), canvas = useRef<HTMLCanvasElement>(null), text = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(page === 1), [ready, setReady] = useState(false), [error, setError] = useState(''), [attempt, retry] = useState(0);
@@ -79,14 +78,12 @@ const PdfPage = memo(function PdfPage({ owner, page, size, zoom, root, signal, f
     const bitmap = canvas.current!, layer = text.current!;
     if (!visible || signal.aborted) { owner.release(bitmap); setReady(false); return; }
     const abort = new AbortController();
-    let timer: ReturnType<typeof setTimeout>;
-    const retire = () => { clearTimeout(timer); abort.abort(); owner.release(bitmap); };
+    const retire = () => { abort.abort(); owner.release(bitmap); };
     signal.addEventListener('abort', retire, { once: true });
     setError('');
-    timer = setTimeout(() => { if (!abort.signal.aborted) { abort.abort(); owner.dispose(); failed('parser_timeout'); } }, PDF_LIMITS.renderWatchdogMs);
-    void owner.render(page, zoom, bitmap, layer, abort.signal).then(() => { if (!abort.signal.aborted) setReady(true); }, cause => { if (!abort.signal.aborted) setError(documentFailure(cause)); }).finally(() => clearTimeout(timer));
-    return () => { clearTimeout(timer); signal.removeEventListener('abort', retire); abort.abort(); };
-  }, [owner, page, size, visible, zoom, signal, attempt, failed]);
+    void owner.render(page, zoom, bitmap, layer, abort.signal).then(() => { if (!abort.signal.aborted) setReady(true); }, cause => { if (!abort.signal.aborted) setError(documentFailure(cause)); });
+    return () => { signal.removeEventListener('abort', retire); abort.abort(); };
+  }, [owner, page, size, visible, zoom, signal, attempt]);
   useEffect(() => () => { owner.release(canvas.current!); }, [owner]);
   return <div ref={host} className={css.page} data-pdf-page={page}>
     <div className={`${css.surface} ${zoomSurfaceClass}`} data-document-zoom-surface style={{ '--document-zoom-width': `${size.width}px`, aspectRatio: `${size.width} / ${size.height}` } as CSSProperties}>

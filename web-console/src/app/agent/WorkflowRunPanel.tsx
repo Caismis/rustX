@@ -51,7 +51,7 @@ function StatusDisclosure({ state, count, title, summary, children }: {
 function WorkflowMember({ instance, children }: { instance: WorkflowInstanceView; children: ReactNode }) {
   const scope = useSubagents(), tx = useTranslation();
   const [focused, setFocused] = useState(false), [pending, setPending] = useState(false), [error, setError] = useState(false);
-  const navigable = !!scope?.openWorkflow && instance.kind === 'agent' && !!instance.child && !!instance.child_agent_id && instance.state.type !== 'pending' && instance.state.type !== 'settled';
+  const navigable = !!scope?.openWorkflow && instance.kind === 'agent' && !!instance.child && !!instance.child_agent_id && instance.state.type !== 'pending';
   const attributes = { 'data-workflow-node': instance.node!, 'data-workflow-activation-id': instance.child ?? undefined, 'data-node-state': instance.state.type };
   return <div className={css.memberHost}>
     {navigable || focused ? <button type="button" {...attributes} className={`${css.member} ${navigable ? css.memberButton : ''}`}

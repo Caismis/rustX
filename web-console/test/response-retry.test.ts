@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest';
-import type { CompletedResponseView, RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v51';
+import type { CompletedResponseView, ContentBinding, RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v51';
 import { responseRetry, responseRetryReady } from '../src/app/agent/response-retry';
+import { deferredToolDescriptors } from '../src/bindings/deferred-tools';
 import { snapshot } from './fixture';
 import type { SessionView } from '../src/client/app-server';
 
@@ -66,4 +67,59 @@ it('retains a deferred question descriptor and accepts its exact native replay d
   retry.replay = { target: source.target!, messageId: 'accepted-user' };
   source.snapshot!.message_descriptors = [{ ...descriptor, identity: 'accepted-user', locator: { type: 'by_message_id', message_id: 'accepted-user' } }];
   expect(responseRetryReady(retry, source)).toBe(true);
+});
+
+it.each([false, true])('truncates all native history representations, with deferred input=%s', deferredInput => {
+  const source = view(), page = source.snapshot!.transcript;
+  const descriptor = (identity: string, role: string) => ({ identity, locator: { type: 'by_message_id' as const, message_id: identity }, role, kind: 'message',
+    block_count: '1', tool_call_count: '0', tool_calls: [], content: [], collections: [], turn_process: process, completed_response: response });
+  const question = descriptor('question', 'user'), reply = descriptor('reply', 'assistant');
+  page.entries = page.entries!.filter(entry => entry.cursor !== '5' && (!deferredInput || entry.cursor !== '3'));
+  page.deferred_entries = [...deferredInput ? [{ offset: '3', identity: 'question', content: [], deferred: true, value: question }] : [],
+    { offset: '5', identity: 'reply', content: [], deferred: true, value: reply }];
+  source.snapshot!.messages = page.entries.flatMap(entry => entry.item.type === 'message' ? [entry.item.message] : []);
+  source.snapshot!.message_descriptors = [question, reply] as NonNullable<SessionView['snapshot']>['message_descriptors'];
+  source.history = { epoch: 1, page: structuredClone(page) };
+  const retry = responseRetry(source, response)!.view;
+  for (const truncated of [retry.snapshot!.transcript, retry.history!.page]) {
+    expect(truncated.deferred_entries?.map(entry => entry.identity)).toEqual(deferredInput ? ['question'] : []);
+    if (deferredInput) expect(truncated.deferred_entries?.[0]?.value).not.toHaveProperty('completed_response', response);
+    const descriptors = deferredToolDescriptors(retry.snapshot!.message_descriptors ?? [], truncated, truncated.entries ?? [], false);
+    expect(descriptors.map(item => item.identity)).toEqual(deferredInput ? ['question'] : []);
+    expect(descriptors.every(item => !item.completed_response && !item.turn_process)).toBe(true);
+  }
+  expect(retry.snapshot!.message_descriptors?.map(item => item.identity)).toEqual(['question']);
+});
+
+it('keeps an opaque deferred input by its exact native locator without selecting an unrelated deferred row', () => {
+  const source = view(), page = source.snapshot!.transcript;
+  page.entries = page.entries!.filter(entry => entry.cursor !== '3');
+  source.snapshot!.messages = [];
+  const descriptor = { locator: { type: 'by_ledger_position' as const, position: 3 }, role: 'user', kind: 'message',
+    block_count: '1', tool_call_count: '0', tool_calls: [], content: [], collections: [], turn_process: process };
+  page.deferred_entries = [{ offset: '3', identity: 'native-ledger:3', value: descriptor, content: [], deferred: true }];
+  const retry = responseRetry(source, { ...response, retry_message_id: null, retry_locator: descriptor.locator })!.view;
+  expect(retry.history!.page.deferred_entries).toHaveLength(1);
+  expect(deferredToolDescriptors([], retry.history!.page, [], true)[0]?.turn_process).toBeUndefined();
+});
+
+it('drops removed rows reading bindings while remapping retained native entry bindings', () => {
+  const source = view(), page = source.snapshot!.transcript;
+  const binding = (index: number): ContentBinding => ({ path: ['entries', String(index), 'item', 'message', 'content', '0', 'text'],
+    deferred: true, content_ref: { conversation_id: 'conversation-A', source: { type: 'canonical_message_block', component: 'payload',
+      locator: { type: 'by_message_id', message_id: index === 2 ? 'question' : 'reply' }, block_index: 0 },
+      representation: 'utf8_text', version: 1, content_revision: 1, readable_end: 20 } });
+  page.content = [binding(2), binding(4)];
+  const retry = responseRetry(source, response)!.view;
+  for (const truncated of [retry.snapshot!.transcript, retry.history!.page]) expect(truncated.content).toEqual([page.content[0]]);
+});
+
+it('retains an exact opaque replay descriptor outside the transcript window', () => {
+  const source = view(); source.snapshot!.transcript.entries = source.snapshot!.transcript.entries!.filter(entry => entry.cursor !== '3');
+  source.snapshot!.messages = [];
+  const descriptor = { locator: { type: 'by_ledger_position' as const, position: 3 }, role: 'user' as const, kind: 'message',
+    block_count: '1', tool_call_count: '0', tool_calls: [], content: [], collections: [], turn_process: process };
+  source.snapshot!.message_descriptors = [descriptor];
+  const retry = responseRetry(source, { ...response, retry_message_id: null, retry_locator: descriptor.locator })!.view;
+  expect(retry.snapshot!.message_descriptors).toEqual([{ ...descriptor, turn_process: undefined, completed_response: undefined }]);
 });

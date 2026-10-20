@@ -8,10 +8,13 @@ import { translator } from '../../locale/translation';
 /** Increment a durable fork title, preserving half/full-width parentheses. */
 export function increasedForkTitle(title: string): string {
   const ascii = /^(.*?)\((\d+)\)$/u.exec(title);
-  if (ascii?.[1] !== undefined && ascii[2] !== undefined) return `${ascii[1]}(${BigInt(ascii[2]) + 1n})`;
   const fullWidth = /^(.*?)（(\d+)）$/u.exec(title);
-  if (fullWidth?.[1] !== undefined && fullWidth[2] !== undefined) return `${fullWidth[1]}（${BigInt(fullWidth[2]) + 1n}）`;
-  return `${title} (1)`;
+  const numbered = ascii ?? fullWidth;
+  const suffix = numbered ? `${ascii ? '(' : '（'}${BigInt(numbered[2]!) + 1n}${ascii ? ')' : '）'}` : ' (1)';
+  // Rust validates Unicode scalar values, rather than UTF-16 code units.
+  const tail = Array.from(suffix).length <= 120 ? suffix : ' (1)';
+  const stem = numbered && tail === suffix ? numbered[1]! : title;
+  return Array.from(stem).slice(0, 120 - Array.from(tail).length).join('') + tail;
 }
 
 /** Sidebar Fork resolves the last native completion without selecting or
@@ -39,12 +42,14 @@ export async function forkLatestSession(client: AppServerClient, sessionId: stri
         surface_revision: response.surface_revision, boundary: response.closing_locator, side: 'after' } }, 'session_transition', undefined, admitted);
       // A dispatched native mutation settles even if its sidebar gesture retires.
       void client.listSessions().catch(() => {});
-      if (!current()) return;
-      if (fork.durability_diagnostic) throw new Error(`Fork committed with durability uncertainty: ${fork.durability_diagnostic}. Inspect Sessions; do not repeat the mutation.`);
-      if (session.name) await client.renameSession(fork.session.id, increasedForkTitle(session.name));
-      if (!current()) return;
+      const receipt: { sessionId: string; warning?: string } = { sessionId: fork.session.id };
+      if (fork.durability_diagnostic) receipt.warning = `Session ${receipt.sessionId} was created with durability uncertainty: ${fork.durability_diagnostic}. Inspect Sessions; do not repeat the mutation.`;
+      else if (current() && session.name) {
+        try { await client.renameSession(receipt.sessionId, increasedForkTitle(session.name)); }
+        catch (cause) { receipt.warning = `Session ${receipt.sessionId} was created, but automatic naming failed: ${String(cause)}. Open the created Session to rename it; do not repeat the fork.`; }
+      }
       void client.listSessions().catch(() => {});
-      return fork.session.id;
+      return receipt;
     }
     const before = result.window.page.next_cursor;
     if (before == null) throw new Error(displayText(translator(localeController.getSnapshot().active), message('workspace:fork.no-completed-response')));

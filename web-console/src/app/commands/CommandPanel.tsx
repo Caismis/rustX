@@ -80,7 +80,6 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
   return <Modal closeLabel={tx('commands:command-panel.close-dialog')} open title={request.id === 'tree' ? tx('commands:command-panel.session-tree') : tx('commands:command-panel.value', { p0: request.id })} onClose={close}>
     <p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{detail}</p>
     {toolsPage && <>
-      {toolsPage.items.some(item => item.value == null || item.deferred) && <p role="status">{tx('common:activity.loading')}</p>}
       {toolsPage.items.map(item => item.value != null ? <pre key={item.offset}>{JSON.stringify(item.value, null, 2)}</pre> : null)}
     </>}
     {error && <p role="alert">{error}</p>}

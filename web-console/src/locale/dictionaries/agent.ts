@@ -490,7 +490,7 @@ export const zh = {
   "context.expand": "点击查看压缩摘要",
   "context.summary-unavailable": "压缩摘要不可用",
   "context.retry-summary": "重新加载摘要",
-  "context.summary-truncated": "摘要内容未完整加载。",
+  "context.summary-truncated": "摘要预览已截断。",
   "context.command-title": "compact",
   "context.failed": "上下文压缩失败",
   "context.uncertain": "上下文压缩结果尚未确认",

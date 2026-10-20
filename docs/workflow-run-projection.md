@@ -28,7 +28,12 @@ Node waits distinguish Tool, Agent, capacity, workspace, Questionnaire,
 Approval, Review and settlement. Native ToolInvocationId and child references
 preserve owner correlation. Interaction references are correlated from the
 existing native coordinator projection under the client lock. The root HITL
-queue is the only response surface. Child inspection remains read-only.
+queue is the only response surface. Child inspection remains read-only. Admitted
+Agent nodes with a retained child identity remain navigable after success,
+failure, or cancellation, including when first opened after settlement or reopened
+from the list. Publication abandonment projects inspection as unavailable for
+live work and uses retained history; it does not claim successful settlement or
+clear the native durability/physical-containment obligations.
 
 Execution completed is not a business acceptance. Structured check `passed`
 facts, Review decisions and Loop satisfied/exhausted exits are shown separately.

@@ -172,7 +172,8 @@ async fn finite_workflow_recovery_tracks_physical_obligation_until_exact_owner_p
         )
         .parent()
         .unwrap()
-        .join("physical-settlement").join(accepted.subagent_id.as_str());
+        .join("physical-settlement")
+        .join(accepted.subagent_id.as_str());
         std::fs::create_dir_all(&incarnation).unwrap();
         // The real original driver has already reaped. This fixture retains
         // the exact native receipt writer lease to prove a receipt alone can
@@ -289,4 +290,104 @@ async fn finite_workflow_recovery_tracks_physical_obligation_until_exact_owner_p
         drop(registry);
         tokio::time::resume();
     }
+}
+
+#[tokio::test]
+async fn abandoned_workflow_publication_keeps_inspection_on_retained_history() {
+    use crate::message::types::UserMessageBlock;
+    use crate::runtime::identity::MessageId;
+    use crate::runtime::subagent::{AgentState, SubagentPhysicalSettlement, SubagentPublication};
+    use crate::runtime_client::agent_observation::{AgentObservation, ObservationSource};
+    use crate::runtime_client::types::RuntimeClientResult;
+    let dir = tempfile::tempdir().unwrap();
+    let conversation = ConversationId::generate();
+    let store =
+        Arc::new(crate::durable::SqliteConversationStore::in_memory(conversation.clone()).unwrap());
+    let (runtime, _, registry) = headless_runtime_over_store_with_subagents(
+        &dir,
+        conversation.as_str(),
+        store.clone(),
+        None,
+    )
+    .await;
+    let host = RuntimeClientHost::new(RuntimeClientHostConfig {
+        runtime: runtime.clone(),
+        replay_limit: None,
+    })
+    .unwrap();
+    let (attachment, _) = host.attach(RUNTIME_CLIENT_PROTOCOL_VERSION).unwrap();
+    runtime.activate();
+    let accepted = finish_finite_workflow_child(&dir, &registry, store.as_ref(), true).await;
+    let child = registry.snapshot(&accepted.subagent_id).unwrap();
+    assert_eq!(child.settlement.publication, SubagentPublication::Abandoned);
+    assert_eq!(
+        child.settlement.physical,
+        SubagentPhysicalSettlement::Proven
+    );
+    assert!(!child.is_settled());
+    let path = crate::runtime::subagent::child_conversation_store_path(
+        &dir.path().join("subagents"),
+        &crate::runtime::identity::SessionId::new("ses_01900000-0000-7000-8000-000000000001"),
+        &accepted.child_conversation_id,
+    );
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let history = crate::durable::SqliteConversationStore::open(
+        accepted.child_conversation_id.clone(),
+        &path,
+    )
+    .unwrap();
+    history
+        .append_canonical(&MessageBlock::User(UserMessageBlock {
+            id: MessageId::new("retained-workflow-input"),
+            source: UserSource::Human,
+            kind: crate::message::types::InboundKind::default(),
+            timestamp: None,
+            content: vec![UserContentBlock::Text(TextBlock {
+                text: "retained diagnostic input".into(),
+            })],
+        }))
+        .unwrap();
+    let status = attachment.handle_request(RuntimeClientRequest::AgentStatus {
+        id: RequestId::new(1),
+        agent_id: accepted.child_agent_id.clone(),
+    });
+    let header: crate::runtime_client::snapshot::RuntimeClientAgent =
+        crate::scripted_suites::common::native_domain_single(
+            status
+                .result
+                .clone()
+                .unwrap_or_else(|| panic!("status: {status:?}")),
+        );
+    assert_eq!(header.state, AgentState::Unavailable);
+    assert_eq!(
+        header.activation_state,
+        crate::runtime::subagent::SubagentState::PublishingTerminal
+    );
+    let response = attachment
+        .handle_request_async(RuntimeClientRequest::AgentObserve {
+            id: RequestId::new(2),
+            agent_id: accepted.child_agent_id,
+            after: None,
+        })
+        .await;
+    let Some(RuntimeClientResult::AgentObserve {
+        observation: AgentObservation::Checkpoint {
+            source, checkpoint, ..
+        },
+    }) = response.result
+    else {
+        panic!("retained inspection checkpoint: {response:?}");
+    };
+    assert_eq!(source, ObservationSource::DurableOnly);
+    assert!(
+        checkpoint
+            .snapshot
+            .messages
+            .iter()
+            .any(|message| message.id().as_str() == "retained-workflow-input")
+    );
+    assert!(
+        runtime.shutdown().await.is_err(),
+        "inspection must not clear publication uncertainty"
+    );
 }

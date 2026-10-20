@@ -3807,3 +3807,32 @@ promoted to FULL verification on its committed head.
 The final protocol regeneration/check passed with no generated-file drift;
 all-target/all-feature Clippy and repository-wide formatting also passed after
 the shared fixture correction.
+
+### PR #488 review corrections (R1–R7)
+
+The retained Harness references above remain unchanged (read-only checkout
+`687f282e8625c6b8d11ff58211a90524be2e4317`). These changes repair rustX adapters:
+Workflow inspection now keeps ended children navigable and routes abandoned
+terminal publication to retained evidence without claiming success; retry prefixes
+truncate inline and deferred history consistently; fork receipts survive naming
+failure and generated titles respect native Unicode scalar bounds. The product
+`/tools` directory automatically hydrates native collection/value continuations
+at one attachment/read cut. PDF render deadlines begin when the serialized slot
+actually starts, and queued cancellation stays independent. Compaction preview
+truncation remains explicit in Summary and Raw output.
+
+Regression coverage includes publication-failure injection through native
+inspection, settled/failed/cancelled child navigation, deferred replay inputs and
+outputs, bounded/deferred tool directories with attachment replacement, Unicode
+fork naming and post-commit refusal, controlled PDF queue timing/cancellation, and
+truncated historical summaries. Browser plugin not available; rendered verification
+uses the repository's pinned Linux Playwright runner. No upstream checkout or
+screenshot tolerance is changed by these review corrections.
+
+Review validation: full WebUI **3071 passed, 4 skipped**; affected native modules
+**319 passed, 1 ignored**; pinned Chromium **12 passed** (Workflow/Review,
+settled-child close/reopen/reload, retry/Fork/tools, compaction, continuous
+Office/PDF pages). The native publication-failure inspection and protocol prose
+contract tests pass. TypeScript, i18n, production build, provenance/notices,
+formatting and strict all-target/all-feature Clippy pass. Full CI remains an
+independent exact-head merge gate; the preceding head's broader CI was not green.

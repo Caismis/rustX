@@ -599,7 +599,7 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
     ? item.context_message_id!=null ? detail?.request?.messages.filter(message => message.message_id === item.context_message_id) : undefined
     : record.kind === 'compaction' ? detail?.projected_messages : detail?.messages;
   // A detail with no canonical message leaves the record's own preview as the content.
-  const blocks = resolved?.blocks ?? (messages?.length ? messages.flatMap(message => message.blocks) : undefined);
+  const blocks = (resolved?.blocks?.length ? resolved.blocks : undefined) ?? (messages?.length ? messages.flatMap(message => message.blocks) : undefined);
   const fallback = item.type === 'ContextRow' ? item.context.preview?.text : messagesHead?.items.map(message => message.preview?.text ?? '').filter(Boolean).join('\n\n') || record.preview?.text;
   const artifacts = [...(resolved?.attachments ?? []), ...(item.type === 'ContextRow' ? item.context.attachments : record.attachments)];
   const source = item.type === 'ContextRow' ? item.context.source : resolved?.source ?? messagesHead?.items[0]?.source ?? messages?.[0]?.source ?? undefined;
@@ -639,7 +639,7 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
   const requestNumber = requestNumbers.get(record.id);
   const content = (rendered: boolean, preview = false) => pending && (!fallback || !!detailError) && !blocks
     ? <DetailPending error={detailError} />
-    : <MessageContent blocks={blocks} fallback={fallback} artifacts={artifacts} rendered={rendered} preview={preview} thinkingExpanded={thinkingExpanded} onThinkingExpanded={setThinkingExpanded} onOpenCall={record.kind === 'compaction' || item.type === 'ContextRow' || item.type === 'RequestBoundary' ? undefined : openCall} />;
+    : <>{record.kind === 'compaction' && !blocks && record.preview?.truncated && <p>{tx('agent:context.summary-truncated')}</p>}<MessageContent blocks={blocks} fallback={fallback} artifacts={artifacts} rendered={rendered} preview={preview} thinkingExpanded={thinkingExpanded} onThinkingExpanded={setThinkingExpanded} onOpenCall={record.kind === 'compaction' || item.type === 'ContextRow' || item.type === 'RequestBoundary' ? undefined : openCall} /></>;
   const tabLabel = (tab: TrajectoryFacet) => tab === 'input' && program ? tx('trajectory:code.source') : tab === 'raw' && record.kind === 'compaction' ? tx('trajectory:tab.raw-output') : tx(TAB_LABEL[tab]);
   const sectionLabel = isBetweenTurnsItem(item) ? tx('trajectory:section.between-turns') : location?.turn;
   const detailLocation = item.type === 'SystemPromptCell' ? item.label

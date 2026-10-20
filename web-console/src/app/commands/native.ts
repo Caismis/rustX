@@ -1,3 +1,6 @@
+import { parseObservedValue } from '../../../../protocol/app-server/domain-observation';
+import { readTraceCollection, readTraceValue } from '../../client/trace-content';
+import type { TraceFieldReader } from '../../client/trace';
 import { readEditor } from '../../../../protocol/app-server/editor';
 import type { CompletedResponseView, AttachmentTarget, SessionUserMessageBoundaryObservation, CanonicalContentLocator } from '../../../../protocol/app-server/v51';
 import { AppServerClient, sameTarget } from '../../client/app-server';
@@ -105,7 +108,32 @@ export class CommandSession {
   async tools() {
     this.requireCurrent();
     const result = await this.client.request({ method: 'resources/read', params: { target: this.target } }, 'domain_page');
-    this.requireCurrent(); return result.page;
+    this.requireCurrent();
+    const page = result.page, cut = page.read_cut, item = page.items[0];
+    if (!item || page.items.length !== 1 || page.domain !== 'capabilities') throw Error('Tool directory header is unavailable.');
+    const fields = page.collections ?? [];
+    if (!item.deferred && item.value != null && item.body_complete !== false && fields.every(field => field.next_offset == null)) return page;
+    const reader: TraceFieldReader = {
+      page: async (cut, domain, offset, current) => (await this.client.request({ method: 'conversation/checkpointPage', params: { target: this.target, cut, domain, offset, limit: 32 } }, 'checkpoint_page', undefined, current)).page,
+      value: async (cut, field, offset, current) => (await this.client.request({ method: 'conversation/checkpointValueRead', params: { target: this.target, cut, ...field, offset, max_bytes: 65536 } }, 'checkpoint_value_chunk', undefined, current)).chunk,
+      content: async (_cut, ref, offset, current) => this.client.readContent(this.target, undefined, ref, offset, current),
+    };
+    const value: Record<string, unknown> = { ...(item.value as Record<string, unknown> | null) };
+    if (item.value == null || item.deferred) {
+      if (!fields.length) throw Error('Tool directory source is unavailable.');
+      value.revision = parseObservedValue((await readTraceValue(reader, cut, { domain: page.domain, item_offset: 0, path: ['revision'] }, this.current)).text);
+    }
+    for (const field of fields) {
+      if (!/^capabilities\.(configured_tools|tools|available_tools|skills|sources)$/.test(field.domain)) throw Error('Tool directory field changed.');
+      if (item.value != null && !item.deferred && field.next_offset == null) continue;
+      const rows = await readTraceCollection(reader, cut, field, this.current);
+      const values: unknown[] = [];
+      for (const row of rows) values.push(row.deferred || row.value == null || row.body_complete === false
+        ? parseObservedValue((await readTraceValue(reader, cut, { domain: field.domain, item_offset: Number(row.offset), path: [] }, this.current)).text) : row.value);
+      value[field.domain.slice('capabilities.'.length)] = values;
+    }
+    this.requireCurrent();
+    return { ...page, items: [{ ...item, value, deferred: false, body_complete: true }] };
   }
   async tree(offset = 0) {
     this.requireCurrent();

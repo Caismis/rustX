@@ -1,3 +1,6 @@
+import { createElement } from 'react';
+import { act, cleanup, render } from '@testing-library/react';
+import PdfPreview from '../src/app/components/documents/PdfPreview';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const api = vi.hoisted(() => ({ load: vi.fn(), bridge: vi.fn(), text: vi.fn(), cleanup: vi.fn() }));
 vi.mock('pdfjs-dist', () => ({ getDocument: api.load, PDFWorker: { create: api.bridge }, TextLayer: class {
@@ -20,7 +23,7 @@ beforeEach(() => {
   document = { filterFactory: { destroy: vi.fn() }, numPages: 3, getPage: vi.fn(async () => page) };
   api.load.mockReturnValue({ promise: Promise.resolve(document), destroy });
 });
-afterEach(() => { for (const owner of owners.splice(0)) owner.dispose(); workers.splice(0); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.useRealTimers(); for (const owner of owners.splice(0)) owner.dispose(); workers.splice(0); vi.unstubAllGlobals(); });
 function owner() { const value = new PdfDocumentOwner(new Uint8Array([1]), vi.fn()); owners.push(value); return value; }
 function view() { return { canvas: window.document.createElement('canvas'), layer: window.document.createElement('div'), signal: new AbortController() }; }
 it('admits two visible PDF workers, rejects a third and releases each once on disposal or worker failure', () => {
@@ -156,4 +159,41 @@ it.each(['bridge', 'load'] as const)('failed %s construction detaches old handle
   expect(() => owner()).toThrow('worker_failure');
   expect(workers[0].onerror).toBeNull(); expect(workers[0].terminate).toHaveBeenCalledOnce();
   expect(() => owner()).not.toThrow();
+});
+
+it('does not count healthy pages waiting for the serialized render slot against their active deadline', async () => {
+  vi.useFakeTimers(); document.numPages = 2;
+  page.render.mockImplementation(() => ({ promise: new Promise<void>(resolve => setTimeout(resolve, 8000)), cancel: vi.fn() }));
+  const ui = render(createElement(PdfPreview, { bytes: new Uint8Array([1]), signal: new AbortController().signal, viewState: {}, onViewStateChange() {}, retry() {} }));
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  expect(page.render).toHaveBeenCalledTimes(1);
+  await act(async () => { await vi.advanceTimersByTimeAsync(8000); });
+  expect(page.render).toHaveBeenCalledTimes(2);
+  await act(async () => { await vi.advanceTimersByTimeAsync(7001); });
+  expect(ui.queryByRole('alert')).toBeNull(); expect(workers[0].terminate).not.toHaveBeenCalled();
+  await act(async () => { await vi.advanceTimersByTimeAsync(999); });
+  expect(ui.queryAllByRole('status')).toHaveLength(0); expect(ui.getAllByRole('img')).toHaveLength(2);
+});
+it('times out an actually stuck render once and retires its worker and deadline', async () => {
+  vi.useFakeTimers(); const held = deferred<void>(), failed = vi.fn();
+  page.render.mockReturnValue({ promise: held.promise, cancel: vi.fn() });
+  const pdf = new PdfDocumentOwner(new Uint8Array([1]), failed); owners.push(pdf); const v = view();
+  const work = pdf.render(1, 1, v.canvas, v.layer, v.signal.signal), rejected = expect(work).rejects.toThrow('obsolete');
+  await vi.advanceTimersByTimeAsync(15000);
+  expect(failed).toHaveBeenCalledExactlyOnceWith('parser_timeout'); expect(workers[0].terminate).toHaveBeenCalledOnce();
+  expect(vi.getTimerCount()).toBe(0);
+  held.resolve(); await rejected;
+  expect(v.layer.childElementCount).toBe(0);
+});
+it('cancels a queued page immediately without starting it or disturbing the active page deadline', async () => {
+  vi.useFakeTimers(); const held = deferred<void>();
+  page.render.mockReturnValueOnce({ promise: held.promise, cancel: vi.fn() });
+  const pdf = owner(), a = view(), b = view();
+  const first = pdf.render(1, 1, a.canvas, a.layer, a.signal.signal);
+  await vi.advanceTimersByTimeAsync(0);
+  const queued = pdf.render(2, 1, b.canvas, b.layer, b.signal.signal), rejected = expect(queued).rejects.toThrow();
+  b.signal.abort(); await rejected;
+  expect(page.render).toHaveBeenCalledTimes(1); expect(vi.getTimerCount()).toBe(1);
+  held.resolve(); await first; await vi.advanceTimersByTimeAsync(0);
+  expect(page.render).toHaveBeenCalledTimes(1); expect(vi.getTimerCount()).toBe(0);
 });

@@ -63,6 +63,7 @@ export class PdfDocumentOwner {
   private retired = false;
   private tail: Promise<unknown> = Promise.resolve();
   private cancelPage?: () => void;
+  private renderTimer?: ReturnType<typeof setTimeout>;
   private readonly presentations = new Map<HTMLCanvasElement, { container: HTMLDivElement; pixels: number }>();
   private rendering?: HTMLCanvasElement;
   private sizes?: Promise<readonly PdfPageSize[]>;
@@ -95,7 +96,7 @@ export class PdfDocumentOwner {
     held.container.replaceChildren();
     this.presentations.delete(canvas);
   }
-  constructor(bytes: Uint8Array<ArrayBuffer>, failed: (code: string) => void) {
+  constructor(bytes: Uint8Array<ArrayBuffer>, private readonly failed: (code: string) => void) {
     if (bytes.length > DERIVED_PDF_MAX_BYTES) throw new Error('too_large');
     if (workers >= limits.workers) throw new Error('capacity');
     try { this.worker = new Worker(workerUrl, { type: 'module' }); }
@@ -134,71 +135,85 @@ export class PdfDocumentOwner {
     const current = () => { signal.throwIfAborted(); if (this.retired) throw new Error('obsolete'); };
     const work = this.tail.catch(() => {}).then(async () => {
       current();
-      const document = await this.document; current();
-      const page = await document.getPage(number);
-      let render: RenderTask | undefined, text: TextLayer | undefined, cancelTextRead: (() => void) | undefined;
-      const abort = () => { render?.cancel(); text?.cancel(); cancelTextRead?.(); };
-      this.cancelPage = abort;
-      signal.addEventListener('abort', abort, { once: true });
-      const buffer = window.document.createElement('canvas'); this.rendering = buffer;
+      // A page owns its deadline only after the serialized render slot starts.
+      this.renderTimer = setTimeout(() => { this.dispose(); this.failed('parser_timeout'); }, limits.renderWatchdogMs);
+      const clearDeadline = () => { clearTimeout(this.renderTimer); this.renderTimer = undefined; };
+      signal.addEventListener('abort', clearDeadline, { once: true });
       try {
         current();
-        const size = this.pageSize(page);
-        if (!Number.isFinite(zoom) || zoom <= 0 || zoom > 4) throw new Error('parser_limit');
-        const viewport = page.getViewport({ scale: 96 / 72 });
-        const ratio = Math.min((globalThis.devicePixelRatio || 1) * zoom, Math.sqrt(limits.canvasPixels / (size.width * size.height)), limits.canvasSide / size.width, limits.canvasSide / size.height);
-        const width = Math.max(1, Math.floor(size.width * ratio)), height = Math.max(1, Math.floor(size.height * ratio));
-        const pixels = [...this.presentations].reduce((total, [node, entry]) => total + (node === canvas ? 0 : entry.pixels), 0);
-        if (pixels + width * height > limits.scratchPixels) throw new Error('parser_limit');
-        buffer.width = width; buffer.height = height;
-        const layer = window.document.createElement('div'); layer.className = 'textLayer';
-        layer.style.setProperty('--scale-factor', String(viewport.scale));
-        layer.style.setProperty('--total-scale-factor', String(viewport.scale));
-        layer.style.width = `${size.width}px`; layer.style.height = `${size.height}px`;
-        render = page.render({ canvas: buffer, viewport, transform: ratio === 1 ? undefined : [ratio, 0, 0, ratio, 0, 0] });
-        await render.promise;
-        current();
-        const reader = page.streamTextContent().getReader();
-        // PDF.js requires an Error reason before marking its stream controller
-        // closed. Omitting it leaves queued worker chunks targeting a closed RS.
-        const cancelReader = () => { void reader.cancel(new Error('obsolete')).catch(() => {}); };
-        cancelTextRead = cancelReader;
-        const content: Awaited<ReturnType<typeof page.getTextContent>> = { items: [], styles: {}, lang: null };
-        let characters = 0;
+        const document = await this.document; current();
+        const page = await document.getPage(number);
+        let render: RenderTask | undefined, text: TextLayer | undefined, cancelTextRead: (() => void) | undefined;
+        const abort = () => { render?.cancel(); text?.cancel(); cancelTextRead?.(); };
+        this.cancelPage = abort;
+        signal.addEventListener('abort', abort, { once: true });
+        const buffer = window.document.createElement('canvas'); this.rendering = buffer;
         try {
-          for (;;) {
-            current();
-            const chunk: ReadableStreamReadResult<Awaited<ReturnType<typeof page.getTextContent>>> = await reader.read(); if (chunk.done) break;
-            characters += chunk.value.items.reduce((n, item) => n + ('str' in item ? item.str.length : 0), 0);
-            if (content.items.length + chunk.value.items.length > limits.textItems || characters > limits.textCharacters) throw new Error('parser_limit');
-            content.items.push(...chunk.value.items); Object.assign(content.styles, chunk.value.styles);
-          }
-        } finally { cancelTextRead = undefined; cancelReader(); }
-        current();
-        text = new TextLayer({ textContentSource: content, container: layer, viewport });
-        await text.render(); current();
-        const context = canvas.getContext('2d');
-        if (!context) throw new Error('worker_failure');
-        // Publish a complete bitmap and matching text together. Zooming never
-        // clears the old readable page while a replacement is being rendered.
-        canvas.width = width; canvas.height = height;
-        context.drawImage(buffer, 0, 0);
-        container.replaceChildren(layer);
-        this.presentations.set(canvas, { container, pixels: width * height });
-      } finally {
-        buffer.width = buffer.height = 0;
-        if (this.rendering === buffer) this.rendering = undefined;
-        signal.removeEventListener('abort', abort);
-        if (this.cancelPage === abort) this.cancelPage = undefined;
-        abort(); page.cleanup(); this.canvases.clear(); (document.filterFactory as BaseFilterFactory).destroy(); TextLayer.cleanup();
-      }
+          current();
+          const size = this.pageSize(page);
+          if (!Number.isFinite(zoom) || zoom <= 0 || zoom > 4) throw new Error('parser_limit');
+          const viewport = page.getViewport({ scale: 96 / 72 });
+          const ratio = Math.min((globalThis.devicePixelRatio || 1) * zoom, Math.sqrt(limits.canvasPixels / (size.width * size.height)), limits.canvasSide / size.width, limits.canvasSide / size.height);
+          const width = Math.max(1, Math.floor(size.width * ratio)), height = Math.max(1, Math.floor(size.height * ratio));
+          const pixels = [...this.presentations].reduce((total, [node, entry]) => total + (node === canvas ? 0 : entry.pixels), 0);
+          if (pixels + width * height > limits.scratchPixels) throw new Error('parser_limit');
+          buffer.width = width; buffer.height = height;
+          const layer = window.document.createElement('div'); layer.className = 'textLayer';
+          layer.style.setProperty('--scale-factor', String(viewport.scale));
+          layer.style.setProperty('--total-scale-factor', String(viewport.scale));
+          layer.style.width = `${size.width}px`; layer.style.height = `${size.height}px`;
+          render = page.render({ canvas: buffer, viewport, transform: ratio === 1 ? undefined : [ratio, 0, 0, ratio, 0, 0] });
+          await render.promise;
+          current();
+          const reader = page.streamTextContent().getReader();
+          // PDF.js requires an Error reason before marking its stream controller
+          // closed. Omitting it leaves queued worker chunks targeting a closed RS.
+          const cancelReader = () => { void reader.cancel(new Error('obsolete')).catch(() => {}); };
+          cancelTextRead = cancelReader;
+          const content: Awaited<ReturnType<typeof page.getTextContent>> = { items: [], styles: {}, lang: null };
+          let characters = 0;
+          try {
+            for (;;) {
+              current();
+              const chunk: ReadableStreamReadResult<Awaited<ReturnType<typeof page.getTextContent>>> = await reader.read(); if (chunk.done) break;
+              characters += chunk.value.items.reduce((n, item) => n + ('str' in item ? item.str.length : 0), 0);
+              if (content.items.length + chunk.value.items.length > limits.textItems || characters > limits.textCharacters) throw new Error('parser_limit');
+              content.items.push(...chunk.value.items); Object.assign(content.styles, chunk.value.styles);
+            }
+          } finally { cancelTextRead = undefined; cancelReader(); }
+          current();
+          text = new TextLayer({ textContentSource: content, container: layer, viewport });
+          await text.render(); current();
+          const context = canvas.getContext('2d');
+          if (!context) throw new Error('worker_failure');
+          // Publish a complete bitmap and matching text together. Zooming never
+          // clears the old readable page while a replacement is being rendered.
+          canvas.width = width; canvas.height = height;
+          context.drawImage(buffer, 0, 0);
+          container.replaceChildren(layer);
+          this.presentations.set(canvas, { container, pixels: width * height });
+        } finally {
+          buffer.width = buffer.height = 0;
+          if (this.rendering === buffer) this.rendering = undefined;
+          signal.removeEventListener('abort', abort);
+          if (this.cancelPage === abort) this.cancelPage = undefined;
+          abort(); page.cleanup(); this.canvases.clear(); (document.filterFactory as BaseFilterFactory).destroy(); TextLayer.cleanup();
+        }
+      } finally { signal.removeEventListener('abort', clearDeadline); clearDeadline(); }
     });
     this.tail = work;
-    return work;
+    // Cancellation of a queued page settles immediately; its retired queue seat
+    // remains serialized until prior rendering has actually finished.
+    return new Promise<void>((resolve, reject) => {
+      const abort = () => reject(signal.reason);
+      signal.addEventListener('abort', abort, { once: true });
+      void work.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
+      if (signal.aborted) abort();
+    });
   }
   dispose() {
     if (this.retired) return;
-    this.retired = true; this.cancelPage?.(); this.cancelPage = undefined;
+    this.retired = true; clearTimeout(this.renderTimer); this.renderTimer = undefined; this.cancelPage?.(); this.cancelPage = undefined;
     this.tail = Promise.resolve();
     const loading = this.loading, worker = this.worker;
     this.loading = undefined; this.ready = undefined; this.worker = undefined;

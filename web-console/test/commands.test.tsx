@@ -523,21 +523,6 @@ describe('typed native operations and continuation fencing', () => {
     await act(() => server.update('A', { ...fixture.original, messages: [{ role: 'user', source: 'human', id: 'accepted-user', content: [{ type: 'text', text: 'accepted' }] }] }));
     expect(row).toHaveProperty('disabled', false);
   });
-  it('tools retains deferred native descriptors without exposing a collection browser', async () => {
-    const { scope, navigation } = await subject();
-    const receipt = domainReceipt('capabilities', [null]);
-    receipt.page.items[0]!.deferred = true;
-    receipt.page.items[0]!.body_complete = false;
-    receipt.page.collections = [{ domain: 'capabilities.available_tools', revision: '0', total: '1000', loaded: '0', next_offset: '0' }];
-    server.handlers.set('resources/read', () => receipt);
-    expect(await scope.tools()).toEqual(receipt.page);
-    render(<CommandPanel request={{ id: 'tools' }} client={server.client} sessionId="A" current={navigation.capture()} close={() => {}} succeeded={() => {}} navigate={() => {}} />);
-    await screen.findByText('Loading…');
-    expect(screen.queryByText('More conversation details')).toBeNull();
-    expect(screen.queryByRole('combobox')).toBeNull();
-    expect(methods()).not.toContain('conversation/checkpointPage');
-    expect(methods()).not.toContain('conversation/checkpointValueRead');
-  });
   it('selects native model identities without any command-string RPC', async () => {
     const { scope, fixture } = await subject();
     expect((await scope.models()).catalog.models?.map(model => model.model)).toEqual(['fixture/first', 'fixture/second']);

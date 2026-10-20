@@ -103,7 +103,7 @@ it('annotates a running node only from the matching native pending review, witho
   expect(gate.textContent).not.toContain('Waiting for review');
   expect(run.instances[4].state).toEqual({ type: 'running' });
 });
-it('opens only the exact running Workflow child, retires its link after settlement, and preserves keyboard focus', async () => {
+it('keeps exact Workflow inspection available after settlement and preserves keyboard focus', async () => {
   const run = workflowRun();
   const node = run.instances[1]; node.kind = 'agent'; node.child = 'finite-child'; node.child_agent_id = 'finite-agent'; node.state = { type: 'running' };
   const openWorkflow = vi.fn().mockResolvedValue(undefined);
@@ -116,10 +116,28 @@ it('opens only the exact running Workflow child, retires its link after settleme
   node.state = { type: 'settled', outcome: 'completed' };
   run.state = node.state;
   ui.rerender(<SubagentContext value={context}><WorkflowRunPanel run={run}/></SubagentContext>);
-  expect(ui.getByRole('button', { name: 'View read' }).getAttribute('aria-disabled')).toBe('true');
+  expect(ui.getByRole('button', { name: 'View read' }).getAttribute('aria-disabled')).toBeNull();
   expect(ui.getByRole('button', { name: /file_checkup/ }).getAttribute('aria-expanded')).toBe('true');
-  fireEvent.click(button); expect(openWorkflow).toHaveBeenCalledTimes(1);
+  fireEvent.click(button); expect(openWorkflow).toHaveBeenCalledTimes(2);
+  await act(async () => {});
   act(() => button.blur());
   expect(ui.queryByRole('button', { name: 'View read' })).toBeNull();
-  expect(ui.getByRole('button', { name: /file_checkup/ }).getAttribute('aria-expanded')).toBe('false');
+  fireEvent.click(ui.getByRole('button', { name: /file_checkup/ }));
+  expect(ui.getByRole('button', { name: 'View read' })).toBeTruthy();
+  expect(ui.getByRole('button', { name: /file_checkup/ }).getAttribute('aria-expanded')).toBe('true');
+});
+
+it.each(['completed', 'failed', 'cancelled'] as const)('opens an already %s Workflow child on first visit and after remount', async outcome => {
+  const run = workflowRun(); run.state = { type: 'settled', outcome };
+  Object.assign(run.instances[1], { kind: 'agent', child: 'finite-child', child_agent_id: 'finite-agent', state: run.state });
+  const openWorkflow = vi.fn().mockResolvedValue(undefined);
+  const context = { client: {} as AppServerClient, agents: [], metrics: {}, metricErrors: {}, opened: [], open: vi.fn(), close: vi.fn(), openWorkflow };
+  for (let visit = 0; visit < 2; visit++) {
+    const ui = render(<SubagentContext value={context}><WorkflowRunPanel run={run}/></SubagentContext>);
+    if (outcome === 'completed') fireEvent.click(ui.getByRole('button', { name: /file_checkup/ }));
+    fireEvent.click(ui.getByRole('button', { name: 'View read' }));
+    await act(async () => {}); ui.unmount();
+  }
+  expect(openWorkflow).toHaveBeenCalledTimes(2);
+  expect(openWorkflow).toHaveBeenLastCalledWith('finite-agent', 'finite-child', 'read');
 });

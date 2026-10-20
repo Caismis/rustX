@@ -3,6 +3,8 @@ import {afterEach,expect,it,vi} from 'vitest';
 import type {CheckpointPage,TraceInspectionHead,TraceRecord} from '../../protocol/app-server/v51';
 import {TrajectoryInspector,type TrajectoryInspectorProps} from '../src/app/trajectory/TrajectoryInspector';
 import {traceRecord} from './trace-fixture';
+import {localeController} from '../src/locale/controller';
+import {translator} from '../src/locale/translation';
 import {checkpoint,snapshot} from './fixture';
 
 afterEach(cleanup);
@@ -34,11 +36,13 @@ it('a newer projection cannot replace the selected historical compaction preview
  view.rerender(<TrajectoryInspector {...properties} facet="raw" records={[first,second]}/>);
  expect(view.container.querySelector('pre')?.textContent).toBe(original);
 });
-it.each(['overview','raw'] as const)('a truncated native summary uses the established preview without a permanent loader in %s',facet=>{
+it.each([['overview','en'],['raw','en'],['overview','zh'],['raw','zh']] as const)('a truncated native summary preserves its limitation without a permanent loader in %s/%s',(facet,locale)=>{
+ localeController.setLocale(locale);
  const prefix='# Long original\n\n水🙂 exact prefix',selected=record(31,prefix,true);
  const view=render(<TrajectoryInspector {...props(selected)} facet={facet}/>);
  expect(screen.queryByRole('status')).toBeNull();
  expect(view.container.textContent).not.toContain('unread original remainder');
+ expect(screen.getByText(translator(locale)('agent:context.summary-truncated'))).toBeTruthy();
  if(facet==='raw')expect(view.container.querySelector('pre')?.textContent).toBe(prefix);
  else expect(screen.getByRole('heading',{name:'Long original'})).toBeTruthy();
 });

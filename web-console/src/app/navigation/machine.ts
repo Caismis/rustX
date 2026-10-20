@@ -36,7 +36,7 @@ type Destination =
   | { kind: 'fork-session'; sessionId: string; sidebar?: boolean }
   | { kind: 'node'; sessionId: string; nodeId: string; conversationId: string };
 interface Pending { viewportCurrent?: () => boolean; observation?: Observation; destination: Destination; route: ShellRoute; generation: number; authority: number | undefined }
-interface Prepared { pending: Pending; route: ShellRoute; observation?: Observation; content?: UserInputBlock[]; replay?: ResponseRetry['replay'] }
+interface Prepared { warning?: string; pending: Pending; route: ShellRoute; observation?: Observation; content?: UserInputBlock[]; replay?: ResponseRetry['replay'] }
 interface Input { client: AppServerClient; settings: SettingsNavigationActor; route?: ConversationRoute }
 export interface ShellNavigationContext extends Omit<Input, 'route'> {
   // Draft identity survives temporary history; control identity never does.
@@ -131,7 +131,7 @@ async function prepare(input: { client: AppServerClient; pending: Pending; paren
   } else if (destination.kind === 'fork-session') {
     const child = await forkLatestSession(client, sessionId, current);
     if (!child) throw new RetiredPreparation();
-    return { pending, route: pending.route, observation: pending.route.kind === 'session' ? client.getSnapshot().views[pending.route.sessionId]?.attachmentObservation : undefined };
+    return { pending, warning: child.warning, route: pending.route, observation: pending.route.kind === 'session' ? client.getSnapshot().views[pending.route.sessionId]?.attachmentObservation : undefined };
   } else {
     const scope = new CommandSession(client, sessionId, current);
     if (destination.kind === 'node') {
@@ -212,7 +212,7 @@ export const shellNavigationMachine = setup({
     retire: assign({ retry: () => undefined, draftSession: () => undefined, readAdmission: () => undefined, pending: () => undefined, command: () => undefined, error: () => undefined }),
     commit: assign(({ context, event }) => {
       const output = (event as unknown as { output: Prepared }).output;
-      if (output.pending.destination.kind === 'fork-session') return { pending: undefined, error: undefined, publication: { intent: output.pending, control: context.control, sidebar: false } };
+      if (output.pending.destination.kind === 'fork-session') return { pending: undefined, error: output.warning, publication: { intent: output.pending, control: context.control, sidebar: false } };
       const control = {};
       // Refocus/admission preserves the logical editor. Explicit executable
       // Node/Branch/Retry transitions still publish a fresh editor identity.

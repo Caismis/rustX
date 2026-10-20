@@ -196,7 +196,7 @@ Trace. These asynchronous read-only methods neither resume nor settle a child,
 work after child process exit, and do not depend on its live inspection socket.
 `SubagentObservation.attempt_id` is the exact current child Attempt, cleared at
 settlement. Live repairs require that identity and exact request/tool identity;
-durable terminal facts always win. Clients must upgrade together to v50/v71.
+durable terminal facts always win. Clients must upgrade together to v51/v71.
 
 
 Child statistics remain available through `agent/statistics { target, agent_id }`.
@@ -301,7 +301,7 @@ and Chat frame contract are documented in [CHAT.md](../web-console/CHAT.md).
 `job_id` and terminal lifecycle; `agents`/`agent_updated` carry stable `agent_id`,
 parent lineage, child ConversationId, current/latest activation identity and explicit
 Admitting/Active/Stopping/Inactive/Unavailable state. Controls route directly to each domain owner. A
-resumed activation updates the same Agent row. Only current v50 generated artifacts are retained, following repository policy;
+resumed activation updates the same Agent row. Only current v51 generated artifacts are retained, following repository policy;
 Older peers are rejected without a compatibility decoder. See
 [Jobs and continuable Agents](jobs-and-agents.md).
 
@@ -317,12 +317,12 @@ open across reconstruction and paging. `CompletedResponseView` retains finalized
 answer/TurnTail provenance and actions. Lineage remains selective: finalized
 completed-response provenance may cross into children; unsuccessful source
 execution outcomes do not. See [the ownership contract](issue-406/terminal-process-ownership.md).
-Only App Server v50 / Runtime Client v71 are supported. Earlier peers are rejected without compatibility paths.
+Only App Server v51 / Runtime Client v71 are supported. Earlier peers are rejected without compatibility paths.
 
 The earlier v22/v49 revision introduced native whole-conversation Turn/Step
 totals, measured request timing, the latest exact Attempt clock, and authored
 `SessionModelsView::Available.default_model` from the same creation capture as
-its catalog. The current v50/v71 pair retains these capabilities. A browser product preference can
+its catalog. The current v51/v71 pair retains these capabilities. A browser product preference can
 seed new Session intent; it does not alter authored configuration or existing
 Sessions.
 
@@ -492,7 +492,7 @@ const socket = new WebSocket("ws://127.0.0.1:8080/", [
 ```
 
 The server requires both offers on path `/` without a query, rejects failed admission
-with HTTP 401, and selects only `rustx.app-server.v50` in its response. It never echoes
+with HTTP 401, and selects only `rustx.app-server.v51` in its response. It never echoes
 the credential. A client the operator trusts with committed-delivery bytes may also
 offer `rustx-delivery-access.<separate secret>` (`--delivery-access-token-file`); a
 wrong or unconfigured value fails the whole handshake, and it never substitutes for
@@ -918,8 +918,8 @@ DTO's standalone serde/schema representation.
 
 Generated client-neutral artifacts are in `protocol/app-server/`:
 
-- `v50.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
-- `v50.ts`: TypeScript generated from that schema using pinned
+- `v51.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
+- `v51.ts`: TypeScript generated from that schema using pinned
   `json-schema-to-typescript` and its committed pnpm lockfile.
 - `fixtures.json`: serialized Rust messages, including nulls, string/numeric
   request IDs, timestamps, exact domains above 2^53 and lossless Questionnaire
@@ -1748,9 +1748,9 @@ the authored unit in that scope. Clients never write whole config documents.
 
 ## Current Session lifecycle contract
 
-Initialization requires exactly v50 and WebSocket requires `rustx.app-server.v50`.
-v49 and all earlier versions are rejected without fallback. Rust DTOs generate
-`v50.ts`, `v50.schema.json`, and the serialized fixtures; only the current version is kept.
+Initialization requires exactly v51 and WebSocket requires `rustx.app-server.v51`.
+v50 and all earlier versions are rejected without fallback. Rust DTOs generate
+`v51.ts`, `v51.schema.json`, and the serialized fixtures; only the current version is kept.
 Manual runtime unload is absent from the public method/result vocabulary.
 Session lists have no residency field. Deletion blockers have no current-Session
 or ordinary-residency case: external allocation exclusion is `resource_conflict`.
@@ -2159,7 +2159,7 @@ it. An accepted response is never retracted. See
 [file delivery](file-delivery.md#delivery-access-for-app-server-clients) for
 the synchronization.
 
-The internal Runtime Client vocabulary is v71. Only App Server v50 clients
+The internal Runtime Client vocabulary is v71. Only App Server v51 clients
 are generated; earlier versions are rejected, with no aliases or compatibility
 decoder. The current storage/control formats are Event envelope 1, SQLite 69, Session
 catalog 16 and subagent IPC v33. Child file and artifact reads use the registered
@@ -2171,17 +2171,14 @@ child Conversation and the parent attachment's native delivery authority.
 `context/compact.params.request_id` is a `ManualCompactionRequestId`: 1–64 ASCII
 letters, digits, underscores or hyphens. UUID strings are accepted. The same native
 type validates JSON deserialization before runtime dispatch and describes the
-v50 schema's length/pattern constraints. Invalid IDs return invalid params without
+v51 schema's length/pattern constraints. Invalid IDs return invalid params without
 admission, lifecycle publication or provider execution. This ID correlates native
 read evidence only; it does not authorize execution or provide exactly-once replay.
 An exact correlated native release frees Web's gesture guard independently of the
 original transport acknowledgement. The unresolved RPC still settles normally,
 with its callbacks fenced from any later explicit request.
 
-The v50 upload policy separately names `max_files_per_transfer`,
-`max_transfer_bytes`, `max_uploads_per_user_input` and
-`max_upload_bytes_per_user_input`. User-input limits apply to the whole receipt
-collection at turn/start and turn/steer, using native persisted admitted sizes.
+Generic uploads use the current [v51 upload policy](#generic-file-upload-policy-v51).
 Preparation reserves intent; binary handshake admission linearizes against host
 drain. Prepared capabilities are revoked; accepted carriers retain a host upload
 guard until settlement. See [Session uploads](session-uploads.md).

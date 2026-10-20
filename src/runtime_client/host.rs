@@ -4877,7 +4877,7 @@ impl ClientInner {
         &self,
         id: &crate::runtime::identity::AgentId,
     ) -> Result<super::snapshot::RuntimeClientAgent, RuntimeClientError> {
-        use crate::runtime::subagent::{AgentState, SubagentState};
+        use crate::runtime::subagent::{AgentState, SubagentPublication, SubagentState};
         let registry = self.agent_registry()?;
         if registry.agent_snapshot(id).is_some() {
             return self.agent_view(id);
@@ -4889,7 +4889,9 @@ impl ClientInner {
         })?;
         let state = if child.is_settled() {
             AgentState::Inactive
-        } else if child.state.is_terminal() {
+        } else if child.state.is_terminal()
+            || child.settlement.publication == SubagentPublication::Abandoned
+        {
             AgentState::Unavailable
         } else if child.state == SubagentState::Running {
             AgentState::Active
