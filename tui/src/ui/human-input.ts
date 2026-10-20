@@ -10,6 +10,7 @@ import type { InteractionRef, InteractionResponse, RoutedInteraction } from "../
 import { HumanInteractionOverlay } from "./components/hitl.ts";
 import type { PopupContent } from "./components/popup-frame.ts";
 import type { PresentationLease } from "./presentation-lease.ts";
+import { compactDiagnostic } from "./diagnostic-text.ts";
 import { interactionKey, type PresentationPreferences } from "./preferences.ts";
 
 /** What the human-input controller reads from and asks of the terminal app. */
@@ -25,10 +26,6 @@ export interface HumanInputPort {
   interrupt(): void;
   applyPreference(change: PreferenceChange): void;
   preferences(): PresentationPreferences;
-}
-
-function compactDiagnostic(error: unknown): string {
-  return (error instanceof Error ? error.message : String(error)).replace(/\s*\r?\n\s*/g, " · ").trim();
 }
 
 /**
