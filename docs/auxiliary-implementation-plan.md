@@ -2,11 +2,11 @@
 
 ## Scope and development baseline
 
-Initial baseline synchronized: 2026-10-18; current upstream integration: 2026-10-19. AUX-01 storage and inspection, review fixes and the CI Node pin are delivered through `4aedcda2c9415cec3cfd1b06d3539215009b2e09`, whose [FULL workflow](https://github.com/Caismis/rustX/actions/runs/39391027089) passed, including macOS full and Merge verification. Stages 2–4 remain planned. The proposed [AUX-02 implementation plan](aux-02-implementation-plan.md) defines the next increment and requires user review before implementation.
+Initial baseline synchronized: 2026-10-18; current upstream integration: 2026-10-19. AUX-01 storage and inspection, review fixes and the CI Node pin are delivered through `4aedcda2c9415cec3cfd1b06d3539215009b2e09`, whose [FULL workflow](https://github.com/Caismis/rustX/actions/runs/39391027089) passed, including macOS full and Merge verification. Stages 2–4 remain planned. The [AUX-02 implementation plan](aux-02-implementation-plan.md) defines the next increment's contracts, implementation steps and validation requirements.
 
 Implement the auxiliary series as four working increments: [AUX-01 #473](https://github.com/Caismis/rustX/issues/473), [AUX-02 #474](https://github.com/Caismis/rustX/issues/474), [AUX-03 #475](https://github.com/Caismis/rustX/issues/475), and [AUX-04 #476](https://github.com/Caismis/rustX/issues/476). The issues own their detailed acceptance contracts; this document defines implementation order, code ownership, integration boundaries and verification gates.
 
-Keep AUX-01 on `MiNisterPaX/rustX:aux-01-request-ownership`. Develop AUX-02 on `MiNisterPaX/rustX:codex/aux-02-supervised-execution`, starting at the AUX-01 commit above. Fetch dependencies from `origin` (Caismis/rustX); push development commits to `fork` (MiNisterPaX/rustX). Preserve unrelated workspace changes and published history. Each issue remains a separately reviewable, complete product increment; do not merge a half-converted owner/schema/reader transition. Integrate actual upstream main containing the accepted prerequisite before the corresponding upstream delivery. AUX-02 work is performed by the primary agent without subagents or delegated workers.
+Keep AUX-01 on `MiNisterPaX/rustX:aux-01-request-ownership`. Develop AUX-02 on `MiNisterPaX/rustX:codex/aux-02-supervised-execution`, starting at the AUX-01 commit above. Fetch dependencies from `origin` (Caismis/rustX); push development commits to `fork` (MiNisterPaX/rustX). Preserve unrelated workspace changes and published history. Each issue remains a separately reviewable, complete product increment; do not merge a half-converted owner/schema/reader transition. Integrate actual upstream main containing the accepted prerequisite before the corresponding upstream delivery.
 
 The initial synchronization baseline was upstream commit `3c355f152d405a201482d53b6e45497df4f44a7f`, including immutable-history compaction, bounded observation, CI improvements and WAL/NORMAL. The fork's starting commit is `c26fc0d00fd1b60a7505888ef3b01893939ff88d`, containing:
 - `8a4cbe8b29d861144d4d689e04b3903886843112`: auxiliary identities and closed request ownership.
@@ -135,7 +135,7 @@ focused results do not replace exact-head FULL or native macOS merge gates.
 
 ## Stage 2: AUX-02 supervised execution and Summary
 
-The proposed [detailed implementation plan](aux-02-implementation-plan.md) owns this stage's source inventory, ownership/state/lock protocol, commit gates and contract-to-test matrix. Implementation waits for user approval. Start from verified AUX-01 Store/reader contracts and implement the shared executor in native Runtime, replacing Summary's old polling implementation.
+The [detailed implementation plan](aux-02-implementation-plan.md) owns this stage's source inventory, ownership/state/lock protocol, commit gates and contract-to-test matrix. Start from accepted AUX-01 Store/reader contracts and implement the shared executor in native Runtime, replacing Summary's old polling implementation.
 
 1. Map the admission, dispatch, child registration, shutdown and durability-failure transitions to existing native owners and locks. Document each linearization point and lock order.
 2. Reserve process then Conversation capacity before expensive preparation. Initial total/general capacities are 32/24 per process and 4/3 per Conversation, preserving protected Compaction capacity. Return typed Busy immediately; no task queue or hold-and-wait acquisition.
