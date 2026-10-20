@@ -546,7 +546,7 @@ impl PublicationDraft {
         };
         let mut event = RuntimeClientEvent::ProjectionTransition {
             events: self.events,
-            metadata: metadata.clone(),
+            metadata,
         };
         set_checkpoint_transition_cursor(&mut event, self.seed.cursor);
         let encoded = if fitted || captured_eviction || self.replacement {
@@ -556,6 +556,10 @@ impl PublicationDraft {
         };
         if encoded.is_none() {
             let transition = event_kind(&event).to_owned();
+            // Cursor stamping changes nested events, not this owned metadata.
+            let RuntimeClientEvent::ProjectionTransition { metadata, .. } = event else {
+                unreachable!("publication draft is a projection transition");
+            };
             let mut replacement = checkpoint;
             replacement.content.clear();
             replacement.collections.clear();
@@ -12925,6 +12929,11 @@ mod tests {
         if let Some(draft) = projection.finish_publication() {
             projection.install_publication(draft.encode().unwrap());
         }
+    }
+
+    mod metadata_ownership_tests {
+        use super::*;
+        include!("projection/metadata_ownership_tests.rs");
     }
 
     mod metadata_root_tests {
