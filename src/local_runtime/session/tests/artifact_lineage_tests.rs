@@ -422,6 +422,159 @@ pub(super) fn historical_summary_audit_fixture(
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // Verify real lineage replay, exact payloads and invalid dependency keys.
+fn inherited_summary_audits_replay_in_canonical_database_key_order() {
+    use std::cmp::Reverse;
+    use std::collections::BTreeSet;
+
+    use crate::durable::ConversationStoreError;
+    use crate::durable::reading::AuxiliaryAuditSnapshot;
+
+    let (_directory, catalog, _config) = open_catalog();
+    let (source_store, _) = source(&catalog, false);
+    let (first_call, _, first_through) = link_summary_generation(&source_store, "summary-first");
+    let (second_call, _, second_through) = link_summary_generation(&source_store, "summary-second");
+    let source_cut = source_store
+        .read_lineage_cut(source_store.load_head().unwrap().revision)
+        .unwrap();
+    assert_eq!(source_cut.auxiliary_audits.len(), 2);
+    let audit_cut = source_store.auxiliary_audit_cut().unwrap();
+    for call_id in [&first_call, &second_call] {
+        assert_eq!(
+            source_store
+                .load_auxiliary_call(call_id, audit_cut)
+                .unwrap()
+                .unwrap()
+                .outcome,
+            Some(crate::model::auxiliary::AuxiliaryCallOutcome::Completed)
+        );
+    }
+    let retained: BTreeSet<_> = source_cut
+        .projections
+        .iter()
+        .filter_map(|checkpoint| checkpoint.candidate.summary_generation.as_ref())
+        .map(|reference| {
+            (
+                reference.conversation_id.clone(),
+                reference.call_id.clone(),
+                reference.through_journal,
+            )
+        })
+        .collect();
+    assert_eq!(
+        retained,
+        BTreeSet::from([
+            (
+                source_store.conversation_id().clone(),
+                first_call,
+                first_through,
+            ),
+            (
+                source_store.conversation_id().clone(),
+                second_call,
+                second_through,
+            ),
+        ])
+    );
+
+    let key = |audit: &AuxiliaryAuditSnapshot| {
+        (
+            audit.source_conversation_id.as_str().to_owned(),
+            audit.call_id.as_str().to_owned(),
+            audit.through_journal,
+        )
+    };
+    let mut descending = source_cut.auxiliary_audits.clone();
+    descending.sort_by_key(|audit| Reverse(key(audit)));
+    assert_eq!(descending.len(), 2);
+    assert!(
+        key(&descending[0]) > key(&descending[1]),
+        "the regression input must be in strictly descending SQLite key order"
+    );
+    assert_eq!(
+        descending.iter().map(key).collect::<BTreeSet<_>>().len(),
+        2,
+        "the descending regression keys must be unique"
+    );
+
+    let target_id = ConversationId::generate();
+    let remapped = super::super::lineage_cut(
+        &target_id,
+        &source_cut,
+        None,
+        super::super::LineageSide::After,
+    )
+    .unwrap();
+    let seed_with_audits = |audits: Vec<AuxiliaryAuditSnapshot>| {
+        LineageSeed::replayed(
+            remapped.canonical().to_vec(),
+            remapped.surface_history().to_vec(),
+        )?
+        .with_completed_responses(remapped.completed_responses().to_vec())?
+        .with_turns(remapped.turns().to_vec())?
+        .with_projections(remapped.projections().to_vec())?
+        .with_raw_tool_arguments(remapped.raw_tool_arguments().to_vec())?
+        .with_auxiliary_audits(audits)
+    };
+
+    let descending_seed = seed_with_audits(descending).unwrap();
+    let target = SqliteConversationStore::in_memory(target_id.clone()).unwrap();
+    target.initialize_lineage(&descending_seed).unwrap();
+    target.initialize_lineage(&descending_seed).unwrap();
+
+    let canonical = descending_seed.auxiliary_audits();
+    assert_eq!(canonical.len(), 2);
+    assert!(
+        key(&canonical[0]) < key(&canonical[1]),
+        "the seed constructor must canonicalize dependency order"
+    );
+    assert_eq!(canonical.iter().map(key).collect::<BTreeSet<_>>().len(), 2);
+    for audit in canonical {
+        let original = source_cut
+            .auxiliary_audits
+            .iter()
+            .find(|original| key(original) == key(audit))
+            .expect("canonicalization preserves every dependency identity");
+        assert_eq!(
+            audit, original,
+            "canonicalization preserves each audit payload exactly"
+        );
+    }
+
+    let mut ascending_source = source_cut.auxiliary_audits.clone();
+    ascending_source.sort_by_key(key);
+    let reordered = seed_with_audits(ascending_source).unwrap();
+    target.initialize_lineage(&reordered).unwrap();
+
+    let duplicate = canonical[0].clone();
+    let duplicate_error =
+        seed_with_audits(vec![duplicate.clone(), duplicate]).expect_err("duplicate key must fail");
+    assert!(matches!(
+        duplicate_error,
+        ConversationStoreError::InvalidReference(_)
+    ));
+
+    let mut changed_payload = canonical.to_vec();
+    for record in &mut changed_payload[0].records {
+        if let crate::model::auxiliary::AuxiliaryAuditFact::CallStarted(call)
+        | crate::model::auxiliary::AuxiliaryAuditFact::CallSettled(call) = &mut record.fact
+        {
+            call.trigger = crate::model::auxiliary::AuxiliaryAttribution::new("manual").unwrap();
+        }
+    }
+    let changed_seed =
+        seed_with_audits(changed_payload).expect("changed payload remains structurally valid");
+    let independent_target = SqliteConversationStore::in_memory(target_id).unwrap();
+    independent_target
+        .initialize_lineage(&changed_seed)
+        .expect("changed payload must be valid for a new target");
+    assert_eq!(
+        target.initialize_lineage(&changed_seed),
+        Err(ConversationStoreError::InitialHistoryMismatch)
+    );
+}
+
+#[test]
 fn summary_checkpoint_overlap_does_not_inherit_auxiliary_execution() {
     let (_directory, catalog, _config) = open_catalog();
     let (store, cut) = source(&catalog, false);

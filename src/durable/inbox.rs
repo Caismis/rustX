@@ -635,12 +635,14 @@ impl LineageSeed {
     }
 
     /// Attach exactly the bounded source audits named by retained checkpoints.
+    /// Audits are stored in canonical `(source_conversation_id, call_id,
+    /// through_journal)` order, matching durable reload order.
     ///
     /// # Errors
     /// Rejects missing, extra, duplicate or oversized source evidence.
     pub fn with_auxiliary_audits(
         mut self,
-        audits: Vec<super::reading::AuxiliaryAuditSnapshot>,
+        mut audits: Vec<super::reading::AuxiliaryAuditSnapshot>,
     ) -> Result<Self, ConversationStoreError> {
         let limits = crate::context::resources::ResourceLimits::default();
         if audits.len() > limits.total_items {
@@ -695,6 +697,19 @@ impl LineageSeed {
                 "retained checkpoints and inherited Summary generation audits differ".into(),
             ));
         }
+        audits.sort_by(|left, right| {
+            let left_key = (
+                left.source_conversation_id.as_str(),
+                left.call_id.as_str(),
+                left.through_journal,
+            );
+            let right_key = (
+                right.source_conversation_id.as_str(),
+                right.call_id.as_str(),
+                right.through_journal,
+            );
+            left_key.cmp(&right_key)
+        });
         self.auxiliary_audits = audits;
         Ok(self)
     }
