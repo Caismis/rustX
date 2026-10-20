@@ -1,0 +1,50 @@
+{
+  "scope": "Read-only attribution outputs; no artifact/cache/container deletions,source edits,builds or product runs",
+  "files": [
+    {
+      "path": "README.md",
+      "bytes": 13158,
+      "sha256": "fcdb9dfff833f9a78f1186089780c381ec102cbb2aa0520409cacd94352d4dbd"
+    },
+    {
+      "path": "capacity-plan.json",
+      "bytes": 799,
+      "sha256": "40a7d92d7d09db930a1260099ec305111656a9d9cd67fd0b08d12c5b80e9ad47"
+    },
+    {
+      "path": "docker-readonly.json",
+      "bytes": 9328,
+      "sha256": "3720201ec23b0eeccf1605ffa1b888795011c4da02b6a17dbd1ca6eb116cbbcb"
+    },
+    {
+      "path": "docker-system-df.txt",
+      "bytes": 482,
+      "sha256": "d899e864f5d420a5fec63e6cb4da4dcc4001f1bd637541cd923a25ec6a6894f2"
+    },
+    {
+      "path": "initial-filesystem-record.txt",
+      "bytes": 341,
+      "sha256": "1557a40d99bcd16ee3ca9a01f3ec71db9ffe5229c57491fb853fd2efc7817d11"
+    },
+    {
+      "path": "inode-accounting.json",
+      "bytes": 4825,
+      "sha256": "e7c783a94ff615f4038e60b34ac55e361d569368bce361299a4301f0eab218ce"
+    },
+    {
+      "path": "metadata-ownership-provenance.json",
+      "bytes": 579,
+      "sha256": "d0c6b31f18207a4869ffb1e62b87d281e87e3795dba006b99fec33df10386d13"
+    },
+    {
+      "path": "overlay-mountinfo.txt",
+      "bytes": 751,
+      "sha256": "233e91e6425a0aa7a6737dba1b91a4fa4be1fe025d369c9182ac2e6cb45f151a"
+    },
+    {
+      "path": "verified-preserved-alias-duplicates.json",
+      "bytes": 7257,
+      "sha256": "e07a2144974fab712fad3d0fde88cc6a14675f683d897661ada15887474cfa41"
+    }
+  ]
+}

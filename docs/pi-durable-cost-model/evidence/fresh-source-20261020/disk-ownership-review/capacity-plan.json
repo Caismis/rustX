@@ -1,0 +1,16 @@
+{
+  "observed_utc": "2026-10-20T05:26:38.022580+00:00",
+  "total_bytes": 33770192896,
+  "available_bytes": 9414164480,
+  "guard_bytes": 5368709120,
+  "setup_budget_bytes": 6442450944,
+  "runtime_output_budget_bytes": 536870912,
+  "minimum_preparation_start_available_bytes": 12348030976,
+  "shortfall_usable_bytes": 2933866496,
+  "proposed_additional_usable_bytes": 3221225472,
+  "post_extension_available_model": 12635389952,
+  "recommended_available_planning_target": 17179869184,
+  "shortfall_to16GiB_usable_bytes": 7765704704,
+  "observed_prior_shared_filesystem_drop_atleast_bytes": 5084258304,
+  "scope": "Budget6GiB for unmeasuredfull VFS peak and0.5GiB run growth. Not a measuredupperbound. Add3GiB usablecapacity,not merelynominaldiskbytes. Checkstrict5GiB throughout; no rerunlaunched."
+}

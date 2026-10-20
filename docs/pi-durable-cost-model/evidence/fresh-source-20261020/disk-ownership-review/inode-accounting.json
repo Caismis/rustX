@@ -1,0 +1,88 @@
+{
+  "at_utc": "2026-10-20T05:25:57.507166+00:00",
+  "root": "/workspace/pr485-study",
+  "unique_file_allocated_bytes": 12824985600,
+  "directory_allocated_bytes": 35762176,
+  "unique_inodes": 50139,
+  "file_paths": 78806,
+  "candidates": [
+    {
+      "path": "/workspace/pr485-study/evidence/products",
+      "reachable_unique_file_allocated_bytes": 4755128320,
+      "file_bytes_reclaimable_if_all_paths_under_only_this_directory_deleted": 4755128320,
+      "shared_file_allocated_bytes": 0,
+      "scope": "Read-only inode accounting. Directory blocks excluded; no deletion authorized/performed. External hardlinks conservatively not reclaimable."
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/build-baseline",
+      "reachable_unique_file_allocated_bytes": 1151721472,
+      "file_bytes_reclaimable_if_all_paths_under_only_this_directory_deleted": 1151721472,
+      "shared_file_allocated_bytes": 0,
+      "scope": "Read-only inode accounting. Directory blocks excluded; no deletion authorized/performed. External hardlinks conservatively not reclaimable."
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/build-geometry",
+      "reachable_unique_file_allocated_bytes": 1147846656,
+      "file_bytes_reclaimable_if_all_paths_under_only_this_directory_deleted": 1147846656,
+      "shared_file_allocated_bytes": 0,
+      "scope": "Read-only inode accounting. Directory blocks excluded; no deletion authorized/performed. External hardlinks conservatively not reclaimable."
+    },
+    {
+      "path": "/workspace/pr485-study/evidence/build-scoped",
+      "reachable_unique_file_allocated_bytes": 1147658240,
+      "file_bytes_reclaimable_if_all_paths_under_only_this_directory_deleted": 1147658240,
+      "shared_file_allocated_bytes": 0,
+      "scope": "Read-only inode accounting. Directory blocks excluded; no deletion authorized/performed. External hardlinks conservatively not reclaimable."
+    },
+    {
+      "path": "/workspace/pr485-study/target",
+      "reachable_unique_file_allocated_bytes": 2612637696,
+      "file_bytes_reclaimable_if_all_paths_under_only_this_directory_deleted": 2612637696,
+      "shared_file_allocated_bytes": 0,
+      "scope": "Read-only inode accounting. Directory blocks excluded; no deletion authorized/performed. External hardlinks conservatively not reclaimable."
+    },
+    {
+      "path": "/workspace/pr485-study/pnpm-store",
+      "reachable_unique_file_allocated_bytes": 642416640,
+      "file_bytes_reclaimable_if_all_paths_under_only_this_directory_deleted": 70668288,
+      "shared_file_allocated_bytes": 571748352,
+      "scope": "Read-only inode accounting. Directory blocks excluded; no deletion authorized/performed. External hardlinks conservatively not reclaimable."
+    },
+    {
+      "path": "/workspace/pr485-study/repo/web-console/node_modules",
+      "reachable_unique_file_allocated_bytes": 631422976,
+      "file_bytes_reclaimable_if_all_paths_under_only_this_directory_deleted": 67670016,
+      "shared_file_allocated_bytes": 563752960,
+      "scope": "Read-only inode accounting. Directory blocks excluded; no deletion authorized/performed. External hardlinks conservatively not reclaimable."
+    },
+    {
+      "path": "/workspace/pr485-study/xdg-cache",
+      "reachable_unique_file_allocated_bytes": 126705664,
+      "file_bytes_reclaimable_if_all_paths_under_only_this_directory_deleted": 126705664,
+      "shared_file_allocated_bytes": 0,
+      "scope": "Read-only inode accounting. Directory blocks excluded; no deletion authorized/performed. External hardlinks conservatively not reclaimable."
+    },
+    {
+      "path": "/workspace/pr485-study/node-gyp",
+      "reachable_unique_file_allocated_bytes": 65392640,
+      "file_bytes_reclaimable_if_all_paths_under_only_this_directory_deleted": 65392640,
+      "shared_file_allocated_bytes": 0,
+      "scope": "Read-only inode accounting. Directory blocks excluded; no deletion authorized/performed. External hardlinks conservatively not reclaimable."
+    },
+    {
+      "path": "/workspace/pr485-study/corepack",
+      "reachable_unique_file_allocated_bytes": 39260160,
+      "file_bytes_reclaimable_if_all_paths_under_only_this_directory_deleted": 39260160,
+      "shared_file_allocated_bytes": 0,
+      "scope": "Read-only inode accounting. Directory blocks excluded; no deletion authorized/performed. External hardlinks conservatively not reclaimable."
+    },
+    {
+      "path": "/workspace/pr485-study/tmp",
+      "reachable_unique_file_allocated_bytes": 17133568,
+      "file_bytes_reclaimable_if_all_paths_under_only_this_directory_deleted": 17133568,
+      "shared_file_allocated_bytes": 0,
+      "scope": "Read-only inode accounting. Directory blocks excluded; no deletion authorized/performed. External hardlinks conservatively not reclaimable."
+    }
+  ],
+  "errors": []
+}

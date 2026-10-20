@@ -1,0 +1,211 @@
+{
+  "scope": "Read-only verification of known immutable alias duplicates,not a deletion instruction. Hardlink replacement changes artifact identity/sharing and needs approval; no target-to-preserved hardlinks proposed.",
+  "verified_files": 24,
+  "groups": [
+    {
+      "label": "baseline",
+      "name": "conformance",
+      "sha256": "711b5af1ac3500e36f0f1bd827d108fb975a088b5e24a8d3a99218d7812ed388",
+      "paths": [
+        "/workspace/pr485-study/evidence/build-baseline/artifacts/release/deps/conformance-24da1f0a9d82f33c",
+        "/workspace/pr485-study/evidence/build-baseline/conformance"
+      ],
+      "bytes": 139129584,
+      "separate_allocated_blocks": 278269952,
+      "potential_block_saving_keep_one_inode": 139132928,
+      "requires_artifact_mutation_approval": true,
+      "current_links": [
+        1,
+        1
+      ]
+    },
+    {
+      "label": "baseline",
+      "name": "rustx",
+      "sha256": "b218ce4b143ae593bd2450ee0a4b8c7b8b7b40c932a6c08dde204fd1e14fb724",
+      "paths": [
+        "/workspace/pr485-study/evidence/build-baseline/artifacts/release/rustx",
+        "/workspace/pr485-study/evidence/build-baseline/rustx"
+      ],
+      "bytes": 133105512,
+      "separate_allocated_blocks": 266219520,
+      "potential_block_saving_keep_one_inode": 133107712,
+      "requires_artifact_mutation_approval": true,
+      "current_links": [
+        1,
+        1
+      ]
+    },
+    {
+      "label": "baseline",
+      "name": "bash-supervisor",
+      "sha256": "0bec7d8218eff7a946dd59f913ba0919c74d529c8b6b312af1f329b201308560",
+      "paths": [
+        "/workspace/pr485-study/evidence/build-baseline/artifacts/release/bash-supervisor",
+        "/workspace/pr485-study/evidence/build-baseline/bash-supervisor"
+      ],
+      "bytes": 8071208,
+      "separate_allocated_blocks": 16146432,
+      "potential_block_saving_keep_one_inode": 8073216,
+      "requires_artifact_mutation_approval": true,
+      "current_links": [
+        1,
+        1
+      ]
+    },
+    {
+      "label": "baseline",
+      "name": "interactive-supervisor",
+      "sha256": "d8a4de9c6be9115d759df8ce3745d5591206216552493468b6bc933056103c1b",
+      "paths": [
+        "/workspace/pr485-study/evidence/build-baseline/artifacts/release/interactive-supervisor",
+        "/workspace/pr485-study/evidence/build-baseline/interactive-supervisor"
+      ],
+      "bytes": 8124968,
+      "separate_allocated_blocks": 16252928,
+      "potential_block_saving_keep_one_inode": 8126464,
+      "requires_artifact_mutation_approval": true,
+      "current_links": [
+        1,
+        1
+      ]
+    },
+    {
+      "label": "geometry",
+      "name": "conformance",
+      "sha256": "d25cae1955161392e1ecfde60b1fcdf87ee17577ee4531da1dac133391dbd4a1",
+      "paths": [
+        "/workspace/pr485-study/evidence/build-geometry/artifacts/release/deps/conformance-24da1f0a9d82f33c",
+        "/workspace/pr485-study/evidence/build-geometry/conformance"
+      ],
+      "bytes": 138743416,
+      "separate_allocated_blocks": 277487616,
+      "potential_block_saving_keep_one_inode": 138743808,
+      "requires_artifact_mutation_approval": true,
+      "current_links": [
+        1,
+        1
+      ]
+    },
+    {
+      "label": "geometry",
+      "name": "rustx",
+      "sha256": "29f3dfe8b5f3fda988c1fb8b5ddec38d230d3f6125c2632f37a67988f638c0f7",
+      "paths": [
+        "/workspace/pr485-study/evidence/build-geometry/artifacts/release/rustx",
+        "/workspace/pr485-study/evidence/build-geometry/rustx"
+      ],
+      "bytes": 132690144,
+      "separate_allocated_blocks": 265392128,
+      "potential_block_saving_keep_one_inode": 132694016,
+      "requires_artifact_mutation_approval": true,
+      "current_links": [
+        1,
+        1
+      ]
+    },
+    {
+      "label": "geometry",
+      "name": "bash-supervisor",
+      "sha256": "4fda45f3e08412fbc59a09086da84ae6ffa1bd04e988326fc3a812bde000a16c",
+      "paths": [
+        "/workspace/pr485-study/evidence/build-geometry/artifacts/release/bash-supervisor",
+        "/workspace/pr485-study/evidence/build-geometry/bash-supervisor"
+      ],
+      "bytes": 8046664,
+      "separate_allocated_blocks": 16097280,
+      "potential_block_saving_keep_one_inode": 8048640,
+      "requires_artifact_mutation_approval": true,
+      "current_links": [
+        1,
+        1
+      ]
+    },
+    {
+      "label": "geometry",
+      "name": "interactive-supervisor",
+      "sha256": "89eaf52144646a329ae0ddd10d7be00da5cdd629881173023a30e058f0d955e0",
+      "paths": [
+        "/workspace/pr485-study/evidence/build-geometry/artifacts/release/interactive-supervisor",
+        "/workspace/pr485-study/evidence/build-geometry/interactive-supervisor"
+      ],
+      "bytes": 8098840,
+      "separate_allocated_blocks": 16203776,
+      "potential_block_saving_keep_one_inode": 8101888,
+      "requires_artifact_mutation_approval": true,
+      "current_links": [
+        1,
+        1
+      ]
+    },
+    {
+      "label": "scoped",
+      "name": "conformance",
+      "sha256": "6e8ea40f0c64a698aa527b52db9a9a10a2deb516d3863180590bfa553ef358aa",
+      "paths": [
+        "/workspace/pr485-study/evidence/build-scoped/artifacts/release/deps/conformance-24da1f0a9d82f33c",
+        "/workspace/pr485-study/evidence/build-scoped/conformance"
+      ],
+      "bytes": 138737320,
+      "separate_allocated_blocks": 277479424,
+      "potential_block_saving_keep_one_inode": 138739712,
+      "requires_artifact_mutation_approval": true,
+      "current_links": [
+        1,
+        1
+      ]
+    },
+    {
+      "label": "scoped",
+      "name": "rustx",
+      "sha256": "a9a2e8e550a646172aec74e817777dd9f73692efaea345bf25acb08f48391361",
+      "paths": [
+        "/workspace/pr485-study/evidence/build-scoped/artifacts/release/rustx",
+        "/workspace/pr485-study/evidence/build-scoped/rustx"
+      ],
+      "bytes": 132691784,
+      "separate_allocated_blocks": 265388032,
+      "potential_block_saving_keep_one_inode": 132694016,
+      "requires_artifact_mutation_approval": true,
+      "current_links": [
+        1,
+        1
+      ]
+    },
+    {
+      "label": "scoped",
+      "name": "bash-supervisor",
+      "sha256": "ab7e132c189e167cae596f3e175d8c49708633c67625ec5676ad4b9721859d74",
+      "paths": [
+        "/workspace/pr485-study/evidence/build-scoped/artifacts/release/bash-supervisor",
+        "/workspace/pr485-study/evidence/build-scoped/bash-supervisor"
+      ],
+      "bytes": 8038008,
+      "separate_allocated_blocks": 16080896,
+      "potential_block_saving_keep_one_inode": 8040448,
+      "requires_artifact_mutation_approval": true,
+      "current_links": [
+        1,
+        1
+      ]
+    },
+    {
+      "label": "scoped",
+      "name": "interactive-supervisor",
+      "sha256": "c86cd61b827d591ee11aa3f3e2911e38e88bef837871bcea4de66e168a0e3acb",
+      "paths": [
+        "/workspace/pr485-study/evidence/build-scoped/artifacts/release/interactive-supervisor",
+        "/workspace/pr485-study/evidence/build-scoped/interactive-supervisor"
+      ],
+      "bytes": 8089944,
+      "separate_allocated_blocks": 16187392,
+      "potential_block_saving_keep_one_inode": 8093696,
+      "requires_artifact_mutation_approval": true,
+      "current_links": [
+        1,
+        1
+      ]
+    }
+  ],
+  "hypothetical_total_saving_bytes": 863596544
+}

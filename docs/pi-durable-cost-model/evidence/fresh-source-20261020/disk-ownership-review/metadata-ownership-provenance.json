@@ -1,0 +1,12 @@
+{
+  "source": "89d6b618eeba8afaf4b95af4406057330baa60a6",
+  "source_files": {
+    "src/runtime_client/projection.rs": "90347d0436d1018710476fe75fb0160aed317f50",
+    "src/runtime_client/checkpoint.rs": "10dfe58fa8486d2efe8a3b2ee9d144a879aeeb28",
+    "src/runtime_client/event.rs": "b0d1d69ba073980958c5fec60b225071571eecc2"
+  },
+  "metadata_mutation_proof": "set_checkpoint_transition_cursor recurses throughProjectionTransition.events only; it doesnotmutateoutermetadata or changeoutervariant",
+  "source_edits": false,
+  "candidate_compiled": false,
+  "candidate_run": false
+}
