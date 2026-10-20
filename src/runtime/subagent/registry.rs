@@ -900,9 +900,7 @@ impl core::fmt::Display for SubagentSteerError {
             }
             Self::InvalidMessage { bytes } => write!(
                 f,
-                "the guidance input must contain text or attachments, at most {MAX_TASK_BYTES} bytes \
-                 and at most {} attachments ({bytes} bytes given)",
-                crate::message::content::MAX_INPUT_ATTACHMENTS
+                "the guidance input must contain text or attachments and at most {MAX_TASK_BYTES} text bytes ({bytes} bytes given)"
             ),
             Self::CancellationCommitted { reason } => write!(
                 f,
@@ -1155,9 +1153,7 @@ impl core::fmt::Display for SubagentStartError {
             }
             Self::InvalidTask { bytes } => write!(
                 f,
-                "the task input must contain text or attachments, at most {MAX_TASK_BYTES} bytes \
-                 and at most {} attachments ({bytes} bytes given)",
-                crate::message::content::MAX_INPUT_ATTACHMENTS
+                "the task input must contain text or attachments and at most {MAX_TASK_BYTES} text bytes ({bytes} bytes given)"
             ),
             Self::ContextOversized { bytes } => write!(
                 f,
@@ -3766,9 +3762,7 @@ impl SubagentRegistry {
 
     /// Shared task/guidance content admission, before ownership or preparation.
     fn valid_input(message: &str, attachments: usize) -> bool {
-        (!message.trim().is_empty() || attachments > 0)
-            && message.len() <= MAX_TASK_BYTES
-            && attachments <= crate::message::content::MAX_INPUT_ATTACHMENTS
+        (!message.trim().is_empty() || attachments > 0) && message.len() <= MAX_TASK_BYTES
     }
 
     /// Advances one ticket to

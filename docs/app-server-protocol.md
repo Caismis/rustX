@@ -1,7 +1,9 @@
-# App Server protocol v50
+# App Server protocol v51
 
-App Server v50 introduces bounded conversation observation, identity receipts,
-content range reads and atomic subscription acceptance (#467). It also retains
+App Server v51 removes product count/size caps from generic workspace uploads
+and advertises transport flow control only. See [Generic file upload policy](#generic-file-upload-policy-v51).
+It retains bounded conversation observation, identity receipts, content range reads
+and atomic subscription acceptance introduced in v50 (#467). It also retains
 the source-scoped automatic `rustx.toml` repair receipts introduced in v47 (#464):
 `SourceSettings.user_repair` / `workspace_repair` carry each source's latest
 bounded, redacted `ConfigRepairReceipt`, and the
@@ -2346,3 +2348,18 @@ correlation field for them. Stored Responses results retain the actual accepted
 output's native ID; stateless replay and full explicit history retain their encoded
 request-local IDs. This observation contract is App Server v50 / Runtime Client v71;
 only the current schema generation is shipped.
+
+
+## Generic file upload policy (v51)
+
+App Server v51 removes generic file count, per-file bytes and aggregate bytes
+from `ServerCapabilities.upload_policy`. It now advertises transport flow control
+only: `max_concurrent_transfers` and `max_chunk_bytes`. The native Session accepts
+ordinary workspace attachments without a product count/size cap, matching DSH.
+The carrier receives one chunk at a time into anonymous scratch storage and
+hands complete, verified file bodies to the existing native allocation owner.
+
+Web and TUI negotiate only `rustx.app-server.v51`; v50 and older peers are
+rejected explicitly. Runtime Client v71, Session catalog schema 15 and SQLite
+schema 49 are unchanged. There are no old policy fields, alternate upload paths
+or compatibility handlers. See [Session-owned workspace uploads](session-uploads.md).

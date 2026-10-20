@@ -1,5 +1,5 @@
 import { expect, type Locator, type Page } from '@playwright/test';
-import type { AttachmentTarget } from '../../../protocol/app-server/v50';
+import type { AttachmentTarget } from '../../../protocol/app-server/v51';
 import type { wireProbe } from './wire-probe';
 export async function closeSessionView(page: Page, id: string) {
   await page.locator(`button[data-session-id="${id}"]`).hover();

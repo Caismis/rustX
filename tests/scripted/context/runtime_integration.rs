@@ -3657,7 +3657,7 @@ async fn production_media_middle_candidate(image: bool, upload: bool) {
                 None,
                 vec![UploadFile {
                     name: "data.txt".into(),
-                    bytes: b"local, Session-owned contents".to_vec(),
+                    data: b"local, Session-owned contents".to_vec().into(),
                 }],
             )
             .await

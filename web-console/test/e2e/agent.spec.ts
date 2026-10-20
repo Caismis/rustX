@@ -162,7 +162,7 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
     await page.getByRole('button', { name: 'Add', exact: true }).click();
     const chooser = page.waitForEvent('filechooser'); await page.locator('#command-file').click();
     await (await chooser).setFiles({ name: 'review.txt', mimeType: 'text/plain', buffer: Buffer.from('Review notes') });
-    await expect(page.getByText('Uploaded', { exact: true })).toBeVisible();
+    await expect(page.locator('[data-attachment-state=ready]')).toBeVisible();
     await input.fill('Review these notes.'); await shot('attachment');
     if (width === 390) {
       const reader = page.locator('[data-conversation-scroll]').first();

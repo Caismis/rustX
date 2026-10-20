@@ -2656,3 +2656,58 @@ passed, followed by four focused desktop/narrow rechecks after that outline
 repair. The updated non-popup references change only the centered chevron;
 registered dark-390 attachment/context noise pixels were compared with the old
 references and are unchanged. No noise regions or tolerances were widened.
+
+## File picker, page drop and attachment rail alignment
+
+Reference: DeepSeek Harness `687f282e8625c6b8d11ff58211a90524be2e4317`:
+`ui-conversation/skeleton/InputBar.tsx`, `ui-attachment/ComposerAttachments`,
+`drop-events`, `DropOverlay`, `AttachmentRail`, `FileCard`, and the shared
+`ImageLightbox`/`file-size` primitives. The reference checkout was read only.
+
+| Reference evidence / previous mismatch | Result and native boundary |
+| --- | --- |
+| DSH opens the multi-file picker from the plus menu and resets its input; rustX advertised raw byte/count budgets in that row | Retain the same picker entry, editor selection and repeat-pick behavior; show the normal attachment description. |
+| DSH listens across the document and shows the illustrated, blurred viewport mask; rustX listened only near the composer | Reuse the DSH document enter/leave counter, copy/blocked drop effect, viewport exit/dragend cleanup, and body-portal mask. Text-only drags remain native. |
+| DSH uses a scrollbar-free paged rail, 240×64 file cards and 64×64 image thumbnails; rustX stacked a generic card, status line and separate retry controls | Reuse rail geometry, edge arrows, wheel panning, new-item reveal, file glyph/size, hover/touch removal, card-body retry and original-image lightbox. |
+| DSH refuses invalid additions with a toast rather than a rejected placeholder | One intake path for picker/drop/paste refuses an invalid addition atomically and preserves the existing draft. Native safe-basename and directory admission remain authoritative. |
+| DSH's InputBar explicitly applies no count/size cap to generic files; rustX imposed 8 files / 2 MiB each / 4 MiB aggregate | Remove those product limits from native preparation, receipt collection, persisted allocation validation, generated capability and clients. Transport concurrency and 64 KiB frames remain independent flow control. The server spools verified frames to anonymous temporary files rather than buffering entire large selections. |
+| DSH separately projects provider-native image limits (reference defaults: 20 images, 20 MiB each, 200 MiB aggregate) | rustX uploads all selected files, including images, into the workspace and does not create provider-native image input. No unrelated image-message limit or image-limit caption is invented for this file path. Image thumbnails retain native upload indication. |
+| Native transport response loss cannot prove failure | Keep Check status inside the same card; only Absent/Failed evidence permits explicit Retry with a fresh operation. No implicit retransmission or browser receipt fabrication. First-submit sealing, native authority fences and TUI's pi interaction remain intact. |
+
+Browser plugin not available; rendered verification uses the repository's pinned
+Playwright 1.63.0 Chromium container. Target flow: composer plus-menu selection or
+a file drag anywhere on the page → native intake/upload → DSH rail, pending/error
+feedback, explicit recovery and preserved editor text/selection. Desktop English
+light and narrow Chinese dark cover the same flow; real native upload scenarios
+exercise workspace bytes, source/fork ownership and more than the old file limits.
+
+
+The upload capability change is mandatory App Server v51. All current Web/TUI
+DTO imports and the binary carrier's control negotiation use v51; v50 artifacts
+are removed and old peers are rejected. This is a native protocol update only
+for other derived presentation files. Runtime Client v71 and TUI interactions
+remain unchanged. The two old narrow attachment-card rasterizer-noise entries
+were removed along with that card. All four new attachment references compare
+exactly; no screenshot tolerance was expanded.
+
+
+Final verification: 2,943 Web unit tests plus the real native Web/TUI parity
+case passed (four existing skips); 87 focused attachment/comparator checks passed
+after the final action-label update. The 72 focused TUI client/upload checks and
+Web/TUI/protocol typechecks passed. Native upload, child input admission, App Server
+and old-version refusal checks passed, as did Clippy, formatting, i18n, source
+provenance and the production build. Shared child task/guidance admission now
+accepts 32 files while preserving its separate text budget and cancellation fence.
+
+The normal pinned-browser run passed all 18 selected regressions under v51. It
+covered desktop English/light, narrow Chinese/dark, all four theme/width Composer
+references, picker caret preservation, document drop, mixed attachment rail,
+image preview/focus restoration, invalid-addition toast, named retry/status
+actions, committed-control fences, read-only navigation, native retry/Fork, source
+deletion/reload, and 24 files including a 6 MiB Markdown document. Target-flow
+console/error-overlay and horizontal-overflow checks were clean. Only the four
+intentional attachment baselines changed; both old attachment noise exceptions
+were removed. Screenshots were inspected from `/tmp/rustx-upload-drop-1440.png`,
+`/tmp/rustx-upload-drop-390.png`, `/tmp/rustx-upload-rail-1440.png`,
+`/tmp/rustx-upload-rail-390.png`, `/tmp/rustx-upload-pending.png`, and
+`/tmp/rustx-upload-failed.png`. The existing bundle-size build warning remains.

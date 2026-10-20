@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { RuntimeClientCheckpoint, RuntimeClientSnapshot, WorkflowRunView, WorkflowSnapshot } from '../../../../protocol/app-server/v50';
+import type { RuntimeClientCheckpoint, RuntimeClientSnapshot, WorkflowRunView, WorkflowSnapshot } from '../../../../protocol/app-server/v51';
 import { parseObservedValue } from '../../../../protocol/app-server/domain-observation';
 import type { AppServerClient, SessionView } from '../../client/app-server';
 import type { TraceFieldReader } from '../../client/trace';

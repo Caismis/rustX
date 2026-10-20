@@ -385,7 +385,5 @@
   .tools, .modes, .trailing { gap: 8px; }
 }
 
-.attachments { display: flex; gap: 10px; overflow-x: auto; padding: 6px 14px; }
-.attachments:empty { display: none; }
 
 .primary > span, .add > span { display: flex; }

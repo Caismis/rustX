@@ -1,8 +1,9 @@
-//! Short-lived binary carrier. This owner never creates or cleans upload files.
+//! Short-lived binary carrier with anonymous scratch files. The Session owner
+//! alone allocates, commits and cleans durable workspace uploads.
 use super::{connection::Route, host::AppServerHost};
 use crate::local_runtime::{
     session::uploads::{
-        UPLOAD_POLICY, UploadFile, UploadMetadata, UploadOutcome, validate_metadata,
+        UPLOAD_POLICY, UploadData, UploadFile, UploadMetadata, UploadOutcome, validate_metadata,
         validate_operation,
     },
     session_controller::SessionAccess,
@@ -20,7 +21,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::{
-    io::{AsyncRead, AsyncWrite},
+    io::{AsyncRead, AsyncSeekExt, AsyncWrite, AsyncWriteExt},
     net::TcpListener,
 };
 use tokio_tungstenite::{
@@ -412,44 +413,54 @@ pub(crate) async fn serve<S: AsyncRead + AsyncWrite + Unpin + Send>(
     let receive = async {
         let mut files = Vec::with_capacity(transfer.files.len());
         for metadata in &transfer.files {
-            let mut bytes = Vec::with_capacity(metadata.size);
-            while bytes.len() < metadata.size {
+            // Anonymous host-owned spool: one chunk in memory, no visible native
+            // allocation until the complete frame has been received and verified.
+            let mut spool = tokio::fs::File::from_std(tempfile::tempfile()?);
+            let mut received = 0;
+            while received < metadata.size {
                 socket
                     .send(Message::Text("next".into()))
                     .await
                     .map_err(io::Error::other)?;
-                let message = socket
-                    .next()
+                let message = tokio::time::timeout(TTL, socket.next())
                     .await
+                    .map_err(io::Error::other)?
                     .ok_or_else(|| invalid("truncated upload"))?
                     .map_err(io::Error::other)?;
                 let Message::Binary(chunk) = message else {
                     return Err(invalid("expected upload binary chunk"));
                 };
-                if chunk.is_empty() || chunk.len() > metadata.size - bytes.len() {
+                if chunk.is_empty() || chunk.len() > metadata.size - received {
                     return Err(invalid("upload length mismatch"));
                 }
-                bytes.extend_from_slice(&chunk);
+                spool.write_all(&chunk).await?;
+                received += chunk.len();
             }
+            spool.rewind().await?;
             files.push(UploadFile {
                 name: metadata.name.clone(),
-                bytes,
+                data: UploadData::File {
+                    file: spool.into_std().await,
+                    size: received,
+                },
             });
         }
         socket
             .send(Message::Text("finish".into()))
             .await
             .map_err(io::Error::other)?;
-        if socket.next().await.transpose().map_err(io::Error::other)?
+        if tokio::time::timeout(TTL, socket.next())
+            .await
+            .map_err(io::Error::other)?
+            .transpose()
+            .map_err(io::Error::other)?
             != Some(Message::Text("finish".into()))
         {
             return Err(invalid("upload has trailing or missing bytes"));
         }
         Ok(files)
     };
-    let files = tokio::time::timeout(TTL, receive)
-        .await
-        .map_err(io::Error::other)??;
+    let files = receive.await?;
     // No cancellation from here: native settlement owns its allocation even if
     // this socket disappears. The permit and Session exclusion survive the ACK.
     let outcome = host

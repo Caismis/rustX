@@ -9,7 +9,7 @@ import { RpcFailure } from '../../src/client/app-server';
 import { App } from '../../src/app/App';
 import { Server, interaction, snapshot, projectionHead, endpoint } from '../fixture';
 import { traceRecord } from '../trace-fixture';
-import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v50';
+import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v51';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -110,7 +110,15 @@ createRoot(document.getElementById('root')!).render(mode === 'restored' ? <Resto
 // Browser-only controls for deterministic composer projection/transport tests.
 // No fixture code enters the production bundle.
 if (mode === 'composer') {
+  let uploadStart = 0;
     window.composerFixture = {
+    holdUploads: () => { uploadStart = server.requests.length; server.held.add('session/uploadStatus'); },
+    settleUploads: state => {
+      server.held.delete('session/uploadStatus');
+      if (state !== 'ready') for (const key of server.uploads.keys()) server.uploads.set(key, { state });
+      for (const { request, socket } of server.requests.slice(uploadStart)) if (request.method === 'session/uploadStatus') server.reply(request, socket);
+    },
+    uploads: () => server.requests.filter(row => row.request.method === 'session/uploadPrepare').length,
     running: async value => { const next = structuredClone(server.snapshots.get('A')!); next.attempt = value ? { attempt_id: 'attempt-A', phase: { type: 'running' }, turn: 1, execution_settings: { resource_revision: '1', approval_mode: 'policy' } } : null; await server.update('A', next); },
     docks: async value => {
       const next = structuredClone(server.snapshots.get('A')!);
@@ -135,7 +143,7 @@ if (mode === 'composer') {
   };
 }
 declare global {
-  interface Window { composerFixture: { running(value: boolean): Promise<void>; docks(value: boolean): Promise<void>; holdCancellation(): void; busyEnter(value: 'queue' | 'steer'): void; cancellations(): import('../../../protocol/app-server/v50').AttachmentTarget[]; acknowledgeCancellation(): Promise<void>; submissions(): string[] } }
+  interface Window { composerFixture: { holdUploads(): void; settleUploads(state: 'ready' | 'failed' | 'unresolved'): void; uploads(): number; running(value: boolean): Promise<void>; docks(value: boolean): Promise<void>; holdCancellation(): void; busyEnter(value: 'queue' | 'steer'): void; cancellations(): import('../../../protocol/app-server/v51').AttachmentTarget[]; acknowledgeCancellation(): Promise<void>; submissions(): string[] } }
 }
 
 function RestoredComposerFixture() {

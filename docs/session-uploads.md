@@ -136,7 +136,7 @@ another Session's root.
 
 ## Protocol and schema boundaries
 
-App Server v50 is mandatory (`rustx.app-server.v50`). Session catalog schema 15
+App Server v51 is mandatory (`rustx.app-server.v51`). Session catalog schema 15
 retains native upload operation correlation and known pre-ready failures alongside
 each allocation, and adds the execution-ownership generation described in
 [the App Server contract](app-server-protocol.md). SQLite schema 49 is unchanged.
@@ -159,11 +159,11 @@ never exceeding the remaining declared length. Files follow metadata order; empt
 files consume no binary message. After the exact declared bytes, the server sends
 `finish` and requires the client's `finish` terminal marker. Early termination,
 extra bytes in place of that marker, oversized messages and nonbinary data chunks
-fail before native allocation. The whole receive phase has a 60-second deadline.
+fail before native allocation. Each requested frame has a 60-second inactivity deadline.
 No HTTP request body or Content-Length parser is involved. The ordinary JSON
 WebSocket still rejects binary messages and retains its 1 MiB bound.
 
-The carrier hands bounded byte vectors to `SessionController`, which alone claims,
+The carrier hands anonymous, rewound file bodies to `SessionController`, which alone claims,
 materializes, synchronizes, verifies and commits ready. The carrier's `settled` or
 `check` message carries no receipt: clients read `session/uploadStatus` for the exact
 operation. A prepared/active carrier is unresolved even before native allocation.
@@ -173,28 +173,35 @@ restart. A failed materialization retains native-owned cleanup residue. An
 unresolved durable claim never authorizes Retry. A new explicit retry after absent
 or failed evidence uses a new operation identity; old allocations are never reused.
 
-### Finite budgets
+### File policy and transport flow control
 
-The typed initialization capability `upload_policy` is the only policy source:
-`max_file_bytes = 2,097,152`; `max_files_per_transfer = 8` and
-`max_transfer_bytes = 4,194,304` bound one preparation. Separately,
-`max_uploads_per_user_input = 8` and `max_upload_bytes_per_user_input = 4,194,304`
-bound one submitted User input, even across multiple transfers. Two prepared-or-active
-transfers (`max_concurrent_transfers`) each allow 65,536-byte messages (`max_chunk_bytes`). There is no pending transfer admission
+As in DSH, ordinary workspace file attachments have no product limit on file
+count, individual size or aggregate bytes. The same file-count policy applies
+to native child task/guidance admission; its independent text budget remains.
+rustX treats all picked files,
+including images, as workspace uploads; it does not send provider-native image
+blocks, so DSH's separate image-message limits do not apply to this path.
+
+The typed initialization capability `upload_policy` advertises transport flow
+control only. Two prepared-or-active transfers (`max_concurrent_transfers`) each
+allow 65,536-byte messages (`max_chunk_bytes`). The browser reads one chunk on
+demand. The server spools each file to anonymous temporary storage, closes that
+storage on rejection/truncation, and hands verified complete files to the native
+allocation owner without retaining the batch in memory. The inactivity timeout
+applies per received frame, not to the duration of a large active transfer.
+There is no pending transfer admission
 queue. Prepared descriptors retain permits; expiry releases unused preparations.
 Consumption retains the permit through native settlement even if its reply is lost.
 
-Native payload buffers total at most 8 MiB across both transfers. Reserve a further
-512 KiB for bounded socket/frame working buffers (8.5 MiB aggregate, excluding
-metadata and OS TCP buffers). Maximum admitted concurrent file materialization is
-8 MiB. Committed Session storage and native partial residue are retained until native
-cleanup; this is an in-flight budget, not a total Session disk quota. Browser sending
-has at most one 64 KiB slice in flight per transfer. TUI local-file reading is bounded
-by the advertised file limit; its byte vector and Blob copies are separate client
-memory, not native storage (at most three 2 MiB backing allocations plus a
-64 KiB slice and the one-byte oversize sentinel). Full bounded buffering avoids a second staging owner
-or a speculative streaming storage strategy. Filesystem work runs on the blocking
-pool, leaving cancellation, detach and status available on the control socket.
+Native receive and materialization copy buffers remain independent of total
+payload size: the binary lane admits one 64 KiB chunk at a time and native copy
+uses `std::io::copy` from the anonymous file. Scratch disk usage follows the
+in-flight selection and is released by descriptor lifetime on every exit.
+Committed Session files and native partial residue remain under Session cleanup.
+Browser sending has at most one 64 KiB slice in flight per transfer. TUI keeps its
+explicit local-file read and acknowledgement flow; its byte/Blob copies are
+client-owned memory. Native filesystem work runs on the blocking pool, leaving
+cancellation, detach and status available on the control socket.
 
 General multipart/resumable protocols and a new HTTP request-body parser were not
 introduced. Explicit binary message framing reuses existing supported browser,
@@ -243,12 +250,12 @@ cannot remain Unresolved solely because a dead capability remains until expiry.
 Consumed work survives detach and remains server-owned through native settlement.
 
 `SessionController::uploaded_content` validates the entire receipt collection once
-for both `turn/start` and `turn/steer`, before inbound admission. It checks count,
-Session ownership, ready status and the sum of native `UploadEntry.admitted_bytes`.
+for both `turn/start` and `turn/steer`, before inbound admission. It checks Session ownership, ready status and checked arithmetic over native
+`UploadEntry.admitted_bytes`.
 This size is persisted with the original claim and retained across native copies;
 later mutable-file metadata and client claims cannot redefine admission policy.
-Catalog validation rejects empty/over-count allocations, oversized admitted file
-sizes, and checked aggregate admitted sizes exceeding the transfer bound. This
+Catalog validation rejects empty allocations, unsafe names and aggregate
+admitted-size arithmetic overflow. This
 also applies on reopen and to copied subsets; current mutable bytes need not equal
 the original admitted fact.
 Canonical block order remains the submitted order. Multi-file native transfers
@@ -287,4 +294,5 @@ local authority loss and pauses continuation without allocating again.
 Queued files stopped before dispatch are locally known to have no side effect.
 Rebinding makes them retryable, never uncertain, and never automatically dispatches
 them. Only dispatched/fenced work needs reconciliation. Unavailable DataTransfer
-file items are visible rejected metadata, not fabricated zero-byte files.
+file items, directories and unsafe names refuse the whole addition with a toast;
+the existing draft remains intact, with no rejected placeholder cards.

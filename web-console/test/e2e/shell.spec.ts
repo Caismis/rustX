@@ -392,7 +392,7 @@ test('authoritative narrow navigation commits while a background snapshot is hel
   await expect(page.locator('[data-harness-frame]')).not.toHaveAttribute('data-sidebar-overlay');
 });
 
-const nativeMutations = (requests: import('../../../protocol/app-server/v50').Request[]) => requests.filter(request => /^(session\/(attach|detach|switchNode|unload)|turn\/)/.test(request.method));
+const nativeMutations = (requests: import('../../../protocol/app-server/v51').Request[]) => requests.filter(request => /^(session\/(attach|detach|switchNode|unload)|turn\/)/.test(request.method));
 
 for (const outcome of ['escape', 'backdrop', 'toggle', 'newer', 'success', 'failed', 'replacement', 'breakpoint', 'desktop'] as const) test(`sidebar attachment ownership: ${outcome}`, async ({ page }) => {
   await page.setViewportSize({ width: outcome === 'desktop' ? 1440 : 390, height: 844 });
@@ -592,10 +592,10 @@ async function proveCommittedControls(page: Page) {
   // Both new uploads and reconciliation use ConversationSeat's committed fence.
   await page.evaluate(() => window.sessionFixture.uncertainUpload());
   await page.getByLabel('Attach files', { exact: true }).setInputFiles({ name: 'owned.txt', mimeType: 'text/plain', buffer: Buffer.from('committed A') });
-  const reconcile = page.getByRole('button', { name: 'Check status', exact: true });
+  const reconcile = page.getByRole('button', { name: /^Check status for / });
   await expect(reconcile).toBeVisible();
   await page.evaluate(() => window.sessionFixture.resolveUpload());
-  await reconcile.click(); await expect(page.getByText('Uploaded', { exact: true })).toBeVisible();
+  await reconcile.click(); await expect(page.locator('[data-attachment-state=ready]')).toBeVisible();
   const requests = await page.evaluate(() => window.sessionFixture.requests());
   expect(requests.filter(request => request.method === 'session/uploadPrepare')).toHaveLength(1);
   expect(requests.filter(request => request.method === 'session/uploadStatus').every(request => request.params.target.session_id === 'A')).toBe(true);
@@ -722,7 +722,7 @@ for (const width of [390, 1440]) for (const back of ['return', 'sidebar'] as con
     { name: 'one.txt', mimeType: 'text/plain', buffer: Buffer.from('one') },
     { name: 'two.txt', mimeType: 'text/plain', buffer: Buffer.from('two') },
   ]);
-  await expect(page.getByText('Uploaded', { exact: true })).toHaveCount(2);
+  await expect(page.locator('[data-attachment-state=ready]')).toHaveCount(2);
   await editor.evaluate((element: HTMLTextAreaElement) => { element.focus(); element.setSelectionRange(7, 12, 'backward'); element.dispatchEvent(new Event('select', { bubbles: true })); });
   const requests = await page.evaluate(() => window.sessionFixture.requests());
   const editorIdentity = await page.locator('[data-editor-incarnation]').evaluate(element => [element.getAttribute('data-editor-incarnation'), element.getAttribute('data-editor-revision')]);
@@ -741,7 +741,7 @@ for (const width of [390, 1440]) for (const back of ['return', 'sidebar'] as con
     await expect(page.getByLabel('Session title')).toHaveText('Session A'); await expect(editor).toHaveValue(text); await expect(editor).toBeEditable();
     expect(await editor.evaluate((element: HTMLTextAreaElement) => [element.selectionStart, element.selectionEnd, element.selectionDirection])).toEqual([7, 12, 'backward']);
     await expect(page.getByText('one.txt', { exact: true })).toBeVisible(); await expect(page.getByText('two.txt', { exact: true })).toBeVisible();
-    await expect(page.getByText('Uploaded', { exact: true })).toHaveCount(2);
+    await expect(page.locator('[data-attachment-state=ready]')).toHaveCount(2);
     expect(await page.evaluate(() => window.sessionFixture.navigationFacts())).toEqual(before);
   }
   const delta = (await page.evaluate(() => window.sessionFixture.requests())).slice(requests.length);
@@ -818,7 +818,7 @@ test('Discard creates a stable replacement editor through repeated read-only his
   await page.evaluate(() => window.sessionFixture.resolveUpload());
   await editor.fill('Stable replacement after Discard');
   await page.getByLabel('Attach files', { exact: true }).setInputFiles({ name: 'replacement.txt', mimeType: 'text/plain', buffer: Buffer.from('replacement') });
-  await expect(page.getByText('Uploaded', { exact: true })).toHaveCount(1);
+  await expect(page.locator('[data-attachment-state=ready]')).toHaveCount(1);
   const incarnation = await page.locator('[data-editor-incarnation]').getAttribute('data-editor-incarnation');
   await editor.evaluate((element: HTMLTextAreaElement) => { element.focus(); element.setSelectionRange(3, 8, 'backward'); element.dispatchEvent(new Event('select', { bubbles: true })); });
   const requests = await page.evaluate(() => window.sessionFixture.requests());
@@ -839,7 +839,7 @@ for (const width of [390, 1440]) test(`reselecting the current Session preserves
   const editor = page.getByRole('textbox', { name: 'Message', exact: true });
   await editor.fill('Authored current Session draft');
   await page.getByLabel('Attach files', { exact: true }).setInputFiles({ name: 'retained.txt', mimeType: 'text/plain', buffer: Buffer.from('local') });
-  await expect(page.getByText('Uploaded', { exact: true })).toHaveCount(1);
+  await expect(page.locator('[data-attachment-state=ready]')).toHaveCount(1);
   await editor.evaluate((element: HTMLTextAreaElement) => { element.focus(); element.setSelectionRange(4, 9, 'backward'); element.dispatchEvent(new Event('select', { bubbles: true })); });
   const incarnation = await page.locator('[data-editor-incarnation]').getAttribute('data-editor-incarnation'), revision = await page.locator('[data-editor-revision]').getAttribute('data-editor-revision');
   const requests = await page.evaluate(() => window.sessionFixture.requests()), facts = await page.evaluate(() => window.sessionFixture.navigationFacts());

@@ -439,8 +439,8 @@ it('K: a dimension change fails, for strict and noise-policy references alike', 
 it.each([
   ...['idle-empty', 'idle-draft', 'running-empty', 'running-draft', 'attachment', 'context']
     .flatMap(state => ['light', 'dark'].map(theme => `composer-${state}-${theme}-390-linux.png`))
-    .filter(name => !['composer-attachment-dark-390-linux.png', 'composer-context-dark-390-linux.png'].includes(name))
-    .filter(name => !['running-empty', 'running-draft', 'attachment', 'context'].some(state => name === `composer-${state}-light-390-linux.png`)),
+    .filter(name => !['composer-context-dark-390-linux.png'].includes(name))
+    .filter(name => !['running-empty', 'running-draft', 'context'].some(state => name === `composer-${state}-light-390-linux.png`)),
   'mobile-expanded-dark-linux.png',
 ])('%s is strict', name => {
   expect(noisePolicy.some(entry => entry.reference === name)).toBe(false);
@@ -453,7 +453,7 @@ it.each([
   }
 });
 
-it.each([...['running-empty', 'running-draft', 'attachment', 'context'].map(state => [state, 'light']), ['attachment', 'dark'], ['context', 'dark']])('Composer %s %s noise rejects every adjacent unmeasured pixel', (state, theme) => {
+it.each([...['running-empty', 'running-draft', 'context'].map(state => [state, 'light']), ['context', 'dark']])('Composer %s %s noise rejects every adjacent unmeasured pixel', (state, theme) => {
   const name = `composer-${state}-${theme}-390-linux.png`, expected = reference(name);
   const entry = noisePolicy.find(entry => entry.reference === name)!;
   const measured = new Set(entry.pixels!.map(([x, y]) => `${x},${y}`));
@@ -467,20 +467,6 @@ it.each([...['running-empty', 'running-draft', 'attachment', 'context'].map(stat
   for (const key of neighbours) { const [x, y] = key.split(',').map(Number); nudge(changed, x, y, 1); }
   const result = compare(changed, name, expected, noisePolicy);
   expect(result.ok).toBe(false); expect(result.changedOutsideRegions).toBe(neighbours.size);
-});
-
-it('dark attachment measured raster evidence passes while adjacent pixels and larger channel deltas fail', () => {
-  const name = 'composer-attachment-dark-390-linux.png', expected = reference(name);
-  const evidence = noisePolicy.find(entry => entry.reference === name)!;
-  const actual = copy(expected);
-  for (const [x, y, , after] of evidence.pixels!) paint(actual, x, y, after);
-  const check = (image: RgbaImage) => compareScreenshot({ referenceName: name, expected, actual: image, noisePolicy });
-  expect(check(actual).ok).toBe(true);
-  expect(check(actual).totalChanged).toBe(8);
-  const adjacent = copy(actual); nudge(adjacent, 289, 153, 1);
-  expect(check(adjacent).ok).toBe(false);
-  const overDelta = copy(expected); nudge(overDelta, 293, 153, 8);
-  expect(check(overDelta).ok).toBe(false);
 });
 
 // The former dark-context glyph allowance hid a deterministic sticky-paint

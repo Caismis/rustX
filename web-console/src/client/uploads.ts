@@ -1,4 +1,4 @@
-import type { UploadPolicy, UploadReceipt, UploadedFile, UploadOutcome } from '../../../protocol/app-server/v50';
+import type { UploadPolicy, UploadReceipt, UploadedFile, UploadOutcome } from '../../../protocol/app-server/v51';
 import { uploadOperationId } from '../../../protocol/app-server/upload';
 
 export type IntakeInput = { file: File | null; name?: string; directory?: boolean };
@@ -6,22 +6,21 @@ export class UploadFailure extends Error {
   constructor(readonly state: 'failed' | 'uncertain', cause?: unknown) { super(`Upload ${state}${cause === undefined ? '' : `: ${String(cause)}`}`, { cause }); }
 }
 export const uploadFailureState = (error: unknown) => error instanceof UploadFailure ? error.state : 'uncertain';
-export type IntakeReason = 'count' | 'size' | 'batch' | 'name' | 'directory' | 'policy' | 'unavailable';
-export type IntakeFile = { id: string; file: File | null; name: string; operation: string; status: 'draft' | 'queued' | 'uploading' | 'ready' | 'rejected' | 'failed' | 'uncertain' | 'reconciling'; reason?: IntakeReason; receipt?: UploadReceipt; error?: string };
+export type IntakeReason = 'name' | 'directory' | 'policy' | 'unavailable';
+export type IntakeFile = { id: string; file: File; name: string; operation: string; status: 'draft' | 'queued' | 'uploading' | 'ready' | 'failed' | 'uncertain' | 'reconciling'; receipt?: UploadReceipt; error?: string };
 export type UploadPort = { upload(files: readonly File[], operation: string): Promise<UploadedFile[]>; status(operation: string): Promise<UploadOutcome> };
 const safeName = (name: string) => !!name && new TextEncoder().encode(name).length <= 255 && !/[\p{Cc}/\\:*?"<>|]/u.test(name) && !/[. ]$/.test(name) && !/^(CON|PRN|AUX|NUL|COM\d|LPT\d)(\.|$)/i.test(name);
 
-/** One normalization path, with bounded visible rejection and no silent truncation. */
-export function intake(inputs: readonly IntakeInput[], existing: readonly IntakeFile[], policy?: UploadPolicy): IntakeFile[] {
-  if (!inputs.length) return [];
-  const row = (file: File | null, reason?: IntakeReason, name = file?.name ?? ''): IntakeFile => ({ name, id: uploadOperationId(), operation: uploadOperationId(), file, status: reason ? 'rejected' : 'draft', reason });
-  if (!policy || inputs.length + existing.length > policy.max_uploads_per_user_input) return [row(null, policy ? 'count' : 'policy', `${inputs.length} files`)];
-  let total = existing.reduce((sum, item) => sum + (item.status === 'rejected' ? 0 : (item.file?.size ?? 0)), 0);
-  return inputs.map(({ file, directory, name }) => {
-    const reason = directory ? 'directory' : !file ? 'unavailable' : !safeName(file.name) ? 'name' : file.size > policy.max_file_bytes ? 'size' : total + file.size > policy.max_upload_bytes_per_user_input ? 'batch' : undefined;
-    if (!reason) total += file!.size;
-    return row(file, reason, name ?? file?.name);
-  });
+/** One normalization path for picker, paste and document drop. File limits are
+ * not invented by the client; native workspace files carry no product cap. */
+export function intake(inputs: readonly IntakeInput[], policy?: UploadPolicy): { files: IntakeFile[]; reason?: IntakeReason } {
+  if (!inputs.length) return { files: [] };
+  if (!policy) return { files: [], reason: 'policy' };
+  for (const { file, directory } of inputs) {
+    const reason = directory ? 'directory' : !file ? 'unavailable' : !safeName(file.name) ? 'name' : undefined;
+    if (reason) return { files: [], reason };
+  }
+  return { files: inputs.map(({ file, name }) => ({ file: file!, name: name ?? file!.name, id: uploadOperationId(), operation: uploadOperationId(), status: 'draft' })) };
 }
 export function transferInputs(data: DataTransfer): IntakeInput[] {
   const items = Array.from(data.items ?? []).filter(item => item.kind === 'file');
@@ -50,7 +49,7 @@ export class AttachmentIntake {
     // Local File selections are recoverable. Native receipts/operations never
     // transfer to a replacement attachment, and nothing is automatically replayed.
     if (replaced) {
-      this.publish(this.files.map(file => file.status === 'rejected' || file.status === 'draft' ? file : { ...file, status: 'draft', receipt: undefined, error: undefined, operation: uploadOperationId() }));
+      this.publish(this.files.map(file => file.status === 'draft' ? file : { ...file, status: 'draft', receipt: undefined, error: undefined, operation: uploadOperationId() }));
       return;
     }
     this.publish(this.files.map(file => file.status === 'queued' ? { ...file, status: 'failed' } : ['uploading', 'reconciling'].includes(file.status) ? { ...file, status: 'uncertain' } : file));
@@ -76,8 +75,10 @@ export class AttachmentIntake {
   retire() { this.retired = true; this.clear(); this.listeners.clear(); }
   add(inputs: readonly IntakeInput[], policy: UploadPolicy | undefined, port?: UploadPort) {
     if (this.retired) return;
-    const added = intake(inputs, this.files, policy).map(file => port && file.status === 'draft' ? { ...file, status: 'queued' as const } : file);
-    this.publish([...this.files.filter(file => !added.some(row => row.reason && row.reason === file.reason && ['count', 'policy'].includes(row.reason))), ...added]);
+    const result = intake(inputs, policy);
+    if (result.reason) return result.reason;
+    const added = result.files.map(file => port ? { ...file, status: 'queued' as const } : file);
+    this.publish([...this.files, ...added]);
     if (port) {
       const revision = this.revision;
       // Sequence this finite selection once. Rebinding stops undispatched work;

@@ -15034,17 +15034,12 @@ export interface ServerCapabilities {
   experimental_methods: string[];
 }
 /**
- * Finite native storage admission, independent of image and control-frame limits.
+ * Transport flow control, independent of image and control-frame limits.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "UploadPolicy".
  */
 export interface UploadPolicy {
-  max_file_bytes: number;
-  max_transfer_bytes: number;
-  max_files_per_transfer: number;
-  max_uploads_per_user_input: number;
-  max_upload_bytes_per_user_input: number;
   max_concurrent_transfers: number;
   max_chunk_bytes: number;
 }

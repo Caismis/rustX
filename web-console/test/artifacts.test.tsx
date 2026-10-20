@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ArtifactResources, ARTIFACT_MAX_BYTES } from '../src/client/artifacts';
 import { Artifact, ArtifactContext } from '../src/app/components/Artifact';
 import { AgentComposer } from '../src/app/agent/AgentComposer';
-import type { UploadedFile } from '../../protocol/app-server/v50';
+import type { UploadedFile } from '../../protocol/app-server/v51';
 import { Server, capabilities, TOKEN } from './fixture';
 let server: Server;
 let sequence = 0;
@@ -121,10 +121,9 @@ it('URL retention stops at sixteen and releasing one slot permits a new read', a
   const next = resources.read('new'); server.socket.success(server.requests.at(-1)!.request, { type: 'artifact_bytes', data: 'eA==' }); await next;
   resources.dispose(); expect(revoke).toHaveBeenCalledTimes(17);
 });
-it('oversized upload drafts are rejected without any model or upload request', async () => {
+it('empty upload selections are rejected without any model or upload request', async () => {
   await server.attached('A'); const before = server.requests.length;
-  const oversized = new File([new Uint8Array(capabilities.upload_policy.max_file_bytes + 1)], 'huge');
-  await expect(server.client.upload('A', [oversized])).rejects.toThrow('native upload policy');
+  await expect(server.client.upload('A', [])).rejects.toThrow('Invalid upload selection');
   expect(server.requests).toHaveLength(before);
 });
 it('Blob uses safe authoritative MIME while semantic image bytes may omit MIME', async () => {
@@ -163,7 +162,7 @@ it.each(['picker', 'drop', 'paste'] as const)('retains a second %s selection dur
   const a = new File(['a'], 'first.txt'), b = new File(['b'], 'second.txt');
   fireEvent.change(ui.getByLabelText('Attach files'), { target: { files: [a] } });
   if (source === 'picker') fireEvent.change(ui.getByLabelText('Attach files'), { target: { files: [b] } });
-  if (source === 'drop') fireEvent.drop(ui.container.firstElementChild!, { dataTransfer: { files: [b] } });
+  if (source === 'drop') fireEvent.drop(ui.container.firstElementChild!, { dataTransfer: { files: [b], types: ['Files'] } });
   if (source === 'paste') fireEvent.paste(ui.getByLabelText('Message'), { clipboardData: { files: [b], getData: () => '' } });
   expect(upload).toHaveBeenCalledTimes(2);
   expect(ui.getByRole('button', { name: 'Remove second.txt' })).toBeTruthy();
@@ -215,8 +214,8 @@ it.each(['absent', 'failed', 'unresolved'] as const)('native %s evidence survive
   expect(value.phase).toBe(state === 'unresolved' ? 'uncertain' : 'failed');
   const recover = vi.fn((retry: boolean) => { void owner.recoverUpload(value, port, retry); });
   const ui = render(<AgentComposer firstSubmission={value} onRetainedRecover={recover} uploadPolicy={capabilities.upload_policy} disabled={false} busy={false} active={false} onUpload={async () => []} onSend={async () => false} onCancel={() => {}}/>);
-  expect(ui.queryByRole('button', { name: 'Retry' }) !== null).toBe(state !== 'unresolved');
-  expect(ui.queryByRole('button', { name: 'Check status' }) !== null).toBe(state === 'unresolved');
+  expect(ui.queryByRole('button', { name: /^Retry uploading / }) !== null).toBe(state !== 'unresolved');
+  expect(ui.queryByRole('button', { name: /^Check status for / }) !== null).toBe(state === 'unresolved');
   const count = () => server.requests.filter(item => item.request.method === 'session/uploadPrepare').length;
   if (state === 'unresolved') {
     await owner.recoverUpload(value, port, true); expect(count()).toBe(1);

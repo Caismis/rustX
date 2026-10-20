@@ -53,7 +53,7 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     await expect(message).toHaveValue('/not-a-command');
     await message.fill('Regenerate my uploaded note');
     await page.getByLabel('Attach files').setInputFiles({ name: 'note.txt', mimeType: 'text/plain', buffer: Buffer.from('Owned by native Session') });
-    await expect(page.getByText('Uploaded', { exact: true })).toBeVisible();
+    await expect(page.locator('[data-attachment-state=ready]')).toBeVisible();
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await expect(page.getByText('Original native answer', { exact: true })).toBeVisible(); await settled();
     const usageButton = page.getByRole('button', { name: 'Usage 120 token', exact: true });

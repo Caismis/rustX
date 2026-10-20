@@ -2565,8 +2565,8 @@ async fn artifact_carrier_is_native_scoped_bounded_and_cold_reopen_safe() {
                 target: target.clone(),
                 operation_id: "0".repeat(32),
                 files: vec![crate::local_runtime::session::uploads::UploadMetadata {
-                    name: "hello.txt".into(),
-                    size: crate::local_runtime::session::uploads::UPLOAD_POLICY.max_file_bytes + 1,
+                    name: "../unsafe.txt".into(),
+                    size: 0,
                 }],
             },
         )
@@ -2913,7 +2913,7 @@ async fn lost_upload_waiter_does_not_cancel_or_replay_the_owned_commit() {
                 None,
                 vec![crate::local_runtime::session::uploads::UploadFile {
                     name: "fence.txt".into(),
-                    bytes: vec![],
+                    data: vec![].into(),
                 }],
             )
             .await
@@ -2967,11 +2967,11 @@ async fn restored_destination_receipts_admit_a_turn_after_source_deletion() {
                 vec![
                     UploadFile {
                         name: "A.txt".into(),
-                        bytes: b"A".to_vec(),
+                        data: b"A".to_vec().into(),
                     },
                     UploadFile {
                         name: "B.txt".into(),
-                        bytes: b"B".to_vec(),
+                        data: b"B".to_vec().into(),
                     },
                 ],
             )
@@ -8349,9 +8349,9 @@ async fn stdio_active_upload_is_owned_until_native_settlement_during_drain() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn native_user_input_receipt_collection_enforces_count_bytes_and_authority() {
+async fn native_user_input_receipts_allow_large_collections_and_preserve_authority() {
     bounded(async {
-        use crate::local_runtime::session::uploads::{UPLOAD_POLICY, UploadFile};
+        use crate::local_runtime::session::uploads::UploadFile;
         for byte_boundary in [false, true] {
             let f = Fixture::new().await;
             let connection = AppServerConnection::new(f.host.clone());
@@ -8360,7 +8360,7 @@ async fn native_user_input_receipt_collection_enforces_count_bytes_and_authority
             let controller = f.manager.session_controller();
             let native = f.load(0).await.unwrap().unwrap().inspect_runtime().unwrap();
             let mut empty = Vec::new();
-            for _ in 0..=UPLOAD_POLICY.max_uploads_per_user_input {
+            for _ in 0..24 {
                 empty.push(
                     controller
                         .upload(
@@ -8368,7 +8368,7 @@ async fn native_user_input_receipt_collection_enforces_count_bytes_and_authority
                             None,
                             vec![UploadFile {
                                 name: "empty".into(),
-                                bytes: vec![],
+                                data: vec![].into(),
                             }],
                         )
                         .await
@@ -8378,11 +8378,7 @@ async fn native_user_input_receipt_collection_enforces_count_bytes_and_authority
                 );
             }
             let mut large = Vec::new();
-            for size in [
-                UPLOAD_POLICY.max_file_bytes,
-                UPLOAD_POLICY.max_file_bytes,
-                1,
-            ] {
+            for size in [3 * 1024 * 1024, 3 * 1024 * 1024, 1] {
                 large.push(
                     controller
                         .upload(
@@ -8390,7 +8386,7 @@ async fn native_user_input_receipt_collection_enforces_count_bytes_and_authority
                             None,
                             vec![UploadFile {
                                 name: "document".into(),
-                                bytes: vec![b'x'; size],
+                                data: vec![b'x'; size].into(),
                             }],
                         )
                         .await
@@ -8419,7 +8415,7 @@ async fn native_user_input_receipt_collection_enforces_count_bytes_and_authority
                         .clone(),
                     &[UploadFile {
                         name: "partial".into(),
-                        bytes: vec![],
+                        data: vec![].into(),
                     }],
                 )
                 .unwrap();
@@ -8432,7 +8428,7 @@ async fn native_user_input_receipt_collection_enforces_count_bytes_and_authority
                 .await
                 .commit_uploads(&target.session_id, registry.clone())
                 .unwrap();
-            for receipts in [empty.clone(), large.clone(), vec![foreign], vec![unready]] {
+            for receipts in [vec![foreign], vec![unready]] {
                 for steer in [false, true] {
                     let content = receipts
                         .iter()
@@ -8491,9 +8487,9 @@ async fn native_user_input_receipt_collection_enforces_count_bytes_and_authority
                 registry
             );
             let receipts = if byte_boundary {
-                &large[..2]
+                &large[..]
             } else {
-                &empty[..UPLOAD_POLICY.max_uploads_per_user_input]
+                &empty[..]
             };
             let mut content: Vec<_> = receipts
                 .iter()
