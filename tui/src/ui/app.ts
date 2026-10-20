@@ -94,7 +94,6 @@ import { ConfirmationView } from "./components/confirmation.ts";
 import { PopupFrame, type PopupContent } from "./components/popup-frame.ts";
 import { TransientFeedbackSurface } from "./components/transient-feedback.ts";
 import { SourceRepairStatus } from "./components/source-repair-status.ts";
-import type { SourceRepairObservation } from "../presentation/source-repairs.ts";
 import { FooterView } from "./components/status.ts";
 import type { ConversationContext } from "./components/status.ts";
 import { renderResourceBanner } from "./components/resources.ts";
@@ -115,7 +114,6 @@ import { SubagentTranscriptView } from "./components/subagent-transcript-view.ts
 import { HumanInputController } from "./human-input.ts";
 import { ConversationView } from "./conversation-view.ts";
 import type { PresentationLease } from "./presentation-lease.ts";
-import type { SourceTarget } from "../protocol/app-server.ts";
 
 export interface RustxTuiAppOptions {
   /** The App Server connection, its Session catalog, and who owns its process. */
@@ -159,7 +157,6 @@ export class RustxTuiApp {
   /** Newly observed configuration repairs of the current App Server
    * authority; presentation only (Issue #464). */
   readonly #repairStatus = new SourceRepairStatus();
-  #removeRepairListener: () => void = () => {};
   readonly #footer = new FooterView(() => ({
     state: this.#connecting ? undefined : this.#session?.state,
     connection: this.#connectionLabel(),
@@ -289,49 +286,7 @@ export class RustxTuiApp {
    * while this client was away is announced to no one until that read.
    */
   #watchSourceRepairs(): void {
-    this.#removeRepairListener();
-    const host = this.#host;
-    const kept = this.#repairStatus.adopt(host.authorityId);
-    const observe = (observation: SourceRepairObservation) => {
-      if (this.#host !== host || this.#quitting || this.#finished || !this.#repairStatus.observe(host.authorityId, observation)) return;
-      if (this.#started) this.#tui.requestRender();
-    };
-    for (const observation of host.sourceRepairs()) observe(observation);
-    this.#removeRepairListener = host.onSourceRepair(observe);
-    if (this.#started) this.#tui.requestRender();
-    if (kept) void this.#reconcileSourceRepairs(host);
-  }
-
-  /**
-   * Rereads, through `host`, every source the repair line still presents:
-   * each Workspace, whose read also rereads the User, and the User alone
-   * only when no Workspace read succeeded — a Workspace that can no longer
-   * be read never keeps the independent User source from its own read.
-   * Bounded by the line's finite sources, one read at a time, and read-only
-   * (`configuration/sourcesRead` never repairs, reconciles, loads a Session
-   * or reaches a model). Each result reaches the line through the host's
-   * sequence-ordered observations, so it never overwrites a newer notice.
-   * It stops once `host` is replaced, closed or the client quits. A failed
-   * read proves nothing — the entry stays until a later read or notice —
-   * and it never fails the connection.
-   */
-  async #reconcileSourceRepairs(host: AppServerHost): Promise<void> {
-    const pending = this.#repairStatus.pendingSources();
-    let userRead = false;
-    const read = async (target: SourceTarget) => {
-      if (this.#host !== host || host.client.closed !== undefined || this.#quitting || this.#finished) return false;
-      try {
-        await host.readSourceRepairs(target);
-        userRead = true;
-      } catch {
-        // Not a withdrawal; `/settings repairs` reads again explicitly.
-      }
-      return true;
-    };
-    for (const target of pending.filter(source => source.kind === "workspace")) {
-      if (!await read(target)) return;
-    }
-    if (!userRead && pending.some(source => source.kind === "user")) await read({ kind: "user" });
+    this.#repairStatus.watch(this.#host, host => this.#host === host && !this.#quitting && !this.#finished, () => { if (this.#started) this.#tui.requestRender(); });
   }
 
   #watchConnection(): void {
