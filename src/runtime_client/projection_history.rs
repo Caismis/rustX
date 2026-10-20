@@ -38,7 +38,7 @@ pub(crate) fn page(
         records: page
             .records
             .into_iter()
-            .map(super::projection::checkpoint_view)
+            .map(super::projection::views::checkpoint_view)
             .collect(),
         next_activation: page.next_activation,
     })
@@ -145,7 +145,7 @@ pub(crate) fn detail(
         read_cut: cut.clone(),
         next_item: (end < checkpoint.candidate.items.len())
             .then_some(u32::try_from(end).expect("bounded checkpoint coordinate")),
-        checkpoint: super::projection::checkpoint_view(checkpoint),
+        checkpoint: super::projection::views::checkpoint_view(checkpoint),
         items,
     })
 }

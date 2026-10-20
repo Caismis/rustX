@@ -175,6 +175,9 @@ crate::runtime_client::trace::request::bind_original_provenance -> crate::observ
 crate::runtime_client::trace::request::protocol_label -> crate::observation::trace::request::protocol_label
 crate::runtime_client::trace::request::request_message -> crate::observation::trace::request::request_message
 crate::runtime_client::trace::request::request_message_with_original -> crate::observation::trace::request::request_message_with_original
+crate::observation::tool::foreground/enrich_* error: RuntimeClientError -> crate::observation::tool::ToolTerminalUnavailable
+crate::runtime_client::response::terminal_turn -> crate::observation::turn::terminal_turn
+crate::runtime_client::response::TurnProcessOutcome -> crate::durable::reading::TurnProcessOutcome
 ```
 
 ## Removed `crate::runtime_client` root re-exports

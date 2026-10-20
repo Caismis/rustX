@@ -309,7 +309,7 @@ fn transcript_entry_view(
         }
         crate::durable::TranscriptItem::AttemptTerminal { event } => {
             RuntimeClientTranscriptItem::AttemptTerminal {
-                turn: crate::runtime_client::response::terminal_turn(event, entry.cursor.into())?,
+                turn: super::turn::terminal_turn(event, entry.cursor.into())?,
             }
         }
 

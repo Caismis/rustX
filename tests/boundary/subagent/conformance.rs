@@ -5856,7 +5856,7 @@ async fn the_successful_answer_never_enters_the_observation_plane() {
     }
 
     // The Runtime Client view of the settled child is equally clean.
-    let view = crate::runtime_client::projection::agent_view(
+    let view = crate::runtime_client::projection::views::agent_view(
         &plane
             .registry
             .agent_snapshot(&settled.child_agent_id)
@@ -6069,7 +6069,7 @@ async fn the_snapshot_projects_only_the_frozen_execution_profile() {
     // The Runtime Client view carries the same profile under the
     // `execution_profile` wire key; the obsolete bare `profile` key stays
     // retired.
-    let view = crate::runtime_client::projection::agent_view(
+    let view = crate::runtime_client::projection::views::agent_view(
         &plane
             .registry
             .agent_snapshot(&snapshot.child_agent_id)

@@ -1,3 +1,5 @@
+use super::*;
+
 // The currently published Trace cache owns its original issued read evidence.
 use crate::durable::ConversationStore;
 use crate::runtime_client::RuntimeClientError;
@@ -116,7 +118,10 @@ mod scale {
         );
         assert!(
             store
-                .observation_trace_tool_result(later.read_cut.source_cut.as_ref().unwrap(), &occurrence)
+                .observation_trace_tool_result(
+                    later.read_cut.source_cut.as_ref().unwrap(),
+                    &occurrence
+                )
                 .unwrap()
                 .is_some()
         );

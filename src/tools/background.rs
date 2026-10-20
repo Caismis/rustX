@@ -3144,7 +3144,7 @@ mod tests {
         let captured = page.items[0].clone();
         assert!(Arc::ptr_eq(&captured.tool_id, &original));
         captured.with_value(|value| {
-            let header = crate::runtime_client::projection::background_source_view(value);
+            let header = crate::runtime_client::projection::views::background_source_view(value);
             assert!(header.tool_id.is_none());
             assert!(header.deferred_fields.contains(&vec!["tool_id".into()]));
             assert!(serde_json::to_vec(&header).unwrap().len() < 1024);

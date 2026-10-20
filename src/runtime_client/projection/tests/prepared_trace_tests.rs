@@ -1,3 +1,5 @@
+use super::*;
+
 use crate::durable::ConversationStore;
 
 fn install_trace(projection: &mut RuntimeClientProjection, store: &dyn ConversationStore) {

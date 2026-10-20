@@ -304,7 +304,9 @@ async fn checkpoint_source_repair_waits_for_its_publication_install() {
 /// Holds the next publication between its fold and its install until the
 /// returned sender releases it; the checkpoint's repair proceeds only once
 /// that fold is held.
-fn hold_repair_publication(gate: &crate::runtime_client::host::PublicationGate) -> std::sync::mpsc::Sender<()> {
+fn hold_repair_publication(
+    gate: &crate::runtime_client::host::PublicationGate,
+) -> std::sync::mpsc::Sender<()> {
     let (entered_tx, entered) = std::sync::mpsc::channel();
     let (release, released) = std::sync::mpsc::channel::<()>();
     *gate.encoding_hook.lock().unwrap() = Some(Box::new(move || {
@@ -352,9 +354,9 @@ async fn checkpoint_source_repair_fails_at_its_deadline_and_a_later_checkpoint_r
     release.send(()).unwrap();
     let host = fixture.host.clone();
     let recovered = tokio::task::spawn_blocking(move || {
-        assert!(gate.wait_installed(
-            std::time::Instant::now() + std::time::Duration::from_secs(30)
-        ));
+        assert!(
+            gate.wait_installed(std::time::Instant::now() + std::time::Duration::from_secs(30))
+        );
         host.checkpoint()
     })
     .await
@@ -380,9 +382,10 @@ async fn installed_checkpoint_source_repair_returns_without_waiting() {
     let installed = gate.clone();
     *gate.repair_request_hook.lock().unwrap() = Some(Box::new(move || {
         entered.recv().unwrap();
-        assert!(installed.wait_installed(
-            std::time::Instant::now() + std::time::Duration::from_secs(30)
-        ));
+        assert!(
+            installed
+                .wait_installed(std::time::Instant::now() + std::time::Duration::from_secs(30))
+        );
         // From here the repair must find nothing in flight.
         *installed.repair_settle_hook.lock().unwrap() = Some(Box::new(|| {
             panic!("an installed repair awaited a publication")

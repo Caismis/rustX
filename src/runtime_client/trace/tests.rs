@@ -4886,9 +4886,5 @@ fn tool_locator_never_fabricates_execution_for_proposals_or_inherited_history() 
     assert_eq!(child.presentation_frontier().unwrap(), 0);
 }
 
-mod frozen_tests {
-    include!("frozen_tests.rs");
-}
-mod inspection_tests {
-    include!("inspection_tests.rs");
-}
+mod frozen_tests;
+mod inspection_tests;

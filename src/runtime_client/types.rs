@@ -1186,6 +1186,13 @@ impl RuntimeClientError {
     }
     /// Observation failures preserve the store's cut/source distinction. A
     /// storage fault cannot request replay repair of an otherwise valid cut.
+    pub(crate) fn tool_terminal_unavailable(
+        error: crate::observation::tool::ToolTerminalUnavailable,
+    ) -> Self {
+        Self::ObservationUnavailable {
+            message: error.to_string(),
+        }
+    }
     pub(crate) fn observation_store_error(error: crate::durable::ConversationStoreError) -> Self {
         use crate::durable::ConversationStoreError;
         let failure = match &error {

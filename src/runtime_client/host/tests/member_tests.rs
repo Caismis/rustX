@@ -1,8 +1,8 @@
 // Actual Native C/J receipts and finite Host checkpoints share one member owner.
 use super::*;
-use crate::runtime_client::checkpoint::RuntimeClientCheckpoint;
 use crate::observation::content::CanonicalContentLocator;
 use crate::observation::transcript::RuntimeClientMessageDescriptor;
+use crate::runtime_client::checkpoint::RuntimeClientCheckpoint;
 
 fn member_event(
     store: &dyn ConversationStore,
@@ -137,7 +137,7 @@ fn assert_completed_member_head(
     assert!(owner.attempt_id_source.is_none());
     assert_eq!(
         owner.outcome,
-        crate::runtime_client::response::TurnProcessOutcome::Completed
+        crate::durable::reading::TurnProcessOutcome::Completed
     );
     assert_eq!(owner.control_cursor.get(), 1);
     assert_eq!(owner.message_count, 1);
@@ -248,7 +248,7 @@ async fn native_member_fixture() -> NativeMemberFixture {
         assert!(row.identity.is_none());
         assert_eq!(
             row.turn_process.as_ref().unwrap().outcome,
-            crate::runtime_client::response::TurnProcessOutcome::Running
+            crate::durable::reading::TurnProcessOutcome::Running
         );
         assert!(
             row.turn_process
