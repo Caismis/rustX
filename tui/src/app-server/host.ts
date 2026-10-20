@@ -54,7 +54,8 @@ import {
   type AppServerChildOptions,
   type ChildExit,
 } from "./child-process.ts";
-import { AppServerSession, SESSION_PROJECTION_PAGE_LIMIT } from "./session.ts";
+import { AppServerSession } from "./session.ts";
+import { SESSION_PROJECTION_PAGE_LIMIT } from "./session-readers.ts";
 import { StdioTransport } from "./stdio-transport.ts";
 import {
   WebSocketTransport,
