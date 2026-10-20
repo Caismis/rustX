@@ -47,14 +47,10 @@ import { ComposerContext } from "./components/composer-context.ts";
 import { PendingInputView } from "./components/pending-input.ts";
 import { isAttemptActive } from "../presentation/state.ts";
 import { historyPresentation } from "../presentation/projection.ts";
-import { sanitizeField } from "../sanitize.ts";
 import type { ConnectingSession, SessionCatalogPage } from "../startup.ts";
 import {
-  Container,
-  Loader,
   ProcessTerminal,
   Spacer,
-  Text,
   TUI,
   matchesKey,
   type OverlayHandle,
@@ -70,7 +66,6 @@ import {
 } from "../commands/dispatcher.ts";
 import { sessionLabel } from "../presentation/selectors.ts";
 import { correlateTools } from "../presentation/tools.ts";
-import { selectTodos } from "../presentation/todos.ts";
 import type { PresentationState } from "../presentation/state.ts";
 import type { AppServerHost } from "../app-server/host.ts";
 import type { AppServerSession } from "../app-server/session.ts";
@@ -84,11 +79,7 @@ import type {
 } from "../protocol/app-server.ts";
 import { launchOpener, systemOpener, type Opener } from "../app-server/delivery-files.ts";
 import {
-  renderBackgroundSection,
-  renderInteractionSection,
-  renderOrphanExecutions,
   renderSubagentDetail,
-  renderSubagentSection,
 } from "./components/activity.ts";
 import {
   cycleSubagentSelection,
@@ -104,16 +95,9 @@ import { PopupFrame, type PopupContent } from "./components/popup-frame.ts";
 import { TransientFeedbackSurface } from "./components/transient-feedback.ts";
 import { SourceRepairStatus } from "./components/source-repair-status.ts";
 import type { SourceRepairObservation } from "../presentation/source-repairs.ts";
-import {
-  FooterView,
-  renderStartup,
-  startupVisible,
-  workingStatus,
-} from "./components/status.ts";
+import { FooterView } from "./components/status.ts";
 import type { ConversationContext } from "./components/status.ts";
 import { renderResourceBanner } from "./components/resources.ts";
-import { renderTranscript } from "./components/transcript.ts";
-import { renderTodoPanel, deferredTodoRecords } from "./components/todos.ts";
 import {
   type PresentationPreferences,
   defaultPreferences,
@@ -126,11 +110,10 @@ import {
   withToggledInteraction,
   withToggledToolCall,
 } from "./preferences.ts";
-import { style } from "./theme.ts";
-import { banded } from "./components/transcript-block.ts";
 import { SubagentTranscript } from "../app-server/subagent-transcript.ts";
 import { SubagentTranscriptView } from "./components/subagent-transcript-view.ts";
 import { HumanInputController } from "./human-input.ts";
+import { ConversationView } from "./conversation-view.ts";
 import type { PresentationLease } from "./presentation-lease.ts";
 import type { SourceTarget } from "../protocol/app-server.ts";
 
@@ -171,17 +154,7 @@ export class RustxTuiApp {
   readonly #opener: { command: string | undefined; launch: Opener };
 
   readonly #tui: TUI;
-  readonly #startup = new Container();
-  readonly #transcript = new Container();
-  readonly #activity = new Container();
-  /**
-   * The task panel, drawn between the conversation and the editor.
-   *
-   * It is the plan the reader needs *while typing the next message*, so it
-   * sits at the bottom of the scrollback rather than inside the transcript,
-   * and it is rebuilt from the projection like every other component here.
-   */
-  readonly #todos = new Container();
+  readonly #view: ConversationView;
   readonly #transient = new TransientFeedbackSurface();
   /** Newly observed configuration repairs of the current App Server
    * authority; presentation only (Issue #464). */
@@ -201,7 +174,6 @@ export class RustxTuiApp {
   readonly #drafts = new Map<string, ComposerDraft>();
   #uploading = false;
   readonly #inputPaste = new PasteGuard();
-  readonly #loader: Loader;
 
   #preferences: PresentationPreferences = defaultPreferences();
   #overlay: OverlayHandle | undefined;
@@ -279,7 +251,7 @@ export class RustxTuiApp {
     this.#editor.running = () => this.#session !== undefined && isAttemptActive(this.#session.state);
     this.#editor.onPrompt = (text, commands) => { void this.#onSubmit(text, false, commands); };
     this.#editor.onQueue = text => { void this.#onSubmit(text, true, false); };
-    this.#loader = new Loader(this.#tui, style.cyan, style.dim, "");
+    this.#view = new ConversationView(this.#tui);
 
     this.#dispatcher = new CommandDispatcher({
       host: this.#host,
@@ -288,12 +260,12 @@ export class RustxTuiApp {
       diagnostics: () => this.#diagnostics(),
     });
 
-    this.#tui.addChild(this.#startup);
-    this.#tui.addChild(this.#transcript);
-    this.#tui.addChild(this.#activity);
+    this.#tui.addChild(this.#view.startup);
+    this.#tui.addChild(this.#view.transcript);
+    this.#tui.addChild(this.#view.activity);
     this.#tui.addChild(this.#transient);
     this.#tui.addChild(this.#repairStatus);
-    this.#tui.addChild(this.#todos);
+    this.#tui.addChild(this.#view.todos);
     this.#tui.addChild(new Spacer(1));
     this.#tui.addChild(this.#composerContext);
     this.#tui.addChild(this.#editor);
@@ -369,7 +341,7 @@ export class RustxTuiApp {
       if (this.#host !== host || this.#quitting || this.#finished) return;
       if (this.#connecting) {
         this.#retainConnectingInput(this.#connecting.queued);
-        this.#connecting = undefined; this.#loader.stop(); this.#activity.clear();
+        this.#connecting = undefined; this.#view.stopWorking();
       }
       this.#deletion?.terminate();
       this.#initialResumePage = undefined;
@@ -630,11 +602,10 @@ export class RustxTuiApp {
         this.#draft = previousDraft;
         this.#editor.setText(retained || previousDraft.text);
         this.#connecting = undefined;
-        this.#loader.stop(); this.#activity.clear();
+        this.#view.stopWorking();
         if (this.#session) this.#renderState(this.#session.state);
         else {
-          this.#startup.clear();
-          this.#startup.addChild(new Text("Connection failed. Press Enter to choose a Session. Your input has been retained.", 1, 0));
+          this.#view.notice("Connection failed. Press Enter to choose a Session. Your input has been retained.");
         }
       }
       this.#showTransient(
@@ -694,7 +665,7 @@ export class RustxTuiApp {
         this.#initialConnection = undefined;
         void this.#focusSession(target.sessionId, target.nodeId, undefined, undefined, this.#presentationLease());
       } else if (this.#session === undefined) {
-        this.#startup.addChild(new Text("Choose a Session to resume. Enter reopens the picker; Ctrl+C exits.", 1, 0));
+        this.#view.notice("Choose a Session to resume. Enter reopens the picker; Ctrl+C exits.", false);
         const page = this.#initialResumePage;
         this.#initialResumePage = undefined;
         void this.#selectors.openResumeSelector(page);
@@ -1275,8 +1246,7 @@ export class RustxTuiApp {
         const next = reconciliation.kind === "ready" ? reconciliation.page.sessions.find(row => row.id !== deletionState.sessionId) : undefined;
         this.#session = undefined;
         this.#bindSession(undefined);
-        this.#startup.clear(); this.#transcript.clear(); this.#activity.clear(); this.#todos.clear();
-        this.#loader.stop();
+        this.#view.clear();
         if (!next) void this.#selectors.openResumeSelector();
         if (next) void this.#focusSession(next.id, undefined, undefined, undefined, this.#presentationLease());
         return;
@@ -1490,17 +1460,7 @@ export class RustxTuiApp {
   }
 
   #renderConnecting(): void {
-    this.#startup.clear(); this.#transcript.clear(); this.#activity.clear(); this.#todos.clear();
-    this.#loader.stop();
-    const history = this.#connecting?.history;
-    if (history) for (const block of renderTranscript(history, this.#preferences, correlateTools(history))) {
-      this.#transcript.addChild(banded(block)); this.#transcript.addChild(new Spacer(1));
-    }
-    if (this.#connecting?.queued !== undefined) {
-      this.#transcript.addChild(new Text(sanitizeField(this.#connecting.queued, true), 1, 0));
-      this.#loader.setMessage("Connecting… Esc to withdraw.");
-      this.#loader.start(); this.#activity.addChild(this.#loader);
-    }
+    this.#view.renderConnecting(this.#connecting?.history, this.#connecting?.queued, this.#preferences);
     this.#tui.requestRender();
   }
 
@@ -1518,84 +1478,14 @@ export class RustxTuiApp {
       this.#selectedAgentId = undefined;
       this.#subagentListFocused = false;
     }
-    // Correlated once per render and shared: the transcript and the activity
-    // area must agree on which calls have a transcript anchor.
-    const correlation = correlateTools(state);
-
-    // The welcome block is useful only before the first real turn. Session
-    // metadata is refreshed from the native Session projection and is never
-    // reconstructed from client or attachment identifiers.
-    this.#startup.clear();
-    if (startupVisible(state)) {
-      this.#startup.addChild(
-        new Text(
-          renderStartup(
-            state,
-            this.#sessionInfo,
-            this.#tui.terminal.columns,
-          ),
-          1,
-          0,
-        ),
-      );
-      // What the runtime is actually running with — its project context
-      // files, its Skill catalog, its active Tools — stated once, before the
-      // first turn, entirely from the capability and resource projections.
-      const resources = renderResourceBanner(state, {
-        workspace: this.#workspace,
-      });
-      if (resources.length > 0) {
-        this.#startup.addChild(new Spacer(1));
-        this.#startup.addChild(new Text(resources, 1, 0));
-      }
-    }
-
-    this.#transcript.clear();
-    for (const block of renderTranscript(state, this.#preferences, correlation)) {
-      this.#transcript.addChild(banded(block));
-      this.#transcript.addChild(new Spacer(1));
-    }
-
-    // The activity area holds only what is *not* conversation content. A
-    // foreground tool call renders inside the assistant message that asked
-    // for it, which is what keeps one call to one card.
-    this.#activity.clear();
-    for (const section of [
-      renderOrphanExecutions(correlation, this.#preferences),
-      renderBackgroundSection(state, this.#preferences),
-      renderSubagentSection(
-        state,
-        this.#preferences,
-        new Date(),
-        this.#subagentListFocused ? this.#selectedAgentId : undefined,
-      ),
-      renderInteractionSection(state, this.#preferences, this.#humanInput.focus),
-    ]) {
-      if (section.length > 0) {
-        this.#activity.addChild(new Text(section, 1, 0));
-      }
-    }
-
-    // The native loaded task prefix and its independently advertised range.
-    // Extension absence and a deferred nonempty list remain distinct.
-    this.#todos.clear();
-    const todos = renderTodoPanel(selectTodos(state), {
-      columns: this.#tui.terminal.columns,
-      deferredTasks: deferredTodoRecords(this.#session?.checkpoint?.collections),
+    this.#view.render(state, {
+      preferences: this.#preferences,
+      sessionInfo: this.#sessionInfo,
+      workspace: this.#workspace,
+      selectedAgentId: this.#subagentListFocused ? this.#selectedAgentId : undefined,
+      interactionFocus: this.#humanInput.focus,
+      collections: this.#session?.checkpoint?.collections,
     });
-    if (todos.length > 0) {
-      this.#todos.addChild(new Text(todos, 1, 0));
-    }
-
-    const working = workingStatus(state);
-    if (working === undefined) {
-      this.#loader.stop();
-    } else {
-      this.#loader.setMessage(working);
-      this.#loader.start();
-      this.#activity.addChild(this.#loader);
-    }
-
     this.#humanInput.sync(state);
     this.#syncDeletionPresentation();
     this.#tui.requestRender();
@@ -1652,7 +1542,7 @@ export class RustxTuiApp {
     this.#exitCode = code;
     const resolve = this.#resolveExit;
     this.#resolveExit = undefined;
-    this.#loader.stop();
+    this.#view.stop();
     this.#overlay?.hide();
     if (this.#started) {
       this.#tui.stop();
