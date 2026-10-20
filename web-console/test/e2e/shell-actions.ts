@@ -2,10 +2,9 @@ import { expect, type Locator, type Page } from '@playwright/test';
 import type { AttachmentTarget } from '../../../protocol/app-server/v51';
 import type { wireProbe } from './wire-probe';
 export async function closeSessionView(page: Page, id: string) {
-  const title = (await page.locator(`button[data-session-id="${id}"]`).getAttribute('aria-label'))!.slice('Open '.length);
   await page.getByRole('button', { name: 'View options', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Close view', exact: true }).hover();
-  await page.getByRole('menuitem', { name: title, exact: true }).click();
+  await page.locator(`[role="menuitem"][data-menu-item-id="close:${id}"]`).click();
 }
 export async function closeSettings(page: Page) {
   const close = page.getByRole('button', { name: 'Close Settings', exact: true });

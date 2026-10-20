@@ -1,5 +1,5 @@
-import { domainReceipt } from '../fixture';
-import { settingsReceipt } from '../fixture';
+import { nativeTraceFixture } from '../native-trace-fixture';
+import { checkpoint, domainReceipt, settingsReceipt } from '../fixture';
 import { createRoot } from 'react-dom/client';
 import { traceRecord, requestDetail } from '../trace-fixture';
 import { App } from '../../src/app/App';
@@ -23,8 +23,19 @@ if (new URL(location.href).searchParams.has('file-links')) {
   const message = { role: 'assistant' as const, id: 'files', content: [{ type: 'text' as const, text: '[モルガン 解説](docs/モルガン_解説.md) · [Same file](./docs/モルガン_解説.md) · [Source line](lines.py#L80) · [Missing](missing.md)' }] };
   server.snapshots.get('A')!.messages = [message];
   const text = { text: message.content[0].text, truncated: false };
-  server.snapshots.get('A')!.trace = { records: [traceRecord(1, { kind: 'assistant', request: null, message_id: 'files', preview: text })] };
-  server.traceDetails.set('trace:1', requestDetail(1, { kind: 'assistant', request: null, messages: [{ role: 'assistant', message_id: 'files', source: 'runtime', blocks: [{ type: 'text', text }], truncated: false }] }));
+  const record = traceRecord(1, { kind: 'assistant', request: null, message_id: 'files', preview: text });
+  const detail = requestDetail(1, { kind: 'assistant', request: null, messages: [{ role: 'assistant', message_id: 'files', source: 'runtime', blocks: [{ type: 'text', text }], truncated: false }] });
+  const native = nativeTraceFixture(record, detail, checkpoint(server.snapshots.get('A')!).read_cut);
+  server.snapshots.get('A')!.trace = { records: [record] };
+  server.handlers.set('session/traceDetail', () => ({ type: 'domain_page', page: native.page }));
+  server.handlers.set('conversation/checkpointPage', request => {
+    if (request.method !== 'conversation/checkpointPage') throw Error('Unexpected page request');
+    return { type: 'checkpoint_page', page: native.original.page(request.params.cut, request.params.domain, request.params.offset, () => true) };
+  });
+  server.handlers.set('conversation/contentRead', request => {
+    if (request.method !== 'conversation/contentRead') throw Error('Unexpected content request');
+    return { type: 'content_chunk', chunk: native.original.content(native.page.read_cut, request.params.content_ref, request.params.offset, () => true) };
+  });
   server.snapshots.get('A')!.transcript = { entries: [{ cursor: '1', item: { type: 'message', message } }] };
 }
 if (new URL(location.href).searchParams.has('composer-layout')) {

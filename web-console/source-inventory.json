@@ -98,7 +98,7 @@
     {
       "upstream": "packages/client/ui-input-trigger/src/client/MenuView.tsx",
       "destination": "web-console/src/app/commands/CommandMenu.tsx",
-      "treatment": "rewritten composer discovery; no controller, plugins or slot registry Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Composer add menu: grouped native command discovery and integrated file intake; upstream baseline unchanged.",
+      "treatment": "rewritten composer discovery; no controller, plugins or slot registry Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Composer add menu: grouped native command discovery and integrated file intake; upstream baseline unchanged. Acceptance review: fit the bottom-anchored menu below the measured conversation scrollport/header, following the inspected Harness header-clearance convention.",
       "upstream_sha256": "765da986046fcf0f5f02d676b3e3c31aa82d10e9e614c853022794e1ae36683f",
       "retained_dependencies": [
         "../../locale/react",
@@ -115,7 +115,7 @@
         "Harness queue and retry authority"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "6322fdc3c4d9502fd2ec644c75c17e8f264b93b0fc5b79d5fe72ea3089965f96"
+      "local_sha256": "7b5beb43b037e3c57fb718bfd319a6fe4a07169d07343d3b5e532464e35a666f"
     },
     {
       "upstream": "packages/client/ui-commands/src/client/PopupSelectView.tsx",
@@ -2000,7 +2000,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "f096461f4393189a190425f586e4be7973c2634c10ffbc77f5a981c74dac6441",
+      "local_sha256": "accc85f465f9c9edbd10708ae47a68884783f6c11ac455d01a85d848baea5ae1",
       "classification": "B",
       "additional_sources": [
         {

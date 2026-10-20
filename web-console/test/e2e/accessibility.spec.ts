@@ -82,12 +82,14 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     await page.keyboard.press('Enter');
     const dialog = page.getByRole('listbox', { name: 'Model', exact: true }); await expect(dialog).toBeVisible();
     await page.keyboard.press('Escape'); await expect(dialog).toHaveCount(0); await expect(message).toBeFocused();
-    // The composer paints keyboard focus on its rounded card, not a second
-    // rectangular outline around the native text scrollport.
+    // Harness keeps the rounded card neutral. Keyboard focus is retained on
+    // the editor with a visible insertion caret and no rectangular outline.
     expect(await message.evaluate(el => {
       const card = getComputedStyle(el.closest('[data-composer-card]')!);
-      return el.matches(':focus-visible') && card.boxShadow !== 'none'
-        && card.getPropertyValue('--dsw-elevation-stroke-color').trim() === card.getPropertyValue('--dsw-alias-state-business-primary').trim();
+      const input = getComputedStyle(el);
+      return el.matches(':focus-visible') && input.outlineStyle === 'none' && card.boxShadow !== 'none'
+        && input.caretColor !== 'transparent' && input.caretColor !== 'rgba(0, 0, 0, 0)'
+        && card.getPropertyValue('--dsw-elevation-stroke-color').trim() === card.getPropertyValue('--dsw-alias-border-l2').trim();
     })).toBe(true);
     await page.keyboard.press('ControlOrMeta+A'); await page.keyboard.press('Backspace');
     const chat = page.getByRole('tab', { name: 'Chat', exact: true }); await tabTo(chat);

@@ -26,14 +26,21 @@ for (const width of [390, 1440]) for (const theme of ['light', 'dark']) test(`gr
   await input.press('Escape'); await expect(input).toHaveValue('/mdl');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await input.fill('保留草稿');
-  await page.setViewportSize({ width, height: 480 });
+  await page.setViewportSize({ width, height: 360 });
   await page.getByRole('button', { name: '添加', exact: true }).click();
   await input.press('ArrowUp');
   await expect(page.locator('#command-tools')).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('#command-tools')).toBeInViewport();
+  // Constrain the available height enough that the last row actually needs
+  // scrolling; a one-pixel padding overflow at 480px does not require it.
   await expect.poll(() => menu.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
-  expect((await menu.boundingBox())!.y).toBeGreaterThanOrEqual(0);
+  const selected = (await page.locator('#command-tools').boundingBox())!, clipped = (await menu.boundingBox())!;
+  expect(selected.y).toBeGreaterThanOrEqual(clipped.y);
+  expect(selected.y + selected.height).toBeLessThanOrEqual(clipped.y + clipped.height);
+  expect(clipped.y).toBeGreaterThanOrEqual(await page.locator('[data-conversation-scroll]').first().evaluate(el => el.getBoundingClientRect().top));
   await input.press('ArrowDown');
   await expect(page.locator('#command-file')).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('#command-file')).toBeInViewport();
   await input.press('Escape');
   expect(errors).toEqual([]);
 });

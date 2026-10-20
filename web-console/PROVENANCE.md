@@ -3836,3 +3836,41 @@ Office/PDF pages). The native publication-failure inspection and protocol prose
 contract tests pass. TypeScript, i18n, production build, provenance/notices,
 formatting and strict all-target/all-feature Clippy pass. Full CI remains an
 independent exact-head merge gate; the preceding head's broader CI was not green.
+
+### PR #488 acceptance review closeout (V1–V2)
+
+The Harness reference pins and execution boundaries above remain unchanged.
+Acceptance now follows the click-to-drill Model menu and `menuitemradio` choices,
+and closes a Session using its exact native identity, including duplicate titles.
+The shared menu exposes each existing item identity as a data attribute without
+changing its role, label, styling or action. Keyboard acceptance retains actual
+focus, editor/caret reachability and the approved neutral composer edge.
+
+Native distant-reading acceptance accounts separately for the two initial,
+bounded older pages and the direct Turn windows; it still forbids intervening
+prefix traversal. Source cancellation is measured after an explicitly selected
+Session finishes its initial reading window, rather than mistaking that passive
+fill for a stale source landing. Request logs and canceled-source geometry are
+attached to the browser report. The Trace file-reference fixture now serves the
+finite native inspection head and original bounded content instead of the
+obsolete raw-detail response. Background-task resize acceptance observes Floating
+UI's settled bounds, and the add-menu test constrains its height enough to prove
+real keyboard scrolling rather than assuming padding overflow requires it. This
+stronger test exposed a genuine short-viewport clipping issue: the menu fit used
+the window top and could hide its first row behind the conversation header.
+Following the inspected Harness MenuView header-clearance convention at
+`687f282e8625c6b8d11ff58211a90524be2e4317`, it now fits to the actual conversation
+scrollport top and remeasures on resize/scroll. Keyboard wrapping must reveal
+both the first and last options in the visible conversation area.
+
+Browser plugin not available; verification uses the immutable Linux Playwright
+image and fonts recorded above. Eight stable screenshot references were reviewed
+against their prior captures: seven contain only the intended ModelSelect chevron
+paint change, and the Workspace override reference removes the previously
+rejected blue text-input outline. No comparator, noise allowance, timeout or
+product behavior is weakened. The full Web suite passes 3071 tests with four
+existing skips; TypeScript and strict native Clippy pass. Ordinary native
+delegation passes locally and in the preceding exact-head Linux boundary job;
+its failure path now records the last authoritative snapshot and all three
+completion predicates. Final rendered acceptance and the final exact-head FULL
+CI result are recorded in PR #488.

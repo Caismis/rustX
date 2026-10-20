@@ -198,7 +198,9 @@ test('DSH task rows show command-copy output, exclusive expansion and two-press 
   await expect(rows.nth(1).getByRole('button', { expanded: true })).toBeVisible();
   await expect(panel.locator('[data-terminal]')).toHaveCount(1);
   await page.setViewportSize({ width: 390, height: 844 });
-  expect(await panel.evaluate(element => { const rect = element.getBoundingClientRect(); return rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight; })).toBe(true);
+  // Floating UI repositions after the resize observer runs. Observe the
+  // settled geometry rather than racing that frame with an immediate read.
+  await expect.poll(() => panel.evaluate(element => { const rect = element.getBoundingClientRect(); return rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight; })).toBe(true);
   await page.screenshot({ path: '/tmp/rustx-dsh-tasks-mobile.png' });
   await expect(page.locator('vite-error-overlay')).toHaveCount(0);
   expect(errors).toEqual([]);
