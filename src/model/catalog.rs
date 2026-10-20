@@ -2127,14 +2127,11 @@ mod tests {
             &catalog.profile_ordinals[0][0].0
         ));
         assert!(
-            crate::runtime_client::checkpoint::bounded_item_bytes(
-                &catalog.model_at(0).unwrap(),
-                16_384
-            )
-            .is_none()
+            crate::observation::bounded::bounded_item_bytes(&catalog.model_at(0).unwrap(), 16_384)
+                .is_none()
         );
         assert!(
-            crate::runtime_client::checkpoint::bounded_item_bytes(
+            crate::observation::bounded::bounded_item_bytes(
                 &catalog.profile_at(0, 72).unwrap(),
                 16_384
             )
@@ -2158,7 +2155,7 @@ mod tests {
                 state.read_source().catalog_source(),
             )),
         ));
-        let cut = crate::runtime_client::checkpoint::CheckpointReadCut {
+        let cut = crate::observation::cut::CheckpointReadCut {
             canonical_foreground: None,
             live_publication: None,
             conversation_id: crate::runtime::identity::ConversationId::new(
@@ -2185,7 +2182,7 @@ mod tests {
             assert_eq!(page.total, 73);
             assert_eq!(page.next_offset, next);
             assert_eq!(page.items.first().unwrap().offset, offset);
-            assert!(crate::runtime_client::checkpoint::bounded_bytes(&page, 786_432).is_some());
+            assert!(crate::observation::bounded::bounded_bytes(&page, 786_432).is_some());
             if offset == 0 {
                 assert!(page.items[0].deferred);
                 assert!(page.items[1].value.is_some());

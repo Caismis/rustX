@@ -66,11 +66,11 @@ pub struct SessionNodeValueChunk {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SessionUserMessageBoundaryObservation {
     pub surface_revision: SurfaceRevision,
-    pub locator: crate::runtime_client::content::CanonicalContentLocator,
+    pub locator: crate::observation::content::CanonicalContentLocator,
     pub message: Option<crate::message::types::UserMessageBlock>,
     pub block_count: u64,
-    pub content: Vec<crate::runtime_client::checkpoint::ContentBinding>,
-    pub collections: Vec<crate::runtime_client::checkpoint::CollectionFrontier>,
+    pub content: Vec<crate::observation::cut::ContentBinding>,
+    pub collections: Vec<crate::observation::cut::CollectionFrontier>,
 }
 impl SessionCatalog {
     fn observation_node(
@@ -258,7 +258,10 @@ mod tests {
                         } else {
                             "x".repeat(70_000)
                         }),
-                        source_locator: crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { position: index + 1 },
+                        source_locator:
+                            crate::observation::content::CanonicalContentLocator::ByLedgerPosition {
+                                position: index + 1,
+                            },
                         side: LineageSide::Before,
                     },
                 },

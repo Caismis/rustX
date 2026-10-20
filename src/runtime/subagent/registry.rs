@@ -546,7 +546,7 @@ struct RegistryState {
     /// cancellation authority. The originating child coordinator remains the
     /// semantic owner of every entry.
     routed_interactions:
-        HashMap<InteractionRef, crate::runtime_client::snapshot::RuntimeClientInteractionHeader>,
+        HashMap<InteractionRef, crate::observation::interaction::RuntimeClientInteractionHeader>,
     routed_order: BTreeMap<u64, InteractionRef>,
     routed_direct: HashMap<InteractionRef, SubagentId>,
     routed_by_child: HashMap<ConversationId, BTreeMap<u64, InteractionRef>>,

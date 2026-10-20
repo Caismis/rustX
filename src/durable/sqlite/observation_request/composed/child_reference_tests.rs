@@ -95,7 +95,7 @@ fn t08_t15_t20_child_references_keep_one_exact_fact_with_the_original_read_bound
                 (stored.start, stored.end, stored.children),
                 (start, end, count)
             );
-            let expected = crate::runtime_client::checkpoint::bounded_bytes(preview, 16_384)
+            let expected = crate::observation::bounded::bounded_bytes(preview, 16_384)
                 .unwrap_or_else(|| b"null".to_vec());
             assert_eq!(
                 base64::engine::general_purpose::STANDARD
@@ -142,7 +142,7 @@ fn t08_t15_t20_child_references_keep_one_exact_fact_with_the_original_read_bound
         .unwrap();
     assert!(children > 10);
     let mut original = Vec::new();
-    crate::runtime_client::structural_json::to_writer(&mut original, &value).unwrap();
+    crate::observation::structural_json::to_writer(&mut original, &value).unwrap();
     assert_eq!(
         super::bytes(&connection, &fragment, 0, fragment.length).unwrap(),
         original

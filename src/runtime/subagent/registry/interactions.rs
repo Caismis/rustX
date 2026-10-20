@@ -25,7 +25,7 @@ use std::sync::PoisonError;
 #[derive(Clone)]
 pub struct ChildPendingHeadProof {
     pub cut: crate::runtime::identity::ObservationCollectionCut,
-    pub head: Vec<crate::runtime_client::snapshot::RuntimeClientInteractionHeader>,
+    pub head: Vec<crate::observation::interaction::RuntimeClientInteractionHeader>,
     pub next_sequence: Option<u64>,
 }
 
@@ -105,7 +105,7 @@ impl SubagentInteractionSink {
     /// control transport.
     pub(crate) async fn apply_requested(
         &self,
-        request: crate::runtime_client::snapshot::RuntimeClientInteractionHeader,
+        request: crate::observation::interaction::RuntimeClientInteractionHeader,
     ) -> Result<(), crate::runtime::interaction::InteractionRouteError> {
         if let Some(header) = self
             .registry
@@ -364,7 +364,7 @@ impl SubagentRegistry {
         cut: crate::runtime::identity::ObservationCollectionCut,
         sequence: u64,
     ) -> Result<
-        crate::runtime_client::snapshot::RuntimeClientInteractionHeader,
+        crate::observation::interaction::RuntimeClientInteractionHeader,
         crate::runtime::identity::ObservationCollectionReadError,
     > {
         let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
@@ -384,8 +384,8 @@ impl SubagentRegistry {
     pub(crate) fn apply_child_interaction_requested(
         &self,
         subagent_id: &SubagentId,
-        mut request: crate::runtime_client::snapshot::RuntimeClientInteractionHeader,
-    ) -> Option<crate::runtime_client::snapshot::RuntimeClientInteractionHeader> {
+        mut request: crate::observation::interaction::RuntimeClientInteractionHeader,
+    ) -> Option<crate::observation::interaction::RuntimeClientInteractionHeader> {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let &index = state.index.get(subagent_id)?;
         let record = &state.records[index];

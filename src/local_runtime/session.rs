@@ -300,7 +300,7 @@ pub enum SessionNodeOrigin {
         /// Exact selected source message; `side` determines the retained prefix.
         source_message: MessageId,
         /// Exact immutable canonical location, captured by the Fork owner before publication.
-        source_locator: crate::runtime_client::content::CanonicalContentLocator,
+        source_locator: crate::observation::content::CanonicalContentLocator,
         /// Explicit retained side of the selected message.
         side: LineageSide,
     },
@@ -748,7 +748,7 @@ impl SessionCatalog {
                 detail: "Node has no immutable fork origin".into(),
             });
         };
-        if !matches!(source_locator, crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { position } if *position > 0)
+        if !matches!(source_locator, crate::observation::content::CanonicalContentLocator::ByLedgerPosition { position } if *position > 0)
         {
             return Err(SessionError::Catalog {
                 detail: "Fork origin requires a finite native ledger position".into(),
@@ -1093,14 +1093,14 @@ pub(crate) mod tests {
     fn fixture_source_locator(
         store: &dyn crate::durable::ConversationStore,
         id: &str,
-    ) -> crate::runtime_client::content::CanonicalContentLocator {
+    ) -> crate::observation::content::CanonicalContentLocator {
         let position = store
             .message_header(&crate::runtime::identity::MessageId::new(id))
             .unwrap()
             .unwrap()
             .ledger_position
             .unwrap();
-        crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { position }
+        crate::observation::content::CanonicalContentLocator::ByLedgerPosition { position }
     }
 
     use crate::context::assembly::ContextGeneration;
@@ -2379,7 +2379,7 @@ model = "provider/model"
                         .unwrap();
                     assert_eq!(window.page.entries[0].cursor.get(), 2);
                     let mut page =
-                        crate::runtime_client::snapshot::transcript_page_view(window.page).unwrap();
+                        crate::observation::transcript::transcript_page_view(window.page).unwrap();
                     crate::runtime_client::response::native_oracle_decorate(
                         copied_store,
                         &mut page,
@@ -2566,7 +2566,7 @@ model = "provider/model"
                     .unwrap();
                 assert_eq!(window.page.entries[0].cursor.get(), 2);
                 let mut page =
-                    crate::runtime_client::snapshot::transcript_page_view(window.page).unwrap();
+                    crate::observation::transcript::transcript_page_view(window.page).unwrap();
                 crate::runtime_client::response::native_oracle_decorate(&destination, &mut page)
                     .unwrap();
                 let process = page.entries[0].turn_process.as_ref().unwrap();

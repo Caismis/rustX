@@ -2,7 +2,7 @@
 use super::{Connection, ConversationStoreError, OptionalExtension, params, storage};
 use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
 fn encode(value: &impl serde::Serialize) -> Result<Vec<u8>, ConversationStoreError> {
-    crate::runtime_client::checkpoint::bounded_bytes(
+    crate::observation::bounded::bounded_bytes(
         value,
         crate::durable::observation::HEADER_ENCODED_MAX,
     )
@@ -108,7 +108,7 @@ fn member_identity(
     counts: &mut crate::durable::observation::AttemptMemberCounts,
     message: &crate::runtime::identity::MessageId,
 ) -> Result<(), ConversationStoreError> {
-    use crate::runtime_client::content::{
+    use crate::observation::content::{
         CanonicalContentComponent, CanonicalContentLocator, ContentRepresentation, ContentSource,
     };
     let position: u64 = connection
@@ -221,7 +221,7 @@ pub(super) fn seed_members(
                 attempt_id_source: if turn.id.attempt_id.as_str().len() > 512 {
                     Some(super::observation_identity::inherited(
                         connection,
-                        crate::runtime_client::response::InheritedAttemptIdentityKind::Turn,
+                        crate::observation::turn::InheritedAttemptIdentityKind::Turn,
                         ordinal as u64,
                     )?)
                 } else {
@@ -333,7 +333,7 @@ fn inherited_terminal_at(
     connection: &Connection,
     cut: &crate::durable::observation::ObservationReadCut,
     transcript: u64,
-) -> Result<Option<crate::runtime_client::response::TurnProcessView>, ConversationStoreError> {
+) -> Result<Option<crate::observation::turn::TurnProcessView>, ConversationStoreError> {
     let reference: Option<Option<String>> = connection.query_row(
         "SELECT CASE WHEN typeof(reference_id)='text' AND length(CAST(reference_id AS BLOB))<=16 THEN reference_id END FROM transcript_order WHERE position=?1 AND position<=?2 AND reference_kind='inherited_turn'",
         params![transcript, cut.inherited_through.get()], |row| row.get(0),
@@ -348,7 +348,7 @@ fn inherited_terminal_at(
         .filter(|ordinal| {
             ordinal.to_string() == reference
                 && ordinal.checked_add(1).is_some_and(|display| {
-                    display <= crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX
+                    display <= crate::observation::content::CONTENT_SAFE_INTEGER_MAX
                 })
         })
         .ok_or_else(|| storage("invalid inherited terminal ordinal"))?;
@@ -364,7 +364,7 @@ pub(super) fn transcript_process(
     connection: &Connection,
     cut: &crate::durable::observation::ObservationReadCut,
     transcript: u64,
-) -> Result<Option<crate::runtime_client::response::TurnProcessView>, ConversationStoreError> {
+) -> Result<Option<crate::observation::turn::TurnProcessView>, ConversationStoreError> {
     if transcript > cut.read.transcript {
         return Err(ConversationStoreError::InvalidReference(
             "member beyond native transcript cut".into(),
@@ -453,7 +453,7 @@ pub(super) fn process_view(
     cut: &crate::durable::observation::ObservationReadCut,
     counts: crate::durable::observation::AttemptMemberCounts,
     fallback: Option<crate::durable::TranscriptCursor>,
-) -> Result<Option<crate::runtime_client::response::TurnProcessView>, ConversationStoreError> {
+) -> Result<Option<crate::observation::turn::TurnProcessView>, ConversationStoreError> {
     use crate::durable::reading::TurnProcessOutcome;
     let owner = counts
         .process
@@ -481,7 +481,7 @@ pub(super) fn process_view(
         None
     };
     let final_identity = counts.completed_response;
-    Ok(Some(crate::runtime_client::response::TurnProcessView {
+    Ok(Some(crate::observation::turn::TurnProcessView {
         conversation_id: owner.conversation_id.clone(),
         attempt_id: owner.attempt_id.clone(),
         attempt_id_source: owner.attempt_id_source.clone(),
@@ -515,7 +515,7 @@ pub(super) fn inherited_process(
     cut: &crate::durable::observation::ObservationReadCut,
     ordinal: u64,
     fallback: crate::durable::TranscriptCursor,
-) -> Result<Option<crate::runtime_client::response::TurnProcessView>, ConversationStoreError> {
+) -> Result<Option<crate::observation::turn::TurnProcessView>, ConversationStoreError> {
     let header = super::observation_turn::inherited(connection, ordinal)?;
     if header.cursor != Some(fallback) {
         return Err(storage(

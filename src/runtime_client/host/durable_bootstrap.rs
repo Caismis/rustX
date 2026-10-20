@@ -35,8 +35,8 @@ fn latest(
     )
 }
 fn same_attempt(
-    left: &crate::runtime_client::trace::TraceLocation,
-    right: &crate::runtime_client::trace::TraceLocation,
+    left: &crate::observation::trace::TraceLocation,
+    right: &crate::observation::trace::TraceLocation,
 ) -> bool {
     left.attempt_id
         .as_ref()
@@ -114,10 +114,10 @@ fn field(
     cut: &ObservationReadCut,
     sequence: u64,
     name: &str,
-) -> Result<crate::runtime_client::snapshot::JournalFieldRef, ConversationStoreError> {
+) -> Result<crate::observation::tool::JournalFieldRef, ConversationStoreError> {
     let path = vec!["event".into(), name.into()];
     let chunk = store.event_value_read(sequence, cut.read.journal, &path, 0, 1)?;
-    Ok(crate::runtime_client::snapshot::JournalFieldRef {
+    Ok(crate::observation::tool::JournalFieldRef {
         sequence,
         path,
         encoded_bytes: chunk.readable_end,
@@ -147,7 +147,7 @@ fn terminal_outcome(
                 if summary.failure_readable_end == 0 {
                     return Err(missing());
                 }
-                Some(crate::runtime_client::snapshot::JournalFieldRef {
+                Some(crate::observation::tool::JournalFieldRef {
                     sequence: terminal.sequence,
                     path: vec!["normalized_failure".into()],
                     encoded_bytes: summary.failure_readable_end,
@@ -237,7 +237,7 @@ fn read_tools(
                 "historical Tool occurrence unavailable".into(),
             ));
         };
-        let locator = crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition {
+        let locator = crate::observation::content::CanonicalContentLocator::ByLedgerPosition {
             position: occurrence.ledger_position,
         };
         let page = store.transcript_tool_headers(
@@ -253,14 +253,13 @@ fn read_tools(
             .ok_or_else(|| {
                 ConversationStoreError::Storage("historical Tool header unavailable".into())
             })?;
-        let view =
-            crate::runtime_client::tool_observation::foreground(&page, header).map_err(|_| {
-                ConversationStoreError::Storage("historical Tool reading unavailable".into())
-            })?;
+        let view = crate::observation::tool::foreground(&page, header).map_err(|_| {
+            ConversationStoreError::Storage("historical Tool reading unavailable".into())
+        })?;
         content.push(PreparedDurableToolReading {
             occurrence: view.occurrence.clone(),
-            content: crate::runtime_client::tool_observation::content(header, &view),
-            collections: crate::runtime_client::tool_observation::collections(header),
+            content: crate::observation::tool::content(header, &view),
+            collections: crate::observation::tool::collections(header),
         });
         attempt.foreground.push(view);
     }

@@ -169,11 +169,11 @@ fn canonical_keys(
         assert_eq!(page.read_cut, checkpoint.read_cut);
         assert_eq!(page.domain, "messages");
         assert!(page.items.len() <= 4);
-        assert!(rustx::runtime_client::checkpoint::bounded_bytes(&page, 786_432).is_some());
+        assert!(rustx::observation::bounded::bounded_bytes(&page, 786_432).is_some());
         for item in page.items {
             assert_eq!(item.offset, keys.len() as u64);
             assert_eq!(item.identity, format!("ledger:{}", item.offset + 1));
-            let message: MessageBlock = rustx::runtime_client::structural_json::decode(
+            let message: MessageBlock = rustx::observation::structural_json::decode(
                 item.value
                     .expect("the finite fixture message is materialized"),
             )

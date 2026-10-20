@@ -26,7 +26,7 @@ use crate::tools::types::{ToolExecutionResult, ToolExecutionStatus, ToolResultCo
 /// Only the namespace crosses; an extension's internal identity and an
 /// agent's routing details stay inside the runtime.
 #[must_use]
-pub(super) const fn user_source_label(source: &UserSource) -> &'static str {
+pub(crate) const fn user_source_label(source: &UserSource) -> &'static str {
     match source {
         UserSource::Human => "human",
         UserSource::Agent { .. } => "agent",
@@ -60,7 +60,7 @@ fn file_artifact(file: &FileReference) -> TraceArtifact {
 }
 
 /// Projects canonical User content blocks.
-pub(super) fn user_blocks(content: &[UserContentBlock]) -> (Vec<TraceContentBlock>, bool) {
+pub(crate) fn user_blocks(content: &[UserContentBlock]) -> (Vec<TraceContentBlock>, bool) {
     let mut truncated = content.len() > TRACE_DETAIL_BLOCKS;
     let mut blocks = Vec::new();
     for block in content.iter().take(TRACE_DETAIL_BLOCKS) {
@@ -97,7 +97,7 @@ pub(super) fn user_blocks(content: &[UserContentBlock]) -> (Vec<TraceContentBloc
 }
 
 /// Projects canonical Assistant content blocks.
-pub(super) fn assistant_blocks(
+pub(crate) fn assistant_blocks(
     content: &[AssistantContentBlock],
 ) -> (Vec<TraceContentBlock>, bool) {
     let mut truncated = content.len() > TRACE_DETAIL_BLOCKS;
@@ -151,7 +151,7 @@ pub(super) fn assistant_blocks(
 
 /// The typed outcome class of one canonical Tool status.
 #[must_use]
-pub(super) const fn tool_outcome(status: &ToolExecutionStatus) -> TraceToolOutcome {
+pub(crate) const fn tool_outcome(status: &ToolExecutionStatus) -> TraceToolOutcome {
     match status {
         ToolExecutionStatus::Success => TraceToolOutcome::Success,
         ToolExecutionStatus::Failed { .. } => TraceToolOutcome::Failed,
@@ -169,7 +169,7 @@ pub(super) const fn tool_outcome(status: &ToolExecutionStatus) -> TraceToolOutco
 /// variants cannot start leaking through a formatter.
 #[must_use]
 #[cfg(test)]
-pub(super) fn tool_status_detail(status: &ToolExecutionStatus) -> Option<String> {
+pub(crate) fn tool_status_detail(status: &ToolExecutionStatus) -> Option<String> {
     match status {
         ToolExecutionStatus::Success | ToolExecutionStatus::TimedOut => None,
         ToolExecutionStatus::Failed { error } => Some(error.clone()),
@@ -206,7 +206,7 @@ const fn cancellation_phase_label(
 }
 
 /// Projects canonical Tool result content blocks.
-pub(super) fn tool_result_blocks(result: &ToolExecutionResult) -> (Vec<TraceContentBlock>, bool) {
+pub(crate) fn tool_result_blocks(result: &ToolExecutionResult) -> (Vec<TraceContentBlock>, bool) {
     let mut truncated = result.content.len() > TRACE_DETAIL_BLOCKS;
     let mut blocks = Vec::new();
     for content in result.content.iter().take(TRACE_DETAIL_BLOCKS) {
@@ -244,12 +244,12 @@ pub(super) fn tool_result_blocks(result: &ToolExecutionResult) -> (Vec<TraceCont
 
 /// Projects one canonical Tool message as a request-context item.
 /// Returns None when a mandatory correlation identity exceeds the bound.
-pub(super) fn tool_result_block(message: &ToolMessageBlock) -> Option<TraceContentBlock> {
+pub(crate) fn tool_result_block(message: &ToolMessageBlock) -> Option<TraceContentBlock> {
     projected_tool_result_block(&message.tool_call_id, &message.tool_id, &message.result)
 }
 
 /// Render typed model-visible content without assigning execution identity or statistics.
-pub(super) fn projected_tool_result_block(
+pub(crate) fn projected_tool_result_block(
     call_id: &crate::runtime::identity::ToolCallId,
     tool_id: &crate::runtime::identity::ToolId,
     result: &ToolExecutionResult,
@@ -273,7 +273,7 @@ pub(super) fn projected_tool_result_block(
 /// an identity that appears as both an Image content block and a generic
 /// artifact keeps its image typing. Filenames and paths never decide type.
 #[cfg(test)]
-pub(super) fn tool_result_artifacts(result: &ToolExecutionResult) -> (Vec<TraceArtifact>, bool) {
+pub(crate) fn tool_result_artifacts(result: &ToolExecutionResult) -> (Vec<TraceArtifact>, bool) {
     let mut seen = std::collections::HashSet::new();
     let mut artifacts: Vec<TraceArtifact> = Vec::new();
     let mut truncated =

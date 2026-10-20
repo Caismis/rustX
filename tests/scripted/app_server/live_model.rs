@@ -312,7 +312,7 @@ async fn active_profile_selection_is_durable_and_reconnect_preserves_frozen_atte
             .trace
             .records
             .iter()
-            .filter(|record| record.kind == crate::runtime_client::trace::TraceKind::Request)
+            .filter(|record| record.kind == crate::observation::trace::TraceKind::Request)
             .collect();
         assert_eq!(historical.len(), 2);
         for record in historical {

@@ -622,7 +622,7 @@ async fn t15_t20_native_agent_source_shares_immutable_authority_and_releases_own
 fn child_head_header(
     conversation: &crate::runtime::identity::ConversationId,
     index: u64,
-) -> crate::runtime_client::snapshot::RuntimeClientInteractionHeader {
+) -> crate::observation::interaction::RuntimeClientInteractionHeader {
     let request = crate::runtime::interaction::InteractionRequest {
         id: crate::runtime::identity::InteractionId::new(format!("child-head-{index}")),
         conversation_id: conversation.clone(),
@@ -642,7 +642,7 @@ fn child_head_header(
             reason: "head test".into(),
         },
     };
-    crate::runtime_client::checkpoint::interaction_request_header(
+    crate::observation::interaction::interaction_request_header(
         &request,
         crate::runtime::interaction::InteractionSource::Primary,
     )

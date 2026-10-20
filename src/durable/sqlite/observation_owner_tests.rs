@@ -14,9 +14,9 @@ fn owner_seed(attempt: &str, with_turn: bool) -> LineageSeed {
 fn original_owner_field(
     store: &SqliteConversationStore,
     cut: &crate::durable::observation::ObservationReadCut,
-    source: &crate::runtime_client::response::AttemptIdentitySource,
+    source: &crate::observation::turn::AttemptIdentitySource,
 ) -> String {
-    use crate::runtime_client::response::AttemptIdentitySource;
+    use crate::observation::turn::AttemptIdentitySource;
     let mut bytes = Vec::new();
     let mut offset = 0;
     loop {
@@ -54,7 +54,7 @@ fn original_owner_field(
 fn owner_completed_view(
     store: &SqliteConversationStore,
     cut: &crate::durable::observation::ObservationReadCut,
-) -> crate::runtime_client::response::CompletedResponseView {
+) -> crate::observation::turn::CompletedResponseView {
     member_source_page(store, cut)
         .entries
         .into_iter()
@@ -102,7 +102,7 @@ fn t08_t12_t14_t19_giant_local_owner_keeps_one_original_j_selector_at_every_cut(
     );
     let source = running.attempt_id_source.as_ref().unwrap();
     assert!(
-        matches!(source,crate::runtime_client::response::AttemptIdentitySource::Journal{field,..} if field.sequence==start.sequence)
+        matches!(source,crate::observation::turn::AttemptIdentitySource::Journal{field,..} if field.sequence==start.sequence)
     );
     assert_eq!(original_owner_field(&store, &before, source), original);
     store
@@ -131,9 +131,7 @@ fn t08_t12_t14_t19_giant_local_owner_keeps_one_original_j_selector_at_every_cut(
 }
 #[test]
 fn t08_t12_t14_t19_giant_inherited_owner_and_response_only_owner_have_real_ordinals() {
-    use crate::runtime_client::response::{
-        AttemptIdentitySource, InheritedAttemptIdentityKind as Kind,
-    };
+    use crate::observation::turn::{AttemptIdentitySource, InheritedAttemptIdentityKind as Kind};
     let original = "inherited-owner🙂水".repeat(70_000);
     for with_turn in [true, false] {
         let store = store();
@@ -184,7 +182,7 @@ fn t10_t14_t19_provenance_display_failure_preserves_native_bootstrap_and_owner_f
     );
     let original_source = super::observation_identity::inherited(
         &store.lock().unwrap(),
-        crate::runtime_client::response::InheritedAttemptIdentityKind::Turn,
+        crate::observation::turn::InheritedAttemptIdentityKind::Turn,
         0,
     )
     .unwrap();
@@ -243,7 +241,7 @@ fn t08_t14_t19_giant_terminal_owner_remains_positive_without_a_content_member() 
         .unwrap();
     let cut = store.observation_read_cut().unwrap();
     let page = member_source_page(&store, &cut);
-    let crate::runtime_client::snapshot::RuntimeClientTranscriptItem::AttemptTerminal { turn } =
+    let crate::observation::transcript::RuntimeClientTranscriptItem::AttemptTerminal { turn } =
         &page.entries[0].item
     else {
         panic!("original terminal must remain positive")
@@ -257,7 +255,7 @@ fn t08_t14_t19_giant_terminal_owner_remains_positive_without_a_content_member() 
     assert!(turn.attempt_id.is_none());
     let source = turn.attempt_id_source.as_ref().unwrap();
     assert!(
-        matches!(source,crate::runtime_client::response::AttemptIdentitySource::Journal{field,..} if field.sequence==start.sequence)
+        matches!(source,crate::observation::turn::AttemptIdentitySource::Journal{field,..} if field.sequence==start.sequence)
     );
     assert_eq!(original_owner_field(&store, &cut, source), original);
     assert!(serde_json::to_vec(turn).unwrap().len() < 16_384);
@@ -297,8 +295,8 @@ fn t08_t12_t19_response_only_repeated_owner_selects_first_real_provenance() {
     assert!(matches!(
         views[0].origin.attempt_id_source,
         Some(
-            crate::runtime_client::response::AttemptIdentitySource::Inherited {
-                kind: crate::runtime_client::response::InheritedAttemptIdentityKind::Response,
+            crate::observation::turn::AttemptIdentitySource::Inherited {
+                kind: crate::observation::turn::InheritedAttemptIdentityKind::Response,
                 ordinal: 0,
                 ..
             }
@@ -317,7 +315,7 @@ fn t08_t12_t19_response_only_repeated_owner_selects_first_real_provenance() {
 #[test]
 fn t08_t12_t19_inherited_owner_selected_field_enforces_original_cut_and_range() {
     use crate::runtime_client::RuntimeClientError;
-    use crate::runtime_client::response::AttemptIdentitySource;
+    use crate::observation::turn::AttemptIdentitySource;
     let store = store();
     let original = "selected-owner🙂".repeat(80_000);
     store

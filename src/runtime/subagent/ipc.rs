@@ -523,7 +523,7 @@ pub(crate) enum ChildFrame {
     /// parent may drop exactly that retained anchor.
     AnchorReleased(ProcessUnitAnchorFrame),
     /// A child-owned interaction request committed by its coordinator.
-    InteractionRequested(Box<crate::runtime_client::snapshot::RuntimeClientInteractionHeader>),
+    InteractionRequested(Box<crate::observation::interaction::RuntimeClientInteractionHeader>),
     /// Originating physical source loss retires this exact read/action locator.
     /// It is observation only and carries no fabricated execution outcome.
     InteractionRemoved {
@@ -1385,7 +1385,7 @@ mod tests {
             },
         };
         let routed_ref = routed_request.interaction_ref();
-        let routed_header = crate::runtime_client::checkpoint::interaction_request_header(
+        let routed_header = crate::observation::interaction::interaction_request_header(
             &routed_request,
             crate::runtime::interaction::InteractionSource::Primary,
         );

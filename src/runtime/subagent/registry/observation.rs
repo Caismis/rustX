@@ -251,7 +251,7 @@ pub trait SubagentObserver: Send + Sync {
     /// state can leave this callback empty.
     fn on_interaction_pending(
         &self,
-        _interaction: &crate::runtime_client::snapshot::RuntimeClientInteractionHeader,
+        _interaction: &crate::observation::interaction::RuntimeClientInteractionHeader,
         _proof: &ChildPendingHeadProof,
     ) {
     }

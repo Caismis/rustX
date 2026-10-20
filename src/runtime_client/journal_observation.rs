@@ -1,11 +1,9 @@
 //! Read evidence for deferred execution diagnostics at a published native J cut.
 use super::RuntimeClientCursor;
-use super::checkpoint::{
-    CheckpointPage, CheckpointPageItem, CheckpointReadCut, CheckpointValueChunk,
-    CheckpointValueRepresentation,
-};
+use super::checkpoint::{CheckpointPage, CheckpointValueChunk, CheckpointValueRepresentation};
 use super::types::RuntimeClientError;
 use crate::durable::ConversationStore;
+use crate::observation::cut::{CheckpointPageItem, CheckpointReadCut};
 
 pub(crate) fn selection(domain: &str) -> Option<(u64, Vec<String>)> {
     let tail = domain.strip_prefix("journal.")?;
@@ -74,7 +72,7 @@ fn authorize(
                 },
             )
             .map_err(RuntimeClientError::observation_store_error)?;
-        facts.iter().any(|fact|fact.sequence==sequence && (fact.fields.iter().chain(fact.location.step_id_source.iter()).any(|field|matches!(field,super::trace::TraceFieldSource::Value{domain,item_offset:0,path:selected,..} if domain==&format!("journal.{sequence}") && selected==path))))
+        facts.iter().any(|fact|fact.sequence==sequence && (fact.fields.iter().chain(fact.location.step_id_source.iter()).any(|field|matches!(field,crate::observation::trace::TraceFieldSource::Value{domain,item_offset:0,path:selected,..} if domain==&format!("journal.{sequence}") && selected==path))))
     } else {
         false
     };

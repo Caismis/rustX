@@ -5,7 +5,7 @@ use super::{
     TraceRequestContextPage, TraceRequestPredecessorHeader, decode, encode, header, params,
     storage, summary,
 };
-use crate::runtime_client::trace::{TraceContextPresentation, TraceContextSource};
+use crate::observation::trace::{TraceContextPresentation, TraceContextSource};
 
 pub(in crate::durable::sqlite) fn predecessor(
     connection: &Connection,
@@ -154,7 +154,7 @@ pub(in crate::durable::sqlite) fn context(
             return Err(storage("native request Context row missing"));
         }
         let value: TraceContextPresentation = decode(&bytes)?;
-        let crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { position } =
+        let crate::observation::content::CanonicalContentLocator::ByLedgerPosition { position } =
             value.locator
         else {
             return Err(storage("native Context has no numeric C"));

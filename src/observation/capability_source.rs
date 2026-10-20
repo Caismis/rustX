@@ -1,13 +1,12 @@
 //! Borrowed read evidence for one immutable native capability generation.
 //! Preparation owns bounded display headers; original definitions stay in the registry.
-use super::snapshot::{
-    CapabilitySourceView, CapabilityView, RuntimeClientSkill, RuntimeClientTool,
-};
 use crate::capabilities::{CapabilityAvailability, CapabilitySnapshot};
-use serde::{
-    Serialize,
-    ser::{SerializeSeq, SerializeStruct},
+use crate::runtime::identity::{CapabilityRevision, SkillId, SkillVersionId, ToolId};
+use crate::tools::types::{
+    ToolConcurrencyPolicy, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
 };
+use serde::ser::{SerializeSeq, SerializeStruct};
+use serde::{Deserialize, Serialize};
 use std::sync::{Arc, OnceLock};
 
 mod prepared;
@@ -162,7 +161,7 @@ impl CapabilityReadSource {
                 domain: &str,
                 values: impl Iterator<Item = T>,
                 total: usize,
-                frontiers: &mut Vec<super::checkpoint::CollectionFrontier>,
+                frontiers: &mut Vec<super::cut::CollectionFrontier>,
             ) -> Vec<U> {
                 let mut scanned = 0;
                 let mut omitted = false;
@@ -170,13 +169,13 @@ impl CapabilityReadSource {
                     .take(32)
                     .filter_map(|value| {
                         scanned += 1;
-                        let bytes = super::checkpoint::bounded_item_bytes(&value, 2048);
+                        let bytes = super::bounded::bounded_item_bytes(&value, 2048);
                         let item = bytes.and_then(|bytes| serde_json::from_slice(&bytes).ok());
                         omitted |= item.is_none();
                         item
                     })
                     .collect::<Vec<_>>();
-                frontiers.push(super::checkpoint::CollectionFrontier {
+                frontiers.push(super::cut::CollectionFrontier {
                     domain: domain.into(),
                     revision: 0,
                     total: total as u64,
@@ -242,7 +241,7 @@ impl CapabilityReadSource {
             .expect("capability header prepared outside Projection")
             .header()
     }
-    pub(crate) fn frontiers(&self) -> Vec<super::checkpoint::CollectionFrontier> {
+    pub(crate) fn frontiers(&self) -> Vec<super::cut::CollectionFrontier> {
         self.prepared_head().frontiers()
     }
     pub(crate) fn prepared_head(&self) -> PreparedCapabilityHead {
@@ -305,13 +304,13 @@ fn source_view<'a>(
         },
         state: match state {
             crate::capabilities::CapabilitySourceState::Unprepared => {
-                super::snapshot::CapabilitySourceStateView::Unprepared
+                super::capability_source::CapabilitySourceStateView::Unprepared
             }
             crate::capabilities::CapabilitySourceState::Ready => {
-                super::snapshot::CapabilitySourceStateView::Ready
+                super::capability_source::CapabilitySourceStateView::Ready
             }
             crate::capabilities::CapabilitySourceState::Unavailable { .. } => {
-                super::snapshot::CapabilitySourceStateView::Unavailable
+                super::capability_source::CapabilitySourceStateView::Unavailable
             }
         },
     }
@@ -337,7 +336,7 @@ enum SourceDescriptor<'a> {
 #[derive(Serialize)]
 pub(crate) struct SourceReadView<'a> {
     source: SourceDescriptor<'a>,
-    state: super::snapshot::CapabilitySourceStateView,
+    state: super::capability_source::CapabilitySourceStateView,
 }
 // Opaque iterator types need not be Clone: repeat the native iterator only while serializing.
 impl Serialize for CapabilityReadSource {
@@ -400,4 +399,128 @@ impl schemars::JsonSchema for CapabilityReadSource {
     fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
         generator.subschema_for::<CapabilityView>()
     }
+}
+
+/// The deterministic capability projection.
+///
+/// Projected from the active [`CapabilitySnapshot`]
+/// ([`crate::capabilities::CapabilitySnapshot`]) plus the
+/// coordinator-owned availability state (Issue #81): the revision, the
+/// active Tool catalog, the complete available Tool catalog, the deterministic
+/// model-visible Skill catalog, and the typed per-source availability. No
+/// executors, environment paths, package-manager state, or private dependency
+/// internals appear.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
+pub struct CapabilityView {
+    /// Configured Tool intent before effective model gating.
+    pub configured_tools: Vec<RuntimeClientTool>,
+    /// The active monotonic capability revision.
+    pub revision: CapabilityRevision,
+    /// The deterministic active Tool catalog in registry order. Model
+    /// requests and execution use exactly this set.
+    #[serde(default)]
+    pub tools: Vec<RuntimeClientTool>,
+    /// The complete available Tool catalog, including inactive Tools. The
+    /// active set above is an explicit subset; availability never implies
+    /// model activation.
+    #[serde(default)]
+    pub available_tools: Vec<RuntimeClientTool>,
+    /// The deterministic model-visible Skill catalog ordered by Skill name.
+    /// Skills hidden by `disable-model-invocation` remain runtime-owned but
+    /// are omitted here. Every entry includes the canonical absolute host
+    /// path of its `SKILL.md`.
+    #[serde(default)]
+    pub skills: Vec<RuntimeClientSkill>,
+    /// The typed availability of every evaluated optional capability
+    /// source, in deterministic source-identity order (Issue #81).
+    #[serde(default)]
+    pub sources: Vec<CapabilitySourceView>,
+}
+/// The client-visible identity of one optional capability source (Issue
+/// #81).
+///
+/// Native tools never appear here: their construction is part of the core
+/// runtime and remains fatal at composition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
+pub enum CapabilitySourceDescriptor {
+    /// Canonical Managed Python source.
+    ManagedPython { package: String },
+    /// One MCP server, configured or synthesized from a managed Python
+    /// tool package (`python:<folder>`, Issue #174).
+    Mcp {
+        /// The authoritative server identity.
+        server_id: crate::runtime::identity::McpServerId,
+    },
+}
+/// The client-visible availability of one optional capability source.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
+pub enum CapabilitySourceStateView {
+    /// Prospective coordinator state before first preparation. Normal Session
+    /// composition completes preparation before publishing this projection.
+    Unprepared,
+    /// The source initialized; its capabilities are usable.
+    Ready,
+    /// Preparation failed. External failure payloads are private owner data.
+    Unavailable,
+}
+/// One optional capability source's availability projection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
+pub struct CapabilitySourceView {
+    /// The stable source identity.
+    pub source: CapabilitySourceDescriptor,
+    /// The authoritative availability state.
+    pub state: CapabilitySourceStateView,
+}
+/// One external tool catalog entry.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
+pub struct RuntimeClientTool {
+    /// The canonical tool identity.
+    pub id: ToolId,
+    /// The stable model-facing tool name.
+    pub name: String,
+    /// The human-readable description.
+    pub description: String,
+    /// The canonical JSON Schema of accepted arguments.
+    pub input_schema: serde_json::Value,
+    /// Who owns an invocation: attempt (foreground) or conversation
+    /// (background).
+    pub execution_policy: ToolExecutionPolicy,
+    /// How calls within one batch are scheduled.
+    pub concurrency_policy: ToolConcurrencyPolicy,
+    /// Whether execution requires a native approval interaction.
+    pub approval_policy: crate::tools::types::ToolApprovalPolicy,
+    /// The replay policy.
+    pub replay_policy: ToolReplayPolicy,
+    /// Where the tool comes from.
+    pub origin: ToolOrigin,
+}
+/// One external Skill catalog entry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
+pub struct RuntimeClientSkill {
+    /// The validated standard Skill identity.
+    pub id: SkillId,
+    /// The immutable Skill version identity.
+    pub version_id: SkillVersionId,
+    /// The validated standard Skill name.
+    pub name: String,
+    /// The validated standard Skill description.
+    pub description: String,
+    /// The canonical absolute host path of the package's `SKILL.md`.
+    ///
+    /// This is a real filesystem path, not a runtime-owned virtual locator:
+    /// a Skill package is an ordinary host directory, and the same path
+    /// serves Read, Bash, Grep, and Glob alike.
+    pub location: String,
 }
