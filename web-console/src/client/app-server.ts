@@ -16,7 +16,7 @@ import { UploadFailure, AttachmentIntakes } from './uploads';
 import { checkpointSnapshot, foldRuntimeEvent, observationCheckpoint, transitionFacts } from '../../../protocol/app-server/projection';
 import { FirstSubmissions } from '../app/new-conversation/first-submit';
 import { SessionExportController } from "./session-export";
-import { standaloneTraceCut,inlineTraceDetail,retainedTraceDetailPage,bindTraceDetailReader,TRACE_LIMIT, TRACE_PAGE_SIZE, beginTraceDetail, completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterestBatches,traceInterests, type TraceCache,type TraceFieldReader } from './trace';
+import { standaloneTraceCut,inlineTraceDetail,retainedTraceDetailPage,bindTraceDetailReader,TRACE_PAGE_SIZE, beginTraceDetail, completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterestBatches,traceInterests, type TraceCache,type TraceFieldReader } from './trace';
 import type {
   TraceToolLocator, ConfigurationApplication, PendingInboundRef, PendingMutationOutcome, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request, Request1, Response, RuntimeClientCursor, RuntimeClientSnapshot, RuntimeClientEvent,
@@ -24,8 +24,8 @@ import type {
   ConfigRepairReceipt, SourceTarget,
 } from '../../../protocol/app-server/v51';
 import { transferUpload, uploadOperationId } from '../../../protocol/app-server/upload';
-import { HISTORY_PAGE_SIZE, TURN_PAGE_SIZE, sameReadCut, extendTranscriptWindow, installTranscriptWindow, prependTranscript, refreshTranscript, replaceTranscript, turnKey, turnPageCount, type TranscriptCache, type TurnSelection } from './transcript';
-import { HISTORY_WINDOW_ROWS, transcriptWindowReady, traceWindowReady } from './history-policy';
+import { HISTORY_PAGE_SIZE, TURN_PAGE_SIZE, sameReadCut, extendTranscriptWindow, installTranscriptWindow, prependTranscript, refreshTranscript, replaceTranscript, transcriptRepairs, repairTranscript, turnKey, turnPageCount, type TranscriptCache, type TurnSelection } from './transcript';
+import { transcriptWindowReady, traceWindowReady } from './history-policy';
 import type { ObservedTurn, ObservedTurnPage } from '../../../protocol/app-server/v51';
 
 
@@ -870,7 +870,7 @@ export class AppServerClient {
     for (const pending of this.modelPreparations.values()) pending.retire();
     this.modelPreparations.clear();
     for (const chain of this.observationChains.values()) chain.retire(); this.observationChains.clear();
-    this.refreshes.clear(); this.traceReads.clear(); this.traceAuthorities.clear(); this.acquiring.clear(); this.dirty.clear(); this.resubscribe.clear();
+    this.refreshes.clear(); this.traceReads.clear(); this.transcriptReads.clear(); this.traceAuthorities.clear(); this.acquiring.clear(); this.dirty.clear(); this.resubscribe.clear();
     const operations = { ...this.state.interactionOperations };
     for (const [key, operation] of Object.entries(operations)) if (operation.status === 'in-flight') delete operations[key];
     for (const item of uncertain) if (item.interactionKey) operations[item.interactionKey] = { sessionId: item.sessionId!, status: 'uncertain' };
@@ -1201,6 +1201,7 @@ export class AppServerClient {
         uncertain:this.state.uncertain.filter(value=>!value.interactionKey||!keys.has(value.interactionKey))});
     }
     this.reconcileInteractions(id); this.settleSubmissions(id);
+    if (snapshot.transcript !== view.snapshot.transcript) void this.refreshTranscriptDomain(id);
     if (checkpointAdvanced) void this.refreshDisplaySummary(id);
     if (transitionFacts(event).some(fact=>fact.type==='trace_changed')) void this.refreshTraceDomain(id).catch(() => {});
   }
@@ -1533,8 +1534,8 @@ export class AppServerClient {
     const { node, conversation, current } = scope;
     if (previous && previous.conversationId !== conversation) return;
     const cache = previous?.cache ?? replaceTrace({ records: [], next_cursor: null });
-    const limit = Math.min(TRACE_PAGE_SIZE, TRACE_LIMIT - cache.page.records.length);
-    if (limit < 1 || !current()) return;
+    const limit = TRACE_PAGE_SIZE;
+    if (!current()) return;
     if (previous) this.setSession(id, { tracePreview: { ...previous, cache: { ...cache, loading: true, error: undefined } } });
     try {
       const admission = older ? await this.admitSessionOperation(id, current) : current;
@@ -1658,7 +1659,7 @@ export class AppServerClient {
             this.resubscribe.add(id); this.dirty.add(id);
           } else throw error;
         }
-        if (current() && !this.dirty.has(id)) {this.lifecycles.event(id, { type: 'OBSERVATION', proof, status: 'attached' });void this.refreshDisplaySummary(id);
+        if (current() && !this.dirty.has(id)) {this.lifecycles.event(id, { type: 'OBSERVATION', proof, status: 'attached' });void this.refreshDisplaySummary(id);void this.refreshTranscriptDomain(id);
           if(traceInterestBatches(this.state.views[id]?.trace).length>1)void this.refreshTraceDomain(id).catch(error=>{if(current()&&this.state.views[id]?.trace)this.setSession(id,{trace:{...this.state.views[id].trace!,error:String(error)}});});
         }
       }
@@ -1751,6 +1752,40 @@ export class AppServerClient {
    * Ordinary live refreshes preserve the epoch only with a durable overlap. */
   /** One Turn-aligned reading window, assembled from bounded native pages. */
   loadEarlier(id: string) { return this.pageOlder(id); }
+  private transcriptReads = new Map<string, { current: () => boolean; dirty: boolean; work: Promise<void> }>();
+  /** Native completion can update a row after it leaves the live head. Reread
+   * that exact message without clearing history, detaching scrolling or asking
+   * the reader to load it again. One later observation coalesces one fresh pass. */
+  private refreshTranscriptDomain(id: string): Promise<void> {
+    const existing = this.transcriptReads.get(id);
+    if (existing?.current()) { existing.dirty = true; return existing.work; }
+    const observation = this.lifecycles.observe(id), history = this.state.views[id]?.history;
+    if (!observation || !history || history.window) return Promise.resolve();
+    const authority = this.readingAuthority(id), intent = this.readingIntents.get(id);
+    const current = () => authority() && this.readingIntents.get(id) === intent
+      && this.state.views[id]?.history?.epoch === history.epoch && !this.state.views[id]?.history?.window;
+    const read = { current, dirty: true, work: Promise.resolve() };
+    this.transcriptReads.set(id, read);
+    read.work = (async () => {
+      try {
+        while (read.dirty && current()) {
+          read.dirty = false;
+          const view = this.state.views[id];
+          for (const entry of transcriptRepairs(view.history, view.snapshot!.transcript)) {
+            if (!current() || entry.item.type !== 'message') return;
+            const result = await this.request({ method: 'session/transcript', params: { target: observation.target, at: { type: 'message', id: entry.item.message.id, cut: null }, limit: 1 } }, 'transcript_window', undefined, current);
+            if (!current()) return;
+            if (result.window.cut.conversation_id !== observation.target.conversation_id) throw new Error('Native transcript refresh changed Conversation.');
+            const latest = this.state.views[id];
+            this.setSession(id, { history: refreshTranscript(repairTranscript(latest.history!, result.window, entry), latest.snapshot!.transcript) });
+          }
+        }
+      } catch (error) {
+        if (current()) this.setSession(id, { history: { ...this.state.views[id].history!, error: String(error) } });
+      } finally { if (this.transcriptReads.get(id) === read) this.transcriptReads.delete(id); }
+    })();
+    return read.work;
+  }
   loadInitialHistory(id: string) {
     const history = this.state.views[id]?.history;
     if (!history || history.window || history.loading || history.error || history.page.next_cursor == null || transcriptWindowReady(history.page.entries ?? [])) return Promise.resolve();
@@ -1769,26 +1804,25 @@ export class AppServerClient {
     const cache = this.state.views[id].trace;
     const authority = this.traceAuthorities.get(id);
     if (!cache || cache.loading || cache.page.next_cursor == null) return;
-    const limit = Math.min(TRACE_PAGE_SIZE, TRACE_LIMIT - cache.page.records.length);
-    if (limit < 1) throw new Error('Trace window is full. Return to latest first.');
     const current = () => observation.current()
       && this.traceAuthorities.get(id) === authority
       && this.state.views[id]?.trace?.epoch === cache.epoch;
     this.setSession(id, { trace: { ...cache, loading: true, error: undefined } });
     try {
       let next = cache;
+      const visited = new Set<string>();
       const added: import('../../../protocol/app-server/v51').TraceRecord[] = [];
-      let pages = 0;
       do {
-        const before = next.page.next_cursor;
-        const result = await this.request({ method: 'session/trace', params: { target, before, limit: Math.min(TRACE_PAGE_SIZE, TRACE_LIMIT - next.page.records.length) } }, 'trace', undefined, current);
+        const before = next.page.next_cursor!;
+        if (visited.has(before)) throw new Error('Native Trace history did not advance.');
+        visited.add(before);
+        const result = await this.request({ method: 'session/trace', params: { target, before, limit: TRACE_PAGE_SIZE } }, 'trace', undefined, current);
         if (!current()) return;
         standaloneTraceCut(result.page,target.conversation_id);
         if (result.page.next_cursor != null && result.page.next_cursor === before) throw new Error('Native Trace history did not advance.');
-        pages++;
         added.push(...result.page.records);
         next = prependTrace(next, result.page);
-      } while (next.page.next_cursor != null && pages < Math.ceil(HISTORY_WINDOW_ROWS / TRACE_PAGE_SIZE) && next.page.records.length < TRACE_LIMIT && !traceWindowReady(initial ? next.page.records : added));
+      } while (next.page.next_cursor != null && !traceWindowReady(initial ? next.page.records : added));
       if (current()) {
         const live = this.state.views[id].trace!;
         this.setSession(id, { trace: { ...prependTrace(live, next.page), readCuts: { ...next.readCuts, ...live.readCuts }, loading: false } });
@@ -2056,7 +2090,8 @@ export class AppServerClient {
     if (!this.lifecycles.observe(id)) return;
     this.invalidateReading(id);
     const view = this.state.views[id];
-    if (view?.snapshot) this.setSession(id, { history: replaceTranscript(view.snapshot.transcript, view.history) });
+    if (view?.snapshot && view.history?.window) this.setSession(id, { history: replaceTranscript(view.snapshot.transcript, view.history) });
+    void this.refreshTranscriptDomain(id);
   }
   async loadLater(id: string) {
     const history = this.state.views[id]?.history, window = history?.window;
@@ -2079,16 +2114,14 @@ export class AppServerClient {
     try {
       let pageAt = at, next = history;
       const added: import('../../../protocol/app-server/v51').RuntimeClientTranscriptEntry[] = [];
-      let pages = 0;
       do {
         const result = await this.request({ method: 'session/transcript', params: { target, at: pageAt, limit: HISTORY_PAGE_SIZE } }, 'transcript_window', undefined, current);
         if (!current()) return;
         if (result.window.cut.conversation_id !== target.conversation_id || ('cut' in pageAt && pageAt.cut && !sameReadCut(result.window.cut, pageAt.cut))) throw new Error('Invalid native history cut.');
         if (pageAt.type === 'older' && result.window.page.next_cursor != null && BigInt(result.window.page.next_cursor) >= BigInt(pageAt.before)) throw new Error('Invalid native history page.');
         added.push(...result.window.page.entries ?? []);
-        pages++;
         next = extendTranscriptWindow(result.window, next, at.type === 'older');
-        if (at.type !== 'older' || next.page.next_cursor == null || pages >= Math.ceil(HISTORY_WINDOW_ROWS / HISTORY_PAGE_SIZE) || next.page.entries!.length >= HISTORY_WINDOW_ROWS || transcriptWindowReady(initial ? next.page.entries! : added)) break;
+        if (at.type !== 'older' || next.page.next_cursor == null || transcriptWindowReady(initial ? next.page.entries! : added)) break;
         pageAt = { type: 'older', before: next.page.next_cursor, cut: result.window.cut };
       } while (current());
       if (!current()) return;
@@ -2099,6 +2132,7 @@ export class AppServerClient {
         next = refreshTranscript(following, this.state.views[id].snapshot!.transcript);
       }
       this.setSession(id, { history: { ...next, loading: false, initialLoading: false } });
+      void this.refreshTranscriptDomain(id);
     } catch (error) {
       if (current()) this.setSession(id, { history: { ...this.state.views[id].history!, loading: false, initialLoading: false, error: String(error) } });
     }

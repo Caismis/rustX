@@ -669,7 +669,7 @@
           "treatment": "Toolbar markup adapted; Actual time stays a visible rustX switch."
         }
       ],
-      "local_sha256": "d521e8ea8dd743c8962f0541b9995fb13b4941464fece8c605abe8034d74db8b"
+      "local_sha256": "e32eb48d19eaa142cada9058b0da4775fca533bd4c2f9f14f0979762b8aa4764"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
@@ -6591,7 +6591,7 @@
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
       "upstream_sha256": "dcfe6a14f8ce0d88e101ae8ed1709512cfde0547216a3520bf69399e01681cc3",
       "classification": "B",
-      "treatment": "Adapt DSH history message/Turn reading-window thresholds to rustX bounded transcript and Trace transports. Native cuts, source references, attachment fencing and finite storage stay rustX-owned.",
+      "treatment": "Adapt DSH per-fetch message/Turn thresholds and accumulation of loaded history to rustX transcript and Trace transports. Native per-response bounds, source references and attachment fences stay rustX-owned.",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../../protocol/app-server/attempt-identity",
@@ -6601,7 +6601,15 @@
       "excluded_dependencies": [
         "Harness Session controller, event stream and projection assembly"
       ],
-      "local_sha256": "82860b04baf872a40a111d5c8858e5ba3a007e8635b932a090f9f41da3514022"
+      "local_sha256": "72e191f8f2e523053ad30afca34a8f951187ed88bfbda986a31f71ddb79caf83",
+      "additional_sources": [
+        {
+          "upstream": "packages/api/session-controller/src/history.ts",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "20a2b002816817b04d7bae25e429034f79dbfa445ec2f7d90e4525a9c1652db8",
+          "treatment": "The 500-message ceiling applies to one fetch, counting conversational user/assistant messages; loaded pages accumulate, and process/context rows do not exhaust that message budget."
+        }
+      ]
     }
   ],
   "inspected_only": [

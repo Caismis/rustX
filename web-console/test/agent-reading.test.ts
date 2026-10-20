@@ -75,7 +75,7 @@ it('rejects foreign child cuts and invalid target locations, allowing an explici
   await reader.refreshTurns(); expect(await reader.navigate(1)).toEqual(turn(1));
   expect(reader.getSnapshot().navigationError).toBeUndefined();
 });
-it('reads older/newer finite windows at the child cut and bounds retained entries', async () => {
+it('reads native pages at the child cut and retains accumulated history', async () => {
   await setup(); await reader.navigate(1);
   server.handlers.set('agent/transcript', request => {
     if (request.method !== 'agent/transcript') throw Error('method');
@@ -89,8 +89,11 @@ it('reads older/newer finite windows at the child cut and bounds retained entrie
   await reader.loadEarlier();
   expect(reader.getSnapshot().history?.page.entries?.map(entry => entry.cursor)).toEqual(['0', '1', '2']);
   reader.returnToLatest();
-  for (let n = 132; n < 500; n++) reader.observe({ ...live(n), transcript: { entries: [entry(n - 1), entry(n)], next_cursor: String(n - 1) } });
-  expect(reader.getSnapshot().history?.page.entries!.length).toBeLessThanOrEqual(500);
+  for (let n = 132; n < 800; n++) reader.observe({ ...live(n), transcript: { entries: [entry(n - 1), entry(n)], next_cursor: String(n - 1) } });
+  expect(reader.getSnapshot().history?.page.entries!.length).toBe(669);
+  const loaded = reader.getSnapshot().history!.page.entries;
+  reader.returnToLatest();
+  expect(reader.getSnapshot().history!.page.entries).toBe(loaded);
   expect(turnKey(turn(1).id)).not.toBe(turnKey(turn(130).id));
 });
 it('parent detachment rejects pending child outline adoption', async () => {

@@ -524,9 +524,14 @@ managed artifact service, never browser access to a local path.
 
 ## Conversation reading
 
-Chat has a bounded native Turn rail. A distant jump reads one native window
-at the selected Turn, retaining at most 256 historical entries / 8 MiB alongside
-the independently current live tail. Return to latest releases the historical
+Chat has a bounded native Turn rail. Initial reading and older-history actions
+assemble a Harness-style window of at least 50 conversational messages and two
+Turns, or at most 500 messages, from native pages. Loaded pages accumulate without
+evicting previously read messages or imposing a total history cap. Pending native
+responses and Tools outside the latest head are reread automatically by identity.
+Scrolling back to the latest message retains the loaded history.
+A distant jump reads one native window at the selected Turn alongside the
+independently current live tail. Return to latest releases that historical
 window. Navigation intent retires obsolete reads. See
 [the reading contract](../docs/conversation-reading.md) for ownership, limits,
 lineage mapping and deterministic intent rules.

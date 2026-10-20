@@ -15,6 +15,9 @@ it('follows DSH message and Turn thresholds, without treating model-only Context
  expect(transcriptWindowReady(rows.map(row => ({ ...row, turn_process: { ...row.turn_process!, attempt_id: 'one-turn' } })))).toBe(false);
  expect(transcriptWindowReady(rows.map(row => ({ ...row, item: { type: 'message', message: { role: 'user', id: `context-${row.cursor}`, source: 'runtime', kind: { context: 'native_environment' }, content: [] } } })))).toBe(false);
  expect(traceWindowReady(rows.map((_, n) => traceRecord(n, { kind: n % 2 ? 'assistant' : 'user', location: { attempt_id: `turn-${Math.floor(n / 10)}` } })))).toBe(true);
+ const contextOnly = Array.from({ length: 600 }, (_, n) => ({ ...entry(n + 1), item: { type: 'message' as const, message: { role: 'user' as const, id: `context-${n}`, source: 'runtime' as const, kind: { context: 'native_environment' as const }, content: [] } } }));
+ expect(transcriptWindowReady(contextOnly)).toBe(false);
+ expect(traceWindowReady(contextOnly.map((_, n) => traceRecord(n, { kind: 'tool' })))).toBe(false);
 });
 it('automatically reads a useful initial window and retains normal live updates without a historical-window mode', async () => {
  server = new Server(); const all = Array.from({ length: 120 }, (_, n) => entry(n + 1));
@@ -44,5 +47,9 @@ it('loads a short conversation to its beginning instead of stopping at a small t
  });
  await server.client.loadInitialHistory('A');
  expect(server.client.getSnapshot().views.A.history!.page.entries).toHaveLength(40);
+ expect(server.client.getSnapshot().views.A.history!.page.next_cursor).toBeNull();
+ const loaded = server.client.getSnapshot().views.A.history!.page.entries;
+ server.client.returnToLatest('A'); await server.client.loadInitialHistory('A');
+ expect(server.client.getSnapshot().views.A.history!.page.entries).toBe(loaded);
  expect(server.client.getSnapshot().views.A.history!.page.next_cursor).toBeNull();
 });

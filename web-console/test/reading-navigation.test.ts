@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from 'vitest';
 import type { ObservedTurn, ObservedTurnPage, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v51';
 import { Server, snapshot } from './fixture';
-import { HISTORY_LIMIT, HISTORY_MAX_BYTES, turnKey } from '../src/client/transcript';
+import { HISTORY_PAGE_MAX_BYTES, turnKey } from '../src/client/transcript';
 const owner=(n:number)=>({attempt_id_source:null, final_message_locator:null,final_message_id_deferred:false,final_message_id_source:null,conversation_id:'conversation-A',attempt_id:`attempt-${n}`,control_cursor:String(n),message_count:1,tool_call_count:0,outcome:'completed' as const});
 const entry=(n:number):RuntimeClientTranscriptEntry=>({cursor:String(n),item:{type:'message',message:{role:'assistant',id:`m${n}`,content:[{type:'text',text:`answer-${n}`}]}},turn_process:owner(n)});
 const turn=(n:number):ObservedTurn=>({id:{conversation_id:'conversation-A',attempt_id:`attempt-${n}`},ordinal:n,cursor:String(n),prompt:`prompt-${n}`,response:''});
@@ -92,11 +92,11 @@ it('a newer jump retires an ordinary older read; late completion cannot prepend 
  await serve(2);expect(await jump).toEqual(turn(400));const installed=server.client.getSnapshot().views.A.history;
  await serve(1);await older;expect(server.client.getSnapshot().views.A.history).toBe(installed);
 });
-it('repeated older gestures retain bounded entries and bytes, ordered without duplicates',async()=>{
+it('repeated older gestures retain all loaded history, ordered without duplicates',async()=>{
  await ready();
  for(let n=1;n<=20;n++){const work=server.client.loadEarlier('A');await finishWindow(work);
  const entries=server.client.getSnapshot().views.A.history!.page.entries!;
- expect(entries.length).toBeLessThanOrEqual(HISTORY_LIMIT);expect(JSON.stringify(entries).length*2).toBeLessThanOrEqual(HISTORY_MAX_BYTES);
+ expect(entries.length).toBe(32 + n * 64);
  expect(new Set(entries.map(row=>row.cursor)).size).toBe(entries.length);
  expect(cursors()).toEqual([...cursors()!].sort((a,b)=>a-b));}
  expect(reads().length).toBeGreaterThanOrEqual(20);
@@ -155,7 +155,7 @@ it.each(['byte bound','entry bound','foreign cut'] as const)('%s rejects a malfo
  await ready();const before=server.client.getSnapshot().views.A.history;
  const work=server.client.navigateTurn('A',{turn:turn(1),cut}),request=await server.waitFor('session/transcript',1);
  const entries=failure==='entry bound'?Array.from({length:65},(_,i)=>entry(i+1)):[entry(1)];
- if(failure==='byte bound'&&entries[0].item.type==='message'&&entries[0].item.message.role==='assistant')entries[0].item.message.content=[{type:'text',text:'x'.repeat(HISTORY_MAX_BYTES)}];
+ if(failure==='byte bound'&&entries[0].item.type==='message'&&entries[0].item.message.role==='assistant')entries[0].item.message.content=[{type:'text',text:'x'.repeat(HISTORY_PAGE_MAX_BYTES)}];
  server.socket.success(request,{type:'transcript_window',window:{cut:failure==='foreign cut'?{...cut,mutation_revision:'1'}:cut,page:{entries},target:turn(1).id,target_cursor:'1'}});
  expect(await work).toBe(false);expect(reads()).toHaveLength(1);expect(server.client.getSnapshot().views.A.history).toBe(before);
  if(failure==='byte bound'){expect(server.client.getSnapshot().connection).toBe('stale');expect(server.client.getSnapshot().views.A.cursor).toBe('0');}
@@ -165,7 +165,7 @@ it.each(['byte bound','entry bound','foreign cut'] as const)('%s rejects a malfo
 it('later paging moves a finite cut and returning to latest releases it',async()=>{
  await ready();const jump=server.client.navigateTurn('A',{turn:turn(1),cut});await serve(1);await jump;
  for(let n=2;n<=12;n++){const next=server.client.loadLater('A');await serve(n);await next;
-  expect(cursors()!.length).toBeLessThanOrEqual(HISTORY_LIMIT);
+  expect(cursors()!.length).toBe(n * 32);
   expect(reads().at(-1)!.request.params).toMatchObject({at:{type:'newer',cut},limit:32});}
  expect(reads()).toHaveLength(12);expect(cursors()![0]).toBe(1);expect(cursors()!.at(-1)).toBe(384);
  expect(server.client.getSnapshot().views.A.history?.page.next_cursor).toBeNull();

@@ -3076,3 +3076,70 @@ The focused document/view-lifetime/workspace-Host suite passed all 45 tests;
 TypeScript, production build, all 303 provenance records and 264 package notices
 passed. No screenshot reference/tolerance or native/TUI source changed. Other
 browser engines were not exercised; the existing large-chunk build warning remains.
+
+### History refresh stays inside the reader (2026-10-20)
+
+Reference: Harness `session-controller/src/client/sessions/session.ts` and
+`session-controller/src/history.ts` at
+`687f282e8625c6b8d11ff58211a90524be2e4317`: 50 conversational messages/two
+Turns per ordinary reading window, a 500-message fetch ceiling, and accumulation
+through `prependWindow`. Harness Chat retains an earlier-history button for a
+real omitted prefix; normal lifecycle repair does not replace history with an
+internal "History was refreshed" notice.
+
+The local mismatch was a destructive cache rebase when an unresolved response or
+Tool left the latest native head, followed by a manual reload error. Root and
+child readers now retain those rows and reread exact native message identities
+silently. Fresh results preserve native content bindings, row identities and the
+current live cursor. In-flight rereads coalesce newer observations and are fenced
+by attachment, Conversation, history epoch and navigation intent. Existing rows
+remain mounted while a result is pending. Passive initial hydration does not show
+its older-page button. Genuine native read failures still retain the last valid
+presentation and expose the existing recovery path.
+
+Chat's global 500-row/8 MiB retention limit and Trace's global 512-row/4 MiB
+retention limit were removed. Limits remain on individual native responses,
+content/field reads, eight-interest lifecycle batches and the heavy detail cache.
+The 500-message ceiling now measures conversational user/assistant messages per
+fetch; Context and Tool-result rows do not exhaust it. Continuation progress and
+opaque-cursor cycle checks replace arbitrary page-count termination. Reading
+mechanism documentation now distinguishes native page admission from retained
+history instead of documenting obsolete 256-row eviction.
+
+The Browser plugin/skill is unavailable; verification used pinned Playwright 1.63
+Linux Chromium at `http://127.0.0.1:5274/test/fixtures/startup.html` and production
+preview at port 5273. Tested flow: open Chat, hold an older Tool/response reread,
+advance the native head, keep the original User node and scroll position, release
+the result, expand its successful output and edit a retained draft. Desktop
+1440x1000 and narrow 390x844 passed page identity, meaningful content, error-overlay
+and console health, viewport bounds, stable DOM/reading position and absence of
+the internal notice/manual-recovery button. Evidence:
+`/tmp/rustx-history-repair-{1440,390}.png`.
+
+The long-history case passed with 1,000 records in its initial 500-message fetch
+and all 1,120 retained after the next real history action; earliest and latest
+messages remained available together. Returning to latest also preserves all
+1,120 ordinary-history rows and does not reintroduce the earlier-history button;
+only explicit historical navigation releases its frozen window. Root and child
+unit regressions cover that distinction. Its fixture cut now reflects the actual
+frontier instead of the original 80-row case. Evidence:
+`/tmp/rustx-history-long-reading.png`. All eight selected browser scenarios passed,
+including short Chat/Trace hydration at both widths, child navigation at both
+widths, and the real native history/rich-response/reconnect/image/lightbox/upload
+workflow. No screenshot reference or comparison policy changed.
+
+The full Web suite passed 2,992 tests with four existing skips. The final focused
+run passed 39 tests, including the added opaque-cursor cycle case and retention
+of 669 child records; root historical navigation also retains 1,312 rows and
+Trace retention exceeds 1,024 records without eviction. TypeScript, production
+build, i18n ownership, all 303 source records and notices for 264 packages passed.
+No native protocol, runtime or TUI source changed. Other browser engines were not
+exercised; the existing large-chunk build warning remains.
+
+After the final ordinary-return-to-latest correction, all 78 focused transcript,
+history-policy, child-reader and navigation tests passed again. The correction
+preserves accumulated ordinary history while explicit historical jumps still
+return to their independently current live head.
+All eight browser scenarios then passed again against the final production build,
+including the no-reload/no-eviction assertion after returning to the latest of
+1,120 loaded records. The final TypeScript and provenance checks also passed.

@@ -1,7 +1,7 @@
 import type { AttachmentTarget, ObservedTurn, ObservedTurnPage, ConversationWindowAt, RuntimeClientSnapshot } from '../../../protocol/app-server/v51';
 import type { AppServerClient } from './app-server';
-import { extendTranscriptWindow, HISTORY_PAGE_SIZE, TURN_PAGE_SIZE, installTranscriptWindow, refreshTranscript, replaceTranscript, sameReadCut, turnKey, turnPageCount, type TranscriptCache, type TurnSelection } from './transcript';
-import { HISTORY_WINDOW_ROWS, transcriptWindowReady } from './history-policy';
+import { extendTranscriptWindow, HISTORY_PAGE_SIZE, TURN_PAGE_SIZE, installTranscriptWindow, refreshTranscript, replaceTranscript, transcriptRepairs, repairTranscript, sameReadCut, turnKey, turnPageCount, type TranscriptCache, type TurnSelection } from './transcript';
+import { transcriptWindowReady } from './history-policy';
 
 export interface AgentReadingState {
   history?: TranscriptCache;
@@ -45,6 +45,7 @@ export class AgentReading {
     if (!this.current() || snapshot.conversation_id !== this.conversationId) return;
     this.live = snapshot;
     this.publish({ history: refreshTranscript(this.state.history, snapshot.transcript) });
+    void this.refreshEntries();
     // Streaming text does not demand a new outline per delta. Native attempt
     // transitions and the committed transcript frontier refresh its previews.
     const revision = JSON.stringify([snapshot.attempt?.attempt_id, snapshot.attempt?.attempt_id_source, snapshot.attempt?.phase.type,
@@ -119,7 +120,8 @@ export class AgentReading {
   }
   returnToLatest = () => {
     this.invalidate();
-    if (this.live) this.publish({ history: replaceTranscript(this.live.transcript, this.state.history), navigationError: undefined });
+    if (this.live && this.state.history?.window) this.publish({ history: replaceTranscript(this.live.transcript, this.state.history), navigationError: undefined });
+    void this.refreshEntries();
   };
   loadEarlier = () => {
     const history = this.state.history;
@@ -136,6 +138,31 @@ export class AgentReading {
     if (!window?.newer_cursor || this.state.history?.loading) return Promise.resolve();
     return this.readWindow({ type: 'newer', after: window.newer_cursor, cut: window.cut });
   };
+  private repairs?: { current: () => boolean; dirty: boolean; work: Promise<void> };
+  private refreshEntries(): Promise<void> {
+    if (this.repairs?.current()) { this.repairs.dirty = true; return this.repairs.work; }
+    const history = this.state.history, intent = this.intent;
+    if (!history || history.window || !this.live || !this.current()) return Promise.resolve();
+    const current = () => this.current() && this.intent === intent && this.state.history?.epoch === history.epoch && !this.state.history?.window;
+    const read = { current, dirty: true, work: Promise.resolve() };
+    this.repairs = read;
+    read.work = (async () => {
+      try {
+        while (read.dirty && current()) {
+          read.dirty = false;
+          for (const entry of transcriptRepairs(this.state.history, this.live!.transcript)) {
+            if (!current() || entry.item.type !== 'message') return;
+            const result = await this.client.request({ method: 'agent/transcript', params: { target: this.target, agent_id: this.agentId, at: { type: 'message', id: entry.item.message.id, cut: null }, limit: 1 } }, 'transcript_window', undefined, current);
+            if (!current()) return;
+            if (result.window.cut.conversation_id !== this.conversationId) throw new Error('Native child transcript refresh changed Conversation.');
+            this.publish({ history: refreshTranscript(repairTranscript(this.state.history!, result.window, entry), this.live!.transcript) });
+          }
+        }
+      } catch (error) { if (current()) this.publish({ history: { ...this.state.history!, error: String(error) } }); }
+      finally { if (this.repairs === read) this.repairs = undefined; }
+    })();
+    return read.work;
+  }
   private async readWindow(at: ConversationWindowAt, initial = false) {
     const history = this.state.history;
     if (!history || !this.current()) return;
@@ -143,7 +170,7 @@ export class AgentReading {
     const intent = this.intent, current = () => this.current() && this.intent === intent;
     this.publish({ history: { ...history, loading: true, initialLoading: initial, error: undefined } });
     try {
-      let pageAt = at, next = history, pages = 0;
+      let pageAt = at, next = history;
       const added: NonNullable<typeof history.page.entries> = [];
       do {
         const result = await this.client.request({ method: 'agent/transcript', params: { target: this.target, agent_id: this.agentId, at: pageAt, limit: HISTORY_PAGE_SIZE } }, 'transcript_window', undefined, current);
@@ -151,9 +178,9 @@ export class AgentReading {
         const window = result.window;
         if (window.cut.conversation_id !== this.conversationId || 'cut' in pageAt && pageAt.cut && !sameReadCut(window.cut, pageAt.cut)) throw new Error('Invalid native child history cut.');
         if (pageAt.type === 'older' && window.page.next_cursor != null && BigInt(window.page.next_cursor) >= BigInt(pageAt.before)) throw new Error('Invalid native child history page.');
-        added.push(...window.page.entries ?? []); pages++;
+        added.push(...window.page.entries ?? []);
         next = extendTranscriptWindow(window, next, at.type === 'older');
-        if (at.type !== 'older' || next.page.next_cursor == null || pages >= Math.ceil(HISTORY_WINDOW_ROWS / HISTORY_PAGE_SIZE) || next.page.entries!.length >= HISTORY_WINDOW_ROWS || transcriptWindowReady(initial ? next.page.entries! : added)) break;
+        if (at.type !== 'older' || next.page.next_cursor == null || transcriptWindowReady(initial ? next.page.entries! : added)) break;
         pageAt = { type: 'older', before: next.page.next_cursor, cut: window.cut };
       } while (current());
       if (!current()) return;
@@ -162,6 +189,7 @@ export class AgentReading {
         next = this.live ? refreshTranscript(following, this.live.transcript) : following;
       }
       this.publish({ history: { ...next, loading: false, initialLoading: false } });
+      void this.refreshEntries();
     } catch (error) { if (current()) this.publish({ history: { ...this.state.history!, loading: false, initialLoading: false, error: String(error) } }); }
   }
 }

@@ -3,7 +3,7 @@ import { useTraceContexts } from './useTraceContexts';
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/TrajectoryTable.tsx and TrajectoryToolbar.tsx; see PROVENANCE.md. */
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { TRACE_LIMIT, type TraceCache } from '../../client/trace';
+import { type TraceCache } from '../../client/trace';
 import { IconSearchOutline16 } from '../../presentation/primitives/icons';
 import { TrajectoryInspector, inspectorTabs } from './TrajectoryInspector';
 import { TrajectoryLedger, type LedgerHandle } from './TrajectoryLedger';
@@ -128,7 +128,7 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLates
     }
   }, [selection, selectedItem]);
   const activeKey = selection?.display_key;
-  const canLoadEarlier = Boolean(cache.page.next_cursor) && !cache.loading && records.length < TRACE_LIMIT;
+  const canLoadEarlier = Boolean(cache.page.next_cursor) && !cache.loading;
   const requestOlder = () => ledger.current?.loadEarlier();
   const toggleTurn = (id: string) => setCollapsedTurns(current => { const next = new Set(current); if (!next.delete(id)) next.add(id); return next; });
   const toggleCalls = (id: string) => setCalls(current => { const next = new Set(current); if (!next.delete(id)) next.add(id); return next; });

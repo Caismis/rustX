@@ -1,7 +1,7 @@
 import{traceReceipt}from'./fixture';
 import { afterEach, expect, it } from 'vitest';
 import { Server, snapshot,checkpoint } from './fixture';
-import { beginTraceDetail, completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace,traceInterestBatches, traceInterests, TRACE_DETAIL_LIMIT, TRACE_DETAIL_MAX_BYTES, TRACE_LIMIT } from '../src/client/trace';
+import { beginTraceDetail, completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace,traceInterestBatches, traceInterests, TRACE_DETAIL_LIMIT, TRACE_DETAIL_MAX_BYTES } from '../src/client/trace';
 import { requestDetail as detail, traceRecord as entry } from './trace-fixture';
 const rootCut=()=>checkpoint(snapshot()).read_cut;
 let server: Server;
@@ -23,9 +23,25 @@ it('overlapping refresh preserves history; a disconnected tail establishes a new
   expect(gap.page.next_cursor).toBe('trace:20');
   expect(gap.page.records.map(item => item.id)).toEqual(['trace:20']);
 });
-it('retention is finite', () => {
-  const full = replaceTrace({ records: Array.from({ length: TRACE_LIMIT }, (_, i) => entry(i + 1)), next_cursor: 'trace:1' });
-  expect(() => prependTrace(full, { records: [entry(0)] })).toThrow('full');
+it('retains previously loaded history beyond one transport window', () => {
+  const full = replaceTrace({ records: Array.from({ length: 1024 }, (_, i) => entry(i + 1)), next_cursor: 'trace:1' });
+  const next = prependTrace(full, { records: [entry(0)] });
+  expect(next.page.records).toHaveLength(1025);
+  expect(next.epoch).toBe(full.epoch);
+  expect(refreshTrace(next, { records: [entry(1024), entry(1025)] }).page.records).toHaveLength(1026);
+});
+it('rejects an opaque native continuation cycle without discarding the loaded ledger', async () => {
+  server = new Server();
+  server.snapshots.set('A', { ...snapshot(), trace: { records: [entry(100)], next_cursor: 'before-a' } });
+  await server.attached('A');
+  const previous = server.client.getSnapshot().views.A.trace!.page;
+  server.handlers.set('session/trace', request => {
+    if (request.method !== 'session/trace') throw Error('Expected Trace page');
+    return { type: 'trace', page: { read_cut: rootCut(), records: [entry(request.params.before === 'before-a' ? 90 : 80)], next_cursor: request.params.before === 'before-a' ? 'before-b' : 'before-a' } };
+  });
+  await expect(server.client.loadEarlierTrace('A')).rejects.toThrow('did not advance');
+  expect(server.client.getSnapshot().views.A.trace!.page).toBe(previous);
+  expect(server.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(2);
 });
 it('a live message arriving during older read survives and advances only the live cursor', async () => {
   server = new Server(); server.snapshots.set('A', { ...snapshot(), trace: { records: [entry(10)], next_cursor: 'trace:10' } });
@@ -141,8 +157,8 @@ it('forty new anchors rebase history, retain one exact selection, and bound inte
   expect(settled.selection).toMatchObject({ id: old.id, state: 'completed' });
   expect(settled.page.records).toEqual(tail.records);
   expect(settled.page.records.some(row => row.id === old.id)).toBe(false);
-  const batches=traceInterestBatches({ ...settled, page: { records: Array.from({ length: TRACE_LIMIT }, (_, i) => entry(i + 100)) } });
-  expect(batches.flat()).toHaveLength(TRACE_LIMIT+1);
+  const batches=traceInterestBatches({ ...settled, page: { records: Array.from({ length: 1024 }, (_, i) => entry(i + 100)) } });
+  expect(batches.flat()).toHaveLength(1025);
   expect(batches.every(batch=>batch.length<=8)).toBe(true);
 });
 it('non-overlap rebase fences a pending older page and uses the new interval cursor', async () => {

@@ -216,7 +216,7 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
     nodes.splice(at < 0 ? nodes.length : at, 0, { kind: 'continuation' });
   }
   return <div className={css.column} aria-label={tx('agent:agent-transcript.canonical-conversation')}>
-    {!retrying && history?.page.next_cursor != null && <div className={css.older}><button type="button" disabled={history.loading || !loadEarlier} onClick={loadEarlier}>{history.loading ? tx('agent:agent-transcript.loading-earlier') : tx('agent:agent-transcript.load-earlier')}</button></div>}
+    {!retrying && !history?.initialLoading && history?.page.next_cursor != null && <div className={css.older}><button type="button" disabled={history.loading || !loadEarlier} onClick={loadEarlier}>{history.loading ? tx('agent:agent-transcript.loading-earlier') : tx('agent:agent-transcript.load-earlier')}</button></div>}
     {history?.error && <p role="alert">{history.error}</p>}
     {!retrying && !messages.length && !entries.length && !runs.length && <Feedback kind="empty" title={tx('agent:agent-transcript.ready-for-a-task')}><p>{tx('agent:agent-transcript.what-would-you-like-to-work-on')}</p></Feedback>}
     {nodes.map(node => {

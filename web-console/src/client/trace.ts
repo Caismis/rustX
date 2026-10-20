@@ -3,10 +3,6 @@ import {traceInspectionHead} from '../../../protocol/app-server/trace-inspection
 import type {TraceValueSelector} from '../../../protocol/app-server/trace-field';
 import type { TraceDetail, TracePage, TraceRecord, TraceLifecycle,CheckpointReadCut,CheckpointPage,CheckpointValueChunk,ContentRef,ContentChunk, Request1 } from '../../../protocol/app-server/v51';
 
-/** Most summary records the browser retains for one Trace interval. */
-export const TRACE_LIMIT = 512;
-/** Estimated encoded UTF-16 ceiling of the retained summary window. */
-export const TRACE_MAX_BYTES = 4 * 1024 * 1024;
 /** Records requested per older page. */
 export const TRACE_PAGE_SIZE = 32;
 /** Most record details retained at once; selection is one, neighbours warm. */
@@ -100,15 +96,6 @@ function merge(older: TraceRecord[], newer: TraceRecord[]) {
   return [...merged, ...older.slice(offset), ...pending];
 }
 
-function bounded(records: TraceRecord[],cuts:Readonly<Record<string,CheckpointReadCut>>={},selection?:TraceRecord) {
-  const retained=retainedCuts(cuts,records,selection);
-  const uniqueCuts=new Set(Object.values(retained));
-  const selected=selection&&!records.some(record=>record.id===selection.id)?JSON.stringify(selection).length*2:0;
-  const bytes=JSON.stringify(records).length*2+selected+Object.keys(retained).reduce((size,key)=>size+key.length*2,0)
-    +[...uniqueCuts].reduce((size,cut)=>size+JSON.stringify(cut).length*2,0);
-  return records.length <= TRACE_LIMIT && bytes <= TRACE_MAX_BYTES;
-}
-
 /** Standalone responses supply their own complete immutable reader scope. */
 export function standaloneTraceCut(page:TracePage,conversationId:string,activation?:CheckpointReadCut['activation_id']) {
   const cut=page.read_cut;
@@ -163,7 +150,7 @@ function interestBatch(values: readonly string[]): TraceInterests {
 /** Loaded identities the server should refresh at the next snapshot cut. */
 export function traceInterestBatches(cache?: TraceCache) {
   const records = cache ? [...(cache.selection ? [cache.selection] : []), ...cache.page.records] : [];
-  const interests=[...new Map(records.map(record => [record.id, record.position])).values()].slice(0, TRACE_LIMIT+1);
+  const interests=[...new Map(records.map(record => [record.id, record.position])).values()];
   return Array.from({length:Math.max(1,Math.ceil(interests.length/8))},(_,index)=>interestBatch(interests.slice(index*8,index*8+8)));
 }
 
@@ -288,14 +275,10 @@ export function refreshTrace(previous: TraceCache | undefined, page: TracePage, 
   const details = Object.fromEntries(Object.entries(previous.details).filter(([id]) =>
     JSON.stringify(old.get(id)) === JSON.stringify(latest.get(id)),
   ));
-  if (!bounded(records,readCuts,selection)) {
-    return { ...replaceTrace(page, previous,outerCut), selection,readCuts:retainedCuts(readCuts,page.records,selection), error: 'Trace window reached its bound; showing latest.' };
-  }
   return { ...previous, selection, details, readCuts:retainedCuts(readCuts,records,selection),page: { read_cut:null,records, next_cursor: previous.page.next_cursor } };
 }
 
 export function prependTrace(previous: TraceCache, page: TracePage): TraceCache {
   const records = merge(page.records, previous.page.records);
-  if (!bounded(records,{...pageCuts(page),...previous.readCuts},previous.selection)) throw new Error('Trace window is full. Return to latest first.');
   return { ...previous, loading: false, error: undefined,readCuts:retainedCuts({...pageCuts(page),...previous.readCuts},records,previous.selection),page: { read_cut:null,records, next_cursor: page.next_cursor } };
 }
