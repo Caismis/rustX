@@ -70,7 +70,7 @@ fn config() -> CurrentRuntimeConfig {
     CurrentRuntimeConfig::from_toml_slice(CONFIG.as_bytes()).expect("valid test config")
 }
 
-/// Deterministic UUIDv7 sequence: yields each value once, then repeats the
+/// Deterministic `UUIDv7` sequence: yields each value once, then repeats the
 /// last one, so collision-retry paths can be driven exactly.
 #[derive(Debug)]
 struct Sequence(std::sync::Mutex<std::collections::VecDeque<uuid::Uuid>>);

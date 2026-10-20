@@ -1,6 +1,7 @@
 //! Exact lineage read cuts: checkpoint activation, response/retry boundaries,
 //! temporal cut races, and unsuccessful turn provenance.
 
+use super::super::{LineageSide, lineage_cut};
 use super::*;
 
 #[test]
@@ -39,13 +40,13 @@ fn historical_fork_excludes_checkpoint_activated_after_selected_ledger() {
         .read_lineage_cut(source.load_head().unwrap().revision)
         .unwrap();
     for (boundary, side, expected) in [
-        (105, super::super::LineageSide::Before, 1),
-        (110, super::super::LineageSide::Before, 1),
-        (110, super::super::LineageSide::After, 2),
-        (111, super::super::LineageSide::After, 2),
+        (105, LineageSide::Before, 1),
+        (110, LineageSide::Before, 1),
+        (110, LineageSide::After, 2),
+        (111, LineageSide::After, 2),
     ] {
         let id = ConversationId::generate();
-        let seed = super::super::lineage_cut(
+        let seed = lineage_cut(
             &id,
             &cut,
             Some(&MessageId::new(format!("M{boundary}"))),
@@ -108,13 +109,7 @@ fn projection_activation_closure_survives_clone_fork_clone_again_and_source_dele
         .read_projection_lineage_cut(LedgerFrontier(100), ProjectionActivationId(2))
         .unwrap();
     let mut copied_id = ConversationId::generate();
-    let first_seed = super::super::lineage_cut(
-        &copied_id,
-        &source_cut,
-        None,
-        super::super::LineageSide::After,
-    )
-    .unwrap();
+    let first_seed = lineage_cut(&copied_id, &source_cut, None, LineageSide::After).unwrap();
     let mut copied = SqliteConversationStore::in_memory(copied_id.clone()).unwrap();
     copied.initialize_lineage(&first_seed).unwrap();
     drop(source);
@@ -144,9 +139,7 @@ fn projection_activation_closure_survives_clone_fork_clone_again_and_source_dele
                 .unwrap();
             assert_eq!(cut.projections.len(), usize::try_from(activation).unwrap());
             let child_id = ConversationId::generate();
-            let seed =
-                super::super::lineage_cut(&child_id, &cut, None, super::super::LineageSide::After)
-                    .unwrap();
+            let seed = lineage_cut(&child_id, &cut, None, LineageSide::After).unwrap();
             let fork = SqliteConversationStore::in_memory(child_id).unwrap();
             fork.initialize_lineage(&seed).unwrap();
             let head = fork.projection_head().unwrap().unwrap();
@@ -170,9 +163,7 @@ fn projection_activation_closure_survives_clone_fork_clone_again_and_source_dele
             .read_projection_lineage_cut(LedgerFrontier(100), ProjectionActivationId(2))
             .unwrap();
         copied_id = ConversationId::generate();
-        let seed =
-            super::super::lineage_cut(&copied_id, &cut, None, super::super::LineageSide::After)
-                .unwrap();
+        let seed = lineage_cut(&copied_id, &cut, None, LineageSide::After).unwrap();
         let next = SqliteConversationStore::in_memory(copied_id.clone()).unwrap();
         next.initialize_lineage(&seed).unwrap();
         copied = next;
@@ -203,7 +194,7 @@ fn post_response_fork_and_branch_include_the_response_and_retry_excludes_input()
             &state(),
             &source,
             &MessageId::new("assistant-b"),
-            super::super::LineageSide::After,
+            LineageSide::After,
         )
         .unwrap();
     let (branch, branch_editor) = catalog
@@ -212,7 +203,7 @@ fn post_response_fork_and_branch_include_the_response_and_retry_excludes_input()
             &state(),
             &source,
             &MessageId::new("assistant-b"),
-            super::super::LineageSide::After,
+            LineageSide::After,
         )
         .unwrap();
     assert!(fork_editor.is_empty());
@@ -244,7 +235,7 @@ fn post_response_fork_and_branch_include_the_response_and_retry_excludes_input()
             &state(),
             &source,
             &MessageId::new("user-b"),
-            super::super::LineageSide::Before,
+            LineageSide::Before,
         )
         .unwrap();
     assert_eq!(editor, vec![text("B")]);
@@ -663,7 +654,7 @@ fn lineage_copy_race(member: bool, terminal_wins: bool) {
                 &state(),
                 &source,
                 &MessageId::new("boundary"),
-                super::super::LineageSide::Before,
+                LineageSide::Before,
             )
             .unwrap();
         let (branch, _) = worker_catalog
@@ -672,7 +663,7 @@ fn lineage_copy_race(member: bool, terminal_wins: bool) {
                 &state(),
                 &source,
                 &MessageId::new("boundary"),
-                super::super::LineageSide::Before,
+                LineageSide::Before,
             )
             .unwrap();
         [clone, fork, branch]
@@ -891,7 +882,7 @@ fn clone_fork_and_branch_share_native_unsuccessful_turn_provenance() {
             &state(),
             &source,
             &MessageId::new("boundary"),
-            super::super::LineageSide::Before,
+            LineageSide::Before,
         )
         .unwrap();
     let (branch, _) = catalog
@@ -900,7 +891,7 @@ fn clone_fork_and_branch_share_native_unsuccessful_turn_provenance() {
             &state(),
             &source,
             &MessageId::new("boundary"),
-            super::super::LineageSide::Before,
+            LineageSide::Before,
         )
         .unwrap();
     for prepared in [&clone, &fork, &branch] {
@@ -947,7 +938,7 @@ fn clone_fork_and_branch_share_native_unsuccessful_turn_provenance() {
             &state(),
             &source,
             &MessageId::new("input"),
-            super::super::LineageSide::Before,
+            LineageSide::Before,
         )
         .unwrap();
     let empty = SqliteConversationStore::open_existing(empty.conversation_id, &empty.database_path)

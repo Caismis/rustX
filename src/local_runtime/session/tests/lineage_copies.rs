@@ -1,6 +1,7 @@
 //! Clone, fork and tree-node publication: identity domains, retained surface
 //! revisions, todo state, failed publication invisibility, and node switching.
 
+use super::super::{SESSION_LIST_PAGE_LIMIT, SESSION_TREE_PAGE_LIMIT};
 use super::compaction_lineage::todo_call;
 use super::compaction_lineage::todo_list_of;
 use super::compaction_lineage::todo_result;
@@ -16,7 +17,7 @@ fn clone_and_fork_with_empty_destinations_are_still_resume_visible() {
     let (_directory, mut catalog, _config) = open_catalog();
     let visible = |catalog: &SessionCatalog| {
         catalog
-            .list_page(None, 0, super::super::SESSION_LIST_PAGE_LIMIT)
+            .list_page(None, 0, SESSION_LIST_PAGE_LIMIT)
             .expect("resume page")
             .sessions
     };
@@ -546,7 +547,7 @@ fn failed_clone_and_fork_publication_is_not_visible() {
     ));
     assert_eq!(
         catalog
-            .list_page(None, 0, super::super::SESSION_LIST_PAGE_LIMIT)
+            .list_page(None, 0, SESSION_LIST_PAGE_LIMIT)
             .expect("visible Session page")
             .sessions
             .len(),
@@ -842,7 +843,7 @@ async fn tree_branch_is_a_distinct_linear_node_and_failed_publication_is_invisib
     );
 
     let nodes = catalog
-        .node_page(&source_session, 0, super::super::SESSION_TREE_PAGE_LIMIT)
+        .node_page(&source_session, 0, SESSION_TREE_PAGE_LIMIT)
         .expect("tree node page")
         .nodes;
     assert_eq!(snapshot.active_node, nodes[1].id);
@@ -855,7 +856,7 @@ async fn tree_branch_is_a_distinct_linear_node_and_failed_publication_is_invisib
     );
     assert_eq!(
         catalog
-            .list_page(None, 0, super::super::SESSION_LIST_PAGE_LIMIT)
+            .list_page(None, 0, SESSION_LIST_PAGE_LIMIT)
             .expect("list page")
             .sessions
             .len(),
@@ -875,7 +876,7 @@ async fn tree_branch_is_a_distinct_linear_node_and_failed_publication_is_invisib
         .expect("publish new session after tree branch");
     assert_eq!(
         catalog
-            .list_page(None, 0, super::super::SESSION_LIST_PAGE_LIMIT)
+            .list_page(None, 0, SESSION_LIST_PAGE_LIMIT)
             .expect("list page")
             .sessions
             .len(),
@@ -949,7 +950,7 @@ fn tree_nodes_switch_between_independent_lineages_without_rewind() {
         .expect("publish branch B");
 
     let nodes = catalog
-        .node_page(&source_session, 0, super::super::SESSION_TREE_PAGE_LIMIT)
+        .node_page(&source_session, 0, SESSION_TREE_PAGE_LIMIT)
         .expect("all branch nodes")
         .nodes;
     assert_eq!(nodes.len(), 3);

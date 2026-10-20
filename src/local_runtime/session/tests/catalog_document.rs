@@ -1,15 +1,13 @@
 //! Catalog document schema, Session-owned model metadata, and the visibility
 //! commit protocol under injected write faults.
 
+use super::super::SESSION_CATALOG_SCHEMA_VERSION;
 use super::*;
 
 // P15
 #[test]
 fn an_unsupported_catalog_schema_is_refused_without_touching_the_file() {
-    for version in [
-        12_u64,
-        u64::from(super::super::SESSION_CATALOG_SCHEMA_VERSION) + 100,
-    ] {
+    for version in [12_u64, u64::from(SESSION_CATALOG_SCHEMA_VERSION) + 100] {
         let (directory, catalog, _config) = open_catalog();
         let path = catalog.path.clone();
         let mut document: serde_json::Value =
@@ -142,11 +140,10 @@ fn a_pre_provenance_session_catalog_is_refused_rather_than_reinterpreted() {
         serde_json::from_slice(&fs::read(&path).expect("catalog bytes")).expect("catalog JSON");
     assert_eq!(
         document["schema_version"],
-        serde_json::json!(super::super::SESSION_CATALOG_SCHEMA_VERSION),
+        serde_json::json!(SESSION_CATALOG_SCHEMA_VERSION),
         "the published catalog carries the current schema"
     );
-    document["schema_version"] =
-        serde_json::json!(super::super::SESSION_CATALOG_SCHEMA_VERSION - 1);
+    document["schema_version"] = serde_json::json!(SESSION_CATALOG_SCHEMA_VERSION - 1);
     fs::write(
         &path,
         serde_json::to_vec(&document).expect("downgraded catalog"),

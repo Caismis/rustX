@@ -1,6 +1,10 @@
 //! Bounded list, summary, tree and history projections, and metadata
 //! publication that never opens a conversation store at read time.
 
+use super::super::{
+    LineageSide, SESSION_LIST_PAGE_LIMIT, SESSION_NAME_LIMIT, SESSION_PREVIEW_LIMIT,
+    SESSION_TREE_PAGE_LIMIT, SessionError, SessionNodeOrigin, preview_of,
+};
 use super::*;
 
 #[test]
@@ -30,7 +34,7 @@ fn new_and_name_publish_metadata_without_mutating_old_history() {
     );
     assert_eq!(
         catalog
-            .list_page(None, 0, super::super::SESSION_LIST_PAGE_LIMIT)
+            .list_page(None, 0, SESSION_LIST_PAGE_LIMIT)
             .expect("list page")
             .sessions
             .len(),
@@ -62,14 +66,11 @@ fn new_and_name_publish_metadata_without_mutating_old_history() {
         Err(SessionError::InvalidName)
     ));
     assert!(matches!(
-        catalog.rename(
-            &new_session_id,
-            &"n".repeat(super::super::SESSION_NAME_LIMIT + 1)
-        ),
+        catalog.rename(&new_session_id, &"n".repeat(SESSION_NAME_LIMIT + 1)),
         Err(SessionError::InvalidName)
     ));
     let new_nodes = catalog
-        .node_page(&new_session_id, 0, super::super::SESSION_TREE_PAGE_LIMIT)
+        .node_page(&new_session_id, 0, SESSION_TREE_PAGE_LIMIT)
         .expect("new node page")
         .nodes;
     let new_node = &new_nodes[0];
@@ -198,7 +199,7 @@ fn exact_summary_is_not_a_fuzzy_search_page() {
         catalog.summary(&super::super::SessionId::new(
             "ses_00000000-0000-7000-8000-000000000099"
         )),
-        Err(super::super::SessionError::UnknownSession { .. })
+        Err(SessionError::UnknownSession { .. })
     ));
 }
 
@@ -227,7 +228,7 @@ fn exact_and_list_summary_share_every_projected_field() {
         // Production persists the projection after the first canonical
         // ordinary user commit; list/summary then read that stored line.
         if let MessageBlock::User(user) = &message
-            && let Some(preview) = super::super::preview_of(user)
+            && let Some(preview) = preview_of(user)
         {
             assert!(
                 catalog.publish_display_preview(&id, &preview).unwrap(),
@@ -261,7 +262,7 @@ fn an_unnamed_session_is_listed_by_its_first_user_message() {
     let (_directory, mut catalog, _config) = open_catalog();
     let row = |catalog: &SessionCatalog| {
         catalog
-            .list_page(None, 0, super::super::SESSION_LIST_PAGE_LIMIT)
+            .list_page(None, 0, SESSION_LIST_PAGE_LIMIT)
             .expect("session page")
             .sessions
             .into_iter()
@@ -271,7 +272,7 @@ fn an_unnamed_session_is_listed_by_its_first_user_message() {
 
     assert!(
         catalog
-            .list_page(None, 0, super::super::SESSION_LIST_PAGE_LIMIT)
+            .list_page(None, 0, SESSION_LIST_PAGE_LIMIT)
             .expect("session page")
             .sessions
             .len()
@@ -291,7 +292,7 @@ fn an_unnamed_session_is_listed_by_its_first_user_message() {
     let MessageBlock::User(first_message) = user("first", "  restore\n  the auth module  ") else {
         unreachable!("user helper builds a User block")
     };
-    let preview = super::super::preview_of(&first_message).expect("text message renders");
+    let preview = preview_of(&first_message).expect("text message renders");
     assert!(
         catalog
             .publish_display_preview(&first_session(&catalog), &preview)
@@ -306,11 +307,7 @@ fn an_unnamed_session_is_listed_by_its_first_user_message() {
     assert_eq!(used.name, None);
     assert!(
         !catalog
-            .list_page(
-                Some("auth module"),
-                0,
-                super::super::SESSION_LIST_PAGE_LIMIT
-            )
+            .list_page(Some("auth module"), 0, SESSION_LIST_PAGE_LIMIT)
             .expect("content search")
             .sessions
             .is_empty(),
@@ -348,7 +345,7 @@ fn a_derived_row_line_is_bounded_and_only_ever_text() {
     let MessageBlock::User(long_message) = user("long", long.as_str()) else {
         unreachable!("user helper builds a User block")
     };
-    let preview = super::super::preview_of(&long_message).expect("long text renders");
+    let preview = preview_of(&long_message).expect("long text renders");
     assert!(
         catalog
             .publish_display_preview(&first_session(&catalog), &preview)
@@ -356,13 +353,13 @@ fn a_derived_row_line_is_bounded_and_only_ever_text() {
         "production persists the derived line after the first canonical commit"
     );
     let preview = catalog
-        .list_page(None, 0, super::super::SESSION_LIST_PAGE_LIMIT)
+        .list_page(None, 0, SESSION_LIST_PAGE_LIMIT)
         .expect("session page")
         .sessions
         .swap_remove(0)
         .preview
         .expect("a long message still yields a line");
-    assert_eq!(preview.chars().count(), super::super::SESSION_PREVIEW_LIMIT);
+    assert_eq!(preview.chars().count(), SESSION_PREVIEW_LIMIT);
     assert!(preview.ends_with('\u{2026}'), "a cut line says it was cut");
 
     let (_directory, catalog, _config) = open_catalog();
@@ -383,7 +380,7 @@ fn a_derived_row_line_is_bounded_and_only_ever_text() {
     );
     assert_eq!(
         catalog
-            .list_page(None, 0, super::super::SESSION_LIST_PAGE_LIMIT)
+            .list_page(None, 0, SESSION_LIST_PAGE_LIMIT)
             .expect("session page")
             .sessions
             .swap_remove(0)
@@ -408,7 +405,7 @@ fn catalog_with_projected_sessions(count: usize) -> (TempDir, SessionCatalog, Ve
                 .prepare_session(&state(), &[])
                 .expect("prepare Session");
             catalog
-                .publish_session(&prepared, super::super::SessionNodeOrigin::New)
+                .publish_session(&prepared, SessionNodeOrigin::New)
                 .expect("publish Session")
                 .id
         };
@@ -447,14 +444,14 @@ fn the_first_list_page_reads_persisted_projections_without_opening_a_store() {
     let (_directory, catalog, sessions) = catalog_with_projected_sessions(70);
     let opens = opens_on_this_thread();
     let page = catalog
-        .list_page(None, 0, super::super::SESSION_LIST_PAGE_LIMIT)
+        .list_page(None, 0, SESSION_LIST_PAGE_LIMIT)
         .expect("first page");
     assert_eq!(
         opens_on_this_thread() - opens,
         0,
         "listing one full page opens zero conversation stores"
     );
-    assert_eq!(page.sessions.len(), super::super::SESSION_LIST_PAGE_LIMIT);
+    assert_eq!(page.sessions.len(), SESSION_LIST_PAGE_LIMIT);
     assert_eq!(page.next_offset, Some(32));
     for (index, row) in page.sessions.iter().enumerate() {
         assert_eq!(&row.id, &sessions[69 - index], "rows are newest first");
@@ -505,7 +502,7 @@ fn searching_by_identity_name_and_projection_opens_no_store() {
     let needle: String = sessions[7].as_str().chars().take(20).collect();
     let opens = opens_on_this_thread();
     let page = catalog
-        .list_page(Some(&needle), 0, super::super::SESSION_LIST_PAGE_LIMIT)
+        .list_page(Some(&needle), 0, SESSION_LIST_PAGE_LIMIT)
         .expect("identity search");
     assert_eq!(opens_on_this_thread() - opens, 0);
     assert!(
@@ -521,7 +518,7 @@ fn searching_by_identity_name_and_projection_opens_no_store() {
     // By name (Session 42 is named "Project 42").
     let opens = opens_on_this_thread();
     let page = catalog
-        .list_page(Some("project 42"), 0, super::super::SESSION_LIST_PAGE_LIMIT)
+        .list_page(Some("project 42"), 0, SESSION_LIST_PAGE_LIMIT)
         .expect("name search");
     assert_eq!(opens_on_this_thread() - opens, 0);
     assert_eq!(page.sessions.len(), 1);
@@ -534,7 +531,7 @@ fn searching_by_identity_name_and_projection_opens_no_store() {
     // By projection substring (Session 69 is unnamed), case-insensitively.
     let opens = opens_on_this_thread();
     let page = catalog
-        .list_page(Some("UNIQUE-69"), 0, super::super::SESSION_LIST_PAGE_LIMIT)
+        .list_page(Some("UNIQUE-69"), 0, SESSION_LIST_PAGE_LIMIT)
         .expect("projection search");
     assert_eq!(opens_on_this_thread() - opens, 0);
     assert_eq!(page.sessions.len(), 1);
@@ -555,7 +552,7 @@ fn an_empty_session_reads_as_the_identity_fallback_without_opening_a_store() {
     );
     let opens = opens_on_this_thread();
     let row = catalog
-        .list_page(None, 0, super::super::SESSION_LIST_PAGE_LIMIT)
+        .list_page(None, 0, SESSION_LIST_PAGE_LIMIT)
         .expect("session page")
         .sessions
         .swap_remove(0);
@@ -621,7 +618,7 @@ fn a_projection_published_underneath_a_name_survives_renaming() {
         "the projection publishes underneath the name"
     );
     let row = catalog
-        .list_page(None, 0, super::super::SESSION_LIST_PAGE_LIMIT)
+        .list_page(None, 0, SESSION_LIST_PAGE_LIMIT)
         .expect("session page")
         .sessions
         .swap_remove(0);
@@ -656,7 +653,7 @@ fn branching_and_switching_the_active_node_keeps_the_root_projection() {
             &state(),
             &source,
             &MessageId::new("source-user-c"),
-            super::super::LineageSide::Before,
+            LineageSide::Before,
         )
         .expect("prepare branch node");
     assert_eq!(
@@ -673,12 +670,7 @@ fn branching_and_switching_the_active_node_keeps_the_root_projection() {
         .parse::<u64>()
         .unwrap();
     catalog
-        .publish_node(
-            &session,
-            &branch,
-            root_node.clone(),
-            super::super::SessionNodeOrigin::New,
-        )
+        .publish_node(&session, &branch, root_node.clone(), SessionNodeOrigin::New)
         .expect("publish branch node");
     let published_generation = catalog.summary(&session).unwrap().ownership_generation;
     catalog
@@ -792,7 +784,7 @@ fn clone_and_fork_carry_the_seed_projection_into_the_visibility_commit() {
     catalog
         .publish_session(
             &clone,
-            super::super::SessionNodeOrigin::Clone {
+            SessionNodeOrigin::Clone {
                 source_session: session.clone(),
                 source_node: node.clone(),
                 source_surface_revision: revision,
@@ -801,7 +793,7 @@ fn clone_and_fork_carry_the_seed_projection_into_the_visibility_commit() {
         .expect("publish clone");
     let opens = opens_on_this_thread();
     let page = catalog
-        .list_page(None, 0, super::super::SESSION_LIST_PAGE_LIMIT)
+        .list_page(None, 0, SESSION_LIST_PAGE_LIMIT)
         .expect("session page");
     assert_eq!(
         opens_on_this_thread() - opens,
@@ -821,7 +813,7 @@ fn clone_and_fork_carry_the_seed_projection_into_the_visibility_commit() {
             &state(),
             &source,
             &MessageId::new("u1"),
-            super::super::LineageSide::Before,
+            LineageSide::Before,
         )
         .expect("prepare pre-input fork");
     assert_eq!(editor, vec![text("seed alpha")]);
@@ -830,18 +822,18 @@ fn clone_and_fork_carry_the_seed_projection_into_the_visibility_commit() {
     catalog
         .publish_session(
             &fork_empty,
-            super::super::SessionNodeOrigin::Fork {
+            SessionNodeOrigin::Fork {
                 source_session: session.clone(),
                 source_node: node.clone(),
                 source_surface_revision: revision,
                 source_message: MessageId::new("u1"),
                 source_locator: fixture_source_locator(&store, "u1"),
-                side: super::super::LineageSide::Before,
+                side: LineageSide::Before,
             },
         )
         .expect("publish pre-input fork");
     let page = catalog
-        .list_page(None, 0, super::super::SESSION_LIST_PAGE_LIMIT)
+        .list_page(None, 0, SESSION_LIST_PAGE_LIMIT)
         .expect("session page");
     assert_eq!(
         page.sessions
@@ -859,7 +851,7 @@ fn clone_and_fork_carry_the_seed_projection_into_the_visibility_commit() {
             &state(),
             &source,
             &MessageId::new("u2"),
-            super::super::LineageSide::Before,
+            LineageSide::Before,
         )
         .expect("prepare fork");
     assert_eq!(fork.display_preview.as_deref(), Some("seed alpha"));
@@ -881,7 +873,7 @@ fn clone_and_fork_carry_the_seed_projection_into_the_visibility_commit() {
             &state(),
             &source,
             &MessageId::new("last"),
-            super::super::LineageSide::Before,
+            LineageSide::Before,
         )
         .expect("prepare fork");
     assert_eq!(
@@ -909,7 +901,7 @@ fn a_missing_projection_is_not_repaired_at_list_time() {
     assert_eq!(opens_on_this_thread() - opens, 0);
     let opens = opens_on_this_thread();
     let row = catalog
-        .list_page(None, 0, super::super::SESSION_LIST_PAGE_LIMIT)
+        .list_page(None, 0, SESSION_LIST_PAGE_LIMIT)
         .expect("session page")
         .sessions
         .swap_remove(0);

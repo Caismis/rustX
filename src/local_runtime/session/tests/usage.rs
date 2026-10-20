@@ -1,5 +1,6 @@
 //! Unused-Session classification against accepted work.
 
+use super::super::SESSION_LIST_PAGE_LIMIT;
 use super::*;
 
 /// The one Session lifecycle classification every product path shares:
@@ -15,7 +16,7 @@ fn only_an_untouched_root_session_counts_as_unused() {
     let (directory, mut catalog, _config) = open_catalog();
     let visible = |catalog: &SessionCatalog| {
         catalog
-            .list_page(None, 0, super::super::SESSION_LIST_PAGE_LIMIT)
+            .list_page(None, 0, SESSION_LIST_PAGE_LIMIT)
             .expect("resume page")
             .sessions
             .into_iter()
