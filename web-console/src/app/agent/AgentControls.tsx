@@ -8,7 +8,6 @@ import type { ModelPickerState } from '../composer/ModelPicker';
 import { ModelSelect } from '../../presentation/agent/ModelSelect';
 import { Toast } from '../../presentation/primitives/Toast';
 import { IconWarningOutline16 } from '../../presentation/primitives/icons';
-import { Button } from '../../presentation/primitives/Button';
 import { catalogAdmits, catalogChoices, intentProfile, nextModelSelection, selectionChanges } from '../../bindings/model-catalog';
 import type { ModelSelectionIntent } from '../../presentation/agent/ModelSelect';
 import { selectSessionModel } from '../model-preference';
@@ -65,12 +64,16 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
    const at = epoch.current; guard.current = true; setBusy(true); setBlocked(true);
    void read(at).catch(cause => { if (current(at)) setError(String(cause)); }).finally(() => { if (current(at)) { guard.current = false; setBusy(false); } });
  };
+ // Revisions invalidate selection authority, not the last confirmed display.
+ // Only a replacement attachment clears the visible catalog; blocked keeps
+ // retained rows inert until the exact new revision has been read.
+ useEffect(() => { setCatalog(undefined); setCatalogPage(undefined); setOriginalModel(undefined); }, [scope]);
  useEffect(() => {
-   ++epoch.current; setCatalog(undefined); setBlocked(true); setBusy(false); setError(''); setSelectionError(''); guard.current = false;
+   ++epoch.current; setBlocked(true); setBusy(false); setError(''); setSelectionError(''); guard.current = false;
    if(!draft&&view?.observationState!=='checkpointLoading'&&view?.observationState!=='subscribePending')load(true);
    return () => { ++epoch.current; };
  }, [target?.attachment_id, generation, view?.snapshot?.resources?.revision, view?.snapshot?.model_status?.binding_revision]);
- useEffect(()=>{if(!draft&&view?.observationState==='following'&&!catalog&&blocked)load();},[view?.observationState]);
+ useEffect(()=>{if(!draft&&view?.observationState==='following'&&blocked)load();},[view?.observationState]);
  const mutate = async (operation: () => Promise<unknown>) => {
    if (pending || guard.current || blocked || busy || !attached || selection.current?.scope === scope) return false;
    const owner = { scope }; selection.current = owner;
@@ -92,7 +95,8 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
  const configured = (queued?.phase !== 'failed' ? queued?.config : undefined) ?? (model?.configured ?? (view?.settings ? view.settings.model ?? (coldSource?.session_models?.kind === 'available' ? coldSource.session_models.default_model : undefined) : undefined));
  const source = draft?.source ?? coldSource;
  const sourceChoices = draft?.source?.session_models?.kind === 'available' ? draft.source.session_models.catalog : coldCatalog?.catalog;
- const choices = sourceCatalog ?? (sourceChoices ? {models:(sourceChoices.models??[]).slice(0,32)} : catalog);
+ const choices = useMemo(() => sourceCatalog ?? (sourceChoices ? {models:(sourceChoices.models??[]).slice(0,32)} : catalog), [sourceCatalog, sourceChoices, catalog]);
+ const modelChoices = useMemo(() => catalogChoices(choices), [choices]);
  const draftError = draft?.source?.session_models?.kind === 'unavailable' ? draft.source.session_models.diagnostic : undefined;
  // Reading choices locks selection through loading, not the menu trigger.
  const disabled = pending || !attached && !connecting || !!queued && queued.phase !== 'failed' && !connecting;
@@ -134,14 +138,13 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
    if(guard.current)return;guard.current=true;setBusy(true);const at=epoch.current;
    try {await read(at,catalogPage);}catch(cause){if(current(at))setError(String(cause));}finally{if(epoch.current===at){guard.current=false;setBusy(false);}}
  } : undefined;
- const picker: ModelPickerState = { nextPage: sourceChoices ? nextSourcePage : nextPage, choices: catalogChoices(choices), current: currentModel, profile: currentProfile, effectiveProfile,
+ const picker: ModelPickerState = { nextPage: sourceChoices ? nextSourcePage : nextPage, choices: modelChoices, current: currentModel, profile: currentProfile, effectiveProfile,
    disabled: draft ? draft.disabled || !choices : disabled || (connecting ? !coldCatalog : blocked), loading: draft ? !draft.source : connecting ? !coldSource : busy && !catalog,
    error: draft ? draftError : queued?.error ?? coldError ?? (view?.modelMutation?.status === 'uncertain' ? tx('agent:copy.outcome-uncertain-no-replay-reconnect-and-reread-authority-before-continuing') : error), choose };
- const toolbar = <div ref={root} className="agent-control"><ModelSelect binding={JSON.stringify([generation, target?.attachment_id, draft?.source?.target, view?.snapshot?.resources?.revision, view?.snapshot?.model_status?.binding_revision])} choices={picker.choices}
+ const toolbar = <div ref={root} className="agent-control"><ModelSelect binding={JSON.stringify([generation, target?.attachment_id, draft?.source?.target])} choices={picker.choices}
    current={picker.current} profile={picker.profile} effectiveProfile={picker.effectiveProfile} disabled={draft ? draft.disabled || !choices : disabled} loading={draft ? !draft.source : connecting ? !coldSource : blocked} error={picker.error} load={load}
-   choose={intent => { void choose(intent); }}/>
+   choose={choose} nextPage={picker.nextPage}/>
    {!draft && modelStatus?.available === false && <p role="status">{tx('common:activity.model-unavailable')}</p>}
-   {!draft && !busy && (blocked && error || queued?.phase === 'failed') && <Button size="sm" disabled={!attached} onClick={() => load(true)}>{tx('agent:agent-controls.reread-models')}</Button>}
  </div>;
  return <>{children ? children(toolbar, picker) : toolbar}{draftError && <p role="alert">{draftError}</p>}{selectionError && <Toast key={toastSequence} text={selectionError} icon={<IconWarningOutline16 />} anchor={root.current?.closest<HTMLElement>('[data-composer-card]') ?? null} onDone={() => setSelectionError('')}/>}</>;
 }

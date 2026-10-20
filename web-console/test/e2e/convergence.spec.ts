@@ -88,11 +88,11 @@ test('Harness New Conversation, permission, model, native process and Models con
     releaseObservation.resolve();
     await expect(permissions).toContainText('Full access');
     await expect(send).toBeEnabled();
-    const model = page.getByRole('button', { name: 'Model and profile', exact: true });
+    const model = page.getByRole('button', { name: 'Model and thinking effort', exact: true });
     await expect(model).toBeEnabled(); await model.click();
     await page.getByRole('menuitem', { name: 'Model', exact: true }).click();
     await shot('06-new-conversation-model-picker');
-    await page.getByRole('menuitem', { name: 'fixture/second-model', exact: true }).click();
+    await page.getByRole('menuitemradio', { name: 'fixture/second-model', exact: true }).click();
     expect(wire.requests.filter(r => r.method === 'session/create')).toHaveLength(0);
     expect(wire.requests.filter(r => r.method === 'configuration/sourceWrite' && r.params.mutation?.unit === 'default_model')).toHaveLength(0);
     await page.getByRole('button', { name: 'Send', exact: true }).click();

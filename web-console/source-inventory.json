@@ -1088,13 +1088,13 @@
       ]
     },
     {
-      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
       "upstream": "packages/client/ui-model-selection/src/client/ModelSelect.module.css",
       "destination": "web-console/src/presentation/agent/ModelSelect.module.css",
-      "upstream_sha256": "0c3385a4ffa34b2a534b70a326193f441d5f8ffb0de471bcdf145844dfbe94fa",
+      "upstream_sha256": "7754687bfd5b18693e326f29367bf96a5ecf2906f0a00da82290406c9f12f80b",
       "classification": "A",
-      "treatment": "Pinned Harness styles; rustX flex-column sizing removes the inline baseline gap so centered model controls retain their glyph origin across sticky repaints; mutation errors remain below the control. Pane-resize repair: toolbar query container restored, viewport caps removed, measured model collapse and container-relative spacing follow current Harness.",
-      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
+      "treatment": "DSH ModelSelect compact geometry, typography, shared menu surface and pane/option/search styles, with an intrinsic flex anchor and fixed-size selection indicator to keep Composer layout stable. Model selector alignment: DSH single-card Model/Thinking effort panes, stable pending selection and confirmation focus; native rustX model/default/Profile semantics remain in the adapter; TUI unchanged.",
+      "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
         "Harness Session event assembler",
@@ -1102,7 +1102,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "124a64784b4706a7b10ee752f8f5343a3f5171284dc60463ad78cf3e6742ed17",
+      "local_sha256": "e031491f3f06461b3cf09c02046191ebf9466983bad27539f1fc89dabd699d1b",
       "additional_sources": [
         {
           "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
@@ -1113,19 +1113,25 @@
       ]
     },
     {
-      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
       "upstream": "packages/client/ui-model-selection/src/client/ModelSelect.tsx",
       "destination": "web-console/src/presentation/agent/ModelSelect.tsx",
-      "upstream_sha256": "4726d9ddcffd63295b0635fac728512308d56ef412ed9f6b037b3eddc552d1c0",
+      "upstream_sha256": "081a79904b09e45c3226e39baa711ed1c72138f00f3d29ba1f0c1aa5c3b768cb",
       "classification": "B",
-      "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority. #393: no longer passes the removed Menu portal prop. Issue #406: One model/profile control and unavailable selection presentation with explicit binding reset, over native catalog admission. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Model menu layout repair: render catalog loading and unavailable-selection status inside the existing portaled menu, disable pending root rows and focus only when ready; upstream baseline unchanged. Main integration #456: general Model Profiles and JSON-object request parameter authoring; existing upstream baseline unchanged.",
-      "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
+      "treatment": "DSH single-card Model/Thinking effort panes, grouped/searchable model list, keyboard navigation and pending selection focus, adapted to typed rustX catalog and configuration intents. Native acknowledgement plus authoritative reread govern settlement; no DSH model directory, Remote or selection authority retained.",
+      "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../locale/react",
-        "../primitives/Menu",
+        "../primitives/DialogSurface",
+        "../primitives/MenuGroup",
+        "../primitives/MenuSurface",
+        "../primitives/StateDot",
         "../primitives/icons",
+        "../primitives/rank-by-name",
         "./ModelSelect.module.css",
-        "react"
+        "clsx",
+        "react",
+        "react-dom"
       ],
       "excluded_dependencies": [
         "Harness Session event assembler",
@@ -1133,7 +1139,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "ba73448d84c930f05ad1e586f043b0e56f50300d135070745b173470c82079ac",
+      "local_sha256": "667cc82ae0b5ab4e9cef6647d820288f415592784311124ced59dd79887a5620",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-model-selection/src/client/ModelSelect.tsx",
@@ -3336,7 +3342,7 @@
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
       "upstream_sha256": "664def8bce9e753c3a670f9e9f01fe2280227a0921021e3a08b496f8c5d6effe",
-      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Repair: localized incomplete historical process outcome. #439: bilingual Busy Enter preference, complementary modifier help and double-Escape Stop wording. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. UI repair: Web last-request context occupancy disclosure removed for Harness parity; its wording is deleted. UI repair: busy-Enter Queue/Steer preference moved from below the Composer card to the General Settings row, matching Harness composer-enter. UI repair: turn-rail wording follows Harness (turn fallback, load-and-jump); paging and ordinal strings removed. UI/UX alignment: Harness step-process done titles and joining wording. UI/UX alignment: Harness usage, session statistics and context meter wording. UI/UX alignment: Harness single branch label and Regenerate wording. Header/Trajectory chrome alignment: Harness title crumb, compact header controls, toolbar, role tags, turn label and detail header. Main integration #456: general Model Profiles and JSON-object request parameter authoring; existing upstream baseline unchanged. PR #458 Shell navigation: one XState route owner, independent native lifecycle settlement and read-only Fork history; upstream reference unchanged. Remove rustX-only historical-window explanation copy to follow Harness Chat reading presentation; native history navigation is unchanged. Align the Chat history control with Harness: compact centered Load earlier, matching Chinese copy, and no visible Load later action; native bounded continuation remains separate. Native Tool detail alignment: shared compact result presentation and one Inspect path; duplicate execution JSON disclosures removed; native lifecycle and original Trace Result remain authoritative. Compaction alignment: DSH command/checkpoint marker in the Chat reading flow; summary-only disclosure and Between Turns presentation, with native retention and execution ownership unchanged. Canonical Tool source failures and retry use localized unavailable-details copy; assembling remains reserved for streaming proposals. Workflow alignment: compact native node activity in Chat, readable review decisions and receipts, explicit execution budget labels; upstream authority remains excluded.",
+      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Repair: localized incomplete historical process outcome. #439: bilingual Busy Enter preference, complementary modifier help and double-Escape Stop wording. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. UI repair: Web last-request context occupancy disclosure removed for Harness parity; its wording is deleted. UI repair: busy-Enter Queue/Steer preference moved from below the Composer card to the General Settings row, matching Harness composer-enter. UI repair: turn-rail wording follows Harness (turn fallback, load-and-jump); paging and ordinal strings removed. UI/UX alignment: Harness step-process done titles and joining wording. UI/UX alignment: Harness usage, session statistics and context meter wording. UI/UX alignment: Harness single branch label and Regenerate wording. Header/Trajectory chrome alignment: Harness title crumb, compact header controls, toolbar, role tags, turn label and detail header. Main integration #456: general Model Profiles and JSON-object request parameter authoring; existing upstream baseline unchanged. PR #458 Shell navigation: one XState route owner, independent native lifecycle settlement and read-only Fork history; upstream reference unchanged. Remove rustX-only historical-window explanation copy to follow Harness Chat reading presentation; native history navigation is unchanged. Align the Chat history control with Harness: compact centered Load earlier, matching Chinese copy, and no visible Load later action; native bounded continuation remains separate. Native Tool detail alignment: shared compact result presentation and one Inspect path; duplicate execution JSON disclosures removed; native lifecycle and original Trace Result remain authoritative. Compaction alignment: DSH command/checkpoint marker in the Chat reading flow; summary-only disclosure and Between Turns presentation, with native retention and execution ownership unchanged. Canonical Tool source failures and retry use localized unavailable-details copy; assembling remains reserved for streaming proposals. Workflow alignment: compact native node activity in Chat, readable review decisions and receipts, explicit execution budget labels; upstream authority remains excluded. Model selector alignment: DSH single-card Model/Thinking effort panes, stable pending selection and confirmation focus; native rustX model/default/Profile semantics remain in the adapter; TUI unchanged.",
       "destination": "web-console/src/locale/dictionaries/agent.ts",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -3354,7 +3360,7 @@
           "treatment": "Compaction checkpoint disclosure and bilingual summary wording adapted to native Ledger messages; no Harness runtime or command authority."
         }
       ],
-      "local_sha256": "1b1c759e960a1a12b72cdb6287d41b2611ca05a90415ae42b3750106bef708a6"
+      "local_sha256": "0057b0c4d21443954e3efffe290fc32e1ca7a41af6c16636d0744314ae0c0f06"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",
@@ -6163,6 +6169,51 @@
         "DSH Remote interaction settlement"
       ],
       "local_sha256": "646c3c860d1423688ac044866b2a2d00445394ed9ab0303dc0f58e317997c3d5"
+    },
+    {
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream": "packages/client/ui-primitives/src/MenuGroup.tsx",
+      "destination": "web-console/src/presentation/primitives/MenuGroup.tsx",
+      "upstream_sha256": "5cf45dc6fcb4aa892fd1e4c9d5e5ca8f8bee312ab1f8668f3063fcda0922e79d",
+      "classification": "B",
+      "treatment": "Model selector alignment: shared DSH provider groups, sticky headings and model search ranking. Native rustX catalog and exact model/profile identities remain authoritative; no DSH directory or remote runtime retained.",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "./MenuGroup.module.css",
+        "react"
+      ],
+      "excluded_dependencies": [
+        "DSH model directory and Remote selection authority"
+      ],
+      "local_sha256": "9b8b975ba74c9ac8db88283614bb2c48fedf5372cf8426d07367545f08c8a316"
+    },
+    {
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream": "packages/client/ui-primitives/src/MenuGroup.module.css",
+      "destination": "web-console/src/presentation/primitives/MenuGroup.module.css",
+      "upstream_sha256": "d0b927d0df0026de5211e8ba8bec81e9f1960eeb914dea57bb0dc440bd71fd59",
+      "classification": "B",
+      "treatment": "Model selector alignment: shared DSH provider groups, sticky headings and model search ranking. Native rustX catalog and exact model/profile identities remain authoritative; no DSH directory or remote runtime retained.",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [
+        "DSH model directory and Remote selection authority"
+      ],
+      "local_sha256": "d4627b90958f3f95fe48758e7b7a399ed1218ff3e4be56f77f848f36c25ef29c"
+    },
+    {
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream": "packages/client/ui-primitives/src/rank-by-name.ts",
+      "destination": "web-console/src/presentation/primitives/rank-by-name.ts",
+      "upstream_sha256": "bdd17f45d9ec55fc701d9242c21599cea4cd3fd39df8a7f7e93ed44d7c02ea30",
+      "classification": "B",
+      "treatment": "Model selector alignment: shared DSH provider groups, sticky headings and model search ranking. Native rustX catalog and exact model/profile identities remain authoritative; no DSH directory or remote runtime retained.",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [
+        "DSH model directory and Remote selection authority"
+      ],
+      "local_sha256": "ee3846e27db8d2ed7f82ebc3bf68a0cb820b012921f19110ec9f4e7befa9b4ce"
     }
   ],
   "inspected_only": [

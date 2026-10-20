@@ -173,7 +173,11 @@ const handled = new Set<Request>(server.requests.filter(row => row.request.metho
     server.held.delete('session/list');
     for (const { request } of server.requests) if (request.method === 'session/list' && !handled.has(request)) { handled.add(request); server.reply(request); }
   },
-  hold(method: Request['method']) { server.held.add(method); },
+  hold(method: Request['method']) {
+    // A new gate owns future requests, not earlier automatically replied ones.
+    if (!server.held.has(method)) for (const { request } of server.requests) if (request.method === method) handled.add(request);
+    server.held.add(method);
+  },
   async lose(method: Request['method']) {
     const request = server.requests.find(row => row.request.method === method && !handled.has(row.request))?.request;
     if (!request) throw Error(`No pending ${method}`);

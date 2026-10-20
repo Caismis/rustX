@@ -2619,3 +2619,40 @@ wait -> reload -> Accept/Reject with feedback -> native branch/return -> settled
 run disclosure. Browser plugin not available; the repository's pinned Docker
 Playwright runner validates desktop light English and narrow dark Chinese,
 with screenshots outside the repository under `/tmp/rustx-workflow-*.png`.
+
+## Web model and thinking effort selector alignment
+
+Reference: DeepSeek Harness `687f282e8625c6b8d11ff58211a90524be2e4317`,
+`ui-model-selection/ModelSelect`, `ui-primitives/MenuGroup` and `rank-by-name`.
+The Web selector now uses the reference's single-card Model / Thinking effort
+panes, compact dimensions, shared translucent menu surface, provider groups,
+search above four models, keyboard return paths and selection focus treatment.
+
+| Evidence mismatch | Repair or intentional native boundary |
+| --- | --- |
+| Model/Profile sideways submenus and missing current values | Two root cells show Model and Thinking effort with their current values; drilling replaces the contents of the same card. Escape/Shift+Tab return to the opening cell, then to the trigger. |
+| Duplicate “Model default profile (high)” and “high” choices | The named native default appears once in both the dropdown and `/model`. Choosing that strength follows the native Model default; other strengths pin their exact native Profile. An unnamed native default or a removed Profile still has one explicit default/recovery action. No strength IDs are fabricated. |
+| Binding revisions close/rebuild the menu and clear its catalog | A write keeps its pane/rows, confirmed label and fixed-size progress indicator until native acknowledgement plus authoritative reread. Revisions fence selection while retaining the last catalog for display; replacement attachments clear it. Cached refreshes add no loading paragraph to the card or Composer. The pending trigger keeps focus while native checkpoint reads temporarily revoke control admission; its option rows and dependent sends remain locked. |
+| Selection failures mixed with catalog diagnostics | Selection failures use the Composer toast. A refused native mutation retains an explicit reread action before a further write; rustX requires authoritative repair rather than replay. Catalog failures retain their in-card Retry. |
+
+The Web adapter continues to carry the complete native Summary policy and
+independent overrides, and preserves native explicit same-Model selection and
+NoOp acknowledgement semantics. Frozen running Attempt configurations are not
+rewritten. Native Profile authoring remains in Settings. **TUI continues to
+follow pi and has no changes in this work.**
+
+Validation flow: saved Chat -> Model/Thinking effort panes -> held selection ->
+held native checkpoint -> confirmed label/focus, plus actual native live profile
+switching and lost-acknowledgement recovery. Browser plugin not available; the
+repository's pinned Docker Playwright runner checks English desktop light and
+Chinese narrow dark. Frame samples verify card/row identity and unchanged
+Composer geometry and Chat scroll while each write/read is pending. Evidence
+screenshots are outside the repository at `/tmp/rustx-model-*.png`.
+
+Final visual QA also scopes the host reset's focus outline away from model menu
+rows: DSH's row highlight and the trigger's own focus shadow are retained, with
+no extra blue outline after a selection. The complete 19-case browser regression
+passed, followed by four focused desktop/narrow rechecks after that outline
+repair. The updated non-popup references change only the centered chevron;
+registered dark-390 attachment/context noise pixels were compared with the old
+references and are unchanged. No noise regions or tolerances were widened.

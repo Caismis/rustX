@@ -15,9 +15,12 @@ async function sessionSnapshot(wire: Awaited<ReturnType<typeof wireProbe>>, sess
 }
 
 async function chooseCurrentModel(page: Page, model: string) {
-  await page.getByRole('button', { name: 'Model and profile', exact: true }).click();
+  await page.getByRole('button', { name: 'Model and thinking effort', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Model', exact: true }).click();
-  await page.getByRole('menuitem', { name: model, exact: true }).click();
+  await expect(page.locator('[data-model-menu]')).toHaveAttribute('aria-busy', 'false');
+  await page.getByRole('menuitemradio', { name: model, exact: true }).click();
+  await expect(page.locator('[data-model-select]')).toHaveAttribute('aria-busy', 'false');
+  await expect(page.locator('[data-model-menu]')).toHaveCount(0);
 }
 
 async function openExistingSession(page: Page, id: string, width: number) {
@@ -77,7 +80,7 @@ max_output_tokens = { mode = "limit", tokens = 333 }
         (await wire.read('session/effectiveConfiguration', attached.target)).projection,
         (reference, offset) => wire.effectiveValueRead(attached.target, reference, offset), () => true,
       );
-      const trigger = page.getByRole('button', { name: 'Model and profile', exact: true });
+      const trigger = page.getByRole('button', { name: 'Model and thinking effort', exact: true });
       await expect(trigger).toContainText('high');
       expect(wire.requests.filter(request => request.method === 'session/setModel')).toHaveLength(0);
 
@@ -171,7 +174,7 @@ for (const [width, acknowledgement] of [[1440, 'received'], [390, 'lost']] as co
       await input.fill('tui multi-session: session A long task');
       await input.press('Enter');
       await fixture.gate('session-a-holding');
-      const trigger = page.getByRole('button', { name: 'Model and profile', exact: true });
+      const trigger = page.getByRole('button', { name: 'Model and thinking effort', exact: true });
       await expect(trigger).toBeEnabled();
       const attached = wire.responses.filter(response => response.method === 'session/attach').at(-1)!.result;
       const original = (await wire.read('session/checkpoint', attached.target)).checkpoint.snapshot.model!.configured;
@@ -182,8 +185,8 @@ for (const [width, acknowledgement] of [[1440, 'received'], [390, 'lost']] as co
       expect(wire.responses.filter(response => response.method === 'session/setModel')[0].result).toMatchObject({ type: 'model_set' });
       if (acknowledgement === 'lost') wire.loseNext('session/setModel');
       await trigger.click();
-      await page.getByRole('menuitem', { name: 'Profile', exact: true }).click();
-      await page.getByRole('menuitem', { name: 'low', exact: true }).click();
+      await page.getByRole('menuitem', { name: 'Thinking effort', exact: true }).click();
+      await page.getByRole('menuitemradio', { name: 'low', exact: true }).click();
       if (acknowledgement === 'lost') {
         await expect.poll(wire.lost).toBe(1);
         await connectRemote(page, fixture.endpoint, fixture.token);

@@ -22,10 +22,10 @@ for (const mode of ['settled', 'streaming', 'tools', 'error', 'approval', 'quest
    }
    if (mode === 'selectors') {
      await expect(page.getByRole('button', { name: 'Approval mode' })).toHaveCount(0);
-     await page.getByRole('button', { name: 'Model and profile' }).click();
+     await page.getByRole('button', { name: 'Model and thinking effort' }).click();
      await expect(page.getByText('Reading native models…')).toHaveCount(0);
-     await page.getByRole('menuitem', { name: 'Profile', exact: true }).click();
-     await expect(page.getByRole('menuitem', { name: 'deliberate', exact: true })).toBeVisible();
+     await page.getByRole('menuitem', { name: 'Thinking effort', exact: true }).click();
+     await expect(page.getByRole('menuitemradio', { name: 'deliberate', exact: true })).toBeVisible();
    }
    await expectStableScreenshot(page, `agent-${mode}-light.png`);
  if (mode === 'selectors') {
@@ -116,15 +116,15 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
         // seat as well as their exact catalog text and font metrics.
         const labels = await stack.evaluate(root => {
           const origin = root.getBoundingClientRect();
-          return [...root.querySelectorAll('[data-model-select] > span')].map(node => {
+          return [...root.querySelectorAll('[data-model-select] > span:not(:last-child)')].map(node => {
             const r = node.getBoundingClientRect(), s = getComputedStyle(node);
             return { text: node.textContent, x: r.x-origin.x, y: r.y-origin.y, width:r.width, height:r.height,
               fontSize:s.fontSize, fontWeight:s.fontWeight, lineHeight:s.lineHeight, color:s.color, transform:s.transform };
           });
         });
         expect(labels).toEqual([
-          { text:'native/coder', x:143.453125, y:271, width:70.78125, height:20, fontSize:'13px', fontWeight:'500', lineHeight:'20px', color:'rgb(207, 211, 214)', transform:'none' },
-          { text:'deliberate', x:218.234375, y:271, width:20.78125, height:20, fontSize:'13px', fontWeight:'500', lineHeight:'20px', color:'rgb(129, 133, 140)', transform:'none' },
+          { text:'native/coder', x:143.453125, y:271, width:70.78125, height:20, fontSize:'13px', fontWeight:'400', lineHeight:'20px', color:'rgb(207, 211, 214)', transform:'none' },
+          { text:'deliberate', x:218.234375, y:271, width:20.765625, height:20, fontSize:'13px', fontWeight:'400', lineHeight:'20px', color:'rgb(129, 133, 140)', transform:'none' },
         ]);
       }
       await expectStableScreenshot(stack, `composer-${state}-${theme}-${width}.png`);
@@ -241,9 +241,9 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
     await shot('context');
     await page.evaluate(() => window.composerFixture.docks(false));
     await expect(input).toHaveValue('Review these notes.');
-    for (const name of ['Add', 'Model and profile']) await expect(page.getByRole('button', { name, exact: true })).toBeVisible();
+    for (const name of ['Add', 'Model and thinking effort']) await expect(page.getByRole('button', { name, exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Approval mode', exact: true })).toHaveCount(0);
-    await page.getByRole('button', { name: 'Model and profile' }).click();
+    await page.getByRole('button', { name: 'Model and thinking effort' }).click();
     await expect(page.getByText('Reading native models…')).toHaveCount(0); await page.keyboard.press('Escape');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
@@ -267,13 +267,13 @@ test('restored Session-scoped drafts are measured on mount and shrink on identit
 /** The composer's model/profile menu is the product's submenu user: on a
  * phone-width viewport both of its layers stay inside the viewport, the page
  * never scrolls sideways, and keyboard and pointer both reach the profiles. */
-test('ModelSelect submenus stay usable inside a narrow viewport', async ({ page }) => {
+test('ModelSelect panes stay usable inside a narrow viewport', async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(`${fixtureOrigin}/test/fixtures/agent.html?mode=selectors`);
-  const trigger = page.getByRole('button', { name: 'Model and profile' });
-  const profile = page.getByRole('menuitem', { name: 'Profile', exact: true });
-  const submenu = page.getByRole('menu').filter({ has: page.getByRole('menuitem', { name: 'deliberate', exact: true }) });
+  const trigger = page.getByRole('button', { name: 'Model and thinking effort' });
+  const profile = page.getByRole('menuitem', { name: 'Thinking effort', exact: true });
+  const submenu = page.getByRole('menu').filter({ has: page.getByRole('menuitemradio', { name: 'deliberate', exact: true }) });
   /** Whether a surface lies wholly inside the viewport's 12px margin, and the page still has no horizontal scroll. */
   const contained = (locator: typeof submenu) => locator.evaluate(el => {
     const r = el.getBoundingClientRect();
@@ -284,23 +284,27 @@ test('ModelSelect submenus stay usable inside a narrow viewport', async ({ page 
   // ArrowRight enters its submenu.
   await trigger.focus(); await page.keyboard.press('Enter');
   await expect(page.getByText('Reading native models…')).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+  await page.keyboard.press('ArrowDown');
   await expect(page.getByRole('menuitem', { name: 'Model', exact: true })).toBeFocused();
   await page.keyboard.press('ArrowDown'); await expect(profile).toBeFocused();
-  // The submenu opens on following the Model default, then each named Profile.
-  await page.keyboard.press('ArrowRight'); await expect(page.getByRole('menuitem', { name: 'Model default profile (deliberate)', exact: true })).toBeFocused();
+  await expect(profile).toHaveCSS('outline-style', 'none');
+  // The named default is one strength, without a duplicate Profile option.
+  await page.keyboard.press('ArrowRight'); await expect(page.getByRole('menuitemradio', { name: 'deliberate', exact: true })).toBeFocused();
   expect(await contained(submenu)).toBe(true);
-  await page.keyboard.press('ArrowDown'); await expect(page.getByRole('menuitem', { name: 'deliberate', exact: true })).toBeFocused();
-  await page.keyboard.press('ArrowDown'); await expect(page.getByRole('menuitem', { name: 'brief', exact: true })).toBeFocused();
+  await expect(page.getByRole('menuitemradio', { name: 'deliberate', exact: true })).toHaveCSS('outline-style', 'none');
+  await page.keyboard.press('ArrowDown'); await expect(page.getByRole('menuitemradio', { name: 'brief', exact: true })).toBeFocused();
   // Escape closes the submenu first, then the menu, and focus returns to the trigger.
   await page.keyboard.press('Escape'); await expect(submenu).toHaveCount(0); await expect(profile).toBeFocused();
   await page.keyboard.press('Escape'); await expect(page.getByRole('menu')).toHaveCount(0); await expect(trigger).toBeFocused();
 
   // Pointer: the same submenu opens from a click, inside the viewport.
   await trigger.click(); await profile.click();
-  await expect(page.getByRole('menuitem', { name: 'brief', exact: true })).toBeVisible();
+  await expect(page.getByRole('menuitemradio', { name: 'brief', exact: true })).toBeVisible();
   expect(await contained(submenu)).toBe(true);
-  await page.getByRole('menuitem', { name: 'brief', exact: true }).hover();
+  await page.getByRole('menuitemradio', { name: 'brief', exact: true }).hover();
   await expect(submenu).toBeVisible();
+  await page.keyboard.press('Escape'); await expect(profile).toBeFocused();
   await page.keyboard.press('Escape'); await expect(page.getByRole('menu')).toHaveCount(0); await expect(trigger).toBeFocused();
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
 });
