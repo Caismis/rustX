@@ -1,6 +1,7 @@
 //! Real registry prepare/commit + durable catalog/SQLite + decoded archive.
 //! The staged child uses the registry's existing real-process/control seam.
 use super::*;
+use crate::durable::CanonicalStore;
 use crate::local_runtime::session::SessionCatalog;
 use crate::runtime::identity::{MessageId, SessionId};
 use crate::session_archive::{SessionArchiveCut, SessionArchiveProducer};

@@ -1,4 +1,5 @@
 // A committed compaction owns its head before asynchronous domain refinement.
+use crate::durable::{JournalStore, ObservationStore, ProjectionStore};
 use super::*;
 use crate::runtime_client::types::RequestId;
 

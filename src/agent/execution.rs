@@ -1062,7 +1062,7 @@ impl Terminal {
 #[derive(Debug)]
 enum CanonicalCommitError {
     Conversation(ConversationError),
-    Durable(crate::durable::inbox::ConversationStoreError),
+    Durable(crate::durable::ConversationStoreError),
     Interaction(InteractionFailure),
 }
 
@@ -3026,7 +3026,7 @@ impl<'a> AgentExecution<'a> {
     ///
     /// The attempt's model-turn start gate serializes the cancellation
     /// observation against the durable start commit
-    /// (`ConversationStore::commit_model_turn_start`: the request-scoped
+    /// (`RequestStore::commit_model_turn_start`: the request-scoped
     /// context, the immutable Request Snapshot, and the complete typed start
     /// receipt — `ModelRequestStarted` followed by any contribution emission
     /// facts — in one transaction). Exactly one side
@@ -3465,9 +3465,7 @@ impl<'a> AgentExecution<'a> {
     /// persisted.
     fn durable_failure_commit_error(&self) -> Option<CanonicalCommitError> {
         self.durable_failure.clone().map(|message| {
-            CanonicalCommitError::Durable(crate::durable::inbox::ConversationStoreError::Storage(
-                message,
-            ))
+            CanonicalCommitError::Durable(crate::durable::ConversationStoreError::Storage(message))
         })
     }
 
@@ -3638,7 +3636,7 @@ impl<'a> AgentExecution<'a> {
     /// progress, fit-check, and commit.
     ///
     /// The **semantic commit / linearization point** of compaction is the
-    /// single `ConversationStore::commit_projection` transaction. Before it
+    /// single `ProjectionStore::commit_projection` transaction. Before it
     /// canonical facts remain immutable. After a successful checkpoint/head
     /// transaction the current durable projection is installed and primary
     /// continuation is cleared. Core inputs retain their generation ownership.
@@ -5497,7 +5495,7 @@ impl<'a> AgentExecution<'a> {
             .map(|block| {
                 Self::canonical_event(block).ok_or_else(|| {
                     CanonicalCommitError::Durable(
-                        crate::durable::inbox::ConversationStoreError::InvalidReference(
+                        crate::durable::ConversationStoreError::InvalidReference(
                             "a ToolResult batch contains a non-tool message".to_owned(),
                         ),
                     )
@@ -6616,10 +6614,11 @@ pub(crate) mod test_sync {
 
 #[cfg(test)]
 mod tests {
+    use crate::durable::{CanonicalStore, JournalStore, RequestStore};
     include!("execution_contribution_tests.rs");
     include!("execution_selected_input_tests.rs");
     use crate::conversation::ConversationState;
-    use crate::durable::inbox::ConversationStore;
+    use crate::durable::ConversationStore;
     use crate::durable::{ModelTurnStartCommit, ModelTurnStartCommitDisposition};
     use crate::events::types::{AttemptOutcome, RuntimeEvent, RuntimeEventEnvelope};
     use std::collections::VecDeque;
@@ -7064,7 +7063,7 @@ mod tests {
             &self,
             _attempt_id: &AttemptId,
             block: &MessageBlock,
-            _receipt: &crate::durable::inbox::TranscriptCommitReceipt,
+            _receipt: &crate::durable::TranscriptCommitReceipt,
         ) {
             self.committed
                 .lock()
@@ -7075,7 +7074,7 @@ mod tests {
         fn observe_status(
             &self,
             observation: &crate::agent::AgentStatusObservation,
-            _source: Option<&crate::durable::inbox::StatusObservationSource>,
+            _source: Option<&crate::durable::StatusObservationSource>,
         ) {
             self.statuses
                 .lock()
@@ -7106,7 +7105,7 @@ mod tests {
             &self,
             _attempt_id: &AttemptId,
             audit: &crate::publication::PublicationAudit,
-            _receipt: &crate::durable::inbox::PublicationAuditReceipt,
+            _receipt: &crate::durable::PublicationAuditReceipt,
         ) {
             self.audits
                 .lock()

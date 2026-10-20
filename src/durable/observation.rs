@@ -477,7 +477,7 @@ pub struct NativeObservationBatch {
     pub finish_reason: Option<NativeObservationFieldRef>,
     pub read_cut: ObservationReadCut,
     pub journal_range: Option<(u64, u64)>,
-    pub canonical: Option<std::sync::Arc<super::inbox::CanonicalObservationBatch>>,
+    pub canonical: Option<std::sync::Arc<super::CanonicalObservationBatch>>,
     pub transition: NativeObservationTransition,
 }
 

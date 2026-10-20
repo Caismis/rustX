@@ -11,9 +11,9 @@
 use chrono::{DateTime, TimeZone, Utc};
 use rustx::conversation::SurfaceOp;
 use rustx::durable::{
-    AcceptedInbound, ConversationStore, ConversationStoreError, InboundDraft, LineageSeed,
-    SqliteConversationStore,
+    AcceptedInbound, ConversationStoreError, InboundDraft, LineageSeed, SqliteConversationStore,
 };
+use rustx::durable::{CanonicalStore, InboxStore, JournalStore, ProjectionStore};
 use rustx::message::content::TextBlock;
 use rustx::message::types::{
     AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, ToolMessageBlock,

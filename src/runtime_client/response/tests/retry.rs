@@ -1,4 +1,5 @@
 use super::*;
+use crate::durable::{CanonicalStore, InboxStore, JournalStore, ObservationStore, ProjectionStore};
 
 fn bounded_tail(store: &dyn ConversationStore) -> CompletedResponseView {
     let cut = store.observation_read_cut().unwrap();

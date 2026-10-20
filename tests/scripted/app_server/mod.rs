@@ -1,6 +1,7 @@
 //! Residency races at the real manager, native composition, provider and
 //! allocation boundaries. Timeouts are liveness guards, never race evidence.
 #![allow(clippy::too_many_lines)]
+use rustx::durable::{CanonicalStore, JournalStore};
 #[path = "../../support/app_server_conformance.rs"]
 mod app_server_conformance;
 mod configuration;
@@ -1219,7 +1220,7 @@ async fn native_composition_failure_does_not_touch_running_b() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cold_load_preserves_unknown_external_tool_outcome_without_replay() {
     bounded(async {
-        use crate::durable::{ConversationStore, SqliteConversationStore};
+        use crate::durable::{SqliteConversationStore};
         use crate::events::types::{RuntimeEventEnvelope, EVENT_SCHEMA_VERSION};
         use crate::runtime::identity::{AttemptId, EventId, MessageId, ToolCallId, ToolId, TurnId};
         use crate::message::types::{MessageBlock, AssistantMessageBlock, AssistantContentBlock};
@@ -1375,7 +1376,6 @@ async fn native_activation_never_holds_the_global_registry_lock() {
 
 // Uses the durable graph owner to create two valid lineages before residency.
 async fn second_node(f: &Fixture) -> SessionSnapshot {
-    use crate::durable::ConversationStore;
     use crate::message::types::{InboundKind, MessageBlock, UserMessageBlock, UserSource};
     let a = &f.sessions[0];
     let access = f
@@ -1469,7 +1469,6 @@ async fn cold_node_routes_compose_the_routed_lineage_without_publishing_focus() 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cold_loads_never_manufacture_a_projection_for_an_unrenderable_root_subject() {
     bounded(async {
-        use crate::durable::ConversationStore as _;
         use crate::message::types::{
             InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
         };

@@ -55,13 +55,17 @@ use crate::runtime::identity::{
 use crate::runtime::inbound::InboundSequence;
 use crate::runtime::process_death;
 
-use super::inbox::{
+use super::{
     AcceptedInbound, CanonicalMessagePage, ContributionEmissionRecord, ConversationStore,
     ConversationStoreError, DurableConversationHead, EventPage, InboundDraft, LineageSeed,
     ModelTurnStartCommit, ModelTurnStartCommitDisposition, PendingBatch, PendingInboundItem,
     RequestSnapshotPage, SurfaceUserMessageBoundary, SurfaceUserMessageBoundaryPage,
     TRANSCRIPT_PAGE_LIMIT_MAX, TranscriptCommitReceipt, TranscriptCursor, TranscriptEntry,
     TranscriptItem, TranscriptPage,
+};
+use super::{
+    CanonicalStore, InboxStore, JournalStore, ObservationStore, ProjectionStore, PublicationStore,
+    RequestStore,
 };
 
 /// Process-wide count of `ConversationStore` open-path entries
@@ -389,7 +393,7 @@ pub(crate) struct HiddenContextAuditFixture {
     pub store: Arc<SqliteConversationStore>,
     pub before: crate::durable::observation::ObservationReadCut,
     pub context: TranscriptCommitReceipt,
-    pub audit: crate::durable::inbox::PublicationAuditReceipt,
+    pub audit: crate::durable::PublicationAuditReceipt,
 }
 
 /// The native durable conversation authority for one conversation.
@@ -1046,7 +1050,7 @@ impl SqliteConversationStore {
     #[cfg(test)]
     pub(crate) fn canonical_scalar_sources_match(
         &self,
-        expected: &crate::durable::inbox::CanonicalObservationBatch,
+        expected: &crate::durable::CanonicalObservationBatch,
     ) -> Result<bool, ConversationStoreError> {
         let connection = self.lock()?;
         observation::validate(&connection, &self.conversation_id, &expected.read_cut)?;
@@ -1678,6 +1682,2772 @@ impl SqliteConversationStore {
 }
 
 impl ConversationStore for SqliteConversationStore {
+    fn presentation_reader(&self) -> Arc<dyn ConversationStore> {
+        let mut reader =
+            Self::from_connection_owner(self.conversation_id.clone(), self.conn.clone());
+        reader.read_cancel = Some(Arc::new(AtomicBool::new(false)));
+        reader.lifecycle.clone_from(&self.lifecycle);
+        Arc::new(reader)
+    }
+    #[cfg(test)]
+    fn park_presentation_read_until_cancelled(&self, entered: tokio::sync::oneshot::Sender<()>) {
+        let mut slot = self.conn.available.lock().unwrap();
+        entered.send(()).unwrap();
+        while !self.read_cancel.as_ref().unwrap().load(Ordering::Acquire) {
+            slot = self.conn.wake.wait(slot).unwrap();
+        }
+    }
+    fn close_presentation_reader(&self) {
+        if let Some(cancel) = &self.read_cancel {
+            let _slot = self.conn.available.lock().expect("connection slot");
+            cancel.store(true, Ordering::Release);
+            self.conn.wake.notify_all();
+        }
+    }
+    fn conversation_id(&self) -> &ConversationId {
+        &self.conversation_id
+    }
+}
+
+impl InboxStore for SqliteConversationStore {
+    fn load_goal(&self) -> Result<Option<crate::goal::GoalSnapshot>, ConversationStoreError> {
+        read_goal(&*self.lock()?)
+    }
+    fn write_goal(
+        &self,
+        write: crate::goal::GoalWrite,
+    ) -> Result<
+        (
+            crate::goal::GoalResult,
+            Option<Arc<crate::durable::inbox::GoalObservationReceipt>>,
+        ),
+        ConversationStoreError,
+    > {
+        let mut connection = self.lock()?;
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(format!("Goal transaction: {error}")))?;
+        let previous = read_goal(&tx)?;
+        let change = write.change();
+        let result = crate::goal::transition(previous.as_ref(), write);
+        let mut receipt = None;
+        if let Ok(goal) = &result {
+            save_goal(&tx, goal)?;
+            #[cfg(test)]
+            if Self::consume(&self.fail_event_remaining) {
+                return Err(storage("fault injected: Goal journal commit"));
+            }
+            let event = persist_event_tx(
+                &tx,
+                &self.conversation_id,
+                crate::goal::journal_envelope(
+                    &self.conversation_id,
+                    crate::goal::GoalFact::Written {
+                        previous: previous.map(|g| g.reference),
+                        current: goal.reference.clone(),
+                        phase: goal.phase,
+                        change,
+                    },
+                ),
+            )?
+            .event;
+            receipt = Some(Arc::new(crate::durable::inbox::GoalObservationReceipt {
+                view: crate::runtime_client::goal::RuntimeClientGoalView::from_native(Some(goal)),
+                native: event.observation,
+                pending: None,
+            }));
+            tx.commit()
+                .map_err(|error| storage(format!("Goal commit: {error}")))?;
+        }
+        Ok((result, receipt))
+    }
+    fn accept_goal_round(
+        &self,
+        expected: &crate::goal::GoalRef,
+        draft: InboundDraft,
+    ) -> Result<Option<AcceptedInbound>, ConversationStoreError> {
+        let mut connection = self.lock()?;
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(format!("Goal admission transaction: {error}")))?;
+        let Some(mut goal) = read_goal(&tx)? else {
+            return Ok(None);
+        };
+        if &goal.reference != expected
+            || goal.phase != crate::goal::GoalPhase::Active
+            || goal.autonomous_rounds_consumed >= goal.autonomous_round_budget
+        {
+            return Ok(None);
+        }
+        let pending: bool = tx
+            .query_row("SELECT EXISTS(SELECT 1 FROM pending_inbound)", [], |row| {
+                row.get(0)
+            })
+            .map_err(|error| storage(format!("Goal pending probe: {error}")))?;
+        if pending {
+            return Ok(None);
+        }
+        if draft.source != UserSource::Runtime
+            || draft.kind != InboundKind::GoalContinuation(expected.clone())
+        {
+            return Err(ConversationStoreError::InvalidReference(
+                "Goal admission requires its exact typed runtime trigger".to_owned(),
+            ));
+        }
+        let mut accepted = accept_inbound_tx(self, &tx, draft)?;
+        if accepted.retried {
+            return Err(ConversationStoreError::InvalidReference(
+                "Goal round identity already accepted".to_owned(),
+            ));
+        }
+        goal.autonomous_rounds_consumed += 1;
+        goal.reference.revision = goal
+            .reference
+            .revision
+            .checked_add(1)
+            .ok_or(ConversationStoreError::SequenceExhausted)?;
+        goal.last_round_message_id = Some(accepted.message_id.clone());
+        save_goal(&tx, &goal)?;
+        let event = persist_event_tx(
+            &tx,
+            &self.conversation_id,
+            crate::goal::journal_envelope(
+                &self.conversation_id,
+                crate::goal::GoalFact::RoundAdmitted {
+                    previous: expected.clone(),
+                    current: goal.reference.clone(),
+                    round: goal.autonomous_rounds_consumed,
+                    message_id: accepted.message_id.clone(),
+                },
+            ),
+        )?
+        .event;
+        #[cfg(test)]
+        if Self::consume(&self.fail_accept_remaining) {
+            return Err(storage("fault injected: Goal accept commit"));
+        }
+        refresh_pending_receipt(&tx, &self.conversation_id, &mut accepted)?;
+        accepted.goal_observation = Some(Arc::new(crate::durable::inbox::GoalObservationReceipt {
+            view: crate::runtime_client::goal::RuntimeClientGoalView::from_native(Some(&goal)),
+            native: event.observation,
+            pending: accepted.pending_observation.clone(),
+        }));
+        process_death::reach("before:accept_goal_round");
+        tx.commit()
+            .map_err(|error| storage(format!("Goal admission commit: {error}")))?;
+        process_death::reach("after:accept_goal_round");
+        Ok(Some(accepted))
+    }
+    fn accept_inbound(
+        &self,
+        draft: InboundDraft,
+    ) -> Result<AcceptedInbound, ConversationStoreError> {
+        reject_unaccounted_goal(&draft)?;
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(format!("accept transaction: {error}")))?;
+        let accepted = accept_inbound_tx(self, &transaction, draft)?;
+        #[cfg(test)]
+        if Self::consume(&self.fail_accept_remaining) {
+            return Err(storage("fault injected: accept commit"));
+        }
+        process_death::reach("before:accept_inbound");
+        transaction
+            .commit()
+            .map_err(|error| storage(format!("accept commit: {error}")))?;
+        process_death::reach("after:accept_inbound");
+        Ok(accepted)
+    }
+    fn accept_inbound_with_event(
+        &self,
+        draft: InboundDraft,
+        mut event: RuntimeEventEnvelope,
+    ) -> Result<(AcceptedInbound, RuntimeEventEnvelope), ConversationStoreError> {
+        reject_unaccounted_goal(&draft)?;
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(format!("accept/event transaction: {error}")))?;
+        // Issue #192: this generic compound transition owns exactly the
+        // detached background terminal domain. A normal subagent terminal
+        // fact has its own semantically closed authority
+        // (`accept_subagent_terminal`) and is rejected here, so no
+        // `SubagentTerminalPublished` can bypass the Issue #192
+        // terminal-publication contract.
+        let RuntimeEvent::BackgroundTerminalPublished {
+            execution_id,
+            message_id: event_message_id,
+            ..
+        } = &event.event
+        else {
+            return Err(ConversationStoreError::InvalidReference(
+                "inbound/event acceptance owns only a detached background terminal fact; a \
+                 subagent terminal publishes through accept_subagent_terminal"
+                    .to_owned(),
+            ));
+        };
+        if event.event_id.as_str().is_empty() {
+            event.event_id = EventId::new(format!("background-terminal-event:{execution_id}"));
+        }
+        let mut accepted = accept_inbound_tx(self, &transaction, draft)?;
+        if *event_message_id != accepted.message_id {
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "detached terminal fact references {}, accepted inbound is {}",
+                event_message_id, accepted.message_id
+            )));
+        }
+        if accepted.retried {
+            let Some(existing) = find_event_by_id(&transaction, &event.event_id)? else {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "correlated inbound {} has no durable terminal fact",
+                    accepted.message_id
+                )));
+            };
+            if existing.event != event.event {
+                return Err(ConversationStoreError::InvalidReference(
+                    "correlated inbound terminal fact conflicts with the stored fact".to_owned(),
+                ));
+            }
+            transaction
+                .commit()
+                .map_err(|error| storage(format!("accept/event retry commit: {error}")))?;
+            return Ok((accepted, existing));
+        }
+        #[cfg(test)]
+        if Self::consume(&self.fail_accept_remaining) {
+            return Err(storage("fault injected: accept/event commit"));
+        }
+        #[cfg(test)]
+        if Self::consume(&self.fail_event_remaining) {
+            return Err(storage("fault injected: accept/event journal commit"));
+        }
+        process_death::reach_event("before:event", &event.event);
+        let mut persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
+        refresh_pending_receipt(&transaction, &self.conversation_id, &mut accepted)?;
+        if let Some(native) = &mut persisted.event.observation {
+            Arc::make_mut(native)
+                .pending
+                .clone_from(&accepted.pending_observation);
+        }
+        transaction
+            .commit()
+            .map_err(|error| storage(format!("accept/event commit: {error}")))?;
+        process_death::reach_event("after:event", &persisted.event.event);
+        Ok((accepted, persisted.event))
+    }
+    #[allow(clippy::too_many_lines)] // one durable linearization boundary
+    fn accept_subagent_terminal(
+        &self,
+        notice: Option<InboundDraft>,
+        draft: InboundDraft,
+        mut event: RuntimeEventEnvelope,
+    ) -> Result<
+        (
+            Option<AcceptedInbound>,
+            AcceptedInbound,
+            RuntimeEventEnvelope,
+        ),
+        ConversationStoreError,
+    > {
+        let _ownership = self.ownership_transition(&event.event)?;
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(format!("subagent terminal transaction: {error}")))?;
+        // The transition is semantically closed (Issue #192): every input
+        // is validated against the durable ownership fact and the canonical
+        // identities before anything is accepted, so no semantically
+        // unreachable durable state can be created.
+        validate_subagent_terminal_publication(&transaction, notice.as_ref(), &draft, &event)?;
+        if event.event_id.as_str().is_empty()
+            && let RuntimeEvent::SubagentTerminalPublished { subagent_id, .. } = &event.event
+        {
+            event.event_id = EventId::new(format!("subagent-terminal-event:{subagent_id}"));
+        }
+        let event_message_id = match &event.event {
+            RuntimeEvent::SubagentTerminalPublished { message_id, .. } => message_id.clone(),
+            _ => unreachable!("the payload was validated above"),
+        };
+        // The notice is ordered first, so the terminal report remains the
+        // last item of the publication.
+        let notice = notice
+            .map(|notice| accept_inbound_tx(self, &transaction, notice))
+            .transpose()?;
+        let mut accepted = accept_inbound_tx(self, &transaction, draft)?;
+        if event_message_id != accepted.message_id {
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "subagent terminal fact references {}, accepted inbound is {}",
+                event_message_id, accepted.message_id
+            )));
+        }
+        // The notice/report pair is one atomic publication: a retry must
+        // find both sides already accepted, never exactly one.
+        if let Some(notice) = &notice
+            && notice.retried != accepted.retried
+        {
+            return Err(ConversationStoreError::InvalidReference(
+                "a subagent terminal notice/report pair must retry together".to_owned(),
+            ));
+        }
+        if accepted.retried {
+            let Some(existing) = find_event_by_id(&transaction, &event.event_id)? else {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "correlated inbound {} has no durable terminal fact",
+                    accepted.message_id
+                )));
+            };
+            if existing.event != event.event {
+                return Err(ConversationStoreError::InvalidReference(
+                    "correlated inbound terminal fact conflicts with the stored fact".to_owned(),
+                ));
+            }
+            transaction
+                .commit()
+                .map_err(|error| storage(format!("subagent terminal retry commit: {error}")))?;
+            return Ok((notice, accepted, existing));
+        }
+        #[cfg(test)]
+        if Self::consume(&self.fail_accept_remaining) {
+            return Err(storage("fault injected: subagent terminal accept commit"));
+        }
+        #[cfg(test)]
+        if Self::consume(&self.fail_event_remaining) {
+            return Err(storage("fault injected: subagent terminal journal commit"));
+        }
+        process_death::reach_event("before:event", &event.event);
+        let mut persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
+        refresh_pending_receipt(&transaction, &self.conversation_id, &mut accepted)?;
+        if let Some(native) = &mut persisted.event.observation {
+            Arc::make_mut(native)
+                .pending
+                .clone_from(&accepted.pending_observation);
+        }
+        transaction
+            .commit()
+            .map_err(|error| storage(format!("subagent terminal commit: {error}")))?;
+        process_death::reach_event("after:event", &persisted.event.event);
+        Ok((notice, accepted, persisted.event))
+    }
+    fn select_pending_batch(&self) -> Result<Option<PendingBatch>, ConversationStoreError> {
+        #[cfg(test)]
+        {
+            if self.consume_admission_fault(AdmissionFaultOperation::SelectPendingBatch)
+                || Self::consume(&self.fail_select_remaining)
+            {
+                return Err(storage("fault injected: select pending batch"));
+            }
+        }
+        let connection = self.lock()?;
+        let items = load_pending_rows(&connection)?;
+        let Some(watermark) = items.last().map(|item| item.sequence) else {
+            return Ok(None);
+        };
+        Ok(Some(PendingBatch {
+            conversation_id: self.conversation_id.clone(),
+            watermark,
+            items,
+        }))
+    }
+    fn adopt_pending_batch(
+        &self,
+        watermark: InboundSequence,
+        attempt_id: Option<crate::runtime::identity::AttemptId>,
+    ) -> Result<crate::durable::inbox::AdoptedBatch, ConversationStoreError> {
+        let mut connection = self.lock()?;
+        let mut validation = append_validation::Batch::begin(&self.conn.append_validation);
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(format!("adopt transaction: {error}")))?;
+        #[cfg(test)]
+        if let Some(probe) = self
+            .pending_adoption_transaction_probe
+            .lock()
+            .unwrap()
+            .take()
+        {
+            probe();
+        }
+        ensure_surface_head(&transaction)?;
+
+        let items = load_pending_until(&transaction, watermark)?;
+        for item in &items {
+            let block = MessageBlock::User(item.message.clone());
+            let cursor = validation.append(&transaction, &block, Some(&item.message_id))?;
+            if cursor != item.transcript_cursor {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "adopted inbound {} changed its transcript cursor from {:?} to {:?}",
+                    item.message_id, item.transcript_cursor, cursor
+                )));
+            }
+        }
+        transaction
+            .execute(
+                "DELETE FROM pending_inbound WHERE sequence <= ?1",
+                [seq_to_i64(watermark.get())?],
+            )
+            .map_err(|error| storage(format!("adopt pending delete: {error}")))?;
+        for item in &items {
+            // The removed native pending row fences these derived bytes even
+            // if cleanup fails; their deletion cannot refuse adoption.
+            let _ = optional_display_layout(&transaction, || {
+                content::clear_pending(&transaction, &item.sequence.get().to_string())
+            });
+        }
+        if !items.is_empty() {
+            transaction.execute("UPDATE rustx_store SET pending_observation_count=pending_observation_count-?1,reading_mutation_revision=reading_mutation_revision+1 WHERE id=1",[items.len() as u64]).map_err(|error|storage(error.to_string()))?;
+        }
+        let mut adoption = None;
+        if !items.is_empty() {
+            let fact = crate::durable::inbox::inbound_adoption_event(
+                &self.conversation_id,
+                attempt_id,
+                items.iter().map(|item| item.message_id.clone()).collect(),
+            );
+            adoption = Some(persist_event_tx(&transaction, &self.conversation_id, fact)?.event);
+        }
+        #[cfg(test)]
+        if self.consume_admission_fault(AdmissionFaultOperation::AdoptPendingBatch)
+            || Self::consume(&self.fail_adopt_remaining)
+        {
+            return Err(storage("fault injected: adopt commit"));
+        }
+        let read_cut = reading::cut(&transaction, &self.conversation_id)?;
+        let canonical_receipts = canonical_observation_batch(
+            &transaction,
+            &self.conversation_id,
+            &items
+                .iter()
+                .map(|item| (&item.message_id, item.transcript_cursor))
+                .collect::<Vec<_>>(),
+            adoption
+                .as_ref()
+                .map(|event| (event.sequence, event.sequence)),
+        )?;
+        if let Some(event) = &mut adoption {
+            event.observation = canonical_receipts.first().and_then(|receipt| {
+                observation_receipt::canonical(
+                    &transaction,
+                    &self.conversation_id,
+                    event,
+                    Arc::clone(&receipt.observation),
+                )
+            });
+        }
+        let pending_observation = observation_receipt::pending(
+            &transaction,
+            &self.conversation_id,
+            None,
+            None,
+            Some((watermark.get(), items.len() as u64)),
+        );
+        process_death::reach("before:adopt_pending_batch");
+        transaction
+            .commit()
+            .map_err(|error| storage(format!("adopt commit: {error}")))?;
+        validation.committed(&connection);
+        process_death::reach("after:adopt_pending_batch");
+        Ok(crate::durable::inbox::AdoptedBatch {
+            pending_observation,
+            canonical_receipts,
+            read_cut,
+            items,
+            adoption,
+        })
+    }
+    fn edit_pending(
+        &self,
+        expected: &crate::durable::inbox::PendingInboundRef,
+        text: &str,
+    ) -> Result<crate::durable::inbox::PendingMutationOutcome, ConversationStoreError> {
+        self.mutate_pending(expected, Some(text))
+    }
+    fn remove_pending(
+        &self,
+        expected: &crate::durable::inbox::PendingInboundRef,
+    ) -> Result<crate::durable::inbox::PendingMutationOutcome, ConversationStoreError> {
+        self.mutate_pending(expected, None)
+    }
+    fn load_pending(&self) -> Result<Vec<PendingInboundItem>, ConversationStoreError> {
+        let connection = self.lock()?;
+        load_pending_rows(&connection)
+    }
+    fn has_accepted_inbound(&self) -> Result<bool, ConversationStoreError> {
+        // The durable acceptance watermark. `accept_inbound` advances it in
+        // the acceptance commit, adoption never touches it, and lineage
+        // seeding initializes it to zero without an acceptance, so a
+        // nonzero value is permanent proof that user work was durably
+        // accepted into this conversation.
+        let connection = self.lock()?;
+        let watermark: i64 = connection
+            .query_row(
+                "SELECT next_inbound_sequence FROM rustx_store WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| storage(format!("read inbound acceptance watermark: {error}")))?;
+        Ok(watermark > 0)
+    }
+}
+
+impl CanonicalStore for SqliteConversationStore {
+    fn transcript_tool_headers(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        locator: &crate::runtime_client::content::CanonicalContentLocator,
+        offset: u64,
+        limit: usize,
+    ) -> Result<crate::durable::observation::NativeToolObservationPage, ConversationStoreError>
+    {
+        let connection = self.lock()?;
+        observation_tools::page(
+            &connection,
+            &self.conversation_id,
+            cut,
+            locator,
+            offset,
+            limit,
+        )
+    }
+    fn is_initialized(&self) -> Result<bool, ConversationStoreError> {
+        let connection = self.lock()?;
+        let (initialized, identity): (i64, Option<i64>) = connection
+            .prepare_cached("SELECT s.bootstrap_initialized,b.id FROM rustx_store s LEFT JOIN bootstrap_identity b ON b.id=s.id WHERE s.id=1")
+            .map_err(|error| storage(format!("bootstrap state: {error}")))?
+            .query_row([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(|error| storage(format!("bootstrap state: {error}")))?;
+        match (initialized, identity) {
+            (0, None) => Ok(false),
+            (1, Some(1)) => Ok(true),
+            _ => Err(storage(
+                "missing or inconsistent immutable bootstrap identity",
+            )),
+        }
+    }
+    fn initialize(&self, messages: &[MessageBlock]) -> Result<(), ConversationStoreError> {
+        let bootstrap: Option<(u64, String)> = self
+            .lock()?
+            .query_row(
+                "SELECT message_count,history_digest FROM bootstrap_identity WHERE id=1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|error| storage(format!("bootstrap count: {error}")))?;
+        let seed = if let Some((count, digest)) = bootstrap {
+            if count != messages.len() as u64 || digest != initial_history_digest(messages)? {
+                return Err(ConversationStoreError::InitialHistoryMismatch);
+            }
+            // Runtime reopening supplies canonical bootstrap bodies, not a new
+            // Surface. Reconstruct the original immutable seed, never flatten it.
+            let history = self.load_surface_history(SurfaceRevision::new(count))?;
+            LineageSeed::replayed(messages.to_vec(), history)?
+        } else {
+            LineageSeed::history(messages.to_vec())
+        };
+        let mut inherited = Vec::new();
+        let mut after = crate::context::checkpoint::ProjectionActivationId(0);
+        loop {
+            let page = self.projection_timeline(after, 64)?;
+            if page.is_empty() {
+                break;
+            }
+            after = page.last().unwrap().activation.activation;
+            inherited.extend(
+                page.into_iter()
+                    .filter(|p| p.activation.destination_installation.is_some()),
+            );
+        }
+        let seed = seed.with_projections(inherited)?;
+        self.initialize_lineage(
+            &seed
+                .with_completed_responses(self.load_inherited_responses()?)?
+                .with_turns(self.load_inherited_turns()?)?,
+        )
+    }
+    #[allow(clippy::too_many_lines)] // One atomic bootstrap owns Ledger, Surface and inherited facts.
+    fn initialize_lineage(&self, seed: &LineageSeed) -> Result<(), ConversationStoreError> {
+        let validated =
+            LineageSeed::replayed(seed.canonical().to_vec(), seed.surface_history().to_vec())?
+                .with_completed_responses(seed.completed_responses().to_vec())?
+                .with_turns(seed.turns().to_vec())?
+                .with_projections(seed.projections().to_vec())?
+                .with_raw_tool_arguments(seed.raw_tool_arguments().to_vec())?;
+        let seed = &validated;
+        let messages = seed.canonical();
+        // Semantics belong to the Context Engine; persistence has no alternate selection rule.
+        let occupancy =
+            crate::context::occupancy::inherit(seed.turns(), seed.canonical(), seed.projections());
+        let occupancy_json = encode(&occupancy, "bootstrap occupancy")?;
+        let history_digest = initial_history_digest(messages)?;
+        let occupancy_digest =
+            inherited_occupancy_digest(messages.len() as u64, &history_digest, &occupancy_json);
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(format!("initialize transaction: {error}")))?;
+        // Fail closed if initialized metadata is missing or damaged. The marker
+        // and identity are written in this same transaction, never independently.
+        read_inherited_occupancy(&transaction)?;
+        let bootstrap: Option<(i64, String, String, String)> = transaction
+            .query_row(
+                "SELECT message_count,history_digest,occupancy_json,occupancy_digest FROM bootstrap_identity WHERE id=1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()
+            .map_err(|error| storage(format!("bootstrap probe: {error}")))?;
+        if let Some((count, digest, retained_occupancy, retained_digest)) = bootstrap {
+            let bootstrap_revision = SurfaceRevision::new(
+                u64::try_from(count).map_err(|_| storage("negative bootstrap message count"))?,
+            );
+            projection::verify_lineage(&transaction, seed.projections())?;
+            if replay_surface_history(&transaction, bootstrap_revision)?.1 != seed.surface_history()
+            {
+                return Err(ConversationStoreError::InitialHistoryMismatch);
+            }
+            let supplied_count = i64::try_from(messages.len())
+                .map_err(|_| storage("initial message count is not representable"))?;
+            if retained_occupancy != occupancy_json
+                || retained_digest != occupancy_digest
+                || count != supplied_count
+                || digest != history_digest
+                || provenance::responses(&transaction)? != seed.completed_responses()
+                || provenance::turns(&transaction)? != seed.turns()
+            {
+                return Err(ConversationStoreError::InitialHistoryMismatch);
+            }
+            provenance::verify_seed_membership(&transaction, seed)?;
+        } else {
+            let existing: i64 = transaction
+                .query_row("SELECT COUNT(*) FROM message_ledger", [], |row| row.get(0))
+                .map_err(|error| storage(format!("bootstrap ledger probe: {error}")))?;
+            if existing != 0 {
+                return Err(storage(
+                    "canonical Ledger exists without bootstrap identity",
+                ));
+            }
+            ensure_surface_head(&transaction)?;
+            // The two parts of the seed go to their two durable homes, in two
+            // passes rather than one, because they are not the same order:
+            // the Ledger is written in canonical commit order, and a
+            // compaction summary the source produced *last* is the fact its
+            // Surface shows *first*. Fusing the passes would force one order
+            // on both and reproduce neither.
+            let append_terminals =
+                |predecessor: Option<&MessageId>| -> Result<(), ConversationStoreError> {
+                    for (index, turn) in seed.turns().iter().enumerate() {
+                        if turn.process_message_ids.is_empty()
+                            && turn.preceding_message_id.as_ref() == predecessor
+                        {
+                            append_transcript_reference(
+                                &transaction,
+                                "inherited_turn",
+                                &index.to_string(),
+                            )?;
+                        }
+                    }
+                    Ok(())
+                };
+            append_terminals(None)?;
+            for message in messages {
+                append_seeded_ledger_message(&transaction, message)?;
+                append_terminals(Some(&crate::conversation::message_id_of(message)))?;
+            }
+            for item in seed.raw_tool_arguments() {
+                content::index_raw_arguments(&transaction, item)?;
+                let message = messages
+                    .iter()
+                    .find(|message| message.id() == &item.message_id)
+                    .ok_or_else(|| storage("raw Tool canonical source missing"))?;
+                let position: u64 = transaction
+                    .query_row(
+                        "SELECT position FROM message_ledger WHERE message_id=?1",
+                        [item.message_id.as_str()],
+                        |row| row.get(0),
+                    )
+                    .map_err(|error| storage(error.to_string()))?;
+                let _ = optional_display_layout(&transaction, || {
+                    observation::index_message(&transaction, message, Some(position))?;
+                    observation_trace::index_proposals(
+                        &transaction,
+                        &self.conversation_id,
+                        position,
+                        message,
+                    )?;
+                    observation_trace::index_canonical(
+                        &transaction,
+                        &self.conversation_id,
+                        position,
+                        message,
+                    )
+                });
+            }
+            // The seed's Surface history becomes this lineage's own retained
+            // operation log, replayed from revision 1. Flattening it into one
+            // append per active message would produce the same Surface and a
+            // different history, and a later fork or tree of *this* lineage
+            // reads the history: its branch points would then be this copy's
+            // artefacts rather than the source's real ones.
+            let mut active: Vec<MessageId> = Vec::new();
+            let mut revision = SurfaceRevision::INITIAL;
+            let generation = 0_u64;
+            for operation in seed.surface_history() {
+                revision = revision.next();
+                validate_surface_operation_references(&transaction, operation)?;
+                append_surface_op(&transaction, revision, generation, operation)?;
+                apply_surface_op(&mut active, operation)?;
+            }
+            if revision != SurfaceRevision::INITIAL {
+                update_surface_head(&transaction, revision, generation)?;
+            }
+            transaction
+                .execute(
+                    "INSERT INTO bootstrap_identity(id,message_count,history_digest,turn_count,response_count,occupancy_json,occupancy_digest,provenance_digest,inherited_transcript_through) VALUES(1,?1,?2,?3,?4,?5,?6,?7,(SELECT next_transcript_position FROM rustx_store WHERE id=1))",
+                    params![
+                        i64::try_from(messages.len()).map_err(|_| storage("initial message count is not representable"))?,
+                        history_digest,
+                        seq_to_i64(seed.turns().len() as u64)?,
+                        seq_to_i64(seed.completed_responses().len() as u64)?,
+                        occupancy_json,
+                        occupancy_digest,
+                        provenance::counts_digest(&history_digest,seq_to_i64(seed.turns().len() as u64)?,seq_to_i64(seed.completed_responses().len() as u64)?)
+                    ],
+                )
+                .map_err(|error| storage(format!("insert bootstrap identity: {error}")))?;
+            let _ = optional_display_layout(&transaction, || {
+                observation_statistics::seed(&transaction, seed.turns())
+            });
+            let _ = optional_display_layout(&transaction, || {
+                observation_occupancy::inherited(&transaction, occupancy.as_ref())
+            });
+            provenance::persist(&transaction, seed)?;
+            // The original identity and provenance now exist together. Derived
+            // readers validate this same transaction's complete bootstrap shape;
+            // no external reader sees the marker before COMMIT.
+            projection::install_lineage(&transaction, &self.conversation_id, seed.projections())?;
+            transaction
+                .execute(
+                    "UPDATE rustx_store SET bootstrap_initialized=1 WHERE id=1",
+                    [],
+                )
+                .map_err(|error| storage(format!("mark lineage bootstrap: {error}")))?;
+            let _ = optional_display_layout(&transaction, || {
+                observation_members::seed_members(&transaction, seed)
+            });
+            let _ = optional_display_layout(&transaction, || {
+                observation_turn::seed(&transaction, seed)
+            });
+            for (ordinal, turn) in seed.turns().iter().enumerate() {
+                let _ = optional_display_layout(&transaction, || {
+                    reading::index_inherited_turn(&transaction, seq_to_i64(ordinal as u64)?, turn)
+                });
+            }
+            for (ordinal, turn) in seed.turns().iter().enumerate() {
+                if turn.process_message_ids.is_empty() {
+                    let id = ordinal.to_string();
+                    if let Some(cursor) =
+                        load_transcript_reference(&transaction, "inherited_turn", &id)?
+                    {
+                        let _ = optional_display_layout(&transaction, || {
+                            observation::index_item(
+                                &transaction,
+                                "inherited_turn",
+                                &id,
+                                TranscriptItem::InheritedTurn {
+                                    provenance: turn.clone(),
+                                },
+                                cursor,
+                            )
+                        });
+                    }
+                }
+            }
+        }
+        transaction
+            .commit()
+            .map_err(|error| storage(format!("initialize commit: {error}")))
+    }
+    fn load_inherited_responses(
+        &self,
+    ) -> Result<Vec<super::response::CompletedResponseProvenance>, ConversationStoreError> {
+        let connection = self.lock()?;
+        provenance::responses(&connection)
+    }
+    fn load_inherited_occupancy(
+        &self,
+    ) -> Result<Option<crate::context::occupancy::ContextOccupancy>, ConversationStoreError> {
+        let connection = self.lock()?;
+        read_inherited_occupancy(&connection)
+    }
+    fn load_bootstrap_history(&self) -> Result<Vec<MessageBlock>, ConversationStoreError> {
+        let connection = self.lock()?;
+        let count: Option<i64> = connection
+            .query_row(
+                "SELECT message_count FROM bootstrap_identity WHERE id=1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| storage(format!("bootstrap history count: {error}")))?;
+        let Some(count) = count else {
+            // A low-level non-session composition may be opening a fresh
+            // store. ConversationRuntime::initialize will establish the
+            // empty bootstrap identity; no historical seed exists yet.
+            return Ok(Vec::new());
+        };
+        let mut statement = connection
+            .prepare(
+                "SELECT message_json FROM message_ledger
+                 ORDER BY position LIMIT ?1",
+            )
+            .map_err(|error| storage(format!("bootstrap history query: {error}")))?;
+        let rows = statement
+            .query_map([count], |row| row.get::<_, String>(0))
+            .map_err(|error| storage(format!("bootstrap history rows: {error}")))?;
+        rows.map(|row| {
+            let json = row.map_err(|error| storage(format!("bootstrap history row: {error}")))?;
+            decode(&json, "bootstrap history")
+        })
+        .collect()
+    }
+    fn unsettled_canonical_tool_calls(
+        &self,
+        limit: usize,
+    ) -> Result<
+        Vec<(crate::message::types::ToolCallOccurrenceRef, ToolCallId)>,
+        ConversationStoreError,
+    > {
+        if limit == 0 || limit > 8192 {
+            return Err(crate::context::resources::bound(
+                "canonical unsettled occurrence read limit",
+            ));
+        }
+        let connection = self.lock()?;
+        let mut query = connection.prepare("SELECT CASE WHEN octet_length(assistant_message_id)<=4096 THEN assistant_message_id END, block_index, CASE WHEN octet_length(call_id)<=4096 THEN call_id END FROM canonical_tool_calls WHERE result_message_id IS NULL ORDER BY assistant_message_id,block_index LIMIT ?1").map_err(|e| storage(e.to_string()))?;
+        let rows = query
+            .query_map([limit], |r| {
+                Ok((
+                    r.get::<_, Option<String>>(0)?,
+                    r.get::<_, u32>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                ))
+            })
+            .map_err(|e| storage(e.to_string()))?;
+        rows.map(|row| {
+            let (id, block, wire) = row.map_err(|e| storage(e.to_string()))?;
+            Ok((
+                crate::message::types::ToolCallOccurrenceRef::new(
+                    MessageId::new(id.ok_or_else(|| {
+                        crate::context::resources::bound(
+                            "canonical occurrence identity exceeds bound",
+                        )
+                    })?),
+                    ContentBlockIndex::new(block),
+                ),
+                ToolCallId::new(wire.ok_or_else(|| {
+                    crate::context::resources::bound("canonical wire correlation exceeds bound")
+                })?),
+            ))
+        })
+        .collect()
+    }
+    fn load_head(&self) -> Result<DurableConversationHead, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        #[cfg(test)]
+        if let Some(probe) = self.head_read_probe.lock().unwrap().take() {
+            transaction
+                .query_row(
+                    "SELECT schema_version FROM rustx_store WHERE id=1",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(|error| storage(error.to_string()))?;
+            probe();
+        }
+        load_head(&transaction)
+    }
+    fn messages_are_human_inputs(&self, ids: &[MessageId]) -> Result<bool, ConversationStoreError> {
+        let connection = self.lock()?;
+        let mut query = connection
+            .prepare_cached(
+                "SELECT json_extract(message_json, '$.id'),
+                    json_extract(message_json, '$.role') = 'user'
+                    AND json_extract(message_json, '$.source') = 'human'
+                    AND json_extract(message_json, '$.kind') = 'message'
+             FROM message_ledger WHERE message_id = ?1",
+            )
+            .map_err(|error| storage(format!("Ledger input authorship: {error}")))?;
+        for id in ids {
+            let (stored_id, human): (String, bool) = query
+                .query_row([id.as_str()], |row| Ok((row.get(0)?, row.get(1)?)))
+                .optional()
+                .map_err(|error| storage(format!("Ledger input authorship: {error}")))?
+                .ok_or_else(|| {
+                    ConversationStoreError::InvalidReference(format!("message {id} is unavailable"))
+                })?;
+            if stored_id != id.as_str() {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "Ledger row for {id} contains a different message identity"
+                )));
+            }
+            if !human {
+                return Ok(false);
+            }
+        }
+        Ok(!ids.is_empty())
+    }
+    fn load_messages(
+        &self,
+        ids: &[MessageId],
+    ) -> Result<Vec<MessageBlock>, ConversationStoreError> {
+        #[cfg(test)]
+        self.checkpoint_read_counts[0].fetch_add(ids.len(), Ordering::SeqCst);
+        let connection = self.lock()?;
+        ids.iter().map(|id| load_message(&connection, id)).collect()
+    }
+    fn message_transcript_cursor(
+        &self,
+        message_id: &MessageId,
+    ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
+        let position: Option<i64> = self.lock()?.query_row(
+            "SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1",
+            [message_id.as_str()], |row| row.get(0),
+        ).optional().map_err(|error| storage(format!("process control position: {error}")))?;
+        position
+            .map(|value| nonnegative(value, "process control position").map(TranscriptCursor::new))
+            .transpose()
+    }
+    fn event_transcript_cursor(
+        &self,
+        event_id: &EventId,
+    ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
+        let position: Option<i64> = self.lock()?.query_row(
+            "SELECT position FROM transcript_order WHERE reference_kind='attempt_terminal' AND reference_id=?1",
+            [event_id.as_str()], |row| row.get(0),
+        ).optional().map_err(|error| storage(format!("terminal control position: {error}")))?;
+        position
+            .map(|value| nonnegative(value, "terminal control position").map(TranscriptCursor::new))
+            .transpose()
+    }
+    fn message_append_revision_by_locator(
+        &self,
+        locator: &crate::runtime_client::content::CanonicalContentLocator,
+    ) -> Result<Option<SurfaceRevision>, ConversationStoreError> {
+        let connection = self.lock()?;
+        let position = content::canonical_position(&connection, locator)?;
+        let revision: Option<u64> = connection
+            .query_row(
+                "SELECT first_append_revision FROM message_ledger WHERE position=?1",
+                [position],
+                |row| row.get(0),
+            )
+            .map_err(|error| storage(error.to_string()))?;
+        Ok(revision.map(SurfaceRevision::new))
+    }
+    fn message_append_revision(
+        &self,
+        message_id: &MessageId,
+    ) -> Result<Option<SurfaceRevision>, ConversationStoreError> {
+        let revision: Option<i64> = self.lock()?.query_row(
+            "SELECT revision FROM surface_ops WHERE json_extract(op_json, '$.op') = 'append' AND json_extract(op_json, '$.message_id') = ?1 ORDER BY revision LIMIT 1",
+            [message_id.as_str()], |row| row.get(0),
+        ).optional().map_err(|error| storage(format!("message append revision: {error}")))?;
+        revision
+            .map(|value| nonnegative(value, "message append revision").map(SurfaceRevision::new))
+            .transpose()
+    }
+    fn load_surface_history(
+        &self,
+        through: SurfaceRevision,
+    ) -> Result<Vec<SurfaceOp>, ConversationStoreError> {
+        let connection = self.lock()?;
+        load_surface_history(&connection, through)
+    }
+    fn reconstruct_surface(
+        &self,
+        revision: SurfaceRevision,
+    ) -> Result<Vec<MessageId>, ConversationStoreError> {
+        #[cfg(test)]
+        self.checkpoint_read_counts[1].fetch_add(1, Ordering::SeqCst);
+        let connection = self.lock()?;
+        reconstruct_surface(&connection, revision)
+    }
+    fn load_surface_snapshot(
+        &self,
+        revision: SurfaceRevision,
+    ) -> Result<Vec<MessageBlock>, ConversationStoreError> {
+        let connection = self.lock()?;
+        let ids = reconstruct_surface(&connection, revision)?;
+        ids.iter().map(|id| load_message(&connection, id)).collect()
+    }
+    fn surface_boundary_header_page(
+        &self,
+        through: SurfaceRevision,
+        offset: u64,
+        limit: usize,
+    ) -> Result<crate::durable::observation::SurfaceBoundaryHeaderPage, ConversationStoreError>
+    {
+        let connection = self.lock()?;
+        observation::surface_boundaries(&connection, through, offset, limit)
+    }
+    fn surface_boundary_message_id(
+        &self,
+        boundary_revision: SurfaceRevision,
+        locator: &crate::runtime_client::content::CanonicalContentLocator,
+    ) -> Result<MessageId, ConversationStoreError> {
+        let connection = self.lock()?;
+        let position = content::canonical_position(&connection, locator)?;
+        let id:Option<String>=connection.query_row("SELECT message_id FROM message_ledger WHERE ordinary_user=1 AND first_append_revision<=?1 AND position=?2",params![seq_to_i64(boundary_revision.get())?,position],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+        id.map(MessageId::new).ok_or_else(|| {
+            ConversationStoreError::InvalidReference(
+                "Surface boundary locator/revision mismatch".into(),
+            )
+        })
+    }
+    fn canonical_boundary_message_id(
+        &self,
+        boundary_revision: SurfaceRevision,
+        locator: &crate::runtime_client::content::CanonicalContentLocator,
+    ) -> Result<MessageId, ConversationStoreError> {
+        let connection = self.lock()?;
+        let position = content::canonical_position(&connection, locator)?;
+        let id: Option<String> = connection
+            .query_row(
+                "SELECT message_id FROM message_ledger WHERE first_append_revision<=?1 AND position=?2",
+                params![seq_to_i64(boundary_revision.get())?, position],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| storage(error.to_string()))?;
+        id.map(MessageId::new).ok_or_else(|| {
+            ConversationStoreError::InvalidReference(
+                "canonical boundary locator/revision mismatch".into(),
+            )
+        })
+    }
+    fn load_user_message_boundaries(
+        &self,
+        through: SurfaceRevision,
+    ) -> Result<Vec<SurfaceUserMessageBoundary>, ConversationStoreError> {
+        let connection = self.lock()?;
+        load_user_message_boundaries(&connection, through)
+    }
+    fn load_user_message_boundaries_page(
+        &self,
+        through: SurfaceRevision,
+        offset: usize,
+        limit: usize,
+    ) -> Result<SurfaceUserMessageBoundaryPage, ConversationStoreError> {
+        let connection = self.lock()?;
+        load_user_message_boundaries_page(&connection, through, offset, limit)
+    }
+    fn append_canonical(
+        &self,
+        message: &MessageBlock,
+    ) -> Result<TranscriptCommitReceipt, ConversationStoreError> {
+        let mut receipts = append_canonical_messages(self, std::slice::from_ref(message))?;
+        Ok(receipts.remove(0))
+    }
+    fn append_canonical_batch(
+        &self,
+        messages: &[MessageBlock],
+    ) -> Result<Vec<TranscriptCommitReceipt>, ConversationStoreError> {
+        append_canonical_messages(self, messages)
+    }
+    fn append_canonical_with_event(
+        &self,
+        message: &MessageBlock,
+        event: RuntimeEventEnvelope,
+    ) -> Result<(RuntimeEventEnvelope, TranscriptCommitReceipt), ConversationStoreError> {
+        validate_canonical_event_for_message(message, &event.event)?;
+        let mut connection = self.lock()?;
+        let mut validation = append_validation::Batch::begin(&self.conn.append_validation);
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(format!("canonical event transaction: {error}")))?;
+        ensure_surface_head(&transaction)?;
+
+        let transcript_cursor = validation.append(&transaction, message, None)?;
+        #[cfg(test)]
+        if Self::consume(&self.fail_event_remaining) {
+            return Err(storage("fault injected: canonical event journal commit"));
+        }
+        process_death::reach_event("before:canonical", &event.event);
+        let mut persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
+        let mut receipt = canonical_observation_receipt(
+            &transaction,
+            &self.conversation_id,
+            message,
+            transcript_cursor,
+            persisted.event.tool_occurrence.clone(),
+        )?;
+        set_canonical_range(
+            &mut receipt,
+            Some((persisted.event.sequence, persisted.event.sequence)),
+        );
+        persisted.event.observation = if matches!(message, MessageBlock::Tool(_)) {
+            observation_receipt::tool_results(
+                &transaction,
+                &self.conversation_id,
+                std::slice::from_ref(&persisted.event),
+                std::slice::from_ref(message),
+                Arc::clone(&receipt.observation),
+            )
+        } else {
+            observation_receipt::canonical(
+                &transaction,
+                &self.conversation_id,
+                &persisted.event,
+                Arc::clone(&receipt.observation),
+            )
+        };
+        transaction
+            .commit()
+            .map_err(|error| storage(format!("canonical event commit: {error}")))?;
+        validation.committed(&connection);
+        process_death::reach_event("after:canonical", &persisted.event.event);
+        Ok((persisted.event, receipt))
+    }
+    fn append_canonical_batch_with_events(
+        &self,
+        messages: &[MessageBlock],
+        events: &[RuntimeEventEnvelope],
+    ) -> Result<(Vec<RuntimeEventEnvelope>, Vec<TranscriptCommitReceipt>), ConversationStoreError>
+    {
+        if messages.len() != events.len() {
+            return Err(storage("canonical event batch lengths differ"));
+        }
+        for (message, event) in messages.iter().zip(events) {
+            validate_canonical_event_for_message(message, &event.event)?;
+        }
+        let mut connection = self.lock()?;
+        let mut validation = append_validation::Batch::begin(&self.conn.append_validation);
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(format!("canonical event batch transaction: {error}")))?;
+        ensure_surface_head(&transaction)?;
+
+        let mut receipts = Vec::with_capacity(messages.len());
+        for message in messages {
+            receipts.push(validation.append(&transaction, message, None)?);
+        }
+        let mut persisted = Vec::with_capacity(events.len());
+        for event in events {
+            #[cfg(test)]
+            if Self::consume(&self.fail_event_remaining) {
+                return Err(storage(
+                    "fault injected: canonical batch event journal commit",
+                ));
+            }
+            persisted.push(
+                persist_event_tx_deferred(&transaction, &self.conversation_id, event.clone())?
+                    .event,
+            );
+        }
+        let range = persisted
+            .first()
+            .zip(persisted.last())
+            .map(|(first, last)| (first.sequence, last.sequence));
+        let receipts = canonical_observation_batch(
+            &transaction,
+            &self.conversation_id,
+            &messages
+                .iter()
+                .zip(receipts)
+                .map(|(message, cursor)| (message.id(), cursor))
+                .collect::<Vec<_>>(),
+            range,
+        )?;
+        let shared = receipts.first().and_then(|receipt| {
+            observation_receipt::tool_results(
+                &transaction,
+                &self.conversation_id,
+                &persisted,
+                messages,
+                Arc::clone(&receipt.observation),
+            )
+        });
+        for event in &mut persisted {
+            event.observation.clone_from(&shared);
+        }
+        process_death::reach("before:append_canonical_batch");
+        transaction
+            .commit()
+            .map_err(|error| storage(format!("canonical event batch commit: {error}")))?;
+        validation.committed(&connection);
+        process_death::reach("after:append_canonical_batch");
+        Ok((persisted, receipts))
+    }
+    #[allow(clippy::too_many_lines)]
+    fn load_canonical(&self) -> Result<Vec<MessageBlock>, ConversationStoreError> {
+        let connection = self.lock()?;
+        load_canonical_rows(&connection)
+    }
+    fn load_canonical_page(
+        &self,
+        after_position: Option<u64>,
+        limit: usize,
+    ) -> Result<CanonicalMessagePage, ConversationStoreError> {
+        let connection = self.lock()?;
+        let after = after_position.unwrap_or(0);
+        let limit = i64::try_from(limit).map_err(|_| storage("page limit is too large"))?;
+        let mut statement = connection
+            .prepare("SELECT position,message_json,message_id FROM message_ledger WHERE position > ?1 ORDER BY position LIMIT ?2")
+            .map_err(|error| storage(format!("canonical page: {error}")))?;
+        let mut rows = statement
+            .query(params![after, limit])
+            .map_err(|error| storage(format!("canonical page query: {error}")))?;
+        let mut messages = Vec::new();
+        let mut next = None;
+        while let Some(row) = rows
+            .next()
+            .map_err(|error| storage(format!("canonical page row: {error}")))?
+        {
+            let position: i64 = row
+                .get(0)
+                .map_err(|error| storage(format!("canonical position: {error}")))?;
+            let json: String = row
+                .get(1)
+                .map_err(|error| storage(format!("canonical json: {error}")))?;
+            let message: MessageBlock = decode(&json, "canonical page")?;
+            let position_id = crate::conversation::message_id_of(&message);
+            let stored_id: String = row
+                .get(2)
+                .map_err(|error| storage(format!("canonical message id: {error}")))?;
+            if position_id.as_str() != stored_id {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "Ledger page row {stored_id} contains message {position_id}"
+                )));
+            }
+            messages.push(message);
+            next =
+                Some(u64::try_from(position).map_err(|_| storage("negative canonical position"))?);
+        }
+        Ok(CanonicalMessagePage {
+            messages,
+            next_position: next,
+        })
+    }
+    fn load_inspection_seed(&self) -> Result<super::InspectionSeed, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        let head = load_head(&transaction)?;
+        let ids = reconstruct_surface(&transaction, head.revision)?;
+        Ok(super::InspectionSeed {
+            messages: ids
+                .iter()
+                .map(|id| load_message(&transaction, id))
+                .collect::<Result<_, _>>()?,
+            canonical: load_canonical_rows(&transaction)?,
+            transcript: load_transcript_page(&transaction, None, TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT)?,
+            journal_through: journal_prefix(&transaction)?,
+        })
+    }
+    fn load_transcript_snapshot(
+        &self,
+        cut: &super::TranscriptSnapshotCut,
+    ) -> Result<TranscriptPage, ConversationStoreError> {
+        let connection = self.lock()?;
+        let messages = serde_json::to_string(&cut.messages).map_err(|e| storage(e.to_string()))?;
+        let publications =
+            serde_json::to_string(&cut.publications).map_err(|e| storage(e.to_string()))?;
+        // The bootstrap prefix is immutable canonical history. Subsequent
+        // canonical membership comes from captured semantic receipts, never
+        // the current ledger head. Pending rows are supplied below from C.
+        let mut statement = connection
+            .prepare(
+                "SELECT t.position,t.reference_kind,t.reference_id FROM transcript_order t
+             WHERE (t.reference_kind='message' AND EXISTS
+               (SELECT 1 FROM message_ledger m WHERE m.message_id=t.reference_id)
+               AND (t.position<=?1 OR t.reference_id IN (SELECT value FROM json_each(?2))))
+             OR (t.reference_kind='publication_audit' AND
+               (t.position<=?1 OR t.reference_id IN (SELECT value FROM json_each(?3))))
+             OR (t.reference_kind='inherited_turn' AND t.position<=?1)
+             OR (t.reference_kind IN ('interaction_event','attempt_terminal') AND EXISTS
+               (SELECT 1 FROM events e WHERE e.event_id=t.reference_id AND e.sequence<=?4))
+             ORDER BY t.position DESC LIMIT ?5",
+            )
+            .map_err(|e| storage(e.to_string()))?;
+        let references = statement
+            .query_map(
+                params![
+                    seq_to_i64(cut.bootstrap_through)?,
+                    messages,
+                    publications,
+                    seq_to_i64(cut.journal_through)?,
+                    TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT + 1
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .map_err(|e| storage(e.to_string()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| storage(e.to_string()))?;
+        let allowed: BTreeSet<_> = cut.messages.iter().map(MessageId::as_str).collect();
+        let mut entries = Vec::new();
+        for (position, kind, id) in references {
+            let item = load_transcript_item(&connection, &kind, &id)?;
+            let mut tool_calls = match &item {
+                TranscriptItem::Message {
+                    message: MessageBlock::Assistant(assistant),
+                } => load_transcript_tools(&connection, assistant)?,
+                _ => Vec::new(),
+            };
+            // Associations are mutable as later Tool results commit. Keep only
+            // results whose canonical message belonged to this captured cut.
+            for tool in &mut tool_calls {
+                let result: Option<(String, i64)> = connection.query_row(
+                    "SELECT m.message_id,t.position FROM canonical_tool_calls c
+                     JOIN message_ledger m ON m.message_id=c.result_message_id
+                     JOIN transcript_order t ON t.reference_kind='message' AND t.reference_id=m.message_id
+                     WHERE c.assistant_message_id=?1 AND c.block_index=?2",
+                    params![tool.message_id.as_str(), tool.block_index.get()],
+                    |row| Ok((row.get(0)?,row.get(1)?))).optional().map_err(|e| storage(e.to_string()))?;
+                if result.is_some_and(|(id, pos)| {
+                    pos > i64::try_from(cut.bootstrap_through).expect("validated transcript prefix")
+                        && !allowed.contains(id.as_str())
+                }) {
+                    tool.result = None;
+                }
+            }
+            entries.push(TranscriptEntry {
+                cursor: TranscriptCursor::new(nonnegative(position, "transcript position")?),
+                item,
+                tool_calls,
+            });
+        }
+        // A later adoption/edit/removal cannot replace the pending body at C.
+        for (cursor, message) in &cut.pending {
+            entries.retain(|entry| entry.cursor != *cursor);
+            entries.push(TranscriptEntry {
+                cursor: *cursor,
+                item: TranscriptItem::Message {
+                    message: MessageBlock::User(message.clone()),
+                },
+                tool_calls: Vec::new(),
+            });
+        }
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.cursor));
+        let more = entries.len() > TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT;
+        entries.truncate(TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT);
+        let next_cursor = more.then(|| entries.last().unwrap().cursor);
+        entries.reverse();
+        Ok(TranscriptPage {
+            inherited_through: inherited_transcript_through(&connection)?,
+            entries,
+            next_cursor,
+        })
+    }
+    fn load_transcript_page(
+        &self,
+        before: Option<TranscriptCursor>,
+        limit: usize,
+    ) -> Result<TranscriptPage, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        load_transcript_page(&transaction, before, limit)
+    }
+}
+
+impl RequestStore for SqliteConversationStore {
+    fn attempt_prompt(
+        &self,
+        attempt: &AttemptId,
+        through: u64,
+    ) -> Result<Option<MessageId>, ConversationStoreError> {
+        reading::attempt_prompt(&*self.lock()?, attempt, through)
+    }
+    fn commit_model_turn_start(
+        &self,
+        context: &[MessageBlock],
+        snapshot: &RequestSnapshot,
+        timestamp: DateTime<Utc>,
+    ) -> Result<ModelTurnStartCommit, ConversationStoreError> {
+        validate_snapshot_identity(snapshot)?;
+        snapshot
+            .input
+            .validate_budget()
+            .map_err(ConversationStoreError::InvalidReference)?;
+        // The one input validation rule shared by the fresh commit and the
+        // idempotent retry (Issue #12, M9b): the exact ordered
+        // request-scoped context the caller supplies must equal the frozen
+        // `snapshot.request_context_ids` before the store chooses a path or
+        // touches durable state. A fresh commit must never be able to append
+        // context while persisting a snapshot whose `request_context_ids`
+        // disagrees with what it just appended.
+        validate_request_context(snapshot, context)?;
+        validate_contribution_start(snapshot, context)?;
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(format!("request start transaction: {error}")))?;
+        let admission_epoch = self.conn.manifest.capture(&transaction)?;
+        let existing: Option<(Option<String>, Option<i64>, String)> = transaction
+            .query_row(
+                "SELECT CASE WHEN octet_length(snapshot_json)<=67108864 THEN snapshot_json END,started_sequence,CASE WHEN typeof(manifest_digest)='text' AND octet_length(manifest_digest)=64 THEN manifest_digest ELSE '' END FROM request_snapshots WHERE request_id = ?1",
+                [snapshot.request_id.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?, read_manifest_digest(row, 2)?)),
+            )
+            .optional()
+            .map_err(|error| storage(format!("request snapshot probe: {error}")))?;
+        if let Some((json, started_sequence, integrity)) = existing {
+            let json = json.ok_or_else(|| {
+                ConversationStoreError::InvalidReference(
+                    "frozen request record exceeds byte budget".into(),
+                )
+            })?;
+            if stored_snapshot_digest(
+                &json,
+                read_stored_snapshot_root(&transaction, &snapshot.request_id)?,
+            ) != integrity
+            {
+                return Err(ConversationStoreError::InvalidReference(
+                    "corrupt frozen request manifest".into(),
+                ));
+            }
+            let mut verified = verify_committed_start_tx(
+                &transaction,
+                &json,
+                started_sequence,
+                context,
+                snapshot,
+            )?;
+            transaction
+                .commit()
+                .map_err(|error| storage(format!("request start retry commit: {error}")))?;
+            verified.verified_snapshot = Some(Box::new(snapshot.clone()));
+            return Ok(verified);
+        }
+        let projection = projection::current_checkpoint_id(&transaction)?;
+        if projection.as_ref() != snapshot.history_cut.checkpoint_id.as_ref() {
+            return Err(ConversationStoreError::InvalidReference(
+                "actual request would start from a stale Projection Head".into(),
+            ));
+        }
+        if snapshot.history_cut.base_frontier > snapshot.history_cut.ledger {
+            return Err(ConversationStoreError::InvalidReference(
+                "invalid Request History Cut".into(),
+            ));
+        }
+        if snapshot.identity.retry_number != 0 {
+            verify_frozen_contributions_tx(&transaction, snapshot)?;
+        }
+        // The request-scoped canonical context commits first, inside the
+        // same transaction as the snapshot and the start fact: a failure
+        // anywhere below rolls all of it back, so request-scoped context
+        // can never become canonical without its request starting.
+        let selection = manifest::persist(&transaction, &snapshot.input, &self.conn.manifest)?;
+        let mut persisted = self.insert_fresh_start_tx(
+            &transaction,
+            context,
+            snapshot,
+            timestamp,
+            &selection,
+            admission_epoch,
+        )?;
+        process_death::reach("before:commit_model_turn_start");
+        transaction
+            .commit()
+            .map_err(|error| storage(format!("request start commit: {error}")))?;
+        process_death::reach("after:commit_model_turn_start");
+        selection.commit(&self.conn.manifest);
+        persisted.verified_snapshot = Some(Box::new(snapshot.clone()));
+        Ok(persisted)
+    }
+    fn latest_contribution_emission(
+        &self,
+        producer: &crate::runtime::identity::ContextContributorIdentity,
+        key: &str,
+    ) -> Result<Option<ContributionEmissionRecord>, ConversationStoreError> {
+        #[cfg(test)]
+        self.contribution_head_lookup_reads
+            .fetch_add(1, Ordering::SeqCst);
+        let connection = self.lock()?;
+        read_contribution_head(&connection, producer, key)
+    }
+    fn load_pending_unresolved_output_stream_id(
+        &self,
+    ) -> Result<Option<PublicationStreamId>, ConversationStoreError> {
+        let connection = self.lock()?;
+        let value: Option<String> = connection
+            .query_row(
+                "SELECT pending_unresolved_output_stream_id FROM rustx_store WHERE id=1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| storage(format!("pending carryover lookup: {error}")))?;
+        Ok(value.map(PublicationStreamId::new))
+    }
+    fn commit_attempt_terminal_with_carryover(
+        &self,
+        event: RuntimeEventEnvelope,
+        pending_source: Option<PublicationStreamId>,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+        if !is_terminal(&event.event)
+            || !matches!(
+                event.event,
+                RuntimeEvent::AttemptCompleted { .. }
+                    | RuntimeEvent::AttemptCancelled { .. }
+                    | RuntimeEvent::AttemptTimedOut { .. }
+                    | RuntimeEvent::AttemptLimitExceeded { .. }
+                    | RuntimeEvent::AttemptFailed { .. }
+            )
+        {
+            return Err(ConversationStoreError::InvalidReference(
+                "carryover terminal transition accepts only attempt terminal events".to_owned(),
+            ));
+        }
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(format!("attempt terminal transaction: {error}")))?;
+        #[cfg(test)]
+        {
+            self.terminal_event_attempts.fetch_add(1, Ordering::SeqCst);
+            if Self::consume(&self.fail_terminal_event_remaining) {
+                return Err(storage("fault injected: terminal event commit"));
+            }
+            if Self::consume(&self.fail_event_remaining) {
+                return Err(storage("fault injected: event commit"));
+            }
+        }
+        validate_pending_carryover_source_tx(&transaction, &event, pending_source.as_ref())?;
+        process_death::reach_event("before:attempt_terminal", &event.event);
+        let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
+        let source = pending_source.as_ref().map(PublicationStreamId::as_str);
+        transaction
+            .execute(
+                "UPDATE rustx_store SET pending_unresolved_output_stream_id=?1 WHERE id=1",
+                [source],
+            )
+            .map_err(|error| storage(format!("install pending carryover source: {error}")))?;
+        process_death::reach("before:commit_attempt_terminal");
+        transaction
+            .commit()
+            .map_err(|error| storage(format!("attempt terminal commit: {error}")))?;
+        process_death::reach("after:commit_attempt_terminal");
+        Ok(persisted.event)
+    }
+    fn current_logical_step_progress(&self) -> Result<u64, ConversationStoreError> {
+        let connection = self.lock()?;
+        let value: i64 = connection
+            .query_row(
+                "SELECT logical_step_sequence FROM rustx_store WHERE id=1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| storage(format!("Todo progress lookup: {error}")))?;
+        nonnegative(value, "Todo progress sequence")
+    }
+    fn load_request_snapshot(
+        &self,
+        request_id: &RequestId,
+    ) -> Result<RequestSnapshot, ConversationStoreError> {
+        #[cfg(test)]
+        self.request_snapshot_body_reads
+            .fetch_add(1, Ordering::SeqCst);
+        {
+            let connection = self.lock()?;
+            load_request_snapshot(&connection, &self.conversation_id, request_id)
+        }
+    }
+    fn reconstruct_model_request(
+        &self,
+        request_id: &crate::runtime::identity::RequestId,
+    ) -> Result<crate::model::types::ModelRequest, ConversationStoreError> {
+        let connection = self.lock()?;
+        let snapshot = load_request_snapshot(&connection, &self.conversation_id, request_id)?;
+        snapshot
+            .reconstruct_with(|reference| {
+                if reference.conversation_id != self.conversation_id {
+                    return Err(
+                        crate::model::snapshot::RequestReconstructionError::Conversation(
+                            "foreign frozen Original scope".to_owned(),
+                        ),
+                    );
+                }
+                load_message(&connection, &reference.message_id).map_err(|error| {
+                    crate::model::snapshot::RequestReconstructionError::Conversation(
+                        error.to_string(),
+                    )
+                })
+            })
+            .map_err(|error| ConversationStoreError::InvalidReference(error.to_string()))
+    }
+    fn read_request_snapshots(
+        &self,
+        after_sequence: Option<u64>,
+        limit: usize,
+    ) -> Result<RequestSnapshotPage, ConversationStoreError> {
+        #[cfg(test)]
+        self.request_snapshot_page_reads
+            .fetch_add(1, Ordering::SeqCst);
+        let connection = self.lock()?;
+        let after = seq_to_i64(after_sequence.unwrap_or(0))?;
+        let limit = i64::try_from(limit)
+            .map_err(|_| storage("request snapshot page limit is too large"))?;
+        let mut statement = connection
+            .prepare(
+                "SELECT request_id,started_sequence FROM request_snapshots
+                 WHERE started_sequence IS NOT NULL AND started_sequence > ?1
+                 ORDER BY started_sequence, request_id LIMIT ?2",
+            )
+            .map_err(|error| storage(format!("request snapshot page: {error}")))?;
+        let rows = statement
+            .query_map(params![after, limit], |row| {
+                let request_id: String = row.get(0)?;
+                let sequence: i64 = row.get(1)?;
+                Ok((request_id, sequence))
+            })
+            .map_err(|error| storage(format!("request snapshot page query: {error}")))?;
+        let rows: Vec<(RequestId, u64)> = rows
+            .map(|row| {
+                let (request_id, sequence) =
+                    row.map_err(|error| storage(format!("request snapshot page row: {error}")))?;
+                Ok((RequestId::new(request_id), sequence_from_i64(sequence)?))
+            })
+            .collect::<Result<_, ConversationStoreError>>()?;
+        drop(statement);
+        drop(connection);
+
+        let next_sequence = rows.last().map(|(_, sequence)| *sequence);
+        let snapshots = rows
+            .into_iter()
+            .map(|(request_id, _)| self.load_request_snapshot(&request_id))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(RequestSnapshotPage {
+            snapshots,
+            next_sequence,
+        })
+    }
+}
+
+impl JournalStore for SqliteConversationStore {
+    fn load_agent_authority(
+        &self,
+        agent_id: &crate::runtime::identity::AgentId,
+    ) -> Result<crate::runtime::subagent::DurableAgentAuthority, ConversationStoreError> {
+        let connection = self.lock()?;
+        let encoded: Option<String> = connection
+            .query_row(
+                "SELECT authority_json FROM agent_authorities WHERE agent_id=?1",
+                [agent_id.as_str()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| storage("read private Agent authority"))?;
+        let encoded = encoded.ok_or_else(|| storage("missing admitted Agent authority"))?;
+        let mut private: PrivateAgentAuthority = serde_json::from_str(&encoded)
+            .map_err(|_| storage("decode private Agent authority"))?;
+        let credentials = crate::credentials::CredentialSnapshot::new(private.credentials);
+        private
+            .authority
+            .resolved
+            .model
+            .restore_admitted_credentials(&credentials)
+            .map_err(|_| storage("restore private Agent provider credentials"))?;
+        for binding in private
+            .authority
+            .resolved
+            .materialization
+            .sources
+            .values_mut()
+        {
+            binding.credentials.capture(credentials.clone());
+        }
+        Ok(private.authority)
+    }
+    fn append_agent_admission(
+        &self,
+        event: RuntimeEventEnvelope,
+        authority: &crate::runtime::subagent::DurableAgentAuthority,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+        self.append_event_internal(event, Some(authority))
+    }
+    fn append_event(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+        if requires_specialized_transition(&event.event) {
+            return Err(ConversationStoreError::InvalidReference(
+                "this event kind must use its specialized durable transition".to_owned(),
+            ));
+        }
+        self.append_event_internal(event, None)
+    }
+    fn commit_subagent_terminal(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+        if !matches!(
+            &event.event,
+            RuntimeEvent::SubagentTerminalSettled {
+                state: crate::events::types::SubagentTerminalState::Failed
+                    | crate::events::types::SubagentTerminalState::Cancelled
+                    | crate::events::types::SubagentTerminalState::Interrupted,
+                ..
+            }
+        ) {
+            return Err(ConversationStoreError::InvalidReference(
+                "a direct Workflow child terminal transition accepts only non-success states"
+                    .to_owned(),
+            ));
+        }
+        let _ownership = self.ownership_transition(&event.event)?;
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(format!("Workflow child terminal transaction: {error}")))?;
+        if let Some(existing) = find_event_by_id(&transaction, &event.event_id)? {
+            if same_event_ignoring_sequence(&existing, &event) {
+                transaction.commit().map_err(|error| {
+                    storage(format!("Workflow child terminal retry commit: {error}"))
+                })?;
+                return Ok(existing);
+            }
+            return Err(ConversationStoreError::TerminalViolation(
+                "Workflow child terminal retry conflicts with its durable fact".to_owned(),
+            ));
+        }
+        #[cfg(test)]
+        if Self::consume(&self.fail_event_remaining) {
+            return Err(storage("fault injected: Workflow child terminal commit"));
+        }
+        process_death::reach_event("before:workflow_child_terminal", &event.event);
+        let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
+        transaction
+            .commit()
+            .map_err(|error| storage(format!("Workflow child terminal commit: {error}")))?;
+        process_death::reach_event("after:workflow_child_terminal", &persisted.event.event);
+        Ok(persisted.event)
+    }
+    fn commit_workflow_agent_terminal(
+        &self,
+        terminal: RuntimeEventEnvelope,
+        output: RuntimeEventEnvelope,
+    ) -> Result<(RuntimeEventEnvelope, RuntimeEventEnvelope), ConversationStoreError> {
+        let valid_pair = matches!(
+            (&terminal.event, &output.event),
+            (
+                RuntimeEvent::SubagentTerminalSettled {
+                    subagent_id: terminal_subagent,
+                    state: crate::events::types::SubagentTerminalState::Succeeded,
+                    physical_settlement_proven: true,
+                    ..
+                },
+                RuntimeEvent::WorkflowAgentOutputCommitted {
+                    subagent_id: output_subagent,
+                    ..
+                }
+            ) if terminal_subagent == output_subagent
+        );
+        if !valid_pair {
+            return Err(ConversationStoreError::InvalidReference(
+                "the Workflow terminal transaction requires one matching physically settled successful child terminal and output fact".to_owned(),
+            ));
+        }
+        if terminal.conversation_id != output.conversation_id
+            || terminal.timestamp != output.timestamp
+        {
+            return Err(ConversationStoreError::InvalidReference(
+                "the Workflow terminal facts must share conversation and timestamp identity"
+                    .to_owned(),
+            ));
+        }
+
+        let _ownership = self.ownership_transition(&terminal.event)?;
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(format!("Workflow terminal transaction: {error}")))?;
+        validate_event_reference(&transaction, &output)?;
+        let existing_terminal = find_event_by_id(&transaction, &terminal.event_id)?;
+        let existing_output = find_event_by_id(&transaction, &output.event_id)?;
+        match (existing_terminal, existing_output) {
+            (Some(existing_terminal), Some(existing_output)) => {
+                if !same_event_ignoring_sequence(&existing_terminal, &terminal)
+                    || !same_event_ignoring_sequence(&existing_output, &output)
+                {
+                    return Err(ConversationStoreError::InvalidReference(
+                        "Workflow terminal retry conflicts with its durable facts".to_owned(),
+                    ));
+                }
+                transaction
+                    .commit()
+                    .map_err(|error| storage(format!("Workflow terminal retry commit: {error}")))?;
+                Ok((existing_terminal, existing_output))
+            }
+            (Some(_), None) | (None, Some(_)) => Err(ConversationStoreError::TerminalViolation(
+                "Workflow terminal facts are only valid as an atomic pair".to_owned(),
+            )),
+            (None, None) => {
+                let mut persisted_terminal =
+                    persist_event_tx_deferred(&transaction, &self.conversation_id, terminal)?;
+                let mut persisted_output =
+                    persist_event_tx_deferred(&transaction, &self.conversation_id, output)?;
+                #[cfg(test)]
+                if Self::consume(&self.fail_event_remaining) {
+                    return Err(storage("fault injected: Workflow terminal commit"));
+                }
+                let shared = observation_receipt::workflow_terminal(
+                    &transaction,
+                    &self.conversation_id,
+                    &persisted_terminal.event,
+                    &persisted_output.event,
+                );
+                persisted_terminal.event.observation.clone_from(&shared);
+                persisted_output.event.observation = shared;
+                process_death::reach_event(
+                    "before:workflow_terminal",
+                    &persisted_output.event.event,
+                );
+                transaction
+                    .commit()
+                    .map_err(|error| storage(format!("Workflow terminal commit: {error}")))?;
+                process_death::reach_event(
+                    "after:workflow_terminal",
+                    &persisted_output.event.event,
+                );
+                Ok((persisted_terminal.event, persisted_output.event))
+            }
+        }
+    }
+    fn append_interaction_audit(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<(RuntimeEventEnvelope, TranscriptCursor), ConversationStoreError> {
+        if !matches!(
+            event.event,
+            RuntimeEvent::InteractionRequested { .. } | RuntimeEvent::InteractionSettled { .. }
+        ) {
+            return Err(ConversationStoreError::InvalidReference(
+                "the interaction audit transition accepts only interaction facts".to_owned(),
+            ));
+        }
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(format!("interaction audit transaction: {error}")))?;
+        let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
+        let transcript_cursor = persisted.transcript_cursor.ok_or_else(|| {
+            ConversationStoreError::InvalidReference(
+                "interaction audit did not receive a transcript cursor".to_owned(),
+            )
+        })?;
+        process_death::reach_event("before:interaction", &persisted.event.event);
+        transaction
+            .commit()
+            .map_err(|error| storage(format!("interaction audit commit: {error}")))?;
+        process_death::reach_event("after:interaction", &persisted.event.event);
+        Ok((persisted.event, transcript_cursor))
+    }
+    fn observe_journal(
+        &self,
+        observer: Arc<dyn super::presentation::JournalObserver>,
+    ) -> Result<u64, ConversationStoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(error.to_string()))?;
+        let through = journal_prefix(&transaction)?;
+        // A newly installed Runtime owns recovery of already committed history.
+        // Previous process-local publication holes cannot survive this epoch.
+        observation_readiness::recover_journal(&transaction)?;
+        observation_readiness::mark(&transaction, 1, through)?;
+        transaction
+            .execute(
+                "UPDATE event_observation_readiness SET direct=0 WHERE direct=1",
+                [],
+            )
+            .map_err(|error| storage(error.to_string()))?;
+        observation_readiness::recover_transcript(&transaction)?;
+        transaction
+            .commit()
+            .map_err(|error| storage(error.to_string()))?;
+        *self.journal_observer.lock().expect("Journal observer lock") = Some((observer, through));
+        Ok(through)
+    }
+    fn presentation_frontier(&self) -> Result<u64, ConversationStoreError> {
+        let value: i64 = self
+            .lock()?
+            .query_row("SELECT COALESCE(MAX(sequence), 0) FROM events", [], |row| {
+                row.get(0)
+            })
+            .map_err(|_| storage("presentation frontier failed"))?;
+        sequence_from_i64(value)
+    }
+    fn read_presentation_events(
+        &self,
+        query: &super::presentation::FactQuery,
+    ) -> Result<Vec<RuntimeEventEnvelope>, ConversationStoreError> {
+        let statements = presentation_statements(query)?;
+        let connection = self.lock()?;
+        let mut events: Vec<RuntimeEventEnvelope> = Vec::new();
+        for (sql, params) in statements {
+            let mut statement = connection
+                .prepare(&sql)
+                .map_err(|_| storage("presentation query preparation failed"))?;
+            let rows = statement
+                .query_map(rusqlite::params_from_iter(params), |row| {
+                    row.get::<_, String>(0)
+                })
+                .map_err(|_| storage("presentation query failed"))?;
+            for row in rows {
+                #[cfg(test)]
+                observation_statistics::original_read();
+                events.push(decode(
+                    &row.map_err(|_| storage("presentation row failed"))?,
+                    "presentation fact",
+                )?);
+            }
+        }
+        events.sort_by_key(|event| event.sequence);
+        if !query.ascending {
+            events.reverse();
+        }
+        events.truncate(query.limit);
+        Ok(events)
+    }
+    fn read_events(
+        &self,
+        after_sequence: Option<u64>,
+        limit: usize,
+    ) -> Result<EventPage, ConversationStoreError> {
+        let connection = self.lock()?;
+        let after = after_sequence.unwrap_or(0);
+        let limit = i64::try_from(limit).map_err(|_| storage("event page limit is too large"))?;
+        let mut statement = connection
+            .prepare(
+                "SELECT sequence,event_id,schema_version,conversation_id,attempt_id,turn_id,event_json
+                 FROM events WHERE sequence > ?1 ORDER BY sequence LIMIT ?2",
+            )
+            .map_err(|error| storage(format!("event page: {error}")))?;
+        let mut rows = statement
+            .query(params![after, limit])
+            .map_err(|error| storage(format!("event page query: {error}")))?;
+        let mut events = Vec::new();
+        let mut next = None;
+        while let Some(row) = rows
+            .next()
+            .map_err(|error| storage(format!("event page row: {error}")))?
+        {
+            let sequence: i64 = row
+                .get(0)
+                .map_err(|error| storage(format!("event sequence: {error}")))?;
+            let stored_event_id: String = row
+                .get(1)
+                .map_err(|error| storage(format!("event identity: {error}")))?;
+            let stored_schema_version: i64 = row
+                .get(2)
+                .map_err(|error| storage(format!("event schema version: {error}")))?;
+            let stored_conversation_id: String = row
+                .get(3)
+                .map_err(|error| storage(format!("event conversation identity: {error}")))?;
+            let stored_attempt_id: Option<String> = row
+                .get(4)
+                .map_err(|error| storage(format!("event attempt identity: {error}")))?;
+            let stored_turn_id: Option<String> = row
+                .get(5)
+                .map_err(|error| storage(format!("event turn identity: {error}")))?;
+            let json: String = row
+                .get(6)
+                .map_err(|error| storage(format!("event json: {error}")))?;
+            let event: RuntimeEventEnvelope = decode(&json, "event page")?;
+            let sequence =
+                u64::try_from(sequence).map_err(|_| storage("negative event sequence"))?;
+            let stored_schema_version = u16::try_from(stored_schema_version).map_err(|_| {
+                ConversationStoreError::InvalidReference(
+                    "Event Journal row has an invalid schema version".to_owned(),
+                )
+            })?;
+            if event.sequence != sequence
+                || event.event_id.as_str() != stored_event_id
+                || event.schema_version != stored_schema_version
+                || event.schema_version != EVENT_SCHEMA_VERSION
+                || event.conversation_id.as_str() != stored_conversation_id
+                || event.conversation_id != self.conversation_id
+                || event.attempt_id.as_ref().map(ToString::to_string) != stored_attempt_id
+                || event.turn_id.as_ref().map(ToString::to_string) != stored_turn_id
+            {
+                return Err(ConversationStoreError::InvalidReference(
+                    "Event Journal row metadata disagrees with its envelope".to_owned(),
+                ));
+            }
+            events.push(event);
+            next = Some(sequence);
+        }
+        Ok(EventPage {
+            events,
+            next_sequence: next,
+        })
+    }
+}
+
+impl PublicationStore for SqliteConversationStore {
+    fn open_publication_stream(
+        &self,
+        start: &PublicationStreamStart,
+    ) -> Result<(), ConversationStoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(format!("publication open transaction: {error}")))?;
+        // The first open is the publication generation admission boundary.
+        // Prove the complete Request Snapshot/start-event identity before an
+        // idempotent reopen probe or any publication row can be written.
+        let (snapshot, _, _) =
+            require_started_request_tx(&transaction, &self.conversation_id, &start.request_id)?;
+        validate_publication_generation(&snapshot, start)?;
+        if let Some(existing) = read_publication_stream(&transaction, &start.stream_id)? {
+            // Re-opening is idempotent only for the identical frozen identity:
+            // a stream may never be re-associated with another request,
+            // attempt, turn, or provisional message.
+            if existing.start != *start {
+                return Err(ConversationStoreError::PublicationViolation(format!(
+                    "publication stream {} is already open under a different request generation",
+                    start.stream_id
+                )));
+            }
+            if existing.settlement.is_some() {
+                return Err(ConversationStoreError::PublicationViolation(format!(
+                    "publication stream {} already settled and cannot reopen",
+                    start.stream_id
+                )));
+            }
+            return Ok(());
+        }
+        transaction
+            .execute(
+                "INSERT INTO publication_streams(stream_id,attempt_id,turn_id,request_id,message_id,next_frame_sequence,terminal_sequence,settlement)
+                 VALUES(?1,?2,?3,?4,?5,0,NULL,NULL)",
+                params![
+                    start.stream_id.as_str(),
+                    start.attempt_id.as_str(),
+                    start.turn_id.as_str(),
+                    start.request_id.as_str(),
+                    start.message_id.as_str()
+                ],
+            )
+            .map_err(|error| storage(format!("open publication stream: {error}")))?;
+        process_death::reach("before:open_publication_stream");
+        transaction
+            .commit()
+            .map_err(|error| storage(format!("publication open commit: {error}")))?;
+        process_death::reach("after:open_publication_stream");
+        Ok(())
+    }
+    fn stage_publication_frames(
+        &self,
+        frames: &[PublicationFrame],
+    ) -> Result<Vec<crate::publication::PublicationFrameReceipt>, ConversationStoreError> {
+        if frames.is_empty() {
+            return Err(ConversationStoreError::PublicationViolation(
+                "a publication staging transaction must carry at least one frame".to_owned(),
+            ));
+        }
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(format!("publication staging transaction: {error}")))?;
+        #[cfg(test)]
+        if Self::consume(&self.fail_publication_frames_remaining) {
+            return Err(storage("fault injected: publication staging commit"));
+        }
+        let (stream, receipts) = stage_frames_tx(&transaction, frames, &self.conversation_id)?;
+        if stream.terminal_sequence.is_some() {
+            return Err(ConversationStoreError::PublicationViolation(format!(
+                "publication stream {} already reached its terminal boundary",
+                stream.start.stream_id
+            )));
+        }
+        process_death::reach("before:stage_publication_frames");
+        transaction
+            .commit()
+            .map_err(|error| storage(format!("publication staging commit: {error}")))?;
+        process_death::reach("after:stage_publication_frames");
+        Ok(receipts)
+    }
+    fn commit_publication_terminal(
+        &self,
+        stream_id: &PublicationStreamId,
+        frames: &[PublicationFrame],
+    ) -> Result<Vec<crate::publication::PublicationFrameReceipt>, ConversationStoreError> {
+        if frames.is_empty() {
+            return Err(ConversationStoreError::PublicationViolation(
+                "the publication terminal transaction must carry a final frame".to_owned(),
+            ));
+        }
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(format!("publication terminal transaction: {error}")))?;
+        #[cfg(test)]
+        if Self::consume(&self.fail_publication_terminal_remaining) {
+            return Err(storage("fault injected: publication terminal commit"));
+        }
+        let stream = require_publication_stream(&transaction, stream_id)?;
+        let (snapshot, _, completed_sequence) = require_started_request_tx(
+            &transaction,
+            &self.conversation_id,
+            &stream.start.request_id,
+        )?;
+        validate_publication_generation(&snapshot, &stream.start)?;
+        // U may never precede P: prove the exact provider outcome before the
+        // frame/proposal staging transaction does any durable work.
+        if !request_outcome_is_durable(
+            &transaction,
+            &self.conversation_id,
+            &snapshot,
+            completed_sequence,
+        )? {
+            return Err(ConversationStoreError::PublicationViolation(format!(
+                "publication terminal for {stream_id} has no durable provider outcome for request {}",
+                stream.start.request_id
+            )));
+        }
+        let (stream, receipts) = stage_frames_tx(&transaction, frames, &self.conversation_id)?;
+        if stream.start.stream_id != *stream_id {
+            return Err(ConversationStoreError::PublicationViolation(format!(
+                "terminal frames belong to publication stream {}, not {stream_id}",
+                stream.start.stream_id
+            )));
+        }
+        if stream.terminal_sequence.is_some() {
+            return Err(ConversationStoreError::PublicationViolation(format!(
+                "publication stream {stream_id} already committed its terminal boundary"
+            )));
+        }
+        let terminal_sequence = frames
+            .last()
+            .map(|frame| frame.sequence)
+            .ok_or_else(|| storage("terminal frames are empty"))?;
+        // The final frame and the terminal marker share this one transaction.
+        transaction
+            .execute(
+                "UPDATE publication_streams SET terminal_sequence=?1 WHERE stream_id=?2",
+                params![seq_to_i64(terminal_sequence)?, stream_id.as_str()],
+            )
+            .map_err(|error| storage(format!("commit publication terminal: {error}")))?;
+        process_death::reach("before:commit_publication_terminal");
+        transaction
+            .commit()
+            .map_err(|error| storage(format!("publication terminal commit: {error}")))?;
+        process_death::reach("after:commit_publication_terminal");
+        Ok(receipts)
+    }
+    // Keep native acceptance, event/staging and COMMIT in one auditable boundary.
+    #[allow(clippy::too_many_lines)]
+    fn commit_canonical_publication(
+        &self,
+        stream_id: &PublicationStreamId,
+        message: &MessageBlock,
+        event: RuntimeEventEnvelope,
+    ) -> Result<(RuntimeEventEnvelope, TranscriptCommitReceipt), ConversationStoreError> {
+        let mut connection = self.lock()?;
+        let mut validation = append_validation::Batch::begin(&self.conn.append_validation);
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(format!("canonical publication transaction: {error}")))?;
+        let stream = require_publication_stream(&transaction, stream_id)?;
+        let (snapshot, _, completed_sequence) = require_started_request_tx(
+            &transaction,
+            &self.conversation_id,
+            &stream.start.request_id,
+        )?;
+        validate_publication_generation(&snapshot, &stream.start)?;
+        validate_canonical_publication_event(
+            &self.conversation_id,
+            &stream.start,
+            message,
+            &event,
+        )?;
+        validate_canonical_tool_proposals(&transaction, stream_id, message)?;
+        if let Some(settlement) = stream.settlement {
+            return Err(ConversationStoreError::PublicationViolation(format!(
+                "publication stream {stream_id} already settled as {}; canonical acceptance is permanently forbidden",
+                settlement.as_str()
+            )));
+        }
+        // C may never precede U for a published stream.
+        if stream.terminal_sequence.is_none() {
+            return Err(ConversationStoreError::PublicationViolation(format!(
+                "publication stream {stream_id} has no durable publication terminal; canonical acceptance requires U"
+            )));
+        }
+        if !matches!(message, MessageBlock::Assistant(_)) {
+            return Err(ConversationStoreError::PublicationViolation(format!(
+                "canonical acceptance of publication stream {stream_id} requires an Assistant message"
+            )));
+        }
+        if !request_outcome_is_durable(
+            &transaction,
+            &self.conversation_id,
+            &snapshot,
+            completed_sequence,
+        )? {
+            return Err(ConversationStoreError::PublicationViolation(format!(
+                "canonical acceptance of publication stream {stream_id} has no durable provider outcome for request {}",
+                stream.start.request_id
+            )));
+        }
+        ensure_surface_head(&transaction)?;
+
+        let transcript_cursor =
+            validation
+                .append(&transaction, message, None)?
+                .ok_or_else(|| {
+                    ConversationStoreError::InvalidReference(
+                        "canonical publication must receive a transcript cursor".to_owned(),
+                    )
+                })?;
+        #[cfg(test)]
+        if Self::consume(&self.fail_event_remaining) {
+            return Err(storage("fault injected: canonical publication commit"));
+        }
+        let mut persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
+        content::settle_canonical(&transaction, stream_id, message)?;
+        rebind_published_read_layouts(&transaction, message, &persisted.event)?;
+        // The canonical transition clears the lifecycle staging of the stream:
+        // the Ledger is now the long-term authority and no transient frame
+        // survives it.
+        clear_publication_staging(&transaction, stream_id)?;
+        // Proposal ownership remains as one bounded `(stream_id, call_id)`
+        // fact after C. Recovery ToolResult repair and later Tool Plane
+        // transitions must still resolve the exact accepted proposal rather
+        // than falling back to a bare call id.
+        transaction
+            .execute(
+                "UPDATE publication_proposals SET settlement=?1 WHERE stream_id=?2",
+                params![
+                    PublicationSettlement::Canonical.as_str(),
+                    stream_id.as_str()
+                ],
+            )
+            .map_err(|error| storage(format!("settle canonical publication proposals: {error}")))?;
+        transaction
+            .execute(
+                "UPDATE publication_streams SET settlement=?1 WHERE stream_id=?2",
+                params![
+                    PublicationSettlement::Canonical.as_str(),
+                    stream_id.as_str()
+                ],
+            )
+            .map_err(|error| storage(format!("settle canonical publication: {error}")))?;
+        let mut receipt = canonical_observation_receipt(
+            &transaction,
+            &self.conversation_id,
+            message,
+            Some(transcript_cursor),
+            persisted.event.tool_occurrence.clone(),
+        )?;
+        process_death::reach("before:commit_canonical_publication");
+        let sequence = persisted.event.sequence;
+        set_canonical_range(&mut receipt, Some((sequence, sequence)));
+        persisted.event.observation = observation_receipt::canonical(
+            &transaction,
+            &self.conversation_id,
+            &persisted.event,
+            Arc::clone(&receipt.observation),
+        );
+        transaction
+            .commit()
+            .map_err(|error| storage(format!("canonical publication commit: {error}")))?;
+        validation.committed(&connection);
+        process_death::reach("after:commit_canonical_publication");
+        Ok((persisted.event, receipt))
+    }
+    fn terminalize_publication_audit(
+        &self,
+        stream_id: &PublicationStreamId,
+        timestamp: DateTime<Utc>,
+    ) -> Result<(PublicationAudit, crate::durable::PublicationAuditReceipt), ConversationStoreError>
+    {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(format!("publication audit transaction: {error}")))?;
+        #[cfg(test)]
+        if Self::consume(&self.fail_publication_audit_remaining) {
+            return Err(storage("fault injected: publication audit commit"));
+        }
+        let stream = require_publication_stream(&transaction, stream_id)?;
+        let (snapshot, _, completed_sequence) = require_started_request_tx(
+            &transaction,
+            &self.conversation_id,
+            &stream.start.request_id,
+        )?;
+        validate_publication_generation(&snapshot, &stream.start)?;
+        if let Some(settlement) = stream.settlement {
+            return Err(ConversationStoreError::PublicationViolation(format!(
+                "publication stream {stream_id} already settled as {}",
+                settlement.as_str()
+            )));
+        }
+        if stream.terminal_sequence.is_some()
+            && !request_outcome_is_durable(
+                &transaction,
+                &self.conversation_id,
+                &snapshot,
+                completed_sequence,
+            )?
+        {
+            return Err(ConversationStoreError::PublicationViolation(format!(
+                "publication audit for {stream_id} has U without the exact successful provider outcome"
+            )));
+        }
+        // The kind is derived from durable evidence, never supplied: U
+        // present means the released output was complete but never accepted;
+        // U absent means publication never reached its own terminal boundary.
+        let kind = stream.audit_kind();
+        let executed: Option<String> = transaction
+            .query_row(
+                "SELECT call_id FROM publication_proposals WHERE stream_id=?1 AND executed=1 LIMIT 1",
+                [stream_id.as_str()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| storage(format!("publication proposal execution probe: {error}")))?;
+        if let Some(call_id) = executed {
+            return Err(ConversationStoreError::PublicationViolation(format!(
+                "publication stream {stream_id} cannot terminalize as an audit: proposal {call_id} already has a Tool Plane execution fact"
+            )));
+        }
+        let frames = read_publication_frames(&transaction, stream_id)?;
+        let content = consolidate_audit_content(&frames);
+        validate_audit_proposal_ownership(&transaction, stream_id, &content)?;
+        let audit = PublicationAudit {
+            stream_id: stream_id.clone(),
+            attempt_id: stream.start.attempt_id.clone(),
+            turn_id: stream.start.turn_id.clone(),
+            request_id: stream.start.request_id.clone(),
+            message_id: stream.start.message_id.clone(),
+            kind,
+            content,
+            settled_at: timestamp,
+        };
+        let _ =
+            optional_display_layout(&transaction, || content::settle_audit(&transaction, &audit));
+        let settlement = PublicationSettlement::from(kind);
+        transaction
+            .execute(
+                "INSERT INTO publication_audits(stream_id,audit_json) VALUES(?1,?2)",
+                params![stream_id.as_str(), encode(&audit, "publication audit")?],
+            )
+            .map_err(|error| storage(format!("insert publication audit: {error}")))?;
+        let transcript_cursor =
+            append_transcript_reference(&transaction, "publication_audit", stream_id.as_str())?;
+        // Consolidation replaces the transient frames: the durable footprint
+        // of a settled audit is one bounded object, never O(frames) rows.
+        clear_publication_staging(&transaction, stream_id)?;
+        transaction
+            .execute(
+                "UPDATE publication_proposals SET settlement=?1 WHERE stream_id=?2",
+                params![settlement.as_str(), stream_id.as_str()],
+            )
+            .map_err(|error| storage(format!("ban audited tool proposals: {error}")))?;
+        transaction
+            .execute(
+                "UPDATE publication_streams SET settlement=?1 WHERE stream_id=?2",
+                params![settlement.as_str(), stream_id.as_str()],
+            )
+            .map_err(|error| storage(format!("settle publication audit: {error}")))?;
+        let receipt = audit_observation_receipt(
+            &transaction,
+            &self.conversation_id,
+            &audit,
+            transcript_cursor,
+        )?;
+        process_death::reach("before:terminalize_publication_audit");
+        transaction
+            .commit()
+            .map_err(|error| storage(format!("publication audit commit: {error}")))?;
+        process_death::reach("after:terminalize_publication_audit");
+        Ok((audit, receipt))
+    }
+    fn load_unsettled_publication_streams(
+        &self,
+    ) -> Result<Vec<PublicationStreamRecord>, ConversationStoreError> {
+        let connection = self.lock()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT stream_id,attempt_id,turn_id,request_id,message_id,terminal_sequence,settlement
+                 FROM publication_streams WHERE settlement IS NULL ORDER BY stream_id",
+            )
+            .map_err(|error| storage(format!("unsettled publication query: {error}")))?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                ))
+            })
+            .map_err(|error| storage(format!("unsettled publication rows: {error}")))?;
+        let mut records = Vec::new();
+        for row in rows {
+            let row =
+                row.map_err(|error| storage(format!("unsettled publication row: {error}")))?;
+            records.push(publication_record(row)?);
+        }
+        Ok(records)
+    }
+    fn load_publication_audit(
+        &self,
+        stream_id: &PublicationStreamId,
+    ) -> Result<Option<PublicationAudit>, ConversationStoreError> {
+        let connection = self.lock()?;
+        let json: Option<String> = connection
+            .query_row(
+                "SELECT audit_json FROM publication_audits WHERE stream_id=?1",
+                [stream_id.as_str()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| storage(format!("publication audit read: {error}")))?;
+        json.map(|json| decode(&json, "publication audit"))
+            .transpose()
+    }
+}
+
+impl ProjectionStore for SqliteConversationStore {
+    fn compaction_resource_cut(
+        &self,
+    ) -> Result<crate::context::resources::ResourceReadCut, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        compaction_resources::cut(&transaction, &self.conversation_id)
+    }
+    fn compaction_message_page(
+        &self,
+        cut: &crate::context::resources::ResourceReadCut,
+        after: crate::context::resources::LedgerFrontier,
+        ids: Option<&[MessageId]>,
+        limits: crate::context::resources::ResourceLimits,
+    ) -> Result<crate::context::resources::ResourcePage<MessageBlock>, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        compaction_resources::messages(&transaction, &self.conversation_id, cut, after, ids, limits)
+    }
+    fn compaction_dependency(
+        &self,
+        cut: &crate::context::resources::ResourceReadCut,
+        source: &crate::model::projected::CanonicalMessageRef,
+        body_required: bool,
+        limits: crate::context::resources::ResourceLimits,
+    ) -> Result<crate::context::checkpoint::CanonicalDependency, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        compaction_resources::dependency(
+            &transaction,
+            &self.conversation_id,
+            cut,
+            source,
+            body_required,
+            limits,
+        )
+    }
+    fn compaction_trajectory_page(
+        &self,
+        cut: &crate::context::resources::ResourceReadCut,
+        after: crate::context::resources::LedgerFrontier,
+        limits: crate::context::resources::ResourceLimits,
+    ) -> Result<
+        crate::context::resources::ResourcePage<crate::context::resources::TrajectoryMessage>,
+        ConversationStoreError,
+    > {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        compaction_resources::trajectory(&transaction, &self.conversation_id, cut, after, limits)
+    }
+    fn compaction_event_page(
+        &self,
+        cut: &crate::context::resources::ResourceReadCut,
+        after: crate::context::resources::JournalFrontier,
+        limits: crate::context::resources::ResourceLimits,
+    ) -> Result<crate::context::resources::ResourcePage<RuntimeEventEnvelope>, ConversationStoreError>
+    {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        compaction_resources::events(&transaction, &self.conversation_id, cut, after, limits)
+    }
+    fn inherited_responses_for(
+        &self,
+        messages: &[MessageId],
+    ) -> Result<Vec<super::response::CompletedResponseProvenance>, ConversationStoreError> {
+        let connection = self.lock()?;
+        provenance::selected_responses(&connection, messages)
+    }
+    fn load_inherited_turns(
+        &self,
+    ) -> Result<Vec<super::reading::TurnReadingProvenance>, ConversationStoreError> {
+        let connection = self.lock()?;
+        reading::inherited_turns(&connection)
+    }
+    fn inherited_turns_for(
+        &self,
+        messages: &[MessageId],
+    ) -> Result<Vec<super::reading::TurnReadingProvenance>, ConversationStoreError> {
+        let connection = self.lock()?;
+        provenance::selected_turns(&connection, messages)
+    }
+    fn read_projection_lineage_cut(
+        &self,
+        ledger: crate::context::resources::LedgerFrontier,
+        activation: crate::context::checkpoint::ProjectionActivationId,
+    ) -> Result<super::reading::LineageReadCut, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        lineage::read_at(
+            &transaction,
+            &self.conversation_id,
+            SurfaceRevision::new(ledger.0),
+            Some(activation),
+            None,
+        )
+    }
+    fn read_lineage_cut(
+        &self,
+        revision: SurfaceRevision,
+    ) -> Result<super::reading::LineageReadCut, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        lineage::read(&transaction, &self.conversation_id, revision)
+    }
+    fn projected_history(
+        &self,
+    ) -> Result<super::projection::HistoricalModelInput, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        #[cfg(test)]
+        if Self::consume(&self.fail_projection_history_remaining) {
+            return Err(storage("fault injected: post-commit hot projection read"));
+        }
+        projection::selected_history(&transaction, &self.conversation_id, &self.conn.manifest)
+    }
+    fn projection_at_journal_cut(
+        &self,
+        through: u64,
+    ) -> Result<Option<super::projection::ProjectionCheckpoint>, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        projection::at_journal_cut(&transaction, through)
+    }
+    fn compaction_checkpoint_at(
+        &self,
+        cut: &crate::context::resources::ResourceReadCut,
+        id: &crate::runtime::identity::CheckpointId,
+        limits: crate::context::resources::ResourceLimits,
+    ) -> Result<super::projection::ProjectionCheckpoint, ConversationStoreError> {
+        limits.validate()?;
+        if cut.conversation_id != self.conversation_id {
+            return Err(ConversationStoreError::InvalidReference(
+                "foreign checkpoint resource cut".into(),
+            ));
+        }
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        compaction_resources::validate(&transaction, &self.conversation_id, cut, limits)?;
+        let bytes:Option<u64>=transaction.query_row(
+            "SELECT octet_length(c.candidate_json)+octet_length(a.activation_json)+coalesce(octet_length(c.occupancy_json),0) FROM projection_checkpoints c JOIN projection_activations a ON a.checkpoint_id=c.checkpoint_id WHERE c.checkpoint_id=?1 AND a.activation<=?2",
+            params![id.as_str(),seq_to_i64(cut.projection_activation.0)?],|row|row.get(0),
+        ).optional().map_err(|e|storage(e.to_string()))?;
+        let bytes = bytes.ok_or_else(|| {
+            ConversationStoreError::InvalidReference(
+                "checkpoint is absent at Resource Read Cut".into(),
+            )
+        })?;
+        if bytes > limits.record_bytes as u64 || bytes > limits.page_bytes as u64 {
+            return Err(crate::context::resources::bound(
+                "checkpoint record exceeds resource materialization bound",
+            ));
+        }
+        projection::checkpoint(&transaction, id)
+    }
+    fn compaction_request(
+        &self,
+        cut: &crate::context::resources::ResourceReadCut,
+        request: &crate::runtime::identity::RequestId,
+        limits: crate::context::resources::ResourceLimits,
+    ) -> Result<crate::model::RequestSnapshot, ConversationStoreError> {
+        limits.validate()?;
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        let bytes: Option<u64> = transaction.query_row("SELECT octet_length(snapshot_json) FROM request_snapshots WHERE request_id=?1 AND started_sequence<=?2",params![request.as_str(),seq_to_i64(cut.journal.0)?],|row|row.get(0)).optional().map_err(|e|storage(e.to_string()))?;
+        if cut.conversation_id != self.conversation_id {
+            return Err(ConversationStoreError::InvalidReference(
+                "foreign frozen request Resource Read Cut".into(),
+            ));
+        }
+        let bytes = bytes.ok_or_else(|| {
+            ConversationStoreError::InvalidReference(
+                "request is absent at the Resource Read Cut".into(),
+            )
+        })?;
+        if bytes > limits.record_bytes as u64 || bytes > limits.page_bytes as u64 {
+            return Err(crate::context::resources::bound(
+                "historical frozen request exceeds materialization bound",
+            ));
+        }
+        load_request_snapshot_bounded(
+            &transaction,
+            &self.conversation_id,
+            request,
+            limits.record_bytes.min(limits.page_bytes),
+        )
+    }
+    fn projection_head(
+        &self,
+    ) -> Result<Option<super::projection::ProjectionCheckpoint>, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        projection::head(&transaction)
+    }
+    fn projection_checkpoint(
+        &self,
+        id: &crate::runtime::identity::CheckpointId,
+    ) -> Result<super::projection::ProjectionCheckpoint, ConversationStoreError> {
+        projection::checkpoint(&*self.lock()?, id)
+    }
+    fn projection_timeline(
+        &self,
+        after: crate::context::checkpoint::ProjectionActivationId,
+        limit: usize,
+    ) -> Result<Vec<super::projection::ProjectionCheckpoint>, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        projection::timeline(&transaction, after, limit)
+    }
+    fn projection_timeline_at_journal_cut(
+        &self,
+        through: u64,
+        after: crate::context::checkpoint::ProjectionActivationId,
+        limit: usize,
+    ) -> Result<super::projection::ProjectionTimelinePage, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        projection::timeline_at_journal_cut(&transaction, through, after, limit)
+    }
+    fn projection_checkpoint_at_journal_cut(
+        &self,
+        through: u64,
+        id: &crate::runtime::identity::CheckpointId,
+    ) -> Result<super::projection::ProjectionCheckpoint, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        projection::checkpoint_at_journal_cut(&transaction, through, id)
+    }
+    fn projection_owner(
+        &self,
+        attempt: Option<&crate::runtime::identity::AttemptId>,
+    ) -> Result<super::projection::ProjectionOwner, ConversationStoreError> {
+        projection::owner(&*self.lock()?, attempt)
+    }
+    fn projection_receipt(
+        &self,
+        operation: &crate::runtime::identity::CompactionOperationId,
+        fingerprint: &str,
+    ) -> Result<Option<super::projection::ProjectionCommitReceipt>, ConversationStoreError> {
+        projection::receipt(&*self.lock()?, operation, fingerprint)
+    }
+    fn commit_projection(
+        &self,
+        input: super::projection::ProjectionCommitInput,
+    ) -> Result<super::projection::ProjectionCommitReceipt, ConversationStoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| storage(e.to_string()))?;
+        let result = projection::commit(&transaction, &self.conversation_id, input, |stage| {
+            #[cfg(test)]
+            if self.consume_compaction_fault(stage) || Self::consume(&self.fail_event_remaining) {
+                return Err(storage("fault injected: checkpoint transaction"));
+            }
+            #[cfg(not(test))]
+            let _ = stage;
+            Ok(())
+        })?;
+        process_death::reach("before:commit_projection");
+        transaction.commit().map_err(|e| storage(e.to_string()))?;
+        process_death::reach("after:commit_projection");
+        // Stage committed Journal facts and release SQLite before returning a receipt.
+        drop(connection);
+        #[cfg(test)]
+        {
+            let probe = self
+                .projection_commit_return_probe
+                .lock()
+                .expect("projection return probe")
+                .take();
+            if let Some(probe) = probe {
+                probe();
+            }
+        }
+        #[cfg(test)]
+        for (stage, count) in [
+            (CompactionFaultOperation::AfterCommitOneHotReadFailure, 1),
+            (CompactionFaultOperation::AfterCommitTwoHotReadFailures, 2),
+        ] {
+            if self.consume_compaction_fault(stage) {
+                self.fail_projection_history_remaining
+                    .store(count, Ordering::SeqCst);
+            }
+        }
+        #[cfg(test)]
+        if self.consume_compaction_fault(CompactionFaultOperation::AfterCommit) {
+            return Err(storage("fault injected: lost checkpoint commit receipt"));
+        }
+        Ok(result)
+    }
+}
+
+impl ObservationStore for SqliteConversationStore {
     fn observation_trace_facts(
         &self,
         cut: &crate::durable::observation::ObservationReadCut,
@@ -2171,12 +4941,11 @@ impl ConversationStore for SqliteConversationStore {
     fn todo_observation_head(
         &self,
         cut: &crate::durable::observation::ObservationReadCut,
-    ) -> Result<Option<crate::durable::inbox::NativeTodoObservation>, ConversationStoreError> {
+    ) -> Result<Option<crate::durable::NativeTodoObservation>, ConversationStoreError> {
         let connection = self.lock()?;
         observation::validate(&connection, &self.conversation_id, cut)?;
         observation_state::todo_head(&connection, 1, cut.ledger_through)
     }
-
     fn observation_state_source(
         &self,
         domain: &str,
@@ -2398,7 +5167,6 @@ impl ConversationStore for SqliteConversationStore {
         let connection = self.lock()?;
         observation_members::members(&connection, attempt, through)
     }
-
     fn observation_transcript_process(
         &self,
         cut: &crate::durable::observation::ObservationReadCut,
@@ -2537,7 +5305,6 @@ impl ConversationStore for SqliteConversationStore {
             .map_err(|error| storage(error.to_string()))?;
         Ok(result)
     }
-
     fn event_transcript_cursor_at_sequence(
         &self,
         sequence: u64,
@@ -2613,7 +5380,6 @@ impl ConversationStore for SqliteConversationStore {
         let connection = self.lock()?;
         observation::tool_occurrence(&connection, &self.conversation_id, call_id, attempt, cut)
     }
-
     fn tool_association_headers(
         &self,
         cut: &crate::durable::observation::ObservationReadCut,
@@ -2639,7 +5405,6 @@ impl ConversationStore for SqliteConversationStore {
             .map_err(|error| storage(error.to_string()))?;
         Ok(result)
     }
-
     fn tool_association_headers_by_locator(
         &self,
         cut: &crate::durable::observation::ObservationReadCut,
@@ -2658,25 +5423,6 @@ impl ConversationStore for SqliteConversationStore {
             limit,
         )
     }
-    fn transcript_tool_headers(
-        &self,
-        cut: &crate::durable::observation::ObservationReadCut,
-        locator: &crate::runtime_client::content::CanonicalContentLocator,
-        offset: u64,
-        limit: usize,
-    ) -> Result<crate::durable::observation::NativeToolObservationPage, ConversationStoreError>
-    {
-        let connection = self.lock()?;
-        observation_tools::page(
-            &connection,
-            &self.conversation_id,
-            cut,
-            locator,
-            offset,
-            limit,
-        )
-    }
-
     fn ordinary_user_message(
         &self,
         locator: &crate::runtime_client::content::CanonicalContentLocator,
@@ -2744,7 +5490,6 @@ impl ConversationStore for SqliteConversationStore {
             .map_err(|error| storage(error.to_string()))?;
         Ok(result)
     }
-
     fn message_block_header_page_by_locator(
         &self,
         cut: &crate::durable::observation::ObservationReadCut,
@@ -2777,7 +5522,6 @@ impl ConversationStore for SqliteConversationStore {
         }
         connection.query_row("SELECT sequence FROM events INDEXED BY events_observation_tool_lifecycle_idx WHERE observation_tool_ledger=?1 AND observation_tool_block=?2 AND observation_tool_phase=1 AND sequence<=?3 ORDER BY sequence DESC LIMIT 1",params![ledger_position,block_index.get(),seq_to_i64(cut.read.journal)?],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))
     }
-
     fn observation_read_cut(
         &self,
     ) -> Result<crate::durable::observation::ObservationReadCut, ConversationStoreError> {
@@ -2825,79 +5569,6 @@ impl ConversationStore for SqliteConversationStore {
             .map_err(|error| storage(error.to_string()))?;
         Ok(result)
     }
-
-    fn compaction_resource_cut(
-        &self,
-    ) -> Result<crate::context::resources::ResourceReadCut, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|e| storage(e.to_string()))?;
-        compaction_resources::cut(&transaction, &self.conversation_id)
-    }
-
-    fn compaction_message_page(
-        &self,
-        cut: &crate::context::resources::ResourceReadCut,
-        after: crate::context::resources::LedgerFrontier,
-        ids: Option<&[MessageId]>,
-        limits: crate::context::resources::ResourceLimits,
-    ) -> Result<crate::context::resources::ResourcePage<MessageBlock>, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|e| storage(e.to_string()))?;
-        compaction_resources::messages(&transaction, &self.conversation_id, cut, after, ids, limits)
-    }
-
-    fn compaction_dependency(
-        &self,
-        cut: &crate::context::resources::ResourceReadCut,
-        source: &crate::model::projected::CanonicalMessageRef,
-        body_required: bool,
-        limits: crate::context::resources::ResourceLimits,
-    ) -> Result<crate::context::checkpoint::CanonicalDependency, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|e| storage(e.to_string()))?;
-        compaction_resources::dependency(
-            &transaction,
-            &self.conversation_id,
-            cut,
-            source,
-            body_required,
-            limits,
-        )
-    }
-    fn compaction_trajectory_page(
-        &self,
-        cut: &crate::context::resources::ResourceReadCut,
-        after: crate::context::resources::LedgerFrontier,
-        limits: crate::context::resources::ResourceLimits,
-    ) -> Result<
-        crate::context::resources::ResourcePage<crate::context::resources::TrajectoryMessage>,
-        ConversationStoreError,
-    > {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|e| storage(e.to_string()))?;
-        compaction_resources::trajectory(&transaction, &self.conversation_id, cut, after, limits)
-    }
-    fn compaction_event_page(
-        &self,
-        cut: &crate::context::resources::ResourceReadCut,
-        after: crate::context::resources::JournalFrontier,
-        limits: crate::context::resources::ResourceLimits,
-    ) -> Result<crate::context::resources::ResourcePage<RuntimeEventEnvelope>, ConversationStoreError>
-    {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|e| storage(e.to_string()))?;
-        compaction_resources::events(&transaction, &self.conversation_id, cut, after, limits)
-    }
     fn transcript_attempts(
         &self,
         messages: &[MessageId],
@@ -2926,57 +5597,6 @@ impl ConversationStore for SqliteConversationStore {
         }
         Ok(attempts.into_iter().collect())
     }
-
-    fn inherited_responses_for(
-        &self,
-        messages: &[MessageId],
-    ) -> Result<Vec<super::response::CompletedResponseProvenance>, ConversationStoreError> {
-        let connection = self.lock()?;
-        provenance::selected_responses(&connection, messages)
-    }
-
-    fn load_inherited_turns(
-        &self,
-    ) -> Result<Vec<super::reading::TurnReadingProvenance>, ConversationStoreError> {
-        let connection = self.lock()?;
-        reading::inherited_turns(&connection)
-    }
-    fn inherited_turns_for(
-        &self,
-        messages: &[MessageId],
-    ) -> Result<Vec<super::reading::TurnReadingProvenance>, ConversationStoreError> {
-        let connection = self.lock()?;
-        provenance::selected_turns(&connection, messages)
-    }
-
-    fn read_projection_lineage_cut(
-        &self,
-        ledger: crate::context::resources::LedgerFrontier,
-        activation: crate::context::checkpoint::ProjectionActivationId,
-    ) -> Result<super::reading::LineageReadCut, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|e| storage(e.to_string()))?;
-        lineage::read_at(
-            &transaction,
-            &self.conversation_id,
-            SurfaceRevision::new(ledger.0),
-            Some(activation),
-            None,
-        )
-    }
-
-    fn read_lineage_cut(
-        &self,
-        revision: SurfaceRevision,
-    ) -> Result<super::reading::LineageReadCut, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|error| storage(error.to_string()))?;
-        lineage::read(&transaction, &self.conversation_id, revision)
-    }
     fn conversation_read_cut(
         &self,
     ) -> Result<super::reading::ConversationReadCut, ConversationStoreError> {
@@ -2986,7 +5606,6 @@ impl ConversationStore for SqliteConversationStore {
             .map_err(|error| storage(error.to_string()))?;
         reading::cut(&transaction, &self.conversation_id)
     }
-
     fn observation_turns(
         &self,
         offset: Option<u64>,
@@ -3053,14 +5672,6 @@ impl ConversationStore for SqliteConversationStore {
         }
         observation_delivery::read(&transaction, position, index, offset, max_bytes)
     }
-
-    fn attempt_prompt(
-        &self,
-        attempt: &AttemptId,
-        through: u64,
-    ) -> Result<Option<MessageId>, ConversationStoreError> {
-        reading::attempt_prompt(&*self.lock()?, attempt, through)
-    }
     fn conversation_turns(
         &self,
         offset: usize,
@@ -3072,7 +5683,6 @@ impl ConversationStore for SqliteConversationStore {
             .map_err(|error| storage(error.to_string()))?;
         reading::turns(&transaction, &self.conversation_id, offset, limit)
     }
-
     fn conversation_window(
         &self,
         at: &super::reading::ConversationWindowAt,
@@ -3084,82 +5694,6 @@ impl ConversationStore for SqliteConversationStore {
             .map_err(|error| storage(error.to_string()))?;
         reading::window(&transaction, &self.conversation_id, at, limit)
     }
-    fn load_agent_authority(
-        &self,
-        agent_id: &crate::runtime::identity::AgentId,
-    ) -> Result<crate::runtime::subagent::DurableAgentAuthority, ConversationStoreError> {
-        let connection = self.lock()?;
-        let encoded: Option<String> = connection
-            .query_row(
-                "SELECT authority_json FROM agent_authorities WHERE agent_id=?1",
-                [agent_id.as_str()],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|_| storage("read private Agent authority"))?;
-        let encoded = encoded.ok_or_else(|| storage("missing admitted Agent authority"))?;
-        let mut private: PrivateAgentAuthority = serde_json::from_str(&encoded)
-            .map_err(|_| storage("decode private Agent authority"))?;
-        let credentials = crate::credentials::CredentialSnapshot::new(private.credentials);
-        private
-            .authority
-            .resolved
-            .model
-            .restore_admitted_credentials(&credentials)
-            .map_err(|_| storage("restore private Agent provider credentials"))?;
-        for binding in private
-            .authority
-            .resolved
-            .materialization
-            .sources
-            .values_mut()
-        {
-            binding.credentials.capture(credentials.clone());
-        }
-        Ok(private.authority)
-    }
-
-    fn append_agent_admission(
-        &self,
-        event: RuntimeEventEnvelope,
-        authority: &crate::runtime::subagent::DurableAgentAuthority,
-    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
-        self.append_event_internal(event, Some(authority))
-    }
-
-    fn presentation_reader(&self) -> Arc<dyn ConversationStore> {
-        let mut reader =
-            Self::from_connection_owner(self.conversation_id.clone(), self.conn.clone());
-        reader.read_cancel = Some(Arc::new(AtomicBool::new(false)));
-        reader.lifecycle.clone_from(&self.lifecycle);
-        Arc::new(reader)
-    }
-
-    #[cfg(test)]
-    fn park_presentation_read_until_cancelled(&self, entered: tokio::sync::oneshot::Sender<()>) {
-        let mut slot = self.conn.available.lock().unwrap();
-        entered.send(()).unwrap();
-        while !self.read_cancel.as_ref().unwrap().load(Ordering::Acquire) {
-            slot = self.conn.wake.wait(slot).unwrap();
-        }
-    }
-
-    fn close_presentation_reader(&self) {
-        if let Some(cancel) = &self.read_cancel {
-            let _slot = self.conn.available.lock().expect("connection slot");
-            cancel.store(true, Ordering::Release);
-            self.conn.wake.notify_all();
-        }
-    }
-
-    fn conversation_id(&self) -> &ConversationId {
-        &self.conversation_id
-    }
-
-    fn load_goal(&self) -> Result<Option<crate::goal::GoalSnapshot>, ConversationStoreError> {
-        read_goal(&*self.lock()?)
-    }
-
     fn goal_observation_view(
         &self,
     ) -> Result<crate::runtime_client::goal::RuntimeClientGoalView, ConversationStoreError> {
@@ -3179,968 +5713,6 @@ impl ConversationStore for SqliteConversationStore {
                 serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string()))
             }
         }
-    }
-    fn write_goal(
-        &self,
-        write: crate::goal::GoalWrite,
-    ) -> Result<
-        (
-            crate::goal::GoalResult,
-            Option<Arc<crate::durable::inbox::GoalObservationReceipt>>,
-        ),
-        ConversationStoreError,
-    > {
-        let mut connection = self.lock()?;
-        let tx = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("Goal transaction: {error}")))?;
-        let previous = read_goal(&tx)?;
-        let change = write.change();
-        let result = crate::goal::transition(previous.as_ref(), write);
-        let mut receipt = None;
-        if let Ok(goal) = &result {
-            save_goal(&tx, goal)?;
-            #[cfg(test)]
-            if Self::consume(&self.fail_event_remaining) {
-                return Err(storage("fault injected: Goal journal commit"));
-            }
-            let event = persist_event_tx(
-                &tx,
-                &self.conversation_id,
-                crate::goal::journal_envelope(
-                    &self.conversation_id,
-                    crate::goal::GoalFact::Written {
-                        previous: previous.map(|g| g.reference),
-                        current: goal.reference.clone(),
-                        phase: goal.phase,
-                        change,
-                    },
-                ),
-            )?
-            .event;
-            receipt = Some(Arc::new(crate::durable::inbox::GoalObservationReceipt {
-                view: crate::runtime_client::goal::RuntimeClientGoalView::from_native(Some(goal)),
-                native: event.observation,
-                pending: None,
-            }));
-            tx.commit()
-                .map_err(|error| storage(format!("Goal commit: {error}")))?;
-        }
-        Ok((result, receipt))
-    }
-
-    fn accept_goal_round(
-        &self,
-        expected: &crate::goal::GoalRef,
-        draft: InboundDraft,
-    ) -> Result<Option<AcceptedInbound>, ConversationStoreError> {
-        let mut connection = self.lock()?;
-        let tx = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("Goal admission transaction: {error}")))?;
-        let Some(mut goal) = read_goal(&tx)? else {
-            return Ok(None);
-        };
-        if &goal.reference != expected
-            || goal.phase != crate::goal::GoalPhase::Active
-            || goal.autonomous_rounds_consumed >= goal.autonomous_round_budget
-        {
-            return Ok(None);
-        }
-        let pending: bool = tx
-            .query_row("SELECT EXISTS(SELECT 1 FROM pending_inbound)", [], |row| {
-                row.get(0)
-            })
-            .map_err(|error| storage(format!("Goal pending probe: {error}")))?;
-        if pending {
-            return Ok(None);
-        }
-        if draft.source != UserSource::Runtime
-            || draft.kind != InboundKind::GoalContinuation(expected.clone())
-        {
-            return Err(ConversationStoreError::InvalidReference(
-                "Goal admission requires its exact typed runtime trigger".to_owned(),
-            ));
-        }
-        let mut accepted = accept_inbound_tx(self, &tx, draft)?;
-        if accepted.retried {
-            return Err(ConversationStoreError::InvalidReference(
-                "Goal round identity already accepted".to_owned(),
-            ));
-        }
-        goal.autonomous_rounds_consumed += 1;
-        goal.reference.revision = goal
-            .reference
-            .revision
-            .checked_add(1)
-            .ok_or(ConversationStoreError::SequenceExhausted)?;
-        goal.last_round_message_id = Some(accepted.message_id.clone());
-        save_goal(&tx, &goal)?;
-        let event = persist_event_tx(
-            &tx,
-            &self.conversation_id,
-            crate::goal::journal_envelope(
-                &self.conversation_id,
-                crate::goal::GoalFact::RoundAdmitted {
-                    previous: expected.clone(),
-                    current: goal.reference.clone(),
-                    round: goal.autonomous_rounds_consumed,
-                    message_id: accepted.message_id.clone(),
-                },
-            ),
-        )?
-        .event;
-        #[cfg(test)]
-        if Self::consume(&self.fail_accept_remaining) {
-            return Err(storage("fault injected: Goal accept commit"));
-        }
-        refresh_pending_receipt(&tx, &self.conversation_id, &mut accepted)?;
-        accepted.goal_observation = Some(Arc::new(crate::durable::inbox::GoalObservationReceipt {
-            view: crate::runtime_client::goal::RuntimeClientGoalView::from_native(Some(&goal)),
-            native: event.observation,
-            pending: accepted.pending_observation.clone(),
-        }));
-        process_death::reach("before:accept_goal_round");
-        tx.commit()
-            .map_err(|error| storage(format!("Goal admission commit: {error}")))?;
-        process_death::reach("after:accept_goal_round");
-        Ok(Some(accepted))
-    }
-
-    fn accept_inbound(
-        &self,
-        draft: InboundDraft,
-    ) -> Result<AcceptedInbound, ConversationStoreError> {
-        reject_unaccounted_goal(&draft)?;
-        let mut connection = self.lock()?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("accept transaction: {error}")))?;
-        let accepted = accept_inbound_tx(self, &transaction, draft)?;
-        #[cfg(test)]
-        if Self::consume(&self.fail_accept_remaining) {
-            return Err(storage("fault injected: accept commit"));
-        }
-        process_death::reach("before:accept_inbound");
-        transaction
-            .commit()
-            .map_err(|error| storage(format!("accept commit: {error}")))?;
-        process_death::reach("after:accept_inbound");
-        Ok(accepted)
-    }
-
-    fn accept_inbound_with_event(
-        &self,
-        draft: InboundDraft,
-        mut event: RuntimeEventEnvelope,
-    ) -> Result<(AcceptedInbound, RuntimeEventEnvelope), ConversationStoreError> {
-        reject_unaccounted_goal(&draft)?;
-        let mut connection = self.lock()?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("accept/event transaction: {error}")))?;
-        // Issue #192: this generic compound transition owns exactly the
-        // detached background terminal domain. A normal subagent terminal
-        // fact has its own semantically closed authority
-        // (`accept_subagent_terminal`) and is rejected here, so no
-        // `SubagentTerminalPublished` can bypass the Issue #192
-        // terminal-publication contract.
-        let RuntimeEvent::BackgroundTerminalPublished {
-            execution_id,
-            message_id: event_message_id,
-            ..
-        } = &event.event
-        else {
-            return Err(ConversationStoreError::InvalidReference(
-                "inbound/event acceptance owns only a detached background terminal fact; a \
-                 subagent terminal publishes through accept_subagent_terminal"
-                    .to_owned(),
-            ));
-        };
-        if event.event_id.as_str().is_empty() {
-            event.event_id = EventId::new(format!("background-terminal-event:{execution_id}"));
-        }
-        let mut accepted = accept_inbound_tx(self, &transaction, draft)?;
-        if *event_message_id != accepted.message_id {
-            return Err(ConversationStoreError::InvalidReference(format!(
-                "detached terminal fact references {}, accepted inbound is {}",
-                event_message_id, accepted.message_id
-            )));
-        }
-        if accepted.retried {
-            let Some(existing) = find_event_by_id(&transaction, &event.event_id)? else {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "correlated inbound {} has no durable terminal fact",
-                    accepted.message_id
-                )));
-            };
-            if existing.event != event.event {
-                return Err(ConversationStoreError::InvalidReference(
-                    "correlated inbound terminal fact conflicts with the stored fact".to_owned(),
-                ));
-            }
-            transaction
-                .commit()
-                .map_err(|error| storage(format!("accept/event retry commit: {error}")))?;
-            return Ok((accepted, existing));
-        }
-        #[cfg(test)]
-        if Self::consume(&self.fail_accept_remaining) {
-            return Err(storage("fault injected: accept/event commit"));
-        }
-        #[cfg(test)]
-        if Self::consume(&self.fail_event_remaining) {
-            return Err(storage("fault injected: accept/event journal commit"));
-        }
-        process_death::reach_event("before:event", &event.event);
-        let mut persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
-        refresh_pending_receipt(&transaction, &self.conversation_id, &mut accepted)?;
-        if let Some(native) = &mut persisted.event.observation {
-            Arc::make_mut(native)
-                .pending
-                .clone_from(&accepted.pending_observation);
-        }
-        transaction
-            .commit()
-            .map_err(|error| storage(format!("accept/event commit: {error}")))?;
-        process_death::reach_event("after:event", &persisted.event.event);
-        Ok((accepted, persisted.event))
-    }
-
-    #[allow(clippy::too_many_lines)] // one durable linearization boundary
-    fn accept_subagent_terminal(
-        &self,
-        notice: Option<InboundDraft>,
-        draft: InboundDraft,
-        mut event: RuntimeEventEnvelope,
-    ) -> Result<
-        (
-            Option<AcceptedInbound>,
-            AcceptedInbound,
-            RuntimeEventEnvelope,
-        ),
-        ConversationStoreError,
-    > {
-        let _ownership = self.ownership_transition(&event.event)?;
-        let mut connection = self.lock()?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("subagent terminal transaction: {error}")))?;
-        // The transition is semantically closed (Issue #192): every input
-        // is validated against the durable ownership fact and the canonical
-        // identities before anything is accepted, so no semantically
-        // unreachable durable state can be created.
-        validate_subagent_terminal_publication(&transaction, notice.as_ref(), &draft, &event)?;
-        if event.event_id.as_str().is_empty()
-            && let RuntimeEvent::SubagentTerminalPublished { subagent_id, .. } = &event.event
-        {
-            event.event_id = EventId::new(format!("subagent-terminal-event:{subagent_id}"));
-        }
-        let event_message_id = match &event.event {
-            RuntimeEvent::SubagentTerminalPublished { message_id, .. } => message_id.clone(),
-            _ => unreachable!("the payload was validated above"),
-        };
-        // The notice is ordered first, so the terminal report remains the
-        // last item of the publication.
-        let notice = notice
-            .map(|notice| accept_inbound_tx(self, &transaction, notice))
-            .transpose()?;
-        let mut accepted = accept_inbound_tx(self, &transaction, draft)?;
-        if event_message_id != accepted.message_id {
-            return Err(ConversationStoreError::InvalidReference(format!(
-                "subagent terminal fact references {}, accepted inbound is {}",
-                event_message_id, accepted.message_id
-            )));
-        }
-        // The notice/report pair is one atomic publication: a retry must
-        // find both sides already accepted, never exactly one.
-        if let Some(notice) = &notice
-            && notice.retried != accepted.retried
-        {
-            return Err(ConversationStoreError::InvalidReference(
-                "a subagent terminal notice/report pair must retry together".to_owned(),
-            ));
-        }
-        if accepted.retried {
-            let Some(existing) = find_event_by_id(&transaction, &event.event_id)? else {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "correlated inbound {} has no durable terminal fact",
-                    accepted.message_id
-                )));
-            };
-            if existing.event != event.event {
-                return Err(ConversationStoreError::InvalidReference(
-                    "correlated inbound terminal fact conflicts with the stored fact".to_owned(),
-                ));
-            }
-            transaction
-                .commit()
-                .map_err(|error| storage(format!("subagent terminal retry commit: {error}")))?;
-            return Ok((notice, accepted, existing));
-        }
-        #[cfg(test)]
-        if Self::consume(&self.fail_accept_remaining) {
-            return Err(storage("fault injected: subagent terminal accept commit"));
-        }
-        #[cfg(test)]
-        if Self::consume(&self.fail_event_remaining) {
-            return Err(storage("fault injected: subagent terminal journal commit"));
-        }
-        process_death::reach_event("before:event", &event.event);
-        let mut persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
-        refresh_pending_receipt(&transaction, &self.conversation_id, &mut accepted)?;
-        if let Some(native) = &mut persisted.event.observation {
-            Arc::make_mut(native)
-                .pending
-                .clone_from(&accepted.pending_observation);
-        }
-        transaction
-            .commit()
-            .map_err(|error| storage(format!("subagent terminal commit: {error}")))?;
-        process_death::reach_event("after:event", &persisted.event.event);
-        Ok((notice, accepted, persisted.event))
-    }
-
-    fn select_pending_batch(&self) -> Result<Option<PendingBatch>, ConversationStoreError> {
-        #[cfg(test)]
-        {
-            if self.consume_admission_fault(AdmissionFaultOperation::SelectPendingBatch)
-                || Self::consume(&self.fail_select_remaining)
-            {
-                return Err(storage("fault injected: select pending batch"));
-            }
-        }
-        let connection = self.lock()?;
-        let items = load_pending_rows(&connection)?;
-        let Some(watermark) = items.last().map(|item| item.sequence) else {
-            return Ok(None);
-        };
-        Ok(Some(PendingBatch {
-            conversation_id: self.conversation_id.clone(),
-            watermark,
-            items,
-        }))
-    }
-
-    fn adopt_pending_batch(
-        &self,
-        watermark: InboundSequence,
-        attempt_id: Option<crate::runtime::identity::AttemptId>,
-    ) -> Result<crate::durable::inbox::AdoptedBatch, ConversationStoreError> {
-        let mut connection = self.lock()?;
-        let mut validation = append_validation::Batch::begin(&self.conn.append_validation);
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("adopt transaction: {error}")))?;
-        #[cfg(test)]
-        if let Some(probe) = self
-            .pending_adoption_transaction_probe
-            .lock()
-            .unwrap()
-            .take()
-        {
-            probe();
-        }
-        ensure_surface_head(&transaction)?;
-
-        let items = load_pending_until(&transaction, watermark)?;
-        for item in &items {
-            let block = MessageBlock::User(item.message.clone());
-            let cursor = validation.append(&transaction, &block, Some(&item.message_id))?;
-            if cursor != item.transcript_cursor {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "adopted inbound {} changed its transcript cursor from {:?} to {:?}",
-                    item.message_id, item.transcript_cursor, cursor
-                )));
-            }
-        }
-        transaction
-            .execute(
-                "DELETE FROM pending_inbound WHERE sequence <= ?1",
-                [seq_to_i64(watermark.get())?],
-            )
-            .map_err(|error| storage(format!("adopt pending delete: {error}")))?;
-        for item in &items {
-            // The removed native pending row fences these derived bytes even
-            // if cleanup fails; their deletion cannot refuse adoption.
-            let _ = optional_display_layout(&transaction, || {
-                content::clear_pending(&transaction, &item.sequence.get().to_string())
-            });
-        }
-        if !items.is_empty() {
-            transaction.execute("UPDATE rustx_store SET pending_observation_count=pending_observation_count-?1,reading_mutation_revision=reading_mutation_revision+1 WHERE id=1",[items.len() as u64]).map_err(|error|storage(error.to_string()))?;
-        }
-        let mut adoption = None;
-        if !items.is_empty() {
-            let fact = crate::durable::inbox::inbound_adoption_event(
-                &self.conversation_id,
-                attempt_id,
-                items.iter().map(|item| item.message_id.clone()).collect(),
-            );
-            adoption = Some(persist_event_tx(&transaction, &self.conversation_id, fact)?.event);
-        }
-        #[cfg(test)]
-        if self.consume_admission_fault(AdmissionFaultOperation::AdoptPendingBatch)
-            || Self::consume(&self.fail_adopt_remaining)
-        {
-            return Err(storage("fault injected: adopt commit"));
-        }
-        let read_cut = reading::cut(&transaction, &self.conversation_id)?;
-        let canonical_receipts = canonical_observation_batch(
-            &transaction,
-            &self.conversation_id,
-            &items
-                .iter()
-                .map(|item| (&item.message_id, item.transcript_cursor))
-                .collect::<Vec<_>>(),
-            adoption
-                .as_ref()
-                .map(|event| (event.sequence, event.sequence)),
-        )?;
-        if let Some(event) = &mut adoption {
-            event.observation = canonical_receipts.first().and_then(|receipt| {
-                observation_receipt::canonical(
-                    &transaction,
-                    &self.conversation_id,
-                    event,
-                    Arc::clone(&receipt.observation),
-                )
-            });
-        }
-        let pending_observation = observation_receipt::pending(
-            &transaction,
-            &self.conversation_id,
-            None,
-            None,
-            Some((watermark.get(), items.len() as u64)),
-        );
-        process_death::reach("before:adopt_pending_batch");
-        transaction
-            .commit()
-            .map_err(|error| storage(format!("adopt commit: {error}")))?;
-        validation.committed(&connection);
-        process_death::reach("after:adopt_pending_batch");
-        Ok(crate::durable::inbox::AdoptedBatch {
-            pending_observation,
-            canonical_receipts,
-            read_cut,
-            items,
-            adoption,
-        })
-    }
-
-    fn edit_pending(
-        &self,
-        expected: &crate::durable::inbox::PendingInboundRef,
-        text: &str,
-    ) -> Result<crate::durable::inbox::PendingMutationOutcome, ConversationStoreError> {
-        self.mutate_pending(expected, Some(text))
-    }
-    fn remove_pending(
-        &self,
-        expected: &crate::durable::inbox::PendingInboundRef,
-    ) -> Result<crate::durable::inbox::PendingMutationOutcome, ConversationStoreError> {
-        self.mutate_pending(expected, None)
-    }
-
-    fn load_pending(&self) -> Result<Vec<PendingInboundItem>, ConversationStoreError> {
-        let connection = self.lock()?;
-        load_pending_rows(&connection)
-    }
-
-    fn has_accepted_inbound(&self) -> Result<bool, ConversationStoreError> {
-        // The durable acceptance watermark. `accept_inbound` advances it in
-        // the acceptance commit, adoption never touches it, and lineage
-        // seeding initializes it to zero without an acceptance, so a
-        // nonzero value is permanent proof that user work was durably
-        // accepted into this conversation.
-        let connection = self.lock()?;
-        let watermark: i64 = connection
-            .query_row(
-                "SELECT next_inbound_sequence FROM rustx_store WHERE id = 1",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(|error| storage(format!("read inbound acceptance watermark: {error}")))?;
-        Ok(watermark > 0)
-    }
-
-    fn is_initialized(&self) -> Result<bool, ConversationStoreError> {
-        let connection = self.lock()?;
-        let (initialized, identity): (i64, Option<i64>) = connection
-            .prepare_cached("SELECT s.bootstrap_initialized,b.id FROM rustx_store s LEFT JOIN bootstrap_identity b ON b.id=s.id WHERE s.id=1")
-            .map_err(|error| storage(format!("bootstrap state: {error}")))?
-            .query_row([], |row| Ok((row.get(0)?, row.get(1)?)))
-            .map_err(|error| storage(format!("bootstrap state: {error}")))?;
-        match (initialized, identity) {
-            (0, None) => Ok(false),
-            (1, Some(1)) => Ok(true),
-            _ => Err(storage(
-                "missing or inconsistent immutable bootstrap identity",
-            )),
-        }
-    }
-
-    fn initialize(&self, messages: &[MessageBlock]) -> Result<(), ConversationStoreError> {
-        let bootstrap: Option<(u64, String)> = self
-            .lock()?
-            .query_row(
-                "SELECT message_count,history_digest FROM bootstrap_identity WHERE id=1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()
-            .map_err(|error| storage(format!("bootstrap count: {error}")))?;
-        let seed = if let Some((count, digest)) = bootstrap {
-            if count != messages.len() as u64 || digest != initial_history_digest(messages)? {
-                return Err(ConversationStoreError::InitialHistoryMismatch);
-            }
-            // Runtime reopening supplies canonical bootstrap bodies, not a new
-            // Surface. Reconstruct the original immutable seed, never flatten it.
-            let history = self.load_surface_history(SurfaceRevision::new(count))?;
-            LineageSeed::replayed(messages.to_vec(), history)?
-        } else {
-            LineageSeed::history(messages.to_vec())
-        };
-        let mut inherited = Vec::new();
-        let mut after = crate::context::checkpoint::ProjectionActivationId(0);
-        loop {
-            let page = self.projection_timeline(after, 64)?;
-            if page.is_empty() {
-                break;
-            }
-            after = page.last().unwrap().activation.activation;
-            inherited.extend(
-                page.into_iter()
-                    .filter(|p| p.activation.destination_installation.is_some()),
-            );
-        }
-        let seed = seed.with_projections(inherited)?;
-        self.initialize_lineage(
-            &seed
-                .with_completed_responses(self.load_inherited_responses()?)?
-                .with_turns(self.load_inherited_turns()?)?,
-        )
-    }
-
-    #[allow(clippy::too_many_lines)] // One atomic bootstrap owns Ledger, Surface and inherited facts.
-    fn initialize_lineage(&self, seed: &LineageSeed) -> Result<(), ConversationStoreError> {
-        let validated =
-            LineageSeed::replayed(seed.canonical().to_vec(), seed.surface_history().to_vec())?
-                .with_completed_responses(seed.completed_responses().to_vec())?
-                .with_turns(seed.turns().to_vec())?
-                .with_projections(seed.projections().to_vec())?
-                .with_raw_tool_arguments(seed.raw_tool_arguments().to_vec())?;
-        let seed = &validated;
-        let messages = seed.canonical();
-        // Semantics belong to the Context Engine; persistence has no alternate selection rule.
-        let occupancy =
-            crate::context::occupancy::inherit(seed.turns(), seed.canonical(), seed.projections());
-        let occupancy_json = encode(&occupancy, "bootstrap occupancy")?;
-        let history_digest = initial_history_digest(messages)?;
-        let occupancy_digest =
-            inherited_occupancy_digest(messages.len() as u64, &history_digest, &occupancy_json);
-        let mut connection = self.lock()?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("initialize transaction: {error}")))?;
-        // Fail closed if initialized metadata is missing or damaged. The marker
-        // and identity are written in this same transaction, never independently.
-        read_inherited_occupancy(&transaction)?;
-        let bootstrap: Option<(i64, String, String, String)> = transaction
-            .query_row(
-                "SELECT message_count,history_digest,occupancy_json,occupancy_digest FROM bootstrap_identity WHERE id=1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .optional()
-            .map_err(|error| storage(format!("bootstrap probe: {error}")))?;
-        if let Some((count, digest, retained_occupancy, retained_digest)) = bootstrap {
-            let bootstrap_revision = SurfaceRevision::new(
-                u64::try_from(count).map_err(|_| storage("negative bootstrap message count"))?,
-            );
-            projection::verify_lineage(&transaction, seed.projections())?;
-            if replay_surface_history(&transaction, bootstrap_revision)?.1 != seed.surface_history()
-            {
-                return Err(ConversationStoreError::InitialHistoryMismatch);
-            }
-            let supplied_count = i64::try_from(messages.len())
-                .map_err(|_| storage("initial message count is not representable"))?;
-            if retained_occupancy != occupancy_json
-                || retained_digest != occupancy_digest
-                || count != supplied_count
-                || digest != history_digest
-                || provenance::responses(&transaction)? != seed.completed_responses()
-                || provenance::turns(&transaction)? != seed.turns()
-            {
-                return Err(ConversationStoreError::InitialHistoryMismatch);
-            }
-            provenance::verify_seed_membership(&transaction, seed)?;
-        } else {
-            let existing: i64 = transaction
-                .query_row("SELECT COUNT(*) FROM message_ledger", [], |row| row.get(0))
-                .map_err(|error| storage(format!("bootstrap ledger probe: {error}")))?;
-            if existing != 0 {
-                return Err(storage(
-                    "canonical Ledger exists without bootstrap identity",
-                ));
-            }
-            ensure_surface_head(&transaction)?;
-            // The two parts of the seed go to their two durable homes, in two
-            // passes rather than one, because they are not the same order:
-            // the Ledger is written in canonical commit order, and a
-            // compaction summary the source produced *last* is the fact its
-            // Surface shows *first*. Fusing the passes would force one order
-            // on both and reproduce neither.
-            let append_terminals =
-                |predecessor: Option<&MessageId>| -> Result<(), ConversationStoreError> {
-                    for (index, turn) in seed.turns().iter().enumerate() {
-                        if turn.process_message_ids.is_empty()
-                            && turn.preceding_message_id.as_ref() == predecessor
-                        {
-                            append_transcript_reference(
-                                &transaction,
-                                "inherited_turn",
-                                &index.to_string(),
-                            )?;
-                        }
-                    }
-                    Ok(())
-                };
-            append_terminals(None)?;
-            for message in messages {
-                append_seeded_ledger_message(&transaction, message)?;
-                append_terminals(Some(&crate::conversation::message_id_of(message)))?;
-            }
-            for item in seed.raw_tool_arguments() {
-                content::index_raw_arguments(&transaction, item)?;
-                let message = messages
-                    .iter()
-                    .find(|message| message.id() == &item.message_id)
-                    .ok_or_else(|| storage("raw Tool canonical source missing"))?;
-                let position: u64 = transaction
-                    .query_row(
-                        "SELECT position FROM message_ledger WHERE message_id=?1",
-                        [item.message_id.as_str()],
-                        |row| row.get(0),
-                    )
-                    .map_err(|error| storage(error.to_string()))?;
-                let _ = optional_display_layout(&transaction, || {
-                    observation::index_message(&transaction, message, Some(position))?;
-                    observation_trace::index_proposals(
-                        &transaction,
-                        &self.conversation_id,
-                        position,
-                        message,
-                    )?;
-                    observation_trace::index_canonical(
-                        &transaction,
-                        &self.conversation_id,
-                        position,
-                        message,
-                    )
-                });
-            }
-            // The seed's Surface history becomes this lineage's own retained
-            // operation log, replayed from revision 1. Flattening it into one
-            // append per active message would produce the same Surface and a
-            // different history, and a later fork or tree of *this* lineage
-            // reads the history: its branch points would then be this copy's
-            // artefacts rather than the source's real ones.
-            let mut active: Vec<MessageId> = Vec::new();
-            let mut revision = SurfaceRevision::INITIAL;
-            let generation = 0_u64;
-            for operation in seed.surface_history() {
-                revision = revision.next();
-                validate_surface_operation_references(&transaction, operation)?;
-                append_surface_op(&transaction, revision, generation, operation)?;
-                apply_surface_op(&mut active, operation)?;
-            }
-            if revision != SurfaceRevision::INITIAL {
-                update_surface_head(&transaction, revision, generation)?;
-            }
-            transaction
-                .execute(
-                    "INSERT INTO bootstrap_identity(id,message_count,history_digest,turn_count,response_count,occupancy_json,occupancy_digest,provenance_digest,inherited_transcript_through) VALUES(1,?1,?2,?3,?4,?5,?6,?7,(SELECT next_transcript_position FROM rustx_store WHERE id=1))",
-                    params![
-                        i64::try_from(messages.len()).map_err(|_| storage("initial message count is not representable"))?,
-                        history_digest,
-                        seq_to_i64(seed.turns().len() as u64)?,
-                        seq_to_i64(seed.completed_responses().len() as u64)?,
-                        occupancy_json,
-                        occupancy_digest,
-                        provenance::counts_digest(&history_digest,seq_to_i64(seed.turns().len() as u64)?,seq_to_i64(seed.completed_responses().len() as u64)?)
-                    ],
-                )
-                .map_err(|error| storage(format!("insert bootstrap identity: {error}")))?;
-            let _ = optional_display_layout(&transaction, || {
-                observation_statistics::seed(&transaction, seed.turns())
-            });
-            let _ = optional_display_layout(&transaction, || {
-                observation_occupancy::inherited(&transaction, occupancy.as_ref())
-            });
-            provenance::persist(&transaction, seed)?;
-            // The original identity and provenance now exist together. Derived
-            // readers validate this same transaction's complete bootstrap shape;
-            // no external reader sees the marker before COMMIT.
-            projection::install_lineage(&transaction, &self.conversation_id, seed.projections())?;
-            transaction
-                .execute(
-                    "UPDATE rustx_store SET bootstrap_initialized=1 WHERE id=1",
-                    [],
-                )
-                .map_err(|error| storage(format!("mark lineage bootstrap: {error}")))?;
-            let _ = optional_display_layout(&transaction, || {
-                observation_members::seed_members(&transaction, seed)
-            });
-            let _ = optional_display_layout(&transaction, || {
-                observation_turn::seed(&transaction, seed)
-            });
-            for (ordinal, turn) in seed.turns().iter().enumerate() {
-                let _ = optional_display_layout(&transaction, || {
-                    reading::index_inherited_turn(&transaction, seq_to_i64(ordinal as u64)?, turn)
-                });
-            }
-            for (ordinal, turn) in seed.turns().iter().enumerate() {
-                if turn.process_message_ids.is_empty() {
-                    let id = ordinal.to_string();
-                    if let Some(cursor) =
-                        load_transcript_reference(&transaction, "inherited_turn", &id)?
-                    {
-                        let _ = optional_display_layout(&transaction, || {
-                            observation::index_item(
-                                &transaction,
-                                "inherited_turn",
-                                &id,
-                                TranscriptItem::InheritedTurn {
-                                    provenance: turn.clone(),
-                                },
-                                cursor,
-                            )
-                        });
-                    }
-                }
-            }
-        }
-        transaction
-            .commit()
-            .map_err(|error| storage(format!("initialize commit: {error}")))
-    }
-
-    fn load_inherited_responses(
-        &self,
-    ) -> Result<Vec<super::response::CompletedResponseProvenance>, ConversationStoreError> {
-        let connection = self.lock()?;
-        provenance::responses(&connection)
-    }
-
-    fn load_inherited_occupancy(
-        &self,
-    ) -> Result<Option<crate::context::occupancy::ContextOccupancy>, ConversationStoreError> {
-        let connection = self.lock()?;
-        read_inherited_occupancy(&connection)
-    }
-
-    fn load_bootstrap_history(&self) -> Result<Vec<MessageBlock>, ConversationStoreError> {
-        let connection = self.lock()?;
-        let count: Option<i64> = connection
-            .query_row(
-                "SELECT message_count FROM bootstrap_identity WHERE id=1",
-                [],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|error| storage(format!("bootstrap history count: {error}")))?;
-        let Some(count) = count else {
-            // A low-level non-session composition may be opening a fresh
-            // store. ConversationRuntime::initialize will establish the
-            // empty bootstrap identity; no historical seed exists yet.
-            return Ok(Vec::new());
-        };
-        let mut statement = connection
-            .prepare(
-                "SELECT message_json FROM message_ledger
-                 ORDER BY position LIMIT ?1",
-            )
-            .map_err(|error| storage(format!("bootstrap history query: {error}")))?;
-        let rows = statement
-            .query_map([count], |row| row.get::<_, String>(0))
-            .map_err(|error| storage(format!("bootstrap history rows: {error}")))?;
-        rows.map(|row| {
-            let json = row.map_err(|error| storage(format!("bootstrap history row: {error}")))?;
-            decode(&json, "bootstrap history")
-        })
-        .collect()
-    }
-
-    fn unsettled_canonical_tool_calls(
-        &self,
-        limit: usize,
-    ) -> Result<
-        Vec<(crate::message::types::ToolCallOccurrenceRef, ToolCallId)>,
-        ConversationStoreError,
-    > {
-        if limit == 0 || limit > 8192 {
-            return Err(crate::context::resources::bound(
-                "canonical unsettled occurrence read limit",
-            ));
-        }
-        let connection = self.lock()?;
-        let mut query = connection.prepare("SELECT CASE WHEN octet_length(assistant_message_id)<=4096 THEN assistant_message_id END, block_index, CASE WHEN octet_length(call_id)<=4096 THEN call_id END FROM canonical_tool_calls WHERE result_message_id IS NULL ORDER BY assistant_message_id,block_index LIMIT ?1").map_err(|e| storage(e.to_string()))?;
-        let rows = query
-            .query_map([limit], |r| {
-                Ok((
-                    r.get::<_, Option<String>>(0)?,
-                    r.get::<_, u32>(1)?,
-                    r.get::<_, Option<String>>(2)?,
-                ))
-            })
-            .map_err(|e| storage(e.to_string()))?;
-        rows.map(|row| {
-            let (id, block, wire) = row.map_err(|e| storage(e.to_string()))?;
-            Ok((
-                crate::message::types::ToolCallOccurrenceRef::new(
-                    MessageId::new(id.ok_or_else(|| {
-                        crate::context::resources::bound(
-                            "canonical occurrence identity exceeds bound",
-                        )
-                    })?),
-                    ContentBlockIndex::new(block),
-                ),
-                ToolCallId::new(wire.ok_or_else(|| {
-                    crate::context::resources::bound("canonical wire correlation exceeds bound")
-                })?),
-            ))
-        })
-        .collect()
-    }
-
-    fn load_head(&self) -> Result<DurableConversationHead, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|error| storage(error.to_string()))?;
-        #[cfg(test)]
-        if let Some(probe) = self.head_read_probe.lock().unwrap().take() {
-            transaction
-                .query_row(
-                    "SELECT schema_version FROM rustx_store WHERE id=1",
-                    [],
-                    |row| row.get::<_, i64>(0),
-                )
-                .map_err(|error| storage(error.to_string()))?;
-            probe();
-        }
-        load_head(&transaction)
-    }
-
-    fn messages_are_human_inputs(&self, ids: &[MessageId]) -> Result<bool, ConversationStoreError> {
-        let connection = self.lock()?;
-        let mut query = connection
-            .prepare_cached(
-                "SELECT json_extract(message_json, '$.id'),
-                    json_extract(message_json, '$.role') = 'user'
-                    AND json_extract(message_json, '$.source') = 'human'
-                    AND json_extract(message_json, '$.kind') = 'message'
-             FROM message_ledger WHERE message_id = ?1",
-            )
-            .map_err(|error| storage(format!("Ledger input authorship: {error}")))?;
-        for id in ids {
-            let (stored_id, human): (String, bool) = query
-                .query_row([id.as_str()], |row| Ok((row.get(0)?, row.get(1)?)))
-                .optional()
-                .map_err(|error| storage(format!("Ledger input authorship: {error}")))?
-                .ok_or_else(|| {
-                    ConversationStoreError::InvalidReference(format!("message {id} is unavailable"))
-                })?;
-            if stored_id != id.as_str() {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "Ledger row for {id} contains a different message identity"
-                )));
-            }
-            if !human {
-                return Ok(false);
-            }
-        }
-        Ok(!ids.is_empty())
-    }
-
-    fn load_messages(
-        &self,
-        ids: &[MessageId],
-    ) -> Result<Vec<MessageBlock>, ConversationStoreError> {
-        #[cfg(test)]
-        self.checkpoint_read_counts[0].fetch_add(ids.len(), Ordering::SeqCst);
-        let connection = self.lock()?;
-        ids.iter().map(|id| load_message(&connection, id)).collect()
-    }
-
-    fn message_transcript_cursor(
-        &self,
-        message_id: &MessageId,
-    ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
-        let position: Option<i64> = self.lock()?.query_row(
-            "SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1",
-            [message_id.as_str()], |row| row.get(0),
-        ).optional().map_err(|error| storage(format!("process control position: {error}")))?;
-        position
-            .map(|value| nonnegative(value, "process control position").map(TranscriptCursor::new))
-            .transpose()
-    }
-
-    fn event_transcript_cursor(
-        &self,
-        event_id: &EventId,
-    ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
-        let position: Option<i64> = self.lock()?.query_row(
-            "SELECT position FROM transcript_order WHERE reference_kind='attempt_terminal' AND reference_id=?1",
-            [event_id.as_str()], |row| row.get(0),
-        ).optional().map_err(|error| storage(format!("terminal control position: {error}")))?;
-        position
-            .map(|value| nonnegative(value, "terminal control position").map(TranscriptCursor::new))
-            .transpose()
-    }
-
-    fn message_append_revision_by_locator(
-        &self,
-        locator: &crate::runtime_client::content::CanonicalContentLocator,
-    ) -> Result<Option<SurfaceRevision>, ConversationStoreError> {
-        let connection = self.lock()?;
-        let position = content::canonical_position(&connection, locator)?;
-        let revision: Option<u64> = connection
-            .query_row(
-                "SELECT first_append_revision FROM message_ledger WHERE position=?1",
-                [position],
-                |row| row.get(0),
-            )
-            .map_err(|error| storage(error.to_string()))?;
-        Ok(revision.map(SurfaceRevision::new))
-    }
-    fn message_append_revision(
-        &self,
-        message_id: &MessageId,
-    ) -> Result<Option<SurfaceRevision>, ConversationStoreError> {
-        let revision: Option<i64> = self.lock()?.query_row(
-            "SELECT revision FROM surface_ops WHERE json_extract(op_json, '$.op') = 'append' AND json_extract(op_json, '$.message_id') = ?1 ORDER BY revision LIMIT 1",
-            [message_id.as_str()], |row| row.get(0),
-        ).optional().map_err(|error| storage(format!("message append revision: {error}")))?;
-        revision
-            .map(|value| nonnegative(value, "message append revision").map(SurfaceRevision::new))
-            .transpose()
-    }
-
-    fn projected_history(
-        &self,
-    ) -> Result<super::projection::HistoricalModelInput, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|e| storage(e.to_string()))?;
-        #[cfg(test)]
-        if Self::consume(&self.fail_projection_history_remaining) {
-            return Err(storage("fault injected: post-commit hot projection read"));
-        }
-        projection::selected_history(&transaction, &self.conversation_id, &self.conn.manifest)
     }
     fn observation_projection_provenance_read(
         &self,
@@ -4179,1091 +5751,6 @@ impl ConversationStore for SqliteConversationStore {
             .map_err(|error| storage(error.to_string()))?;
         observation_projection::read(&transaction, through)
     }
-    fn projection_at_journal_cut(
-        &self,
-        through: u64,
-    ) -> Result<Option<super::projection::ProjectionCheckpoint>, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|e| storage(e.to_string()))?;
-        projection::at_journal_cut(&transaction, through)
-    }
-    fn compaction_checkpoint_at(
-        &self,
-        cut: &crate::context::resources::ResourceReadCut,
-        id: &crate::runtime::identity::CheckpointId,
-        limits: crate::context::resources::ResourceLimits,
-    ) -> Result<super::projection::ProjectionCheckpoint, ConversationStoreError> {
-        limits.validate()?;
-        if cut.conversation_id != self.conversation_id {
-            return Err(ConversationStoreError::InvalidReference(
-                "foreign checkpoint resource cut".into(),
-            ));
-        }
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|e| storage(e.to_string()))?;
-        compaction_resources::validate(&transaction, &self.conversation_id, cut, limits)?;
-        let bytes:Option<u64>=transaction.query_row(
-            "SELECT octet_length(c.candidate_json)+octet_length(a.activation_json)+coalesce(octet_length(c.occupancy_json),0) FROM projection_checkpoints c JOIN projection_activations a ON a.checkpoint_id=c.checkpoint_id WHERE c.checkpoint_id=?1 AND a.activation<=?2",
-            params![id.as_str(),seq_to_i64(cut.projection_activation.0)?],|row|row.get(0),
-        ).optional().map_err(|e|storage(e.to_string()))?;
-        let bytes = bytes.ok_or_else(|| {
-            ConversationStoreError::InvalidReference(
-                "checkpoint is absent at Resource Read Cut".into(),
-            )
-        })?;
-        if bytes > limits.record_bytes as u64 || bytes > limits.page_bytes as u64 {
-            return Err(crate::context::resources::bound(
-                "checkpoint record exceeds resource materialization bound",
-            ));
-        }
-        projection::checkpoint(&transaction, id)
-    }
-    fn compaction_request(
-        &self,
-        cut: &crate::context::resources::ResourceReadCut,
-        request: &crate::runtime::identity::RequestId,
-        limits: crate::context::resources::ResourceLimits,
-    ) -> Result<crate::model::RequestSnapshot, ConversationStoreError> {
-        limits.validate()?;
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|e| storage(e.to_string()))?;
-        let bytes: Option<u64> = transaction.query_row("SELECT octet_length(snapshot_json) FROM request_snapshots WHERE request_id=?1 AND started_sequence<=?2",params![request.as_str(),seq_to_i64(cut.journal.0)?],|row|row.get(0)).optional().map_err(|e|storage(e.to_string()))?;
-        if cut.conversation_id != self.conversation_id {
-            return Err(ConversationStoreError::InvalidReference(
-                "foreign frozen request Resource Read Cut".into(),
-            ));
-        }
-        let bytes = bytes.ok_or_else(|| {
-            ConversationStoreError::InvalidReference(
-                "request is absent at the Resource Read Cut".into(),
-            )
-        })?;
-        if bytes > limits.record_bytes as u64 || bytes > limits.page_bytes as u64 {
-            return Err(crate::context::resources::bound(
-                "historical frozen request exceeds materialization bound",
-            ));
-        }
-        load_request_snapshot_bounded(
-            &transaction,
-            &self.conversation_id,
-            request,
-            limits.record_bytes.min(limits.page_bytes),
-        )
-    }
-
-    fn projection_head(
-        &self,
-    ) -> Result<Option<super::projection::ProjectionCheckpoint>, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|e| storage(e.to_string()))?;
-        projection::head(&transaction)
-    }
-    fn projection_checkpoint(
-        &self,
-        id: &crate::runtime::identity::CheckpointId,
-    ) -> Result<super::projection::ProjectionCheckpoint, ConversationStoreError> {
-        projection::checkpoint(&*self.lock()?, id)
-    }
-    fn projection_timeline(
-        &self,
-        after: crate::context::checkpoint::ProjectionActivationId,
-        limit: usize,
-    ) -> Result<Vec<super::projection::ProjectionCheckpoint>, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|e| storage(e.to_string()))?;
-        projection::timeline(&transaction, after, limit)
-    }
-    fn projection_timeline_at_journal_cut(
-        &self,
-        through: u64,
-        after: crate::context::checkpoint::ProjectionActivationId,
-        limit: usize,
-    ) -> Result<super::projection::ProjectionTimelinePage, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|e| storage(e.to_string()))?;
-        projection::timeline_at_journal_cut(&transaction, through, after, limit)
-    }
-    fn projection_checkpoint_at_journal_cut(
-        &self,
-        through: u64,
-        id: &crate::runtime::identity::CheckpointId,
-    ) -> Result<super::projection::ProjectionCheckpoint, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|e| storage(e.to_string()))?;
-        projection::checkpoint_at_journal_cut(&transaction, through, id)
-    }
-    fn projection_owner(
-        &self,
-        attempt: Option<&crate::runtime::identity::AttemptId>,
-    ) -> Result<super::projection::ProjectionOwner, ConversationStoreError> {
-        projection::owner(&*self.lock()?, attempt)
-    }
-    fn projection_receipt(
-        &self,
-        operation: &crate::runtime::identity::CompactionOperationId,
-        fingerprint: &str,
-    ) -> Result<Option<super::projection::ProjectionCommitReceipt>, ConversationStoreError> {
-        projection::receipt(&*self.lock()?, operation, fingerprint)
-    }
-    fn commit_projection(
-        &self,
-        input: super::projection::ProjectionCommitInput,
-    ) -> Result<super::projection::ProjectionCommitReceipt, ConversationStoreError> {
-        let mut connection = self.lock()?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|e| storage(e.to_string()))?;
-        let result = projection::commit(&transaction, &self.conversation_id, input, |stage| {
-            #[cfg(test)]
-            if self.consume_compaction_fault(stage) || Self::consume(&self.fail_event_remaining) {
-                return Err(storage("fault injected: checkpoint transaction"));
-            }
-            #[cfg(not(test))]
-            let _ = stage;
-            Ok(())
-        })?;
-        process_death::reach("before:commit_projection");
-        transaction.commit().map_err(|e| storage(e.to_string()))?;
-        process_death::reach("after:commit_projection");
-        // Stage committed Journal facts and release SQLite before returning a receipt.
-        drop(connection);
-        #[cfg(test)]
-        {
-            let probe = self
-                .projection_commit_return_probe
-                .lock()
-                .expect("projection return probe")
-                .take();
-            if let Some(probe) = probe {
-                probe();
-            }
-        }
-        #[cfg(test)]
-        for (stage, count) in [
-            (CompactionFaultOperation::AfterCommitOneHotReadFailure, 1),
-            (CompactionFaultOperation::AfterCommitTwoHotReadFailures, 2),
-        ] {
-            if self.consume_compaction_fault(stage) {
-                self.fail_projection_history_remaining
-                    .store(count, Ordering::SeqCst);
-            }
-        }
-        #[cfg(test)]
-        if self.consume_compaction_fault(CompactionFaultOperation::AfterCommit) {
-            return Err(storage("fault injected: lost checkpoint commit receipt"));
-        }
-        Ok(result)
-    }
-
-    fn load_surface_history(
-        &self,
-        through: SurfaceRevision,
-    ) -> Result<Vec<SurfaceOp>, ConversationStoreError> {
-        let connection = self.lock()?;
-        load_surface_history(&connection, through)
-    }
-
-    fn reconstruct_surface(
-        &self,
-        revision: SurfaceRevision,
-    ) -> Result<Vec<MessageId>, ConversationStoreError> {
-        #[cfg(test)]
-        self.checkpoint_read_counts[1].fetch_add(1, Ordering::SeqCst);
-        let connection = self.lock()?;
-        reconstruct_surface(&connection, revision)
-    }
-
-    fn load_surface_snapshot(
-        &self,
-        revision: SurfaceRevision,
-    ) -> Result<Vec<MessageBlock>, ConversationStoreError> {
-        let connection = self.lock()?;
-        let ids = reconstruct_surface(&connection, revision)?;
-        ids.iter().map(|id| load_message(&connection, id)).collect()
-    }
-
-    fn surface_boundary_header_page(
-        &self,
-        through: SurfaceRevision,
-        offset: u64,
-        limit: usize,
-    ) -> Result<crate::durable::observation::SurfaceBoundaryHeaderPage, ConversationStoreError>
-    {
-        let connection = self.lock()?;
-        observation::surface_boundaries(&connection, through, offset, limit)
-    }
-    fn surface_boundary_message_id(
-        &self,
-        boundary_revision: SurfaceRevision,
-        locator: &crate::runtime_client::content::CanonicalContentLocator,
-    ) -> Result<MessageId, ConversationStoreError> {
-        let connection = self.lock()?;
-        let position = content::canonical_position(&connection, locator)?;
-        let id:Option<String>=connection.query_row("SELECT message_id FROM message_ledger WHERE ordinary_user=1 AND first_append_revision<=?1 AND position=?2",params![seq_to_i64(boundary_revision.get())?,position],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
-        id.map(MessageId::new).ok_or_else(|| {
-            ConversationStoreError::InvalidReference(
-                "Surface boundary locator/revision mismatch".into(),
-            )
-        })
-    }
-
-    fn canonical_boundary_message_id(
-        &self,
-        boundary_revision: SurfaceRevision,
-        locator: &crate::runtime_client::content::CanonicalContentLocator,
-    ) -> Result<MessageId, ConversationStoreError> {
-        let connection = self.lock()?;
-        let position = content::canonical_position(&connection, locator)?;
-        let id: Option<String> = connection
-            .query_row(
-                "SELECT message_id FROM message_ledger WHERE first_append_revision<=?1 AND position=?2",
-                params![seq_to_i64(boundary_revision.get())?, position],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|error| storage(error.to_string()))?;
-        id.map(MessageId::new).ok_or_else(|| {
-            ConversationStoreError::InvalidReference(
-                "canonical boundary locator/revision mismatch".into(),
-            )
-        })
-    }
-
-    fn load_user_message_boundaries(
-        &self,
-        through: SurfaceRevision,
-    ) -> Result<Vec<SurfaceUserMessageBoundary>, ConversationStoreError> {
-        let connection = self.lock()?;
-        load_user_message_boundaries(&connection, through)
-    }
-
-    fn load_user_message_boundaries_page(
-        &self,
-        through: SurfaceRevision,
-        offset: usize,
-        limit: usize,
-    ) -> Result<SurfaceUserMessageBoundaryPage, ConversationStoreError> {
-        let connection = self.lock()?;
-        load_user_message_boundaries_page(&connection, through, offset, limit)
-    }
-
-    fn append_canonical(
-        &self,
-        message: &MessageBlock,
-    ) -> Result<TranscriptCommitReceipt, ConversationStoreError> {
-        let mut receipts = append_canonical_messages(self, std::slice::from_ref(message))?;
-        Ok(receipts.remove(0))
-    }
-
-    fn append_canonical_batch(
-        &self,
-        messages: &[MessageBlock],
-    ) -> Result<Vec<TranscriptCommitReceipt>, ConversationStoreError> {
-        append_canonical_messages(self, messages)
-    }
-
-    fn append_canonical_with_event(
-        &self,
-        message: &MessageBlock,
-        event: RuntimeEventEnvelope,
-    ) -> Result<(RuntimeEventEnvelope, TranscriptCommitReceipt), ConversationStoreError> {
-        validate_canonical_event_for_message(message, &event.event)?;
-        let mut connection = self.lock()?;
-        let mut validation = append_validation::Batch::begin(&self.conn.append_validation);
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("canonical event transaction: {error}")))?;
-        ensure_surface_head(&transaction)?;
-
-        let transcript_cursor = validation.append(&transaction, message, None)?;
-        #[cfg(test)]
-        if Self::consume(&self.fail_event_remaining) {
-            return Err(storage("fault injected: canonical event journal commit"));
-        }
-        process_death::reach_event("before:canonical", &event.event);
-        let mut persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
-        let mut receipt = canonical_observation_receipt(
-            &transaction,
-            &self.conversation_id,
-            message,
-            transcript_cursor,
-            persisted.event.tool_occurrence.clone(),
-        )?;
-        set_canonical_range(
-            &mut receipt,
-            Some((persisted.event.sequence, persisted.event.sequence)),
-        );
-        persisted.event.observation = if matches!(message, MessageBlock::Tool(_)) {
-            observation_receipt::tool_results(
-                &transaction,
-                &self.conversation_id,
-                std::slice::from_ref(&persisted.event),
-                std::slice::from_ref(message),
-                Arc::clone(&receipt.observation),
-            )
-        } else {
-            observation_receipt::canonical(
-                &transaction,
-                &self.conversation_id,
-                &persisted.event,
-                Arc::clone(&receipt.observation),
-            )
-        };
-        transaction
-            .commit()
-            .map_err(|error| storage(format!("canonical event commit: {error}")))?;
-        validation.committed(&connection);
-        process_death::reach_event("after:canonical", &persisted.event.event);
-        Ok((persisted.event, receipt))
-    }
-
-    fn append_canonical_batch_with_events(
-        &self,
-        messages: &[MessageBlock],
-        events: &[RuntimeEventEnvelope],
-    ) -> Result<(Vec<RuntimeEventEnvelope>, Vec<TranscriptCommitReceipt>), ConversationStoreError>
-    {
-        if messages.len() != events.len() {
-            return Err(storage("canonical event batch lengths differ"));
-        }
-        for (message, event) in messages.iter().zip(events) {
-            validate_canonical_event_for_message(message, &event.event)?;
-        }
-        let mut connection = self.lock()?;
-        let mut validation = append_validation::Batch::begin(&self.conn.append_validation);
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("canonical event batch transaction: {error}")))?;
-        ensure_surface_head(&transaction)?;
-
-        let mut receipts = Vec::with_capacity(messages.len());
-        for message in messages {
-            receipts.push(validation.append(&transaction, message, None)?);
-        }
-        let mut persisted = Vec::with_capacity(events.len());
-        for event in events {
-            #[cfg(test)]
-            if Self::consume(&self.fail_event_remaining) {
-                return Err(storage(
-                    "fault injected: canonical batch event journal commit",
-                ));
-            }
-            persisted.push(
-                persist_event_tx_deferred(&transaction, &self.conversation_id, event.clone())?
-                    .event,
-            );
-        }
-        let range = persisted
-            .first()
-            .zip(persisted.last())
-            .map(|(first, last)| (first.sequence, last.sequence));
-        let receipts = canonical_observation_batch(
-            &transaction,
-            &self.conversation_id,
-            &messages
-                .iter()
-                .zip(receipts)
-                .map(|(message, cursor)| (message.id(), cursor))
-                .collect::<Vec<_>>(),
-            range,
-        )?;
-        let shared = receipts.first().and_then(|receipt| {
-            observation_receipt::tool_results(
-                &transaction,
-                &self.conversation_id,
-                &persisted,
-                messages,
-                Arc::clone(&receipt.observation),
-            )
-        });
-        for event in &mut persisted {
-            event.observation.clone_from(&shared);
-        }
-        process_death::reach("before:append_canonical_batch");
-        transaction
-            .commit()
-            .map_err(|error| storage(format!("canonical event batch commit: {error}")))?;
-        validation.committed(&connection);
-        process_death::reach("after:append_canonical_batch");
-        Ok((persisted, receipts))
-    }
-
-    #[allow(clippy::too_many_lines)]
-    fn load_canonical(&self) -> Result<Vec<MessageBlock>, ConversationStoreError> {
-        let connection = self.lock()?;
-        load_canonical_rows(&connection)
-    }
-
-    fn load_canonical_page(
-        &self,
-        after_position: Option<u64>,
-        limit: usize,
-    ) -> Result<CanonicalMessagePage, ConversationStoreError> {
-        let connection = self.lock()?;
-        let after = after_position.unwrap_or(0);
-        let limit = i64::try_from(limit).map_err(|_| storage("page limit is too large"))?;
-        let mut statement = connection
-            .prepare("SELECT position,message_json,message_id FROM message_ledger WHERE position > ?1 ORDER BY position LIMIT ?2")
-            .map_err(|error| storage(format!("canonical page: {error}")))?;
-        let mut rows = statement
-            .query(params![after, limit])
-            .map_err(|error| storage(format!("canonical page query: {error}")))?;
-        let mut messages = Vec::new();
-        let mut next = None;
-        while let Some(row) = rows
-            .next()
-            .map_err(|error| storage(format!("canonical page row: {error}")))?
-        {
-            let position: i64 = row
-                .get(0)
-                .map_err(|error| storage(format!("canonical position: {error}")))?;
-            let json: String = row
-                .get(1)
-                .map_err(|error| storage(format!("canonical json: {error}")))?;
-            let message: MessageBlock = decode(&json, "canonical page")?;
-            let position_id = crate::conversation::message_id_of(&message);
-            let stored_id: String = row
-                .get(2)
-                .map_err(|error| storage(format!("canonical message id: {error}")))?;
-            if position_id.as_str() != stored_id {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "Ledger page row {stored_id} contains message {position_id}"
-                )));
-            }
-            messages.push(message);
-            next =
-                Some(u64::try_from(position).map_err(|_| storage("negative canonical position"))?);
-        }
-        Ok(CanonicalMessagePage {
-            messages,
-            next_position: next,
-        })
-    }
-
-    fn load_inspection_seed(&self) -> Result<super::inbox::InspectionSeed, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|e| storage(e.to_string()))?;
-        let head = load_head(&transaction)?;
-        let ids = reconstruct_surface(&transaction, head.revision)?;
-        Ok(super::inbox::InspectionSeed {
-            messages: ids
-                .iter()
-                .map(|id| load_message(&transaction, id))
-                .collect::<Result<_, _>>()?,
-            canonical: load_canonical_rows(&transaction)?,
-            transcript: load_transcript_page(&transaction, None, TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT)?,
-            journal_through: journal_prefix(&transaction)?,
-        })
-    }
-
-    fn load_transcript_snapshot(
-        &self,
-        cut: &super::inbox::TranscriptSnapshotCut,
-    ) -> Result<TranscriptPage, ConversationStoreError> {
-        let connection = self.lock()?;
-        let messages = serde_json::to_string(&cut.messages).map_err(|e| storage(e.to_string()))?;
-        let publications =
-            serde_json::to_string(&cut.publications).map_err(|e| storage(e.to_string()))?;
-        // The bootstrap prefix is immutable canonical history. Subsequent
-        // canonical membership comes from captured semantic receipts, never
-        // the current ledger head. Pending rows are supplied below from C.
-        let mut statement = connection
-            .prepare(
-                "SELECT t.position,t.reference_kind,t.reference_id FROM transcript_order t
-             WHERE (t.reference_kind='message' AND EXISTS
-               (SELECT 1 FROM message_ledger m WHERE m.message_id=t.reference_id)
-               AND (t.position<=?1 OR t.reference_id IN (SELECT value FROM json_each(?2))))
-             OR (t.reference_kind='publication_audit' AND
-               (t.position<=?1 OR t.reference_id IN (SELECT value FROM json_each(?3))))
-             OR (t.reference_kind='inherited_turn' AND t.position<=?1)
-             OR (t.reference_kind IN ('interaction_event','attempt_terminal') AND EXISTS
-               (SELECT 1 FROM events e WHERE e.event_id=t.reference_id AND e.sequence<=?4))
-             ORDER BY t.position DESC LIMIT ?5",
-            )
-            .map_err(|e| storage(e.to_string()))?;
-        let references = statement
-            .query_map(
-                params![
-                    seq_to_i64(cut.bootstrap_through)?,
-                    messages,
-                    publications,
-                    seq_to_i64(cut.journal_through)?,
-                    TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT + 1
-                ],
-                |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                    ))
-                },
-            )
-            .map_err(|e| storage(e.to_string()))?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| storage(e.to_string()))?;
-        let allowed: BTreeSet<_> = cut.messages.iter().map(MessageId::as_str).collect();
-        let mut entries = Vec::new();
-        for (position, kind, id) in references {
-            let item = load_transcript_item(&connection, &kind, &id)?;
-            let mut tool_calls = match &item {
-                TranscriptItem::Message {
-                    message: MessageBlock::Assistant(assistant),
-                } => load_transcript_tools(&connection, assistant)?,
-                _ => Vec::new(),
-            };
-            // Associations are mutable as later Tool results commit. Keep only
-            // results whose canonical message belonged to this captured cut.
-            for tool in &mut tool_calls {
-                let result: Option<(String, i64)> = connection.query_row(
-                    "SELECT m.message_id,t.position FROM canonical_tool_calls c
-                     JOIN message_ledger m ON m.message_id=c.result_message_id
-                     JOIN transcript_order t ON t.reference_kind='message' AND t.reference_id=m.message_id
-                     WHERE c.assistant_message_id=?1 AND c.block_index=?2",
-                    params![tool.message_id.as_str(), tool.block_index.get()],
-                    |row| Ok((row.get(0)?,row.get(1)?))).optional().map_err(|e| storage(e.to_string()))?;
-                if result.is_some_and(|(id, pos)| {
-                    pos > i64::try_from(cut.bootstrap_through).expect("validated transcript prefix")
-                        && !allowed.contains(id.as_str())
-                }) {
-                    tool.result = None;
-                }
-            }
-            entries.push(TranscriptEntry {
-                cursor: TranscriptCursor::new(nonnegative(position, "transcript position")?),
-                item,
-                tool_calls,
-            });
-        }
-        // A later adoption/edit/removal cannot replace the pending body at C.
-        for (cursor, message) in &cut.pending {
-            entries.retain(|entry| entry.cursor != *cursor);
-            entries.push(TranscriptEntry {
-                cursor: *cursor,
-                item: TranscriptItem::Message {
-                    message: MessageBlock::User(message.clone()),
-                },
-                tool_calls: Vec::new(),
-            });
-        }
-        entries.sort_by_key(|entry| std::cmp::Reverse(entry.cursor));
-        let more = entries.len() > TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT;
-        entries.truncate(TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT);
-        let next_cursor = more.then(|| entries.last().unwrap().cursor);
-        entries.reverse();
-        Ok(TranscriptPage {
-            inherited_through: inherited_transcript_through(&connection)?,
-            entries,
-            next_cursor,
-        })
-    }
-
-    fn load_transcript_page(
-        &self,
-        before: Option<TranscriptCursor>,
-        limit: usize,
-    ) -> Result<TranscriptPage, ConversationStoreError> {
-        let connection = self.lock()?;
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|error| storage(error.to_string()))?;
-        load_transcript_page(&transaction, before, limit)
-    }
-
-    fn commit_model_turn_start(
-        &self,
-        context: &[MessageBlock],
-        snapshot: &RequestSnapshot,
-        timestamp: DateTime<Utc>,
-    ) -> Result<ModelTurnStartCommit, ConversationStoreError> {
-        validate_snapshot_identity(snapshot)?;
-        snapshot
-            .input
-            .validate_budget()
-            .map_err(ConversationStoreError::InvalidReference)?;
-        // The one input validation rule shared by the fresh commit and the
-        // idempotent retry (Issue #12, M9b): the exact ordered
-        // request-scoped context the caller supplies must equal the frozen
-        // `snapshot.request_context_ids` before the store chooses a path or
-        // touches durable state. A fresh commit must never be able to append
-        // context while persisting a snapshot whose `request_context_ids`
-        // disagrees with what it just appended.
-        validate_request_context(snapshot, context)?;
-        validate_contribution_start(snapshot, context)?;
-        let mut connection = self.lock()?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("request start transaction: {error}")))?;
-        let admission_epoch = self.conn.manifest.capture(&transaction)?;
-        let existing: Option<(Option<String>, Option<i64>, String)> = transaction
-            .query_row(
-                "SELECT CASE WHEN octet_length(snapshot_json)<=67108864 THEN snapshot_json END,started_sequence,CASE WHEN typeof(manifest_digest)='text' AND octet_length(manifest_digest)=64 THEN manifest_digest ELSE '' END FROM request_snapshots WHERE request_id = ?1",
-                [snapshot.request_id.as_str()],
-                |row| Ok((row.get(0)?, row.get(1)?, read_manifest_digest(row, 2)?)),
-            )
-            .optional()
-            .map_err(|error| storage(format!("request snapshot probe: {error}")))?;
-        if let Some((json, started_sequence, integrity)) = existing {
-            let json = json.ok_or_else(|| {
-                ConversationStoreError::InvalidReference(
-                    "frozen request record exceeds byte budget".into(),
-                )
-            })?;
-            if stored_snapshot_digest(
-                &json,
-                read_stored_snapshot_root(&transaction, &snapshot.request_id)?,
-            ) != integrity
-            {
-                return Err(ConversationStoreError::InvalidReference(
-                    "corrupt frozen request manifest".into(),
-                ));
-            }
-            let mut verified = verify_committed_start_tx(
-                &transaction,
-                &json,
-                started_sequence,
-                context,
-                snapshot,
-            )?;
-            transaction
-                .commit()
-                .map_err(|error| storage(format!("request start retry commit: {error}")))?;
-            verified.verified_snapshot = Some(Box::new(snapshot.clone()));
-            return Ok(verified);
-        }
-        let projection = projection::current_checkpoint_id(&transaction)?;
-        if projection.as_ref() != snapshot.history_cut.checkpoint_id.as_ref() {
-            return Err(ConversationStoreError::InvalidReference(
-                "actual request would start from a stale Projection Head".into(),
-            ));
-        }
-        if snapshot.history_cut.base_frontier > snapshot.history_cut.ledger {
-            return Err(ConversationStoreError::InvalidReference(
-                "invalid Request History Cut".into(),
-            ));
-        }
-        if snapshot.identity.retry_number != 0 {
-            verify_frozen_contributions_tx(&transaction, snapshot)?;
-        }
-        // The request-scoped canonical context commits first, inside the
-        // same transaction as the snapshot and the start fact: a failure
-        // anywhere below rolls all of it back, so request-scoped context
-        // can never become canonical without its request starting.
-        let selection = manifest::persist(&transaction, &snapshot.input, &self.conn.manifest)?;
-        let mut persisted = self.insert_fresh_start_tx(
-            &transaction,
-            context,
-            snapshot,
-            timestamp,
-            &selection,
-            admission_epoch,
-        )?;
-        process_death::reach("before:commit_model_turn_start");
-        transaction
-            .commit()
-            .map_err(|error| storage(format!("request start commit: {error}")))?;
-        process_death::reach("after:commit_model_turn_start");
-        selection.commit(&self.conn.manifest);
-        persisted.verified_snapshot = Some(Box::new(snapshot.clone()));
-        Ok(persisted)
-    }
-
-    fn latest_contribution_emission(
-        &self,
-        producer: &crate::runtime::identity::ContextContributorIdentity,
-        key: &str,
-    ) -> Result<Option<ContributionEmissionRecord>, ConversationStoreError> {
-        #[cfg(test)]
-        self.contribution_head_lookup_reads
-            .fetch_add(1, Ordering::SeqCst);
-        let connection = self.lock()?;
-        read_contribution_head(&connection, producer, key)
-    }
-
-    fn load_pending_unresolved_output_stream_id(
-        &self,
-    ) -> Result<Option<PublicationStreamId>, ConversationStoreError> {
-        let connection = self.lock()?;
-        let value: Option<String> = connection
-            .query_row(
-                "SELECT pending_unresolved_output_stream_id FROM rustx_store WHERE id=1",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(|error| storage(format!("pending carryover lookup: {error}")))?;
-        Ok(value.map(PublicationStreamId::new))
-    }
-
-    fn commit_attempt_terminal_with_carryover(
-        &self,
-        event: RuntimeEventEnvelope,
-        pending_source: Option<PublicationStreamId>,
-    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
-        if !is_terminal(&event.event)
-            || !matches!(
-                event.event,
-                RuntimeEvent::AttemptCompleted { .. }
-                    | RuntimeEvent::AttemptCancelled { .. }
-                    | RuntimeEvent::AttemptTimedOut { .. }
-                    | RuntimeEvent::AttemptLimitExceeded { .. }
-                    | RuntimeEvent::AttemptFailed { .. }
-            )
-        {
-            return Err(ConversationStoreError::InvalidReference(
-                "carryover terminal transition accepts only attempt terminal events".to_owned(),
-            ));
-        }
-        let mut connection = self.lock()?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("attempt terminal transaction: {error}")))?;
-        #[cfg(test)]
-        {
-            self.terminal_event_attempts.fetch_add(1, Ordering::SeqCst);
-            if Self::consume(&self.fail_terminal_event_remaining) {
-                return Err(storage("fault injected: terminal event commit"));
-            }
-            if Self::consume(&self.fail_event_remaining) {
-                return Err(storage("fault injected: event commit"));
-            }
-        }
-        validate_pending_carryover_source_tx(&transaction, &event, pending_source.as_ref())?;
-        process_death::reach_event("before:attempt_terminal", &event.event);
-        let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
-        let source = pending_source.as_ref().map(PublicationStreamId::as_str);
-        transaction
-            .execute(
-                "UPDATE rustx_store SET pending_unresolved_output_stream_id=?1 WHERE id=1",
-                [source],
-            )
-            .map_err(|error| storage(format!("install pending carryover source: {error}")))?;
-        process_death::reach("before:commit_attempt_terminal");
-        transaction
-            .commit()
-            .map_err(|error| storage(format!("attempt terminal commit: {error}")))?;
-        process_death::reach("after:commit_attempt_terminal");
-        Ok(persisted.event)
-    }
-
-    fn current_logical_step_progress(&self) -> Result<u64, ConversationStoreError> {
-        let connection = self.lock()?;
-        let value: i64 = connection
-            .query_row(
-                "SELECT logical_step_sequence FROM rustx_store WHERE id=1",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(|error| storage(format!("Todo progress lookup: {error}")))?;
-        nonnegative(value, "Todo progress sequence")
-    }
-
-    fn load_request_snapshot(
-        &self,
-        request_id: &RequestId,
-    ) -> Result<RequestSnapshot, ConversationStoreError> {
-        #[cfg(test)]
-        self.request_snapshot_body_reads
-            .fetch_add(1, Ordering::SeqCst);
-        {
-            let connection = self.lock()?;
-            load_request_snapshot(&connection, &self.conversation_id, request_id)
-        }
-    }
-
-    fn reconstruct_model_request(
-        &self,
-        request_id: &crate::runtime::identity::RequestId,
-    ) -> Result<crate::model::types::ModelRequest, ConversationStoreError> {
-        let connection = self.lock()?;
-        let snapshot = load_request_snapshot(&connection, &self.conversation_id, request_id)?;
-        snapshot
-            .reconstruct_with(|reference| {
-                if reference.conversation_id != self.conversation_id {
-                    return Err(
-                        crate::model::snapshot::RequestReconstructionError::Conversation(
-                            "foreign frozen Original scope".to_owned(),
-                        ),
-                    );
-                }
-                load_message(&connection, &reference.message_id).map_err(|error| {
-                    crate::model::snapshot::RequestReconstructionError::Conversation(
-                        error.to_string(),
-                    )
-                })
-            })
-            .map_err(|error| ConversationStoreError::InvalidReference(error.to_string()))
-    }
-
-    fn read_request_snapshots(
-        &self,
-        after_sequence: Option<u64>,
-        limit: usize,
-    ) -> Result<RequestSnapshotPage, ConversationStoreError> {
-        #[cfg(test)]
-        self.request_snapshot_page_reads
-            .fetch_add(1, Ordering::SeqCst);
-        let connection = self.lock()?;
-        let after = seq_to_i64(after_sequence.unwrap_or(0))?;
-        let limit = i64::try_from(limit)
-            .map_err(|_| storage("request snapshot page limit is too large"))?;
-        let mut statement = connection
-            .prepare(
-                "SELECT request_id,started_sequence FROM request_snapshots
-                 WHERE started_sequence IS NOT NULL AND started_sequence > ?1
-                 ORDER BY started_sequence, request_id LIMIT ?2",
-            )
-            .map_err(|error| storage(format!("request snapshot page: {error}")))?;
-        let rows = statement
-            .query_map(params![after, limit], |row| {
-                let request_id: String = row.get(0)?;
-                let sequence: i64 = row.get(1)?;
-                Ok((request_id, sequence))
-            })
-            .map_err(|error| storage(format!("request snapshot page query: {error}")))?;
-        let rows: Vec<(RequestId, u64)> = rows
-            .map(|row| {
-                let (request_id, sequence) =
-                    row.map_err(|error| storage(format!("request snapshot page row: {error}")))?;
-                Ok((RequestId::new(request_id), sequence_from_i64(sequence)?))
-            })
-            .collect::<Result<_, ConversationStoreError>>()?;
-        drop(statement);
-        drop(connection);
-
-        let next_sequence = rows.last().map(|(_, sequence)| *sequence);
-        let snapshots = rows
-            .into_iter()
-            .map(|(request_id, _)| self.load_request_snapshot(&request_id))
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(RequestSnapshotPage {
-            snapshots,
-            next_sequence,
-        })
-    }
-
-    fn append_event(
-        &self,
-        event: RuntimeEventEnvelope,
-    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
-        if requires_specialized_transition(&event.event) {
-            return Err(ConversationStoreError::InvalidReference(
-                "this event kind must use its specialized durable transition".to_owned(),
-            ));
-        }
-        self.append_event_internal(event, None)
-    }
-
-    fn commit_subagent_terminal(
-        &self,
-        event: RuntimeEventEnvelope,
-    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
-        if !matches!(
-            &event.event,
-            RuntimeEvent::SubagentTerminalSettled {
-                state: crate::events::types::SubagentTerminalState::Failed
-                    | crate::events::types::SubagentTerminalState::Cancelled
-                    | crate::events::types::SubagentTerminalState::Interrupted,
-                ..
-            }
-        ) {
-            return Err(ConversationStoreError::InvalidReference(
-                "a direct Workflow child terminal transition accepts only non-success states"
-                    .to_owned(),
-            ));
-        }
-        let _ownership = self.ownership_transition(&event.event)?;
-        let mut connection = self.lock()?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("Workflow child terminal transaction: {error}")))?;
-        if let Some(existing) = find_event_by_id(&transaction, &event.event_id)? {
-            if same_event_ignoring_sequence(&existing, &event) {
-                transaction.commit().map_err(|error| {
-                    storage(format!("Workflow child terminal retry commit: {error}"))
-                })?;
-                return Ok(existing);
-            }
-            return Err(ConversationStoreError::TerminalViolation(
-                "Workflow child terminal retry conflicts with its durable fact".to_owned(),
-            ));
-        }
-        #[cfg(test)]
-        if Self::consume(&self.fail_event_remaining) {
-            return Err(storage("fault injected: Workflow child terminal commit"));
-        }
-        process_death::reach_event("before:workflow_child_terminal", &event.event);
-        let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
-        transaction
-            .commit()
-            .map_err(|error| storage(format!("Workflow child terminal commit: {error}")))?;
-        process_death::reach_event("after:workflow_child_terminal", &persisted.event.event);
-        Ok(persisted.event)
-    }
-
-    fn commit_workflow_agent_terminal(
-        &self,
-        terminal: RuntimeEventEnvelope,
-        output: RuntimeEventEnvelope,
-    ) -> Result<(RuntimeEventEnvelope, RuntimeEventEnvelope), ConversationStoreError> {
-        let valid_pair = matches!(
-            (&terminal.event, &output.event),
-            (
-                RuntimeEvent::SubagentTerminalSettled {
-                    subagent_id: terminal_subagent,
-                    state: crate::events::types::SubagentTerminalState::Succeeded,
-                    physical_settlement_proven: true,
-                    ..
-                },
-                RuntimeEvent::WorkflowAgentOutputCommitted {
-                    subagent_id: output_subagent,
-                    ..
-                }
-            ) if terminal_subagent == output_subagent
-        );
-        if !valid_pair {
-            return Err(ConversationStoreError::InvalidReference(
-                "the Workflow terminal transaction requires one matching physically settled successful child terminal and output fact".to_owned(),
-            ));
-        }
-        if terminal.conversation_id != output.conversation_id
-            || terminal.timestamp != output.timestamp
-        {
-            return Err(ConversationStoreError::InvalidReference(
-                "the Workflow terminal facts must share conversation and timestamp identity"
-                    .to_owned(),
-            ));
-        }
-
-        let _ownership = self.ownership_transition(&terminal.event)?;
-        let mut connection = self.lock()?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("Workflow terminal transaction: {error}")))?;
-        validate_event_reference(&transaction, &output)?;
-        let existing_terminal = find_event_by_id(&transaction, &terminal.event_id)?;
-        let existing_output = find_event_by_id(&transaction, &output.event_id)?;
-        match (existing_terminal, existing_output) {
-            (Some(existing_terminal), Some(existing_output)) => {
-                if !same_event_ignoring_sequence(&existing_terminal, &terminal)
-                    || !same_event_ignoring_sequence(&existing_output, &output)
-                {
-                    return Err(ConversationStoreError::InvalidReference(
-                        "Workflow terminal retry conflicts with its durable facts".to_owned(),
-                    ));
-                }
-                transaction
-                    .commit()
-                    .map_err(|error| storage(format!("Workflow terminal retry commit: {error}")))?;
-                Ok((existing_terminal, existing_output))
-            }
-            (Some(_), None) | (None, Some(_)) => Err(ConversationStoreError::TerminalViolation(
-                "Workflow terminal facts are only valid as an atomic pair".to_owned(),
-            )),
-            (None, None) => {
-                let mut persisted_terminal =
-                    persist_event_tx_deferred(&transaction, &self.conversation_id, terminal)?;
-                let mut persisted_output =
-                    persist_event_tx_deferred(&transaction, &self.conversation_id, output)?;
-                #[cfg(test)]
-                if Self::consume(&self.fail_event_remaining) {
-                    return Err(storage("fault injected: Workflow terminal commit"));
-                }
-                let shared = observation_receipt::workflow_terminal(
-                    &transaction,
-                    &self.conversation_id,
-                    &persisted_terminal.event,
-                    &persisted_output.event,
-                );
-                persisted_terminal.event.observation.clone_from(&shared);
-                persisted_output.event.observation = shared;
-                process_death::reach_event(
-                    "before:workflow_terminal",
-                    &persisted_output.event.event,
-                );
-                transaction
-                    .commit()
-                    .map_err(|error| storage(format!("Workflow terminal commit: {error}")))?;
-                process_death::reach_event(
-                    "after:workflow_terminal",
-                    &persisted_output.event.event,
-                );
-                Ok((persisted_terminal.event, persisted_output.event))
-            }
-        }
-    }
-
-    fn append_interaction_audit(
-        &self,
-        event: RuntimeEventEnvelope,
-    ) -> Result<(RuntimeEventEnvelope, TranscriptCursor), ConversationStoreError> {
-        if !matches!(
-            event.event,
-            RuntimeEvent::InteractionRequested { .. } | RuntimeEvent::InteractionSettled { .. }
-        ) {
-            return Err(ConversationStoreError::InvalidReference(
-                "the interaction audit transition accepts only interaction facts".to_owned(),
-            ));
-        }
-        let mut connection = self.lock()?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("interaction audit transaction: {error}")))?;
-        let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
-        let transcript_cursor = persisted.transcript_cursor.ok_or_else(|| {
-            ConversationStoreError::InvalidReference(
-                "interaction audit did not receive a transcript cursor".to_owned(),
-            )
-        })?;
-        process_death::reach_event("before:interaction", &persisted.event.event);
-        transaction
-            .commit()
-            .map_err(|error| storage(format!("interaction audit commit: {error}")))?;
-        process_death::reach_event("after:interaction", &persisted.event.event);
-        Ok((persisted.event, transcript_cursor))
-    }
-
-    fn observe_journal(
-        &self,
-        observer: Arc<dyn super::presentation::JournalObserver>,
-    ) -> Result<u64, ConversationStoreError> {
-        let mut connection = self.lock()?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(error.to_string()))?;
-        let through = journal_prefix(&transaction)?;
-        // A newly installed Runtime owns recovery of already committed history.
-        // Previous process-local publication holes cannot survive this epoch.
-        observation_readiness::recover_journal(&transaction)?;
-        observation_readiness::mark(&transaction, 1, through)?;
-        transaction
-            .execute(
-                "UPDATE event_observation_readiness SET direct=0 WHERE direct=1",
-                [],
-            )
-            .map_err(|error| storage(error.to_string()))?;
-        observation_readiness::recover_transcript(&transaction)?;
-        transaction
-            .commit()
-            .map_err(|error| storage(error.to_string()))?;
-        *self.journal_observer.lock().expect("Journal observer lock") = Some((observer, through));
-        Ok(through)
-    }
-
     fn mark_observation_ready(&self, first: u64, last: u64) -> Result<(), ConversationStoreError> {
         if first == 0 || first > last {
             return Err(ConversationStoreError::InvalidReference(
@@ -5330,7 +5817,6 @@ impl ConversationStore for SqliteConversationStore {
         let connection = self.lock()?;
         observation_readiness::frontier(&connection, after, through)
     }
-
     fn mark_observation_transcript_ready(&self, cursor: u64) -> Result<(), ConversationStoreError> {
         {
             let mut connection = self.lock()?;
@@ -5387,7 +5873,6 @@ impl ConversationStore for SqliteConversationStore {
         let connection = self.lock()?;
         observation_readiness::transcript_frontier(&connection, after, through)
     }
-
     fn transcript_source_ready(
         &self,
     ) -> Result<crate::durable::observation::TranscriptSourceReady, ConversationStoreError> {
@@ -5403,124 +5888,6 @@ impl ConversationStore for SqliteConversationStore {
             .map_err(|error| storage(error.to_string()))?;
         Ok(crate::durable::observation::TranscriptSourceReady { prefix, read_cut })
     }
-
-    fn presentation_frontier(&self) -> Result<u64, ConversationStoreError> {
-        let value: i64 = self
-            .lock()?
-            .query_row("SELECT COALESCE(MAX(sequence), 0) FROM events", [], |row| {
-                row.get(0)
-            })
-            .map_err(|_| storage("presentation frontier failed"))?;
-        sequence_from_i64(value)
-    }
-
-    fn read_presentation_events(
-        &self,
-        query: &super::presentation::FactQuery,
-    ) -> Result<Vec<RuntimeEventEnvelope>, ConversationStoreError> {
-        let statements = presentation_statements(query)?;
-        let connection = self.lock()?;
-        let mut events: Vec<RuntimeEventEnvelope> = Vec::new();
-        for (sql, params) in statements {
-            let mut statement = connection
-                .prepare(&sql)
-                .map_err(|_| storage("presentation query preparation failed"))?;
-            let rows = statement
-                .query_map(rusqlite::params_from_iter(params), |row| {
-                    row.get::<_, String>(0)
-                })
-                .map_err(|_| storage("presentation query failed"))?;
-            for row in rows {
-                #[cfg(test)]
-                observation_statistics::original_read();
-                events.push(decode(
-                    &row.map_err(|_| storage("presentation row failed"))?,
-                    "presentation fact",
-                )?);
-            }
-        }
-        events.sort_by_key(|event| event.sequence);
-        if !query.ascending {
-            events.reverse();
-        }
-        events.truncate(query.limit);
-        Ok(events)
-    }
-
-    fn read_events(
-        &self,
-        after_sequence: Option<u64>,
-        limit: usize,
-    ) -> Result<EventPage, ConversationStoreError> {
-        let connection = self.lock()?;
-        let after = after_sequence.unwrap_or(0);
-        let limit = i64::try_from(limit).map_err(|_| storage("event page limit is too large"))?;
-        let mut statement = connection
-            .prepare(
-                "SELECT sequence,event_id,schema_version,conversation_id,attempt_id,turn_id,event_json
-                 FROM events WHERE sequence > ?1 ORDER BY sequence LIMIT ?2",
-            )
-            .map_err(|error| storage(format!("event page: {error}")))?;
-        let mut rows = statement
-            .query(params![after, limit])
-            .map_err(|error| storage(format!("event page query: {error}")))?;
-        let mut events = Vec::new();
-        let mut next = None;
-        while let Some(row) = rows
-            .next()
-            .map_err(|error| storage(format!("event page row: {error}")))?
-        {
-            let sequence: i64 = row
-                .get(0)
-                .map_err(|error| storage(format!("event sequence: {error}")))?;
-            let stored_event_id: String = row
-                .get(1)
-                .map_err(|error| storage(format!("event identity: {error}")))?;
-            let stored_schema_version: i64 = row
-                .get(2)
-                .map_err(|error| storage(format!("event schema version: {error}")))?;
-            let stored_conversation_id: String = row
-                .get(3)
-                .map_err(|error| storage(format!("event conversation identity: {error}")))?;
-            let stored_attempt_id: Option<String> = row
-                .get(4)
-                .map_err(|error| storage(format!("event attempt identity: {error}")))?;
-            let stored_turn_id: Option<String> = row
-                .get(5)
-                .map_err(|error| storage(format!("event turn identity: {error}")))?;
-            let json: String = row
-                .get(6)
-                .map_err(|error| storage(format!("event json: {error}")))?;
-            let event: RuntimeEventEnvelope = decode(&json, "event page")?;
-            let sequence =
-                u64::try_from(sequence).map_err(|_| storage("negative event sequence"))?;
-            let stored_schema_version = u16::try_from(stored_schema_version).map_err(|_| {
-                ConversationStoreError::InvalidReference(
-                    "Event Journal row has an invalid schema version".to_owned(),
-                )
-            })?;
-            if event.sequence != sequence
-                || event.event_id.as_str() != stored_event_id
-                || event.schema_version != stored_schema_version
-                || event.schema_version != EVENT_SCHEMA_VERSION
-                || event.conversation_id.as_str() != stored_conversation_id
-                || event.conversation_id != self.conversation_id
-                || event.attempt_id.as_ref().map(ToString::to_string) != stored_attempt_id
-                || event.turn_id.as_ref().map(ToString::to_string) != stored_turn_id
-            {
-                return Err(ConversationStoreError::InvalidReference(
-                    "Event Journal row metadata disagrees with its envelope".to_owned(),
-                ));
-            }
-            events.push(event);
-            next = Some(sequence);
-        }
-        Ok(EventPage {
-            events,
-            next_sequence: next,
-        })
-    }
-
     fn live_block_header_page(
         &self,
         source: &crate::runtime_client::content::ContentSource,
@@ -5538,7 +5905,6 @@ impl ConversationStore for SqliteConversationStore {
             limit,
         )
     }
-
     fn live_tool_header_page(
         &self,
         source: &crate::runtime_client::content::ContentSource,
@@ -5556,7 +5922,6 @@ impl ConversationStore for SqliteConversationStore {
             limit,
         )
     }
-
     fn content_descriptor_at(
         &self,
         source: &crate::runtime_client::content::ContentSource,
@@ -5595,7 +5960,6 @@ impl ConversationStore for SqliteConversationStore {
             .map_err(|error| storage(error.to_string()))?;
         Ok(result)
     }
-
     fn content_read(
         &self,
         reference: &crate::runtime_client::content::ContentRef,
@@ -5617,445 +5981,6 @@ impl ConversationStore for SqliteConversationStore {
             .commit()
             .map_err(|error| storage(error.to_string()))?;
         Ok(result)
-    }
-
-    fn open_publication_stream(
-        &self,
-        start: &PublicationStreamStart,
-    ) -> Result<(), ConversationStoreError> {
-        let mut connection = self.lock()?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("publication open transaction: {error}")))?;
-        // The first open is the publication generation admission boundary.
-        // Prove the complete Request Snapshot/start-event identity before an
-        // idempotent reopen probe or any publication row can be written.
-        let (snapshot, _, _) =
-            require_started_request_tx(&transaction, &self.conversation_id, &start.request_id)?;
-        validate_publication_generation(&snapshot, start)?;
-        if let Some(existing) = read_publication_stream(&transaction, &start.stream_id)? {
-            // Re-opening is idempotent only for the identical frozen identity:
-            // a stream may never be re-associated with another request,
-            // attempt, turn, or provisional message.
-            if existing.start != *start {
-                return Err(ConversationStoreError::PublicationViolation(format!(
-                    "publication stream {} is already open under a different request generation",
-                    start.stream_id
-                )));
-            }
-            if existing.settlement.is_some() {
-                return Err(ConversationStoreError::PublicationViolation(format!(
-                    "publication stream {} already settled and cannot reopen",
-                    start.stream_id
-                )));
-            }
-            return Ok(());
-        }
-        transaction
-            .execute(
-                "INSERT INTO publication_streams(stream_id,attempt_id,turn_id,request_id,message_id,next_frame_sequence,terminal_sequence,settlement)
-                 VALUES(?1,?2,?3,?4,?5,0,NULL,NULL)",
-                params![
-                    start.stream_id.as_str(),
-                    start.attempt_id.as_str(),
-                    start.turn_id.as_str(),
-                    start.request_id.as_str(),
-                    start.message_id.as_str()
-                ],
-            )
-            .map_err(|error| storage(format!("open publication stream: {error}")))?;
-        process_death::reach("before:open_publication_stream");
-        transaction
-            .commit()
-            .map_err(|error| storage(format!("publication open commit: {error}")))?;
-        process_death::reach("after:open_publication_stream");
-        Ok(())
-    }
-
-    fn stage_publication_frames(
-        &self,
-        frames: &[PublicationFrame],
-    ) -> Result<Vec<crate::publication::PublicationFrameReceipt>, ConversationStoreError> {
-        if frames.is_empty() {
-            return Err(ConversationStoreError::PublicationViolation(
-                "a publication staging transaction must carry at least one frame".to_owned(),
-            ));
-        }
-        let mut connection = self.lock()?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("publication staging transaction: {error}")))?;
-        #[cfg(test)]
-        if Self::consume(&self.fail_publication_frames_remaining) {
-            return Err(storage("fault injected: publication staging commit"));
-        }
-        let (stream, receipts) = stage_frames_tx(&transaction, frames, &self.conversation_id)?;
-        if stream.terminal_sequence.is_some() {
-            return Err(ConversationStoreError::PublicationViolation(format!(
-                "publication stream {} already reached its terminal boundary",
-                stream.start.stream_id
-            )));
-        }
-        process_death::reach("before:stage_publication_frames");
-        transaction
-            .commit()
-            .map_err(|error| storage(format!("publication staging commit: {error}")))?;
-        process_death::reach("after:stage_publication_frames");
-        Ok(receipts)
-    }
-
-    fn commit_publication_terminal(
-        &self,
-        stream_id: &PublicationStreamId,
-        frames: &[PublicationFrame],
-    ) -> Result<Vec<crate::publication::PublicationFrameReceipt>, ConversationStoreError> {
-        if frames.is_empty() {
-            return Err(ConversationStoreError::PublicationViolation(
-                "the publication terminal transaction must carry a final frame".to_owned(),
-            ));
-        }
-        let mut connection = self.lock()?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("publication terminal transaction: {error}")))?;
-        #[cfg(test)]
-        if Self::consume(&self.fail_publication_terminal_remaining) {
-            return Err(storage("fault injected: publication terminal commit"));
-        }
-        let stream = require_publication_stream(&transaction, stream_id)?;
-        let (snapshot, _, completed_sequence) = require_started_request_tx(
-            &transaction,
-            &self.conversation_id,
-            &stream.start.request_id,
-        )?;
-        validate_publication_generation(&snapshot, &stream.start)?;
-        // U may never precede P: prove the exact provider outcome before the
-        // frame/proposal staging transaction does any durable work.
-        if !request_outcome_is_durable(
-            &transaction,
-            &self.conversation_id,
-            &snapshot,
-            completed_sequence,
-        )? {
-            return Err(ConversationStoreError::PublicationViolation(format!(
-                "publication terminal for {stream_id} has no durable provider outcome for request {}",
-                stream.start.request_id
-            )));
-        }
-        let (stream, receipts) = stage_frames_tx(&transaction, frames, &self.conversation_id)?;
-        if stream.start.stream_id != *stream_id {
-            return Err(ConversationStoreError::PublicationViolation(format!(
-                "terminal frames belong to publication stream {}, not {stream_id}",
-                stream.start.stream_id
-            )));
-        }
-        if stream.terminal_sequence.is_some() {
-            return Err(ConversationStoreError::PublicationViolation(format!(
-                "publication stream {stream_id} already committed its terminal boundary"
-            )));
-        }
-        let terminal_sequence = frames
-            .last()
-            .map(|frame| frame.sequence)
-            .ok_or_else(|| storage("terminal frames are empty"))?;
-        // The final frame and the terminal marker share this one transaction.
-        transaction
-            .execute(
-                "UPDATE publication_streams SET terminal_sequence=?1 WHERE stream_id=?2",
-                params![seq_to_i64(terminal_sequence)?, stream_id.as_str()],
-            )
-            .map_err(|error| storage(format!("commit publication terminal: {error}")))?;
-        process_death::reach("before:commit_publication_terminal");
-        transaction
-            .commit()
-            .map_err(|error| storage(format!("publication terminal commit: {error}")))?;
-        process_death::reach("after:commit_publication_terminal");
-        Ok(receipts)
-    }
-
-    // Keep native acceptance, event/staging and COMMIT in one auditable boundary.
-    #[allow(clippy::too_many_lines)]
-    fn commit_canonical_publication(
-        &self,
-        stream_id: &PublicationStreamId,
-        message: &MessageBlock,
-        event: RuntimeEventEnvelope,
-    ) -> Result<(RuntimeEventEnvelope, TranscriptCommitReceipt), ConversationStoreError> {
-        let mut connection = self.lock()?;
-        let mut validation = append_validation::Batch::begin(&self.conn.append_validation);
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("canonical publication transaction: {error}")))?;
-        let stream = require_publication_stream(&transaction, stream_id)?;
-        let (snapshot, _, completed_sequence) = require_started_request_tx(
-            &transaction,
-            &self.conversation_id,
-            &stream.start.request_id,
-        )?;
-        validate_publication_generation(&snapshot, &stream.start)?;
-        validate_canonical_publication_event(
-            &self.conversation_id,
-            &stream.start,
-            message,
-            &event,
-        )?;
-        validate_canonical_tool_proposals(&transaction, stream_id, message)?;
-        if let Some(settlement) = stream.settlement {
-            return Err(ConversationStoreError::PublicationViolation(format!(
-                "publication stream {stream_id} already settled as {}; canonical acceptance is permanently forbidden",
-                settlement.as_str()
-            )));
-        }
-        // C may never precede U for a published stream.
-        if stream.terminal_sequence.is_none() {
-            return Err(ConversationStoreError::PublicationViolation(format!(
-                "publication stream {stream_id} has no durable publication terminal; canonical acceptance requires U"
-            )));
-        }
-        if !matches!(message, MessageBlock::Assistant(_)) {
-            return Err(ConversationStoreError::PublicationViolation(format!(
-                "canonical acceptance of publication stream {stream_id} requires an Assistant message"
-            )));
-        }
-        if !request_outcome_is_durable(
-            &transaction,
-            &self.conversation_id,
-            &snapshot,
-            completed_sequence,
-        )? {
-            return Err(ConversationStoreError::PublicationViolation(format!(
-                "canonical acceptance of publication stream {stream_id} has no durable provider outcome for request {}",
-                stream.start.request_id
-            )));
-        }
-        ensure_surface_head(&transaction)?;
-
-        let transcript_cursor =
-            validation
-                .append(&transaction, message, None)?
-                .ok_or_else(|| {
-                    ConversationStoreError::InvalidReference(
-                        "canonical publication must receive a transcript cursor".to_owned(),
-                    )
-                })?;
-        #[cfg(test)]
-        if Self::consume(&self.fail_event_remaining) {
-            return Err(storage("fault injected: canonical publication commit"));
-        }
-        let mut persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
-        content::settle_canonical(&transaction, stream_id, message)?;
-        rebind_published_read_layouts(&transaction, message, &persisted.event)?;
-        // The canonical transition clears the lifecycle staging of the stream:
-        // the Ledger is now the long-term authority and no transient frame
-        // survives it.
-        clear_publication_staging(&transaction, stream_id)?;
-        // Proposal ownership remains as one bounded `(stream_id, call_id)`
-        // fact after C. Recovery ToolResult repair and later Tool Plane
-        // transitions must still resolve the exact accepted proposal rather
-        // than falling back to a bare call id.
-        transaction
-            .execute(
-                "UPDATE publication_proposals SET settlement=?1 WHERE stream_id=?2",
-                params![
-                    PublicationSettlement::Canonical.as_str(),
-                    stream_id.as_str()
-                ],
-            )
-            .map_err(|error| storage(format!("settle canonical publication proposals: {error}")))?;
-        transaction
-            .execute(
-                "UPDATE publication_streams SET settlement=?1 WHERE stream_id=?2",
-                params![
-                    PublicationSettlement::Canonical.as_str(),
-                    stream_id.as_str()
-                ],
-            )
-            .map_err(|error| storage(format!("settle canonical publication: {error}")))?;
-        let mut receipt = canonical_observation_receipt(
-            &transaction,
-            &self.conversation_id,
-            message,
-            Some(transcript_cursor),
-            persisted.event.tool_occurrence.clone(),
-        )?;
-        process_death::reach("before:commit_canonical_publication");
-        let sequence = persisted.event.sequence;
-        set_canonical_range(&mut receipt, Some((sequence, sequence)));
-        persisted.event.observation = observation_receipt::canonical(
-            &transaction,
-            &self.conversation_id,
-            &persisted.event,
-            Arc::clone(&receipt.observation),
-        );
-        transaction
-            .commit()
-            .map_err(|error| storage(format!("canonical publication commit: {error}")))?;
-        validation.committed(&connection);
-        process_death::reach("after:commit_canonical_publication");
-        Ok((persisted.event, receipt))
-    }
-
-    fn terminalize_publication_audit(
-        &self,
-        stream_id: &PublicationStreamId,
-        timestamp: DateTime<Utc>,
-    ) -> Result<
-        (
-            PublicationAudit,
-            crate::durable::inbox::PublicationAuditReceipt,
-        ),
-        ConversationStoreError,
-    > {
-        let mut connection = self.lock()?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("publication audit transaction: {error}")))?;
-        #[cfg(test)]
-        if Self::consume(&self.fail_publication_audit_remaining) {
-            return Err(storage("fault injected: publication audit commit"));
-        }
-        let stream = require_publication_stream(&transaction, stream_id)?;
-        let (snapshot, _, completed_sequence) = require_started_request_tx(
-            &transaction,
-            &self.conversation_id,
-            &stream.start.request_id,
-        )?;
-        validate_publication_generation(&snapshot, &stream.start)?;
-        if let Some(settlement) = stream.settlement {
-            return Err(ConversationStoreError::PublicationViolation(format!(
-                "publication stream {stream_id} already settled as {}",
-                settlement.as_str()
-            )));
-        }
-        if stream.terminal_sequence.is_some()
-            && !request_outcome_is_durable(
-                &transaction,
-                &self.conversation_id,
-                &snapshot,
-                completed_sequence,
-            )?
-        {
-            return Err(ConversationStoreError::PublicationViolation(format!(
-                "publication audit for {stream_id} has U without the exact successful provider outcome"
-            )));
-        }
-        // The kind is derived from durable evidence, never supplied: U
-        // present means the released output was complete but never accepted;
-        // U absent means publication never reached its own terminal boundary.
-        let kind = stream.audit_kind();
-        let executed: Option<String> = transaction
-            .query_row(
-                "SELECT call_id FROM publication_proposals WHERE stream_id=?1 AND executed=1 LIMIT 1",
-                [stream_id.as_str()],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|error| storage(format!("publication proposal execution probe: {error}")))?;
-        if let Some(call_id) = executed {
-            return Err(ConversationStoreError::PublicationViolation(format!(
-                "publication stream {stream_id} cannot terminalize as an audit: proposal {call_id} already has a Tool Plane execution fact"
-            )));
-        }
-        let frames = read_publication_frames(&transaction, stream_id)?;
-        let content = consolidate_audit_content(&frames);
-        validate_audit_proposal_ownership(&transaction, stream_id, &content)?;
-        let audit = PublicationAudit {
-            stream_id: stream_id.clone(),
-            attempt_id: stream.start.attempt_id.clone(),
-            turn_id: stream.start.turn_id.clone(),
-            request_id: stream.start.request_id.clone(),
-            message_id: stream.start.message_id.clone(),
-            kind,
-            content,
-            settled_at: timestamp,
-        };
-        let _ =
-            optional_display_layout(&transaction, || content::settle_audit(&transaction, &audit));
-        let settlement = PublicationSettlement::from(kind);
-        transaction
-            .execute(
-                "INSERT INTO publication_audits(stream_id,audit_json) VALUES(?1,?2)",
-                params![stream_id.as_str(), encode(&audit, "publication audit")?],
-            )
-            .map_err(|error| storage(format!("insert publication audit: {error}")))?;
-        let transcript_cursor =
-            append_transcript_reference(&transaction, "publication_audit", stream_id.as_str())?;
-        // Consolidation replaces the transient frames: the durable footprint
-        // of a settled audit is one bounded object, never O(frames) rows.
-        clear_publication_staging(&transaction, stream_id)?;
-        transaction
-            .execute(
-                "UPDATE publication_proposals SET settlement=?1 WHERE stream_id=?2",
-                params![settlement.as_str(), stream_id.as_str()],
-            )
-            .map_err(|error| storage(format!("ban audited tool proposals: {error}")))?;
-        transaction
-            .execute(
-                "UPDATE publication_streams SET settlement=?1 WHERE stream_id=?2",
-                params![settlement.as_str(), stream_id.as_str()],
-            )
-            .map_err(|error| storage(format!("settle publication audit: {error}")))?;
-        let receipt = audit_observation_receipt(
-            &transaction,
-            &self.conversation_id,
-            &audit,
-            transcript_cursor,
-        )?;
-        process_death::reach("before:terminalize_publication_audit");
-        transaction
-            .commit()
-            .map_err(|error| storage(format!("publication audit commit: {error}")))?;
-        process_death::reach("after:terminalize_publication_audit");
-        Ok((audit, receipt))
-    }
-
-    fn load_unsettled_publication_streams(
-        &self,
-    ) -> Result<Vec<PublicationStreamRecord>, ConversationStoreError> {
-        let connection = self.lock()?;
-        let mut statement = connection
-            .prepare(
-                "SELECT stream_id,attempt_id,turn_id,request_id,message_id,terminal_sequence,settlement
-                 FROM publication_streams WHERE settlement IS NULL ORDER BY stream_id",
-            )
-            .map_err(|error| storage(format!("unsettled publication query: {error}")))?;
-        let rows = statement
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, Option<i64>>(5)?,
-                    row.get::<_, Option<String>>(6)?,
-                ))
-            })
-            .map_err(|error| storage(format!("unsettled publication rows: {error}")))?;
-        let mut records = Vec::new();
-        for row in rows {
-            let row =
-                row.map_err(|error| storage(format!("unsettled publication row: {error}")))?;
-            records.push(publication_record(row)?);
-        }
-        Ok(records)
-    }
-
-    fn load_publication_audit(
-        &self,
-        stream_id: &PublicationStreamId,
-    ) -> Result<Option<PublicationAudit>, ConversationStoreError> {
-        let connection = self.lock()?;
-        let json: Option<String> = connection
-            .query_row(
-                "SELECT audit_json FROM publication_audits WHERE stream_id=?1",
-                [stream_id.as_str()],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|error| storage(format!("publication audit read: {error}")))?;
-        json.map(|json| decode(&json, "publication audit"))
-            .transpose()
     }
 }
 
@@ -6311,7 +6236,7 @@ fn audit_observation_receipt(
     conversation: &ConversationId,
     audit: &PublicationAudit,
     cursor: TranscriptCursor,
-) -> Result<crate::durable::inbox::PublicationAuditReceipt, ConversationStoreError> {
+) -> Result<crate::durable::PublicationAuditReceipt, ConversationStoreError> {
     let read_cut = observation::cut(connection, conversation)?;
     let summary = observation::audit_summary(audit);
     let _ = optional_display_layout(connection, || {
@@ -6340,7 +6265,7 @@ fn audit_observation_receipt(
             collections: Vec::new(),
             deferred: true,
         });
-    Ok(crate::durable::inbox::PublicationAuditReceipt {
+    Ok(crate::durable::PublicationAuditReceipt {
         ready_through: observation_readiness::frontier(connection, 0, read_cut.read.journal).ok(),
         ready_t_through: observation_readiness::transcript_frontier(
             connection,
@@ -7718,7 +7643,7 @@ fn canonical_observation_batch(
         source_unavailable = true;
         CanonicalSourceScalars::default()
     });
-    let batch = Arc::new(crate::durable::inbox::CanonicalObservationBatch {
+    let batch = Arc::new(crate::durable::CanonicalObservationBatch {
         ready_through: observation_readiness::frontier(connection, 0, through).ok(),
         ready_t_through: observation_readiness::transcript_frontier(
             connection,
@@ -7761,7 +7686,7 @@ struct CanonicalSourceScalars {
     human_activity_at: Option<chrono::DateTime<Utc>>,
     has_opening_user: bool,
     opening_preview: Option<String>,
-    todos: Option<crate::durable::inbox::NativeTodoObservation>,
+    todos: Option<crate::durable::NativeTodoObservation>,
 }
 fn complete_canonical_scalars(
     connection: &Connection,
@@ -10668,7 +10593,7 @@ fn load_canonical_rows(
 fn load_transcript_tools(
     connection: &Connection,
     assistant: &crate::message::types::AssistantMessageBlock,
-) -> Result<Vec<crate::durable::inbox::TranscriptTool>, ConversationStoreError> {
+) -> Result<Vec<crate::durable::TranscriptTool>, ConversationStoreError> {
     let mut tool_calls = Vec::new();
     let mut statement = connection
         .prepare(TRANSCRIPT_TOOLS_SQL)
@@ -10705,7 +10630,7 @@ fn load_transcript_tools(
                 )),
             })
             .transpose()?;
-        tool_calls.push(crate::durable::inbox::TranscriptTool {
+        tool_calls.push(crate::durable::TranscriptTool {
             message_id: assistant.id.clone(),
             block_index: crate::message::types::ContentBlockIndex::new(block_index),
             call: call.clone(),
@@ -14485,7 +14410,7 @@ mod tests {
                 managed_output: None,
             },
         };
-        let cut = super::super::inbox::TranscriptSnapshotCut {
+        let cut = super::super::TranscriptSnapshotCut {
             bootstrap_through: store.load_transcript_page(None, 1).unwrap().entries[0]
                 .cursor
                 .get(),

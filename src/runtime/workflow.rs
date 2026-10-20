@@ -3032,6 +3032,7 @@ fn single_successor(
 
 #[cfg(test)]
 mod tests {
+    use crate::durable::{CanonicalStore, JournalStore};
     mod authored_paths;
     #[cfg(unix)]
     mod publication_tests;
@@ -3047,7 +3048,6 @@ mod tests {
     use crate::capabilities::CapabilitySnapshot;
 
     #[cfg(unix)]
-    use crate::durable::ConversationStore;
     #[cfg(unix)]
     use crate::model::catalog::{MapCredentialEnvironment, ModelCatalog, ModelRef};
     #[cfg(unix)]

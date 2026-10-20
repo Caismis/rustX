@@ -28,6 +28,7 @@
 //! `runtime_multi_compaction.rs`.
 
 use super::super::{common, support};
+use rustx::durable::RequestStore;
 use support::model::{FixtureModel, ScriptedAdapterFactory, fixture_session_model};
 
 use std::sync::Arc;
@@ -40,7 +41,6 @@ use rustx::context::{
     ContextErrorKind, ContextProposal, ContextRuntime, TokenEstimator, UserMessageProposal,
 };
 use rustx::conversation::ConversationState;
-use rustx::durable::ConversationStore;
 use rustx::events::types::{AttemptFailure, AttemptOutcome, RuntimeEvent};
 use rustx::message::content::TextBlock;
 use rustx::message::types::{

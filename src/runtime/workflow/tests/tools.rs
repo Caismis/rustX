@@ -1,5 +1,6 @@
 //! WF-02 boundary tests. Gates identify the interleaving; no sleeps establish order.
 #![cfg(unix)]
+use crate::durable::JournalStore;
 #[path = "tool_composition.rs"]
 mod composition;
 #[path = "human.rs"]

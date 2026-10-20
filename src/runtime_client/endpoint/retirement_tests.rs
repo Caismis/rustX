@@ -1,6 +1,7 @@
 //! Exact endpoint lifetime tests, included as `endpoint::retirement_tests`.
 use super::*;
-use crate::durable::{ConversationStore, SqliteConversationStore};
+use crate::durable::SqliteConversationStore;
+use crate::durable::{CanonicalStore, JournalStore, ObservationStore};
 use crate::runtime::identity::ConversationId;
 use crate::runtime_client::{
     RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientCursor, RuntimeClientResult,

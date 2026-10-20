@@ -1,4 +1,5 @@
 use super::*;
+use crate::durable::{CanonicalStore, JournalStore, ProjectionStore};
 use crate::runtime_client::checkpoint::{CheckpointReadCut, decode_domain_value};
 use crate::runtime_client::trace::{TraceInspectionHead, TraceKind, TraceProjection, TraceState};
 

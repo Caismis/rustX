@@ -1916,8 +1916,8 @@ pub(super) fn audit_blocks(
 
 pub(super) fn audit_summary(
     audit: &crate::publication::PublicationAudit,
-) -> crate::durable::inbox::PublicationAuditSummary {
-    crate::durable::inbox::PublicationAuditSummary {
+) -> crate::durable::PublicationAuditSummary {
+    crate::durable::PublicationAuditSummary {
         stream_id: (audit.stream_id.as_str().len() <= 256).then(|| audit.stream_id.clone()),
         message_id: (audit.message_id.as_str().len() <= 256).then(|| audit.message_id.clone()),
         attempt_id: (audit.attempt_id.as_str().len() <= 256).then(|| audit.attempt_id.clone()),

@@ -1,6 +1,7 @@
 /// Capacity suite: this test's value comes from its scale, so FAST skips
 /// `::scale::` and FULL runs it (tests/README.md, "Capacity tests").
 mod scale {
+    use crate::durable::{CanonicalStore};
     use super::*;
 
     /// Exercise real preparation, native start, publication and provider dispatch after

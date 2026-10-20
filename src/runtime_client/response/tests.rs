@@ -1,6 +1,7 @@
 use super::*;
 use crate::context::assembly::ContextGeneration;
 use crate::durable::SqliteConversationStore;
+use crate::durable::{CanonicalStore, JournalStore, ObservationStore, ProjectionStore};
 use crate::events::types::RuntimeEventEnvelope;
 use crate::message::TextBlock;
 use crate::message::types::InboundKind;
@@ -1570,6 +1571,7 @@ fn occupancy_reopens_and_inherits_without_local_requests_or_events() {
 /// `::scale::` and FULL runs it (tests/README.md, "Capacity tests").
 mod scale {
     use super::*;
+    use crate::durable::JournalStore;
 
     #[test]
     fn occupancy_thousands_of_unmeasured_terminal_requests_do_not_invent_a_reading() {

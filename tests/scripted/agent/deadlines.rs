@@ -699,14 +699,14 @@ impl AgentExecutionObserver for OrderingObserver {
         &self,
         _attempt_id: &AttemptId,
         _block: &MessageBlock,
-        _receipt: &rustx::durable::inbox::TranscriptCommitReceipt,
+        _receipt: &rustx::durable::TranscriptCommitReceipt,
     ) {
     }
 
     fn observe_status(
         &self,
         _observation: &rustx::agent::AgentStatusObservation,
-        _source: Option<&rustx::durable::inbox::StatusObservationSource>,
+        _source: Option<&rustx::durable::StatusObservationSource>,
     ) {
     }
 
@@ -733,7 +733,7 @@ impl AgentExecutionObserver for OrderingObserver {
         &self,
         _attempt_id: &AttemptId,
         _audit: &rustx::publication::PublicationAudit,
-        _receipt: &rustx::durable::inbox::PublicationAuditReceipt,
+        _receipt: &rustx::durable::PublicationAuditReceipt,
     ) {
     }
 }

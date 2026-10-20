@@ -11,6 +11,7 @@
 //! Every interleaving here is decided by explicit gates — watches, channels,
 //! and the registry's own authoritative state — never by a sleep.
 
+use rustx::durable::{CanonicalStore, InboxStore, ObservationStore};
 mod contribution;
 
 #[tokio::test]
@@ -654,14 +655,14 @@ impl AgentExecutionObserver for Recorder {
         &self,
         _attempt_id: &AttemptId,
         _block: &MessageBlock,
-        _receipt: &rustx::durable::inbox::TranscriptCommitReceipt,
+        _receipt: &rustx::durable::TranscriptCommitReceipt,
     ) {
     }
 
     fn observe_status(
         &self,
         observation: &AgentStatusObservation,
-        _source: Option<&rustx::durable::inbox::StatusObservationSource>,
+        _source: Option<&rustx::durable::StatusObservationSource>,
     ) {
         self.observations
             .lock()
@@ -688,7 +689,7 @@ impl AgentExecutionObserver for Recorder {
         &self,
         _attempt_id: &AttemptId,
         _audit: &rustx::publication::PublicationAudit,
-        _receipt: &rustx::durable::inbox::PublicationAuditReceipt,
+        _receipt: &rustx::durable::PublicationAuditReceipt,
     ) {
     }
 }

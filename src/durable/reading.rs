@@ -219,7 +219,7 @@ impl From<InheritedTurnOutcome> for TurnProcessOutcome {
 /// may retain a newer outcome; later source activity cannot change captured (R, C).
 #[derive(Debug, Clone, PartialEq)]
 pub struct LineageReadCut {
-    pub raw_tool_arguments: Vec<super::inbox::CanonicalRawToolArguments>,
+    pub raw_tool_arguments: Vec<super::CanonicalRawToolArguments>,
     pub projections: Vec<super::projection::ProjectionCheckpoint>,
     pub read_cut: ConversationReadCut,
     pub conversation_id: ConversationId,

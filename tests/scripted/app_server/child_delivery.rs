@@ -1,4 +1,5 @@
 // Exact native child ownership and physical-root admission, with existing fences.
+use rustx::durable::{CanonicalStore, JournalStore};
 use crate::durable::ConversationStore;
 use crate::message::types::{
     AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, MessageBlock,

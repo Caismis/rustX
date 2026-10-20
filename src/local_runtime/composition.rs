@@ -2296,6 +2296,7 @@ impl From<SessionError> for LocalRuntimeError {
 
 #[cfg(test)]
 mod subagent_child_tests {
+    use crate::durable::{CanonicalStore, InboxStore, JournalStore};
     use std::sync::Arc;
 
     use super::{ChildPreparation, LocalConversationCore, LocalRuntimeDependencies};
@@ -2505,7 +2506,6 @@ chat_reasoning_replay = "omit"
     /// is durable pending input, but no Delegate has released a turn permit.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn child_binding_gates_historical_guidance_before_activation() {
-        use crate::durable::ConversationStore;
         use crate::message::{content::TextBlock, types::UserContentBlock};
 
         let dir = lab();

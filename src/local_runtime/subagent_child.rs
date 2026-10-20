@@ -1391,6 +1391,7 @@ impl NativeTerminalGate {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use crate::durable::{CanonicalStore, InboxStore, JournalStore};
     use std::sync::Arc;
 
     use super::*;
@@ -2447,7 +2448,6 @@ pub(crate) mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn delegation_durable_acceptance_failure_never_acknowledges_input() {
-        use crate::durable::ConversationStore;
         let dir = tempfile::tempdir().unwrap();
         let id = ConversationId::generate();
         let store =
@@ -2532,7 +2532,6 @@ pub(crate) mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[allow(clippy::too_many_lines)] // One failed activation and its durable continuation proof.
     async fn failed_activation_preserves_admitted_guidance_for_the_next_activation() {
-        use crate::durable::ConversationStore;
         use crate::model::event::ModelEvent;
         use crate::runtime::subagent::ipc::{GuidanceFrame, read_child_frame, write_parent_frame};
 
@@ -2719,7 +2718,6 @@ pub(crate) mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[allow(clippy::too_many_lines)] // One end-to-end cancellation/observation interleaving.
     async fn cancel_before_native_terminal_consumption_never_reopens_activation() {
-        use crate::durable::ConversationStore;
         use crate::runtime::subagent::ipc::{GuidanceFrame, read_child_frame, write_parent_frame};
         let dir = tempfile::tempdir().unwrap();
         let id = ConversationId::generate();
@@ -2859,7 +2857,6 @@ pub(crate) mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[allow(clippy::too_many_lines)] // complete FIFO cancellation and transport-drain fixture
     async fn cancel_during_close_admission_is_absorbing_and_preserves_guidance() {
-        use crate::durable::ConversationStore;
         use crate::runtime::subagent::ipc::{GuidanceFrame, read_child_frame, write_parent_frame};
 
         let dir = tempfile::tempdir().unwrap();
@@ -3431,7 +3428,6 @@ pub(crate) mod tests {
         id: ConversationId,
         mode: &str,
     ) -> ResultFrame {
-        use crate::durable::ConversationStore;
         use crate::message::types::ContentBlockIndex;
         use crate::model::event::ModelEvent;
         use crate::model::finish::ModelFinishReason;
@@ -3636,7 +3632,6 @@ pub(crate) mod tests {
     /// this actual result through its native driver and publication path.
     #[allow(clippy::too_many_lines)]
     pub(crate) async fn workflow_cancellation_ordering(late: bool) -> ResultFrame {
-        use crate::durable::ConversationStore;
         use crate::runtime::subagent::ipc::{read_child_frame, write_parent_frame};
         let stage = |name: &str| eprintln!("workflow-cancellation late={late}: {name}");
         stage("construct native child runtime");

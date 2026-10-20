@@ -85,7 +85,7 @@
 //! # Bounded working set
 //!
 //! The evidence fold pages the Event Journal
-//! ([`ConversationStore::read_events`]) and retains only the *unresolved*
+//! ([`JournalStore::read_events`]) and retains only the *unresolved*
 //! state. Reads are O(history); hot memory is O(unresolved work):
 //!
 //! ```text
@@ -1979,7 +1979,7 @@ impl RecoveryPlan {
     /// lifecycle plus the stable producer correlation make the publication
     /// exactly-once across any number of restarts. Nothing is reattached,
     /// relaunched, or replayed. A normal child publishes through
-    /// [`ConversationStore::accept_subagent_terminal`] — the one
+    /// [`InboxStore::accept_subagent_terminal`] — the one
     /// normal-subagent terminal authority, shared with the live settlement
     /// path (Issue #192); a Workflow-owned child closes through its own
     /// Workflow terminal settlement, which never creates parent inbound.

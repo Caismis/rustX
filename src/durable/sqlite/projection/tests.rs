@@ -1,5 +1,6 @@
 use super::*;
 use crate::context::checkpoint::{CheckpointItem, CheckpointMessage};
+use crate::durable::{CanonicalStore, JournalStore, ProjectionStore};
 use crate::durable::{ConversationStore, SqliteConversationStore};
 use crate::message::TextBlock;
 use crate::message::types::{

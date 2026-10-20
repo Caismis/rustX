@@ -1,5 +1,6 @@
 use super::{hash, index, params};
-use crate::durable::{ConversationStore, ConversationStoreError, SqliteConversationStore};
+use crate::durable::CanonicalStore;
+use crate::durable::{ConversationStoreError, SqliteConversationStore};
 use crate::runtime::identity::ConversationId;
 use rusqlite::{Connection, types::Value};
 use std::sync::atomic::Ordering;

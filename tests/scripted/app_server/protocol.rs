@@ -5,6 +5,7 @@ use crate::app_server::connection::AppServerConnection;
 use crate::app_server::protocol::*;
 use crate::runtime_client::content::CanonicalContentLocator;
 use crate::runtime_client::event::RuntimeClientEvent;
+use rustx::durable::{CanonicalStore, InboxStore, JournalStore, ObservationStore, ProjectionStore};
 
 use super::app_server_conformance as conformance;
 
@@ -2952,7 +2953,7 @@ async fn lost_upload_waiter_does_not_cancel_or_replay_the_owned_commit() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn restored_destination_receipts_admit_a_turn_after_source_deletion() {
     bounded(async {
-        use crate::durable::{ConversationStore, SqliteConversationStore};
+        use crate::durable::SqliteConversationStore;
         use crate::local_runtime::session::uploads::UploadFile;
         use crate::message::types::{
             InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
@@ -4893,7 +4894,7 @@ async fn another_connection_deletes_an_attached_idle_session_and_closes_its_rout
 #[allow(clippy::too_many_lines)] // One native source proves both lineage destinations and Retry through the public protocol.
 async fn completed_response_cut_is_shared_by_branch_and_fork_and_distinct_from_retry() {
     Box::pin(bounded(async {
-        use crate::durable::{ConversationStore, SqliteConversationStore};
+        use crate::durable::{SqliteConversationStore};
         use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
         use crate::local_runtime::session::LineageSide;
         use crate::message::types::{AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, UserContentBlock, UserSource};
@@ -5008,7 +5009,7 @@ async fn completed_response_cut_is_shared_by_branch_and_fork_and_distinct_from_r
 
 #[tokio::test]
 async fn archive_preflight_failures_reach_the_protocol_without_private_diagnostics() {
-    use crate::durable::{ConversationStore, SqliteConversationStore};
+    use crate::durable::SqliteConversationStore;
     use crate::runtime::identity::{AgentId, ConversationId, SubagentId, ToolCallId};
     use crate::session_archive::SessionArchivePrepareError;
     bounded(async {
@@ -5545,7 +5546,6 @@ async fn an_agent_sourced_boundary_never_repaints_the_settled_projection() {
 #[tokio::test]
 async fn a_failed_projection_commit_preserves_history_and_repairs_exactly_once() {
     bounded(async {
-        use crate::durable::ConversationStore as _;
         let f = Fixture::new().await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
@@ -5876,7 +5876,6 @@ async fn a_parked_publication_serves_a_null_summary_then_invalidates_it() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cold_loading_a_branch_repairs_the_projection_from_the_session_root() {
     bounded(async {
-        use crate::durable::ConversationStore as _;
         let f = Fixture::new().await;
         let sessions = &f.manager.sessions;
         let session = f.sessions[0].clone();
@@ -8820,7 +8819,7 @@ async fn durable_history_is_readable_before_and_during_runtime_preparation() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn explicit_node_switch_commits_aba_ownership_and_coalesces_exact_retirements() {
     bounded(async {
-        use crate::durable::{ConversationStore, SqliteConversationStore};
+        use crate::durable::SqliteConversationStore;
         use crate::local_runtime::session::LineageSide;
         use crate::message::TextBlock;
         use crate::message::types::{
@@ -8953,7 +8952,7 @@ async fn switch_fixture(
     AttachmentTarget,
     crate::local_runtime::session::SessionSnapshot,
 ) {
-    use crate::durable::{ConversationStore, SqliteConversationStore};
+    use crate::durable::SqliteConversationStore;
     use crate::local_runtime::session::LineageSide;
     use crate::message::TextBlock;
     use crate::message::types::{
@@ -9858,7 +9857,7 @@ async fn t15_effective_configuration_preserves_all_fields_and_advancing_pages() 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn t08_t13_t15_editor_and_origin_history_use_finite_native_ledger_identity() {
     bounded(async {
-        use crate::durable::{ConversationStore, SqliteConversationStore};
+        use crate::durable::{SqliteConversationStore};
         use crate::local_runtime::session::LineageSide;
         use crate::message::types::{InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource};
         use crate::runtime::identity::MessageId;
@@ -9903,7 +9902,7 @@ async fn t08_t13_t15_editor_and_origin_history_use_finite_native_ledger_identity
 }
 
 async fn retained_huge_root(fixture: &Fixture) -> Vec<(crate::runtime::identity::MessageId, u64)> {
-    use crate::durable::{ConversationStore, SqliteConversationStore};
+    use crate::durable::SqliteConversationStore;
     use crate::message::types::{
         InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
     };
@@ -10055,7 +10054,7 @@ async fn projection_history_and_activation_fork_cross_native_app_server_boundary
     bounded(async {
         use crate::context::checkpoint::ProjectionActivationId;
         use crate::context::resources::LedgerFrontier;
-        use crate::durable::{ConversationStore, SqliteConversationStore};
+        use crate::durable::SqliteConversationStore;
         use crate::message::types::{InboundKind, MessageBlock, UserMessageBlock, UserSource};
         use crate::runtime::identity::MessageId;
         let f = Fixture::new().await;
@@ -10201,7 +10200,6 @@ async fn projection_history_and_activation_fork_cross_native_app_server_boundary
 async fn t07_t13_source_failure_fences_registration_without_replay_loss_or_cursor_consumption() {
     bounded(async {
         use futures_util::FutureExt;
-        use crate::durable::ConversationStore as _;
         struct SourceFault { connection: rusqlite::Connection, original: Vec<u8> }
         impl SourceFault {
             fn restore(&self) {

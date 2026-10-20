@@ -1,5 +1,6 @@
 use super::{TraceInputProvenance, TraceMessageRole};
-use crate::durable::{ConversationStore, SqliteConversationStore};
+use crate::durable::SqliteConversationStore;
+use crate::durable::{CanonicalStore, ObservationStore};
 use crate::message::types::{
     InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };

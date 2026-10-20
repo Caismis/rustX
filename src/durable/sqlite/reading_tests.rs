@@ -1,5 +1,8 @@
 use super::seq_to_i64;
 use crate::durable::reading::*;
+use crate::durable::{
+    CanonicalStore, InboxStore, JournalStore, ObservationStore, ProjectionStore, RequestStore,
+};
 use crate::durable::{ConversationStore, LineageSeed, SqliteConversationStore};
 use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
 use crate::message::TextBlock;

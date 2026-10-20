@@ -4233,7 +4233,7 @@ impl RuntimeClientProjection {
                     }
                     _ => None,
                 },
-                receipt: crate::durable::inbox::TranscriptCommitReceipt {
+                receipt: crate::durable::TranscriptCommitReceipt {
                     transcript_cursor: canonical.last_transcript,
                     ledger_position: canonical.last_position,
                     ordinal: canonical.count.saturating_sub(1),
@@ -4976,7 +4976,7 @@ impl RuntimeClientProjection {
         }
     }
 
-    fn install_todo_head(&mut self, todos: &crate::durable::inbox::NativeTodoObservation) {
+    fn install_todo_head(&mut self, todos: &crate::durable::NativeTodoObservation) {
         self.snapshot.todos = Some(todos.snapshot.clone());
         self.source_frontiers.insert(
             "todos.tasks".into(),
@@ -4993,7 +4993,7 @@ impl RuntimeClientProjection {
     fn fold_canonical_receipt(
         &mut self,
         attempt_id: Option<&AttemptId>,
-        receipt: crate::durable::inbox::TranscriptCommitReceipt,
+        receipt: crate::durable::TranscriptCommitReceipt,
     ) -> Vec<RuntimeClientEvent> {
         if receipt.ordinal.checked_add(1) != Some(receipt.observation.count) {
             return Vec::new();
@@ -5295,10 +5295,7 @@ impl RuntimeClientProjection {
         }
     }
 
-    fn observe_audit_dependencies(
-        &mut self,
-        receipt: &crate::durable::inbox::PublicationAuditReceipt,
-    ) {
+    fn observe_audit_dependencies(&mut self, receipt: &crate::durable::PublicationAuditReceipt) {
         self.observe_released_journal_prefix(receipt.ready_through);
         self.observe_released_transcript_prefix(receipt.ready_t_through, &receipt.read_cut);
         self.native_journal_highwater = self
@@ -5312,7 +5309,7 @@ impl RuntimeClientProjection {
     fn fold_audit_receipt(
         &mut self,
         attempt_id: AttemptId,
-        receipt: crate::durable::inbox::PublicationAuditReceipt,
+        receipt: crate::durable::PublicationAuditReceipt,
     ) -> Vec<RuntimeClientEvent> {
         // Only the captured audit T is this owner's new fact. An unrelated
         // concurrent C/J/Pending transaction must retain its publication owner.
@@ -7849,7 +7846,7 @@ pub(crate) fn status_view(observation: &AgentStatusObservation) -> AgentStatusVi
 /// Prepare finite display metadata before entering the projection synchronization boundary.
 pub(crate) fn prepared_status_view(
     observation: &AgentStatusObservation,
-    source: Option<&crate::durable::inbox::StatusObservationSource>,
+    source: Option<&crate::durable::StatusObservationSource>,
 ) -> AgentStatusView {
     prepared_status(
         &observation.attempt_id,
@@ -7868,7 +7865,7 @@ pub(crate) fn prepared_status(
     opportunities: &crate::context::ContributionOpportunities,
     post_tool_batch_anchor: Option<crate::durable::TranscriptCursor>,
     status: &crate::context::AgentStatus,
-    source: Option<&crate::durable::inbox::StatusObservationSource>,
+    source: Option<&crate::durable::StatusObservationSource>,
 ) -> AgentStatusView {
     let sections = status
         .sections
@@ -8023,6 +8020,9 @@ mod tests {
         PostToolBatchOpportunity,
     };
     use crate::conversation::ConversationState;
+    use crate::durable::{
+        CanonicalStore, InboxStore, JournalStore, ObservationStore, PublicationStore, RequestStore,
+    };
     use crate::events::interaction::{InteractionSettlement, InteractionSubject};
     use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
     use crate::message::content::TextBlock;
@@ -8973,7 +8973,7 @@ mod tests {
             &self,
             attempt_id: &AttemptId,
             block: &MessageBlock,
-            receipt: &crate::durable::inbox::TranscriptCommitReceipt,
+            receipt: &crate::durable::TranscriptCommitReceipt,
         ) {
             if let Some(cursor) = receipt.transcript_cursor {
                 self.commits
@@ -8990,7 +8990,7 @@ mod tests {
         fn observe_status(
             &self,
             observation: &AgentStatusObservation,
-            _source: Option<&crate::durable::inbox::StatusObservationSource>,
+            _source: Option<&crate::durable::StatusObservationSource>,
         ) {
             let park = observation.opportunities.post_tool_batch.is_some()
                 && observation.opportunities.fresh_inbound.is_none()
@@ -9034,7 +9034,7 @@ mod tests {
             &self,
             attempt_id: &AttemptId,
             _audit: &crate::publication::PublicationAudit,
-            receipt: &crate::durable::inbox::PublicationAuditReceipt,
+            receipt: &crate::durable::PublicationAuditReceipt,
         ) {
             self.apply(ConversationObservation::AuditSettled {
                 attempt_id: attempt_id.clone(),
@@ -9607,7 +9607,7 @@ mod tests {
             &self,
             attempt_id: &AttemptId,
             _block: &MessageBlock,
-            receipt: &crate::durable::inbox::TranscriptCommitReceipt,
+            receipt: &crate::durable::TranscriptCommitReceipt,
         ) {
             let mut projection = self.projection.lock().expect("projection lock");
             projection.apply(ConversationObservation::CanonicalCommitted {
@@ -9620,7 +9620,7 @@ mod tests {
         fn observe_status(
             &self,
             observation: &AgentStatusObservation,
-            source: Option<&crate::durable::inbox::StatusObservationSource>,
+            source: Option<&crate::durable::StatusObservationSource>,
         ) {
             let mut projection = self.projection.lock().expect("projection lock");
             projection.apply(ConversationObservation::Status(
@@ -9660,7 +9660,7 @@ mod tests {
             &self,
             attempt_id: &AttemptId,
             _audit: &crate::publication::PublicationAudit,
-            receipt: &crate::durable::inbox::PublicationAuditReceipt,
+            receipt: &crate::durable::PublicationAuditReceipt,
         ) {
             {
                 let mut projection = self.projection.lock().expect("projection lock");
@@ -10147,7 +10147,6 @@ mod tests {
 
     #[test]
     fn t14_t19_worker_read_fence_keeps_one_native_cut_before_publication() {
-        use crate::durable::ConversationStore;
         let (mut projection, store) = initialized_source_projection();
         let initial = projection.checkpoint_candidate().unwrap();
         let first = store
@@ -10330,7 +10329,6 @@ mod tests {
     /// its positive fact but cannot clear a replacement with the same message.
     #[test]
     fn t14_t19_audit_receipt_fences_exact_stream_and_preserves_deferred_settlement_head() {
-        use crate::durable::ConversationStore;
         let mut projection = projection();
         projection.apply(event_observation(RuntimeEvent::AttemptStarted {
             attempt_id: attempt(),
@@ -10345,10 +10343,10 @@ mod tests {
         let cut = store.observation_read_cut().unwrap();
         projection.source_cut = Some(cut.clone());
         let receipt = |start: &crate::publication::PublicationStreamStart, position: u64| {
-            crate::durable::inbox::PublicationAuditReceipt {
+            crate::durable::PublicationAuditReceipt {
                 ready_through: Some(0),
                 ready_t_through: Some(0),
-                summary: crate::durable::inbox::PublicationAuditSummary {
+                summary: crate::durable::PublicationAuditSummary {
                     stream_id: Some(start.stream_id.clone()),
                     message_id: Some(start.message_id.clone()),
                     attempt_id: Some(start.attempt_id.clone()),
@@ -12561,7 +12559,6 @@ mod tests {
 
     #[test]
     fn t06_t14_oversized_transition_is_one_foldable_checkpoint_and_converges() {
-        use crate::durable::ConversationStore;
         let (mut projection, store) = initialized_source_projection();
         let initial = projection.checkpoint_candidate().unwrap();
         let message = MessageBlock::Assistant(crate::message::types::AssistantMessageBlock {
@@ -12647,7 +12644,7 @@ mod tests {
 
     #[test]
     fn t19_atomic_canonical_batch_advances_its_exact_transcript_interval() {
-        use crate::durable::{ConversationStore, SqliteConversationStore};
+        use crate::durable::SqliteConversationStore;
         let mut projection = projection();
         let directory = tempfile::tempdir().unwrap();
         let store = SqliteConversationStore::open(
@@ -12716,7 +12713,6 @@ mod tests {
         RuntimeClientProjection,
         crate::durable::SqliteConversationStore,
     ) {
-        use crate::durable::ConversationStore;
         let mut projection = projection();
         let store = crate::durable::SqliteConversationStore::in_memory(
             projection.snapshot.conversation_id.clone(),
@@ -12758,7 +12754,6 @@ mod tests {
 
     #[test]
     fn t14_t20_initial_cut_expires_with_its_replay_cursor() {
-        use crate::durable::ConversationStore;
         let (mut projection, store) = initialized_source_projection();
         projection.replay_limit = 1;
         let initial = projection.checkpoint_candidate().unwrap().read_cut;
@@ -12906,7 +12901,6 @@ mod tests {
         ToolCall,
         crate::durable::observation::ObservationEventWitness,
     ) {
-        use crate::durable::ConversationStore;
         let (mut projection, store) = initialized_source_projection();
         let started = append_source_attempt_start(&store, "progress-attempt-start");
         publish_source_fact(&mut projection, |projection| {
@@ -12977,7 +12971,6 @@ mod tests {
 
     #[test]
     fn t14_t19_prepared_started_witness_preserves_exact_live_progress_and_terminal_facts() {
-        use crate::durable::ConversationStore;
         let (mut projection, store, call, prepared) = native_running_tool_fixture();
         let historical = projection.checkpoint_seed();
         let progress = ToolProgress {
@@ -13088,7 +13081,6 @@ mod tests {
     /// a sparse skip map or granting future J/C/pending source access.
     #[test]
     fn t14_t20_native_direct_receipts_wait_for_the_exact_earlier_source_prefix() {
-        use crate::durable::ConversationStore;
         let (mut projection, store) = initialized_source_projection();
         let initial = projection.checkpoint_read_cut();
         let earlier = append_source_attempt_start(&store, "held-native-owner");
@@ -13223,7 +13215,6 @@ mod tests {
 
     #[test]
     fn t14_t20_no_j_canonical_and_pending_cuts_do_not_authorize_a_held_journal_owner() {
-        use crate::durable::ConversationStore;
         let (mut projection, store) = initialized_source_projection();
         let published = projection.checkpoint_read_cut();
         let earlier = append_source_attempt_start(&store, "held-before-no-j-c");
@@ -13314,7 +13305,6 @@ mod tests {
 
     #[test]
     fn t14_t19_complete_canonical_head_survives_an_earlier_delayed_callback() {
-        use crate::durable::ConversationStore;
         let (mut projection, store) = initialized_source_projection();
         let initial = projection.checkpoint_read_cut();
         let first = store
@@ -13412,7 +13402,6 @@ mod tests {
 
     #[test]
     fn t14_t19_complete_canonical_head_omits_only_exact_unchanged_rows() {
-        use crate::durable::ConversationStore;
         let (mut projection, store) = initialized_source_projection();
         let [first, second] = canonical_capture_receipts(&store);
         publish_source_fact(&mut projection, |projection| {
@@ -13547,7 +13536,7 @@ mod tests {
 
     fn canonical_capture_receipts(
         store: &dyn crate::durable::ConversationStore,
-    ) -> [crate::durable::inbox::TranscriptCommitReceipt; 2] {
+    ) -> [crate::durable::TranscriptCommitReceipt; 2] {
         let first = store
             .append_canonical(&MessageBlock::User(UserMessageBlock {
                 id: MessageId::new("boundary-user"),
@@ -13569,7 +13558,6 @@ mod tests {
     }
 
     fn canonical_tool_result_capture_case() -> serde_json::Value {
-        use crate::durable::ConversationStore;
         let (mut projection, store) = initialized_source_projection();
         let call = ToolCall {
             id: ToolCallId::new("canonical-boundary-call"),
@@ -13633,7 +13621,6 @@ mod tests {
     /// asynchronous transcript read domain; no client fold produces the oracle.
     #[test]
     fn t14_native_canonical_boundary_independent_checkpoint_capture() {
-        use crate::durable::ConversationStore;
         let (mut projection, store) = initialized_source_projection();
         let initial = projection.checkpoint_candidate().unwrap();
         let [first, second] = canonical_capture_receipts(&store);
@@ -13700,7 +13687,6 @@ mod tests {
 
     #[test]
     fn t14_t19_hidden_canonical_dependency_fences_a_native_audit_without_a_t_gap() {
-        use crate::durable::ConversationStore;
         let fixture = crate::durable::SqliteConversationStore::hidden_context_audit_fixture();
         let mut projection = projection();
         projection.snapshot.conversation_id = fixture.before.read.conversation_id.clone();
@@ -13749,7 +13735,7 @@ mod tests {
 
     #[test]
     fn t19_published_checkpoint_is_independent_of_pending_native_owner_work() {
-        use crate::durable::{ConversationStore, SqliteConversationStore};
+        use crate::durable::SqliteConversationStore;
         let mut projection = projection();
         let directory = tempfile::tempdir().unwrap();
         let store = SqliteConversationStore::open(
@@ -13865,7 +13851,7 @@ mod tests {
 
     #[test]
     fn t16_pending_adoption_receipt_releases_only_its_matching_mutation_fence() {
-        use crate::durable::{ConversationStore, SqliteConversationStore};
+        use crate::durable::SqliteConversationStore;
         let mut projection = projection();
         let directory = tempfile::tempdir().unwrap();
         let store = SqliteConversationStore::open(
@@ -14044,7 +14030,6 @@ mod tests {
         crate::durable::SqliteConversationStore,
         crate::publication::PublicationStreamStart,
     ) {
-        use crate::durable::ConversationStore;
         let store = crate::durable::SqliteConversationStore::in_memory(conversation_id).unwrap();
         let snapshot = raw_publication_snapshot(crate::context::resources::LedgerFrontier(
             store.observation_read_cut().unwrap().ledger_through,
@@ -14100,7 +14085,6 @@ mod tests {
 
     #[test]
     fn t19_raw_assembled_arguments_and_observed_live_frontier_are_exact() {
-        use crate::durable::ConversationStore;
         let mut projection = projection();
         let (store, start) = raw_publication_store(projection.snapshot.conversation_id.clone());
         let staged_frame = |sequence, payload| {

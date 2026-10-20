@@ -1,12 +1,13 @@
 //! #467 real Unix IPC closure. Native initialization carries identity only;
 //! the large canonical source is reconstructed through bounded range reads.
 #![cfg(unix)]
-use crate::durable::{ConversationStore, SqliteConversationStore};
+use crate::durable::SqliteConversationStore;
 use crate::runtime::identity::{ConversationId, MessageId};
 use crate::runtime_client::{
     RUNTIME_CLIENT_PROTOCOL_VERSION, RequestId, RuntimeClientHost, RuntimeClientRequest,
     RuntimeClientResponse, RuntimeClientResult,
 };
+use rustx::durable::CanonicalStore;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;

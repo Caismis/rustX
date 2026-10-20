@@ -1,4 +1,5 @@
 // Captured native C/J cuts retain distinct positive canonical and execution evidence.
+use crate::durable::{CanonicalStore, ObservationStore};
 use super::*;
 
 fn running_trace_snapshot(

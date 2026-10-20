@@ -30,6 +30,7 @@
 //! remains a monotonic usage classifier; unused Sessions are still listed and
 //! are never implicitly reused. See docs/durable-sessions.md for ownership.
 
+use crate::durable::{CanonicalStore, InboxStore, JournalStore};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
@@ -42,9 +43,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::conversation::{SurfaceOp, SurfaceRevision, message_id_of};
-use crate::durable::{
-    ConversationStore, ConversationStoreError, LineageSeed, SqliteConversationStore,
-};
+use crate::durable::{ConversationStoreError, LineageSeed, SqliteConversationStore};
 use crate::message::types::{
     AssistantMessageBlock, InboundKind, MessageBlock, ToolMessageBlock, UserContentBlock,
     UserMessageBlock,
@@ -1528,7 +1527,7 @@ impl SessionCatalog {
     /// - that conversation has never committed a durable inbound acceptance.
     ///
     /// The last condition is the monotonic usage fact owned by the
-    /// conversation's durable authority (`ConversationStore::has_accepted_inbound`),
+    /// conversation's durable authority (`InboxStore::has_accepted_inbound`),
     /// not a pair of independently changing projections. Reading the current
     /// Surface head and the current Pending Inbox separately could assemble a
     /// state that never existed — a pre-adoption head plus a post-adoption
@@ -3017,7 +3016,7 @@ pub(crate) fn remap_seed(
     surface_history: &[SurfaceOp],
     completed_responses: &[crate::durable::response::CompletedResponseProvenance],
     turns: &[crate::durable::reading::TurnReadingProvenance],
-    raw_tool_arguments: &[crate::durable::inbox::CanonicalRawToolArguments],
+    raw_tool_arguments: &[crate::durable::CanonicalRawToolArguments],
 ) -> Result<LineageSeed, SessionError> {
     let messages = canonical;
     let mut message_ids = BTreeMap::new();
@@ -3105,19 +3104,19 @@ pub(crate) fn remap_seed(
 }
 
 fn remap_raw_tool_arguments(
-    raw_tool_arguments: &[crate::durable::inbox::CanonicalRawToolArguments],
+    raw_tool_arguments: &[crate::durable::CanonicalRawToolArguments],
     message_ids: &BTreeMap<MessageId, MessageId>,
-) -> Vec<crate::durable::inbox::CanonicalRawToolArguments> {
+) -> Vec<crate::durable::CanonicalRawToolArguments> {
     raw_tool_arguments
         .iter()
         .filter_map(|item| {
-            message_ids.get(&item.message_id).map(|id| {
-                crate::durable::inbox::CanonicalRawToolArguments {
+            message_ids
+                .get(&item.message_id)
+                .map(|id| crate::durable::CanonicalRawToolArguments {
                     message_id: id.clone(),
                     block_index: item.block_index,
                     bytes: item.bytes.clone(),
-                }
-            })
+                })
         })
         .collect()
 }
@@ -3792,6 +3791,9 @@ impl SessionError {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use crate::durable::{
+        CanonicalStore, InboxStore, JournalStore, ObservationStore, ProjectionStore, RequestStore,
+    };
     #[cfg(test)]
     #[path = "cfg3_reservation.rs"]
     mod reservation_tests;

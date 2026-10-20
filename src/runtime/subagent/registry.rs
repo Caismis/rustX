@@ -5403,6 +5403,7 @@ impl SteerAcknowledgementHook {
 
 #[cfg(test)]
 mod tests {
+    use crate::durable::{InboxStore, JournalStore, ObservationStore};
     include!("registry/agent_recovery_tests.rs");
     include!("registry/agent_duration_tests.rs");
     include!("registry/agent_bootstrap_tests.rs");

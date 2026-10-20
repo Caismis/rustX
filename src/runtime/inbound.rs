@@ -15,7 +15,7 @@
 //!
 //! The mailbox no longer owns [`InboundSequence`] allocation and no longer
 //! holds a process-local payload queue: the durable
-//! [`ConversationStore`](crate::durable::inbox::ConversationStore) owns the accepted
+//! [`ConversationStore`](crate::durable::ConversationStore) owns the accepted
 //! pending state and the one per-conversation sequence domain. The mailbox
 //! is the narrow acceptance/publisher seam that validates eligibility and
 //! lifecycle, durably accepts through the store, then publishes the
@@ -36,7 +36,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
-use crate::durable::inbox::{
+use crate::durable::{
     AcceptedInbound, ConversationInboundCapability, ConversationStore, ConversationStoreError,
     InboundDraft, TranscriptCursor,
 };
@@ -1340,7 +1340,7 @@ impl ConversationInboundMailbox {
 /// Trace-affecting receipt until its owner publishes it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AdoptedInbound {
-    pub canonical_receipts: Vec<crate::durable::inbox::TranscriptCommitReceipt>,
+    pub canonical_receipts: Vec<crate::durable::TranscriptCommitReceipt>,
     /// The adopted items, in strict sequence order.
     pub items: Vec<InboundItem>,
     /// The committed adoption fact, present exactly when `items` is non-empty.

@@ -26,6 +26,7 @@
 //! `src/runtime/conversation_runtime.rs`, and the real-provider proof that a
 //! recovered runtime resends nothing lives in `tests/conformance/agent_loop.rs`.
 
+use rustx::durable::{CanonicalStore, InboxStore, JournalStore, ProjectionStore, RequestStore};
 use std::sync::Arc;
 
 use chrono::{DateTime, TimeZone, Utc};

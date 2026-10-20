@@ -1,10 +1,11 @@
 // Actual cold checkpoints retain original inherited owner identity sources.
+use crate::durable::{CanonicalStore, JournalStore, ObservationStore, ProjectionStore};
 use super::*;
 use crate::runtime_client::response::{AttemptIdentitySource, InheritedAttemptIdentityKind};
 
 fn giant_owner_seed(
     with_turn: bool,
-) -> (crate::durable::inbox::LineageSeed, ConversationId, String) {
+) -> (crate::durable::LineageSeed, ConversationId, String) {
     use crate::durable::reading::{
         ConversationTurnId, InheritedTurnOutcome, TurnExecution, TurnReadingProvenance,
     };
@@ -32,7 +33,7 @@ fn giant_owner_seed(
             },
         )],
     });
-    let mut seed = crate::durable::inbox::LineageSeed::history(vec![first, final_message]);
+    let mut seed = crate::durable::LineageSeed::history(vec![first, final_message]);
     if with_turn {
         seed = seed
             .with_turns(vec![TurnReadingProvenance {

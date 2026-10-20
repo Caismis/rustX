@@ -3,7 +3,7 @@ use super::session::{
     DisplayPreviewSubject, SessionCatalog, SessionError, SessionId, SessionListPage, SessionNode,
     SessionNodeId, SessionPersistentState, SessionSnapshot, SessionSummary,
 };
-use crate::durable::ConversationStore;
+use crate::durable::{CanonicalStore, ObservationStore, ProjectionStore};
 use crate::message::types::{MessageBlock, UserContentBlock};
 use crate::runtime::local_storage::{ConversationAccess, ProductController};
 use std::sync::Arc;
@@ -1488,6 +1488,8 @@ impl SessionController {
 
 #[cfg(test)]
 mod tests {
+    use crate::durable::CanonicalStore;
+    use crate::durable::JournalStore;
     include!("session_controller/cold_statistics_tests.rs");
     use super::super::configuration::SessionConfigInput;
     use super::super::session::deletion::SessionDeleteResult;

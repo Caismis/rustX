@@ -1,4 +1,5 @@
 // Explicit checkpoint repair stays on the existing cancellable Source worker.
+use crate::durable::{JournalStore, ObservationStore};
 use super::*;
 
 pub(super) struct OccupancySourceFault {

@@ -146,12 +146,12 @@ pub(crate) enum ConversationObservation {
     /// Finite native C evidence; canonical body bytes remain at their source.
     CanonicalCommitted {
         attempt_id: Option<AttemptId>,
-        receipt: crate::durable::inbox::TranscriptCommitReceipt,
+        receipt: crate::durable::TranscriptCommitReceipt,
     },
     /// Finite audit settlement captured in the native publication transaction.
     AuditSettled {
         attempt_id: AttemptId,
-        receipt: crate::durable::inbox::PublicationAuditReceipt,
+        receipt: crate::durable::PublicationAuditReceipt,
     },
     /// One canonical message commit (the loop's commit observation seam;
     /// the internal committed-message events reference identity only).
@@ -590,11 +590,7 @@ pub(crate) trait PublicationProjectionCommit: Send + Sync {
         &self,
         receipt: &crate::durable::inbox::GoalObservationReceipt,
     ) -> NativeReceiptInstallation;
-    fn native_audit(
-        &self,
-        attempt: &AttemptId,
-        receipt: &crate::durable::inbox::PublicationAuditReceipt,
-    );
+    fn native_audit(&self, attempt: &AttemptId, receipt: &crate::durable::PublicationAuditReceipt);
     fn native_pending(
         &self,
         receipt: Option<&crate::durable::inbox::PendingObservationReceipt>,
@@ -628,7 +624,7 @@ pub(crate) struct SessionObservationMetadata {
     pub(crate) closed: bool,
 }
 impl SessionObservationMetadata {
-    fn fold_canonical(&mut self, batch: &crate::durable::inbox::CanonicalObservationBatch) {
+    fn fold_canonical(&mut self, batch: &crate::durable::CanonicalObservationBatch) {
         self.fold(
             batch.human_activity_at,
             batch.has_opening_user,
@@ -696,7 +692,7 @@ impl ObservationFanout {
         self.session_metadata.subscribe()
     }
 
-    fn canonical_metadata(&self, batch: &crate::durable::inbox::CanonicalObservationBatch) {
+    fn canonical_metadata(&self, batch: &crate::durable::CanonicalObservationBatch) {
         self.session_metadata.send_if_modified(|metadata| {
             let previous = metadata.clone();
             metadata.fold_canonical(batch);
@@ -844,7 +840,7 @@ impl ObservationFanout {
     pub(crate) fn native_audit(
         &self,
         attempt: &AttemptId,
-        receipt: &crate::durable::inbox::PublicationAuditReceipt,
+        receipt: &crate::durable::PublicationAuditReceipt,
     ) {
         if let Some(projection) = self.publication_projection.get() {
             projection.native_audit(attempt, receipt);

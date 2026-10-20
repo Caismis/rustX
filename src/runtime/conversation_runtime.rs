@@ -7627,7 +7627,7 @@ impl AgentExecutionObserver for RuntimeObserver {
         &self,
         attempt_id: &AttemptId,
         _block: &MessageBlock,
-        receipt: &crate::durable::inbox::TranscriptCommitReceipt,
+        receipt: &crate::durable::TranscriptCommitReceipt,
     ) {
         self.push(ConversationObservation::CanonicalCommitted {
             attempt_id: Some(attempt_id.clone()),
@@ -7638,7 +7638,7 @@ impl AgentExecutionObserver for RuntimeObserver {
     fn observe_status(
         &self,
         observation: &AgentStatusObservation,
-        source: Option<&crate::durable::inbox::StatusObservationSource>,
+        source: Option<&crate::durable::StatusObservationSource>,
     ) {
         self.push(ConversationObservation::Status(
             crate::runtime_client::projection::prepared_status_view(observation, source),
@@ -7650,7 +7650,7 @@ impl AgentExecutionObserver for RuntimeObserver {
         contribution: &crate::context::contribution::ContributionStart,
         _attempt: &AttemptId,
         _turn: u32,
-        source: Option<&crate::durable::inbox::StatusObservationSource>,
+        source: Option<&crate::durable::StatusObservationSource>,
     ) {
         if contribution.presentation.is_none() {
             return;
@@ -7690,7 +7690,7 @@ impl AgentExecutionObserver for RuntimeObserver {
         &self,
         attempt_id: &AttemptId,
         _audit: &PublicationAudit,
-        receipt: &crate::durable::inbox::PublicationAuditReceipt,
+        receipt: &crate::durable::PublicationAuditReceipt,
     ) {
         if let Some(inner) = self.inner.upgrade()
             && let Some(fanout) = inner.pending.get()
@@ -8144,6 +8144,7 @@ pub(crate) async fn runtime_with_recovered_registry_for_test(
 
 #[cfg(test)]
 mod tests {
+    use crate::durable::{CanonicalStore, InboxStore, JournalStore, ProjectionStore, RequestStore};
     use std::sync::Arc;
 
     /// A wake from the admission task enters Tokio's private LIFO slot.
@@ -8253,7 +8254,7 @@ mod tests {
         AgentStatusEngine, ClosureTokenEstimator, ContextError, ContextErrorKind,
         DefaultTokenEstimator, TokenEstimator,
     };
-    use crate::durable::inbox::ConversationStore;
+    use crate::durable::ConversationStore;
     use crate::events::types::RuntimeEvent;
     use crate::message::content::TextBlock;
     use crate::message::types::{InboundKind, MessageBlock, UserContentBlock, UserSource};

@@ -7,10 +7,11 @@
 //! Private child transcripts remain outside the single parent `ToolResult`.
 
 use crate::launch_fixture::LaunchFixture;
+use rustx::durable::{CanonicalStore, JournalStore, ObservationStore};
 use std::sync::Arc;
 
 use crate::common::provider_emulator::ProviderEmulator;
-use rustx::durable::{ConversationStore, SqliteConversationStore};
+use rustx::durable::SqliteConversationStore;
 use rustx::local_runtime::composition::{
     LocalConversationCore, LocalConversationRuntime, LocalRuntimeDependencies,
 };

@@ -4,8 +4,8 @@ use super::{
     connection::{client_error, domain},
     protocol::{ErrorData, MethodResult, RpcError},
 };
+use crate::durable::ObservationStore;
 use crate::{
-    durable::ConversationStore,
     local_runtime::{
         session::{LineageSide, SessionId, SessionNodeId},
         session_controller::SessionController,

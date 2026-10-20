@@ -1,5 +1,6 @@
 //! Atomic Workflow admission against deterministic candidate facts.
 use super::*;
+use crate::durable::JournalStore;
 
 fn cfg274_agent_source(overrides: Option<Value>) -> WorkflowProgram {
     let mut agent = json!({"type":"agent","profile":"reviewer","task":"Review","output":schema(json!({}), &[])});

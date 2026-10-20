@@ -9,7 +9,7 @@ use super::{
         RuntimeClientResult,
     },
 };
-use crate::durable::ConversationStore;
+use crate::durable::ObservationStore;
 use crate::runtime::identity::{AgentId, ConversationId, SubagentId};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -1456,6 +1456,7 @@ impl ClientInner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::durable::ObservationStore;
 
     fn identity_response(
         id: RequestId,

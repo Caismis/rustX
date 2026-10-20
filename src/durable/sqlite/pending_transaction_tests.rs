@@ -4,7 +4,7 @@
 //! denied the writer. Channels release the owner, then permit `SQLite` to retry.
 
 use super::*;
-use crate::durable::inbox::{PendingInboundRef, PendingMutationOutcome, TranscriptItem};
+use crate::durable::{PendingInboundRef, PendingMutationOutcome, TranscriptItem};
 use chrono::TimeZone;
 use std::cell::RefCell;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};

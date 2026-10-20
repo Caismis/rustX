@@ -2960,6 +2960,7 @@ pub(crate) mod test_sync {
 
 #[cfg(test)]
 mod tests {
+    use crate::durable::{CanonicalStore, InboxStore, JournalStore};
     use std::sync::Arc;
 
     use tokio::sync::watch;
@@ -2970,7 +2971,6 @@ mod tests {
         BackgroundLifecycle, BackgroundRecord, BackgroundResources, ConversationBackgroundRegistry,
         NotificationState,
     };
-    use crate::durable::inbox::ConversationStore;
     use crate::events::{RecordingEventSink, RuntimeEvent};
     use crate::runtime::identity::{ConversationId, ToolCallId, ToolExecutionId, ToolId};
     use crate::runtime::inbound::ConversationInboundMailbox;

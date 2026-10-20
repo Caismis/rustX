@@ -79,6 +79,7 @@ fn assert_frozen_tool_result_absent(
 /// Capacity suite: this test's value comes from its scale, so FAST skips
 /// `::scale::` and FULL runs it (tests/README.md, "Capacity tests").
 mod scale {
+    use crate::durable::{ObservationStore};
     use super::*;
 
     #[test]

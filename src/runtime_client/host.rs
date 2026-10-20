@@ -110,6 +110,7 @@
 //! attempt, conversation-owned background executions, mailbox contents,
 //! canonical conversation state, and capability state are untouched.
 
+use crate::durable::{JournalStore, ObservationStore};
 mod durable_bootstrap;
 
 use std::collections::BTreeMap;
@@ -1381,7 +1382,7 @@ impl crate::runtime::observation::PublicationProjectionCommit for NativePublicat
     fn native_audit(
         &self,
         attempt: &crate::runtime::identity::AttemptId,
-        receipt: &crate::durable::inbox::PublicationAuditReceipt,
+        receipt: &crate::durable::PublicationAuditReceipt,
     ) {
         let Some(inner) = self.inner.upgrade() else {
             return;
@@ -6208,6 +6209,7 @@ fn source_domain_path(domain: &str) -> Option<(Vec<String>, bool)> {
 
 #[cfg(test)]
 mod tests {
+    use crate::durable::{CanonicalStore, JournalStore, ObservationStore};
     mod pure_read_tests {
         include!("host/pure_read_tests.rs");
     }

@@ -683,7 +683,7 @@ fn transcript_entry_view(
     })
 }
 
-fn transcript_tool_view(tool: crate::durable::inbox::TranscriptTool) -> ForegroundToolExecution {
+fn transcript_tool_view(tool: crate::durable::TranscriptTool) -> ForegroundToolExecution {
     ForegroundToolExecution {
         committed_result_deferred: false,
         committed_result: tool.result,
@@ -1159,8 +1159,8 @@ pub struct RuntimeClientPublicationSettlementRecord {
     pub transcript_cursor: RuntimeClientTranscriptCursor,
     pub read_cut: crate::durable::observation::ObservationReadCut,
 }
-impl From<crate::durable::inbox::PublicationAuditSummary> for RuntimeClientPublicationSettlement {
-    fn from(summary: crate::durable::inbox::PublicationAuditSummary) -> Self {
+impl From<crate::durable::PublicationAuditSummary> for RuntimeClientPublicationSettlement {
+    fn from(summary: crate::durable::PublicationAuditSummary) -> Self {
         Self {
             stream_id: summary.stream_id,
             message_id: summary.message_id,

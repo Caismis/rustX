@@ -1,6 +1,6 @@
 // Original J/C/request bodies are an independent oracle, never default read input.
 fn trace_raw_seed() -> (LineageSeed, Vec<u8>) {
-    use crate::durable::inbox::CanonicalRawToolArguments;
+    use crate::durable::CanonicalRawToolArguments;
     use crate::message::types::ContentBlockIndex;
     let raw = format!(
         " {{\"n\":1.0000,{}\"integer\":18446744073709551615,\"escaped\":\"\\u6c34\"}} \n",
