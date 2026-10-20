@@ -20,9 +20,14 @@ const optionFields = ['model', 'protocol', 'reasoning_enabled', 'profile', 'max_
 export function useTraceContent(page: CheckpointPage | undefined, reader: TraceFieldReader | undefined, inspection: TraceInspectionHead | undefined, item: InspectableDisplayItem, facet: TrajectoryFacet, previousDomain?: string) {
   const section = inspection?.content.type === 'tool' ? 'tool' : inspection?.content.type === 'messages' ? facet === 'source' ? 'source' : 'message' : item.record.kind === 'request' && (facet === 'overview' || facet === 'options') ? 'options' : facet;
   const identity = JSON.stringify([page, item.type, item.type === 'ContextRow' ? item.context.locator : undefined, section, previousDomain]);
+  const owner = JSON.stringify([page?.read_cut.conversation_id, page?.read_cut.activation_id,
+    item.owner_record_id, item.type, item.type === 'ContextRow' ? item.context.locator : undefined, section, previousDomain]);
   const latest = useRef({ identity, reader }); latest.current = { identity, reader };
-  const [state, setState] = useState<{ identity: string; reader: typeof reader; content?: Content; error?: string }>();
+  const [state, setState] = useState<{ identity: string; owner: string; reader: typeof reader; content?: Content; error?: string }>();
   const loaded = state?.identity === identity && state.reader === reader ? state : undefined;
+  // A new cut for the same selected content is read behind the resident view.
+  // Facet/record/source changes and missing native headers never borrow a body.
+  const displayed = loaded ?? (page && state?.owner === owner ? state : undefined);
   useEffect(() => {
     if (!page || !reader) return;
     let mounted = true;
@@ -82,9 +87,10 @@ export function useTraceContent(page: CheckpointPage | undefined, reader: TraceF
         request.tools = tools as TraceToolDefinition[];
       }
       return { request };
-    })().then(content => { if (current()) setState({ identity, reader, content }); })
-      .catch(error => { if (current()) setState({ identity, reader, error: String(error).slice(0, 512) }); });
+    })().then(content => { if (current()) setState({ identity, owner, reader, content }); })
+      .catch(error => { if (current()) setState(previous => ({ identity, owner, reader,
+        content: previous?.owner === owner ? previous.content : undefined, error: String(error).slice(0, 512) })); });
     return () => { mounted = false; };
   }, [identity, reader]);
-  return loaded;
+  return displayed;
 }

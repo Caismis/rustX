@@ -122,9 +122,10 @@ export class AgentTraceReader {
     finally { if (this.paging === operation) this.paging = undefined; }
   };
   detail = async (id: string) => {
-    if (!this.current() || this.cache.details[id]?.loading || this.cache.details[id]?.detail || this.cache.details[id]?.page) return;
+    const existing = this.cache.details[id];
+    if (!this.current() || existing?.loading || existing && !existing.stale && !existing.error && (existing.detail || existing.page)) return;
     const pending = beginTraceDetail(this.cache, id), epoch = pending.epoch;
-    const current = () => this.current() && this.cache.epoch === epoch && this.cache.details[id] === pending.details[id];
+    const current = () => this.current() && this.cache.epoch === epoch && this.cache.details[id]?.read === pending.details[id].read;
     this.publish(pending);
     try {
       const result = await this.client.request({ method: 'agent/traceDetail', params: { target: this.proof.target, agent_id: this.agentId, record_id: id } }, 'domain_page', undefined, current);

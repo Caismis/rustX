@@ -231,7 +231,7 @@ it('a detail reply cannot attach to a different attachment target', async () => 
   expect(server.client.getSnapshot().views.A.trace?.details['trace:10']?.detail).toBeUndefined();
 });
 
-it('a lifecycle repair invalidates cached detail and fences a pending older read', async () => {
+it('a lifecycle-only repair preserves cached detail and its pending original read', async () => {
   server = new Server();
   const running = entry(1, { state: 'running' });
   server.snapshots.set('A', { ...snapshot(), trace: { records: [running] } });
@@ -242,9 +242,24 @@ it('a lifecycle repair invalidates cached detail and fences a pending older read
   await server.update('A', { ...snapshot(), trace: { records: [entry(1)] } });
   server.socket.success(request, traceReceipt(detail(1)));
   await pending;
-  expect(server.client.getSnapshot().views.A.trace?.details[running.id]).toBeUndefined();
+  expect(server.client.getSnapshot().views.A.trace?.details[running.id]?.detail).toEqual(detail(1));
   const cached = completeTraceDetail(replaceTrace({ records: [running] }), running.id, 1, detail(1));
-  expect(refreshTrace(cached, { records: [entry(1)] }).details[running.id]).toBeUndefined();
+  expect(refreshTrace(cached, { records: [entry(1)] }).details[running.id]).toBe(cached.details[running.id]);
+});
+
+it('a body update retains readable detail and coalesces changes while the replacement is in flight', () => {
+  const original = entry(1), first = { ...original, preview: { text: 'New content', truncated: false } };
+  const cached = completeTraceDetail(replaceTrace({ records: [original], read_cut: rootCut() }), original.id, 1, detail(1));
+  const updated = refreshTrace(cached, { records: [first], read_cut: { ...rootCut(), revision: '2' } });
+  expect(updated.details[original.id]).toMatchObject({ stale: true, detail: detail(1) });
+  const reading = beginTraceDetail(updated, original.id);
+  expect(reading.details[original.id]).toMatchObject({ loading: true, stale: false, detail: detail(1) });
+  const newer = refreshTrace(reading, { records: [{ ...first, preview: { text: 'Newest content', truncated: false } }] });
+  expect(newer.details[original.id].read).toBe(reading.details[original.id].read);
+  const completed = completeTraceDetail(newer, original.id, newer.epoch, detail(1, { truncated: true }));
+  expect(completed.details[original.id]).toMatchObject({ stale: true, detail: { truncated: true } });
+  const failed = completeTraceDetail(beginTraceDetail(completed, original.id), original.id, newer.epoch, undefined, 'Read failed');
+  expect(failed.details[original.id]).toMatchObject({ loading: false, stale: false, error: 'Read failed', detail: { truncated: true } });
 });
 
 it('native TraceChanged coalesces burst reads independently of durable Session updates', async () => {
@@ -267,6 +282,19 @@ it('native TraceChanged coalesces burst reads independently of durable Session u
   await observed;
   expect(server.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(2);
   expect(server.requests.filter(row => row.request.method === 'session/checkpoint')).toHaveLength(1);
+});
+
+it('a delayed summary cannot roll back a newer native head while retained detail stays readable', async () => {
+  server = new Server();
+  const running = entry(1, { state: 'running' });
+  server.snapshots.set('A', { ...snapshot(), trace: { records: [running], next_cursor: null } });
+  await server.attached('A'); server.held.add('session/trace');
+  server.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: server.target('A'), cursor: String(++server.cursor), event: { type: 'trace_changed' } } });
+  const stale = await server.waitFor('session/trace', 1);
+  await server.update('A', { ...snapshot(), trace: { records: [entry(1)], next_cursor: null } });
+  server.socket.success(stale, { type: 'trace', page: { read_cut: rootCut(), records: [running], next_cursor: null } });
+  await server.waitFor('session/trace', 2);
+  expect(server.client.getSnapshot().views.A.trace!.page.records[0].state).toBe('completed');
 });
 
 it('overlapping snapshot supersedes paging and unchanged pending detail without stranding loading', async () => {

@@ -3482,3 +3482,65 @@ reviewed; the native narrow dark flow was also reviewed. Evidence:
 `/tmp/rustx-compaction-position-{en,zh}-{light,dark}-{1440,390}.png` and
 `/tmp/rustx-compaction-zh-dark.png`. Other browser engines were not exercised.
 The existing large-chunk build warning remains.
+
+### Live trajectory inspection keeps its resident content (2026-10-20)
+
+Reference: Harness `ui-trajectory/src/client/TrajectoryTable.tsx` at
+`687f282e8625c6b8d11ff58211a90524be2e4317` keeps the selected record/detail pane
+resident while its semantic cells update. The rustX adapter instead superseded
+all reader-owned detail on each native checkpoint/domain event, then invalidated
+cached bodies for changes to timing, status, usage or Turn placement. The detail
+hook also hid its loaded body while reading a replacement cut. Together these
+paths repeatedly removed the right-hand content and its interactive state.
+
+Ordinary overlapping live updates now preserve the original native detail page,
+reader and content cut when its content selectors are unchanged. Native payload
+changes mark the detail stale and cause one background read; the old content
+remains displayed until the new descriptor and all required fields are ready.
+A per-read token lets native changes queue one successor read without repeatedly
+cancelling the in-flight read. Root and child readers share this cache behavior.
+The Inspector keeps its tab, JSON tree, reasoning disclosure, focus and scroll
+position. Failed replacement reads preserve content and expose the existing
+error presentation. New selections, native interval epochs, attachment changes,
+explicit resynchronization and child retirement still fence obsolete readers.
+
+Native summary reads have a separate freshness check: a response launched before
+a newer native Trace head cannot overwrite that head, and one coalesced read
+repairs its interests. This does not revoke the resident detail's immutable
+source merely because the live summary advanced. No runtime execution, provider,
+native protocol, or TUI interaction logic changed.
+
+Validation passed: 245 focused tests covering root/child live inspection, finite
+cache limits, delayed response ordering, deferred native fields, original Tool
+and message sources, cut replacement, resync, attachment replacement and child
+retirement; TypeScript, i18n ownership, production build, 307 source records and
+notices for 264 production packages also passed. A new delayed-summary regression
+failed against the intermediate implementation before the ordering guard was
+added, then passed with the rest of the final checks.
+
+Browser plugin not available: rendered QA used pinned Playwright 1.63 Linux
+Chromium, fixture origin `http://127.0.0.1:5274` and production preview origin
+`http://127.0.0.1:5273`. All 14 final browser scenarios passed. The new flow opens
+Session A at `test/fixtures/startup.html?existing&models&trace-live`, selects the
+Trajectory request and Options, runs 50 native updates while summary/header/field
+replies are held, then completes the new source. The body stays readable until
+the replacement is ready. A MutationObserver saw zero panel/tree detachments and
+zero loading-state appearances; tab focus, scrollTop=80 and the original tree DOM
+survived. Detail reads stayed at one for lifecycle changes and two for one actual
+body update; stale summary replies coalesced one follow-up read. Tests cover both
+themes at 1440x1000 and 390x1000, with English desktop and Chinese narrow UI.
+
+The existing eight native/Harness visual-parity combinations and desktop/narrow
+child trajectory navigation also passed, with no screenshot baseline changes.
+Page identity, meaningful content, error overlays, console health, interaction
+state and horizontal viewport bounds passed. Desktop dark and narrow light
+captures were visually reviewed. Evidence:
+`/tmp/rustx-trace-live-{before,after}-{dark,light}-{1440,390}.png`; these show the
+resident view before and after the stress flow, not a before-fix capture. Other
+browser engines were not exercised. The existing large-chunk build warning
+remains.
+
+The real native `trajectory-integration.spec.ts` workflow also passed: Settings
+save/reread, busy admission, exact adoption and immutable historical Trace
+inspection through a running App Server. This brings the final browser validation
+to 15 passing scenarios, including the 14 presentation/stress/child scenarios.

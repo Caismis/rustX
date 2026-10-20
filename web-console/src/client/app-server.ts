@@ -1192,7 +1192,8 @@ export class AppServerClient {
     const snapshot = foldRuntimeEvent(view.snapshot, event);
     const checkpointAdvanced = transitionFacts(event).some(fact => fact.type === 'checkpoint_advanced');
     const traceAdvanced = checkpointAdvanced || transitionFacts(event).some(fact => fact.type === 'read_domains_updated');
-    this.setSession(id, { snapshot, publicationHeads: publicationHeads(view.publicationHeads, event, snapshot), ...(traceAdvanced ? {trace:this.supersedeTrace(id,refreshTrace(view.trace,snapshot.trace,snapshot.trace_updates,observationCheckpoint(snapshot,cursor)?.read_cut))} : {}), checkpoint: observationCheckpoint(snapshot, cursor) ?? view.checkpoint, cursor, observationState: 'following',
+    const trace = traceAdvanced ? refreshTrace(view.trace, snapshot.trace, snapshot.trace_updates, observationCheckpoint(snapshot, cursor)?.read_cut) : undefined;
+    this.setSession(id, { snapshot, publicationHeads: publicationHeads(view.publicationHeads, event, snapshot), ...(trace ? { trace: trace.epoch === view.trace?.epoch ? trace : this.supersedeTrace(id, trace) } : {}), checkpoint: observationCheckpoint(snapshot, cursor) ?? view.checkpoint, cursor, observationState: 'following',
       history: snapshot.transcript === view.snapshot.transcript ? this.state.views[id].history : refreshTranscript(this.state.views[id].history, snapshot.transcript) });
     const settled=transitionFacts(event).filter(fact=>fact.type==='interaction_settled'||fact.type==='interaction_removed');
     if(settled.length){
@@ -1728,6 +1729,7 @@ export class AppServerClient {
           // while it awaits owns a separate, coalesced follow-up obligation.
           read.dirty = false;
           const authority = this.traceAuthorities.get(id);
+          const observed = this.state.views[id]?.snapshot;
           const batches=traceInterestBatches(this.state.views[id]?.trace);
           for(const [index,records] of batches.entries()) {
             if(!current()||this.traceAuthorities.get(id)!==authority)break;
@@ -1736,7 +1738,15 @@ export class AppServerClient {
               result=await this.request({method:'session/trace',params:{target,before:null,limit:index?1:TRACE_PAGE_SIZE,records}},'trace',undefined,current);
             }catch(error){if(!read.dirty||!current())throw error;break;}
             standaloneTraceCut(result.page,target.conversation_id);
-            if(current()&&this.traceAuthorities.get(id)===authority)this.setSession(id,{trace:{...refreshTrace(this.state.views[id]?.trace,result.page,result.page.updates??[],undefined,index>0),fields:this.liveTraceFields(target)}});
+            if(current()&&this.traceAuthorities.get(id)===authority) {
+              const latest = this.state.views[id]?.snapshot;
+              if (latest?.trace !== observed?.trace || latest?.trace_updates !== observed?.trace_updates) {
+                // A newer native head already landed. Keep its rows and the
+                // resident detail, then coalesce one read for the new head.
+                read.dirty = true; break;
+              }
+              this.setSession(id,{trace:{...refreshTrace(this.state.views[id]?.trace,result.page,result.page.updates??[],undefined,index>0),fields:this.liveTraceFields(target)}});
+            }
           }
         }
       } finally {
@@ -1885,12 +1895,12 @@ export class AppServerClient {
     const epoch = cache.epoch;
     const authority = this.traceAuthorities.get(id);
     const existing = cache.details[record];
-    if (existing && (existing.loading || existing.detail || existing.page)) return;
+    if (existing?.loading || existing && !existing.stale && !existing.error && (existing.detail || existing.page)) return;
     const pending = beginTraceDetail(cache, record);
     const current = () => observation.current()
       && this.traceAuthorities.get(id) === authority
       && this.state.views[id]?.trace?.epoch === epoch
-      && this.state.views[id]?.trace?.details[record] === pending.details[record];
+      && this.state.views[id]?.trace?.details[record]?.read === pending.details[record].read;
     this.setSession(id, { trace: pending });
     try {
       const result = await this.request({ method: 'session/traceDetail', params: { target, record_id: record } }, 'domain_page', undefined, current);

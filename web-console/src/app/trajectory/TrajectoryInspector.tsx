@@ -538,6 +538,7 @@ export interface TrajectoryInspectorProps {
   detailPage?:import('../../../../protocol/app-server/v51').CheckpointPage;
   detailReader?:import('../../client/trace').TraceFieldReader;
   loading?: boolean | undefined;
+  stale?: boolean;
   error?: string | undefined;
   /** Request the heavy detail of this record; the owner fences the reply. */
   onLoadDetail: (id: string) => void;
@@ -561,7 +562,7 @@ export interface TrajectoryInspectorProps {
  * @param props - the selected item, its fetched detail and navigation.
  * @returns the details panel contents.
  */
-export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFacet, detail, loading,error,onLoadDetail,onLoadEarlier, onClose, location, records, executions, requestNumbers, completeHistory, onOpen }: TrajectoryInspectorProps) {
+export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFacet, detail, loading,stale,error,onLoadDetail,onLoadEarlier, onClose, location, records, executions, requestNumbers, completeHistory, onOpen }: TrajectoryInspectorProps) {
   const tx = useTranslation();
   const inspection=detailPage?traceInspectionHead(detailPage,item.record.id):undefined;
   const messagesHead=inspection?.content.type==='messages'?inspection.content.page:undefined;
@@ -569,8 +570,8 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
   // The selected durable content head never replaces the outer live lifecycle.
   const sourceRecord=inspection?.record??record;
   useEffect(() => {
-    if (record.has_detail && !detail && !detailPage && !loading && !error) onLoadDetail(record.id);
-  }, [record.id, record.has_detail, detail, detailPage,loading, error, onLoadDetail]);
+    if (record.has_detail && (stale || !detail && !detailPage) && !loading && !error) onLoadDetail(record.id);
+  }, [record.id, record.has_detail, detail, detailPage,loading, stale, error, onLoadDetail]);
   const tabs = inspectorTabs(item);
   const active = tabs.includes(facet) ? facet : tabs[0]!;
   const predecessor=record.request?.predecessor;
@@ -773,6 +774,7 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
       </button>)}
     </div>
     <div id="trajectory-detail-panel" className={panelClass} role="tabpanel" aria-labelledby={`trajectory-detail-${active}`}>
+      {detailError && !pending && <DetailPending error={detailError}/>}
       {body()}
     </div>
   </>;

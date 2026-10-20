@@ -27,6 +27,9 @@ function detailWeight(entry: TraceDetailEntry) {
  */
 export interface TraceDetailEntry {
   readonly epoch: number;
+  /** One in-flight read; lifecycle refreshes may mark its result stale without cancelling it. */
+  readonly read?: object;
+  readonly stale?: boolean;
   readonly content?:import('../../../protocol/app-server/v51').ContentBinding[];
   readonly readContent?:(ref:import('../../../protocol/app-server/v51').ContentRef,offset:number,current:()=>boolean)=>Promise<import('../../../protocol/app-server/v51').ContentChunk>;
   /** A positive finite descriptor is not a complete TraceDetail. */
@@ -198,7 +201,7 @@ export function beginTraceDetail(cache: TraceCache, id: string): TraceCache {
   return {
     ...cache,
     details: boundDetails(
-      { ...cache.details, [id]: { epoch: cache.epoch, loading: true } },
+      { ...cache.details, [id]: { ...cache.details[id], epoch: cache.epoch, read: {}, stale: false, loading: true, error: undefined } },
       cache.selection?.id,
       id,
     ),
@@ -224,14 +227,29 @@ export function completeTraceDetail(
   reader?:TraceFieldReader,
 ): TraceCache {
   if (cache.epoch !== epoch) return cache;
+  const previous = cache.details[id];
+  const failure = !detail && !page ? error ?? 'Record detail is unavailable at this read cut.' : undefined;
   return {
     ...cache,
     details: boundDetails(
-      { ...cache.details, [id]: { epoch, content,readContent,page,reader,...(detail ? { detail } : {}), ...(!detail&&!page ? { error: error ?? 'Record detail is unavailable at this read cut.' } : {}) } },
+      { ...cache.details, [id]: failure
+        ? { ...previous, epoch, read: undefined, loading: false, stale: false, error: failure }
+        : { epoch, content, readContent, page, reader, detail, stale: previous?.stale } },
       cache.selection?.id,
       id,
     ),
   };
+}
+
+/** Only native content selectors change a detail's read source. Timing, usage,
+ * status and Turn placement belong to the outer live row, not its frozen body. */
+function contentIdentity(record: TraceRecord | undefined) {
+  if (!record) return undefined;
+  const request = record.request;
+  return JSON.stringify([record.kind, record.has_detail, record.fields, record.collections, record.calls,
+    record.message_id, record.attachments, record.tool, record.preview,
+    request && [request.request_id, request.request_id_source, request.context_domain, request.context_total,
+      request.context_next_offset, request.context_additions, request.system_prompt, request.tool_catalog]]);
 }
 
 export function refreshTrace(previous: TraceCache | undefined, page: TracePage, updates: TraceLifecycle[] = [],outerCut?:CheckpointReadCut,lifecycleOnly=false): TraceCache {
@@ -271,9 +289,12 @@ export function refreshTrace(previous: TraceCache | undefined, page: TracePage, 
   if (selection) latest.set(selection.id, selection);
   const old = new Map(previous.page.records.map(record => [record.id, record]));
   if (previous.selection) old.set(previous.selection.id, previous.selection);
-  // A repaired record needs detail from the new native read cut.
-  const details = Object.fromEntries(Object.entries(previous.details).filter(([id]) =>
-    JSON.stringify(old.get(id)) === JSON.stringify(latest.get(id)),
+  // Keep the original reader while the same native content remains represented.
+  // A changed body is refreshed in the background; it never blanks the inspector.
+  const unchanged = (id: string) => old.get(id) === latest.get(id) || contentIdentity(old.get(id)) === contentIdentity(latest.get(id));
+  for (const id of Object.keys(readCuts)) if (previous.readCuts?.[id] && unchanged(id)) readCuts[id] = previous.readCuts[id];
+  const details = Object.fromEntries(Object.entries(previous.details).map(([id, entry]) =>
+    [id, unchanged(id) ? entry : { ...entry, stale: true, error: undefined }],
   ));
   return { ...previous, selection, details, readCuts:retainedCuts(readCuts,records,selection),page: { read_cut:null,records, next_cursor: previous.page.next_cursor } };
 }
