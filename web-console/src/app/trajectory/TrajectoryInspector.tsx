@@ -30,7 +30,7 @@ import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import { CodeBlock } from '../../presentation/markdown/CodeBlock';
 import { Artifact } from '../components/Artifact';
 import { cellKind, cellLabel, isErrorRecord } from './TrajectoryCell';
-import type { InspectableDisplayItem, TrajectoryFacet } from './layout';
+import { isBetweenTurnsItem, type InspectableDisplayItem, type TrajectoryFacet } from './layout';
 import { formatDurationMillis, formatDurationMs, formatStartedAt, instantMillis, wireCount } from './timeline';
 import css from './Trajectory.module.css';
 
@@ -640,17 +640,19 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
     ? <DetailPending error={detailError} />
     : <MessageContent blocks={blocks} fallback={fallback} artifacts={artifacts} rendered={rendered} preview={preview} thinkingExpanded={thinkingExpanded} onThinkingExpanded={setThinkingExpanded} onOpenCall={record.kind === 'compaction' || item.type === 'ContextRow' || item.type === 'RequestBoundary' ? undefined : openCall} />;
   const tabLabel = (tab: TrajectoryFacet) => tab === 'input' && program ? tx('trajectory:code.source') : tab === 'raw' && record.kind === 'compaction' ? tx('trajectory:tab.raw-output') : tx(TAB_LABEL[tab]);
+  const sectionLabel = isBetweenTurnsItem(item) ? tx('trajectory:section.between-turns') : location?.turn;
+  const detailLocation = item.type === 'SystemPromptCell' ? item.label
+    : [sectionLabel, record.kind === 'compaction' ? undefined : location?.group].filter(Boolean).join(' · ');
   const title = item.type === 'RequestBoundary'
     ? <>
       <span className={css.requestDetailsDot} aria-hidden="true" />
       <span className={css.requestDetailsName}>{tx('trajectory:request.label', { request: requestNumber ?? '—' })}</span>
-      <span className={css.detailsLocation}>{location?.turn ?? tx('trajectory:section.between-turns')}</span>
+      {sectionLabel && <span className={css.detailsLocation}>{sectionLabel}</span>}
     </>
     : <>
       <span className={css.kindTag} data-role-kind={kind}>{cellLabel(tx, kind)}</span>
       {record.kind === 'tool' && (toolDetail?.name ?? sourceRecord.tool?.name) != null && <span className={css.detailsLocation} title={toolDetail?.name ?? sourceRecord.tool?.name ?? undefined}>{toolDetail?.name ?? sourceRecord.tool?.name}</span>}
-      <span className={css.detailsLocation}>{item.type === 'SystemPromptCell' ? item.label
-        : [location?.turn ?? tx('trajectory:section.between-turns'), record.kind === 'compaction' ? undefined : location?.group].filter(Boolean).join(' · ')}</span>
+      {detailLocation && <span className={css.detailsLocation}>{detailLocation}</span>}
     </>;
   const panelClass = active === 'overview' ? `${css.detailBody} ${css.detailBodySummary}` : program && active === 'input' ? `${css.detailBody} ${css.detailBodyProgram}` : css.detailBody;
 

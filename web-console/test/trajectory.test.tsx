@@ -1613,6 +1613,48 @@ it('checkpoint summaries and unscoped reused history display Between turns witho
   expect(JSON.stringify(records)).toBe(original);
 });
 
+it.each(['subagent', 'background', 'workflow', 'tool'] as const)('unscoped %s activity is not a between-turn section or an inferred nearby Turn', kind => {
+  const records = [
+    traceRecord(0, { kind: 'user', request: null, location: {}, preview: { text: 'Reused original context', truncated: false } }),
+    traceRecord(1, { kind: 'compaction', request: null, location: {} }),
+    traceRecord(2, { kind: 'assistant', request: null, location: { attempt_id: 'parent-turn', step_id: '1' } }),
+    traceRecord(3, { kind, request: null, location: {}, agent_id: 'native-agent', activation_id: 'native-activation', originating_tool_call_id: 'source-call' }),
+  ];
+  const original = JSON.stringify(records), tx = translator('en'), projection = projectTrajectory(tx, records);
+  const items = flattenTrajectory(tx, projection);
+  const rows = ledgerRows(tx, projection, items, new Set(), false);
+  const activity = rows.find(row => row.item?.owner_record_id === 'trace:3')!;
+  expect(activity.betweenTurns).toBe(false); expect(activity.turn).toBeUndefined(); expect(activity.turnStart).toBe(false);
+  for (const query of ['Between turns', '轮次之间']) {
+    const matches = searchItems(projection, query)!;
+    expect(items.filter(item => isInspectable(item) && matches.has(item.display_key)).map(item => (item as InspectableDisplayItem).owner_record_id)).toEqual(['trace:0', 'trace:1']);
+  }
+  const ui = show(cacheOf(records));
+  expect(row('RecordRow', 'trace:3').querySelector('[aria-label="Between turns"]')).toBeNull();
+  fireEvent.click(row('RecordRow', 'trace:3'));
+  const inspector = within(screen.getByRole('complementary', { name: 'Event details' }));
+  expect(inspector.queryByText('Between turns')).toBeNull(); expect(inspector.queryByText(/Turn 1/)).toBeNull();
+  expect(row('RecordRow', 'trace:3').getAttribute('aria-selected')).toBe('true');
+  ui.rerender(<Trajectory cache={cacheOf(structuredClone(records))} loadEarlier={noop} onSelect={noop} onLoadDetail={noop}/>);
+  expect(row('RecordRow', 'trace:3').getAttribute('aria-selected')).toBe('true');
+  expect(JSON.stringify(records)).toBe(original);
+});
+
+it('native-owned child activity retains its actual Turn/Step across folding and selection', () => {
+  const records = [traceRecord(1, { kind: 'user', request: null }), traceRecord(2, { kind: 'subagent', request: null, agent_id: 'child', activation_id: 'activation' })];
+  show(cacheOf(records));
+  fireEvent.click(row('RecordRow', 'trace:2'));
+  const inspector = within(screen.getByRole('complementary', { name: 'Event details' }));
+  expect(inspector.getByText('Turn 1 · Step 1')).toBeTruthy();
+  expect(inspector.queryByText('Between turns')).toBeNull();
+  expect(row('RecordRow', 'trace:2').hasAttribute('data-between-turns')).toBe(false);
+  fireEvent.doubleClick(row('RecordRow', 'trace:1'));
+  expect(row('RecordRow', 'trace:2')).toBeNull();
+  expect(inspector.getByText('Turn 1 · Step 1')).toBeTruthy();
+  fireEvent.doubleClick(row('RecordRow', 'trace:1'));
+  expect(row('RecordRow', 'trace:2').getAttribute('aria-selected')).toBe('true');
+});
+
 it('a request after a between-turn summary keeps a full-height Turn label seat', () => {
   const records = [
     traceRecord(0, { kind: 'compaction', request: null, location: { attempt_id: 'attempt-a', step_id: '1' } }),

@@ -3143,3 +3143,47 @@ return to their independently current live head.
 All eight browser scenarios then passed again against the final production build,
 including the no-reload/no-eviction assertion after returning to the latest of
 1,120 loaded records. The final TypeScript and provenance checks also passed.
+
+### Between-turn labels follow semantic membership (2026-10-20)
+
+Reference: Harness `ui-trajectory/src/client/layout.ts`, `TrajectoryTable.tsx`
+and `trajectory-search-index.ts` at
+`687f282e8625c6b8d11ff58211a90524be2e4317`. Harness explicitly models standalone
+compaction sections with a null Turn. The local ledger instead marked every
+unowned native record between Turns, and the Inspector used the same label as a
+fallback whenever a Turn was absent. This mislabeled native child activations.
+
+One shared semantic classifier now serves the ledger, Inspector and bilingual
+search. Compaction checkpoints and unscoped reused conversation material retain
+the requested between-turn label. Native Subagent, Background, Workflow and Tool
+activities keep their actual ownership, including absent ownership; no nearby
+Turn is inferred from position or Tool-call IDs. Native records, row identities,
+selection and timing are unchanged. Tests cover scoped child Turn/Step ownership,
+fold/unfold selection, unscoped activities, and both search vocabularies.
+
+The Browser plugin/skill is unavailable; QA used pinned Playwright 1.63 Linux
+Chromium at `http://127.0.0.1:5274/test/fixtures/trajectory.html` and the startup
+fixture, with the production preview on port 5273. Desktop 1440x844 English/dark
+and narrow 390x844 Chinese/light passed semantic labels, selection, close/focus
+restoration, search without extra detail reads, meaningful page identity,
+console/error-overlay health and viewport bounds. Evidence:
+`/tmp/rustx-trajectory-child-section-{1440,390}.png` and
+`/tmp/rustx-trajectory-between-section-{1440,390}.png`.
+
+Before-edit screenshot runs exposed stale references that omitted even the
+already-requested User/compaction gutter labels. Comparing the before-edit actual
+with the fixed actual changed only x=0..71, y=583..624: 1,560 pixels at 1440 and
+1,379 at 390, removing the two incorrect native activity labels. After visual
+inspection, eight ledger/Inspector references were refreshed for the legitimate
+User/compaction labels. Their reference changes are confined to x=0..71,
+y=153..564 (x=0..30 for the narrow Inspector overlay). All four strict screenshot
+replays passed without changing comparison tolerances. The existing child
+navigation regression now checks automatic history hydration instead of waiting
+for the obsolete manual earlier-page action; it still verifies child-owned
+trace/detail reads, draft retention and parent/child switching at both widths.
+
+All 138 focused trajectory/timing tests and ten selected browser scenarios passed,
+including English/light and Chinese/dark native compaction continuation. TypeScript,
+production build, i18n ownership, all 303 source records and notices for 264
+packages passed. No native protocol, runtime or TUI source changed. Other browser
+engines were not exercised; the existing large-chunk build warning remains.

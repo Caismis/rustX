@@ -49,6 +49,14 @@ export type TrajectoryDisplayItem = InspectableDisplayItem | StructuralDisplayIt
 export function isInspectable(item: TrajectoryDisplayItem): item is InspectableDisplayItem {
   return item.type !== 'HistoryBoundary' && item.type !== 'GroupHeader' && item.type !== 'TurnHeader' && item.type !== 'CallsSummary';
 }
+/** Compaction checkpoints and reused conversation material are between Turns.
+ * Missing execution ownership alone does not give native activities that label. */
+export function isBetweenTurnsItem(item: InspectableDisplayItem): boolean {
+  if (item.record.kind === 'compaction') return true;
+  if (traceAttemptKey(item.record.location) != null) return false;
+  return item.type === 'ContextRow' || item.type === 'RecordRow'
+    && ['user', 'assistant', 'context'].includes(item.record.kind);
+}
 export const displayKey = (...parts: (string | number | null | undefined)[]) => JSON.stringify(parts);
 /** The only visible names of these closed domains. The native context kind and
  * the facet identity stay untranslated; only their labels follow the locale. */
@@ -338,7 +346,7 @@ export function ledgerRows(tx: Translate, projection: TrajectoryProjection, item
     if (!isInspectable(item)) return [];
     if (item.type === 'RequestBoundary' && !markerSeats.has(item.display_key)) return [];
     return [{ display_key: item.type === 'RequestBoundary' ? displayKey('marker-seat', item.display_key) : item.display_key, kind: item.type === 'RequestBoundary' ? 'marker' : 'semantic', height: item.type === 'RequestBoundary' ? 10 : 30,
-      item, betweenTurns: item.record.kind === 'compaction', turn: turnOf(item.record), request: hosts.get(item.display_key), turnStart: false }];
+      item, betweenTurns: isBetweenTurnsItem(item), turn: turnOf(item.record), request: hosts.get(item.display_key), turnStart: false }];
   });
   const ownerOf = (row: TrajectoryLedgerRow) => row.item?.owner_record_id ?? row.callsOwner;
   const rows = seats.filter(row => row.kind === 'history');
@@ -347,7 +355,7 @@ export function ledgerRows(tx: Translate, projection: TrajectoryProjection, item
   // a group's representation, never its position relative to another group.
   for (const section of projection.sections) {
     if (section.kind === 'outside') {
-      rows.push(...seats.filter(row => ownerOf(row) === section.record.id).map(row => ({ ...row, betweenTurns: row.kind === 'semantic' && !isInitial(row) })));
+      rows.push(...seats.filter(row => ownerOf(row) === section.record.id));
       continue;
     }
     const turn = turns.get(section.ownerKey);

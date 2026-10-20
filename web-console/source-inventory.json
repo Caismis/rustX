@@ -735,9 +735,15 @@
           "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
           "upstream_sha256": "0b8a5fa7f0f5ceb3d3a49272a0f8ff2c29de047f0bef4713f6cb8e3b8a4052e9",
           "treatment": "Details header (role tag, section/group location, icon close) adapted."
+        },
+        {
+          "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "915bedf03ce65ed47e46b9bbadf4f8d487feae9857dd65411d683c90414d74d8",
+          "treatment": "Share semantic between-Turn classification across ledger, Inspector and bilingual search. Preserve compaction/reused-history labels without treating unowned native Agent/Background/Workflow activities as between-Turn material or inventing nearby execution ownership."
         }
       ],
-      "local_sha256": "d7005b3db442985b089c7e6ef075d7a419486e02b1b9f9be8647756f53e8aafc"
+      "local_sha256": "c4b87b28533fbabc57f1352b2a4d146c2c53223ee2336a124cdf79cefd34545d"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.module.css",
@@ -828,7 +834,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "4f4eed48adfbd8622837eb89da6739e0a9f52b51fb8f1716afda9c7fb1fdb5c7",
+      "local_sha256": "8e1df488b95659606fbdbabc84b04fa5d4f128e214f52e1c2e55bc094ecba032",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-trajectory/src/client/layout.ts",
@@ -841,6 +847,12 @@
           "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
           "upstream_sha256": "0b8a5fa7f0f5ceb3d3a49272a0f8ff2c29de047f0bef4713f6cb8e3b8a4052e9",
           "treatment": "Issue #421 semantic ledger adaptation; exact rustX native ownership replaces Harness runtime relationships."
+        },
+        {
+          "upstream": "packages/client/ui-trajectory/src/client/layout.ts",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "43d2b2fabf067f849fc689336d84b898398eeb7d547ce9ea6bdd6ff428b5fbd5",
+          "treatment": "Share semantic between-Turn classification across ledger, Inspector and bilingual search. Preserve compaction/reused-history labels without treating unowned native Agent/Background/Workflow activities as between-Turn material or inventing nearby execution ownership."
         }
       ]
     },
@@ -863,13 +875,19 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "776db2fa7dfe5943421872f9c5b2909eb014133f2bba127be8973d892fc6fedd",
+      "local_sha256": "01970d146a81c5fb824498f19a55204267722fd322ae452df96e45c2203f4016",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-trajectory/src/client/trajectory-search-index.ts",
           "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
           "upstream_sha256": "081fdf9092da9fe24e23b255262f3bd0f0e020aa9f377e318722f956b6cd371a",
           "treatment": "PR #414 repair: structural labels are context on stable semantic cell search results; shared native owner projection serves Timeline, without sibling-cell expansion."
+        },
+        {
+          "upstream": "packages/client/ui-trajectory/src/client/trajectory-search-index.ts",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "081fdf9092da9fe24e23b255262f3bd0f0e020aa9f377e318722f956b6cd371a",
+          "treatment": "Share semantic between-Turn classification across ledger, Inspector and bilingual search. Preserve compaction/reused-history labels without treating unowned native Agent/Background/Workflow activities as between-Turn material or inventing nearby execution ownership."
         }
       ]
     },
@@ -2834,7 +2852,7 @@
           "upstream_sha256": "8b0a7e2827df55d62aa456570d5fdc012964f94953edf1fbaa95c20b1842f225"
         }
       ],
-      "local_sha256": "8dbd8d40f2310cd619f8b49050a103dc082f58182076fbe1b53e1d05d8bd1d6f"
+      "local_sha256": "080b8f6962d4eec121b53c3cfb5ddec4a90942d3ace08d389eb799e58d782c8f"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.tsx",

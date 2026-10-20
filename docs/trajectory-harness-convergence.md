@@ -146,6 +146,12 @@ evidence remains available.
 Ledger ellipses have a localized truncation label; Inspector retains the explicit
 bounded/truncated explanations. No completeness information is suppressed.
 
+Between-turn membership is semantic: compaction checkpoints and unscoped reused
+conversation material receive that label. Missing native ownership alone does
+not place Subagent, Background, Workflow or Tool activities between Turns, nor
+does it justify assigning a nearby Turn. The ledger, Inspector and bilingual
+search share this classification; native Turn/Step ownership remains authoritative.
+
 ## Pinned Harness mapping
 
 All references below were inspected read-only with `git show` against exactly
