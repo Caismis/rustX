@@ -191,7 +191,7 @@ impl<'a> AgentExecution<'a> {
                 reason: self.cancellation.reason(),
             });
         }
-        if self.accepted_context.is_some() {
+        if self.logical_step.accepted_context.is_some() {
             return Err(Self::context_failure_terminal(&ContextError::new(
                 ContextErrorKind::Internal,
                 "a primary model turn is prepared exactly once per turn",
@@ -326,7 +326,7 @@ impl<'a> AgentExecution<'a> {
         // identities, and in-memory validation only. Nothing commits until
         // the start arbitration wins.
         let staged_context = self.stage_context(accepted)?;
-        self.logical_context_ids = staged_context.iter().map(|m| m.id().clone()).collect();
+        self.logical_step.context_ids = staged_context.iter().map(|m| m.id().clone()).collect();
         self.freeze_model_media(&staged_context).await?;
         let mut staged = self.stage_model_turn(request_ordinal, &staged_context)?;
         let budgets = self.compaction_budgets();
@@ -378,7 +378,7 @@ impl<'a> AgentExecution<'a> {
             .map_err(|error| Self::context_failure_terminal(&error))?;
         while staged.estimated_input >= soft_limit {
             let canonical_fits = staged.projection.estimated_input.input_tokens < soft_limit;
-            let Some(carryover) = self.frozen_carryover.as_mut() else {
+            let Some(carryover) = self.logical_step.frozen_carryover.as_mut() else {
                 if canonical_fits {
                     return Err(Self::context_failure_terminal(&ContextError::new(
                         ContextErrorKind::CannotFit,
@@ -489,7 +489,7 @@ impl<'a> AgentExecution<'a> {
                 },
             });
         }
-        self.frozen_carryover =
+        self.logical_step.frozen_carryover =
             Some(FrozenCarryover {
                 full,
                 level: CarryoverDetailLevel::Full,
@@ -549,10 +549,12 @@ impl<'a> AgentExecution<'a> {
             ))
         })?;
         let anchor = self
+            .logical_step
             .frozen_carryover
             .as_ref()
             .and_then(|c| c.anchor.as_ref());
         let carryover = self
+            .logical_step
             .frozen_carryover
             .as_ref()
             .filter(|_| anchor.is_some())
@@ -607,15 +609,18 @@ impl<'a> AgentExecution<'a> {
         })?;
         let active = &history.messages;
         let carryover_anchor = self
+            .logical_step
             .frozen_carryover
             .as_ref()
             .and_then(|carryover| carryover.anchor.as_ref());
         let carryover = self
+            .logical_step
             .frozen_carryover
             .as_ref()
             .filter(|_| carryover_anchor.is_some())
             .and_then(FrozenCarryover::admitted);
         let sections = self
+            .logical_step
             .accepted_context
             .as_ref()
             .map_or(&[][..], |accepted| accepted.system_sections.as_slice());
@@ -678,7 +683,7 @@ impl<'a> AgentExecution<'a> {
         let retire_continuation = request
             .reconcile_continuation()
             .map_err(compatibility_failure)?;
-        let accepted = self.accepted_context.as_ref().ok_or_else(|| {
+        let accepted = self.logical_step.accepted_context.as_ref().ok_or_else(|| {
             Self::context_failure_terminal(&ContextError::new(
                 ContextErrorKind::Internal,
                 "model request built before context staging",
@@ -715,7 +720,7 @@ impl<'a> AgentExecution<'a> {
                 .collect(),
         );
         snapshot.history_cut = history.cut.clone();
-        if let Some(frozen_carryover) = self.frozen_carryover.as_ref() {
+        if let Some(frozen_carryover) = self.logical_step.frozen_carryover.as_ref() {
             snapshot.unresolved_output_carryover_source =
                 Some(frozen_carryover.full.source_stream_id.clone());
             snapshot.unresolved_output_carryover = carryover;
@@ -727,7 +732,7 @@ impl<'a> AgentExecution<'a> {
         // this logical step's accepted records. Retain their frozen receipts
         // together with that input instead of treating an empty append delta
         // as an empty contribution set.
-        snapshot.contributions = self.current_input.as_ref().map_or_else(
+        snapshot.contributions = self.logical_step.current_input.as_ref().map_or_else(
             || accepted.request_contributions(staged_context),
             |input| input.snapshot.contributions.clone(),
         );
@@ -829,8 +834,7 @@ impl<'a> AgentExecution<'a> {
         staged.snapshot.tool_associations = associations;
         if staged.retire_continuation {
             self.retire_continuation();
-            self.observed = None;
-            self.observed_request_identity = None;
+            self.measurements.withdraw();
         }
         let mut context = Vec::with_capacity(staged_context.len());
         for block in staged_context {
@@ -893,7 +897,7 @@ impl<'a> AgentExecution<'a> {
     /// Renders the exact request-time Effective System Prompt solely from
     /// the attempt-pinned resource generation and accepted request sections.
     pub(super) fn effective_system_prompt(&self) -> Result<String, Terminal> {
-        if let Some(accepted) = &self.accepted_context {
+        if let Some(accepted) = &self.logical_step.accepted_context {
             return Ok(render_effective_system_prompt(&accepted.system_sections));
         }
         let sections = self
@@ -1036,7 +1040,7 @@ impl<'a> AgentExecution<'a> {
                 })?;
             staged.push(block);
         }
-        self.accepted_context = Some(accepted);
+        self.logical_step.accepted_context = Some(accepted);
         Ok(staged)
     }
 
@@ -1065,7 +1069,7 @@ impl<'a> AgentExecution<'a> {
             });
         }
         let mut effective_system_prompt = projection.effective_system_prompt.clone();
-        if let Some(feedback) = &self.frozen_workflow_feedback {
+        if let Some(feedback) = &self.logical_step.frozen_workflow_feedback {
             if !effective_system_prompt.is_empty() {
                 effective_system_prompt.push('\n');
             }
@@ -1081,7 +1085,7 @@ impl<'a> AgentExecution<'a> {
         // step ends. The instruction is chosen by the anomaly class and is
         // bounded, provider-independent, and request-only; it never contains
         // the discarded generation.
-        if let Some(hint) = self.semantic_recovery.pending_hint() {
+        if let Some(hint) = self.logical_step.semantic_recovery.pending_hint() {
             if !effective_system_prompt.is_empty() {
                 effective_system_prompt.push('\n');
             }

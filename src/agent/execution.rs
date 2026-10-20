@@ -85,19 +85,15 @@ pub(crate) mod test_sync;
 mod tools;
 
 use self::publication::OpenPublication;
-use self::recovery::SemanticGenerationRecovery;
-use self::request::{FrozenCarryover, FrozenLogicalInput};
-use self::start::RequestObservationIdentity;
-use self::step::LogicalModelStepState;
-use self::terminal::{TerminalCarryoverDecision, TerminalCommitState};
+use self::start::RequestMeasurements;
+use self::step::LogicalStep;
 use self::tools::PendingPostToolBatch;
 use super::cancellation::AgentCancellation;
 use super::lifecycle::AttemptLifecycle;
 use super::observer::AgentExecutionObserver;
 use super::state::{ExecutionState, ExecutionStateMachine};
 use crate::capabilities::AttemptCapabilityLease;
-use crate::context::tokens::{ObservedAnchor, ProviderObservedInput};
-use crate::context::{AcceptedContext, ContextRuntime, DeferredContextProposal};
+use crate::context::{ContextRuntime, DeferredContextProposal};
 use crate::conversation::ConversationState;
 use crate::durable::ConversationStore;
 use crate::events::types::AttemptOutcome;
@@ -106,7 +102,6 @@ use crate::model::deadline::ModelTimeoutPolicy;
 use crate::model::generation::GenerationSafetyPolicy;
 use crate::model::generation_evidence::GenerationTiming;
 use crate::model::session::AttemptModelSnapshot;
-use crate::model::snapshot::RequestIdentity;
 use crate::publication::CoalescePolicy;
 use crate::runtime::MonotonicClock;
 use crate::runtime::continuation::ProviderContinuationState;
@@ -390,52 +385,15 @@ pub struct AgentExecution<'a> {
     /// schema rejection. This is request-only context, never canonical
     /// conversation history.
     workflow_output_feedback: Option<String>,
-    /// Workflow correction frozen for this logical generation, including recovery versions.
-    frozen_workflow_feedback: Option<String>,
-    /// The semantic-generation recovery state of the current logical model
-    /// step: its one spent corrective-generation budget, shared by every
-    /// anomaly class, and — while a corrective generation is pending — the
-    /// one bounded corrective hint every actual request of that generation
-    /// carries.
-    ///
-    /// This is noncanonical request-only state. It is frozen into the exact
-    /// `RequestSnapshot` of every actual request that used it — durable
-    /// audit evidence, so a historical request stays byte-for-byte
-    /// reconstructible — but it never enters canonical Assistant/User
-    /// history and never survives the corrective generation as semantic
-    /// context. The discarded generation itself is never stored here at
-    /// all.
-    semantic_recovery: SemanticGenerationRecovery,
-    /// The transient accepted context for the current admitted logical model
-    /// step. It is retained across every actual-request retry and discarded
-    /// only when the next logical step begins.
-    accepted_context: Option<AcceptedContext>,
-    /// The one publication-audit carryover frozen for the current logical
-    /// primary step. It is never reloaded for a retry.
-    frozen_carryover: Option<FrozenCarryover>,
-    /// Latest authorized immutable semantic version of the current logical generation.
-    current_input: Option<Box<FrozenLogicalInput>>,
-    /// The current logical generation's accepted Context identities, exactly once.
-    logical_context_ids: Vec<MessageId>,
-    /// The last request identity that durably crossed model start in the
-    /// current logical step. It is the input to the shared live/recovery
-    /// carryover selector.
-    last_started_request: Option<RequestIdentity>,
-    /// Whether the current logical step has started model execution without
-    /// reaching canonical Assistant acceptance yet.
-    logical_model_step: LogicalModelStepState,
-    /// A terminal cannot be recorded until publication evidence and the
-    /// carryover source-selection decision are durably ready.
-    terminal_commit_state: TerminalCommitState,
-    /// The producer decision frozen after the current unresolved step's audit
-    /// settles. `Some(None)` is meaningful: the new unresolved step replaces
-    /// any older pending source with an explicit clear.
-    terminal_carryover_decision: TerminalCarryoverDecision,
     /// The one required immutable lifecycle configuration of the attempt.
     /// It carries the attempt's single pre-step policy owner and its
     /// identity-registered tool-result observers; the inert configuration is
     /// the identity.
     lifecycle: AttemptLifecycle,
+    /// The working set of the current logical primary step. It is replaced
+    /// as one value at every logical-step boundary; the actual-request
+    /// retries of the step reuse it.
+    logical_step: LogicalStep,
     /// The Agent-Loop-owned staging buffer of deferred context.
     ///
     /// It is **not** canonical history and **not** a second transcript: a
@@ -453,28 +411,9 @@ pub struct AgentExecution<'a> {
     deferred_context: Vec<DeferredContextProposal>,
     /// Per-attempt context-generation allocator owned by the Agent Loop.
     context_generation_serial: u64,
-    observed: Option<ProviderObservedInput>,
-    /// The request identity [`Self::observed`] was measured under.
-    ///
-    /// A provider counted the input of one concrete request. That count is
-    /// evidence about a later request only while the parts of the request
-    /// the conversation projection does not describe — the resolved
-    /// invocation and the opaque provider continuation — are still the
-    /// same. When they are not, the measurement is dropped rather than
-    /// stretched over a request the provider never measured.
-    observed_request_identity: Option<Arc<RequestObservationIdentity>>,
-    /// The request identity of the last started request, promoted alongside
-    /// its measurement when the provider reports one.
-    last_request_identity: Option<Arc<RequestObservationIdentity>>,
-    /// The structural anchor of the last started request, kept so its
-    /// provider-reported input measurement can be reused for every later
-    /// request context that extends it.
-    last_request_anchor: Option<ObservedAnchor>,
-    /// The runtime's deterministic input estimate for the last started
-    /// request, kept so a provider overflow can be turned into a measured
-    /// estimator correction instead of being retried against the same
-    /// budget.
-    last_request_estimated_input: Option<u64>,
+    /// Provider-observed input measurements. They outlive the request that
+    /// produced them and are reused by later compatible requests and steps.
+    measurements: RequestMeasurements,
     /// The exact request identity of the in-flight provider request. The
     /// provider outcome fact (P) and the publication stream both name it, so
     /// neither can be attributed to a different request of the same turn.
@@ -514,73 +453,10 @@ pub struct AgentExecution<'a> {
     /// durable Event Journal remains the historical authority regardless of
     /// attachment.
     observer: Option<&'a dyn AgentExecutionObserver>,
-    /// Test-only control point parked at the turn-continuation boundary:
-    /// after a completed turn (and all its mailbox drain/append work)
-    /// returned "continue", before the generic cancellation check of the
-    /// next model turn; never present outside `#[cfg(test)]`. The `Mutex`
-    /// keeps an execution with an installed pause `Sync` (the pause holds
-    /// a `std::sync::mpsc::Receiver`), so host-driven attempt tasks can be
-    /// spawned across threads in tests.
+    /// Test-only deterministic synchronization points; never present outside
+    /// `#[cfg(test)]`.
     #[cfg(test)]
-    continuation_pause: std::sync::Mutex<Option<test_sync::ContinuationBoundaryPause>>,
-    /// Test-only control point at the one M9b model-turn start boundary:
-    /// immediately before the cancellation-vs-start arbitration, and inside
-    /// the arbitration critical section immediately before the durable
-    /// start commit. No request-scoped context, Request Snapshot, start
-    /// fact, or provider request exists while the first phase is parked;
-    /// while the second phase is parked the arbitration holds the start
-    /// gate, so a concurrent cancellation provably blocks behind it.
-    #[cfg(test)]
-    start_boundary_pause: std::sync::Mutex<Option<test_sync::StartBoundaryPause>>,
-    /// Test-only control point after `ModelRetryScheduled` commits and after
-    /// the retry deadline is captured, before the monotonic backoff wait
-    /// begins. It makes the cancellation/backoff ordering observable without
-    /// sleeping.
-    #[cfg(test)]
-    retry_backoff_pause: std::sync::Mutex<Option<test_sync::RetryBackoffPause>>,
-    /// Test-only control point after one provider stream item has been
-    /// classified and fully processed. It makes exact provider/deadline and
-    /// publication/deadline cuts observable without scheduler timing.
-    #[cfg(test)]
-    model_stream_item_pause: std::sync::Mutex<Option<test_sync::ModelStreamItemPause>>,
-    /// Test-only control point immediately before one provider arbitration.
-    /// The controller can make multiple branches ready while the execution is
-    /// parked, then release it to prove the explicit biased precedence.
-    #[cfg(test)]
-    model_arbitration_pause: std::sync::Mutex<Option<test_sync::ModelArbitrationPause>>,
-    /// Test-only control point after a rejected physical generation is
-    /// durably settled and before the logical step decides whether a
-    /// corrective generation is authorized. It makes the
-    /// cancellation-versus-generation-anomaly race an exact interleaving
-    /// rather than a likely one.
-    #[cfg(test)]
-    generation_anomaly_pause: std::sync::Mutex<Option<test_sync::GenerationAnomalyPause>>,
-    /// Test-only control point after a foreground tool-start fact and before
-    /// the next sibling's start frontier advances. This makes cancellation
-    /// during a parallel batch deterministic without changing production
-    /// scheduling.
-    #[cfg(test)]
-    tool_start_pause: std::sync::Mutex<Option<test_sync::ToolStartPause>>,
-    /// Test-only signal published when one foreground call's hard deadline
-    /// becomes an absolute monotonic value, which is strictly after the
-    /// `ToolExecutionStarted` fact. A manual-clock test uses it to advance
-    /// the clock across a frontier that provably already exists.
-    #[cfg(test)]
-    tool_deadline_armed: std::sync::Mutex<Option<test_sync::ToolDeadlineArmedSignal>>,
-    /// Test-only control point after cancellation wins the foreground
-    /// physical-result arbitration and before the late physical future is
-    /// awaited. It makes the cancellation linearization observable without
-    /// changing production scheduling or adding a runtime event.
-    #[cfg(test)]
-    tool_cancellation_settlement_pause:
-        std::sync::Mutex<Option<test_sync::ToolCancellationSettlementPause>>,
-    /// Test-only control point immediately after the physical-result branch
-    /// wins foreground settlement arbitration. It lets a test request attempt
-    /// cancellation after the physical result is authoritative, before any
-    /// post-arbitration normalization runs.
-    #[cfg(test)]
-    tool_physical_settlement_pause:
-        std::sync::Mutex<Option<test_sync::ToolPhysicalSettlementPause>>,
+    pauses: test_sync::ExecutionPauses,
     turn: u32,
     terminal_emitted: bool,
 }

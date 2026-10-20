@@ -326,6 +326,7 @@ impl<'a> AgentExecution<'a> {
             }
             #[cfg(test)]
             if let Some(pause) = self
+                .pauses
                 .model_stream_item_pause
                 .lock()
                 .expect("model stream item pause lock")
@@ -336,6 +337,7 @@ impl<'a> AgentExecution<'a> {
             #[cfg(test)]
             {
                 let arbitration_pause = self
+                    .pauses
                     .model_arbitration_pause
                     .lock()
                     .expect("model arbitration pause lock")
@@ -349,6 +351,7 @@ impl<'a> AgentExecution<'a> {
                         pause.wait().await;
                     } else {
                         *self
+                            .pauses
                             .model_arbitration_pause
                             .lock()
                             .expect("model arbitration pause lock") = Some(pause);

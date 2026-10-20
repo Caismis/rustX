@@ -638,6 +638,7 @@ async fn cancellation_at_turn_boundary_stops_next_model_request_without_mailbox(
     )
     .expect("conversation identity matches the tool runtime");
     execution
+        .pauses
         .continuation_pause
         .lock()
         .expect("continuation pause lock")
@@ -751,6 +752,7 @@ async fn cancellation_after_drain_append_stops_before_the_next_turn() {
     )
     .expect("conversation identity matches the tool runtime");
     execution
+        .pauses
         .continuation_pause
         .lock()
         .expect("continuation pause lock")
@@ -1011,6 +1013,7 @@ async fn terminal_inbound_after_snapshot_can_never_join_the_first_batch() {
     )
     .expect("conversation identity matches the tool runtime");
     execution
+        .pauses
         .continuation_pause
         .lock()
         .expect("continuation pause lock")

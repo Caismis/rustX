@@ -3,9 +3,10 @@
 //! the frozen runtime policy, plus the test-only policy overrides installed
 //! before the execution runs.
 
-use super::recovery::SemanticGenerationRecovery;
-use super::step::LogicalModelStepState;
-use super::terminal::{TerminalCarryoverDecision, TerminalCommitState};
+use super::start::RequestMeasurements;
+use super::step::LogicalStep;
+#[cfg(test)]
+use super::test_sync;
 use super::{AgentExecution, AgentExecutionRequest, AgentExecutionRuntimePolicy};
 use crate::agent::cancellation::AgentCancellation;
 use crate::agent::lifecycle::AttemptLifecycle;
@@ -218,24 +219,11 @@ impl<'a> AgentExecution<'a> {
             subagent_context: runtime_policy.subagent_context,
             workflow_output: runtime_policy.workflow_output,
             workflow_output_feedback: None,
-            frozen_workflow_feedback: None,
-            semantic_recovery: SemanticGenerationRecovery::default(),
-            accepted_context: None,
-            frozen_carryover: None,
-            current_input: None,
-            logical_context_ids: Vec::new(),
-            last_started_request: None,
-            logical_model_step: LogicalModelStepState::NotStarted,
-            terminal_commit_state: TerminalCommitState::Ready,
-            terminal_carryover_decision: TerminalCarryoverDecision::Undecided,
             lifecycle,
+            logical_step: LogicalStep::begin(None),
             deferred_context: Vec::new(),
             context_generation_serial: 0,
-            observed: None,
-            observed_request_identity: None,
-            last_request_identity: None,
-            last_request_anchor: None,
-            last_request_estimated_input: None,
+            measurements: RequestMeasurements::default(),
             last_request_id: None,
             generation_timing: None,
             publication_policy: CoalescePolicy::default(),
@@ -246,25 +234,7 @@ impl<'a> AgentExecution<'a> {
             publication_settlement_failed: false,
             observer: None,
             #[cfg(test)]
-            continuation_pause: std::sync::Mutex::new(None),
-            #[cfg(test)]
-            start_boundary_pause: std::sync::Mutex::new(None),
-            #[cfg(test)]
-            retry_backoff_pause: std::sync::Mutex::new(None),
-            #[cfg(test)]
-            model_stream_item_pause: std::sync::Mutex::new(None),
-            #[cfg(test)]
-            model_arbitration_pause: std::sync::Mutex::new(None),
-            #[cfg(test)]
-            generation_anomaly_pause: std::sync::Mutex::new(None),
-            #[cfg(test)]
-            tool_start_pause: std::sync::Mutex::new(None),
-            #[cfg(test)]
-            tool_deadline_armed: std::sync::Mutex::new(None),
-            #[cfg(test)]
-            tool_cancellation_settlement_pause: std::sync::Mutex::new(None),
-            #[cfg(test)]
-            tool_physical_settlement_pause: std::sync::Mutex::new(None),
+            pauses: test_sync::ExecutionPauses::default(),
             turn: 0,
             terminal_emitted: false,
         })

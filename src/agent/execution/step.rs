@@ -3,7 +3,9 @@
 //! completion (P -> U -> C ordering, Workflow terminal protocol, tool
 //! dispatch), and the mailbox safe boundary between turns.
 
+use super::recovery::SemanticGenerationRecovery;
 use super::recovery::{SemanticGenerationAnomaly, transient_retry_delay_ms};
+use super::request::{FrozenCarryover, FrozenLogicalInput};
 use super::stream::{ModelInvocation, StreamTerminal};
 use super::terminal::{Terminal, TerminalCarryoverDecision, TerminalCommitState};
 use super::{
@@ -11,8 +13,10 @@ use super::{
     MAX_CONTEXT_OVERFLOW_RETRIES_PER_MODEL_TURN, MAX_TRANSIENT_MODEL_RETRIES_PER_LOGICAL_STEP,
 };
 use crate::agent::assembly::ModelEventAssembler;
+use crate::context::AcceptedContext;
 use crate::events::types::{AttemptFailure, RuntimeEvent};
 use crate::model::error::ModelErrorKind;
+use crate::model::snapshot::RequestIdentity;
 use crate::runtime::identity::MessageId;
 use crate::runtime::inbound::{FreshInboundTurn, InitialTurnTrigger};
 use crate::runtime::types::RuntimeError;
@@ -24,6 +28,71 @@ pub(super) enum LogicalModelStepState {
     CanonicalAccepted,
 }
 
+/// The working set of one logical primary step: everything that is reset
+/// together when the next logical step begins and reused by every actual
+/// request (initial, transient retry, overflow or corrective retry) of the
+/// current one.
+pub(super) struct LogicalStep {
+    /// Workflow correction frozen for this logical generation, including recovery versions.
+    pub(super) frozen_workflow_feedback: Option<String>,
+    /// The semantic-generation recovery state of the current logical model
+    /// step: its one spent corrective-generation budget, shared by every
+    /// anomaly class, and — while a corrective generation is pending — the
+    /// one bounded corrective hint every actual request of that generation
+    /// carries.
+    ///
+    /// This is noncanonical request-only state. It is frozen into the exact
+    /// `RequestSnapshot` of every actual request that used it — durable
+    /// audit evidence, so a historical request stays byte-for-byte
+    /// reconstructible — but it never enters canonical Assistant/User
+    /// history and never survives the corrective generation as semantic
+    /// context. The discarded generation itself is never stored here at
+    /// all.
+    pub(super) semantic_recovery: SemanticGenerationRecovery,
+    /// The transient accepted context for the current admitted logical model
+    /// step. It is retained across every actual-request retry and discarded
+    /// only when the next logical step begins.
+    pub(super) accepted_context: Option<AcceptedContext>,
+    /// The one publication-audit carryover frozen for the current logical
+    /// primary step. It is never reloaded for a retry.
+    pub(super) frozen_carryover: Option<FrozenCarryover>,
+    /// Latest authorized immutable semantic version of the current logical generation.
+    pub(super) current_input: Option<Box<FrozenLogicalInput>>,
+    /// The current logical generation's accepted Context identities, exactly once.
+    pub(super) context_ids: Vec<MessageId>,
+    /// The last request identity that durably crossed model start in the
+    /// current logical step. It is the input to the shared live/recovery
+    /// carryover selector.
+    pub(super) last_started_request: Option<RequestIdentity>,
+    /// Whether the current logical step has started model execution without
+    /// reaching canonical Assistant acceptance yet.
+    pub(super) model_step: LogicalModelStepState,
+    /// A terminal cannot be recorded until publication evidence and the
+    /// carryover source-selection decision are durably ready.
+    pub(super) terminal_commit_state: TerminalCommitState,
+    /// The producer decision frozen after the current unresolved step's audit
+    /// settles. `Some(None)` is meaningful: the new unresolved step replaces
+    /// any older pending source with an explicit clear.
+    pub(super) terminal_carryover_decision: TerminalCarryoverDecision,
+}
+
+impl LogicalStep {
+    /// A fresh logical step carrying the Workflow correction frozen for it.
+    pub(super) fn begin(frozen_workflow_feedback: Option<String>) -> Self {
+        Self {
+            frozen_workflow_feedback,
+            semantic_recovery: SemanticGenerationRecovery::default(),
+            accepted_context: None,
+            frozen_carryover: None,
+            current_input: None,
+            context_ids: Vec::new(),
+            last_started_request: None,
+            model_step: LogicalModelStepState::NotStarted,
+            terminal_commit_state: TerminalCommitState::Ready,
+            terminal_carryover_decision: TerminalCarryoverDecision::Undecided,
+        }
+    }
+}
 impl<'a> AgentExecution<'a> {
     /// Runs the attempt to its execution settlement candidate.
     ///
@@ -110,6 +179,7 @@ impl<'a> AgentExecution<'a> {
                 #[cfg(test)]
                 if terminal.is_none()
                     && let Some(pause) = &self
+                        .pauses
                         .continuation_pause
                         .lock()
                         .expect("continuation pause lock")
@@ -147,16 +217,19 @@ impl<'a> AgentExecution<'a> {
         if !self.publication_settlement_failed
             && let Err(error) = self.settle_publication_audit()
         {
-            self.terminal_commit_state = TerminalCommitState::Blocked;
+            self.logical_step.terminal_commit_state = TerminalCommitState::Blocked;
             return Some(Terminal::Failed {
                 failure: AttemptFailure::Runtime { error },
             });
         }
         if terminal.is_some()
-            && matches!(self.logical_model_step, LogicalModelStepState::Unresolved)
+            && matches!(
+                self.logical_step.model_step,
+                LogicalModelStepState::Unresolved
+            )
         {
-            let Some(last_started_request) = self.last_started_request.as_ref() else {
-                self.terminal_commit_state = TerminalCommitState::Blocked;
+            let Some(last_started_request) = self.logical_step.last_started_request.as_ref() else {
+                self.logical_step.terminal_commit_state = TerminalCommitState::Blocked;
                 let message =
                     "an unresolved logical model step has no durable last-started request";
                 self.durable_failure_kind = Some(DurableFailureKind::Publication);
@@ -173,10 +246,11 @@ impl<'a> AgentExecution<'a> {
                 self.store.load_publication_audit(id)
             }) {
                 Ok(source) => {
-                    self.terminal_carryover_decision = TerminalCarryoverDecision::Replace(source);
+                    self.logical_step.terminal_carryover_decision =
+                        TerminalCarryoverDecision::Replace(source);
                 }
                 Err(error) => {
-                    self.terminal_commit_state = TerminalCommitState::Blocked;
+                    self.logical_step.terminal_commit_state = TerminalCommitState::Blocked;
                     let message = format!(
                         "unresolved-output carryover source selection failed before attempt terminal: {error}"
                     );
@@ -202,20 +276,12 @@ impl<'a> AgentExecution<'a> {
         // actual request of that step — initial, transient retry, or
         // post-compaction retry — consumes the one shared request ordinal
         // below. Retries never re-enter dynamic context admission.
-        self.accepted_context = None;
-        self.frozen_carryover = None;
-        self.current_input = None;
-        self.frozen_workflow_feedback = self.workflow_output_feedback.take();
-        self.logical_context_ids.clear();
+        // The semantic corrective-generation budget, any unresolved corrective
+        // hint, the frozen carryover and input, and the terminal readiness of
+        // the step that just ended are all replaced here, so none of them may
+        // cross this boundary.
+        self.logical_step = LogicalStep::begin(self.workflow_output_feedback.take());
         self.context_runtime.engine.clear_media();
-        self.last_started_request = None;
-        // The semantic corrective-generation budget and any unresolved
-        // corrective hint are semantic state of the step that just ended, so
-        // neither may cross this boundary.
-        self.semantic_recovery.reset();
-        self.logical_model_step = LogicalModelStepState::NotStarted;
-        self.terminal_commit_state = TerminalCommitState::Ready;
-        self.terminal_carryover_decision = TerminalCarryoverDecision::Undecided;
         self.emit(RuntimeEvent::TurnStarted);
         if let Some(message) = self.durable_failure.clone() {
             return Some(Terminal::Failed {
@@ -253,7 +319,7 @@ impl<'a> AgentExecution<'a> {
                     // a canonical model outcome, so a corrective generation —
                     // if this was one — has resolved and its hint must not
                     // reach the tool-result continuation that follows.
-                    self.semantic_recovery.resolve();
+                    self.logical_step.semantic_recovery.resolve();
                     return self.complete_turn(message_id, assembler).await;
                 }
                 StreamTerminal::Failed { error } => {
@@ -283,6 +349,7 @@ impl<'a> AgentExecution<'a> {
                     // is not a second authorization.
                     if let Some(anomaly) = SemanticGenerationAnomaly::classify(&error)
                         && self
+                            .logical_step
                             .semantic_recovery
                             .authorize(anomaly, error.message.clone())
                     {
@@ -488,7 +555,7 @@ impl<'a> AgentExecution<'a> {
                 match workflow_output.submit(protocol_calls[0].arguments.clone()) {
                     crate::runtime::workflow::WorkflowOutputSubmission::Committed => {
                         self.retire_continuation();
-                        self.logical_model_step = LogicalModelStepState::CanonicalAccepted;
+                        self.logical_step.model_step = LogicalModelStepState::CanonicalAccepted;
                         if let Err(error) = self.state.tools_finished() {
                             return Some(Terminal::Failed {
                                 failure: AttemptFailure::Runtime { error },
@@ -548,9 +615,10 @@ impl<'a> AgentExecution<'a> {
         }
         // C succeeded: the logical model step is no longer unresolved, even
         // if a later tool/result phase causes the attempt itself to fail.
-        self.logical_model_step = LogicalModelStepState::CanonicalAccepted;
+        self.logical_step.model_step = LogicalModelStepState::CanonicalAccepted;
         self.continuation_source = if self.pending_continuation.is_some() {
             let input = self
+                .logical_step
                 .current_input
                 .as_ref()
                 .expect("accepted output has frozen actual request");
@@ -660,7 +728,7 @@ impl<'a> AgentExecution<'a> {
             2048,
         ));
         self.retire_continuation();
-        self.logical_model_step = LogicalModelStepState::CanonicalAccepted;
+        self.logical_step.model_step = LogicalModelStepState::CanonicalAccepted;
         if had_tool_calls {
             let _ = self.state.tools_finished();
         }

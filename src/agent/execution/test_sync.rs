@@ -467,6 +467,72 @@ impl StartBoundaryPause {
     }
 }
 
+/// Every test-only synchronization point of one execution. Each one is
+/// installed before the execution runs and lives exactly as long as it. The
+/// `Mutex` keeps an execution with an installed pause `Sync` (several pauses
+/// hold a `std::sync::mpsc::Receiver`), so host-driven attempt tasks can be
+/// spawned across threads in tests.
+#[derive(Default)]
+pub(super) struct ExecutionPauses {
+    /// Test-only control point parked at the turn-continuation boundary:
+    /// after a completed turn (and all its mailbox drain/append work)
+    /// returned "continue", before the generic cancellation check of the
+    /// next model turn; never present outside `#[cfg(test)]`. The `Mutex`
+    /// keeps an execution with an installed pause `Sync` (the pause holds
+    /// a `std::sync::mpsc::Receiver`), so host-driven attempt tasks can be
+    /// spawned across threads in tests.
+    pub(super) continuation_pause: std::sync::Mutex<Option<ContinuationBoundaryPause>>,
+    /// Test-only control point at the one M9b model-turn start boundary:
+    /// immediately before the cancellation-vs-start arbitration, and inside
+    /// the arbitration critical section immediately before the durable
+    /// start commit. No request-scoped context, Request Snapshot, start
+    /// fact, or provider request exists while the first phase is parked;
+    /// while the second phase is parked the arbitration holds the start
+    /// gate, so a concurrent cancellation provably blocks behind it.
+    pub(super) start_boundary_pause: std::sync::Mutex<Option<StartBoundaryPause>>,
+    /// Test-only control point after `ModelRetryScheduled` commits and after
+    /// the retry deadline is captured, before the monotonic backoff wait
+    /// begins. It makes the cancellation/backoff ordering observable without
+    /// sleeping.
+    pub(super) retry_backoff_pause: std::sync::Mutex<Option<RetryBackoffPause>>,
+    /// Test-only control point after one provider stream item has been
+    /// classified and fully processed. It makes exact provider/deadline and
+    /// publication/deadline cuts observable without scheduler timing.
+    pub(super) model_stream_item_pause: std::sync::Mutex<Option<ModelStreamItemPause>>,
+    /// Test-only control point immediately before one provider arbitration.
+    /// The controller can make multiple branches ready while the execution is
+    /// parked, then release it to prove the explicit biased precedence.
+    pub(super) model_arbitration_pause: std::sync::Mutex<Option<ModelArbitrationPause>>,
+    /// Test-only control point after a rejected physical generation is
+    /// durably settled and before the logical step decides whether a
+    /// corrective generation is authorized. It makes the
+    /// cancellation-versus-generation-anomaly race an exact interleaving
+    /// rather than a likely one.
+    pub(super) generation_anomaly_pause: std::sync::Mutex<Option<GenerationAnomalyPause>>,
+    /// Test-only control point after a foreground tool-start fact and before
+    /// the next sibling's start frontier advances. This makes cancellation
+    /// during a parallel batch deterministic without changing production
+    /// scheduling.
+    pub(super) tool_start_pause: std::sync::Mutex<Option<ToolStartPause>>,
+    /// Test-only signal published when one foreground call's hard deadline
+    /// becomes an absolute monotonic value, which is strictly after the
+    /// `ToolExecutionStarted` fact. A manual-clock test uses it to advance
+    /// the clock across a frontier that provably already exists.
+    pub(super) tool_deadline_armed: std::sync::Mutex<Option<ToolDeadlineArmedSignal>>,
+    /// Test-only control point after cancellation wins the foreground
+    /// physical-result arbitration and before the late physical future is
+    /// awaited. It makes the cancellation linearization observable without
+    /// changing production scheduling or adding a runtime event.
+    pub(super) tool_cancellation_settlement_pause:
+        std::sync::Mutex<Option<ToolCancellationSettlementPause>>,
+    /// Test-only control point immediately after the physical-result branch
+    /// wins foreground settlement arbitration. It lets a test request attempt
+    /// cancellation after the physical result is authoritative, before any
+    /// post-arbitration normalization runs.
+    pub(super) tool_physical_settlement_pause:
+        std::sync::Mutex<Option<ToolPhysicalSettlementPause>>,
+}
+
 use super::AgentExecution;
 
 impl<'a> AgentExecution<'a> {
@@ -475,6 +541,7 @@ impl<'a> AgentExecution<'a> {
     #[cfg(test)]
     pub(crate) fn install_start_boundary_pause(&mut self, pause: StartBoundaryPause) {
         *self
+            .pauses
             .start_boundary_pause
             .lock()
             .expect("start boundary pause lock") = Some(pause);
@@ -484,6 +551,7 @@ impl<'a> AgentExecution<'a> {
     #[cfg(test)]
     pub(crate) fn install_retry_backoff_pause(&mut self, pause: RetryBackoffPause) {
         *self
+            .pauses
             .retry_backoff_pause
             .lock()
             .expect("retry backoff pause lock") = Some(pause);
@@ -493,6 +561,7 @@ impl<'a> AgentExecution<'a> {
     #[cfg(test)]
     pub(crate) fn install_model_stream_item_pause(&mut self, pause: ModelStreamItemPause) {
         *self
+            .pauses
             .model_stream_item_pause
             .lock()
             .expect("model stream item pause lock") = Some(pause);
@@ -502,6 +571,7 @@ impl<'a> AgentExecution<'a> {
     #[cfg(test)]
     pub(crate) fn install_model_arbitration_pause(&mut self, pause: ModelArbitrationPause) {
         *self
+            .pauses
             .model_arbitration_pause
             .lock()
             .expect("model arbitration pause lock") = Some(pause);
@@ -511,6 +581,7 @@ impl<'a> AgentExecution<'a> {
     #[cfg(test)]
     pub(crate) fn install_generation_anomaly_pause(&mut self, pause: GenerationAnomalyPause) {
         *self
+            .pauses
             .generation_anomaly_pause
             .lock()
             .expect("generation anomaly pause lock") = Some(pause);
@@ -519,13 +590,18 @@ impl<'a> AgentExecution<'a> {
     /// Installs the test-only foreground tool-start pause for one attempt.
     #[cfg(test)]
     pub(crate) fn install_tool_start_pause(&mut self, pause: ToolStartPause) {
-        *self.tool_start_pause.lock().expect("tool start pause lock") = Some(pause);
+        *self
+            .pauses
+            .tool_start_pause
+            .lock()
+            .expect("tool start pause lock") = Some(pause);
     }
 
     /// Installs the test-only foreground tool hard-deadline arming signal.
     #[cfg(test)]
     pub(crate) fn install_tool_deadline_armed_signal(&mut self, signal: ToolDeadlineArmedSignal) {
         *self
+            .pauses
             .tool_deadline_armed
             .lock()
             .expect("tool deadline armed signal lock") = Some(signal);
@@ -538,6 +614,7 @@ impl<'a> AgentExecution<'a> {
         pause: ToolCancellationSettlementPause,
     ) {
         *self
+            .pauses
             .tool_cancellation_settlement_pause
             .lock()
             .expect("tool cancellation settlement pause lock") = Some(pause);
@@ -550,6 +627,7 @@ impl<'a> AgentExecution<'a> {
         pause: ToolPhysicalSettlementPause,
     ) {
         *self
+            .pauses
             .tool_physical_settlement_pause
             .lock()
             .expect("tool physical settlement pause lock") = Some(pause);

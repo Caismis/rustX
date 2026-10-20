@@ -965,6 +965,7 @@ impl<'a> AgentExecution<'a> {
     #[cfg(test)]
     fn park_after_tool_start(&self) {
         if let Some(pause) = self
+            .pauses
             .tool_start_pause
             .lock()
             .expect("tool start pause lock")
@@ -977,6 +978,7 @@ impl<'a> AgentExecution<'a> {
     #[cfg(test)]
     fn park_after_tool_cancellation_settlement(&self) {
         if let Some(pause) = self
+            .pauses
             .tool_cancellation_settlement_pause
             .lock()
             .expect("tool cancellation settlement pause lock")
@@ -989,6 +991,7 @@ impl<'a> AgentExecution<'a> {
     #[cfg(test)]
     fn park_after_tool_physical_settlement(&self) {
         if let Some(pause) = self
+            .pauses
             .tool_physical_settlement_pause
             .lock()
             .expect("tool physical settlement pause lock")
@@ -1079,6 +1082,7 @@ impl<'a> AgentExecution<'a> {
         #[cfg(test)]
         let armed = |deadline| {
             if let Some(signal) = self
+                .pauses
                 .tool_deadline_armed
                 .lock()
                 .expect("deadline signal")

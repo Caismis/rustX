@@ -226,7 +226,10 @@ impl<'a> AgentExecution<'a> {
             },
         };
         debug_assert!(!self.terminal_emitted, "exactly one terminal event");
-        if matches!(self.terminal_commit_state, TerminalCommitState::Blocked) {
+        if matches!(
+            self.logical_step.terminal_commit_state,
+            TerminalCommitState::Blocked
+        ) {
             // Publication evidence or source selection did not reach the
             // producer boundary. Leaving the attempt terminal event absent is
             // deliberate: recovery must finish the same semantic transition
@@ -236,7 +239,7 @@ impl<'a> AgentExecution<'a> {
         self.terminal_emitted = true;
         let envelope = self.event_envelope(event);
         let persisted = match std::mem::replace(
-            &mut self.terminal_carryover_decision,
+            &mut self.logical_step.terminal_carryover_decision,
             TerminalCarryoverDecision::Undecided,
         ) {
             TerminalCarryoverDecision::Replace(source) => self

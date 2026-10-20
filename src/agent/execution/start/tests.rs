@@ -128,7 +128,7 @@ async fn a_measurement_does_not_survive_a_changed_provider_continuation() {
         invocation: execution.request.model.primary().invocation_config(),
         continuation: None,
     });
-    execution.observed = Some(ProviderObservedInput {
+    execution.measurements.observed = Some(ProviderObservedInput {
         input_tokens: 1_234,
         anchor: ObservedAnchor::of_selected(
             crate::conversation::SurfaceRevision::new(0),
@@ -137,7 +137,7 @@ async fn a_measurement_does_not_survive_a_changed_provider_continuation() {
             &[],
         ),
     });
-    execution.observed_request_identity = Some(measured_identity);
+    execution.measurements.observed_request_identity = Some(measured_identity);
     assert!(
         execution.reusable_observation().is_some(),
         "the measurement applies to the request it was taken under"

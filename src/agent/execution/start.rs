@@ -2,6 +2,8 @@
 //! fused durable start commit, and the provider-observed input measurements
 //! that outlive the request that produced them.
 
+use std::sync::Arc;
+
 #[cfg(test)]
 use super::attribution;
 use super::request::{FrozenLogicalInput, PreparedModelTurn};
@@ -10,6 +12,7 @@ use super::terminal::Terminal;
 use super::{AgentExecution, DurableFailureKind};
 use crate::agent::cancellation::StartAdjudication;
 use crate::agent::observer::AgentExecutionObserver;
+use crate::context::tokens::ObservedAnchor;
 use crate::context::tokens::ProviderObservedInput;
 use crate::durable::{ModelTurnStartCommit, ModelTurnStartCommitDisposition};
 use crate::events::types::AttemptFailure;
@@ -62,6 +65,58 @@ fn publish_model_turn_start_events(
     }
 }
 
+/// The provider-observed input of this attempt and the identity it was
+/// measured under, plus the facts of the last started request that a later
+/// provider report is promoted from. Unlike the request that produced it, a
+/// measurement survives into later compatible requests and logical steps; it
+/// is withdrawn only when the request state it described is replaced.
+#[derive(Default)]
+pub(super) struct RequestMeasurements {
+    pub(super) observed: Option<ProviderObservedInput>,
+    /// The request identity [`Self::observed`] was measured under.
+    ///
+    /// A provider counted the input of one concrete request. That count is
+    /// evidence about a later request only while the parts of the request
+    /// the conversation projection does not describe — the resolved
+    /// invocation and the opaque provider continuation — are still the
+    /// same. When they are not, the measurement is dropped rather than
+    /// stretched over a request the provider never measured.
+    pub(super) observed_request_identity: Option<Arc<RequestObservationIdentity>>,
+    /// The request identity of the last started request, promoted alongside
+    /// its measurement when the provider reports one.
+    pub(super) last_request_identity: Option<Arc<RequestObservationIdentity>>,
+    /// The structural anchor of the last started request, kept so its
+    /// provider-reported input measurement can be reused for every later
+    /// request context that extends it.
+    pub(super) last_request_anchor: Option<ObservedAnchor>,
+    /// The runtime's deterministic input estimate for the last started
+    /// request, kept so a provider overflow can be turned into a measured
+    /// estimator correction instead of being retried against the same
+    /// budget.
+    pub(super) last_request_estimated_input: Option<u64>,
+}
+
+impl RequestMeasurements {
+    /// Records the facts of one request that crossed the durable start
+    /// frontier, so its provider report can later be promoted.
+    fn started(
+        &mut self,
+        identity: Arc<RequestObservationIdentity>,
+        anchor: ObservedAnchor,
+        estimated_input: u64,
+    ) {
+        self.last_request_identity = Some(identity);
+        self.last_request_anchor = Some(anchor);
+        self.last_request_estimated_input = Some(estimated_input);
+    }
+
+    /// Withdraws the measurement once the request state it described
+    /// (provider continuation or replayed history) has been replaced.
+    pub(super) fn withdraw(&mut self) {
+        self.observed = None;
+        self.observed_request_identity = None;
+    }
+}
 impl<'a> AgentExecution<'a> {
     /// The one cancellation-vs-start linearization point of every model
     /// turn (Issue #12, M9b): the first turn, every tool→model
@@ -98,6 +153,7 @@ impl<'a> AgentExecution<'a> {
         let _profile = attribution::Timer::new(attribution::Phase::Start);
         #[cfg(test)]
         if let Some(pause) = self
+            .pauses
             .start_boundary_pause
             .lock()
             .expect("start boundary pause lock")
@@ -109,6 +165,7 @@ impl<'a> AgentExecution<'a> {
         let arbitration = self.cancellation.arbitrate_model_turn_start(|| {
             #[cfg(test)]
             if let Some(pause) = self
+                .pauses
                 .start_boundary_pause
                 .lock()
                 .expect("start boundary pause lock")
@@ -164,8 +221,8 @@ impl<'a> AgentExecution<'a> {
         // infallibly (validated at preparation, still exact), the start fact
         // is recorded, and only after this point may the provider be
         // invoked.
-        self.last_started_request = Some(prepared.snapshot.identity.clone());
-        self.logical_model_step = LogicalModelStepState::Unresolved;
+        self.logical_step.last_started_request = Some(prepared.snapshot.identity.clone());
+        self.logical_step.model_step = LogicalModelStepState::Unresolved;
         for (commit, receipt) in prepared
             .context
             .into_iter()
@@ -206,9 +263,11 @@ impl<'a> AgentExecution<'a> {
         // idempotent store verification returns the historical receipt but
         // must not replay those facts to a live observer.
         publish_model_turn_start_events(self.observer, &self.request.attempt_id, &start_commit);
-        self.last_request_identity = Some(prepared.request_identity.clone());
-        self.last_request_anchor = Some(prepared.anchor.clone());
-        self.last_request_estimated_input = Some(prepared.estimated_input);
+        self.measurements.started(
+            prepared.request_identity.clone(),
+            prepared.anchor.clone(),
+            prepared.estimated_input,
+        );
         self.last_request_id = Some(prepared.snapshot.request_id.clone());
         let accepts_prepared = {
             #[cfg(test)]
@@ -227,7 +286,7 @@ impl<'a> AgentExecution<'a> {
                 },
             });
         }
-        self.current_input = Some(Box::new(FrozenLogicalInput {
+        self.logical_step.current_input = Some(Box::new(FrozenLogicalInput {
             #[cfg(feature = "issue-387-profile")]
             adapter_input_profile: prepared.adapter_input_profile,
             snapshot: prepared.snapshot.clone(),
@@ -283,8 +342,8 @@ impl<'a> AgentExecution<'a> {
     /// a confident, provider-attributed number for a request no provider
     /// ever measured — and that number decides compaction.
     pub(super) fn reusable_observation(&self) -> Option<&ProviderObservedInput> {
-        let observed = self.observed.as_ref()?;
-        let identity = self.observed_request_identity.as_deref()?;
+        let observed = self.measurements.observed.as_ref()?;
+        let identity = self.measurements.observed_request_identity.as_deref()?;
         (identity.invocation == self.request.model.primary().invocation_config()
             && identity.continuation == self.pending_continuation)
             .then_some(observed)
@@ -295,18 +354,19 @@ impl<'a> AgentExecution<'a> {
     /// only while its structural anchor and request identity remain
     /// compatible; no estimate is promoted here.
     pub(super) fn record_provider_observation(&mut self, usage: &ModelUsage) {
-        let Some(anchor) = self.last_request_anchor.take() else {
+        let Some(anchor) = self.measurements.last_request_anchor.take() else {
             return;
         };
-        self.observed = Some(ProviderObservedInput {
+        self.measurements.observed = Some(ProviderObservedInput {
             input_tokens: usage.input_tokens,
             anchor,
         });
         // The measurement travels with the request identity it was taken
         // under, so a later request that changed invocation or continuation
         // cannot inherit it.
-        self.observed_request_identity
-            .clone_from(&self.last_request_identity);
+        self.measurements
+            .observed_request_identity
+            .clone_from(&self.measurements.last_request_identity);
     }
 }
 

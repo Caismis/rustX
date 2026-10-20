@@ -376,7 +376,7 @@ impl<'a> AgentExecution<'a> {
                     format!("the publication audit could not be terminalized durably: {error}");
                 self.record_publication_failure(&message);
                 self.publication_settlement_failed = true;
-                self.terminal_commit_state = TerminalCommitState::Blocked;
+                self.logical_step.terminal_commit_state = TerminalCommitState::Blocked;
                 Err(RuntimeError::DurableStore { message })
             }
         }

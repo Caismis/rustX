@@ -96,8 +96,7 @@ impl<'a> AgentExecution<'a> {
                     // Complete replay replaces all primary continuation ownership;
                     // the old request measurement is no longer evidence for it.
                     self.retire_continuation();
-                    self.observed = None;
-                    self.observed_request_identity = None;
+                    self.measurements.withdraw();
                     // `commit_projection` persisted and returned the exact
                     // completion fact before this branch became observable.
                     break;
@@ -107,6 +106,7 @@ impl<'a> AgentExecution<'a> {
                 // turn a committed checkpoint into a terminal CannotFit.
                 Err(error) if error.kind == ContextErrorKind::CannotFit => {
                     let can_degrade = self
+                        .logical_step
                         .frozen_carryover
                         .as_mut()
                         .is_some_and(FrozenCarryover::degrade);
@@ -153,11 +153,13 @@ impl<'a> AgentExecution<'a> {
         // is about to be handed mutable access to.
         let observed = self.reusable_observation().cloned();
         let carryover_anchor = self
+            .logical_step
             .frozen_carryover
             .as_ref()
             .and_then(|carryover| carryover.anchor.as_ref());
         let carryover = if carryover_anchor.is_some() {
-            self.frozen_carryover
+            self.logical_step
+                .frozen_carryover
                 .as_ref()
                 .and_then(FrozenCarryover::admitted)
         } else {
@@ -174,7 +176,7 @@ impl<'a> AgentExecution<'a> {
             &CompactionConstraints {
                 must_cover_through,
                 fresh_inbound,
-                protected_context_ids: &self.logical_context_ids,
+                protected_context_ids: &self.logical_step.context_ids,
                 staged_request_context,
                 carryover: carryover.as_ref(),
                 carryover_anchor,

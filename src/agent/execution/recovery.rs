@@ -120,8 +120,9 @@ impl SemanticGenerationAnomaly {
 ///   construction can consume it;
 /// - **cleared** by [`Self::resolve`], the moment the corrective generation
 ///   produces a canonical model outcome;
-/// - **discarded** by [`Self::reset`] at every logical-model-step boundary,
-///   together with the spent budget, so it can never reach a later step.
+/// - **discarded** with the replaced logical-step working set
+///   (`LogicalStep::begin`) at every logical-model-step boundary, together
+///   with the spent budget, so it can never reach a later step.
 ///
 /// The budget lives here too, for the same reason: it is semantic state of
 /// the step, not of any one request.
@@ -175,12 +176,6 @@ impl SemanticGenerationRecovery {
     pub(super) fn resolve(&mut self) {
         self.pending_hint = None;
     }
-
-    /// A new logical model step begins: neither the spent budget nor an
-    /// unresolved hint belongs to it.
-    pub(super) fn reset(&mut self) {
-        *self = Self::default();
-    }
 }
 
 impl<'a> AgentExecution<'a> {
@@ -194,6 +189,7 @@ impl<'a> AgentExecution<'a> {
         next_request_ordinal: &mut u32,
     ) -> Result<ModelInvocation, Terminal> {
         let input = *self
+            .logical_step
             .current_input
             .as_ref()
             .ok_or_else(|| {
@@ -361,6 +357,7 @@ impl<'a> AgentExecution<'a> {
         // below usefulness. No report means the conservative unquantified
         // correction, which is exactly the honest answer.
         let estimate_correction = self
+            .measurements
             .last_request_estimated_input
             .and_then(|estimated| {
                 overflow_error
@@ -429,6 +426,7 @@ impl<'a> AgentExecution<'a> {
         self.settle_model_request_failure(assembler, &error)?;
         #[cfg(test)]
         if let Some(pause) = self
+            .pauses
             .generation_anomaly_pause
             .lock()
             .expect("generation anomaly pause lock")
@@ -479,6 +477,7 @@ impl<'a> AgentExecution<'a> {
     pub(super) async fn wait_for_retry_backoff(&self, deadline_ms: u64) -> Result<(), Terminal> {
         #[cfg(test)]
         if let Some(pause) = self
+            .pauses
             .retry_backoff_pause
             .lock()
             .expect("retry backoff pause lock")
