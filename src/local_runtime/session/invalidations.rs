@@ -148,3 +148,43 @@ impl SessionSummaryInvalidations {
         self.frontier()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::identity::SessionId;
+    #[test]
+    fn ownership_retirement_survives_coalesced_metadata_and_is_not_inferred_from_activity() {
+        let log = SessionSummaryInvalidations::default();
+        let id = SessionId::new("ses_00000000-0000-7000-8000-000000000001");
+        log.record_change(&id, true);
+        log.record(&id);
+        assert!(log.next_ownership_after(0).is_none());
+        log.retire_ownership(&id, 7);
+        let retirement = log.next_ownership_after(0).unwrap();
+        log.record(&id);
+        log.record_change(&id, true);
+        assert_eq!(log.next_ownership_after(0), Some(retirement.clone()));
+        assert!(log.next_ownership_after(retirement.0).is_none());
+        log.retire_ownership(&id, 12);
+        let coalesced = log.next_ownership_after(0).unwrap();
+        assert!(coalesced.0 > retirement.0);
+        assert_eq!(coalesced.2, 12);
+        log.retire_ownership(&id, 7);
+        assert_eq!(log.next_ownership_after(0).unwrap().2, 12);
+    }
+
+    #[test]
+    fn issue419_catalog_membership_invalidation_survives_coalesced_preview_changes() {
+        let log = SessionSummaryInvalidations::default();
+        let a = SessionId::new("ses_00000000-0000-7000-8000-000000000001");
+        let b = SessionId::new("ses_00000000-0000-7000-8000-000000000002");
+        log.record_change(&a, true);
+        log.record_change(&b, true);
+        log.record(&a);
+        assert_eq!(log.next_after(0), Some((1, a.clone(), true)));
+        assert_eq!(log.next_after(1), Some((2, b, true)));
+        assert_eq!(log.next_after(2), Some((3, a, false)));
+        assert_eq!(log.next_after(3), None);
+    }
+}

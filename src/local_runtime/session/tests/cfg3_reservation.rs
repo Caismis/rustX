@@ -558,7 +558,7 @@ fn spawn_create_child(root: &Path, mode: &str) -> (std::process::Child, SessionI
     let mut process = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
-            "local_runtime::session::tests::reservation_tests::reservation_create_process_gate",
+            "local_runtime::session::tests::cfg3_reservation::reservation_create_process_gate",
             "--nocapture",
             "--format=terse",
         ])
