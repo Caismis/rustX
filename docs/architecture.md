@@ -1416,17 +1416,27 @@ runtime/inbound.rs         ConversationInboundMailbox (per-conversation
                            process-local coordination contract over the
                            durable Pending Inbound Inbox): InboundSequence,
                            InboundItem, InboundBatch, MailboxError
-durable/inbox.rs           ConversationStore trait + domain types (InboundDraft,
-                           AcceptedInbound, PendingInboundItem, PendingBatch):
-                           the backend-independent acceptance/selection/adoption
-                           operations, plus the fused `commit_model_turn_start`
-                           contract (canonical User context + RequestSnapshot
-                           with frozen Effective System Prompt +
-                           ModelRequestStarted in one transaction)
-durable/sqlite.rs          SqliteConversationStore: the M8 SQLite backend
-                           (one semantic authority over Pending Inbound,
-                           Message Ledger, Surface revisions, Request
-                           Snapshots, Event Journal, and checkpoint metadata)
+durable/store.rs           ConversationStore: the one durable authority of a
+                           conversation, the union of the domain Store
+                           contracts (InboxStore, CanonicalStore,
+                           RequestStore, JournalStore, PublicationStore,
+                           ProjectionStore, ObservationStore) declared in
+                           durable/inbox.rs and durable/store/*.rs beside
+                           their vocabulary; RequestStore owns the fused
+                           `commit_model_turn_start` contract (canonical User
+                           context + RequestSnapshot with frozen Effective
+                           System Prompt + ModelRequestStarted in one
+                           transaction)
+durable/inbox.rs           InboxStore + Pending Inbound/Goal types (InboundDraft,
+                           AcceptedInbound, PendingInboundItem, PendingBatch),
+                           ConversationStoreBinding and the narrow inbound and
+                           interaction-audit capabilities
+durable/sqlite.rs          SqliteConversationStore: the M8 SQLite backend and
+                           its single connection/transaction owner; each
+                           domain contract is implemented in durable/sqlite/
+                           (schema, inbox, canonical, request, journal,
+                           publication, projection, observation) by helpers
+                           that run inside the caller's transaction
 runtime/continuation.rs   ProviderContinuationState boundary (OpenAI Responses
                            stored/stateless, Anthropic opaque state)
 message/content.rs         TextBlock, ImageReference, FileReference
