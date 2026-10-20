@@ -1,0 +1,382 @@
+"""Opt-in ownership mapping and outer safety controls; no workload implementation."""
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import signal
+import subprocess
+import threading
+import time
+
+GIB = 2**30
+HEAD = '1dfdf7e53bf20e1869099578b8f41c434e275961'
+TREE = '6b4e4e4b47592ab9369c364574331daac923ca4e'
+BASE = '623b41b869a95c888eb04f907cbf607232699a2f'
+COHORT_ENTRY = 16 * GIB  # Preserve the existing wrapper's reserve.
+BUILD_ENTRY = COHORT_ENTRY + 2 * GIB
+
+
+def sha(path):
+    with Path(path).open('rb') as stream:
+        return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+
+def validate_candidate(identity, preserved, baseline):
+    if identity.get('head') != HEAD or identity.get('production_tree') != TREE:
+        raise ValueError('ownership candidate must be the exact reviewed source tree')
+    if identity.get('verified') is not True or preserved.get('source_head') != HEAD:
+        raise ValueError('missing verified candidate build provenance')
+    if baseline['head'] != BASE or identity['harness'] != baseline['harness']:
+        raise ValueError('baseline or fixture identity differs')
+    for name, kind, test in [('rustx', ['lib'], False), ('conformance', ['test'], True)]:
+        roots = [item for item in identity['root_artifacts'] if item['name'] == name and item['kind'] == kind]
+        if len(roots) != 1 or roots[0]['fresh'] is not False:
+            raise ValueError('ordinary library and conformance must be freshly compiled')
+        items = [item for item in preserved['artifacts'] if item['name'] == name and item['kind'] == kind]
+        if not items or not any(item['preserved'].endswith('.rlib') for item in items) and kind == ['lib']:
+            raise ValueError('missing preserved ordinary product artifact')
+        for item in items:
+            profile = item['profile']
+            if (str(profile['opt_level']), profile['debuginfo'], profile['test'], item['features']) != ('3', 0, test, []):
+                raise ValueError('unit/O0/instrumented artifacts cannot be performance products')
+            if profile.get('debug_assertions') is not False or profile.get('overflow_checks') is not False:
+                raise ValueError('candidate profile differs from the preserved release baseline')
+        if kind == ['lib']:
+            library = next(item for item in items if item['preserved'].endswith('.rlib'))
+            if sha(library['preserved']) != library['sha256'] or library['sha256'] != identity['library_sha256']:
+                raise ValueError('ordinary library digest mismatch')
+    if sha(identity['binary']) != identity['sha256']:
+        raise ValueError('candidate executable digest mismatch')
+    products = [item for item in preserved['artifacts'] if item['kind'] == ['test'] and item['name'] == 'conformance']
+    if not any(Path(item['preserved']).resolve() == Path(identity['binary']).resolve()
+               and item['sha256'] == identity['sha256'] for item in products):
+        raise ValueError('conformance identity is not the preserved executable')
+
+
+def allocated(paths):
+    """Count actual allocated regular-file blocks once, without following symlinks."""
+    seen = set()
+    total = 0
+    for path in paths:
+        if not path.exists():
+            continue
+        for directory, _, names in os.walk(path, followlinks=False):
+            for name in names:
+                file = Path(directory) / name
+                try:
+                    stat = file.lstat()
+                except FileNotFoundError:
+                    continue
+                key = (stat.st_dev, stat.st_ino)
+                if file.is_symlink() or key in seen:
+                    continue
+                seen.add(key)
+                total += stat.st_blocks * 512
+    return total
+
+
+def process_start(pid):
+    try:
+        return int(Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[19])
+    except FileNotFoundError:
+        return None
+
+
+def resources(workspace):
+    group = Path('/sys/fs/cgroup')
+    stats = dict(line.split() for line in (group / 'memory.stat').read_text().splitlines())
+    events = dict(line.split() for line in (group / 'memory.events').read_text().splitlines())
+    pressure = dict(word.split('=') for line in (group / 'memory.pressure').read_text().splitlines()
+                    if line.startswith('full ') for word in line.split()[1:])
+    disk = os.statvfs(workspace)
+    return {'monotonic': time.monotonic(), 'free': disk.f_bavail * disk.f_frsize,
+            'memory_limit': int((group / 'memory.max').read_text()),
+            'memory_current': int((group / 'memory.current').read_text()),
+            'anon_shmem': int(stats['anon']) + int(stats['shmem']),
+            'full_avg10': float(pressure['avg10']),
+            'oom': int(events['oom']), 'oom_kill': int(events['oom_kill'])}
+
+
+class Guard:
+    """Monitor one owned build/cohort. Existing workload clocks stay untouched."""
+    def __init__(self, workspace, output, kind, evidence=None):
+        if kind not in ('build', 'cohort'):
+            raise ValueError('unknown guard scope')
+        self.workspace, self.output, self.kind = Path(workspace), Path(output), kind
+        self.initial = resources(self.workspace)
+        if self.initial['free'] < (BUILD_ENTRY if kind == 'build' else COHORT_ENTRY):
+            raise RuntimeError('insufficient combined build/cohort reserve; no child started')
+        self.started = time.monotonic()
+        self.deadline = self.started + (3600 if kind == 'build' else 1800)
+        self.product_deadline = None
+        self.paths = [self.output, self.workspace / 'tmp']
+        self.evidence = Path(evidence) if evidence is not None else self.output
+        self.paths.append(self.evidence)
+        if kind == 'build':
+            self.paths.append(self.workspace / 'target')
+        self.initial_allocated = allocated(self.paths)
+        self.initial_temp = allocated([self.workspace / 'tmp'])
+        self.failure = None
+        self.owned = []
+        self.pressure_since = self.memory_since = None
+        self.done = threading.Event()
+        self.lock = threading.Lock()
+        self.thread = threading.Thread(target=self._monitor, daemon=True)
+
+    def start(self):
+        self.output.mkdir(parents=True, exist_ok=False)
+        (self.output / 'watchdog-config.json').write_text(json.dumps({
+            'kind': self.kind, 'adapter_sha256': sha(__file__), 'initial': self.initial,
+            'entry_bytes': BUILD_ENTRY if self.kind == 'build' else COHORT_ENTRY,
+            'hard_floor_bytes': 5 * GIB, 'soft_stop_bytes': 6 * GIB,
+            'allocated_growth_cap_bytes': 2 * GIB if self.kind == 'build' else GIB,
+            'evidence_cap_bytes': int(.75 * GIB), 'temporary_growth_cap_bytes': int(.25 * GIB),
+            'deadline_monotonic': self.deadline, 'per_product_seconds': 180,
+            'memory_stop': 'anon+shmem >= limit-2GiB for 3s; memory full avg10 >=10% for 5s; any new oom/oom_kill event',
+            'sampling_seconds': .5, 'scope': 'external watchdog; overhead not estimated'}, indent=2) + '\n')
+        self.thread.start()
+        return self
+
+    def register(self, process):
+        try:
+            group = os.getpgid(process.pid)
+        except ProcessLookupError:
+            group = None
+        with self.lock:
+            self.owned.append((process, process_start(process.pid), group))
+        if self.failure:
+            self._shutdown()
+
+    def check(self):
+        if self.failure:
+            raise RuntimeError('owned operation stopped: ' + self.failure['reason'])
+
+    def product(self, active):
+        if active:
+            self.check()
+        self.product_deadline = time.monotonic() + 180 if active else None
+
+    def reason(self, point, growth, evidence=0, temporary=0):
+        now = point['monotonic']
+        if point['free'] <= 6 * GIB:
+            return 'disk-soft-stop-6GiB'
+        if growth > (2 * GIB if self.kind == 'build' else GIB):
+            return 'allocated-disk-budget'
+        if self.kind == 'cohort' and (evidence > .75 * GIB or temporary > .25 * GIB):
+            return 'evidence-or-temporary-allocation-budget'
+        if now >= self.deadline:
+            return 'build-60m-timeout' if self.kind == 'build' else 'cohort-30m-timeout'
+        if self.product_deadline is not None and now >= self.product_deadline:
+            return 'product-180s-timeout'
+        if point['oom'] > self.initial['oom'] or point['oom_kill'] > self.initial['oom_kill']:
+            return 'new-cgroup-oom-event'
+        self.memory_since = (self.memory_since or now) if point['anon_shmem'] >= point['memory_limit'] - 2 * GIB else None
+        self.pressure_since = (self.pressure_since or now) if point['full_avg10'] >= 10 else None
+        if self.memory_since is not None and now - self.memory_since >= 3:
+            return 'anon-plus-shmem-within-2GiB-of-limit-for-3s'
+        if self.pressure_since is not None and now - self.pressure_since >= 5:
+            return 'memory-full-avg10-at-least-10-percent-for-5s'
+        return None
+
+    def _shutdown(self):
+        with self.lock:
+            processes = list(self.owned)
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            for process, start, group in processes:
+                try:
+                    current = process_start(process.pid)
+                    if start is not None and current in (None, start):
+                        if group == process.pid:
+                            # The created session can outlive its leader (uv/provider
+                            # descendants). A reused leader PID is rejected above.
+                            os.killpg(group, sig)
+                        elif process.poll() is None and current == start:
+                            process.send_signal(sig)
+                except ProcessLookupError:
+                    pass
+            if sig == signal.SIGTERM:
+                time.sleep(2)
+
+    def _monitor(self):
+        try:
+            with (self.output / 'watchdog-resources.jsonl').open('w') as log:
+                while not self.done.is_set():
+                    point = resources(self.workspace)
+                    growth = max(0, allocated(self.paths) - self.initial_allocated, self.initial['free'] - point['free'])
+                    evidence = allocated([self.evidence, self.output])
+                    temporary = max(0, allocated([self.workspace / 'tmp']) - self.initial_temp)
+                    log.write(json.dumps(point | {'allocated_growth': growth, 'evidence_allocated': evidence, 'temporary_growth': temporary}) + '\n')
+                    log.flush()
+                    reason = self.reason(point, growth, evidence, temporary)
+                    if reason:
+                        self.failure = point | {'reason': reason, 'allocated_growth': growth}
+                        break
+                    self.done.wait(.5)
+        except Exception as error:
+            self.failure = {'reason': 'watchdog-observation-error', 'error': repr(error)}
+        if self.failure:
+            (self.output / 'watchdog-stop.json').write_text(json.dumps(self.failure, indent=2) + '\n')
+            self._shutdown()
+            (self.output / 'owned-process-status.json').write_text(json.dumps([
+                {'pid': process.pid, 'start_ticks': start, 'process_group': group, 'returncode': process.poll(),
+                 'same_process_still_present': start is not None and process_start(process.pid) == start}
+                for process, start, group in self.owned], indent=2) + '\n')
+
+    def close(self):
+        self.done.set()
+        self.thread.join()
+        active = False
+        for process, start, group in self.owned:
+            if process.poll() is None:
+                active = True
+            elif group == process.pid and start is not None and process_start(process.pid) in (None, start):
+                try:
+                    os.killpg(group, 0)
+                    active = True
+                except ProcessLookupError:
+                    pass
+        if active:
+            if self.failure is None:
+                self.failure = {'reason': 'owner-exit-with-live-child'}
+                (self.output / 'watchdog-stop.json').write_text(json.dumps(self.failure, indent=2) + '\n')
+            self._shutdown()
+        self.check()
+
+
+def accepted(result):
+    if result.get('accepted') is not True:
+        raise RuntimeError('first product/oracle failure; artifacts retained; cohort stopped')
+
+
+def comparison_runner(original, output):
+    def run(argv, *args, **kwargs):
+        result = original(argv, *args, **kwargs)
+        if list(argv[:2]) == ['node', 'benchmarks/runtime/compare-http.mjs'] and result.returncode:
+            (Path(output) / 'first-comparison-failure.json').write_text(json.dumps({
+                'argv': argv, 'returncode': result.returncode,
+                'stdout': result.stdout, 'stderr': result.stderr}, indent=2) + '\n')
+            raise RuntimeError('first cross-revision oracle failure; cohort stopped')
+        return result
+    return run
+
+
+def cohort_arguments(argv):
+    """Exactly the reviewed 18-product schedule; one shared 30-minute guard."""
+    if any(option in argv for option in ('--case', '--observer-mode', '--pair-offset')):
+        raise ValueError('ownership mode uses the fixed two-block protocol; omit case/mode/offset')
+    if '--pairs' in argv and argv[argv.index('--pairs') + 1] != '3':
+        raise ValueError('ownership mode requires three exploratory pairs')
+    output_index = argv.index('--output') + 1
+    output = Path(argv[output_index])
+    blocks = []
+    for name, mode, cases in [('live-main', 'live-subscriber', ['short-small', 'short-large']),
+                              ('late-control', 'no-live-subscriber', ['short-large'])]:
+        block = list(argv)
+        block[output_index] = str(output / name)
+        block += ['--observer-mode', mode]
+        for case in cases:
+            block += ['--case', case]
+        blocks.append(block)
+    return blocks
+
+
+def watch_build(repo, output):
+    """Fixed ordinary-product build; intentionally never runs cargo clean."""
+    workspace = Path('/workspace/pr485-study')
+    repo, output = Path(repo).resolve(), Path(output).resolve()
+    def git(*args):
+        return subprocess.check_output(['git', *args], cwd=repo, text=True).strip()
+    if git('rev-parse', 'HEAD') != HEAD or git('rev-parse', 'HEAD:src') != TREE:
+        raise ValueError('build checkout is not reviewed 1df source')
+    inputs = ['src', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'tests/conformance', 'tests/common/provider_emulator.rs', 'benchmarks/runtime', 'test-support/fake-provider']
+    if git('status', '--porcelain', '--', *inputs):
+        raise ValueError('uncommitted build input')
+    env = dict(os.environ)
+    for key in list(env):
+        if key.startswith('CARGO_PROFILE_RELEASE_') or key in ('CARGO_ENCODED_RUSTFLAGS', 'RUSTC_WRAPPER', 'RUSTC_WORKSPACE_WRAPPER', 'LD_PRELOAD', 'CPUPROFILE'):
+            env.pop(key)
+    env.update(PATH='/workspace/.cargo/bin:' + env['PATH'], CARGO_HOME='/workspace/.cargo',
+               RUSTUP_HOME='/workspace/.rustup', RUSTUP_TOOLCHAIN='1.98.1', CARGO_INCREMENTAL='0',
+               CARGO_TARGET_DIR=str(workspace / 'target'), CARGO_BUILD_JOBS='2',
+               CARGO_PROFILE_RELEASE_OPT_LEVEL='3', CARGO_PROFILE_RELEASE_DEBUG='0',
+               RUSTFLAGS='-Copt-level=3 -Cdebuginfo=0', TMPDIR=str(workspace / 'tmp'),
+               BINDGEN_EXTRA_CLANG_ARGS='-isystem /usr/lib/gcc/x86_64-linux-gnu/14/include', LIBCLANG_PATH='/usr/lib/llvm-19/lib')
+    argv = ['cargo', 'test', '--release', '--locked', '--offline', '--test', 'conformance', '--no-run', '--message-format=json', '-vv', '-j', '2']
+    guard = Guard(workspace, output, 'build').start()
+    safe_env = ['CARGO_TARGET_DIR', 'CARGO_BUILD_JOBS', 'CARGO_INCREMENTAL', 'CARGO_PROFILE_RELEASE_OPT_LEVEL', 'CARGO_PROFILE_RELEASE_DEBUG',
+                'RUSTFLAGS', 'RUSTUP_TOOLCHAIN', 'TMPDIR', 'BINDGEN_EXTRA_CLANG_ARGS', 'LIBCLANG_PATH']
+    identity = {'head': HEAD, 'production_tree': TREE, 'verified': False, 'commands': [argv],
+                'build_environment': {key: env[key] for key in safe_env},
+                'rustc': subprocess.check_output(['rustc', '--version', '--verbose'], env=env, text=True),
+                'cargo': subprocess.check_output(['cargo', '--version'], env=env, text=True),
+                'source_sha256': {name: sha(repo / name) for name in ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'src/runtime_client/projection.rs', 'src/runtime_client/projection/metadata_ownership_tests.rs']},
+                'root_artifacts': [], 'harness': {}}
+    try:
+        guard.check()
+        with (output / 'build.stdout').open('w') as stdout, (output / 'build.stderr').open('w') as stderr:
+            process = subprocess.Popen(argv, cwd=repo, env=env, stdout=stdout, stderr=stderr, start_new_session=True)
+            guard.register(process)
+            identity['build_exit'] = process.wait()
+        guard.check()
+        if identity['build_exit'] != 0:
+            raise RuntimeError('candidate build failed; output retained')
+        if git('rev-parse', 'HEAD') != HEAD or git('status', '--porcelain', '--', *inputs):
+            raise RuntimeError('build inputs changed')
+        rows = [json.loads(line) for line in (output / 'build.stdout').read_text().splitlines() if line.startswith('{')]
+        roots = [row for row in rows if row.get('reason') == 'compiler-artifact' and row['target']['name'] in ('rustx', 'conformance', 'bash-supervisor', 'interactive-supervisor')]
+        for name, kind, source in [('rustx', ['lib'], 'src/lib.rs'), ('conformance', ['test'], 'tests/conformance/main.rs')]:
+            selected = [row for row in roots if row['target']['name'] == name and row['target']['kind'] == kind]
+            if len(selected) != 1 or selected[0]['fresh'] is not False or Path(selected[0]['target']['src_path']).resolve() != repo / source:
+                raise RuntimeError('unexpected cached/foreign root artifact; stop before timing')
+        artifacts = []
+        for row in roots:
+            identity['root_artifacts'].append({'name': row['target']['name'], 'kind': row['target']['kind'], 'source_path': row['target']['src_path'], 'fresh': row['fresh']})
+            for filename in row['filenames']:
+                source = Path(filename)
+                destination = output / ('conformance' if row['target']['name'] == 'conformance' else 'artifacts/' + source.name)
+                destination.parent.mkdir(exist_ok=True)
+                shutil.copy2(source, destination)
+                artifacts.append({'target': str(source), 'preserved': str(destination), 'name': row['target']['name'],
+                                  'kind': row['target']['kind'], 'profile': row['profile'], 'features': row['features'],
+                                  'sha256': sha(destination), 'bytes': destination.stat().st_size})
+                guard.check()
+        for source in (workspace / 'target/release/deps').glob('*.so'):
+            destination = output / 'artifacts' / source.name
+            shutil.copy2(source, destination)
+            artifacts.append({'target': str(source), 'preserved': str(destination), 'name': source.name,
+                              'kind': ['shared-library'], 'sha256': sha(destination), 'bytes': destination.stat().st_size})
+            guard.check()
+        for source in [repo / 'tests/common/provider_emulator.rs', repo / 'tests/conformance/agent_loop/runtime_benchmark.rs',
+                       *sorted((repo / 'tests/conformance/agent_loop/runtime_benchmark').rglob('*'))]:
+            if source.is_file():
+                identity['harness'][str(source.relative_to(repo))] = sha(source)
+        identity.update(binary=str(output / 'conformance'), sha256=sha(output / 'conformance'),
+                        library_sha256=next(item['sha256'] for item in artifacts if item['kind'] == ['lib'] and item['preserved'].endswith('.rlib')))
+        preserved = {'source_head': HEAD, 'artifacts': artifacts}
+        (output / 'preserved-artifacts.json').write_text(json.dumps(preserved, indent=2) + '\n')
+        baseline = json.loads((workspace / 'evidence/build-baseline/identity.json').read_text())
+        identity['verified'] = True
+        validate_candidate(identity, preserved, baseline)
+        guard.check()
+    except BaseException:
+        identity['verified'] = False
+        raise
+    finally:
+        try:
+            guard.close()
+        except BaseException:
+            identity['verified'] = False
+            raise
+        finally:
+            (output / 'identity.json').write_text(json.dumps(identity, indent=2) + '\n')
+
+
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--watch-build', action='store_true', required=True)
+    parser.add_argument('--repo', type=Path, required=True)
+    parser.add_argument('--output', type=Path, required=True)
+    args = parser.parse_args()
+    watch_build(args.repo, args.output)

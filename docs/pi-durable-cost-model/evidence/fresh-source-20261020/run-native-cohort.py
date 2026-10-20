@@ -10,6 +10,8 @@ import shutil
 import subprocess
 import sys
 import time
+import traceback
+from ownership_adapter import Guard, accepted, cohort_arguments, comparison_runner, validate_candidate
 
 root = Path('/workspace/pr485-study')
 repo = root / 'repo'
@@ -26,16 +28,24 @@ def sha(path):
 
 identities = {}
 build_identities = {}
-for label in ('baseline', 'geometry', 'scoped'):
-    build = root / 'evidence' / ('build-' + label)
+builds = [(label, root / 'evidence' / ('build-' + label)) for label in ('baseline', 'geometry', 'scoped')]
+candidate_build = os.environ.get('RUSTX_BENCH_CANDIDATE_BUILD')
+if candidate_build:
+    builds.append(('ownership', Path(candidate_build).resolve()))
+for label, build in builds:
     identity = json.loads((build / 'identity.json').read_text())
     preserved = json.loads((build / 'preserved-artifacts.json').read_text())
     assert identity['verified'] is True
     assert sha(Path(identity['binary'])) == identity['sha256']
+    if label == 'ownership':
+        validate_candidate(identity, preserved, build_identities['baseline'])
+        assert str(Path(identity['binary']).resolve()) not in identities
     build_identities[label] = identity
     identities[str(Path(identity['binary']).resolve())] = (label, preserved)
 
 original_run = controller.run
+original_popen, original_subprocess_run = subprocess.Popen, subprocess.run
+guard = None
 output_arg = sys.argv[sys.argv.index('--output') + 1]
 Path(output_arg).parent.mkdir(parents=True, exist_ok=True)
 restoration_log = Path(output_arg).with_name(Path(output_arg).name + '-helper-restoration.jsonl')
@@ -45,6 +55,11 @@ assert not restoration_log.exists()
 assert not interval_log.exists()
 assert not cohort_path.exists()
 protected = [runtime / name for name in ('compare-revisions.py', 'controller.py', 'observer_oracle.py')]
+if candidate_build:
+    protected.extend([Path(__file__).resolve(), Path(__file__).with_name('ownership_adapter.py').resolve()])
+    frozen_driver = Path(__file__).with_name('ownership-driver-compare-revisions.py')
+    assert sha(runtime / 'compare-revisions.py') == sha(frozen_driver), 'runtime driver differs from tested frozen workload'
+    protected.append(frozen_driver)
 hashes = {str(p): sha(p) for p in protected}
 node_version = subprocess.check_output(['node', '--version'], text=True).strip()
 assert node_version == 'v24.19.0'
@@ -60,6 +75,8 @@ cohort = {'start_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
 cohort_path.write_text(json.dumps(cohort, indent=2) + '\n')
 
 def guarded_run(argv, stem, case, env, project):
+    if guard is not None:
+        guard.check()
     label, preserved = identities[str(Path(argv[0]).resolve())]
     stat = os.statvfs(root)
     assert stat.f_bavail * stat.f_frsize >= 16 * 2**30, 'less than 16 GiB usable reserve'
@@ -98,9 +115,13 @@ def guarded_run(argv, stem, case, env, project):
             'idle_process_check_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
             'forbidden_or_timed_processes': active, 'artifacts': restored}) + '\n')
     started_utc = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    if guard is not None:
+        guard.product(True)
     entered = time.monotonic_ns()
     result = original_run(argv, stem, case, env, project)
     ended = time.monotonic_ns()
+    if guard is not None:
+        guard.product(False)
     with interval_log.open('a') as f:
         f.write(json.dumps({'label': label, 'stem': str(stem), 'case': case,
             'start_utc': started_utc,
@@ -108,19 +129,69 @@ def guarded_run(argv, stem, case, env, project):
             'controller_entry_monotonic_ns': entered,
             'controller_return_monotonic_ns': ended,
             'accepted': result['accepted']}) + '\n')
+    if guard is not None:
+        guard.check()
+        accepted(result)
     return result
 
 controller.run = guarded_run
 sys.argv[0] = str(runtime / 'compare-revisions.py')
 os.chdir(repo)
 try:
-    runpy.run_path(sys.argv[0], run_name='__main__')
+    if candidate_build:
+        before = str(Path(sys.argv[sys.argv.index('--before') + 1]).resolve())
+        after = str(Path(sys.argv[sys.argv.index('--after') + 1]).resolve())
+        assert identities[before][0] == 'baseline' and identities[after][0] == 'ownership', 'ownership mode requires exact baseline/candidate pair'
+        guard = Guard(root, Path(output_arg + '-watchdog'), 'cohort', Path(output_arg)).start()
+        def owned_popen(*args, **kwargs):
+            guard.check()
+            kwargs['start_new_session'] = True
+            process = original_popen(*args, **kwargs)
+            guard.register(process)
+            return process
+        subprocess.Popen = owned_popen
+        subprocess.run = comparison_runner(original_subprocess_run, Path(output_arg + '-watchdog'))
+        cohort['ownership_adapter'] = {'candidate_build': str(Path(candidate_build).resolve()),
+            'effective_entry_reserve_bytes': 16 * 2**30, 'first_failure_stops': True,
+            'pair_order': ['AB', 'BA', 'AB'], 'order_imbalance': 'baseline first twice; candidate first once; exploratory n=3, no acceptance/significance claim',
+            'watchdog': output_arg + '-watchdog', 'cohort_cap_seconds': 1800,
+            'expected_product_count': 18,
+            'incomplete_policy': 'retain incomplete cohort; no replacement or automatic retry'}
+        for block_argv in cohort_arguments(sys.argv):
+            guard.check()
+            sys.argv = block_argv
+            try:
+                runpy.run_path(sys.argv[0], run_name='__main__')
+            except SystemExit as result:
+                if result.code not in (0, None):
+                    raise
+    else:
+        runpy.run_path(sys.argv[0], run_name='__main__')
+except Exception:
+    cohort['adapter_error'] = traceback.format_exc()
+    raise
 finally:
+    subprocess.Popen, subprocess.run = original_popen, original_subprocess_run
+    guard_error = None
+    if guard is not None:
+        try:
+            guard.close()
+        except RuntimeError as error:
+            cohort['watchdog_failure'] = str(error)
+            guard_error = error
     assert {str(p): sha(p) for p in protected} == hashes, 'published benchmark sources changed'
     cohort['end_utc'] = datetime.datetime.now(datetime.timezone.utc).isoformat()
     manifest = Path(output_arg) / 'manifest.json'
     if manifest.exists():
         cohort['published_manifest'] = json.loads(manifest.read_text())
+    if candidate_build:
+        cohort['published_manifests'] = {name: json.loads(path.read_text())
+            for name in ('live-main', 'late-control')
+            if (path := Path(output_arg) / name / 'manifest.json').exists()}
     if interval_log.exists():
         cohort['products'] = [json.loads(line) for line in interval_log.read_text().splitlines()]
+    if candidate_build:
+        cohort['complete_18_products'] = len(cohort.get('products', [])) == 18 and all(product['accepted'] for product in cohort.get('products', [])) and not guard_error and 'adapter_error' not in cohort
     cohort_path.write_text(json.dumps(cohort, indent=2) + '\n')
+    if guard_error is not None:
+        raise guard_error
