@@ -3238,3 +3238,33 @@ All 139 focused trajectory/timing tests, TypeScript, production build, i18n
 ownership, 303 source records and notices for 264 packages passed. No native
 protocol, runtime or TUI source changed. Other browser engines were not exercised;
 the existing large-chunk build warning remains.
+
+### Composer editor focus keeps the neutral Harness card edge (2026-10-20)
+
+Reference: Harness `ui-conversation/src/client/skeleton/InputBar.module.css` at
+`687f282e8625c6b8d11ff58211a90524be2e4317`. Its card retains the neutral border-l2
+elevation stroke while editing. The local textarea outline was already removed,
+but a separate `card:has(input:focus-visible)` override recolored the whole card
+blue. That override is removed from the shared composer stylesheet; new, parent
+and child editors keep the same card edge and shadow before and after focus.
+
+Browser plugin not available: an outside-repository Playwright script used the
+pinned 1.63 Linux Chromium container at the startup fixture on port 5274 (production
+preview on port 5273). All four before/after scenarios passed at 1440x844 and
+390x844 in light and dark themes, exercising new-conversation, parent and child
+editors. The flow is workspace selection or child navigation, pointer focus,
+draft editing, Tab/Shift+Tab focus return and action-button keyboard focus.
+After the fix, computed card paint and geometry remain unchanged by editor
+focus, the draft survives, and action buttons keep their keyboard outlines.
+Page identity, meaningful content, console/error-overlay health and viewport
+bounds passed. Evidence: `/tmp/rustx-composer-focus-{before,after}-{hero,root,child}-{1440,390}-{light,dark}.png`.
+
+The existing Agent browser suite passed all 23 scenarios, including strict
+screenshots, growth/scrolling, restored drafts, send/queue/steer, uploads, model
+menus, both locales' keyboard policies and preference reload. Sixteen focused
+composer references were updated after visual review: only the rounded card
+edge changes, dimensions are identical and the central interior has zero changed
+pixels. Screenshot tolerance and noise policies are unchanged. TypeScript,
+production build, all 303 source records and notices for 264 packages passed.
+No native protocol, runtime or TUI source changed. Other browser engines were
+not exercised; the existing large-chunk build warning remains.

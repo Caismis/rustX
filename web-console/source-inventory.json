@@ -1012,13 +1012,19 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "9938d86e503ef32ba560f4a4b07cc8fe2a028d2e8f2f05f3c9cba244a32ec15e",
+      "local_sha256": "ae2b36bfe4babc87a2d51f0febfeb3be780517a731e24cf4a927f2d76d925840",
       "additional_sources": [
         {
           "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
           "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.module.css",
           "upstream_sha256": "3728d67da4e1d1c2dd102d66f42f0c129a5c1e17e6a1167d738c999d0d87f60b",
           "treatment": "Restore pane-relative toolbar sizing and expanded-demand model collapse from the current local Harness reference."
+        },
+        {
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.module.css",
+          "upstream_sha256": "3d6e405a567b04280dc33566890cce3056a7a36508b91b0abe01a0c53f11337f",
+          "treatment": "Match Harness neutral input-card stroke across pointer and keyboard editor focus; remove the rustX-only blue focus stroke for new, parent and child composers."
         }
       ]
     },

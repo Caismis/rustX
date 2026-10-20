@@ -183,9 +183,8 @@
   caret-color: var(--dsw-alias-state-business-primary);
 }
 
-/* Keyboard focus follows the rounded card, not a rectangular native editor. */
+/* Harness keeps the editor outline-free and the card's neutral stroke stable. */
 .input:focus-visible { outline: none; }
-.card:has(.input:focus-visible) { --dsw-elevation-stroke-color: var(--dsw-alias-state-business-primary); }
 
 /* Lexical paragraphs are <p> blocks: strip the UA margins so the surface
    keeps the textarea's line rhythm. */
