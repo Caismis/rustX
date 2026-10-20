@@ -1,4 +1,5 @@
-// Included in registry::tests; the owner fixture supplies gated physical settlement.
+use super::*;
+
 #[tokio::test]
 async fn agent_bootstrap_ignores_activation_record_iteration_order() {
     let plane = plane(4);
@@ -149,14 +150,14 @@ async fn proven_child_loss_has_identical_resume_authority_before_and_after_reope
         .unwrap();
 }
 
-fn admitted_catalog(names: &[&str]) -> super::super::AgentCatalog {
-    super::super::AgentCatalog::new(names.iter().map(|name| {
+fn admitted_catalog(names: &[&str]) -> super::super::super::AgentCatalog {
+    super::super::super::AgentCatalog::new(names.iter().map(|name| {
         let document = crate::local_runtime::agent_resources::parse(&format!(
             "description = '{name} role'\ninstructions = 'Act as {name}'\n[tools]\nbuiltin = ['read']"
         ))
         .unwrap();
-        super::super::NamedAgentDefinition::new(
-            super::super::SubagentName::parse(name).unwrap(),
+        super::super::super::NamedAgentDefinition::new(
+            super::super::super::SubagentName::parse(name).unwrap(),
             crate::runtime::agent_profile::AgentProfile::from_document(
                 &document,
                 crate::runtime::agent_profile::AgentProfileKind::Named,
@@ -202,8 +203,8 @@ async fn domain_tool_metadata_matches_registered_authority() {
     );
     let policies = NativeToolPolicies::default();
     for (catalog, owns_registry) in [
-        (super::super::AgentCatalog::empty(), false),
-        (super::super::AgentCatalog::empty(), true),
+        (super::super::super::AgentCatalog::empty(), false),
+        (super::super::super::AgentCatalog::empty(), true),
         (admitted_catalog(&["reviewer"]), true),
         (admitted_catalog(&["reviewer", "explorer"]), true),
     ] {
@@ -342,7 +343,7 @@ async fn admission_receipts_release_observation_frontier_after_owner_installatio
         .install_observer_and_agent_snapshots(observer.clone());
     queue.drain();
     plane.registry.state.lock().unwrap().allocation_failure = Some(
-        super::super::process::SpawnError::ConversationIdentityInUse {
+        super::super::super::process::SpawnError::ConversationIdentityInUse {
             conversation_id: first.child_conversation_id.clone(),
             path: plane.runtime_root.clone(),
         },

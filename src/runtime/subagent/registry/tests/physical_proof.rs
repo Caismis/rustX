@@ -1,5 +1,9 @@
-// Physical outcome injection occurs at the driver/registry settlement boundary.
-// No timing assumptions or sleeps determine the winning terminal generation.
+//! Physical outcome injection occurs at the driver/registry settlement boundary.
+//! No timing assumptions or sleeps determine the winning terminal generation.
+use super::*;
+use crate::runtime::subagent::process::PhysicalOutcome;
+use crate::runtime::subagent::process::PhysicalSettlement;
+
 async fn assert_unproven_agent_stops_at_exact_activation(
     registry: &SubagentRegistry,
     agent_id: &AgentId,
@@ -74,7 +78,7 @@ async fn unproven_control_or_cleanup_terminal_blocks_live_and_recovered_agent() 
                         diagnostic: None,
                     })
                 },
-                nested: super::super::anchors::NestedUnitSettlement {
+                nested: super::super::super::anchors::NestedUnitSettlement {
                     contained: Vec::new(),
                     unproven: Vec::new(),
                 },
@@ -239,7 +243,7 @@ async fn post_result_protocol_failure_publishes_once_after_physical_settlement()
             .send_result(ChildResultStatus::Succeeded, Some("must not publish"))
             .await;
         assert_eq!(
-            super::super::ipc::read_parent_frame(&mut child.peer)
+            super::super::super::ipc::read_parent_frame(&mut child.peer)
                 .await
                 .unwrap(),
             None
@@ -271,9 +275,12 @@ async fn post_result_protocol_failure_publishes_once_after_physical_settlement()
                 .send_result(ChildResultStatus::Succeeded, Some("duplicate"))
                 .await;
         } else {
-            super::super::ipc::write_child_frame(&mut child.peer, &ChildFrame::DelegateAccepted)
-                .await
-                .unwrap();
+            super::super::super::ipc::write_child_frame(
+                &mut child.peer,
+                &ChildFrame::DelegateAccepted,
+            )
+            .await
+            .unwrap();
         }
         let pid = child.pid;
         drop(child);

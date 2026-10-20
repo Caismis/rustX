@@ -3,7 +3,8 @@
 //! Fresh native proof can discharge that obligation without reopening its
 //! interrupted logical attempt or changing its terminal publication.
 
-use super::{PoisonError, SubagentRegistry, publish_committed_snapshot};
+use super::observation::publish_committed_snapshot;
+use super::{PoisonError, SubagentRegistry};
 
 struct RecoveryObligation {
     activation: super::SubagentId,
@@ -298,7 +299,7 @@ impl SubagentRegistry {
         self.state_version.send_modify(|version| *version += 1);
         if let Some((agent_id, index)) = agent_id.zip(index) {
             if !state.has_recovery_obligation_for(agent_id) {
-                super::publish_snapshot(&mut state, &self.state_version, index);
+                super::observation::publish_snapshot(&mut state, &self.state_version, index);
             }
         } else {
             // There is no logical Agent snapshot to publish, but this exact

@@ -238,7 +238,8 @@ fn ensure_directory(parent: &File, name: &str) -> io::Result<File> {
     Ok(child)
 }
 fn session_directory(workspace: &Path, session: &SessionId, create: bool) -> io::Result<File> {
-    super::validate_id(session.as_str(), "upload Session").map_err(io::Error::other)?;
+    super::catalog_commit::validate_id(session.as_str(), "upload Session")
+        .map_err(io::Error::other)?;
     let mut current = stable_directory(workspace)?;
     for name in [".agents", "uploads", session.as_str()] {
         current = if create {
@@ -578,7 +579,8 @@ pub(crate) fn cleanup(workspace: &Path, session: &SessionId) -> io::Result<()> {
     if !workspace.is_absolute() {
         return Err(invalid("cleanup workspace must be absolute"));
     }
-    super::validate_id(session.as_str(), "upload Session").map_err(io::Error::other)?;
+    super::catalog_commit::validate_id(session.as_str(), "upload Session")
+        .map_err(io::Error::other)?;
     // Missing residue still needs a barrier before deletion can be declared
     // durable. Walk to the nearest existing parent without following links.
     let mut current = File::from(open(
@@ -1045,7 +1047,7 @@ impl SessionCatalog {
 
 pub(super) fn validate_preparations(document: &super::CatalogDocument) -> Result<(), SessionError> {
     for (id, roots) in &document.upload_preparations {
-        super::validate_id(id.as_str(), "prepared upload Session")?;
+        super::catalog_commit::validate_id(id.as_str(), "prepared upload Session")?;
         if document.sessions.contains_key(id)
             || document.deletions.contains_key(id)
             || roots.iter().any(|root| {

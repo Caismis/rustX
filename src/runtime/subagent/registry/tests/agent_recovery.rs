@@ -1,12 +1,13 @@
-// Included inside registry::tests so the existing deterministic staged-child
-// and physical-settlement fixtures remain the single test substrate.
+use super::*;
+use crate::runtime::ToolCallId;
+
 #[tokio::test]
 async fn initial_uncommitted_physical_authority_consumes_activation_identity_on_restart() {
     let plane = plane(4);
     let orphaned_conversation = ConversationId::from_uuid(uuid::Uuid::now_v7()).unwrap();
     let consumed = SubagentId::for_conversation(&plane.conversation_id, 1);
     let spawn = &plane.registry.config.spawn;
-    let owner = super::super::physical_recovery::ParentPhysicalLease::reserve(
+    let owner = super::super::super::physical_recovery::ParentPhysicalLease::reserve(
         &spawn.product_root,
         &spawn.session_id,
         &orphaned_conversation,
@@ -36,7 +37,7 @@ async fn initial_uncommitted_physical_authority_consumes_activation_identity_on_
     assert_eq!(recovered.with_goal_idle(|| true), None);
     drop(owner);
     drop(
-        super::super::physical_recovery::prove_after_release(
+        super::super::super::physical_recovery::prove_after_release(
             &spawn.product_root,
             &spawn.session_id,
             &orphaned_conversation,
@@ -58,7 +59,7 @@ async fn initial_uncommitted_physical_authority_consumes_activation_identity_on_
         "physical proof invents no logical ownership"
     );
     assert!(
-        super::super::physical_recovery::ParentPhysicalLease::reserve(
+        super::super::super::physical_recovery::ParentPhysicalLease::reserve(
             &spawn.product_root,
             &spawn.session_id,
             &orphaned_conversation,
@@ -191,7 +192,10 @@ async fn agent411_recovery_never_reopens_unproven_physical_containment() {
         let recovered = SubagentRegistry::new(plane.registry.config.clone());
         recovered.restore_agents(plane.store.as_ref()).unwrap();
         let restored = recovered.agent_snapshot(&accepted.child_agent_id).unwrap();
-        assert_eq!(restored.state, super::agents::AgentState::Unavailable);
+        assert_eq!(
+            restored.state,
+            super::super::agents::AgentState::Unavailable
+        );
         let refused = recovered
             .send_message(
                 &accepted.child_agent_id,
@@ -202,7 +206,7 @@ async fn agent411_recovery_never_reopens_unproven_physical_containment() {
             .await;
         let error = refused.unwrap_err();
         assert!(
-            matches!(error, super::agents::AgentControlError::Settlement),
+            matches!(error, super::super::agents::AgentControlError::Settlement),
             "{error}"
         );
         assert_eq!(recovered.list_agents(MAX_AGENT_LIST_LIMIT).agents.len(), 1);
@@ -240,7 +244,7 @@ async fn agent411_unreconciled_orphan_cannot_recover_resume_authority() {
         .await;
     let error = refused.unwrap_err();
     assert!(
-        matches!(error, super::agents::AgentControlError::Settlement),
+        matches!(error, super::super::agents::AgentControlError::Settlement),
         "{error}"
     );
     assert_eq!(recovered.all_snapshots().len(), 1);
@@ -287,7 +291,10 @@ async fn agent411_crash_reconciliation_cannot_invent_physical_resume_proof() {
         let restored = recovered
             .agent_snapshot_with_activation(&accepted.child_agent_id)
             .unwrap();
-        assert_eq!(restored.0.state, super::agents::AgentState::Unavailable);
+        assert_eq!(
+            restored.0.state,
+            super::super::agents::AgentState::Unavailable
+        );
         assert_eq!(restored.1.state, SubagentState::Interrupted);
         assert_eq!(restored.0.conversation_id, accepted.child_conversation_id);
         let error = recovered
@@ -300,7 +307,7 @@ async fn agent411_crash_reconciliation_cannot_invent_physical_resume_proof() {
             .await
             .unwrap_err();
         assert!(
-            matches!(error, super::agents::AgentControlError::Settlement),
+            matches!(error, super::super::agents::AgentControlError::Settlement),
             "{error}"
         );
         assert_eq!(recovered.all_snapshots().len(), 1);
@@ -339,7 +346,7 @@ async fn agent411_resume_reservation_recovery_requires_rollback_containment_proo
             .mailbox
             .commit_agent_activation_admission(
                 &ownership,
-                super::super::admission_event(
+                super::super::super::admission_event(
                     &plane.conversation_id,
                     &admitted.child_agent_id,
                     &reserved,
@@ -359,7 +366,7 @@ async fn agent411_resume_reservation_recovery_requires_rollback_containment_proo
                 .mailbox
                 .commit_agent_activation_admission(
                     &ownership,
-                    super::super::admission_event(
+                    super::super::super::admission_event(
                         &plane.conversation_id,
                         &admitted.child_agent_id,
                         &reserved,
@@ -380,7 +387,7 @@ async fn agent411_resume_reservation_recovery_requires_rollback_containment_proo
                 .mailbox
                 .commit_agent_activation_admission(
                     &ownership,
-                    super::super::admission_event(
+                    super::super::super::admission_event(
                         &plane.conversation_id,
                         &admitted.child_agent_id,
                         &reserved,
@@ -407,14 +414,17 @@ async fn agent411_resume_reservation_recovery_requires_rollback_containment_proo
         recovered.restore_agents(plane.store.as_ref()).unwrap();
         let snapshot = recovered.agent_snapshot(&admitted.child_agent_id).unwrap();
         if proof == Some(true) {
-            assert_eq!(snapshot.state, super::agents::AgentState::Inactive);
+            assert_eq!(snapshot.state, super::super::agents::AgentState::Inactive);
             assert!(snapshot.current_activation.is_none());
         } else {
-            assert_eq!(snapshot.state, super::agents::AgentState::Unavailable);
+            assert_eq!(
+                snapshot.state,
+                super::super::agents::AgentState::Unavailable
+            );
             assert_eq!(snapshot.current_activation, Some(reserved.clone()));
             assert!(matches!(
                 recovered.wait_agent(&admitted.child_agent_id).await,
-                Err(super::agents::AgentControlError::Settlement)
+                Err(super::super::agents::AgentControlError::Settlement)
             ));
         }
         assert_eq!(
@@ -574,7 +584,7 @@ async fn agent411_resume_reservation_recovery_requires_rollback_containment_proo
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn interrupted_authority_publication_reopens_without_logical_facts() {
-    use super::super::physical_recovery::{AllocationBoundary, ParentPhysicalLease};
+    use super::super::super::physical_recovery::{AllocationBoundary, ParentPhysicalLease};
     for boundary in [
         AllocationBoundary::Created,
         AllocationBoundary::LeaseCreated,
@@ -717,7 +727,7 @@ async fn persistent_child_result_belongs_to_concluding_terminal_attempt() {
                 Some("the attempt completed without a final answer")
             );
         }
-        super::super::ipc::write_child_frame(&mut child.peer, &ChildFrame::Result(result))
+        super::super::super::ipc::write_child_frame(&mut child.peer, &ChildFrame::Result(result))
             .await
             .unwrap();
         let terminal = plane
@@ -739,7 +749,9 @@ async fn persistent_child_result_belongs_to_concluding_terminal_attempt() {
             .iter()
             .find(|item| {
                 item.correlation.as_deref()
-                    == Some(super::super::terminal_correlation(&resumed.activation_id).as_str())
+                    == Some(
+                        super::super::super::terminal_correlation(&resumed.activation_id).as_str(),
+                    )
             })
             .unwrap();
         let text = report
@@ -758,12 +770,12 @@ async fn persistent_child_result_belongs_to_concluding_terminal_attempt() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn published_initialization_error_retains_live_registry_obligation_until_exact_proof() {
-    use super::super::physical_recovery::{AllocationBoundary, ParentPhysicalLease};
+    use super::super::super::physical_recovery::{AllocationBoundary, ParentPhysicalLease};
     let plane = plane_with_storage(4, true);
     let spawn = &plane.registry.config.spawn;
     let child = ConversationId::generate();
     let activation = SubagentId::for_conversation(&plane.conversation_id, 1);
-    let path = super::super::child_conversation_store_path(
+    let path = super::super::super::child_conversation_store_path(
         spawn.product_root.root(),
         &spawn.session_id,
         &child,

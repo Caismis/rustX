@@ -3,6 +3,7 @@
 use super::*;
 use crate::local_runtime::session::SessionCatalog;
 use crate::runtime::identity::{MessageId, SessionId};
+use crate::runtime::subagent::process::StagedChild;
 use crate::session_archive::{SessionArchiveCut, SessionArchiveProducer};
 use std::io::Read;
 use tokio_util::sync::CancellationToken;

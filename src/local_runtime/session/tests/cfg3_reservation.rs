@@ -11,47 +11,14 @@
 //! delivery report. Process-death R05 lives in `runtime::local_storage::tests`
 //! because it must fork the real test binary.
 
-use super::super::conversation_database_path;
+use super::super::creation::conversation_database_path;
 use super::*;
 use crate::durable::conversation_store_opens_on_this_thread;
 use crate::local_runtime::session::LineageSide;
-use crate::runtime::identity::UuidV7Generator;
 use crate::runtime::local_storage::{ProductController, ProductRoot};
-use std::collections::VecDeque;
 use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Barrier, Mutex};
-
-#[derive(Debug)]
-struct Sequence(Mutex<VecDeque<uuid::Uuid>>);
-
-impl UuidV7Generator for Sequence {
-    fn next_uuid(&self) -> uuid::Uuid {
-        let mut values = self.0.lock().unwrap();
-        if values.len() > 1 {
-            values.pop_front().unwrap()
-        } else {
-            *values.front().unwrap()
-        }
-    }
-}
-
-fn uuid(value: u64) -> uuid::Uuid {
-    uuid::Uuid::parse_str(&format!("01900000-0000-7000-8000-{value:012}")).unwrap()
-}
-
-fn identities(values: &[u64]) -> Arc<dyn UuidV7Generator> {
-    Arc::new(Sequence(Mutex::new(
-        values.iter().map(|value| uuid(*value)).collect(),
-    )))
-}
-
-fn template() -> SessionPersistentState {
-    SessionPersistentState {
-        cwd: PathBuf::from("/workspace"),
-        model: None,
-    }
-}
+use std::sync::Barrier;
 
 fn assistant(id: &str, value: &str) -> MessageBlock {
     MessageBlock::Assistant(AssistantMessageBlock {
@@ -79,7 +46,7 @@ fn seed_published_sessions(catalog: &mut SessionCatalog, count: usize) {
     use super::super::{PersistedSession, SessionNode};
     let mut prepared = Vec::with_capacity(count);
     for _ in 0..count {
-        let lineage = catalog.prepare_session(&template(), &[]).unwrap();
+        let lineage = catalog.prepare_session(&workspace_state(), &[]).unwrap();
         // The same destination-completeness check `build_session_document`
         // performs before it publishes a Session.
         assert!(lineage.database_path.is_file());
@@ -320,7 +287,7 @@ fn r06_prepared_unpublished_is_inert_across_reopen() {
     let directory = tempfile::tempdir().unwrap();
     let controller = ProductController::acquire(directory.path()).unwrap();
     let catalog = SessionCatalog::empty(&controller).unwrap();
-    let prepared = catalog.prepare_session(&template(), &[]).unwrap();
+    let prepared = catalog.prepare_session(&workspace_state(), &[]).unwrap();
     assert!(prepared.database_path.is_file());
     assert!(marker(directory.path(), &prepared.conversation_id).is_file());
     assert!(catalog.list_page(None, 0, 32).unwrap().sessions.is_empty());
@@ -424,7 +391,7 @@ fn r08_all_allocation_paths_share_the_reservation_contract() {
     let directory = tempfile::tempdir().unwrap();
     let controller = ProductController::acquire(directory.path()).unwrap();
     let mut catalog = SessionCatalog::empty(&controller).unwrap();
-    let root = catalog.prepare_session(&template(), &[]).unwrap();
+    let root = catalog.prepare_session(&workspace_state(), &[]).unwrap();
     catalog
         .publish_session(&root, SessionNodeOrigin::New)
         .unwrap();
@@ -451,7 +418,7 @@ fn r08_all_allocation_paths_share_the_reservation_contract() {
             LineageSide::After,
         )
         .unwrap();
-    let fresh = catalog.prepare_session(&template(), &[]).unwrap();
+    let fresh = catalog.prepare_session(&workspace_state(), &[]).unwrap();
 
     for prepared in [&cloned, &forked, &branched, &fresh] {
         assert!(
@@ -480,7 +447,7 @@ fn r13_list_and_search_open_zero_stores_and_clone_keeps_preview() {
     let directory = tempfile::tempdir().unwrap();
     let controller = ProductController::acquire(directory.path()).unwrap();
     let mut catalog = SessionCatalog::empty(&controller).unwrap();
-    let root = catalog.prepare_session(&template(), &[]).unwrap();
+    let root = catalog.prepare_session(&workspace_state(), &[]).unwrap();
     catalog
         .publish_session(&root, SessionNodeOrigin::New)
         .unwrap();
@@ -530,7 +497,7 @@ fn reservation_create_process_gate() {
     let mut catalog = SessionCatalog::empty(&controller)
         .unwrap()
         .with_identity_generator(identities(&[900, 901, 902]));
-    let prepared = catalog.prepare_session(&template(), &[]).unwrap();
+    let prepared = catalog.prepare_session(&workspace_state(), &[]).unwrap();
     if mode == "publish" {
         catalog
             .publish_session(&prepared, SessionNodeOrigin::New)
@@ -558,7 +525,7 @@ fn spawn_create_child(root: &Path, mode: &str) -> (std::process::Child, SessionI
     let mut process = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
-            "local_runtime::session::tests::reservation_tests::reservation_create_process_gate",
+            "local_runtime::session::tests::cfg3_reservation::reservation_create_process_gate",
             "--nocapture",
             "--format=terse",
         ])
@@ -657,7 +624,7 @@ async fn stage_profile_real_create_pipeline() {
         .unwrap_or(0);
     let directory = tempfile::tempdir().unwrap();
     let controller = SessionController::open(directory.path()).unwrap();
-    let template = template();
+    let template = workspace_state();
     for _ in 0..existing {
         controller.create_session(template.clone()).await.unwrap();
     }
@@ -706,7 +673,7 @@ fn r12_pre_visibility_fault_never_reports_success() {
     let directory = tempfile::tempdir().unwrap();
     let controller = ProductController::acquire(directory.path()).unwrap();
     let mut catalog = SessionCatalog::empty(&controller).unwrap();
-    let prepared = catalog.prepare_session(&template(), &[]).unwrap();
+    let prepared = catalog.prepare_session(&workspace_state(), &[]).unwrap();
     catalog.arm_write_fault_before_rename();
     let result = catalog.publish_session(&prepared, SessionNodeOrigin::New);
     assert!(result.is_err());
@@ -730,7 +697,9 @@ fn r12_initialization_failure_after_reservation_is_inert() {
         .unwrap()
         .with_identity_generator(identities(&[70, 71, 72, 73, 74, 75]));
     crate::local_runtime::session::fail_next_database_initializations(1);
-    let error = catalog.prepare_session(&template(), &[]).unwrap_err();
+    let error = catalog
+        .prepare_session(&workspace_state(), &[])
+        .unwrap_err();
     assert!(matches!(error, SessionError::Io { .. }), "{error:?}");
     assert!(catalog.list_page(None, 0, 32).unwrap().sessions.is_empty());
     // `allocate_ids` consumed session=70, node=71, conversation=72; the
@@ -749,7 +718,7 @@ fn r12_initialization_failure_after_reservation_is_inert() {
     assert!(reopened.list_page(None, 0, 32).unwrap().sessions.is_empty());
     drop(reopened);
     // Retry resumes from a fresh identity and publishes a complete Session.
-    let prepared = catalog.prepare_session(&template(), &[]).unwrap();
+    let prepared = catalog.prepare_session(&workspace_state(), &[]).unwrap();
     assert_ne!(prepared.conversation_id, consumed);
     catalog
         .publish_session(&prepared, SessionNodeOrigin::New)
@@ -766,7 +735,7 @@ fn r12_destination_validation_failure_after_initialization_is_inert() {
     let directory = tempfile::tempdir().unwrap();
     let controller = ProductController::acquire(directory.path()).unwrap();
     let mut catalog = SessionCatalog::empty(&controller).unwrap();
-    let prepared = catalog.prepare_session(&template(), &[]).unwrap();
+    let prepared = catalog.prepare_session(&workspace_state(), &[]).unwrap();
     assert!(prepared.database_path.is_file());
     // The prepared destination is complete at preparation time; make the
     // publication-time destination validation fail by removing the database.
@@ -788,7 +757,7 @@ fn r12_destination_validation_failure_after_initialization_is_inert() {
         .unwrap();
     assert!(reopened.list_page(None, 0, 32).unwrap().sessions.is_empty());
     drop(reopened);
-    let next = catalog.prepare_session(&template(), &[]).unwrap();
+    let next = catalog.prepare_session(&workspace_state(), &[]).unwrap();
     assert_ne!(next.conversation_id, prepared.conversation_id);
     catalog
         .publish_session(&next, SessionNodeOrigin::New)
