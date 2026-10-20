@@ -79,7 +79,7 @@ use futures_util::future::{BoxFuture, pending};
 
 use crate::capabilities::AttemptCapabilityLease;
 use crate::context::compaction::{
-    CompactionAttribution, CompactionExecutionError, execute_compaction,
+    CompactionAttribution, CompactionExecutionError, execute_compaction_in_operation,
 };
 use crate::context::engine::{CompactionConstraints, EstimateCorrection};
 use crate::context::error::{ContextError, ContextErrorKind};
@@ -138,7 +138,6 @@ use crate::tools::types::{
     ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolOrigin, ToolProgress,
 };
 
-use super::assembly::ModelEventAssembler;
 use super::cancellation::{AgentCancellation, StartAdjudication};
 use super::lifecycle::{
     AttemptLifecycle, ObservedToolInvocation, PreStepBatch, PreStepDecision, PreToolView,
@@ -146,6 +145,7 @@ use super::lifecycle::{
 };
 use super::observer::AgentExecutionObserver;
 use super::state::{ExecutionState, ExecutionStateMachine};
+use crate::model::assembly::ModelEventAssembler;
 
 use chrono::Utc;
 
@@ -1201,6 +1201,22 @@ impl<'a> AgentExecution<'a> {
                 .input_modalities
                 .contains(&crate::model::catalog::Modality::Image),
         );
+        #[cfg(test)]
+        {
+            context_runtime.monotonic_clock = runtime_policy.monotonic_clock.clone();
+            if !context_runtime.summarizer.has_backend() {
+                let backend = crate::runtime::auxiliary::executor::AuxiliaryExecutor::for_test(
+                    store.clone(),
+                    runtime_policy.monotonic_clock.clone(),
+                )
+                .map_err(|error| {
+                    MailboxError::Durable(ConversationStoreError::Storage(error.to_string()))
+                })?;
+                context_runtime
+                    .summarizer
+                    .bind_backend(Arc::new(backend), context_runtime.resource_revision.get());
+            }
+        }
         let snapshot = capability.snapshot();
         let lifecycle = context_runtime
             .native_composition
@@ -3596,54 +3612,70 @@ impl<'a> AgentExecution<'a> {
                 overflow,
             ));
         }
-        loop {
-            match self
-                .run_compaction(
-                    &operation_id,
-                    must_cover_through,
-                    fresh_inbound,
-                    effective_system_prompt,
-                    staged_request_context,
-                    estimate_correction,
-                )
-                .await
-            {
-                Ok(_completed) => {
-                    // The typed checkpoint and Projection Head are committed.
-                    // Complete replay replaces all primary continuation ownership;
-                    // the old request measurement is no longer evidence for it.
-                    self.retire_continuation();
-                    self.observed = None;
-                    self.observed_request_identity = None;
-                    // `commit_projection` persisted and returned the exact
-                    // completion fact before this branch became observable.
-                    break;
-                }
-                // Carryover is auxiliary. A full/reduced/metadata-only value
-                // may make a candidate fail the hard fit, but that must never
-                // turn a committed checkpoint into a terminal CannotFit.
-                Err(error) if error.kind == ContextErrorKind::CannotFit => {
-                    let can_degrade = self
-                        .frozen_carryover
-                        .as_mut()
-                        .is_some_and(FrozenCarryover::degrade);
-                    if can_degrade {
-                        continue;
+        let budget = self.context_runtime.compaction_budget(operation_id.clone());
+        let operation = match self
+            .context_runtime
+            .summarizer
+            .operation(budget.clone(), self.cancellation.signal().child())
+        {
+            Ok(operation) => operation,
+            Err(error) => return Err(self.compaction_failure(&operation_id, &error, overflow)),
+        };
+        let result = async {
+            loop {
+                match self
+                    .run_compaction(
+                        must_cover_through,
+                        fresh_inbound,
+                        effective_system_prompt,
+                        staged_request_context,
+                        estimate_correction,
+                        operation.as_ref(),
+                    )
+                    .await
+                {
+                    Ok(_completed) => {
+                        // The typed checkpoint and Projection Head are committed.
+                        // Complete replay replaces all primary continuation ownership;
+                        // the old request measurement is no longer evidence for it.
+                        self.retire_continuation();
+                        self.observed = None;
+                        self.observed_request_identity = None;
+                        // `commit_projection` persisted and returned the exact
+                        // completion fact before this branch became observable.
+                        break;
                     }
-                    return Err(self.compaction_failure(&operation_id, &error, overflow));
+                    // Carryover is auxiliary. A full/reduced/metadata-only value
+                    // may make a candidate fail the hard fit, but that must never
+                    // turn a committed checkpoint into a terminal CannotFit.
+                    Err(error) if error.kind == ContextErrorKind::CannotFit => {
+                        let can_degrade = self
+                            .frozen_carryover
+                            .as_mut()
+                            .is_some_and(FrozenCarryover::degrade);
+                        if can_degrade {
+                            continue;
+                        }
+                        return Err(self.compaction_failure(&operation_id, &error, overflow));
+                    }
+                    // Cancellation never becomes a compaction failure: no
+                    // `CompactionFailed` event is emitted and the attempt settles
+                    // cancelled.
+                    Err(error) if error.kind == ContextErrorKind::Cancelled => {
+                        return Err(Terminal::Cancelled {
+                            reason: self.cancellation.reason(),
+                        });
+                    }
+                    Err(error) => {
+                        return Err(self.compaction_failure(&operation_id, &error, overflow));
+                    }
                 }
-                // Cancellation never becomes a compaction failure: no
-                // `CompactionFailed` event is emitted and the attempt settles
-                // cancelled.
-                Err(error) if error.kind == ContextErrorKind::Cancelled => {
-                    return Err(Terminal::Cancelled {
-                        reason: self.cancellation.reason(),
-                    });
-                }
-                Err(error) => return Err(self.compaction_failure(&operation_id, &error, overflow)),
             }
+            Ok(())
         }
-        Ok(())
+        .await;
+        operation.close().await;
+        result
     }
 
     /// The cancellation-aware compaction pipeline: plan, summarize, verify
@@ -3656,13 +3688,14 @@ impl<'a> AgentExecution<'a> {
     /// continuation is cleared. Core inputs retain their generation ownership.
     async fn run_compaction(
         &mut self,
-        operation_id: &crate::runtime::identity::CompactionOperationId,
         must_cover_through: Option<&MessageId>,
         fresh_inbound: Option<&FreshInboundTurn>,
         effective_system_prompt: &str,
         staged_request_context: &[MessageBlock],
         estimate_correction: Option<EstimateCorrection>,
+        operation: &dyn crate::context::summarizer::SummaryOperation,
     ) -> Result<CompletedCompaction, ContextError> {
+        let operation_id = operation.budget().operation_id().clone();
         let tools = self.tool_registry().model_definitions();
         let cancellation = self.cancellation.signal();
         // Resolved before the exclusive borrow of the conversation: the
@@ -3680,7 +3713,7 @@ impl<'a> AgentExecution<'a> {
         } else {
             None
         };
-        let result = execute_compaction(
+        let result = execute_compaction_in_operation(
             &mut self.conversation,
             &self.context_runtime,
             &self.request.conversation_id,
@@ -3703,6 +3736,7 @@ impl<'a> AgentExecution<'a> {
                 attempt_id: Some(self.request.attempt_id.clone()),
                 turn_id: Some(TurnId::new(self.turn.to_string())),
             },
+            operation,
         )
         .await;
         let completed = match result {
@@ -5168,7 +5202,9 @@ impl<'a> AgentExecution<'a> {
             // A detached execution outlives this batch, so it is handed no
             // task-list authority: nothing it does can land in the snapshot
             // this batch is about to commit.
-            ToolInvocationMode::Background => (self.dispatch_background(&invocation), Vec::new()),
+            ToolInvocationMode::Background => {
+                (self.dispatch_background(&invocation).await, Vec::new())
+            }
         };
         (call_index, result, facts)
     }
@@ -5357,7 +5393,7 @@ impl<'a> AgentExecution<'a> {
     /// accepted result exactly when conversation ownership commits. A
     /// rolled-back dispatch produces a cancelled result slot for the
     /// originating attempt, never a detached execution.
-    fn dispatch_background(&self, invocation: &ToolInvocation) -> ToolExecutionResult {
+    async fn dispatch_background(&self, invocation: &ToolInvocation) -> ToolExecutionResult {
         let executor = self.tool_registry().executor(&invocation.tool_id);
         // The attempt's effective ToolEnvironment is captured at prepare
         // time, before the background ownership commit: the detached
@@ -5377,7 +5413,8 @@ impl<'a> AgentExecution<'a> {
                 match self
                     .tool_runtime
                     .background()
-                    .commit_dispatch(prepared, &self.cancellation.signal())
+                    .commit_dispatch_owned(prepared, &self.cancellation.signal())
+                    .await
                 {
                     Ok(BackgroundDispatchOutcome::Accepted { result, .. }) => result,
                     // A rolled-back dispatch (attempt cancellation won at

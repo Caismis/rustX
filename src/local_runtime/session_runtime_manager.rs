@@ -23,6 +23,12 @@ use crate::credentials::CredentialSnapshot;
 use crate::runtime::conversation_runtime::ConversationRuntime;
 use crate::runtime::identity::ConversationId;
 
+type CompactionReply = Result<
+    crate::runtime_client::types::RuntimeClientResult,
+    crate::runtime_client::types::RuntimeClientError,
+>;
+type CompactionTail = futures_util::future::BoxFuture<'static, CompactionReply>;
+
 /// Process-local live composition identity. Never a durable or transport identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(transparent)]
@@ -371,6 +377,53 @@ impl ManagedRuntimeClient {
             }
             let result = operation.await;
             drop(lease);
+            let _ = sender.send(result);
+        });
+        Ok(receiver)
+    }
+
+    /// Compaction transfers its whole business tail to ConversationRuntime.
+    /// The manager lease covers native admission only; the reply cannot pin
+    /// residency or prevent an explicit unload from draining that native tail.
+    pub(crate) fn start_compaction_operation<F, Fut>(
+        &self,
+        admission: F,
+    ) -> Result<tokio::sync::oneshot::Receiver<CompactionReply>, RuntimeManagerError>
+    where
+        F: FnOnce(&OperationLease) -> Fut + Send + 'static,
+        Fut: std::future::Future<
+                Output = Result<CompactionTail, crate::runtime_client::types::RuntimeClientError>,
+            > + Send
+            + 'static,
+    {
+        let lease = self.admit_operation()?;
+        #[cfg(test)]
+        let probe = {
+            let identity = &lease.0.as_ref().expect("operation resident").identity;
+            identity
+                .registry
+                .upgrade()
+                .expect("resident registry")
+                .0
+                .lock()
+                .expect("registry mutex")
+                .probes
+                .get(&identity.conversation)
+                .cloned()
+        };
+        let admitted = admission(&lease);
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            #[cfg(test)]
+            if let Some(probe) = probe {
+                probe.before_operation.park().await;
+            }
+            let tail = admitted.await;
+            drop(lease);
+            let result = match tail {
+                Ok(tail) => tail.await,
+                Err(error) => Err(error),
+            };
             let _ = sender.send(result);
         });
         Ok(receiver)

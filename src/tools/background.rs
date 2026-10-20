@@ -15,7 +15,7 @@
 //! validates the invocation, allocates the deterministic `exec_N`
 //! [`ToolExecutionId`], creates a private prepared record with its own
 //! cancellation resources, and spawns the runner behind a start/commit gate
-//! (the runner cannot begin before the gate is released). [`ConversationBackgroundRegistry::commit_dispatch`]
+//! (the runner cannot begin before the gate is released). [`ConversationBackgroundRegistry::commit_dispatch_owned`]
 //! is the one deterministic linearization point of background ownership:
 //! the registry synchronization boundary is acquired first, the activation
 //! gate and the final attempt-cancellation observation happen at that same
@@ -73,7 +73,7 @@
 //! A standalone `ConversationToolRuntime` may be claimed by a
 //! `ConversationRuntime` only while its background plane is **pristine**,
 //! and the claim shares the one registry synchronization boundary with
-//! `commit_dispatch` (see
+//! `commit_dispatch_owned` (see
 //! [`ConversationBackgroundRegistry::claim_conversation_runtime_inactive`]):
 //!
 //! ```text
@@ -196,7 +196,10 @@ use crate::runtime::identity::{
     ConversationId, EventId, MessageId, ToolCallId, ToolExecutionId, ToolId,
 };
 use crate::runtime::inbound::ConversationInboundMailbox;
-use crate::runtime::types::{CancellationReason, ConversationLifecycle, DurabilityGate};
+use crate::runtime::types::{
+    CancellationReason, ConversationLifecycle, DurabilityGate, OwnershipCommitGuard,
+    OwnershipCommitRefused,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::tools::artifacts::ArtifactStore;
@@ -706,7 +709,7 @@ impl std::error::Error for BackgroundDispatchError {}
 /// A prepared but not yet committed background dispatch.
 ///
 /// Between [`ConversationBackgroundRegistry::prepare_dispatch`] and
-/// [`ConversationBackgroundRegistry::commit_dispatch`] the runner is parked
+/// [`ConversationBackgroundRegistry::commit_dispatch_owned`] the runner is parked
 /// behind its start gate and the dispatch is private. Dropping the prepared
 /// dispatch without committing rolls it back: the runner is aborted and no
 /// detached execution exists.
@@ -1005,10 +1008,10 @@ impl ConversationBackgroundRegistry {
     }
 
     /// The one `ConversationToolRuntime -> ConversationRuntime` ownership
-    /// transfer, linearized against [`ConversationBackgroundRegistry::commit_dispatch`].
+    /// transfer, linearized against [`ConversationBackgroundRegistry::commit_dispatch_owned`].
     ///
     /// Under one registry critical section — the same synchronization
-    /// boundary `commit_dispatch` uses for its deciding mailbox-lifecycle
+    /// boundary `commit_dispatch_owned` uses for its deciding mailbox-lifecycle
     /// observation — this method:
     ///
     /// ```text
@@ -1025,14 +1028,14 @@ impl ConversationBackgroundRegistry {
     /// refused [`BackgroundOwnershipClaimError::NotQuiescent`]), or this
     /// transfer linearizes first (the mailbox becomes runtime-owned with
     /// the shared lifecycle `Inactive` before this section ends, and a
-    /// later `commit_dispatch` observes it and is refused with
+    /// later `commit_dispatch_owned` observes it and is refused with
     /// [`BackgroundDispatchError::ConversationInactive`]). A conversation
     /// runtime can therefore never be constructed over a tool runtime that
     /// already contains staged or committed background ownership state, and
     /// a standalone commit can never cross the transfer.
     ///
     /// The mailbox lifecycle bind nests the mailbox lock inside the held
-    /// registry lock, the same order `commit_dispatch` uses; no mailbox ->
+    /// registry lock, the same order `commit_dispatch_owned` uses; no mailbox ->
     /// registry edge exists anywhere, so the lock graph stays acyclic.
     ///
     /// The `coordinator_claimed` atomic is the one-time binding of the
@@ -1119,7 +1122,7 @@ impl ConversationBackgroundRegistry {
     /// synchronization boundary, creates the private prepared record with
     /// its own cancellation signal, and spawns the runner behind the
     /// start/commit gate. The runner cannot begin before the gate is
-    /// released by [`ConversationBackgroundRegistry::commit_dispatch`].
+    /// released by [`ConversationBackgroundRegistry::commit_dispatch_owned`].
     ///
     /// # Errors
     ///
@@ -1265,11 +1268,65 @@ impl ConversationBackgroundRegistry {
         self.notify_state_change();
     }
 
+    /// Waits for native ownership permission without holding registry state.
+    /// Final lifecycle/cancellation validation and durable transfer are one
+    /// synchronous commit section after the permission is obtained.
+    ///
+    /// # Errors
+    /// Returns typed native admission, cancellation or durability refusal.
+    pub async fn commit_dispatch_owned(
+        &self,
+        prepared: PreparedBackgroundDispatch,
+        attempt_cancellation: &CancellationSignal,
+    ) -> Result<BackgroundDispatchOutcome, BackgroundDispatchError> {
+        let admission = self
+            .resources
+            .mailbox
+            .begin_running_admission()
+            .map_err(|_| BackgroundDispatchError::ConversationInactive {
+                conversation_id: self.conversation_id.clone(),
+            })?;
+        let gate = self.state().durability_gate.clone();
+        let permission = match gate.as_ref() {
+            Some(gate) => Some(tokio::select! {
+                biased;
+                () = attempt_cancellation.cancelled() => {
+                    drop(prepared);
+                    return Ok(BackgroundDispatchOutcome::RolledBack);
+                }
+                permission = gate.enter_ownership_commit_async() => permission,
+            }),
+            None => None,
+        };
+        let registry = self.clone();
+        let cancellation = attempt_cancellation.clone();
+        tokio::task::spawn_blocking(move || {
+            let _admission = admission;
+            registry.commit_dispatch_with_permission(prepared, &cancellation, permission)
+        })
+        .await
+        .map_err(|error| BackgroundDispatchError::Durable {
+            detail: format!("background ownership worker failed: {error}"),
+        })?
+    }
+
+    // Synchronous unit fixtures exercise the same final native commit section.
+    // Production uses the awaitable owner above, including on current-thread Tokio.
+    #[cfg(test)]
+    pub fn commit_dispatch(
+        &self,
+        prepared: PreparedBackgroundDispatch,
+        attempt_cancellation: &CancellationSignal,
+    ) -> Result<BackgroundDispatchOutcome, BackgroundDispatchError> {
+        let gate = self.state().durability_gate.clone();
+        let permission = gate.as_ref().map(|gate| gate.enter_ownership_commit());
+        self.commit_dispatch_with_permission(prepared, attempt_cancellation, permission)
+    }
+
     /// Stage two: commits the prepared dispatch (the linearization point).
     ///
-    /// The registry synchronization boundary is acquired first; the
-    /// activation gate and the final attempt-cancellation observation
-    /// happen at that same protected boundary, so there is no unchecked
+    /// After awaitable permission acquisition, the registry boundary encloses
+    /// the activation gate and final attempt-cancellation observation, so there is no unchecked
     /// window between the deciding observations and the prepared→owned
     /// transition.
     ///
@@ -1298,10 +1355,11 @@ impl ConversationBackgroundRegistry {
     /// Returns [`BackgroundDispatchError::ConversationInactive`] when the
     /// owning conversation runtime has not been activated.
     #[allow(clippy::too_many_lines)] // Ownership COMMIT, rollback and native installation form one boundary.
-    pub fn commit_dispatch(
+    fn commit_dispatch_with_permission(
         &self,
         mut prepared: PreparedBackgroundDispatch,
         attempt_cancellation: &CancellationSignal,
+        ownership_permission: Option<Result<OwnershipCommitGuard, OwnershipCommitRefused>>,
     ) -> Result<BackgroundDispatchOutcome, BackgroundDispatchError> {
         // Hold the shared lifecycle admission guard across the prepared
         // registry transfer. This keeps a parked ownership attempt inside
@@ -1329,10 +1387,6 @@ impl ConversationBackgroundRegistry {
         // handle is copied out of the registry state first: the guard
         // borrows the gate, never the registry state, so the ownership
         // commit below may still mutate the state while the guard is held.
-        let durability_gate = state.durability_gate.clone();
-        let ownership_permission = durability_gate
-            .as_ref()
-            .map(|gate| gate.enter_ownership_commit());
         if let Some(Err(refused)) = &ownership_permission {
             // Reject: roll the prepared dispatch back completely — the
             // runner is aborted while still parked behind its start gate —
@@ -2898,7 +2952,7 @@ impl ProgressReporter for BackgroundProgressReporter {
 
 /// Test-only synchronization for the dispatch ownership commit boundary.
 ///
-/// [`CommitBoundaryHook::enter`] is called by `commit_dispatch` while the
+/// [`CommitBoundaryHook::enter`] is called by `commit_dispatch_owned` while the
 /// registry synchronization lock is held, immediately before the deciding
 /// attempt-cancellation observation. It signals `entered` and parks the
 /// calling thread until the test calls `proceed`, so a test can prove the

@@ -29,8 +29,7 @@ use std::sync::Arc;
 
 use rustx::context::{
     AgentStatusConfig, AgentStatusEngine, CompactionBudgets, CompactionConstraints, ContextConfig,
-    ContextEngine, ContextErrorKind, ContextRuntime, ContextSummarizer, ModelBackedSummarizer,
-    SummaryRequest,
+    ContextEngine, ContextErrorKind, ContextRuntime, ModelBackedSummarizer, SummaryRequest,
 };
 use rustx::conversation::ConversationState;
 use rustx::durable::{ConversationStore, SqliteConversationStore};

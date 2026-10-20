@@ -25,8 +25,7 @@ pub enum FakeSummaryStep {
     Return(String),
     /// Fail with this context error.
     Fail(ContextError),
-    /// Park until the invocation's cancellation signal fires. The future is
-    /// expected to be dropped when cancellation wins the biased race.
+    /// Park until the owning operation is cancelled or reaches its deadline.
     ParkUntilCancelled,
 }
 
@@ -36,8 +35,9 @@ pub enum FakeSummaryStep {
 /// step per invocation and records every request, so tests can prove which
 /// exact Surface span was selected, and cancellation, without network
 /// access.
+#[derive(Clone)]
 pub struct FakeContextSummarizer {
-    scripts: Mutex<VecDeque<FakeSummaryStep>>,
+    scripts: Arc<Mutex<VecDeque<FakeSummaryStep>>>,
     requests: Arc<Mutex<Vec<SummaryRequest>>>,
     parked: watch::Sender<bool>,
 }
@@ -47,7 +47,7 @@ impl FakeContextSummarizer {
     #[must_use]
     pub fn new(scripts: Vec<FakeSummaryStep>) -> Self {
         Self {
-            scripts: Mutex::new(scripts.into()),
+            scripts: Arc::new(Mutex::new(scripts.into())),
             requests: Arc::new(Mutex::new(Vec::new())),
             parked: watch::Sender::new(false),
         }
@@ -81,28 +81,111 @@ impl FakeContextSummarizer {
 }
 
 impl ContextSummarizer for FakeContextSummarizer {
-    fn summarize(
+    fn bind_backend(
         &self,
-        request: SummaryRequest,
+        _backend: Arc<dyn rustx::context::summarizer::SummaryBackend>,
+        _resource_revision: u64,
+    ) {
+    }
+    fn has_backend(&self) -> bool {
+        true
+    }
+    fn operation(
+        &self,
+        budget: rustx::context::compaction_budget::CompactionBudget,
         cancellation: rustx::runtime::CancellationSignal,
-    ) -> BoxFuture<'_, Result<String, ContextError>> {
-        self.requests
+    ) -> Result<Box<dyn rustx::context::summarizer::SummaryOperation>, ContextError> {
+        Ok(Box::new(FakeSummaryOperation {
+            summarizer: self.clone(),
+            budget,
+            cancellation: cancellation.child(),
+        }))
+    }
+}
+
+struct FakeSummaryOperation {
+    summarizer: FakeContextSummarizer,
+    budget: rustx::context::compaction_budget::CompactionBudget,
+    cancellation: rustx::runtime::CancellationSignal,
+}
+
+impl rustx::context::summarizer::SummaryOperation for FakeSummaryOperation {
+    fn budget(&self) -> rustx::context::compaction_budget::CompactionBudget {
+        self.budget.clone()
+    }
+    fn prepare(
+        &self,
+    ) -> Result<Box<dyn rustx::context::summarizer::PreparedSummary>, ContextError> {
+        self.budget.check(&self.cancellation)?;
+        Ok(Box::new(FakePreparedSummary {
+            summarizer: self.summarizer.clone(),
+            cancellation: self.cancellation.child(),
+            budget: self.budget.clone(),
+        }))
+    }
+    fn authorize_commit(
+        &self,
+    ) -> Result<rustx::runtime::cancellation::CompactionCommitGrant, ContextError> {
+        self.cancellation
+            .authorize_compaction_commit_with(self.budget.operation_id().clone(), || {
+                self.budget.check(&self.cancellation).is_ok()
+            })
+            .ok_or_else(|| {
+                self.budget
+                    .check(&self.cancellation)
+                    .err()
+                    .unwrap_or_else(|| {
+                        ContextError::new(
+                            ContextErrorKind::Cancelled,
+                            "fake Summary operation closed",
+                        )
+                    })
+            })
+    }
+    fn close(&self) -> BoxFuture<'_, ()> {
+        self.cancellation.cancel();
+        Box::pin(async {})
+    }
+}
+
+struct FakePreparedSummary {
+    summarizer: FakeContextSummarizer,
+    cancellation: rustx::runtime::CancellationSignal,
+    budget: rustx::context::compaction_budget::CompactionBudget,
+}
+
+impl rustx::context::summarizer::PreparedSummary for FakePreparedSummary {
+    fn summarize(
+        self: Box<Self>,
+        request: SummaryRequest,
+        _cut: Option<rustx::context::resources::ResourceReadCut>,
+    ) -> BoxFuture<'static, Result<rustx::context::summarizer::SummaryGeneration, ContextError>>
+    {
+        self.summarizer
+            .requests
             .lock()
             .expect("fake summarizer request lock")
             .push(request);
-        let step = self.pop_step();
-        let parked = self.parked.clone();
+        let step = self.summarizer.pop_step();
+        let parked = self.summarizer.parked.clone();
+        let cancellation = self.cancellation;
+        let budget = self.budget;
         Box::pin(async move {
             match step {
-                FakeSummaryStep::Return(text) => Ok(text),
+                FakeSummaryStep::Return(text) => {
+                    Ok(rustx::context::summarizer::SummaryGeneration {
+                        text,
+                        generation: None,
+                    })
+                }
                 FakeSummaryStep::Fail(error) => Err(error),
                 FakeSummaryStep::ParkUntilCancelled => {
                     parked.send_replace(true);
-                    cancellation.cancelled().await;
-                    Err(ContextError::new(
-                        ContextErrorKind::Cancelled,
-                        "parked summarizer cancelled",
-                    ))
+                    tokio::select! {
+                        biased;
+                        () = cancellation.cancelled() => Err(ContextError::new(ContextErrorKind::Cancelled, "parked summarizer cancelled")),
+                        () = budget.wait_until_deadline() => Err(ContextError::new(ContextErrorKind::AuxiliaryDeadlineExceeded, "parked Summary exceeded its operation deadline")),
+                    }
                 }
             }
         })

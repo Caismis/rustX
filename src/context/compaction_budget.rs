@@ -39,6 +39,15 @@ struct Operation {
 pub struct CompactionBudget(Arc<Operation>);
 
 impl CompactionBudget {
+    pub(crate) fn same_operation(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+    pub(crate) fn uses_clock(&self, clock: &Arc<dyn MonotonicClock>) -> bool {
+        Arc::ptr_eq(&self.0.clock, clock)
+    }
+    pub(crate) fn wait_until_deadline(&self) -> futures_util::future::BoxFuture<'static, ()> {
+        self.0.clock.wait_until_millis(self.0.deadline_millis)
+    }
     /// Starts one operation's five-minute budget in the supplied clock domain.
     #[must_use]
     pub fn new(id: CompactionOperationId, clock: Arc<dyn MonotonicClock>) -> Self {

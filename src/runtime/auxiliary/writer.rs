@@ -4,7 +4,7 @@
 //! loss never owns cancellation or the worker's join. Settlement and exact
 //! confirmation use the original Store rather than the cancellable start scope.
 
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Condvar, Mutex, mpsc};
 
 use chrono::{DateTime, Utc};
 use tokio::sync::oneshot;
@@ -38,6 +38,9 @@ pub enum RequiredReceipt {
     RequestStart(Box<AuxiliaryRequestStartCommit>),
     Settlement(Box<AuxiliarySettlementCommit>),
 }
+
+type WriteOutcome = Arc<Result<RequiredReceipt, AuxiliaryWriteFailure>>;
+pub(super) type SubmittedWrite = oneshot::Receiver<WriteOutcome>;
 
 impl RequiredWrite {
     fn commit(
@@ -122,6 +125,8 @@ struct WriterState {
     completed: Option<WriteEvidence>,
     #[cfg(test)]
     after_commit: Option<(oneshot::Sender<()>, mpsc::Receiver<()>)>,
+    #[cfg(test)]
+    before_confirmation: Option<(oneshot::Sender<()>, mpsc::Receiver<()>)>,
 }
 
 enum Command {
@@ -138,7 +143,8 @@ pub struct AuxiliaryWriter {
     commands: mpsc::SyncSender<Command>,
     worker: std::thread::JoinHandle<()>,
     state: Arc<Mutex<WriterState>>,
-    permit: CallPermit,
+    permit: Arc<CallPermit>,
+    completed: Arc<Condvar>,
 }
 
 /// A bounded command/control view. Dropping this handle never cancels work.
@@ -152,9 +158,11 @@ pub struct AuxiliaryWriterClient {
 /// Actual worker exit, while permits remain retained for obligation resolution.
 #[must_use = "resolve required obligations or perform native durability handoff before release"]
 pub struct JoinedAuxiliaryWriter {
+    /// Retained even if a worker exits before it can construct completion evidence.
+    pub intent: Option<Arc<RequiredWrite>>,
     pub evidence: Option<WriteEvidence>,
     pub panicked: bool,
-    _permit: CallPermit,
+    _permit: Arc<CallPermit>,
 }
 
 impl AuxiliaryWriter {
@@ -164,10 +172,12 @@ impl AuxiliaryWriter {
     /// Reports `NotStarted` if the operating system cannot create the worker.
     /// # Panics
     /// A poisoned owner mutex indicates an internal invariant violation in the worker.
+    #[allow(clippy::too_many_lines)] // Required writes and their exact confirmation stay on this one reserved worker.
     pub fn start(
         store: Arc<dyn ConversationStore>,
-        permit: CallPermit,
+        permit: impl Into<Arc<CallPermit>>,
     ) -> Result<(Self, AuxiliaryWriterClient), ContextError> {
+        let permit = permit.into();
         let (commands, incoming) = mpsc::sync_channel(1);
         let state = Arc::new(Mutex::new(WriterState::default()));
         let start_store = store.auxiliary_writer();
@@ -177,6 +187,8 @@ impl AuxiliaryWriter {
             start_store: start_store.clone(),
         };
         let thread_state = state.clone();
+        let completed = Arc::new(Condvar::new());
+        let thread_completed = completed.clone();
         let worker = std::thread::Builder::new()
             .name("auxiliary-write".into())
             .spawn(move || {
@@ -190,7 +202,7 @@ impl AuxiliaryWriter {
                         if written.is_ok() {
                             let gate = thread_state
                                 .lock()
-                                .expect("auxiliary write owner")
+                                .unwrap_or_else(std::sync::PoisonError::into_inner)
                                 .after_commit
                                 .take();
                             if let Some((entered, release)) = gate {
@@ -211,34 +223,60 @@ impl AuxiliaryWriter {
                     });
                     // The synchronous transaction call/unwind has finished before
                     // an exact read is attempted. There is no replacement write.
-                    let outcome = Arc::new(match written {
-                        Err(AuxiliaryWriteFailure::Unknown { error }) => {
-                            match intent.confirm(store.as_ref()) {
-                                Ok(AuxiliaryCommitConfirmation::ConfirmedCommitted(receipt)) => {
-                                    Ok(receipt)
+                    let outcome = Arc::new(
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match written {
+                            Err(AuxiliaryWriteFailure::Unknown { error }) => {
+                                #[cfg(test)]
+                                {
+                                    let gate = thread_state
+                                        .lock()
+                                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                        .before_confirmation
+                                        .take();
+                                    if let Some((entered, release)) = gate {
+                                        let _ = entered.send(());
+                                        release
+                                            .recv_timeout(std::time::Duration::from_secs(10))
+                                            .expect("confirmation test gate released");
+                                    }
                                 }
-                                Ok(AuxiliaryCommitConfirmation::ConfirmedNotCommitted) => {
-                                    Err(AuxiliaryWriteFailure::KnownNotCommitted { error })
+                                match intent.confirm(store.as_ref()) {
+                                    Ok(AuxiliaryCommitConfirmation::ConfirmedCommitted(
+                                        receipt,
+                                    )) => Ok(receipt),
+                                    Ok(AuxiliaryCommitConfirmation::ConfirmedNotCommitted) => {
+                                        Err(AuxiliaryWriteFailure::KnownNotCommitted { error })
+                                    }
+                                    Ok(AuxiliaryCommitConfirmation::Unknown) => {
+                                        Err(AuxiliaryWriteFailure::Unknown { error })
+                                    }
+                                    Err(confirmation) => Err(AuxiliaryWriteFailure::Unknown {
+                                        error: ConversationStoreError::Storage(format!(
+                                            "{error}; exact confirmation: {confirmation}"
+                                        )),
+                                    }),
                                 }
-                                Ok(AuxiliaryCommitConfirmation::Unknown) => {
-                                    Err(AuxiliaryWriteFailure::Unknown { error })
-                                }
-                                Err(confirmation) => Err(AuxiliaryWriteFailure::Unknown {
-                                    error: ConversationStoreError::Storage(format!(
-                                        "{error}; exact confirmation: {confirmation}"
-                                    )),
-                                }),
                             }
-                        }
-                        other => other,
-                    });
-                    let mut shared = thread_state.lock().expect("auxiliary write owner");
+                            other => other,
+                        }))
+                        .unwrap_or_else(|_| {
+                            Err(AuxiliaryWriteFailure::Unknown {
+                                error: ConversationStoreError::Storage(
+                                    "auxiliary exact confirmation panicked".into(),
+                                ),
+                            })
+                        }),
+                    );
+                    let mut shared = thread_state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     shared.completed = Some(WriteEvidence {
                         intent,
                         outcome: outcome.clone(),
                     });
                     shared.pending = false;
                     drop(shared);
+                    thread_completed.notify_all();
                     let _ = reply.send(outcome);
                 }
             })
@@ -254,9 +292,37 @@ impl AuxiliaryWriter {
                 worker,
                 state,
                 permit,
+                completed,
             },
             client,
         ))
+    }
+
+    /// Recovers an abandoned reply only on the native owner thread. The real
+    /// serialized write and confirmation finish before their evidence is read.
+    pub fn wait_pending(&self) -> Option<WriteEvidence> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while state.pending && !self.worker.is_finished() {
+            state = self
+                .completed
+                .wait_timeout(state, std::time::Duration::from_millis(50))
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .0;
+        }
+        state
+            .completed
+            .as_ref()
+            .filter(|evidence| {
+                !state.pending
+                    && state
+                        .intent
+                        .as_ref()
+                        .is_some_and(|intent| Arc::ptr_eq(intent, &evidence.intent))
+            })
+            .cloned()
     }
 
     /// Joins the real thread. Run only in the native retained blocking-join job.
@@ -265,17 +331,19 @@ impl AuxiliaryWriter {
     /// # Panics
     /// A poisoned owner mutex indicates an internal invariant violation.
     pub fn join(self) -> JoinedAuxiliaryWriter {
-        self.state.lock().expect("auxiliary write owner").closed = true;
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .closed = true;
         let _ = self.commands.send(Command::Stop);
         let panicked = self.worker.join().is_err();
-        let evidence = self
+        let state = self
             .state
             .lock()
-            .expect("auxiliary write owner")
-            .completed
-            .clone();
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         JoinedAuxiliaryWriter {
-            evidence,
+            intent: state.intent.clone(),
+            evidence: state.completed.clone(),
             panicked,
             _permit: self.permit,
         }
@@ -293,10 +361,23 @@ impl AuxiliaryWriterClient {
         &self,
         intent: RequiredWrite,
     ) -> Result<Arc<Result<RequiredReceipt, AuxiliaryWriteFailure>>, ContextError> {
+        self.submit(intent)?.await.map_err(|_| {
+            ContextError::new(
+                ContextErrorKind::AuxiliarySupervisionFailed,
+                "required write completion unavailable; native owner must join and confirm",
+            )
+        })
+    }
+
+    /// Nonblocking submission under the native cancellation/grant boundary.
+    pub(super) fn submit(&self, intent: RequiredWrite) -> Result<SubmittedWrite, ContextError> {
         let intent = Arc::new(intent);
         let (reply, completed) = oneshot::channel();
         {
-            let mut state = self.state.lock().expect("auxiliary write owner");
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if state.closed
                 || state.pending
                 || state.completed.as_ref().is_some_and(|evidence| {
@@ -325,12 +406,7 @@ impl AuxiliaryWriterClient {
                 ));
             }
         }
-        completed.await.map_err(|_| {
-            ContextError::new(
-                ContextErrorKind::AuxiliarySupervisionFailed,
-                "required write completion unavailable; native owner must join and confirm",
-            )
-        })
+        Ok(completed)
     }
 
     /// Cancels only preparation/start writes; existing settlement stays usable.
@@ -466,5 +542,97 @@ mod tests {
         drop(joined);
         assert!(capacity.reserve_general().is_ok());
         drop(other_permits);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn confirmation_retains_capacity_and_exact_intent_after_sql_exit_and_waiter_loss() {
+        for confirmation_panics in [false, true] {
+            let store =
+                Arc::new(SqliteConversationStore::in_memory(ConversationId::generate()).unwrap());
+            let capacity = ProcessCapacity::new().conversation();
+            let (owner, client) =
+                AuxiliaryWriter::start(store.clone(), capacity.reserve_general().unwrap()).unwrap();
+            let other_permits: Vec<_> = (0..3)
+                .map(|_| capacity.reserve_compaction().unwrap())
+                .collect();
+            let start = call_start();
+            let submitted = start.clone();
+            let (entered, committed) = oneshot::channel();
+            let (lose_ack, held_ack) = mpsc::channel();
+            let (confirming, confirmation_entered) = oneshot::channel();
+            let (release_confirmation, held_confirmation) = mpsc::channel();
+            {
+                let mut state = client.state.lock().unwrap();
+                state.after_commit = Some((entered, held_ack));
+                state.before_confirmation = Some((confirming, held_confirmation));
+            }
+            let waiter = tokio::spawn(async move {
+                client
+                    .execute(RequiredWrite::CallStart(submitted, Utc::now()))
+                    .await
+            });
+            committed.await.unwrap();
+            // The real transaction committed, then its acknowledgement was lost
+            // by unwinding outside SQL. Only the exact read may resolve it.
+            drop(lose_ack);
+            confirmation_entered.await.unwrap();
+            assert!(
+                store
+                    .load_auxiliary_call(&start.call_id, store.auxiliary_audit_cut().unwrap())
+                    .unwrap()
+                    .is_some(),
+                "a separate real Store read proves the transaction lease returned"
+            );
+            waiter.abort();
+            assert!(waiter.await.unwrap_err().is_cancelled());
+            let joining = tokio::task::spawn_blocking(move || owner.join());
+            assert!(
+                capacity.reserve_compaction().is_err(),
+                "active confirmation still owns the lane and Call"
+            );
+            if confirmation_panics {
+                drop(release_confirmation);
+            } else {
+                release_confirmation.send(()).unwrap();
+            }
+            let joined = joining.await.unwrap();
+            assert!(
+                !joined.panicked,
+                "confirmation failure is retained evidence, not lost worker state"
+            );
+            let intent = joined
+                .intent
+                .as_ref()
+                .expect("exact operation survives confirmation failure");
+            assert!(
+                matches!(intent.as_ref(), RequiredWrite::CallStart(actual, _) if actual.as_ref() == start.as_ref())
+            );
+            let evidence = joined.evidence.as_ref().unwrap();
+            if confirmation_panics {
+                assert!(matches!(
+                    evidence.outcome.as_ref(),
+                    Err(AuxiliaryWriteFailure::Unknown { .. })
+                ));
+            } else {
+                assert!(matches!(
+                    evidence.outcome.as_ref(),
+                    Ok(RequiredReceipt::CallStart(_))
+                ));
+            }
+            assert!(
+                capacity.reserve_compaction().is_err(),
+                "physical exit alone cannot resolve the durable obligation"
+            );
+            assert!(matches!(
+                intent.confirm(store.as_ref()).unwrap(),
+                AuxiliaryCommitConfirmation::ConfirmedCommitted(_)
+            ));
+            store
+                .commit_auxiliary_call_settlement(cancelled(store.as_ref(), &start))
+                .unwrap();
+            drop(joined);
+            assert!(capacity.reserve_compaction().is_ok());
+            drop(other_permits);
+        }
     }
 }

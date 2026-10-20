@@ -10,6 +10,7 @@
 //! `crate::runtime::continuation`.
 
 pub mod adapter;
+pub mod assembly;
 pub mod authoring;
 pub mod auxiliary;
 pub mod catalog;

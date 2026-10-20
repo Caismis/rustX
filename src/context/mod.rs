@@ -100,9 +100,16 @@ pub struct ContextRuntime {
     pub(crate) native_system: NativeContextInput,
     /// Process-local resource generation that supplied `native_system`.
     pub(crate) resource_revision: crate::runtime::RuntimeResourceRevision,
+    pub(crate) monotonic_clock: Arc<dyn MonotonicClock>,
 }
 
 impl ContextRuntime {
+    pub(crate) fn compaction_budget(
+        &self,
+        operation_id: crate::runtime::identity::CompactionOperationId,
+    ) -> compaction_budget::CompactionBudget {
+        compaction_budget::CompactionBudget::new(operation_id, self.monotonic_clock.clone())
+    }
     /// Test-only convenience wrapper for the explicit production-capable
     /// assembly constructor. It requires the same admitted policy and clock
     /// that the sibling `AgentExecution` receives; it never creates either.
@@ -199,13 +206,14 @@ impl ContextRuntime {
             summarizer: Arc::new(ModelBackedSummarizer::new(
                 summary,
                 model_timeout_policy,
-                monotonic_clock,
+                monotonic_clock.clone(),
             )),
             native_composition: crate::extensions::NativeContextComposition::new(status_engine),
             assembly,
             compaction_budgets,
             native_system: NativeContextInput::default(),
             resource_revision: crate::runtime::RuntimeResourceRevision::default(),
+            monotonic_clock,
         })
     }
 
@@ -264,6 +272,7 @@ impl ContextRuntime {
             compaction_budgets,
             native_system: NativeContextInput::default(),
             resource_revision: crate::runtime::RuntimeResourceRevision::default(),
+            monotonic_clock: Arc::new(crate::runtime::monotonic::SystemMonotonicClock::new()),
         }
     }
 }

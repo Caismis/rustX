@@ -2284,43 +2284,75 @@ impl ClientInner {
         request_id: Option<crate::runtime::identity::ManualCompactionRequestId>,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.ensure_writable_runtime()?;
-        let outcome = self
+        let handle = self
             .runtime
             .as_ref()
             .expect("a writable Runtime Client host has a runtime")
-            .compact_context(request_id)
-            .await
-            .map_err(|error| match error {
-                ManualCompactionError::Inactive | ManualCompactionError::Busy => {
-                    RuntimeClientError::InvalidState {
-                        message: error.to_string(),
-                    }
+            .admit_compaction(request_id)
+            .map_err(Self::compaction_error)?;
+        self.finish_compaction(handle).await
+    }
+
+    pub(crate) fn admit_compaction_transfer(
+        self: &Arc<Self>,
+        request_id: Option<crate::runtime::identity::ManualCompactionRequestId>,
+    ) -> Result<
+        futures_util::future::BoxFuture<'static, Result<RuntimeClientResult, RuntimeClientError>>,
+        RuntimeClientError,
+    > {
+        self.ensure_writable_runtime()?;
+        let handle = self
+            .runtime
+            .as_ref()
+            .expect("writable runtime")
+            .admit_compaction(request_id)
+            .map_err(Self::compaction_error)?;
+        let owner = self.clone();
+        Ok(Box::pin(
+            async move { owner.finish_compaction(handle).await },
+        ))
+    }
+
+    fn compaction_error(error: ManualCompactionError) -> RuntimeClientError {
+        match error {
+            ManualCompactionError::Inactive | ManualCompactionError::Busy => {
+                RuntimeClientError::InvalidState {
+                    message: error.to_string(),
                 }
-                ManualCompactionError::Shutdown => RuntimeClientError::RuntimeShutdown,
-                ManualCompactionError::ModelUnavailable { .. } => {
-                    RuntimeClientError::InvalidModelConfiguration {
-                        message: error.to_string(),
-                    }
+            }
+            ManualCompactionError::Shutdown => RuntimeClientError::RuntimeShutdown,
+            ManualCompactionError::ModelUnavailable { .. } => {
+                RuntimeClientError::InvalidModelConfiguration {
+                    message: error.to_string(),
                 }
-                ManualCompactionError::DurabilityFailed { message }
-                | ManualCompactionError::Durable { message } => {
-                    RuntimeClientError::InvalidState { message }
-                }
-                ManualCompactionError::Context(context)
-                    if matches!(
-                        context.kind,
-                        crate::context::ContextErrorKind::NoProgress
-                            | crate::context::ContextErrorKind::CannotFit
-                    ) =>
-                {
-                    RuntimeClientError::InvalidState {
-                        message: context.message,
-                    }
-                }
-                ManualCompactionError::Context(context) => RuntimeClientError::RuntimeFailure {
+            }
+            ManualCompactionError::DurabilityFailed { message }
+            | ManualCompactionError::Durable { message } => {
+                RuntimeClientError::InvalidState { message }
+            }
+            ManualCompactionError::Context(context)
+                if matches!(
+                    context.kind,
+                    crate::context::ContextErrorKind::NoProgress
+                        | crate::context::ContextErrorKind::CannotFit
+                        | crate::context::ContextErrorKind::AuxiliaryBusy
+                ) =>
+            {
+                RuntimeClientError::InvalidState {
                     message: context.message,
-                },
-            })?;
+                }
+            }
+            ManualCompactionError::Context(context) => RuntimeClientError::RuntimeFailure {
+                message: context.message,
+            },
+        }
+    }
+
+    async fn finish_compaction(
+        &self,
+        handle: crate::runtime::conversation_runtime::ManualCompactionHandle,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        let outcome = handle.wait().await.map_err(Self::compaction_error)?;
         #[cfg(test)]
         {
             let gate = self.manual_compaction_response_gate.lock().unwrap().take();

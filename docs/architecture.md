@@ -441,6 +441,48 @@ deadline, start reservations and shrink count. Request receipts and typed
 noncommit evidence resolve reservations; an unknown transaction remains a
 logical budget obligation rather than permission for another physical start.
 
+`runtime::auxiliary::executor` registers each preparation before expensive
+history/media work. A close-fenced native Scope owns the Compaction children;
+one Call consumes one RequestId-specific dispatch grant after both starts are
+confirmed. Call records keep lifecycle admission and capacity independently
+of the result receiver. Frozen invocation parameters, resource revision and
+semantic input are checked before durable start. Context owns transcript
+construction, Summary acceptance and the checkpoint transaction.
+
+An admitted Call creates at most one native owner thread and one serialized
+write thread. Thirty-two live Calls therefore create at most 64 such threads,
+plus one process-owned reaper. The write thread performs exact confirmation
+after a write exits; the owner joins that real thread, then the reaper joins
+the real owner thread. Completed owners alone enter the bounded reaper
+channel, so a stuck write cannot block other Calls' cleanup there. No
+provider-execution waiting queue or extra join-offloading pool is used.
+Capacity is released only after these joins and confirmed obligations or a
+proven-exited handoff of the exact intent to native durability failure.
+
+`model::assembly` supplies canonical event/block validation to Agent and
+auxiliary consumers. Its text-only entry validates reasoning/continuation
+envelopes without retaining their bytes. The auxiliary fold retains
+request-local timing and cumulative usage snapshots, accepts success only
+after Completed and EOF, and keeps the absolute deadline active after
+Completed. Provider observation, remote uncertainty and local outcome stay
+separate. Context can reject refused/empty Summary text after confirmed
+execution without causing another provider entry.
+
+Manual compaction transfers its whole business tail to ConversationRuntime
+before releasing the manager OperationLease. The resident worker or drain
+owner joins the retained maintenance task; callers await a reply view outside
+the manager lease. Responses use that invocation's exact native receipt,
+including when a later compaction commits or observation delivery is lost.
+
+DurabilityGate keeps a short state mutex and an owned ownership permission.
+A failure request immediately closes later admission without parking the
+coordinator behind SQL. An earlier permission retains its order through the
+write and native publication, then commits the pending absorbing failure on
+exit. The single failure publisher runs outside the gate mutex. Existing
+background and Subagent ownership writers await permission outside registry
+locks and perform their synchronous transaction/publication on blocking
+workers; already-owned settlement never reacquires healthy admission.
+
 `ConversationRuntime` owns one lifecycle authority:
 
 ```text

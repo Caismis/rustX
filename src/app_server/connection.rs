@@ -878,6 +878,44 @@ impl AppServerConnection {
             let sessions = self.sessions.clone();
             let manager = self.host.manager().clone();
             let upload_host = self.host.clone();
+            if let Method::CompactContext { request_id, .. } = &method {
+                let request_id = request_id.clone();
+                let receiver = {
+                    let routes = self.routes.lock().expect("routes mutex");
+                    if routes.closed
+                        || !routes
+                            .active
+                            .get(&target.session_id)
+                            .is_some_and(|active| Arc::ptr_eq(active, &route))
+                    {
+                        return Err(domain(ErrorData::StaleAttachment));
+                    }
+                    self.host
+                        .admit_request(request_lane, |request_owner| {
+                            client.start_compaction_operation(move |_| {
+                                let authority = route.attachment.operation_authority();
+                                async move {
+                                    let tail =
+                                        authority?.admit_compaction_transfer(Some(request_id))?;
+                                    let completion: futures_util::future::BoxFuture<'static, _> =
+                                        Box::pin(async move {
+                                            let _request = request_owner;
+                                            let _physical_association = physical_association;
+                                            tail.await
+                                        });
+                                    Ok(completion)
+                                }
+                            })
+                        })
+                        .map_err(host_error)?
+                        .map_err(manager_error)?
+                };
+                return native_result(
+                    receiver
+                        .await
+                        .map_err(|_| domain(ErrorData::OperationFailed))?,
+                );
+            }
             let receiver = {
                 let routes = self.routes.lock().expect("routes mutex");
                 if routes.closed

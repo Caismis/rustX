@@ -71,6 +71,44 @@ Inspection archives keep requests.jsonl for actual primary Snapshots. Auxiliary 
 
 ## Verification boundary
 
-Real SQLite tests own transaction atomicity, owner/index consistency, rollback and receipt-loss evidence, immutable cuts, pagination and corruption refusal. Mixed-history regressions compare primary behavior with auxiliary facts interleaved. A private supervised consumer fixture owns actual tasks and writer joins, arbitrates cancellation against adapter entry, and confirms settlement after physical exit. It validates the Store/executor seam without shipping the AUX-02 executor.
+Real SQLite tests cover transaction atomicity, owner/index consistency, rollback and receipt-loss evidence, immutable cuts, pagination and corruption refusal. Mixed-history regressions compare primary behavior with auxiliary facts interleaved. Native execution tests exercise the production executor with a private second consumer, actual starts before adapter entry, panic after trusted usage, waiter loss and parent close. Writer boundary tests retain capacity through actual confirmation and joins after a real COMMIT. These are separate from Context deciding whether generated text is a usable Summary.
+
+## Native execution
+
+Automatic and manual Summary use the Runtime-owned single-request executor.
+Native preparation reserves process total/general, Conversation total/general
+and write responsibility without waiting. Limits are 32/24 and 4/3; only
+native Compaction authority may omit the general reservations. A purpose or
+trigger string grants no execution or protected-capacity authority.
+
+Each Call confirms CallStarted and RequestStarted before consuming its only
+dispatch grant. Unknown start never enters the adapter. The owner retains
+execution state outside the polled future, so panic cannot discard trusted
+usage or cause reentry. Required terminal Request and Call facts settle
+atomically. Already-owned settlement and exact confirmation remain available
+after admission closes.
+
+Success requires a valid completion and EOF under current native authority;
+the absolute deadline continues through EOF. Valid provider observations and
+usage survive a later local refusal. Context separately rejects empty/refused
+Summary content and commits its checkpoint only with an accepted parent grant.
+The checkpoint names the confirmed local Call at its exact settlement Journal
+cut. No input body, generated output, credentials or logical budget is copied
+into auxiliary audit metadata.
+
+Each live Call owns at most one owner thread and one serialized write thread;
+one process reaper joins completed owners. At full capacity this is at most
+65 auxiliary threads. Actual write/confirmation and owner joins precede
+resource release. Unresolved exact intent moves to the native failed-durability
+owner only after physical exit; historical uncertainty does not pin global
+capacity indefinitely. Live/unproven cleanup retains its old allocation.
+
+One Compaction shares twelve confirmed/unresolved starts, three total input
+shrinks and a five-minute absolute deadline across carryover and input replans.
+The model and resources remain frozen. Manual compaction transfers its native
+business tail before the manager lease is released, and a lost observer or
+later checkpoint cannot replace the exact result of the original invocation.
+Technical retries, Title, Classification/BTW and result retention remain
+outside this executor's shipped consumer scope.
 
 Changes to stored facts or read layouts advance the affected development-format gates. Unsupported or falsely current layouts are rejected without migrations, fallback readers, data deletion or database reconstruction.

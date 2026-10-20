@@ -328,6 +328,53 @@ without retaining an execution permit. Capacity, deadline, supervision and
 required-durability failures retain typed distinctions from rejected Summary
 content.
 
+The Summary operation owns that budget; every input replan obtains the same
+accounting object. Its monotonic clock domain must match the native executor.
+Checkpoint authorization checks the parent cancellation/close fence and
+absolute deadline together, after native children have exited. A late
+cancellation cannot rewrite an already-sealed model outcome, but can still
+refuse the dependent checkpoint.
+
+Native auxiliary acquisition and waits follow this graph:
+
+- Admission: nonblocking process/Conversation/write reservations, then short
+  durability state, nonblocking lifecycle admission, cancellation grant,
+  parent Scope and registry publication. No SQL or provider wait occurs here.
+- Ownership start: await the owned durability permission outside coordinator
+  and registry locks; enqueue the retained exact intent under the cancellation
+  grant; the dedicated writer acquires ConnectionOwner and runs SQLite.
+  Request start allowance precedes that submission. Cancellation first wins
+  without submitting; a confirmed start remains charged even without dispatch.
+- Dispatch/success seal: the native owner thread enters lifecycle, short
+  durability state, cancellation grant, parent Scope and Call state. No await
+  or SQL splits the winning decision from its one-shot consumption.
+- Settlement/confirmation: retained write responsibility enters ConnectionOwner
+  directly, including after DurabilityFailed. Neither cancellation nor healthy
+  admission can remove an existing obligation.
+- Retirement: join the write/confirmation thread, join the owner thread,
+  confirm obligations or retain the exact intent under proven-exited native
+  failure, release permits/admission, retire the child, then deliver its result.
+
+Failure registration under the coordinator takes only DurabilityGate's short
+state mutex. A pending winner refuses later work while an earlier writer
+finishes. Permission exit commits/publishes that first winner exactly once,
+without holding the gate mutex or a SQL lease during the native callback.
+General work cannot select protected capacity by supplying a purpose string.
+
+One auxiliary generation folds the same canonical ordering as Agent output.
+It refuses tools and more than 4096 content blocks, discards validated native
+continuation/reasoning state, and never modifies primary continuation or usage.
+UsageUpdate replaces the prior cumulative snapshot. Missing final usage
+retains the latest partial value; absence never becomes zero. Illegal tail
+events cannot change trusted evidence. A local timeout, transport error or
+cancellation does not assert provider termination or remote execution certainty.
+
+Manual maintenance keeps an actual native task join. Reply waiter loss does
+not release its native lifetime or lose the checked-out conversation. The
+compaction-specific manager path releases its OperationLease immediately
+after native admission/transfer and waits for the exact receipt outside that
+lease. Other managed operations retain their existing lease semantics.
+
 The agent kernel owns agent execution semantics. Provider SDKs, MCP SDKs, storage clients, HTTP frameworks, and control-plane schemas must not define kernel types.
 
 ## Native durable authority (M8 / Issue #11)

@@ -429,25 +429,3 @@ pub(crate) fn bounded_encoded_len(
         .map_err(|_| bound("cumulative compaction bytes exceeded"))?;
     Ok(counter.bytes)
 }
-
-/// Attempt-admitted model resources, separate from source-data authority. The
-/// supervised summarizer already owns its deadline and native provider policy.
-pub(crate) struct CompactionModelResources<'a> {
-    pub(crate) context: &'a crate::context::ContextRuntime,
-    pub(crate) cancellation: &'a crate::runtime::cancellation::CancellationSignal,
-}
-impl CompactionModelResources<'_> {
-    pub(crate) fn budgets(&self) -> crate::context::engine::CompactionBudgets {
-        self.context.compaction_budgets
-    }
-    pub(crate) async fn summarize(
-        &self,
-        request: crate::context::summarizer::SummaryRequest,
-    ) -> Result<String, crate::context::error::ContextError> {
-        tokio::select! {
-            biased;
-            () = self.cancellation.cancelled() => Err(crate::context::error::ContextError::new(crate::context::error::ContextErrorKind::Cancelled, "compaction cancelled while summarizing")),
-            result = self.context.summarizer.summarize(request,self.cancellation.child()) => result,
-        }
-    }
-}

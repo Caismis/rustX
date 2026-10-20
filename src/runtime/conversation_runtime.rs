@@ -294,7 +294,8 @@ use crate::agent::observer::{AgentExecutionObserver, AgentStatusObservation};
 use crate::agent::{AgentExecution, AgentExecutionRequest};
 use crate::capabilities::{CapabilityCoordinator, CapabilityObserver, CapabilitySnapshot};
 use crate::context::compaction::{
-    CompactionAttribution, CompactionExecutionError, ExecutedCompaction, execute_compaction,
+    CompactionAttribution, CompactionExecutionError, ExecutedCompaction,
+    execute_compaction_in_operation,
 };
 use crate::context::tokens::TokenEstimator;
 use crate::context::{
@@ -334,7 +335,7 @@ use crate::runtime::resources::{RuntimeResourceLoader, RuntimeResourceSnapshot};
 use crate::runtime::transcript_history::TranscriptHistory;
 use crate::runtime::types::{
     ApprovalMode, CancellationReason, ConversationLifecycle, ConversationLifecycleState,
-    DurabilityFailureCommit, DurabilityGate, DurableOperation, RuntimeClock, SystemClock,
+    DurabilityGate, DurableOperation, RuntimeClock, SystemClock,
 };
 use crate::tools::background::{BackgroundExecutionSnapshot, BackgroundObserver};
 use crate::tools::runtime::ConversationToolRuntime;
@@ -1113,8 +1114,39 @@ enum DrainTrigger {
 #[derive(Debug, Default)]
 struct ManualCompactionCompletion {
     completed: AtomicBool,
+    ready_to_join: AtomicBool,
+    joined: AtomicBool,
     result: Mutex<Option<Result<ManualCompactionOutcome, ManualCompactionError>>>,
     notify: tokio::sync::Notify,
+}
+
+struct ManualTail {
+    worker: tokio::task::JoinHandle<()>,
+    completion: Arc<ManualCompactionCompletion>,
+}
+
+struct ManualTailExit {
+    completion: Arc<ManualCompactionCompletion>,
+    wake: Arc<WakeGate>,
+    _admission: crate::runtime::types::LifecycleAdmission,
+}
+
+impl Drop for ManualTailExit {
+    fn drop(&mut self) {
+        // This announces that the native owner may await the actual Join;
+        // it is deliberately not physical-exit evidence by itself.
+        self.completion.ready_to_join.store(true, Ordering::Release);
+        self.wake.notify.notify_one();
+    }
+}
+
+/// A reply view after native ownership of the whole maintenance tail transferred.
+pub(crate) struct ManualCompactionHandle(Arc<ManualCompactionCompletion>);
+
+impl ManualCompactionHandle {
+    pub(crate) async fn wait(self) -> Result<ManualCompactionOutcome, ManualCompactionError> {
+        self.0.wait().await
+    }
 }
 
 impl ManualCompactionCompletion {
@@ -1129,7 +1161,7 @@ impl ManualCompactionCompletion {
 
     async fn wait(&self) -> Result<ManualCompactionOutcome, ManualCompactionError> {
         loop {
-            if self.completed.load(Ordering::Acquire) {
+            if self.completed.load(Ordering::Acquire) && self.joined.load(Ordering::Acquire) {
                 return self
                     .result
                     .lock()
@@ -1140,7 +1172,7 @@ impl ManualCompactionCompletion {
             let notified = self.notify.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
-            if self.completed.load(Ordering::Acquire) {
+            if self.completed.load(Ordering::Acquire) && self.joined.load(Ordering::Acquire) {
                 return self
                     .result
                     .lock()
@@ -1449,11 +1481,11 @@ pub(crate) struct RuntimeInner {
     /// The shared durability frontier (Issue #60): the same failed fact the
     /// coordinator commits as `DurabilityFailed`, carried to the
     /// conversation-owned registries so their new durable ownership commits
-    /// linearize against it. Updated under the coordinator lock in
-    /// [`RuntimeInner::record_durability_failure`]; the registries hold it
-    /// across their ownership durable writes.
+    /// linearize against it. The coordinator requests failure without waiting
+    /// for SQL; the gate publishes after any earlier ownership writer exits.
     durability_gate: Arc<DurabilityGate>,
-    auxiliary_capacity: crate::runtime::auxiliary::capacity::ConversationCapacity,
+    auxiliary: crate::runtime::auxiliary::executor::AuxiliaryExecutor,
+    manual_tail: Mutex<Option<ManualTail>>,
     /// The immutable result of this runtime's startup recovery (Issue #12,
     /// M9a): the deterministic classification, exactly which recovery facts
     /// were committed, and what continuation is permitted.
@@ -1558,7 +1590,14 @@ impl RuntimeInner {
     ) -> Result<u64, IdleBusyReason> {
         use IdleBusyReason as Busy;
         let epoch = self.lifecycle.idle_epoch().ok_or(Busy::LifecycleOwner)?;
-        if state.current_attempt.is_some() || state.manual_compaction.is_some() {
+        if state.current_attempt.is_some()
+            || state.manual_compaction.is_some()
+            || self
+                .manual_tail
+                .lock()
+                .expect("manual tail owner")
+                .is_some()
+        {
             return Err(Busy::Foreground);
         }
         // Work that waits for admission owns nothing while the published
@@ -1764,6 +1803,7 @@ impl RuntimeInner {
                         transitioned,
                         "the coordinator lock owns the runtime drain transition"
                     );
+                    self.auxiliary.begin_drain();
                     first = true;
                     self.observe(ConversationObservation::Shutdown);
                     #[cfg(test)]
@@ -1898,6 +1938,48 @@ impl RuntimeInner {
         }
     }
 
+    async fn reap_manual_tail(self: &Arc<Self>, wait: bool) {
+        let tail = {
+            let mut owner = self.manual_tail.lock().expect("manual tail owner");
+            if owner.as_ref().is_some_and(|tail| {
+                wait || tail.completion.ready_to_join.load(Ordering::Acquire)
+                    || tail.worker.is_finished()
+            }) {
+                owner.take()
+            } else {
+                None
+            }
+        };
+        let Some(tail) = tail else {
+            return;
+        };
+        if let Err(error) = tail.worker.await {
+            let diagnostic = format!("native manual Compaction task failed: {error}");
+            self.commit_failure_and_observe(DurableOperation::CanonicalCommit, diagnostic.clone());
+            // A panicking business future has dropped its parent scopes. The
+            // native Call registry still owns and joins every live child.
+            self.auxiliary.drain().await;
+            {
+                let mut state = self
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                state.manual_compaction = None;
+            }
+            if !tail.completion.completed.load(Ordering::Acquire) {
+                // No invented CompactionFailed fact after an unknown commit.
+                tail.completion
+                    .complete(Err(ManualCompactionError::Durable {
+                        message: diagnostic,
+                    }));
+            }
+        }
+        tail.completion.joined.store(true, Ordering::Release);
+        tail.completion.notify.notify_waiters();
+        self.settlement.notify_waiters();
+        self.wake.notify.notify_one();
+    }
+
     /// Supervises every runtime-owned operation to its strongest honest
     /// settlement, then publishes `Quiescent` only if nothing prevents it.
     ///
@@ -1935,6 +2017,20 @@ impl RuntimeInner {
         self.interaction
             .cancel_pending_async(interaction_cancel_reason)
             .await;
+        // Cancellation intent reaches every sibling before an irreducible
+        // auxiliary write/confirmation wait can delay this drain owner.
+        if let Some(subagents) = &self.subagents {
+            for child in subagents.unsettled_snapshot() {
+                let _ = subagents.cancel(&child.subagent_id, CancellationReason::RuntimeShutdown);
+            }
+        }
+        for execution in self.tool_runtime.background().unsettled_snapshot() {
+            self.tool_runtime
+                .background()
+                .cancel_with_reason(&execution.execution_id, CancellationReason::RuntimeShutdown);
+        }
+        self.auxiliary.drain().await;
+        self.reap_manual_tail(true).await;
         loop {
             self.wait_for_foreground_operation().await;
 
@@ -2087,6 +2183,7 @@ impl RuntimeInner {
         assembly: crate::context::ContextAssembly,
         model_timeout_policy: ModelTimeoutPolicy,
         resources: &RuntimeResourceSnapshot,
+        summary_backend: Arc<dyn crate::context::summarizer::SummaryBackend>,
     ) -> Result<ContextRuntime, crate::context::ContextError> {
         let configuration = resources.configuration();
         let policy = configuration.map_or(self.context.policy, |generation| {
@@ -2112,6 +2209,9 @@ impl RuntimeInner {
             model_timeout_policy,
             Arc::clone(&self.monotonic_clock),
         )?;
+        context
+            .summarizer
+            .bind_backend(summary_backend, resources.revision().get());
         if let Some(owner) = &self.tool_runtime.uploads {
             context.engine.set_upload_resolver(owner.clone());
         }
@@ -2168,11 +2268,9 @@ impl RuntimeInner {
     /// authority ([`DurabilityGate::commit_failure`]) and published as a
     /// [`ConversationObservation::DurabilityFailed`] exactly once; no
     /// further re-kick is armed, so a persistent or alternating fault cannot
-    /// become a hot loop. The observation is published only when the commit
-    /// reports that THIS call installed the absorbing fact, and it carries
-    /// the authoritative operation and diagnostic returned by the commit
-    /// (see [`Self::commit_failure_and_observe`]) — a later caller can
-    /// never publish a second observation. A failure of a different
+    /// become a hot loop. The gate's one publisher reports the absorbing
+    /// operation and diagnostic after any earlier ownership commit exits;
+    /// repeated requests cannot publish a second observation. A failure of a different
     /// transient stage consumes its own allowance without erasing the first
     /// stage's debt.
     fn record_durability_failure(
@@ -2216,22 +2314,12 @@ impl RuntimeInner {
         }
     }
 
-    /// Commits the absorbing `DurabilityFailed` fact through the one
-    /// authority and publishes the single
-    /// [`ConversationObservation::DurabilityFailed`] only when THIS call
-    /// installed the fact; the observation's operation and diagnostic are
-    /// the authoritative ones returned by the commit.
+    /// Requests absorbing failure without waiting for a writer under the
+    /// coordinator. The gate publishes the single committed observation.
     fn commit_failure_and_observe(&self, operation: DurableOperation, diagnostic: String) {
-        let outcome = self.durability_gate.commit_failure(operation, diagnostic);
-        if let DurabilityFailureCommit::Committed(failure) = outcome {
-            self.observe(ConversationObservation::DurabilityFailed {
-                operation: failure.operation.as_str().to_owned(),
-                diagnostic: failure.diagnostic,
-            });
-            // The absorbing failure is an eligibility input with no
-            // lifecycle announcement of its own.
-            self.wake.eligibility.notify_one();
-        }
+        // An already-authorized writer can finish before this failure becomes
+        // committed. The gate's one publisher runs after that physical boundary.
+        let _ = self.durability_gate.commit_failure(operation, diagnostic);
     }
 
     /// Records progress through one durable stage. This clears only the
@@ -2604,7 +2692,8 @@ impl RuntimeInner {
     /// The worker never owns the runtime. It captures `Weak<RuntimeInner>`
     /// plus an `Arc<WakeGate>` — the minimal wait state — and it upgrades
     /// the weak handle only inside an admission step, never across an
-    /// await. A parked worker therefore holds no strong reference, so it
+    /// ordinary idle wait. Native manual-tail joins retain their accountable
+    /// owner until actual exit. A parked worker holds no strong reference, so it
     /// cannot keep a runtime alive that has no semantic owner left.
     ///
     /// Termination is deterministic, not timed: dropping the last
@@ -2642,12 +2731,13 @@ impl RuntimeInner {
                 let lifecycle_changed = lifecycle.changed();
                 tokio::pin!(lifecycle_changed);
                 lifecycle_changed.as_mut().enable();
-                // The strong handle exists only inside this block, so it is
-                // never held across the await below.
+                // Retain the native owner across a concrete manual-tail join,
+                // then release it before the ordinary idle wait below.
                 {
                     let Some(inner) = weak.upgrade() else {
                         break;
                     };
+                    inner.reap_manual_tail(false).await;
                     if admit {
                         inner.admit_next_attempt();
                     }
@@ -2706,6 +2796,7 @@ impl RuntimeInner {
                 resources.context_assembly().clone(),
                 model_timeout_policy,
                 &resources,
+                Arc::new(self.auxiliary.clone()),
             )
             .expect("admission validated this model against the session context policy");
         let context_runtime = context_runtime.with_runtime_resources(&resources);
@@ -2861,16 +2952,30 @@ impl RuntimeInner {
     /// settlement even if the requesting attachment disappears.
     async fn run_manual_compaction(
         self: &Arc<Self>,
-        operation_id: crate::runtime::identity::CompactionOperationId,
         mut conversation: ConversationState,
         context_runtime: ContextRuntime,
         tools: Vec<ModelToolDefinition>,
         system_sections: Vec<crate::context::AcceptedSystemSection>,
         cancellation: &AgentCancellation,
+        budget: crate::context::compaction_budget::CompactionBudget,
     ) -> ManualCompactionTaskResult {
+        let operation_id = budget.operation_id().clone();
         let effective_system_prompt = render_effective_system_prompt(&system_sections);
         let signal = cancellation.signal();
-        let executed = execute_compaction(
+        let operation = match context_runtime
+            .summarizer
+            .operation(budget.clone(), signal.child())
+        {
+            Ok(operation) => operation,
+            Err(error) => {
+                return ManualCompactionTaskResult {
+                    conversation,
+                    result: Err(ManualCompactionError::Context(error)),
+                    committed_failure: None,
+                };
+            }
+        };
+        let executed = execute_compaction_in_operation(
             &mut conversation,
             &context_runtime,
             &self.conversation_id,
@@ -2885,8 +2990,10 @@ impl RuntimeInner {
                 attempt_id: None,
                 turn_id: None,
             },
+            operation.as_ref(),
         )
         .await;
+        operation.close().await;
         let result = match executed {
             Ok(completed) => {
                 let RuntimeEvent::CompactionCompleted {
@@ -4187,6 +4294,17 @@ impl ConversationRuntime {
         // the runtime is still inactive — no ownership commit can race the
         // installation.
         let durability_gate = Arc::new(DurabilityGate::new());
+        let monotonic_clock = injected_monotonic_clock
+            .unwrap_or_else(|| Arc::new(SystemMonotonicClock::new()) as Arc<dyn MonotonicClock>);
+        let auxiliary = crate::runtime::auxiliary::executor::AuxiliaryExecutor::new(
+            store.clone(),
+            clock.clone(),
+            monotonic_clock.clone(),
+            lifecycle.clone(),
+            durability_gate.clone(),
+            crate::runtime::auxiliary::capacity::ProcessCapacity::shared_process().conversation(),
+        )
+        .map_err(|error| ConversationRuntimeError::Storage(error.to_string()))?;
         let inner = Arc::new(RuntimeInner {
             configuration_owner: Arc::new(()),
             model_selection_owner,
@@ -4206,13 +4324,10 @@ impl ConversationRuntime {
             clock,
             model_timeout_policy: config.model_timeout_policy,
             tool_deadline_policy: config.tool_deadline_policy,
-            monotonic_clock: injected_monotonic_clock.unwrap_or_else(|| {
-                Arc::new(SystemMonotonicClock::new()) as Arc<dyn MonotonicClock>
-            }),
+            monotonic_clock,
             durability_gate: durability_gate.clone(),
-            auxiliary_capacity:
-                crate::runtime::auxiliary::capacity::ProcessCapacity::shared_process()
-                    .conversation(),
+            auxiliary,
+            manual_tail: Mutex::new(None),
             recovery,
             executor,
             state: Mutex::new(CoordinatorState {
@@ -4274,6 +4389,18 @@ impl ConversationRuntime {
         // exist before activation — the registry refused every commit
         // while the mailbox was bound inactive — so the installation can
         // never race a settlement.
+        durability_gate.install_failure_publisher(Arc::new({
+            let weak = Arc::downgrade(&inner);
+            move |failure| {
+                if let Some(inner) = weak.upgrade() {
+                    inner.observe(ConversationObservation::DurabilityFailed {
+                        operation: failure.operation.as_str().to_owned(),
+                        diagnostic: failure.diagnostic,
+                    });
+                    inner.wake.eligibility.notify_one();
+                }
+            }
+        }));
         inner
             .tool_runtime
             .background()
@@ -5393,6 +5520,14 @@ impl ConversationRuntime {
         &self,
         request_id: Option<crate::runtime::identity::ManualCompactionRequestId>,
     ) -> Result<ManualCompactionOutcome, ManualCompactionError> {
+        self.admit_compaction(request_id)?.wait().await
+    }
+
+    #[allow(clippy::too_many_lines)] // Native ownership transfers the complete maintenance tail once.
+    pub(crate) fn admit_compaction(
+        &self,
+        request_id: Option<crate::runtime::identity::ManualCompactionRequestId>,
+    ) -> Result<ManualCompactionHandle, ManualCompactionError> {
         let completion = {
             let mut state = self.inner.lock_state();
             match self.inner.lifecycle.state() {
@@ -5404,24 +5539,35 @@ impl ConversationRuntime {
                 }
                 ConversationLifecycleState::Running => {}
             }
-            if let Some(failure) = self.inner.durability_gate.failure() {
+            if let Some(failure) = self.inner.durability_gate.admission_failure() {
                 return Err(ManualCompactionError::DurabilityFailed {
                     message: failure.diagnostic,
                 });
             }
-            if state.current_attempt.is_some() || state.manual_compaction.is_some() {
+            if state.current_attempt.is_some()
+                || state.manual_compaction.is_some()
+                || self
+                    .inner
+                    .manual_tail
+                    .lock()
+                    .expect("manual tail owner")
+                    .is_some()
+            {
                 return Err(ManualCompactionError::Busy);
             }
-            let auxiliary_permit =
-                self.inner
-                    .auxiliary_capacity
-                    .reserve_compaction()
-                    .map_err(|busy| {
-                        ManualCompactionError::Context(ContextError::new(
-                            ContextErrorKind::AuxiliaryBusy,
-                            busy.to_string(),
-                        ))
-                    })?;
+            let operation_id = crate::runtime::identity::CompactionOperationId::new(
+                uuid::Uuid::now_v7().to_string(),
+            );
+            let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+            let budget = crate::context::compaction_budget::CompactionBudget::new(
+                operation_id.clone(),
+                self.inner.monotonic_clock.clone(),
+            );
+            let summary_backend = self
+                .inner
+                .auxiliary
+                .pre_admit_summary(budget.clone(), &cancellation.signal())
+                .map_err(ManualCompactionError::Context)?;
             let model = state.model.snapshot().map_err(|error| {
                 ManualCompactionError::ModelUnavailable {
                     diagnostic: error.to_string(),
@@ -5443,6 +5589,7 @@ impl ConversationRuntime {
                         },
                     ),
                     &resources,
+                    summary_backend,
                 )
                 .map_err(ManualCompactionError::Context)?;
             // Manual maintenance has no attempt lease, but it still freezes
@@ -5463,9 +5610,6 @@ impl ConversationRuntime {
                         format!("the frozen capability system guidance is invalid: {error}"),
                     ))
                 })?;
-            let operation_id = crate::runtime::identity::CompactionOperationId::new(
-                uuid::Uuid::now_v7().to_string(),
-            );
             self.inner.publish_manual_compaction_event(
                 &mut state,
                 request_id.as_ref(),
@@ -5477,7 +5621,6 @@ impl ConversationRuntime {
                 .conversation
                 .take()
                 .expect("the idle coordinator owns the conversation state");
-            let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
             state.manual_compaction = Some(CurrentManualCompaction {
                 operation_id: operation_id.clone(),
                 cancellation: cancellation.clone(),
@@ -5490,6 +5633,7 @@ impl ConversationRuntime {
             let completion = Arc::new(ManualCompactionCompletion::default());
             let completion_for_task = completion.clone();
             let inner = Arc::clone(&self.inner);
+            let (release, registered) = tokio::sync::oneshot::channel();
             drop(state);
             // Diagnostics follow the runtime owner, not the requesting socket:
             // disconnecting the requester cannot hide maintenance settlement.
@@ -5498,15 +5642,24 @@ impl ConversationRuntime {
                 "rustx: manual context compaction admitted for {}",
                 self.inner.conversation_id
             );
-            self.inner.executor.spawn(async move {
+            let task_completion = completion.clone();
+            let worker = self.inner.executor.spawn(async move {
+                if registered.await.is_err() {
+                    return;
+                }
+                let _tail = ManualTailExit {
+                    completion: task_completion,
+                    wake: inner.wake.clone(),
+                    _admission: admission,
+                };
                 let task = inner
                     .run_manual_compaction(
-                        operation_id,
                         conversation,
                         context_runtime,
                         tools,
                         system_sections,
                         &cancellation,
+                        budget,
                     )
                     .await;
                 #[cfg(test)]
@@ -5522,12 +5675,15 @@ impl ConversationRuntime {
                     }
                 }
                 inner.finish_manual_compaction(task, &completion_for_task, request_id.as_ref());
-                drop(auxiliary_permit);
-                drop(admission);
             });
+            *self.inner.manual_tail.lock().expect("manual tail owner") = Some(ManualTail {
+                worker,
+                completion: completion.clone(),
+            });
+            let _ = release.send(());
             completion
         };
-        completion.wait().await
+        Ok(ManualCompactionHandle(completion))
     }
 
     /// Submits one ordinary inbound message under an explicit provenance.
@@ -5873,7 +6029,7 @@ impl ConversationRuntime {
             }
             ConversationLifecycleState::Running => {}
         }
-        if let Some(failure) = self.inner.durability_gate.failure() {
+        if let Some(failure) = self.inner.durability_gate.admission_failure() {
             return Err(InboundAdmissionError::DurabilityFailed {
                 message: failure.diagnostic,
             });
@@ -6276,7 +6432,7 @@ impl ConversationRuntime {
         if !self.inner.lifecycle.is_running() {
             return Err(ModelUpdateError::Inactive);
         }
-        if let Some(failure) = self.inner.durability_gate.failure() {
+        if let Some(failure) = self.inner.durability_gate.admission_failure() {
             return Err(ModelUpdateError::DurabilityFailed {
                 message: failure.diagnostic,
             });
@@ -14005,7 +14161,7 @@ mod tests {
     /// ownership commit is parked inside its authoritative critical section
     /// (holding the runtime durability frontier across its durable write
     /// and record publication) while the `DurabilityFailed` commit is
-    /// invoked concurrently; the failure provably blocks on the frontier,
+    /// invoked concurrently; the failure fact waits on the frontier without blocking the coordinator,
     /// the ownership completes first, and only then does the failure
     /// linearize. The owned child survives with its settlement authority.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -14084,7 +14240,7 @@ mod tests {
         .expect("commit-boundary entered");
 
         // The DurabilityFailed commit is now invoked concurrently: it takes
-        // the coordinator lock and blocks on the runtime frontier held by
+        // the coordinator lock and records its intent behind the frontier held by
         // the parked ownership commit.
         let (failed_started_tx, failed_started_rx) = std::sync::mpsc::channel();
         let (failed_done_tx, failed_done_rx) = std::sync::mpsc::channel();
@@ -14101,8 +14257,10 @@ mod tests {
             .recv()
             .expect("failure is invoked while the ownership is parked");
         assert!(
-            failed_done_rx.try_recv().is_err(),
-            "the DurabilityFailed commit is provably blocked on the runtime frontier held by the parked ownership commit"
+            failed_done_rx
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .is_ok(),
+            "failure registration returns without parking the coordinator while its committed fact waits for ownership exit"
         );
         assert!(
             !pending
@@ -14425,7 +14583,7 @@ mod tests {
         }
 
         // The DurabilityFailed commit is now invoked concurrently: it takes
-        // the coordinator lock and blocks on the runtime frontier held by
+        // the coordinator lock and records its intent behind the frontier held by
         // the parked ownership commit.
         let (failed_started_tx, failed_started_rx) = std::sync::mpsc::channel();
         let (failed_done_tx, failed_done_rx) = std::sync::mpsc::channel();
@@ -14442,8 +14600,10 @@ mod tests {
             .recv()
             .expect("failure is invoked while the ownership is parked");
         assert!(
-            failed_done_rx.try_recv().is_err(),
-            "the DurabilityFailed commit is provably blocked on the runtime frontier held by the parked ownership commit"
+            failed_done_rx
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .is_ok(),
+            "failure registration returns without parking the coordinator while its committed fact waits for ownership exit"
         );
         assert!(
             !pending

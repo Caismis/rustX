@@ -1,8 +1,8 @@
 //! Canonical model stream assembly and validation.
 //!
-//! The agent loop owns `AssistantMessageBlock` assembly from the canonical
-//! `ModelEvent` stream (M2 explicitly deferred this to the loop). This module
-//! validates the stream contract and assembles one ordered message:
+//! Native model consumers share this pure assembler. It validates the
+//! canonical `ModelEvent` contract and assembles one ordered output;
+//! consumers retain execution, tool and durable-commit authority:
 //!
 //! - a stream starts with `Started` (or is a bare terminal `Failed` for a
 //!   request rejected before provider execution) and has at most one
@@ -57,11 +57,12 @@ pub struct AssembledTurn {
     pub finish_reason: ModelFinishReason,
     /// The assembled content blocks in index order, after refusal rollback.
     pub content: Vec<AssistantContentBlock>,
-    /// The fully assembled tool calls of this turn, in block order. These
-    /// are the calls the loop must execute before the model continues.
+    /// The fully assembled tool calls in block order. Only an Agent owner
+    /// may authorize their execution; auxiliary consumers reject tools.
     pub tool_calls: Vec<ToolCall>,
     /// The provider continuation state of the boundary reasoning block, when
-    /// the stream reported one. Propagated losslessly into the next request.
+    /// the stream reported one. Agent execution may retain it; one-shot
+    /// auxiliary consumers discard it without continuation authority.
     pub continuation: Option<ProviderContinuationState>,
     /// Final usage: the terminal event's reported usage, else the latest
     /// usage update.
@@ -119,6 +120,33 @@ impl ModelEventAssembler {
     /// event, a content delta targeting a foreign or skipped block, or a
     /// tool-call delta that cannot be attributed to an open call.
     pub fn push(&mut self, event: &ModelEvent) -> Result<(), RuntimeError> {
+        self.push_inner(event, true)
+    }
+
+    /// Validates one text-only consumer event without retaining reasoning text
+    /// or provider continuation bytes. Empty reasoning placeholders preserve
+    /// canonical block indices and reject foreign continuation envelopes.
+    ///
+    /// # Errors
+    /// Returns a contract violation for invalid stream order, foreign blocks
+    /// or any tool proposal. This method grants no tool/continuation authority.
+    pub fn push_text_only(&mut self, event: &ModelEvent) -> Result<(), RuntimeError> {
+        if matches!(
+            event,
+            ModelEvent::ToolCallStarted { .. }
+                | ModelEvent::ToolCallArgumentsDelta { .. }
+                | ModelEvent::ToolCallCompleted { .. }
+        ) {
+            return Err(violation("text-only model consumer cannot accept tools"));
+        }
+        self.push_inner(event, false)
+    }
+
+    fn push_inner(
+        &mut self,
+        event: &ModelEvent,
+        retain_reasoning: bool,
+    ) -> Result<(), RuntimeError> {
         if self.terminal.is_some() {
             return Err(violation("model event after the terminal event"));
         }
@@ -156,7 +184,12 @@ impl ModelEventAssembler {
                         self.push_text(*block_index, text)
                     }
                     ModelEvent::ReasoningDelta { block_index, text } => {
-                        self.push_reasoning(*block_index, text)
+                        if retain_reasoning {
+                            self.push_reasoning(*block_index, text)
+                        } else {
+                            self.block_at(*block_index, BlockKind::Reasoning)
+                                .map(|_| ())
+                        }
                     }
                     ModelEvent::RefusalDelta { block_index, text } => {
                         self.push_refusal(*block_index, text)
@@ -177,7 +210,12 @@ impl ModelEventAssembler {
                         Ok(())
                     }
                     ModelEvent::ContinuationState { block_index, state } => {
-                        self.attach_continuation(*block_index, state)
+                        if retain_reasoning {
+                            self.attach_continuation(*block_index, state)
+                        } else {
+                            self.block_at(*block_index, BlockKind::Reasoning)
+                                .map(|_| ())
+                        }
                     }
                     ModelEvent::Started
                     | ModelEvent::Failed { .. }
@@ -952,5 +990,40 @@ mod tests {
             completed(ModelFinishReason::Stop),
         ]);
         assert_eq!(turn.usage, Some(usage));
+    }
+
+    #[test]
+    fn text_only_consumer_validates_blocks_without_retaining_reasoning_or_continuation() {
+        use crate::runtime::continuation::{AnthropicContinuation, ProviderContinuationState};
+        let mut assembler = ModelEventAssembler::new();
+        for event in [
+            ModelEvent::Started,
+            ModelEvent::ReasoningDelta {
+                block_index: ContentBlockIndex::new(0),
+                text: "private reasoning".into(),
+            },
+            ModelEvent::ContinuationState {
+                block_index: ContentBlockIndex::new(0),
+                state: ProviderContinuationState::Anthropic(AnthropicContinuation {
+                    opaque: serde_json::json!({"signature": "opaque-state"}),
+                }),
+            },
+            text(1, "visible output"),
+            completed(ModelFinishReason::Stop),
+        ] {
+            assembler.push_text_only(&event).unwrap();
+        }
+        let turn = assembler.finish().unwrap();
+        assert!(turn.continuation.is_none());
+        assert_eq!(turn.content.len(), 2);
+        let AssistantContentBlock::Reasoning(reasoning) = &turn.content[0] else {
+            panic!("canonical reasoning placeholder preserves index zero")
+        };
+        assert!(reasoning.text.is_none());
+        assert!(reasoning.provider_state.is_none());
+        let AssistantContentBlock::Text(text) = &turn.content[1] else {
+            panic!("visible text preserves index one")
+        };
+        assert_eq!(text.text, "visible output");
     }
 }

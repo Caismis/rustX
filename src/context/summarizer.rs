@@ -10,10 +10,9 @@
 //! It never enters `AgentExecution` and never commits a canonical message.
 
 use std::fmt::Write as _;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
-use futures_util::StreamExt;
-use futures_util::future::{BoxFuture, pending};
+use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 
 use crate::context::error::{ContextError, ContextErrorKind};
@@ -21,10 +20,7 @@ use crate::message::content::TextBlock;
 use crate::message::types::{
     AssistantContentBlock, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
-use crate::model::adapter::ModelStreamItem;
-use crate::model::deadline::{ModelRequestDeadline, ModelTimeoutPolicy};
-use crate::model::event::ModelEvent;
-use crate::model::generation::GenerationGuard;
+use crate::model::deadline::ModelTimeoutPolicy;
 use crate::model::invocation::ResolvedModelInvocation;
 use crate::model::types::ModelRequest;
 use crate::runtime::cancellation::CancellationSignal;
@@ -344,21 +340,72 @@ fn render_tool(
 
 /// The summary service.
 pub trait ContextSummarizer: Send + Sync {
-    /// Generates the textual summary of one request.
-    ///
-    /// The returned text is the structured Markdown summary body only. The
-    /// deterministic file half of the transition — typed
-    /// `CompactionSummaryMetadata` extraction and the derived
-    /// `<read-files>`/`<modified-files>` rendering — is applied by the
-    /// compaction preparation, never by this service.
-    ///
-    /// The returned future is owned by the summarizer and must observe
-    /// `cancellation`; cancellation may abort the summary.
-    fn summarize(
+    /// Composition installs one native owner before Summary admission.
+    /// # Panics
+    /// A production service cannot replace its already-frozen native owner.
+    fn bind_backend(&self, backend: Arc<dyn SummaryBackend>, resource_revision: u64);
+    /// Scripted Context services own their test authority directly.
+    fn has_backend(&self) -> bool;
+    /// Admits one business operation before history/media preparation. Every
+    /// replan shares its budget, frozen invocation and close-fenced children.
+    /// # Errors
+    /// Refuses Busy, closed admission, an expired budget or missing native ownership.
+    fn operation(
         &self,
-        request: SummaryRequest,
+        budget: super::compaction_budget::CompactionBudget,
         cancellation: CancellationSignal,
-    ) -> BoxFuture<'_, Result<String, ContextError>>;
+    ) -> Result<Box<dyn SummaryOperation>, ContextError>;
+}
+
+/// One Compaction business tail; normal return waits for its native children.
+pub trait SummaryOperation: Send + Sync {
+    /// The original accounting object, shared by every candidate and re-entry.
+    fn budget(&self) -> super::compaction_budget::CompactionBudget;
+    /// Reserves the next Call before expensive candidate preparation.
+    /// # Errors
+    /// Refuses exhausted capacity, closed parent authority or an expired budget.
+    fn prepare(&self) -> Result<Box<dyn PreparedSummary>, ContextError>;
+    /// Deadline and parent close arbitrate at the checkpoint grant itself.
+    /// # Errors
+    /// Rejects expired/revoked authority or children that have not physically exited.
+    fn authorize_commit(
+        &self,
+    ) -> Result<crate::runtime::cancellation::CompactionCommitGrant, ContextError>;
+    /// Closes child admission, cancels inference and awaits actual native exit.
+    fn close(&self) -> BoxFuture<'_, ()>;
+}
+
+/// The sole prepared Call consumed by one planned Summary input.
+pub trait PreparedSummary: Send {
+    fn summarize(
+        self: Box<Self>,
+        request: SummaryRequest,
+        cut: Option<super::resources::ResourceReadCut>,
+    ) -> BoxFuture<'static, Result<SummaryGeneration, ContextError>>;
+}
+
+/// Accepted Summary text plus confirmed native generation dependency.
+#[derive(Debug)]
+pub struct SummaryGeneration {
+    pub text: String,
+    /// Scripted Context services have no physical generation; production does.
+    pub generation: Option<super::checkpoint::SummaryGenerationRef>,
+}
+
+/// Runtime supplies this narrow Context interface, keeping concrete execution
+/// ownership out of Context and Store/model facts.
+pub trait SummaryBackend: Send + Sync {
+    /// Freezes native execution policy and reserves before preparation.
+    /// # Errors
+    /// Refuses unavailable capacity, lifecycle/durability closure or invalid ownership.
+    fn operation(
+        &self,
+        invocation: ResolvedModelInvocation,
+        timeout: ModelTimeoutPolicy,
+        resource_revision: u64,
+        budget: super::compaction_budget::CompactionBudget,
+        cancellation: CancellationSignal,
+    ) -> Result<Box<dyn SummaryOperation>, ContextError>;
 }
 
 /// The production summarizer backed by a frozen resolved summary-model
@@ -381,7 +428,8 @@ pub trait ContextSummarizer: Send + Sync {
 pub struct ModelBackedSummarizer {
     invocation: ResolvedModelInvocation,
     model_timeout_policy: ModelTimeoutPolicy,
-    monotonic_clock: Arc<dyn MonotonicClock>,
+    _monotonic_clock: Arc<dyn MonotonicClock>,
+    backend: OnceLock<(Arc<dyn SummaryBackend>, u64)>,
 }
 
 /// The fixed structured summary instruction (Issue #140).
@@ -445,8 +493,48 @@ impl ModelBackedSummarizer {
         Self {
             invocation,
             model_timeout_policy,
-            monotonic_clock,
+            _monotonic_clock: monotonic_clock,
+            backend: OnceLock::new(),
         }
+    }
+
+    /// Standalone stream fixtures use the production native executor over a
+    /// real isolated Store; they carry no historical checkpoint authority.
+    #[cfg(test)]
+    pub(crate) fn summarize(
+        &self,
+        request: SummaryRequest,
+        cancellation: CancellationSignal,
+    ) -> BoxFuture<'_, Result<String, ContextError>> {
+        Box::pin(async move {
+            if !self.has_backend() {
+                let store = Arc::new(
+                    crate::durable::SqliteConversationStore::in_memory(
+                        crate::runtime::identity::ConversationId::generate(),
+                    )
+                    .expect("summary fixture Store"),
+                );
+                self.bind_backend(
+                    Arc::new(
+                        crate::runtime::auxiliary::executor::AuxiliaryExecutor::for_test(
+                            store,
+                            self._monotonic_clock.clone(),
+                        )?,
+                    ),
+                    0,
+                );
+            }
+            let budget = super::compaction_budget::CompactionBudget::new(
+                crate::runtime::identity::CompactionOperationId::new(
+                    uuid::Uuid::now_v7().to_string(),
+                ),
+                self._monotonic_clock.clone(),
+            );
+            let operation = self.operation(budget, cancellation)?;
+            let result = operation.prepare()?.summarize(request, None).await;
+            operation.close().await;
+            result.map(|generation| generation.text)
+        })
     }
 
     /// The resolved invocation this summarizer sends with.
@@ -473,258 +561,86 @@ impl ModelBackedSummarizer {
 }
 
 impl ContextSummarizer for ModelBackedSummarizer {
-    #[allow(clippy::too_many_lines)] // one explicit summary stream/failure boundary
-    fn summarize(
+    fn bind_backend(&self, backend: Arc<dyn SummaryBackend>, resource_revision: u64) {
+        assert!(
+            self.backend.set((backend, resource_revision)).is_ok(),
+            "one native Summary backend per frozen model service"
+        );
+    }
+    fn has_backend(&self) -> bool {
+        self.backend.get().is_some()
+    }
+    fn operation(
         &self,
-        request: SummaryRequest,
+        budget: super::compaction_budget::CompactionBudget,
         cancellation: CancellationSignal,
-    ) -> BoxFuture<'_, Result<String, ContextError>> {
-        Box::pin(async move {
-            let input = request.model_input();
-            let model_request = ModelRequest {
-                continuation_source: None,
-                images: std::collections::BTreeMap::new(),
-                invocation: self.invocation.invocation_config(),
-                // The summarizer has a structurally canonical-only input
-                // boundary. Request-only execution-recovery context cannot
-                // be represented by `SummaryModelInput`, so it cannot be
-                // forwarded into a summary request accidentally.
-                messages: input.messages.clone().into(),
-                tools: Vec::new(),
-                // Summary generation is not an inbound Assistant turn: it never
-                // carries primary-step dynamic context. Agent Status is a
-                // primary-request User fact, and Skill guidance is a
-                // primary-request system section; neither belongs here.
-                effective_system_prompt: String::new(),
-                continuation: None,
-            };
-            // Summary dispatch has its own request-local deadline. It starts
-            // before the synchronous adapter dispatch and never uses the
-            // primary AgentCancellation authority.
-            let mut deadline = ModelRequestDeadline::new(
-                self.model_timeout_policy,
-                self.monotonic_clock.now_millis(),
-            );
-            // Summary generation is a model generation like any other: it can
-            // degenerate and it can stream past its output budget while
-            // remaining perfectly live. It gets the same provider-independent
-            // guard as the primary path, enforcing the policy the summary
-            // invocation itself resolves, and maps the result through this
-            // module's existing summary-failure boundary instead of entering
-            // generic model retry — exactly as the shared request deadline
-            // already does.
-            let mut guard = GenerationGuard::new(self.invocation.generation_safety_policy());
-            let mut stream = self
-                .invocation
-                .adapter()
-                .stream(model_request, cancellation.clone());
-            let mut text = String::new();
-            let mut state = SummaryStreamState::default();
-            let mut finish_reason = None;
-            loop {
-                let timeout_wait: BoxFuture<'static, ()> = match deadline.deadline_millis() {
-                    Some(deadline_millis) => {
-                        self.monotonic_clock.wait_until_millis(deadline_millis)
-                    }
-                    None => Box::pin(pending()),
-                };
-                let next = tokio::select! {
-                    biased;
-                    item = stream.next() => item,
-                    () = cancellation.cancelled() => {
-                        return Err(ContextError::new(
-                            ContextErrorKind::Cancelled,
-                            "summary generation cancelled",
-                        ));
-                    }
-                    () = timeout_wait => {
-                        drop(stream);
-                        return Err(summary_failed("summary generation timed out"));
-                    }
-                };
-                let Some(item) = next else {
-                    break;
-                };
-                // The shared state machine owns provider-item classification and
-                // phase transitions. Publication/compaction work never
-                // reaches this call and therefore cannot reset a deadline.
-                deadline.observe(&item, self.monotonic_clock.now_millis());
-                if let Some(failure) = guard.observe(&item) {
-                    drop(stream);
-                    return Err(summary_failed(&format!(
-                        "summary generation was discarded: {}",
-                        failure.message()
-                    )));
-                }
-                // Malformed canonical orderings are compaction failures,
-                // never silently folded into a canonical message.
-                state.accept(&item)?;
-                match item {
-                    ModelStreamItem::Progress(_) => {}
-                    ModelStreamItem::Event(event) => match event {
-                        ModelEvent::Started
-                        | ModelEvent::UsageUpdate { .. }
-                        | ModelEvent::ReasoningDelta { .. }
-                        | ModelEvent::ContinuationState { .. } => {}
-                        ModelEvent::TextDelta { text: delta, .. } => text.push_str(&delta),
-                        ModelEvent::RefusalDelta { .. } => {
-                            return Err(summary_failed("summary generation refused"));
-                        }
-                        ModelEvent::ToolCallStarted { .. }
-                        | ModelEvent::ToolCallArgumentsDelta { .. }
-                        | ModelEvent::ToolCallCompleted { .. } => {
-                            return Err(summary_failed(
-                                "summary generation must not request tools",
-                            ));
-                        }
-                        ModelEvent::Completed {
-                            finish_reason: reason,
-                            ..
-                        } => {
-                            finish_reason = Some(reason);
-                        }
-                        ModelEvent::Failed { error } => {
-                            return Err(match error.kind {
-                                crate::model::error::ModelErrorKind::Cancelled => {
-                                    ContextError::new(
-                                        ContextErrorKind::Cancelled,
-                                        "summary generation cancelled",
-                                    )
-                                }
-                                // The summary request itself did not fit the
-                                // summary model. This is not a dead end: it is
-                                // evidence that the planned span was estimated
-                                // too optimistically, and the pipeline replans
-                                // against a smaller budget.
-                                crate::model::error::ModelErrorKind::ContextWindowExceeded => {
-                                    ContextError::new(
-                                        ContextErrorKind::SummaryInputTooLarge,
-                                        format!(
-                                            "the summary request exceeded the summary model context window: {}",
-                                            error.message
-                                        ),
-                                    )
-                                }
-                                _ => summary_failed(&format!(
-                                    "summary generation failed: {}",
-                                    error.message
-                                )),
-                            });
-                        }
-                    },
-                }
-            }
-            if !state.terminal {
-                return Err(summary_failed(
-                    "summary stream ended without a terminal event",
-                ));
-            }
-            // The terminal finish reason is authoritative: a refusal with no
-            // `RefusalDelta` and a tool-call completion with no delta are
-            // still compaction failures, never summaries.
-            match finish_reason {
-                Some(crate::model::finish::ModelFinishReason::Refusal) => {
-                    return Err(summary_failed("summary generation refused"));
-                }
-                Some(crate::model::finish::ModelFinishReason::ToolCalls) => {
-                    return Err(summary_failed("summary generation must not request tools"));
-                }
-                // A summary truncated at the provider's token limit is not a
-                // summary: it replaces retired history with a sentence that
-                // stops mid-thought. The same fail-closed rule the Agent Loop
-                // applies before its canonical commit applies here, before
-                // compaction can commit this text.
-                Some(reason) => {
-                    if let Some(failure) = GenerationGuard::classify_completion(&reason) {
-                        return Err(summary_failed(&format!(
-                            "summary generation was discarded: {}",
-                            failure.message()
-                        )));
-                    }
-                }
-                None => {}
-            }
-            // An empty or whitespace-only output erases history; it is never
-            // a valid summary.
-            if text.trim().is_empty() {
-                return Err(summary_failed("summary generation produced no content"));
-            }
-            Ok(text)
-        })
+    ) -> Result<Box<dyn SummaryOperation>, ContextError> {
+        let (backend, revision) = self.backend.get().ok_or_else(|| {
+            ContextError::new(
+                ContextErrorKind::AuxiliaryNotStarted,
+                "Summary has no native execution owner",
+            )
+        })?;
+        backend.operation(
+            self.invocation.clone(),
+            self.model_timeout_policy,
+            *revision,
+            budget,
+            cancellation,
+        )
     }
 }
 
-fn summary_failed(message: &str) -> ContextError {
-    ContextError::new(ContextErrorKind::SummaryFailed, message)
-}
-
-/// The canonical stream state of one summary generation.
-///
-/// Malformed adapter streams must never become durable compaction
-/// summary messages: the summary stream must start with `Started` (or a bare
-/// terminal `Failed` for a request rejected before provider execution),
-/// `Started` occurs at most once, `Completed` requires `Started`, and no
-/// event follows the terminal event. Ephemeral progress is accepted only
-/// after `Started` and never changes the canonical state. This is the same
-/// canonical contract
-/// the agent loop enforces, kept provider-neutral and without recursing
-/// into `AgentExecution`.
-#[derive(Debug, Default)]
-struct SummaryStreamState {
-    started: bool,
-    terminal: bool,
-}
-
-impl SummaryStreamState {
-    /// Accepts one stream item, validating canonical event ordering while
-    /// keeping progress ephemeral.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ContextErrorKind::SummaryFailed`] for a malformed
-    /// ordering: content before `Started`, a duplicate `Started`,
-    /// `Completed` without `Started`, or any event after the terminal.
-    fn accept(&mut self, item: &ModelStreamItem) -> Result<(), ContextError> {
-        if self.terminal {
-            return Err(summary_failed(
-                "summary stream item after the terminal event",
-            ));
-        }
-        let ModelStreamItem::Event(event) = item else {
-            if self.started {
-                return Ok(());
-            }
-            return Err(summary_failed("summary stream progress before Started"));
-        };
-        match event {
-            ModelEvent::Started => {
-                if self.started {
-                    return Err(summary_failed("duplicate Started in the summary stream"));
-                }
-                self.started = true;
-                Ok(())
-            }
-            ModelEvent::Failed { .. } => {
-                self.terminal = true;
-                Ok(())
-            }
-            ModelEvent::Completed { .. } => {
-                if !self.started {
-                    return Err(summary_failed("summary stream Completed without Started"));
-                }
-                self.terminal = true;
-                Ok(())
-            }
-            _ => {
-                if !self.started {
-                    return Err(summary_failed("summary stream content before Started"));
-                }
-                Ok(())
-            }
+impl SummaryRequest {
+    /// Context owns the exact one-shot input; Runtime only executes the frozen value.
+    #[must_use]
+    pub fn model_request(&self, invocation: &ResolvedModelInvocation) -> ModelRequest {
+        ModelRequest {
+            continuation_source: None,
+            images: std::collections::BTreeMap::new(),
+            invocation: invocation.invocation_config(),
+            messages: self.model_input().messages.into(),
+            tools: Vec::new(),
+            effective_system_prompt: String::new(),
+            continuation: None,
         }
     }
 }
 
+/// Domain acceptance is independent of successful native execution and settlement.
+/// # Errors
+/// A refused or empty result cannot replace retired historical input.
+pub fn accept_summary(text: String, refused: bool) -> Result<String, ContextError> {
+    if refused {
+        return Err(ContextError::new(
+            ContextErrorKind::SummaryFailed,
+            "summary generation refused",
+        ));
+    }
+    if text.trim().is_empty() {
+        return Err(ContextError::new(
+            ContextErrorKind::SummaryFailed,
+            "summary generation produced no content",
+        ));
+    }
+    Ok(text)
+}
+
+/// Maps confirmed physical failure into the Summary domain without retrying it.
+#[must_use]
+pub fn summary_execution_failed(error: crate::model::ModelError) -> ContextError {
+    ContextError::new(
+        match error.kind {
+            crate::model::ModelErrorKind::Cancelled => ContextErrorKind::Cancelled,
+            crate::model::ModelErrorKind::ContextWindowExceeded => {
+                ContextErrorKind::SummaryInputTooLarge
+            }
+            crate::model::ModelErrorKind::Timeout => ContextErrorKind::AuxiliaryDeadlineExceeded,
+            _ => ContextErrorKind::SummaryFailed,
+        },
+        error.message,
+    )
+}
 #[cfg(test)]
 mod tests {
     use super::{ModelBackedSummarizer, SUMMARY_TOOL_RESULT_MAX_CHARS, SummaryRequest};

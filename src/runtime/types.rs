@@ -6,7 +6,7 @@
 //! types.
 
 use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -94,6 +94,11 @@ pub(crate) struct LifecycleAdmission {
     inner: Arc<LifecycleInner>,
 }
 
+pub(crate) enum NativeAdmissionRefusal {
+    Busy,
+    Closed(ConversationLifecycleState),
+}
+
 impl Drop for LifecycleAdmission {
     fn drop(&mut self) {
         self.inner.admissions.fetch_sub(1, Ordering::AcqRel);
@@ -129,6 +134,29 @@ impl Default for ConversationLifecycle {
 }
 
 impl ConversationLifecycle {
+    /// Nonblocking native registration, including when called under the
+    /// coordinator. A concurrent SQL-bearing legacy ownership commit cannot
+    /// park the coordinator behind its lifecycle boundary.
+    pub(crate) fn try_admit_running_commit<T>(
+        &self,
+        operation: impl FnOnce(LifecycleAdmission) -> T,
+    ) -> Result<T, NativeAdmissionRefusal> {
+        let _boundary = self
+            .inner
+            .commit_boundary
+            .try_lock()
+            .map_err(|_| NativeAdmissionRefusal::Busy)?;
+        let state = self.state();
+        if state != ConversationLifecycleState::Running {
+            return Err(NativeAdmissionRefusal::Closed(state));
+        }
+        self.inner.activity.fetch_add(1, Ordering::AcqRel);
+        self.inner.admissions.fetch_add(1, Ordering::AcqRel);
+        self.inner.changed.notify_waiters();
+        Ok(operation(LifecycleAdmission {
+            inner: self.inner.clone(),
+        }))
+    }
     /// Creates a fresh conversation lifecycle in the `Inactive` state.
     #[must_use]
     pub fn new() -> Self {
@@ -602,12 +630,13 @@ pub(crate) struct DurabilityFailure {
 ///
 /// - `ConversationRuntime` owns the durability *policy*: under the
 ///   coordinator lock it decides when a transient admission-cycle failure
-///   upgrades to the absorbing failure, and commits the fact here through
+///   upgrades to the absorbing failure, and requests the fact here through
 ///   [`DurabilityGate::commit_failure`] — the one mutation API. There is no
 ///   second failed-state authority anywhere: the coordinator keeps only
 ///   transient admission-cycle retry bookkeeping, and every reader
-///   (`submit_inbound`, `model_set`, attempt admission, the registries, the
-///   shutdown diagnostic, the observation) reads this one fact.
+///   reads this authority. A pending request immediately refuses later
+///   admission; the committed fact and its observation follow physical exit
+///   of an earlier ownership writer.
 /// - a new ownership commit holds the gate **across** its durable
 ///   ownership write and record publication — a failure that wins the gate
 ///   first makes the commit refuse (and its staged child roll back), while
@@ -619,15 +648,30 @@ pub(crate) struct DurabilityFailure {
 /// `DurabilityFailed` is deliberately not a lifecycle state: a degraded
 /// durable authority and a shutting-down runtime are different dimensions,
 /// and this gate keeps them separate.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub(crate) struct DurabilityGate {
     state: Mutex<DurabilityGateState>,
+    released: Condvar,
+    changed: tokio::sync::Notify,
+    publisher: OnceLock<Arc<dyn Fn(DurabilityFailure) + Send + Sync>>,
 }
 
 #[derive(Debug, Default)]
 struct DurabilityGateState {
     /// The one absorbing durability-failure fact, once committed.
     failure: Option<DurabilityFailure>,
+    /// A failure requested behind an already-authorized ownership commit.
+    /// It closes later admission but becomes the committed fact only on exit.
+    requested_failure: Option<DurabilityFailure>,
+    ownership_active: bool,
+}
+
+impl std::fmt::Debug for DurabilityGate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DurabilityGate")
+            .field("state", &self.state.lock().expect("durability gate lock"))
+            .finish_non_exhaustive()
+    }
 }
 
 impl DurabilityGate {
@@ -637,18 +681,34 @@ impl DurabilityGate {
         Self::default()
     }
 
-    /// Commits the absorbing `DurabilityFailed` fact — the **only** mutation
-    /// API of the failure authority.
+    pub(crate) fn install_failure_publisher(
+        &self,
+        publisher: Arc<dyn Fn(DurabilityFailure) + Send + Sync>,
+    ) {
+        assert!(
+            self.publisher.set(publisher).is_ok(),
+            "one native durability publisher"
+        );
+    }
+
+    fn publish(&self, failure: DurabilityFailure) {
+        self.released.notify_all();
+        self.changed.notify_waiters();
+        if let Some(publisher) = self.publisher.get() {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| publisher(failure)));
+        }
+    }
+
+    /// Requests the absorbing failure through the one mutation API.
     ///
     /// The first commit is absorbing: a later call never replaces the stored
     /// operation/diagnostic and never publishes a second fact. The returned
     /// [`DurabilityFailureCommit`] tells the caller mechanically whether
     /// THIS call installed the absorbing winner and carries the
-    /// authoritative [`DurabilityFailure`] either way. Called by the owning
-    /// runtime's durability-failure commit under the coordinator lock. New
-    /// ownership commits serialize on this same gate, so this acquisition is
-    /// the linearization point against any new conversation-owned durable
-    /// ownership commit.
+    /// authoritative [`DurabilityFailure`] in every case. This short call may
+    /// run under the coordinator; it never waits for an ownership writer's
+    /// SQL. If a writer won first, its permission drop commits and publishes
+    /// the pending winner after the write and native record publication exit.
     pub(crate) fn commit_failure(
         &self,
         operation: DurableOperation,
@@ -660,11 +720,23 @@ impl DurabilityGate {
             // rewritten by a later one.
             return DurabilityFailureCommit::AlreadyFailed(failure.clone());
         }
+        if let Some(failure) = &state.requested_failure {
+            return DurabilityFailureCommit::Pending(failure.clone());
+        }
         let failure = DurabilityFailure {
             operation,
             diagnostic,
         };
+        if state.ownership_active {
+            state.requested_failure = Some(failure.clone());
+            drop(state);
+            self.changed.notify_waiters();
+            self.released.notify_all();
+            return DurabilityFailureCommit::Pending(failure);
+        }
         state.failure = Some(failure.clone());
+        drop(state);
+        self.publish(failure.clone());
         DurabilityFailureCommit::Committed(failure)
     }
 
@@ -678,53 +750,108 @@ impl DurabilityGate {
             .clone()
     }
 
-    /// Whether the runtime committed the absorbing `DurabilityFailed` fact.
+    /// Whether a committed or pending failure closes new admission.
     pub(crate) fn is_failed(&self) -> bool {
-        self.state
-            .lock()
-            .expect("durability gate lock poisoned")
+        self.with_healthy_commit(|| ()).is_err()
+    }
+
+    /// Pending failure closes new work without claiming an earlier commit exited.
+    pub(crate) fn admission_failure(&self) -> Option<DurabilityFailure> {
+        let state = self.state.lock().expect("durability gate lock poisoned");
+        state
             .failure
-            .is_some()
+            .as_ref()
+            .or(state.requested_failure.as_ref())
+            .cloned()
     }
 
     /// Idle claims cannot wait behind another subsystem's durable write.
     pub(crate) fn healthy_for_idle_claim(&self) -> bool {
-        self.state
-            .try_lock()
-            .is_ok_and(|state| state.failure.is_none())
+        self.state.try_lock().is_ok_and(|state| {
+            state.failure.is_none() && state.requested_failure.is_none() && !state.ownership_active
+        })
+    }
+
+    /// One short native admission/dispatch decision, serialized with failure
+    /// requests. The closure must not wait, write SQL or call the coordinator.
+    pub(crate) fn with_healthy_commit<T>(
+        &self,
+        commit: impl FnOnce() -> T,
+    ) -> Result<T, OwnershipCommitRefused> {
+        let state = self.state.lock().expect("durability gate lock poisoned");
+        if let Some(failure) = state.failure.as_ref().or(state.requested_failure.as_ref()) {
+            return Err(OwnershipCommitRefused {
+                diagnostic: failure.diagnostic.clone(),
+            });
+        }
+        Ok(commit())
     }
 
     /// Acquires the ownership-commit permission for one new
     /// conversation-owned durable ownership commit.
     ///
     /// The returned guard must be held across the ownership durable write
-    /// and (for the registries) the record publication: while it is held,
-    /// the `DurabilityFailed` commit blocks on the same gate, so the two
-    /// operations have one total order and no check-then-write window
-    /// exists. Returns [`OwnershipCommitRefused`] when the owning runtime
-    /// already committed `DurabilityFailed`.
+    /// and native record publication. A later failure request closes new
+    /// work immediately and publishes only after this permission exits.
+    /// Call only from a blocking worker or synchronous fixture, outside
+    /// coordinator and registry locks. Async callers await the other entry.
+    #[cfg(test)]
     pub(crate) fn enter_ownership_commit(
-        &self,
-    ) -> Result<OwnershipCommitGuard<'_>, OwnershipCommitRefused> {
-        let state = self.state.lock().expect("durability gate lock poisoned");
-        if let Some(failure) = &state.failure {
-            return Err(OwnershipCommitRefused {
-                diagnostic: failure.diagnostic.clone(),
-            });
+        self: &Arc<Self>,
+    ) -> Result<OwnershipCommitGuard, OwnershipCommitRefused> {
+        let mut state = self.state.lock().expect("durability gate lock poisoned");
+        loop {
+            if let Some(failure) = state.failure.as_ref().or(state.requested_failure.as_ref()) {
+                return Err(OwnershipCommitRefused {
+                    diagnostic: failure.diagnostic.clone(),
+                });
+            }
+            if !state.ownership_active {
+                state.ownership_active = true;
+                return Ok(OwnershipCommitGuard { gate: self.clone() });
+            }
+            state = self
+                .released
+                .wait(state)
+                .expect("durability gate lock poisoned");
         }
-        Ok(OwnershipCommitGuard { _gate: state })
+    }
+
+    /// Waits outside coordinator/registry locks without occupying a Tokio worker.
+    pub(crate) async fn enter_ownership_commit_async(
+        self: &Arc<Self>,
+    ) -> Result<OwnershipCommitGuard, OwnershipCommitRefused> {
+        loop {
+            let changed = self.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            {
+                let mut state = self.state.lock().expect("durability gate lock poisoned");
+                if let Some(failure) = state.failure.as_ref().or(state.requested_failure.as_ref()) {
+                    return Err(OwnershipCommitRefused {
+                        diagnostic: failure.diagnostic.clone(),
+                    });
+                }
+                if !state.ownership_active {
+                    state.ownership_active = true;
+                    return Ok(OwnershipCommitGuard { gate: self.clone() });
+                }
+            }
+            changed.await;
+        }
     }
 }
 
 /// The outcome of one [`DurabilityGate::commit_failure`] call.
 ///
-/// Both variants carry the one authoritative [`DurabilityFailure`]: the
-/// absorbing stored fact. The caller learns mechanically whether THIS call
-/// installed the fact ([`Self::Committed`]) or arrived after an earlier
-/// winner ([`Self::AlreadyFailed`]) and must not publish a second
-/// observation.
+/// Each variant carries the absorbing winner. A pending winner refuses new
+/// admission but does not claim that an earlier writer exited. The gate's
+/// one publisher emits the observation when the fact becomes committed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DurabilityFailureCommit {
+    /// An earlier ownership commit retains its permission until physical exit;
+    /// later admission is closed and failure publication follows that exit.
+    Pending(DurabilityFailure),
     /// This call installed the first (absorbing) failure fact.
     Committed(DurabilityFailure),
     /// The runtime had already committed its absorbing failure fact; the
@@ -738,8 +865,29 @@ pub(crate) enum DurabilityFailureCommit {
 /// Held across the ownership durable write and record publication, it is
 /// what gives the `DurabilityFailed` commit and the ownership commit one
 /// deterministic total order on the [`DurabilityGate`].
-pub(crate) struct OwnershipCommitGuard<'a> {
-    _gate: MutexGuard<'a, DurabilityGateState>,
+pub(crate) struct OwnershipCommitGuard {
+    gate: Arc<DurabilityGate>,
+}
+
+impl Drop for OwnershipCommitGuard {
+    fn drop(&mut self) {
+        let mut state = self
+            .gate
+            .state
+            .lock()
+            .expect("durability gate lock poisoned");
+        state.ownership_active = false;
+        let failure = state.requested_failure.take();
+        if let Some(failure) = &failure {
+            state.failure = Some(failure.clone());
+        }
+        drop(state);
+        self.gate.released.notify_all();
+        self.gate.changed.notify_waiters();
+        if let Some(failure) = failure {
+            self.gate.publish(failure);
+        }
+    }
 }
 
 /// A new conversation-owned durable ownership commit refused because the
@@ -953,6 +1101,8 @@ impl RuntimeClock for SystemClock {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::{
         CancellationReason, ConversationLifecycle, ConversationLifecycleState,
         DurabilityFailureCommit, DurabilityGate, DurableOperation, RuntimeClock, RuntimeError,
@@ -1078,7 +1228,7 @@ mod tests {
     /// and never rewrites the stored one.
     #[test]
     fn durability_failure_commit_first_wins_and_never_rewrites() {
-        let gate = DurabilityGate::new();
+        let gate = Arc::new(DurabilityGate::new());
         assert!(!gate.is_failed(), "a fresh gate is healthy");
 
         let first = gate.commit_failure(
@@ -1120,5 +1270,51 @@ mod tests {
             Some(&committed),
             "the stored fact is still the first absorbing one"
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn ownership_exit_commits_pending_failure_without_parking_the_coordinator() {
+        let gate = Arc::new(DurabilityGate::new());
+        let (published, received) = std::sync::mpsc::channel();
+        gate.install_failure_publisher(Arc::new(move |failure| {
+            published.send(failure).unwrap();
+        }));
+        let ownership = gate.enter_ownership_commit().unwrap();
+        let mut next = Box::pin(gate.enter_ownership_commit_async());
+        assert!(futures_util::poll!(next.as_mut()).is_pending());
+        let result = gate.commit_failure(DurableOperation::EventJournal, "pending failure".into());
+        assert!(matches!(result, DurabilityFailureCommit::Pending(_)));
+        assert!(
+            gate.failure().is_none(),
+            "an earlier ownership write has not exited"
+        );
+        assert!(
+            gate.admission_failure().is_some(),
+            "later admission is closed immediately"
+        );
+        assert!(received.try_recv().is_err());
+        assert!(
+            next.await.is_err(),
+            "a pending failure refuses new ownership without waiting for SQL"
+        );
+        drop(ownership);
+        assert_eq!(received.try_recv().unwrap().diagnostic, "pending failure");
+        assert!(gate.failure().is_some());
+        assert!(
+            received.try_recv().is_err(),
+            "the absorbing failure publishes once"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn asynchronous_ownership_wait_wakes_after_physical_owner_exit() {
+        let gate = Arc::new(DurabilityGate::new());
+        let ownership = gate.enter_ownership_commit().unwrap();
+        let mut next = Box::pin(gate.enter_ownership_commit_async());
+        assert!(futures_util::poll!(next.as_mut()).is_pending());
+        tokio::task::yield_now().await;
+        drop(ownership);
+        assert!(next.await.is_ok());
+        assert!(!gate.is_failed());
     }
 }
