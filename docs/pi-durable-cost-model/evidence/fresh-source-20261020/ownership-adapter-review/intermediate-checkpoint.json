@@ -1,0 +1,13 @@
+{
+  "utc": "2026-10-20T08:08:28.735161+00:00",
+  "free_bytes": 8166916096,
+  "free_gib": 7.6060333251953125,
+  "combined_9_25_gib_shortfall": 1.6439666748046875,
+  "cache_file_reclaim_bytes": 143839232,
+  "cache_reclaim_gib_with_dirs": 0.13412857055664062,
+  "tmp_incremental_unique_bytes": 5810524160,
+  "tmp_incremental_unique_gib": 5.411472320556641,
+  "tmp_incremental_paths": 520,
+  "tmp_incremental_persistent_reclaim": 0,
+  "no_deletions": true
+}

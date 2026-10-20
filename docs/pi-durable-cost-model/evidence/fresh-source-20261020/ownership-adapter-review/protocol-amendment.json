@@ -1,0 +1,19 @@
+{
+  "code_review_commit": "d9c31a37d38344db984ff0a76222a9a0b4378dd1",
+  "executed": false,
+  "candidate_source": "1dfdf7e53bf20e1869099578b8f41c434e275961",
+  "ordinary_product_required": true,
+  "unit_or_O0_substitution": false,
+  "original_proposed_combined_envelope_GiB": 9.25,
+  "no_implicit_stage_cleanup": true,
+  "unchanged_legacy_cohort_entry_GiB": 16,
+  "effective_no_cleanup_combined_entry_GiB": 18,
+  "explanation": "No guardrail lowered. The old wrapper 16 GiB per-product entry is retained; with 2 GiB build cap the executable adapter requires 18 GiB before build, 16 before cohort. 9.25 is only the earlier lower proposal envelope, already unreachable via safe caches here. Changing this policy requires explicit separate review.",
+  "schedule": "One candidate-mode invocation schedules live short-small/short-large (12 products) then no-live short-large (6), same frozen compare-revisions driver; one shared 30-minute watchdog. AB/BA/AB is 2:1 order-imbalanced, exploratory n=3 only.",
+  "incomplete": "18*180s may exceed 30 minutes; stop, retain incomplete cohort, no replacements/retries.",
+  "failure": "First unaccepted controller product or failing node compare-http result stops before any subsequent product/pair; original failure artifacts retained.",
+  "watchdog": "Build cap60m, product180s, combined cohort30m; disk .5s free and allocated blocks. 6GiB soft/5GiB hard; build2GiB growth, cohort.75GiB evidence+.25GiB tmp. Memory anon+shmem>=limit-2GiB for3s or full PSI avg10>=10% for5s or newOOM => TERM owned PID/start/group scopes then KILL after2s; observer error fails closed.",
+  "helpers": "Existing variant-specific helper/shared-library restoration and hashes remain outside controller.run, per sample.",
+  "workload_driver_sha256": "67b8f207f2e61348b84c0bc7fc190c6f40855abc45a0aaf177ed523e7df27c08",
+  "tests": "8 mock-only tests passed; no cargo/native product/provider/browser executed. Original immutable driver ResourceWarnings retained."
+}

@@ -1,0 +1,61 @@
+test_first_product_oracle_failure_stops_before_second_product (test_ownership_adapter.AdapterTests.test_first_product_oracle_failure_stops_before_second_product) ... usage: compare-revisions.py [-h] --before BEFORE --after AFTER --output OUTPUT
+                            [--pairs PAIRS] [--case {short-large}]
+                            [--pair-offset PAIR_OFFSET]
+compare-revisions.py: error: unrecognized arguments: --observer-mode live-subscriber
+ERROR
+test_first_pair_oracle_failure_stops_before_next_pair (test_ownership_adapter.AdapterTests.test_first_pair_oracle_failure_stops_before_next_pair) ... usage: compare-revisions.py [-h] --before BEFORE --after AFTER --output OUTPUT
+                            [--pairs PAIRS] [--case {short-large}]
+                            [--pair-offset PAIR_OFFSET]
+compare-revisions.py: error: unrecognized arguments: --observer-mode live-subscriber
+ERROR
+
+======================================================================
+ERROR: test_first_product_oracle_failure_stops_before_second_product (test_ownership_adapter.AdapterTests.test_first_product_oracle_failure_stops_before_second_product)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/pr485-study/native-evidence-public/docs/pi-durable-cost-model/evidence/fresh-source-20261020/test_ownership_adapter.py", line 77, in test_first_product_oracle_failure_stops_before_second_product
+    calls, out = self.compare_script(fail_product=True)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/pr485-study/native-evidence-public/docs/pi-durable-cost-model/evidence/fresh-source-20261020/test_ownership_adapter.py", line 73, in compare_script
+    runpy.run_path(str(script), run_name='__main__')
+  File "<frozen runpy>", line 287, in run_path
+  File "<frozen runpy>", line 98, in _run_module_code
+  File "<frozen runpy>", line 88, in _run_code
+  File "/workspace/pr485-study/native-evidence-public/benchmarks/runtime/compare-revisions.py", line 14, in <module>
+    p.add_argument('--case',choices=CASES,action='append');p.add_argument('--pair-offset',type=int,default=0);args=p.parse_args()
+                                                                                                                   ^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/argparse.py", line 1908, in parse_args
+    self.error(msg)
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/argparse.py", line 2650, in error
+    self.exit(2, _('%(prog)s: error: %(message)s\n') % args)
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/argparse.py", line 2637, in exit
+    _sys.exit(status)
+SystemExit: 2
+
+======================================================================
+ERROR: test_first_pair_oracle_failure_stops_before_next_pair (test_ownership_adapter.AdapterTests.test_first_pair_oracle_failure_stops_before_next_pair)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/pr485-study/native-evidence-public/docs/pi-durable-cost-model/evidence/fresh-source-20261020/test_ownership_adapter.py", line 82, in test_first_pair_oracle_failure_stops_before_next_pair
+    calls, out = self.compare_script(fail_comparison=True)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/pr485-study/native-evidence-public/docs/pi-durable-cost-model/evidence/fresh-source-20261020/test_ownership_adapter.py", line 73, in compare_script
+    runpy.run_path(str(script), run_name='__main__')
+  File "<frozen runpy>", line 287, in run_path
+  File "<frozen runpy>", line 98, in _run_module_code
+  File "<frozen runpy>", line 88, in _run_code
+  File "/workspace/pr485-study/native-evidence-public/benchmarks/runtime/compare-revisions.py", line 14, in <module>
+    p.add_argument('--case',choices=CASES,action='append');p.add_argument('--pair-offset',type=int,default=0);args=p.parse_args()
+                                                                                                                   ^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/argparse.py", line 1908, in parse_args
+    self.error(msg)
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/argparse.py", line 2650, in error
+    self.exit(2, _('%(prog)s: error: %(message)s\n') % args)
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/argparse.py", line 2637, in exit
+    _sys.exit(status)
+SystemExit: 2
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.009s
+
+FAILED (errors=2)

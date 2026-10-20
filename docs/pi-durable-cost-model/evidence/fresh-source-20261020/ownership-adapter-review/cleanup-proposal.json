@@ -1,0 +1,50 @@
+{
+  "utc": "2026-10-20T08:10:14.360695+00:00",
+  "status": "PROPOSAL ONLY: no deletion/build/measurement",
+  "free_bytes": 8166801408,
+  "candidates": [
+    {
+      "path": "/workspace/pr485-study/xdg-cache/pnpm",
+      "file_allocated_bytes": 126705664,
+      "directory_blocks_upper_bound": 172032,
+      "reclaim_estimate_bytes": 126877696,
+      "classification": "task-owned regenerable cache; optional approval only, not executed",
+      "reproducibility": "Retain Node 24.19.0, JS/package content, frozen pnpm lockfile, corepack/pnpm store/node_modules. Cache behavior can regenerate; registry response bytes and bytecode cache bytes are not promised byte-identical."
+    },
+    {
+      "path": "/workspace/pr485-study/tmp/node-compile-cache",
+      "file_allocated_bytes": 17133568,
+      "directory_blocks_upper_bound": 8192,
+      "reclaim_estimate_bytes": 17141760,
+      "classification": "task-owned regenerable cache; optional approval only, not executed",
+      "reproducibility": "Retain Node 24.19.0, JS/package content, frozen pnpm lockfile, corepack/pnpm store/node_modules. Cache behavior can regenerate; registry response bytes and bytecode cache bytes are not promised byte-identical."
+    }
+  ],
+  "safe_persistent_reclaim_upper_bound_bytes": 144019456,
+  "after_optional_cleanup_bytes_upper_bound": 8310820864,
+  "combined_9_25_GiB_gap_bytes": 1765310464,
+  "gap_after_optional_caches_bytes": 1621291008,
+  "can_meet_combined_envelope": false,
+  "can_meet_8_GiB_build_entry": false,
+  "tmpfs_intermediate": {
+    "path": "/tmp/pr485-metadata-correctness-incremental",
+    "unique_allocated_bytes": 5810524160,
+    "persistent_reclaim_bytes": 0,
+    "classification": "reproducible Rust compiler incremental intermediate; optional RAM/tmpfs cleanup requires separate exact-path approval; retain all O3/O0 binaries, source, extern rlibs and commands"
+  },
+  "excluded": {
+    "protected": "All baseline/geometry/scoped bundles, three ownership unit binaries, Source worktrees, raw failures/products, private diagnostic evidence, published archives, Cargo registry/target dependency artifacts; no artifact/source deletion or deduplication",
+    "tool_and_package_caches": "node-gyp, corepack and pnpm-store retained. All previously counted auxiliary caches together were only about 0.30 GiB anyway; shared pnpm hardlinks cannot be counted as reclaimable file bytes.",
+    "lower_layers": "Do not claim preloaded /workspace/rustX/target lower-layer bytes as reclaim; no broad prune or Docker changes"
+  },
+  "retain_for_reproduction": [
+    "623b41b869a95c888eb04f907cbf607232699a2f",
+    "1dfdf7e53bf20e1869099578b8f41c434e275961",
+    "90b353801c69b553f2293134d334e9bccd5fce84",
+    "all source/Cargo lock/toolchain and frozen workload/oracle files",
+    "all 65 protected files listed in prior evidence plus original d07 O3 and both O0 unit binaries",
+    "all raw failure/success outputs and command/environment/Source/binary identities",
+    "shared target dependencies, Cargo sources, pinned Node/pnpm tool and installed JS packages"
+  ],
+  "approval_needed": "If opportunistic cache reclaim is desired, approve only the two listed /workspace directories after inode/hash/idle recheck. It cannot unlock either construction or full cohort, so recommendation is no persistent cleanup now. An optional /tmp incremental-cache approval frees RAM/tmpfs only, not the disk envelope. No source/artifact deletion requested."
+}

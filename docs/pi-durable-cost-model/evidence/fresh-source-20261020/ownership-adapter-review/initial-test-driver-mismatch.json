@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "python3",
+    "-m",
+    "unittest",
+    "test_ownership_adapter.AdapterTests.test_first_product_oracle_failure_stops_before_second_product",
+    "test_ownership_adapter.AdapterTests.test_first_pair_oracle_failure_stops_before_next_pair",
+    "-v"
+  ],
+  "exit": 1,
+  "diagnosis": "Test pointed at old evidence-branch root driver lacking observer mode; production wrapper uses current task runtime. Pin identical current driver fixture; workload implementation remains unchanged."
+}

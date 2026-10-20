@@ -1,0 +1,16 @@
+{
+  "utc": "2026-10-20T08:07:42.369528+00:00",
+  "argv": [
+    "python3",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "docs/pi-durable-cost-model/evidence/fresh-source-20261020",
+    "-p",
+    "test_ownership_adapter.py",
+    "-v"
+  ],
+  "exit": 0,
+  "scope": "8 mock-only metadata/unchanged-driver integration/process-watchdog tests; no Cargo or native benchmark invoked"
+}

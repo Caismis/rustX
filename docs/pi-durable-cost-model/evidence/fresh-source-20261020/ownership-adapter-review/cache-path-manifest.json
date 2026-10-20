@@ -1,0 +1,5154 @@
+[
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/lockfile-verified.jsonl",
+    "bytes": 972,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 820638,
+    "sha256": "6c935fd5ce800e03a3f331297b67c33c01e43f11d8cb98e1a9dee4fa6c1c865b"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/aria-query.jsonl",
+    "bytes": 41679,
+    "allocated_bytes": 45056,
+    "dev": 27,
+    "inode": 800559,
+    "sha256": "b7c2e84e4d99a16657011edde64670958e74b6df60337c7aa5cb0758f826bdec"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/fontkit.jsonl",
+    "bytes": 48571,
+    "allocated_bytes": 49152,
+    "dev": 27,
+    "inode": 801921,
+    "sha256": "11f16ae315979e8e48c1130a2cb5aeddbd16ffb42add535e2c7473d7aeaa9bd2"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/unicode-properties.jsonl",
+    "bytes": 15275,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 820455,
+    "sha256": "0bc9a0ffa0af8f1a2a437dc230f727717609e626dddf716c9538882119cf85cb"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/property-information.jsonl",
+    "bytes": 53590,
+    "allocated_bytes": 57344,
+    "dev": 27,
+    "inode": 818395,
+    "sha256": "63c68f0508e98588400cbc4704d14c9ca86f833dd2ef6a8e37a1b76187563a0a"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/debug.jsonl",
+    "bytes": 75665,
+    "allocated_bytes": 77824,
+    "dev": 27,
+    "inode": 800591,
+    "sha256": "d26f776c2e1fcf0b0aee8df72cb18bee6f81ac672517678802f4970a64063762"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/saxes.jsonl",
+    "bytes": 55940,
+    "allocated_bytes": 57344,
+    "dev": 27,
+    "inode": 818420,
+    "sha256": "6413d0e536587d148f72b90b7f2102c33372c6872943746a0421e2ea6feb055a"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/hast-util-whitespace.jsonl",
+    "bytes": 12031,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 801916,
+    "sha256": "38571f99a32ce1e137e25b10b5b8959c067ec611dca367746707faccc321d875"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/brotli.jsonl",
+    "bytes": 7429,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 800566,
+    "sha256": "01cb73ea78f357567f019dbb74eaaa94561f0a73039b51c596a105de760d99c6"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/postcss.jsonl",
+    "bytes": 360753,
+    "allocated_bytes": 364544,
+    "dev": 27,
+    "inode": 818400,
+    "sha256": "4d8500c018306b567abd51987b6749dafab185ee003e16959ad7d9157ac5412a"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/fast-xml-builder.jsonl",
+    "bytes": 16465,
+    "allocated_bytes": 20480,
+    "dev": 27,
+    "inode": 801897,
+    "sha256": "103a8b9c80eeebeb3b8029181dcf82b7e843f3ff8734c4e5c81a9fcd01e2243f"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/micromark-extension-gfm-table.jsonl",
+    "bytes": 30173,
+    "allocated_bytes": 32768,
+    "dev": 27,
+    "inode": 811995,
+    "sha256": "537f4c670994ac0b7f09559bed5593dd9f79091cd72867a438f18a9cafcaa88c"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/mdast-util-find-and-replace.jsonl",
+    "bytes": 21472,
+    "allocated_bytes": 24576,
+    "dev": 27,
+    "inode": 808561,
+    "sha256": "209575acdf02c3c1339e80f2ff055a07ec11c450d16184bc51bf3b0264ffb493"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/unicode-trie.jsonl",
+    "bytes": 7647,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 820538,
+    "sha256": "8005f1d8a37c88112ba98ff0983c4a1d99bbe2e527a98d25f261a8cd20f7a693"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/mdast-util-gfm-task-list-item.jsonl",
+    "bytes": 20315,
+    "allocated_bytes": 20480,
+    "dev": 27,
+    "inode": 810119,
+    "sha256": "868b59feb1d4e0f564d8011b4ddb0dc1972834bff59ea8f429ed4ead4676300a"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/buffer-indexof-polyfill.jsonl",
+    "bytes": 2964,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 800575,
+    "sha256": "9c85567396627c01cdcc044f4c34f2437f8de49b028e3bb3b7795b7488927904"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/koffi.jsonl",
+    "bytes": 338996,
+    "allocated_bytes": 339968,
+    "dev": 27,
+    "inode": 801940,
+    "sha256": "30a6b3e98addaad5039dfe35c1a25704e41b256fd40b462f413a3f18dd606116"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/dayjs.jsonl",
+    "bytes": 264095,
+    "allocated_bytes": 266240,
+    "dev": 27,
+    "inode": 800593,
+    "sha256": "f962810549aacfb03232c9a1c1a194593d496a3697edaaff9f12a05e65e018a0"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/whatwg-url.jsonl",
+    "bytes": 74732,
+    "allocated_bytes": 77824,
+    "dev": 27,
+    "inode": 820626,
+    "sha256": "5158a7877208e82cc42c7c0f17b5269b3f6477262249914d043fd2cd0a94cc8e"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/xml-naming.jsonl",
+    "bytes": 2186,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 820628,
+    "sha256": "c7874d9a88f7a51cf4d2b58b279e47ee41a9e4b11eb77909edebab9fc59101a4"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/lightningcss-linux-arm64-gnu.jsonl",
+    "bytes": 39688,
+    "allocated_bytes": 40960,
+    "dev": 27,
+    "inode": 801947,
+    "sha256": "33eecae99d1ba442716e49865bac5c55d6071fadbeb1a2569311fef020eb00a5"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/micromark-extension-gfm-footnote.jsonl",
+    "bytes": 15308,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 811303,
+    "sha256": "bfdbcdafff126cf0a18696e8203ab933944c79a2b5c20835684a8256df68c705"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/character-entities-html4.jsonl",
+    "bytes": 11915,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 800576,
+    "sha256": "8eb556206774cb26d6b34ead22e641cd78c240308f01fa27eb4c7043166d252f"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/mkdirp.jsonl",
+    "bytes": 49505,
+    "allocated_bytes": 53248,
+    "dev": 27,
+    "inode": 815325,
+    "sha256": "21c022a784293a432c9c6aee1fb7d1e807ee10a6662d34067ce8ca2a9680248f"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/glob.jsonl",
+    "bytes": 199282,
+    "allocated_bytes": 200704,
+    "dev": 27,
+    "inode": 801920,
+    "sha256": "f4de7119e8b2ac260d7806d94b1213c06829dbe200c316a035e05b86dd7acb05"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/ansi-styles.jsonl",
+    "bytes": 30801,
+    "allocated_bytes": 32768,
+    "dev": 27,
+    "inode": 800557,
+    "sha256": "7cc0c0ba54b60ba846a8edf56cc3e05b217ec68b2cf6f956afc061b5463c26d9"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/micromark-factory-title.jsonl",
+    "bytes": 14516,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 813902,
+    "sha256": "52bdc9229c62b60916a84b68a8ff50ab6ad15fffc8aa3eca8c669149ece0dbb6"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/immediate.jsonl",
+    "bytes": 20532,
+    "allocated_bytes": 24576,
+    "dev": 27,
+    "inode": 801937,
+    "sha256": "bf4e1772e624847f11c9f8f0379f58213c2c3640f26464d118e552c25b04d57e"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/restructure.jsonl",
+    "bytes": 22198,
+    "allocated_bytes": 24576,
+    "dev": 27,
+    "inode": 818417,
+    "sha256": "abefcd23748aae3613f9892b4089f19282c22efcf502059acb311089813be6a5"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/scheduler.jsonl",
+    "bytes": 2781108,
+    "allocated_bytes": 2781184,
+    "dev": 27,
+    "inode": 818712,
+    "sha256": "1c4e80c41ecaa9c0d7edc41a178c343910062d8e28423ca8ef77c4bf540ad2f1"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/oniguruma-to-es.jsonl",
+    "bytes": 26389,
+    "allocated_bytes": 28672,
+    "dev": 27,
+    "inode": 818357,
+    "sha256": "e23394b231e3eb3b32bdc7dfc792983a67755cb8e51b21c6378762eac1f1577c"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/micromark-util-encode.jsonl",
+    "bytes": 12059,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 812802,
+    "sha256": "0626d05577af8a79f29e17e8f7fbd04b8ee4635ac69737a8174792a1d9421d53"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/decimal.js.jsonl",
+    "bytes": 36504,
+    "allocated_bytes": 36864,
+    "dev": 27,
+    "inode": 800590,
+    "sha256": "ada7bc85fc1cd8fe45c664e7ee900e983d9514053dfe004b9b081818fa08d6c3"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/unist-util-visit.jsonl",
+    "bytes": 34098,
+    "allocated_bytes": 36864,
+    "dev": 27,
+    "inode": 820509,
+    "sha256": "dacd28f94bbcc3f59ab4b9c7ab851bd9c2f899895126c17b502c2761e8ef4477"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/parse5.jsonl",
+    "bytes": 45845,
+    "allocated_bytes": 49152,
+    "dev": 27,
+    "inode": 818364,
+    "sha256": "e581a2707565e236890b1088ace44aec347aca7f99a2ef5878d69f72fb7f9231"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/lodash.jsonl",
+    "bytes": 69643,
+    "allocated_bytes": 73728,
+    "dev": 27,
+    "inode": 808539,
+    "sha256": "418509df3ffe3e541679320ef9b56606ce78f4a7af39a8dba2abba193a9f53a2"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/trim-lines.jsonl",
+    "bytes": 11665,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 820107,
+    "sha256": "0d1a13a34c6ab703ce83cb6ae90ac7bae701a4495ae3793a9f6e47d182d31f17"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/vite.jsonl",
+    "bytes": 2333332,
+    "allocated_bytes": 2334720,
+    "dev": 27,
+    "inode": 820619,
+    "sha256": "9fbdd90dc6a2df282b8980f02633f241559a4591b3b1290be5dc6698a3a02aea"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/graceful-fs.jsonl",
+    "bytes": 59287,
+    "allocated_bytes": 61440,
+    "dev": 27,
+    "inode": 801919,
+    "sha256": "af0dca2baff23096c5c3bb6ebba67eb08fbc39d8e0a517a09829537bb166ce92"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/bessel.jsonl",
+    "bytes": 2829,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 800570,
+    "sha256": "f7cf15275a896065a9971d74156b80b1e65f20f3b2cfba6ed0c30a110febe717"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/regex.jsonl",
+    "bytes": 18590,
+    "allocated_bytes": 20480,
+    "dev": 27,
+    "inode": 818409,
+    "sha256": "6fafdf2b6634897d9e7354db7a9c2ddea89c413ff6d964428b125e7646c04689"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/exceljs.jsonl",
+    "bytes": 244286,
+    "allocated_bytes": 245760,
+    "dev": 27,
+    "inode": 801906,
+    "sha256": "56e02138bf88ce34013f8d541453deb61c758b0050ae6c4660d7e2443f44dbbf"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/character-entities-legacy.jsonl",
+    "bytes": 11941,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 800577,
+    "sha256": "a665a91a0539abfcbb1b7dc22d94d8059a94530e2a1b344b5c3057a6eb346dfd"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/big-integer.jsonl",
+    "bytes": 85630,
+    "allocated_bytes": 86016,
+    "dev": 27,
+    "inode": 800581,
+    "sha256": "d6acc63e7588a29412d642bf53a05df0b32199c0a4c4d212391ad707d9f45da8"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/detect-libc.jsonl",
+    "bytes": 17751,
+    "allocated_bytes": 20480,
+    "dev": 27,
+    "inode": 800617,
+    "sha256": "f396bf6b42f73e0bade7795458cb9d0d9e22375ceb879bac6de1dcf806207e84"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/tldts-core.jsonl",
+    "bytes": 1338631,
+    "allocated_bytes": 1339392,
+    "dev": 27,
+    "inode": 820618,
+    "sha256": "a8cd37a46c51c63ef397f0e11b82c669b911b1cf5739adce25002607796a3203"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/inflight.jsonl",
+    "bytes": 5572,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 801926,
+    "sha256": "d078a6976b4406f8c315f51bb64a99722460eba2ef7688f1c7a3e67da12d92ed"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/balanced-match.jsonl",
+    "bytes": 14493,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 800562,
+    "sha256": "101544e29040745391efe06a1189e8f73d09e011ed8d6ca56dd4d395bb4cd72e"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/numeral.jsonl",
+    "bytes": 21593,
+    "allocated_bytes": 24576,
+    "dev": 27,
+    "inode": 817716,
+    "sha256": "291ea9df4dbe4ad8aae100529ad102b0addd6a4188cb846f441b18d2cde5ee2b"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/micromark-core-commonmark.jsonl",
+    "bytes": 30402,
+    "allocated_bytes": 32768,
+    "dev": 27,
+    "inode": 811906,
+    "sha256": "23c125436fae78e060cd51992c50851f35e8e27ddb200a8b261dcb99d141962f"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/minimist.jsonl",
+    "bytes": 29351,
+    "allocated_bytes": 32768,
+    "dev": 27,
+    "inode": 815251,
+    "sha256": "70b6416832c8ba18867c5cd35e00c277c63c65c52f78fca22010dd13cb9fefc8"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/undici.jsonl",
+    "bytes": 476085,
+    "allocated_bytes": 479232,
+    "dev": 27,
+    "inode": 820614,
+    "sha256": "35af8c539a8dcfae29c3d9e9ffab880bdaed30669c54b28e4a918d7018a695a0"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/readable-stream.jsonl",
+    "bytes": 122086,
+    "allocated_bytes": 122880,
+    "dev": 27,
+    "inode": 818402,
+    "sha256": "fd9cac07a9a6c4ce5e67c988aaf271b13f47ccb5625af4d1e047189499d88fc2"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/whatwg-mimetype.jsonl",
+    "bytes": 8374,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 820621,
+    "sha256": "2b0a022c556559af746485458b2ee8dc98386030053db03ff6488b5eb90271bb"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/react-aria-components.jsonl",
+    "bytes": 1888544,
+    "allocated_bytes": 1892352,
+    "dev": 27,
+    "inode": 818401,
+    "sha256": "8acea448e6315773107867e937b42c54deeca43c61218346c0077c949f6ad956"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/source-map-js.jsonl",
+    "bytes": 8622,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 818431,
+    "sha256": "df35324731597a1b353547c0f63d8d0b7c1e2fd0706a4e8c196e316ad7b2827f"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/tslib.jsonl",
+    "bytes": 43003,
+    "allocated_bytes": 45056,
+    "dev": 27,
+    "inode": 820459,
+    "sha256": "9e4d8696c7348da193defea0d58334f0a54b90c450f66fdccfc076223a050cc7"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/pnpm.jsonl",
+    "bytes": 1905850,
+    "allocated_bytes": 1908736,
+    "dev": 27,
+    "inode": 791181,
+    "sha256": "0d75b6a1c4828d3c448acb97950780a71c28ab22ddeeca26abe373903f5c0e15"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/brace-expansion.jsonl",
+    "bytes": 45197,
+    "allocated_bytes": 49152,
+    "dev": 27,
+    "inode": 800568,
+    "sha256": "5ce1aa0a966bc9c3ce35ef01bbbc043e60e545d41718bc0c9ac52c3bb9a72f45"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/minimatch.jsonl",
+    "bytes": 169530,
+    "allocated_bytes": 172032,
+    "dev": 27,
+    "inode": 815215,
+    "sha256": "e39b09d2f266f0a66f2085efcb925c0e60a8dd980336591847c7f72574d43a12"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/mdast-util-from-markdown.jsonl",
+    "bytes": 64692,
+    "allocated_bytes": 65536,
+    "dev": 27,
+    "inode": 808623,
+    "sha256": "bd54bb730d65e61acd4b9bf09c3b52259a976ac5c0abc95f908e8803324f9d15"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/estree-walker.jsonl",
+    "bytes": 31788,
+    "allocated_bytes": 32768,
+    "dev": 27,
+    "inode": 801895,
+    "sha256": "91103ac5ff622bdbe8d215b1919afdf60825dda609ed534eb2345e0f75f423fc"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/util-deprecate.jsonl",
+    "bytes": 1656,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 820539,
+    "sha256": "90278b9f959a70c38fd186ee3ca6a08bf4914c62742b11af99bd2186f35a550a"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/ieee754.jsonl",
+    "bytes": 13345,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 801939,
+    "sha256": "7380efdf3921a67028384eb44e057c0c6fd918465e156c4c1840043e9736d0f0"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/jszip.jsonl",
+    "bytes": 49259,
+    "allocated_bytes": 53248,
+    "dev": 27,
+    "inode": 801949,
+    "sha256": "77c23cfe44acaf164bfe8745badafeccc212b5e126a7d36264f5434a1e54e44d"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/bluebird.jsonl",
+    "bytes": 220685,
+    "allocated_bytes": 221184,
+    "dev": 27,
+    "inode": 800572,
+    "sha256": "c67c4900568ae86b39d6007332eeaff2ef2ba980515ee9ee35083e042e2b9ecc"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/listenercount.jsonl",
+    "bytes": 1274,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 801966,
+    "sha256": "16521c2bc4373e9873eb561da28516f20a996037803f3373d9538d72aa26d1c8"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/lru-cache.jsonl",
+    "bytes": 196465,
+    "allocated_bytes": 196608,
+    "dev": 27,
+    "inode": 808497,
+    "sha256": "18fd16296cea255702fa43086f212fa076cc5aa1b7d076b6a711e68d756c0cb6"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/vfile.jsonl",
+    "bytes": 58014,
+    "allocated_bytes": 61440,
+    "dev": 27,
+    "inode": 820616,
+    "sha256": "d46882df13a24a9bcdb27cd4c2651b0da58baef2b63f0df690a1d27909aa5f9f"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/mdast-util-gfm-footnote.jsonl",
+    "bytes": 7344,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 808678,
+    "sha256": "a6a08bd0f94d3bd5bbdd6abbe7ac2d43115e29468a9ea185e04e853d69089a35"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/inherits.jsonl",
+    "bytes": 4512,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 801927,
+    "sha256": "a1f50a8a17f794d34e727a4a86dc21ab5ac57689b35259fab210e56837405354"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/node-addon-api.jsonl",
+    "bytes": 66805,
+    "allocated_bytes": 69632,
+    "dev": 27,
+    "inode": 816892,
+    "sha256": "4f7572cb2b3d015c0f23ebc1825ed7ddad19b168aef1dbdddfa03015f1807e45"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/regex-utilities.jsonl",
+    "bytes": 4709,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 818407,
+    "sha256": "77a39a317d34b71a1201844d730863f5f327b0d8dfa4503f4276b4df16cdd1d9"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/zwitch.jsonl",
+    "bytes": 15668,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 820631,
+    "sha256": "909c52f40d7570e3851af6e00fd244040db5d45c04056306e729c8668f9eef76"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/micromark-extension-gfm-strikethrough.jsonl",
+    "bytes": 35178,
+    "allocated_bytes": 36864,
+    "dev": 27,
+    "inode": 811656,
+    "sha256": "c03d367303938dd25015c840bd9ca8ab4cbd52faf1b3c9e4ed0e86b52b1dd9f7"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/symbol-tree.jsonl",
+    "bytes": 13154,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 818744,
+    "sha256": "93eb7aff7a04e41fbe4bff7fd33bd758404d8f5208b79491d9f7354ca9c03da3"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/fast-uri.jsonl",
+    "bytes": 45209,
+    "allocated_bytes": 49152,
+    "dev": 27,
+    "inode": 822554,
+    "sha256": "95971b84e6657e98a9f6bca70b2e573e8098da71b3b8368618ea99f88a17e819"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/zip-stream.jsonl",
+    "bytes": 54264,
+    "allocated_bytes": 57344,
+    "dev": 27,
+    "inode": 820633,
+    "sha256": "ca6472618949d83d6ad82f83228e89a59626811b6148d3473e22bbd5e7372f8a"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/once.jsonl",
+    "bytes": 3959,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 817717,
+    "sha256": "f5f8b4b1cf6ec216ed3704850f39490995db559bfa3ab004e7fa7c31b7dda1e3"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/clone.jsonl",
+    "bytes": 20368,
+    "allocated_bytes": 20480,
+    "dev": 27,
+    "inode": 800598,
+    "sha256": "25b3dc7b16b127bb6d37e02a75e66f99f9344d7e2e9e81e3f608cb2651784ca9"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/mdast-util-math.jsonl",
+    "bytes": 16363,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 810489,
+    "sha256": "f7e9dd9055dfa02b45132ebe811c86c6db3c33d4ff32673135ddbd0fc853cdfd"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/readdir-glob.jsonl",
+    "bytes": 12199,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 818408,
+    "sha256": "5f7f8f6b0e20c416435201293b07d0da5d17e3c313a63ad06c811ef8f8778990"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/csstype.jsonl",
+    "bytes": 144058,
+    "allocated_bytes": 147456,
+    "dev": 27,
+    "inode": 800588,
+    "sha256": "4e15fe395903789214f8e27a0c3a25c874d063aea6afc9325dfae6659ee17ff6"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/path-is-absolute.jsonl",
+    "bytes": 2865,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 818396,
+    "sha256": "9282155b3d30e038ce0d9ebed3f2a163bf6e44e6aaaf1ac38d2f86cb14e2dfda"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/lightningcss-win32-arm64-msvc.jsonl",
+    "bytes": 11603,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 801951,
+    "sha256": "a3d20e8d6238e23251d6851e52fd93b2f0710c63e6b1340bee3ac70e236334e0"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/mdast-util-to-hast.jsonl",
+    "bytes": 102586,
+    "allocated_bytes": 106496,
+    "dev": 27,
+    "inode": 812142,
+    "sha256": "4460720e7621708a2e655541eda2363ebadd524dc54103790cf925b44c059eef"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/aria-hidden.jsonl",
+    "bytes": 16920,
+    "allocated_bytes": 20480,
+    "dev": 27,
+    "inode": 800556,
+    "sha256": "579a1e1666c98daa817308a596fde2d6f5e756aa24b39dd9d0b79dd0c5f37bb2"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/micromark-factory-whitespace.jsonl",
+    "bytes": 11972,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 813894,
+    "sha256": "1e0448f3e326016ee968c405ae845dd9ac66478e6b096cb566b742be80c30337"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/unist-util-position.jsonl",
+    "bytes": 19907,
+    "allocated_bytes": 20480,
+    "dev": 27,
+    "inode": 820456,
+    "sha256": "f325bc16a56aeae18a8bb91c970a564001c035eb6b315fb65de82a84157e6324"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/decode-named-character-reference.jsonl",
+    "bytes": 8440,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 800587,
+    "sha256": "ca4acaf351091ba52a1689bbf4182dcce6ea315b74a81ae40da852ea3ba529c1"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/fflate.jsonl",
+    "bytes": 98288,
+    "allocated_bytes": 98304,
+    "dev": 27,
+    "inode": 801909,
+    "sha256": "61ba5aa105a0dc812b85e0e4d1c0d3a9d368f67904cb6810a82b745bb5824c52"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/markdown-table.jsonl",
+    "bytes": 19738,
+    "allocated_bytes": 20480,
+    "dev": 27,
+    "inode": 808568,
+    "sha256": "3f6f2320f21d242270374f6a5e1e6fb9c6100d01c1425f628d35a009ba77429d"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/micromark-extension-gfm-autolink-literal.jsonl",
+    "bytes": 33377,
+    "allocated_bytes": 36864,
+    "dev": 27,
+    "inode": 811222,
+    "sha256": "c9636ee4791b2410231cd49b5ed4a33c8bc183240085ade2ab04660e8bf2b928"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/tar-stream.jsonl",
+    "bytes": 60280,
+    "allocated_bytes": 61440,
+    "dev": 27,
+    "inode": 818879,
+    "sha256": "4e417ee8df9b0be10f99cb7c0c522175a9dd40b241d2d815c04ed3a65efcb715"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/assertion-error.jsonl",
+    "bytes": 5018,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 800554,
+    "sha256": "6757af113eca8b70470f47453c2a56c11b5b9a1e51eb43d8c95204b9ddb98fce"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/unist-util-visit-parents.jsonl",
+    "bytes": 41133,
+    "allocated_bytes": 45056,
+    "dev": 27,
+    "inode": 820510,
+    "sha256": "2afefc782d922c22ed4a11bf1163cb33747d8329c5ce05036b916cb2084679af"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/lodash.isnil.jsonl",
+    "bytes": 674,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 806925,
+    "sha256": "86f3417e0046281428fb7b388c8bf01b1025afdb3f829f639890a5b72318b758"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/buffer-crc32.jsonl",
+    "bytes": 13797,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 800574,
+    "sha256": "e8fafcdc87dc6a4ee0681bd7a39803aae4d3da2d71b708d46f1a689dbac76aac"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/unist-util-stringify-position.jsonl",
+    "bytes": 19639,
+    "allocated_bytes": 20480,
+    "dev": 27,
+    "inode": 820508,
+    "sha256": "b53e593fd074eeda58780eb7c110bbfef452a6223297f82c7a98800368719c29"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/lodash.isundefined.jsonl",
+    "bytes": 4690,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 808289,
+    "sha256": "23470abe376c3d3bd9586d7353330c6fdd13067737a82c803899400490644dac"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/async.jsonl",
+    "bytes": 98183,
+    "allocated_bytes": 98304,
+    "dev": 27,
+    "inode": 800563,
+    "sha256": "5964506a6426ebd278f65ab51f74a6399d35f580007a469b03dcdc4e5007ab5e"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/mdn-data.jsonl",
+    "bytes": 91784,
+    "allocated_bytes": 94208,
+    "dev": 27,
+    "inode": 811373,
+    "sha256": "0c1e34b2fc6b8827c0ae3a1cdc7f80a13cafa3535a05c316bf12ace033e0809d"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/use-sync-external-store.jsonl",
+    "bytes": 2398193,
+    "allocated_bytes": 2400256,
+    "dev": 27,
+    "inode": 820632,
+    "sha256": "287fe327e3f809868289b6827551937022a4da3e56d3f7217df0700dd86cf532"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/tough-cookie.jsonl",
+    "bytes": 57657,
+    "allocated_bytes": 61440,
+    "dev": 27,
+    "inode": 819998,
+    "sha256": "df55f6ff1332356ac24904e492f538add1a450691d9ecb77f8e046969b67ffd3"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/string_decoder.jsonl",
+    "bytes": 11273,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 818434,
+    "sha256": "f7300c23eb5b122c864acbd5b8c5bd25049acc6a1763507b7f97244efd37b91d"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/micromark-util-sanitize-uri.jsonl",
+    "bytes": 13457,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 814788,
+    "sha256": "602dddc788aeb5a69134de5086c6248814a4ab897ba1198f63a5756b625e5169"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/micromark-util-html-tag-name.jsonl",
+    "bytes": 12313,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 814790,
+    "sha256": "47970b50e18301713e2cfbfde7a2f831bac2460135fd9927c6975fe4c7c3a4fa"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/fsevents.jsonl",
+    "bytes": 72693,
+    "allocated_bytes": 73728,
+    "dev": 27,
+    "inode": 801915,
+    "sha256": "3a0abdc748b8262efa49cd6833b96a9c2f2b49509ce62cc5534fe56e25c1a270"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/micromark-util-normalize-identifier.jsonl",
+    "bytes": 11234,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 814786,
+    "sha256": "52b4bb51ea29a37f434052c5af9430203577e5bd35f08c36499da28195afe73b"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/node-pty.jsonl",
+    "bytes": 250337,
+    "allocated_bytes": 253952,
+    "dev": 27,
+    "inode": 817565,
+    "sha256": "68b66c9b86334e10134a483da71483a29592fdfdb47ad278c8feaf7887b03822"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/crc32-stream.jsonl",
+    "bytes": 21556,
+    "allocated_bytes": 24576,
+    "dev": 27,
+    "inode": 800596,
+    "sha256": "63acf87e18edcb190d79b75a446df6a59b4fa22ae8ada04fc4b5134557900bf0"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/fstream.jsonl",
+    "bytes": 32056,
+    "allocated_bytes": 32768,
+    "dev": 27,
+    "inode": 801917,
+    "sha256": "c02c0091d2d8f615b4ba7ffdab3bce85ccb6061001a1eee6f82f8497942a2cb4"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/mdast-util-gfm-autolink-literal.jsonl",
+    "bytes": 18475,
+    "allocated_bytes": 20480,
+    "dev": 27,
+    "inode": 808681,
+    "sha256": "61f13310db5adcb1081ac55d0854aa6cf55501000e9b0b43d5b89441da6ed6f0"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/tr46.jsonl",
+    "bytes": 20097,
+    "allocated_bytes": 20480,
+    "dev": 27,
+    "inode": 820001,
+    "sha256": "de57dc083ee96b862cee8e0d81db68b4a77a302cf45399d8c60a94278efabf32"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/mdast-util-phrasing.jsonl",
+    "bytes": 12885,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 811245,
+    "sha256": "b534dcab52163de2c865f44e6087c0864872de4aeda94b97acebb4a4cb572556"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/unist-util-is.jsonl",
+    "bytes": 29501,
+    "allocated_bytes": 32768,
+    "dev": 27,
+    "inode": 820457,
+    "sha256": "27b3c512f0ad0d8cbf28e69756f00c3a03ced3f37101ee9c7f4c79b3334d4b04"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/clsx.jsonl",
+    "bytes": 18395,
+    "allocated_bytes": 20480,
+    "dev": 27,
+    "inode": 800584,
+    "sha256": "39cc772a2ca6f8eae5b7f32f84a9845f8fba7bb2655f6fd02b8069866ac4ecf5"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/lightningcss-linux-arm-gnueabihf.jsonl",
+    "bytes": 40112,
+    "allocated_bytes": 40960,
+    "dev": 27,
+    "inode": 801955,
+    "sha256": "7f44a2665d71cc15d440cc7ae84263a0a88f20e4086542cb0017faeaef710f05"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/webidl-conversions.jsonl",
+    "bytes": 14713,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 820622,
+    "sha256": "b2c5a954101023cbba5b2c046a8318e22aca6bce1143e8c54ee521d2f4ffc0a5"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/isarray.jsonl",
+    "bytes": 5715,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 801934,
+    "sha256": "87fe041ed02c4981287aff939fa22d2825f7335fb22b042d3147fdfcce8a2e5d"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/require-from-string.jsonl",
+    "bytes": 5310,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 818406,
+    "sha256": "5c2061dcb55e5425cbbb96ba0d9b1fa76e5b695534b4396b1a6e04fc238f3681"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/duplexer2.jsonl",
+    "bytes": 4366,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 801872,
+    "sha256": "10e7062d263c1bd355cf28d0dc56f88816ca637c2b0daa971c1fc88fa1992361"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/use-isomorphic-layout-effect.jsonl",
+    "bytes": 9700,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 820533,
+    "sha256": "9cc1bf58fb28a10e34148f0c6f0256e953b9fe6976f303a0f243d2d07aa466ff"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/ajv.jsonl",
+    "bytes": 467647,
+    "allocated_bytes": 471040,
+    "dev": 27,
+    "inode": 822613,
+    "sha256": "0872e6f809170707f7095f23beaec20801d5047f7eaf76744a9438988d75dc2d"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/tmp.jsonl",
+    "bytes": 25371,
+    "allocated_bytes": 28672,
+    "dev": 27,
+    "inode": 819984,
+    "sha256": "2dad39104fb946472d4207b0cab2cbb1d1e2764b6e780cf4b2c6b9bd06dd5adc"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/magic-string.jsonl",
+    "bytes": 137293,
+    "allocated_bytes": 139264,
+    "dev": 27,
+    "inode": 808812,
+    "sha256": "18232917c4a0d95f29d35347649d5c5d9604c1c108ff43d2c06a21989ff59853"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/wrappy.jsonl",
+    "bytes": 3248,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 820624,
+    "sha256": "1e52cc203e0149d5af8eaf50727ace425cfb5c42ecaa839996af05fce7f804e4"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/is-unsafe.jsonl",
+    "bytes": 3044,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 801933,
+    "sha256": "3b4745d0f19afa3d61ed3dc3f39e697fa39b193a6e9df02f9b0868ec63e5cc18"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/micromark-util-decode-string.jsonl",
+    "bytes": 6502,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 814789,
+    "sha256": "c3a91dfd084f039a1790274057ed8d0756a9e795233522e13fc61bff11499b53"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/shiki.jsonl",
+    "bytes": 209164,
+    "allocated_bytes": 212992,
+    "dev": 27,
+    "inode": 818428,
+    "sha256": "1a5bd740810e14dfb1c10ee5fecd5e4247f4cbd77a36e2c448e1970a53aa21b8"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/chai.jsonl",
+    "bytes": 94354,
+    "allocated_bytes": 98304,
+    "dev": 27,
+    "inode": 800571,
+    "sha256": "cc170239e662f6d7478466f63f32318d46a257f3474ef9d65defe61a0e3826ee"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/micromark-factory-destination.jsonl",
+    "bytes": 11691,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 812713,
+    "sha256": "a53ff65fe389a3a0b4ffa8fba9f0459189464ad57e78ce24a6000542671f1074"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/crc-32.jsonl",
+    "bytes": 11620,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 800594,
+    "sha256": "4b7640698cc4d97d70aea87b06c75c99c5ed7a3fc4d091a35fb716971ffa7c70"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/get-east-asian-width.jsonl",
+    "bytes": 7108,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 822555,
+    "sha256": "341f0fa9a9db5104059d65a3ae6f90477390fd11e26454cfba802ce7a051bb9c"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/regenerator-runtime.jsonl",
+    "bytes": 29303,
+    "allocated_bytes": 32768,
+    "dev": 27,
+    "inode": 818410,
+    "sha256": "b53138b588116acab9e6e4554f057f786b0b086c65efd25d2264dbcd4e148af8"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/lodash.union.jsonl",
+    "bytes": 11809,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 807267,
+    "sha256": "a412a24c4b11d4483107c669b4e50cbf270cc63aacf02830cebb79154b75f4f5"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/micromark-extension-gfm.jsonl",
+    "bytes": 23005,
+    "allocated_bytes": 24576,
+    "dev": 27,
+    "inode": 812757,
+    "sha256": "1e131c7247f31c078b1c70f3ab1cafc81dd88f18cf4ec7038ba716c4153f7956"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/json-schema-traverse.jsonl",
+    "bytes": 9440,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 822553,
+    "sha256": "45de2e4ec2bc2ff0053ce9e4d9d2d7886e3e27849f3de8e210f3f1aed4db46e5"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/lodash.escaperegexp.jsonl",
+    "bytes": 4399,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 802027,
+    "sha256": "2f30e6b1dcf2fdc41527e38607b4aeebf31d401a8cd7d84c1a4e147e0e2c9698"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/react-dom.jsonl",
+    "bytes": 3209925,
+    "allocated_bytes": 3211264,
+    "dev": 27,
+    "inode": 818411,
+    "sha256": "5cf0db007b40c776ddb5a4bb615b07cf4ba4d34884490d0ec996bfed1331ee64"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/ajv-formats.jsonl",
+    "bytes": 63642,
+    "allocated_bytes": 65536,
+    "dev": 27,
+    "inode": 822552,
+    "sha256": "909aa71b134a7073235ae1bd0e7838e30c146194b9051bdce55b150244185085"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/ms.jsonl",
+    "bytes": 29485,
+    "allocated_bytes": 32768,
+    "dev": 27,
+    "inode": 815323,
+    "sha256": "380beca9692fa63089a17d3468e448707a323d4de9457e04b0c7f1b3f624a0cf"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/lodash.isfunction.jsonl",
+    "bytes": 8630,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 806815,
+    "sha256": "6dc203ebb8ffba98cdc3ca15914b2b4e6b7215ff2b67a9cb14697b7a2ac53e0a"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/mdast-util-gfm-table.jsonl",
+    "bytes": 30561,
+    "allocated_bytes": 32768,
+    "dev": 27,
+    "inode": 809606,
+    "sha256": "a93dbde1da881bb5419258828f7f8069b00fce6c02c4068d0e32cdea591d59dc"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/react-stately.jsonl",
+    "bytes": 2902601,
+    "allocated_bytes": 2904064,
+    "dev": 27,
+    "inode": 818433,
+    "sha256": "8d9b946c4bf515dfd9e561ab86e95fce37610678dd0236a5691dbe2fd9fa7847"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/lazystream.jsonl",
+    "bytes": 4097,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 801938,
+    "sha256": "6f1dc38431fcc26ef60065e98dc57a5c7c35a7d1e6d03d0848eaa4e21c364401"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/lodash.isequal.jsonl",
+    "bytes": 15140,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 805130,
+    "sha256": "b2e52d44b5e94060dc74a140f642ec680e8c9aa12855961dc713718bcccec4be"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/expect-type.jsonl",
+    "bytes": 78883,
+    "allocated_bytes": 81920,
+    "dev": 27,
+    "inode": 801896,
+    "sha256": "0794658127b4953e75824d7377f59018b74cf301c98d7f8658a85fe8fe748996"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/strnum.jsonl",
+    "bytes": 21161,
+    "allocated_bytes": 24576,
+    "dev": 27,
+    "inode": 818797,
+    "sha256": "2a1efad6215dd39f2d4424ab5b1c300e70e68564bd703cc8637bef2f72f742aa"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/tiny-inflate.jsonl",
+    "bytes": 3212,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 819008,
+    "sha256": "526dbc45cd666f425501c83937726d28d49f22189fe738dc99e8035610307148"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/stackback.jsonl",
+    "bytes": 1171,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 818430,
+    "sha256": "10e7403e460ac844d5bff19f2c918e6d8854b03ff46150bef3f09b41179ce146"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/fast-deep-equal.jsonl",
+    "bytes": 19707,
+    "allocated_bytes": 20480,
+    "dev": 27,
+    "inode": 801899,
+    "sha256": "bcd41446c54afa88330088dcac469e8cef15096a73a5592e3764f0f8d88769d0"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/micromark-util-decode-numeric-character-reference.jsonl",
+    "bytes": 7087,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 813875,
+    "sha256": "e5c7406a3ef56cddee752d8702225e5fa8da631f26d9f60c913507f152de731b"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/safe-buffer.jsonl",
+    "bytes": 9198,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 818418,
+    "sha256": "52530a8747ae5260f1d9d2b76f6b2f915d652c3c0e01aec820efc9cb47940302"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/css-tree.jsonl",
+    "bytes": 71990,
+    "allocated_bytes": 73728,
+    "dev": 27,
+    "inode": 800600,
+    "sha256": "2aa94ce0f50129a981c4d0b07e68ed9438b9a6bee8734352ee19329f3b158f95"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/react-aria.jsonl",
+    "bytes": 3808237,
+    "allocated_bytes": 3809280,
+    "dev": 27,
+    "inode": 818425,
+    "sha256": "d97a5ba7461c6b4587d7ee921ab9eba355623541b08402bfee6fc4e1db83599a"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/fast-xml-parser.jsonl",
+    "bytes": 269657,
+    "allocated_bytes": 270336,
+    "dev": 27,
+    "inode": 801912,
+    "sha256": "844905dc87dca4d40a06cac92d8d03e37277ce1062ada096817d3ef64e13fe6f"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/devlop.jsonl",
+    "bytes": 1971,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 800605,
+    "sha256": "eec30bf88cf860996d314d99459ad2a5663368ac6630355c079454180a0d7a1e"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/xml-name-validator.jsonl",
+    "bytes": 3266,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 820625,
+    "sha256": "db3a40ddc9531863728bb15afaa35a965d739d57381d0bc502304695614b3229"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/fs.realpath.jsonl",
+    "bytes": 1148,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 801914,
+    "sha256": "f7b5a88fde00b38691d9cfc696f7b16aeda422f37c764ca44e841dbe31e08e78"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/rimraf.jsonl",
+    "bytes": 87882,
+    "allocated_bytes": 90112,
+    "dev": 27,
+    "inode": 818421,
+    "sha256": "df22dd1b298d208ff96018a66fd9f5da91924730cd2327c850a699db3b44e745"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/html-encoding-sniffer.jsonl",
+    "bytes": 10375,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 801922,
+    "sha256": "c8de047588dab8c23c1c159311812a4fec48bb1eec1b15c4676ec37176f427dd"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/typescript.jsonl",
+    "bytes": 8741386,
+    "allocated_bytes": 8744960,
+    "dev": 27,
+    "inode": 820623,
+    "sha256": "23df52648f95fc1b49d28acdb97e6c4243586c3e88b11ab69eaf94dc8fc9c441"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/mdast-util-to-markdown.jsonl",
+    "bytes": 78326,
+    "allocated_bytes": 81920,
+    "dev": 27,
+    "inode": 810854,
+    "sha256": "635f68688a4304ba4f5a85fe7d0ed8946bd92b6a1c86ded26900af3cd396607c"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/core-util-is.jsonl",
+    "bytes": 3135,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 800586,
+    "sha256": "0445580af9e459ad942e8cf5fe7b10bb27cd6be4a4f4bc3b2de5ff286ec3decb"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/micromark.jsonl",
+    "bytes": 86980,
+    "allocated_bytes": 90112,
+    "dev": 27,
+    "inode": 814926,
+    "sha256": "c730393762fa0b778a4c414026908ff5ebc1d00fc0e57d1aefb0171640b5c6c1"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/comma-separated-tokens.jsonl",
+    "bytes": 17832,
+    "allocated_bytes": 20480,
+    "dev": 27,
+    "inode": 800583,
+    "sha256": "ff60e54b8ca56d2e60efcc26f1e89839f3ffec4a40b03ec5a3b8f802221e42ca"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/anser.jsonl",
+    "bytes": 31149,
+    "allocated_bytes": 32768,
+    "dev": 27,
+    "inode": 800537,
+    "sha256": "f754a387f64a82e411adcc8998d342548a287c8dfcbe83cd58112399f337ab7b"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/micromark-util-subtokenize.jsonl",
+    "bytes": 17648,
+    "allocated_bytes": 20480,
+    "dev": 27,
+    "inode": 814787,
+    "sha256": "22ab91e0a6e37160895898a5eab87baad2de429032935d882a1d86e258d74339"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/micromark-extension-math.jsonl",
+    "bytes": 19065,
+    "allocated_bytes": 20480,
+    "dev": 27,
+    "inode": 811907,
+    "sha256": "0b07dd0f3fb425f1ac45bfea4eee4ff65dd2130193d1bbde23679f027180ad86"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/lightningcss-linux-x64-musl.jsonl",
+    "bytes": 39481,
+    "allocated_bytes": 40960,
+    "dev": 27,
+    "inode": 801952,
+    "sha256": "b2e272f49abc966749aa0bd31cf6265f1146428e0790c8b03003ed9d67c89f24"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/std-env.jsonl",
+    "bytes": 43731,
+    "allocated_bytes": 45056,
+    "dev": 27,
+    "inode": 818749,
+    "sha256": "c9059718d692903a2c41afd7929a89c3c82b7497fe8804515269de08b10ced13"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/lightningcss-freebsd-x64.jsonl",
+    "bytes": 18330,
+    "allocated_bytes": 20480,
+    "dev": 27,
+    "inode": 801953,
+    "sha256": "20151e2b23ac6ff349200ee657511e0f2e56f1695aac267ddb3bbfde7976292b"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/jsdom.jsonl",
+    "bytes": 395707,
+    "allocated_bytes": 397312,
+    "dev": 27,
+    "inode": 801941,
+    "sha256": "f137eaec6c0df4c5957d4abb5d932b94d6755b819d964eb46574fcf18d71838e"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/lodash.defaults.jsonl",
+    "bytes": 8466,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 801981,
+    "sha256": "1b6bcf9a362fe085d5cce7bf47ff98ab8dae52dcd2bd47e47bc62b67a2d8f985"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/w3c-xmlserializer.jsonl",
+    "bytes": 20878,
+    "allocated_bytes": 24576,
+    "dev": 27,
+    "inode": 820620,
+    "sha256": "5aaf46ce28dbd91ff7ababc2b15c780fbae645cdc8ecee70f12dd5d3bc85016a"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/lodash.flatten.jsonl",
+    "bytes": 8915,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 801998,
+    "sha256": "db8120a407e43fe259711df8ce9f900f7300d8436c47dd85227691241c46c1c7"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/vfile-message.jsonl",
+    "bytes": 34763,
+    "allocated_bytes": 36864,
+    "dev": 27,
+    "inode": 820615,
+    "sha256": "12275c2134809a80ca1ec2dbf26ebb213ce95b9b2c6054db3f7bff334a6470ff"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/concat-map.jsonl",
+    "bytes": 3129,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 800597,
+    "sha256": "68229a1724a916cc520382a92b36e2156c10a3f03b1f991d81b31a009088ee79"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/fs-constants.jsonl",
+    "bytes": 1620,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 801913,
+    "sha256": "502f7a35ddc2ed0884fea15b7f922fa3b3aa1409c42b7ffe62eae55ced94f426"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/axe-core.jsonl",
+    "bytes": 4585496,
+    "allocated_bytes": 4587520,
+    "dev": 27,
+    "inode": 800573,
+    "sha256": "888c82112a29da64ddeb3407305af73c3958968a5dca3c74e972deb655bf0ee1"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/path-expression-matcher.jsonl",
+    "bytes": 11611,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 818397,
+    "sha256": "bcc90357da28308c4689dc374af5098ed778f63e3d946b8050ab6365e3d59ae3"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/image-size.jsonl",
+    "bytes": 77980,
+    "allocated_bytes": 81920,
+    "dev": 27,
+    "inode": 801924,
+    "sha256": "80d355ea9071b09f9acb1a36d9b5c44c8334a1b12256bc6c75358f66a6393c3c"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/why-is-node-running.jsonl",
+    "bytes": 22348,
+    "allocated_bytes": 24576,
+    "dev": 27,
+    "inode": 820629,
+    "sha256": "8087029d40acffafaabf9d71ad8ec62883e377af4974eb9d68ea9f7a0c98e77e"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/punycode.jsonl",
+    "bytes": 22526,
+    "allocated_bytes": 24576,
+    "dev": 27,
+    "inode": 818399,
+    "sha256": "5c57306ecc2d4891280c5735068428ec24d1ff9fa69c3ae4228b87d3aee8b3a7"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/fdir.jsonl",
+    "bytes": 76993,
+    "allocated_bytes": 77824,
+    "dev": 27,
+    "inode": 801911,
+    "sha256": "726c9f17b7887054fe144450af5fb8055a20f72e945d5400b0e92fc472e76113"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/micromark-util-symbol.jsonl",
+    "bytes": 12077,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 814819,
+    "sha256": "f048c2fea36dd3b9ab35d310795d254b0f80a35600e00467777c4cdcf448a4db"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/micromark-extension-gfm-task-list-item.jsonl",
+    "bytes": 23980,
+    "allocated_bytes": 24576,
+    "dev": 27,
+    "inode": 812767,
+    "sha256": "da4c8b4c2bd1a099cc66d4feb94aab25e3607e875c5650179d6a37d700fdec46"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/space-separated-tokens.jsonl",
+    "bytes": 14359,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 818427,
+    "sha256": "ccedf56f4345ffd1c14c7e54ce65b67f349bc34562b8f2da91c5c3b9dc730da6"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/lightningcss-linux-arm64-musl.jsonl",
+    "bytes": 39811,
+    "allocated_bytes": 40960,
+    "dev": 27,
+    "inode": 801948,
+    "sha256": "a9520ee5c9060ae13346e54cee008200db0fef358d2ae7bc4bb6ab75fbe205c0"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/unzipper.jsonl",
+    "bytes": 98914,
+    "allocated_bytes": 102400,
+    "dev": 27,
+    "inode": 820613,
+    "sha256": "662a2379cbf8ea4b48b949fb38851caab6820ea533abf849a153d1d203cab1b3"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/bidi-js.jsonl",
+    "bytes": 8496,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 800580,
+    "sha256": "e18956283c52b98956061d3a6fc1dfc08b0f6057ac3717900132326e30172f9e"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/lightningcss.jsonl",
+    "bytes": 95489,
+    "allocated_bytes": 98304,
+    "dev": 27,
+    "inode": 801954,
+    "sha256": "6a81ec9aacc4e663fa9b710e3f10ab8f0952b773bbd0d93a882ce252c91bb210"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/yaml.jsonl",
+    "bytes": 166399,
+    "allocated_bytes": 167936,
+    "dev": 27,
+    "inode": 820634,
+    "sha256": "722d562c1e99f13b4c5c7c469feccd71a129f28e0555f1dc8b9539e1cfb9d984"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/lightningcss-android-arm64.jsonl",
+    "bytes": 3733,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 801945,
+    "sha256": "9ecf57fa3152a842a51e621e6a3c57b82f8d02640bb019c620e07e54c4c927fd"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/micromark-util-classify-character.jsonl",
+    "bytes": 11784,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 814123,
+    "sha256": "fc2e52a698598239e070128d9905bd6baa0e414650a8999dd7fe4b4b70344076"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/micromark-util-combine-extensions.jsonl",
+    "bytes": 11475,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 813890,
+    "sha256": "f86f96a042a27d59fc4e6c4e23c283f3ec4d3ab74f46255fa49f473e3b4f3f96"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/setimmediate.jsonl",
+    "bytes": 3767,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 818423,
+    "sha256": "ab25604c50fc8cd346e19fb9b1f3ce2dd72fc75729fe4088b2385e11111e9e28"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/stringify-entities.jsonl",
+    "bytes": 23128,
+    "allocated_bytes": 24576,
+    "dev": 27,
+    "inode": 818432,
+    "sha256": "71bafbdeae3e08642552623df6f70f4018f69b33b2a8f2d9cd8ae43301bc7486"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/lie.jsonl",
+    "bytes": 33732,
+    "allocated_bytes": 36864,
+    "dev": 27,
+    "inode": 801943,
+    "sha256": "8476a7dec363fe0da9dd87302708f4a60a0bd5ccf8277a46de5d23d5cc0c52e8"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/diff.jsonl",
+    "bytes": 67829,
+    "allocated_bytes": 69632,
+    "dev": 27,
+    "inode": 800654,
+    "sha256": "4f25145ddc273bd4f417f31d9995c215720152884f9deb3cde0c2953a56d5f03"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/pngjs.jsonl",
+    "bytes": 23321,
+    "allocated_bytes": 24576,
+    "dev": 27,
+    "inode": 818384,
+    "sha256": "0bf26174ff7c1638140706829895e1fa22724b9ec40b09fc60c1e112a904fa19"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/lightningcss-win32-x64-msvc.jsonl",
+    "bytes": 39477,
+    "allocated_bytes": 40960,
+    "dev": 27,
+    "inode": 801962,
+    "sha256": "a21a3c6c908dd41fb75280bfb5e725e6a4fa8d67587e2de0b91c4884f2a1f53e"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/lodash.isboolean.jsonl",
+    "bytes": 5620,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 802597,
+    "sha256": "d41d8dd35784ea0caabd091fae6527a01c5b86343e248302a18faad24e187222"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/lodash.difference.jsonl",
+    "bytes": 14660,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 801992,
+    "sha256": "aed510586444063d82676ae97f80d5c6a64d63591e1e66d927ebd660cd1f3a8f"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/dfa.jsonl",
+    "bytes": 3950,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 800645,
+    "sha256": "748492ecc5b7e100bb82f72d843e8af4245acac708044a0957817c0078ffd572"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/compress-commons.jsonl",
+    "bytes": 41891,
+    "allocated_bytes": 45056,
+    "dev": 27,
+    "inode": 800599,
+    "sha256": "3b83dde5f09026cf4110321675428c0377fe26275c5429526a6b4eb676457ee0"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/xmlchars.jsonl",
+    "bytes": 15736,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 820635,
+    "sha256": "aef55e418f72990f860c5ee8dc3b38e941d4a55823d1147b9090d3eef70a912c"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/client-only.jsonl",
+    "bytes": 1673,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 800578,
+    "sha256": "29d881a47c7ba4185be5bc6033fd36984e4b64b51ebc85824b66b05d69e67658"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/anynum.jsonl",
+    "bytes": 1355,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 800552,
+    "sha256": "67c42a3069dafaf5ccb79c447f41d61e194c34f14e7e63b3d926d380abb8c208"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/reselect.jsonl",
+    "bytes": 72710,
+    "allocated_bytes": 73728,
+    "dev": 27,
+    "inode": 818419,
+    "sha256": "5b8232ce9595c6d002d48b21ccedf8d3f903381f408c93b7a6bfbe530ecb5bed"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/unist-util-remove-position.jsonl",
+    "bytes": 20376,
+    "allocated_bytes": 20480,
+    "dev": 27,
+    "inode": 820458,
+    "sha256": "0f6e194fb7484beb2c5783a174c343f3cc28f32b25d3825401ab4053f330d5bb"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/micromark-factory-label.jsonl",
+    "bytes": 14186,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 812682,
+    "sha256": "8b203e5bb886830da30aa74cbbcc60a4f37201fcd9e90debb40659967d537a80"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/katex.jsonl",
+    "bytes": 336660,
+    "allocated_bytes": 339968,
+    "dev": 27,
+    "inode": 801942,
+    "sha256": "40b3843881ee71f35dbc5b97f6c0068374494a103e04475691a08bbc6b6f9efe"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/xstate.jsonl",
+    "bytes": 469572,
+    "allocated_bytes": 471040,
+    "dev": 27,
+    "inode": 820630,
+    "sha256": "6d784a013b0de802a00d2e5227962e67c783ceb7b3cffc28a48487856f2a652c"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/process-nextick-args.jsonl",
+    "bytes": 6568,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 818394,
+    "sha256": "e53200ae000daf40cf598dd63385e40a9ea97ecc8f42f634f51754130e9d18b7"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/escape-string-regexp.jsonl",
+    "bytes": 9944,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 801887,
+    "sha256": "1d327fdf90f978ceeca10c2127a0eb69b5326038e282d1c0b43786bed76dd07d"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/react.jsonl",
+    "bytes": 2946098,
+    "allocated_bytes": 2949120,
+    "dev": 27,
+    "inode": 818403,
+    "sha256": "ea73d95af8777bfebbfa6a7745115bf23bad5dcbe1a93138177837b38a8a401b"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/vitest.jsonl",
+    "bytes": 1301093,
+    "allocated_bytes": 1302528,
+    "dev": 27,
+    "inode": 820627,
+    "sha256": "7a3860ef83f285bab68025f1dc46f1859ac2e90deb6e48840a4002d02f2facf9"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/micromark-util-types.jsonl",
+    "bytes": 15203,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 814791,
+    "sha256": "6229fd644c2584ae39b906aa74750d7db2802b107acfae87f2a429e888032f1c"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/data-urls.jsonl",
+    "bytes": 16483,
+    "allocated_bytes": 20480,
+    "dev": 27,
+    "inode": 800595,
+    "sha256": "2252da1df918d2ea351fbdc6282d10c79792b5bba392e112de4f85e27b718028"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/react-is.jsonl",
+    "bytes": 2709922,
+    "allocated_bytes": 2711552,
+    "dev": 27,
+    "inode": 818422,
+    "sha256": "f6eb209559f905fb893eacab6413900ab7261ae144b18af5074a3d3c729b23a1"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/lodash.uniq.jsonl",
+    "bytes": 12869,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 807545,
+    "sha256": "28c49b7ed6b58d446c91b9e2159cabe90899bad9f3b4a9a7165f289e1875921b"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/lightningcss-linux-x64-gnu.jsonl",
+    "bytes": 39354,
+    "allocated_bytes": 40960,
+    "dev": 27,
+    "inode": 801950,
+    "sha256": "ad7e1e938516f6d42cc8a79236722afd9fc525f04760fee136332700d953a784"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/nanoid.jsonl",
+    "bytes": 160934,
+    "allocated_bytes": 163840,
+    "dev": 27,
+    "inode": 815974,
+    "sha256": "12eff8b7719da17f8004cada6f616bde353021f3f7ff231cca127249c571b348"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/mdast-util-gfm.jsonl",
+    "bytes": 17441,
+    "allocated_bytes": 20480,
+    "dev": 27,
+    "inode": 810753,
+    "sha256": "da6a4659b8bf8d39a8235520e5258ed4eb77918e303adff68f818d159be89d6d"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/es-module-lexer.jsonl",
+    "bytes": 113270,
+    "allocated_bytes": 114688,
+    "dev": 27,
+    "inode": 801910,
+    "sha256": "367fceb226998216c1942b5877c26cd54ccea95b25abcea77b851d63f52d917f"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/buffers.jsonl",
+    "bytes": 3158,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 800567,
+    "sha256": "65d723a456a62db4f2516001bf07f600437110d6ab3792174d0b9a2aaa93cbba"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/undici-types.jsonl",
+    "bytes": 93663,
+    "allocated_bytes": 94208,
+    "dev": 27,
+    "inode": 820460,
+    "sha256": "df80e2eda02539a570c01fe9bd53bd2ca4c26052086504c90d96909555a11603"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/picocolors.jsonl",
+    "bytes": 5975,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 818368,
+    "sha256": "ded4d0be9b0fd2fa88b82ece8c39f7535fa19730755dea40c63e74f55bbfdf25"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/picomatch.jsonl",
+    "bytes": 46965,
+    "allocated_bytes": 49152,
+    "dev": 27,
+    "inode": 818388,
+    "sha256": "c2a66f77f55a3af45dabcade9f61611ea0794c5a4e8937864f3275ec8a2910e5"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/mdast-util-gfm-strikethrough.jsonl",
+    "bytes": 19701,
+    "allocated_bytes": 20480,
+    "dev": 27,
+    "inode": 810106,
+    "sha256": "b9fc1f5207572dfb82c4898c1cc465f4b10af8f70011fb9719430490c5aa39ee"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/pretty-format.jsonl",
+    "bytes": 312760,
+    "allocated_bytes": 315392,
+    "dev": 27,
+    "inode": 818398,
+    "sha256": "e1b2634a68da1004bb07ff8d7a6e9eec9766ec6dda2449ca9b1d00938d5573c5"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/lightningcss-darwin-x64.jsonl",
+    "bytes": 39011,
+    "allocated_bytes": 40960,
+    "dev": 27,
+    "inode": 801944,
+    "sha256": "b037f81bbb6bb518bdc2b17d5c2eccf361c7b664e88b2522fc7287cea83119d2"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/longest-streak.jsonl",
+    "bytes": 11385,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 808024,
+    "sha256": "0920b0508040fcc799a94baafb301a23cf1341145755e6d3274d2355b612e7fb"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/binary.jsonl",
+    "bytes": 15042,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 800564,
+    "sha256": "c4478d05ab2983a4de5372d87d53826afe131e298cc960de1bfd93f8456dd1f3"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/hast-util-to-html.jsonl",
+    "bytes": 52011,
+    "allocated_bytes": 53248,
+    "dev": 27,
+    "inode": 801918,
+    "sha256": "c0ce0200c52bd4b95e7af6a044040afafd6efe329213b53eaae217d23f84fd3f"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/is-potential-custom-element-name.jsonl",
+    "bytes": 2360,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 801925,
+    "sha256": "3553e07c552550773ae568383561bd5c0a94119a19d38eec1f6a85f350c49be3"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/tinyglobby.jsonl",
+    "bytes": 20009,
+    "allocated_bytes": 20480,
+    "dev": 27,
+    "inode": 819993,
+    "sha256": "23776e26cdc30062c5f79d48572041ad87641357b3bf6f07254271bf3b1c6b67"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/lodash.isplainobject.jsonl",
+    "bytes": 10855,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 806802,
+    "sha256": "ecbae3d717a9d5050abd7d489da5c992a3c2f98edbaa632a1224c2f5c712f75f"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/papaparse.jsonl",
+    "bytes": 51115,
+    "allocated_bytes": 53248,
+    "dev": 27,
+    "inode": 818356,
+    "sha256": "4850dd96eaa4ca2aabecc6e77f55a11409eb4a0c04dd444fd7be9b51f36872bb"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/uuid.jsonl",
+    "bytes": 85758,
+    "allocated_bytes": 86016,
+    "dev": 27,
+    "inode": 820617,
+    "sha256": "57d117d5930e21be57fcb401a789a9a7970f54c0ce00f44e35803556b384e313"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/regex-recursion.jsonl",
+    "bytes": 9479,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 818405,
+    "sha256": "4f837e7289819fac9265cc3b7e5350d6b47da33a503fd37bbd60a99cbe9bff83"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/tinyexec.jsonl",
+    "bytes": 24247,
+    "allocated_bytes": 24576,
+    "dev": 27,
+    "inode": 819971,
+    "sha256": "d11829a1a841b710af3f05167aafabfc9fdda5415a6f10bb756d695cad345bc3"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/obug.jsonl",
+    "bytes": 20879,
+    "allocated_bytes": 24576,
+    "dev": 27,
+    "inode": 817581,
+    "sha256": "5a0d592212d04390f472ece3849306732767fb339597af988ff2b3bf8271d502"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/chainsaw.jsonl",
+    "bytes": 4974,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 800579,
+    "sha256": "dbc50a6de1131be00442007b7af5615d6a3a991f76f5a5bc8470167f154f7bdb"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/archiver.jsonl",
+    "bytes": 81866,
+    "allocated_bytes": 81920,
+    "dev": 27,
+    "inode": 800539,
+    "sha256": "74382ba5c23bb36d12e8a2ea6bdf330836bbee34586cd423672dff5ac7e8fcbd"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/commander.jsonl",
+    "bytes": 137445,
+    "allocated_bytes": 139264,
+    "dev": 27,
+    "inode": 800592,
+    "sha256": "67ebf12c49c89ce5d8e96481c52f305d978c61a923c86adbeea336f93f6c9ff9"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/ccount.jsonl",
+    "bytes": 12141,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 800565,
+    "sha256": "aa2ce99ba1d4b088a82f906567e8a45465e63d82de609239a709b0537677910f"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/traverse.jsonl",
+    "bytes": 31240,
+    "allocated_bytes": 32768,
+    "dev": 27,
+    "inode": 820033,
+    "sha256": "1cfa5b9e5383121fdd5385ec23b88ea261499ce6564366186b8df40d6b5ba66e"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/rolldown.jsonl",
+    "bytes": 1503139,
+    "allocated_bytes": 1503232,
+    "dev": 27,
+    "inode": 818429,
+    "sha256": "1bbf8e1561e539aefbfbcc4265291e651bfe4774291e2188ff264a86afe8cac0"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/playwright-core.jsonl",
+    "bytes": 8431515,
+    "allocated_bytes": 8433664,
+    "dev": 27,
+    "inode": 818404,
+    "sha256": "68c2babadbf6254f77a8213bdf3c0218f5afd9c07ac2ab05c6fc965b20e3e40b"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/marked.jsonl",
+    "bytes": 349693,
+    "allocated_bytes": 352256,
+    "dev": 27,
+    "inode": 822580,
+    "sha256": "93d73078bb61d316b42100f5e0f46ecb13b02d14f39cc61773b9ceefbeb4c3ef"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/lightningcss-darwin-arm64.jsonl",
+    "bytes": 39349,
+    "allocated_bytes": 40960,
+    "dev": 27,
+    "inode": 801946,
+    "sha256": "b4d711c2f39b0b7da5a36fdebb412b41686dd6a74e1899d4f5bcd964273e7790"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/dom-accessibility-api.jsonl",
+    "bytes": 73406,
+    "allocated_bytes": 73728,
+    "dev": 27,
+    "inode": 800660,
+    "sha256": "4498d8f2208ba273938dd7e50cae646cd68a16e0d580f13c968126340e458f72"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/siginfo.jsonl",
+    "bytes": 3156,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 818426,
+    "sha256": "958ac9ccffefdfd7d686e8cf6f8a89835d8acb5802e8c873de93feb607fe11c0"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/end-of-stream.jsonl",
+    "bytes": 11486,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 801754,
+    "sha256": "b08e8988523f92f8810f1c6ab7440d82028842bd67e8afd7a0d4e2888a22c527"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/buffer.jsonl",
+    "bytes": 95314,
+    "allocated_bytes": 98304,
+    "dev": 27,
+    "inode": 800569,
+    "sha256": "e5bea61d8c837434a473bca701332ca1fe70f36ec88c0e708d35e57296f7b72d"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/bl.jsonl",
+    "bytes": 81749,
+    "allocated_bytes": 81920,
+    "dev": 27,
+    "inode": 800582,
+    "sha256": "40bb63fd000c002de5367ed0e99acfda0e921433e84dcd534957255a2423dab2"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/immer.jsonl",
+    "bytes": 350158,
+    "allocated_bytes": 352256,
+    "dev": 27,
+    "inode": 801932,
+    "sha256": "356fb6505adab4f7a61f8302da9f36157040ffa9da63f325ea4725b0a4fa03e3"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/micromark-util-chunked.jsonl",
+    "bytes": 10914,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 813869,
+    "sha256": "6d8428f5f34fb7b1c8c422f1f3b30f4f61eef9dba0f3db4796088a20ac280006"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/lodash.groupby.jsonl",
+    "bytes": 13405,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 802254,
+    "sha256": "a9694a912d6696a8c98c084ed621ef4c253fd9d5109021c5c1ce829619016c68"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/mdast-util-to-string.jsonl",
+    "bytes": 22978,
+    "allocated_bytes": 24576,
+    "dev": 27,
+    "inode": 811353,
+    "sha256": "c9cc5f3b17dba25d0195dbc81dc5d72b50f27e105203a271f74d53920b7ddb96"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/archiver-utils.jsonl",
+    "bytes": 14737,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 800555,
+    "sha256": "5f7f2e1e03e31c93e400fb14aa781dabb292c9f981b5023a06bd5e1bc26cf977"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/jstat.jsonl",
+    "bytes": 22929,
+    "allocated_bytes": 24576,
+    "dev": 27,
+    "inode": 801936,
+    "sha256": "0e788ff5cc7285270b9819c8a5dade72d371dcb1f6fa88de4d84ac311a9a569f"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/pako.jsonl",
+    "bytes": 37387,
+    "allocated_bytes": 40960,
+    "dev": 27,
+    "inode": 818361,
+    "sha256": "8f671380787b0329cef847f2c44dbe0edff04edf41e09c50870804456eed2ce1"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/character-entities.jsonl",
+    "bytes": 13595,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 800585,
+    "sha256": "92e664f0088898caa626eef13a26a0cfc3cf3803c7f271ccd879858f4cd94609"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/micromark-factory-space.jsonl",
+    "bytes": 12197,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 813871,
+    "sha256": "f7b514670aa91e2cdd7c3832985930afad9e1880fd40314f30cca261f44456b1"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/dequal.jsonl",
+    "bytes": 10762,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 800589,
+    "sha256": "a4857437fd21166f16aeae35dfe47a65e061e0fdccfe901eb1ae9295c72844f6"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/dompurify.jsonl",
+    "bytes": 262653,
+    "allocated_bytes": 266240,
+    "dev": 27,
+    "inode": 800830,
+    "sha256": "f30c834254082d0ccc930314b2849cfcec495c8a21b712d6275ddd1605f46198"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/lz-string.jsonl",
+    "bytes": 5980,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 808028,
+    "sha256": "58a3dcb75859645486b5400d1b6d2d22509fb40fde0da5c17d717d5fb5152008"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/micromark-util-resolve-all.jsonl",
+    "bytes": 10995,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 814490,
+    "sha256": "2a92645293d3958506494ba85a224e3e81867306955cbb34e80509a652cbc5b4"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/playwright.jsonl",
+    "bytes": 8168722,
+    "allocated_bytes": 8171520,
+    "dev": 27,
+    "inode": 818776,
+    "sha256": "3f11ee8cfe7c10a8004e313c8412a5cbd109e8371d65afd17aa2bbc5b942431f"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/tinybench.jsonl",
+    "bytes": 62891,
+    "allocated_bytes": 65536,
+    "dev": 27,
+    "inode": 819554,
+    "sha256": "bfb025df49d101bca21f2daffd784abd6968c227dcb2acf6eeaa48c378c22800"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/micromark-util-character.jsonl",
+    "bytes": 14531,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 813510,
+    "sha256": "3ae2bf8029c82e675a9a80eceece1a1a681d4d0155150e8614e850547ecbb5dc"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/shell-quote.jsonl",
+    "bytes": 31170,
+    "allocated_bytes": 32768,
+    "dev": 27,
+    "inode": 818424,
+    "sha256": "e11dab97601abd8948100b752bae2979e685920ec2fb2f9544755bbf5ffb901c"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/normalize-path.jsonl",
+    "bytes": 7826,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 817718,
+    "sha256": "1cb902d73fae71ec0a00001cb5f5555d2616251d1314a88d79b9d211a28ebc18"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/entities.jsonl",
+    "bytes": 45404,
+    "allocated_bytes": 49152,
+    "dev": 27,
+    "inode": 801888,
+    "sha256": "f365defd099c3694d4e1f4f73744f048a923a61c777ee9a284358abfdc2f53f4"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/html-void-elements.jsonl",
+    "bytes": 12782,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 801923,
+    "sha256": "27850a88aca8f610fcde63b9fca8f846af68013e20975db4be67c8d5ddc616cd"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/oniguruma-parser.jsonl",
+    "bytes": 15664,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 818355,
+    "sha256": "779de642064bacd3702f638b3fdd46c9d1d1eb2cb2dc5deee258912c6e4ec006"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/tiny-emitter.jsonl",
+    "bytes": 14105,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 818750,
+    "sha256": "02e241431c50df90490dc00608601b43de3080b612dd550d35ae5740faf82fb7"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/tldts.jsonl",
+    "bytes": 1521640,
+    "allocated_bytes": 1523712,
+    "dev": 27,
+    "inode": 820537,
+    "sha256": "b912997e208837bdfcaf857fe198ff40e0eb687f47af4d8a371672edd0c3652c"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/ansi-regex.jsonl",
+    "bytes": 21060,
+    "allocated_bytes": 24576,
+    "dev": 27,
+    "inode": 800558,
+    "sha256": "dc99e65c38069321b6dcc5a6c8eb9a1f62b6e7d12df7d597530e6f8484bdaba9"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/micromark-extension-gfm-tagfilter.jsonl",
+    "bytes": 11959,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 812679,
+    "sha256": "1bbfb5ddaf86537aac298e9662eed5d5ec6f50a916f14cc23b32daa99569556e"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/base64-js.jsonl",
+    "bytes": 17163,
+    "allocated_bytes": 20480,
+    "dev": 27,
+    "inode": 800561,
+    "sha256": "51723cb2e5246960c059a5e5fe65d4e9cfb67c2d0de1175367eeeb6ee8e6a5f5"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/js-tokens.jsonl",
+    "bytes": 18402,
+    "allocated_bytes": 20480,
+    "dev": 27,
+    "inode": 801935,
+    "sha256": "a0dd6512b9c9f730f10fa8b3367f312955a3ec606ce4bc250d89333aeeefd5d4"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/fast-csv.jsonl",
+    "bytes": 89034,
+    "allocated_bytes": 90112,
+    "dev": 27,
+    "inode": 801898,
+    "sha256": "242ab128e80a32c8b66bad3e65b677bfd86c6328372868ee645a152acef3c595"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@playwright/test.jsonl",
+    "bytes": 4979680,
+    "allocated_bytes": 4980736,
+    "dev": 27,
+    "inode": 798872,
+    "sha256": "d06e220abbe9e0e33db5de7291df439210519df266b319058b7c411093976d8e"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@fortune-sheet/core.jsonl",
+    "bytes": 126614,
+    "allocated_bytes": 126976,
+    "dev": 27,
+    "inode": 791250,
+    "sha256": "9b4308f4bd478452cd508c65e55b005ce31c6452772ceb3f6d2b8c87f6e1cef7"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@fortune-sheet/formula-parser.jsonl",
+    "bytes": 43840,
+    "allocated_bytes": 45056,
+    "dev": 27,
+    "inode": 791229,
+    "sha256": "6d29f8f7f42d8f138f7343972ff9714c50b2b8484444e4a6a5ebf20491861e4b"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@fortune-sheet/react.jsonl",
+    "bytes": 131098,
+    "allocated_bytes": 135168,
+    "dev": 27,
+    "inode": 791251,
+    "sha256": "75e3f96975846457f6f1f47cbae64af50d49a3652e69225bb4ca0ce8954bda74"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@asamuzakjp/css-color.jsonl",
+    "bytes": 95947,
+    "allocated_bytes": 98304,
+    "dev": 27,
+    "inode": 791186,
+    "sha256": "be8b727a7a68234c5314c94ed5e9507775d9726c5fae10d73d3ed5d6ec56730b"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@asamuzakjp/dom-selector.jsonl",
+    "bytes": 325343,
+    "allocated_bytes": 327680,
+    "dev": 27,
+    "inode": 791189,
+    "sha256": "636d601689d8327d652df282272b17f39fed2fd83f2dcb879bcf3be38de3fac6"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@internationalized/number.jsonl",
+    "bytes": 1190511,
+    "allocated_bytes": 1191936,
+    "dev": 27,
+    "inode": 791241,
+    "sha256": "fb027ac14a8a12ab4bc1ae1d4037746c5b9aaea3c9b817317c03ecebbc1ef6f0"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@internationalized/string.jsonl",
+    "bytes": 825540,
+    "allocated_bytes": 827392,
+    "dev": 27,
+    "inode": 791237,
+    "sha256": "a362d262d138d9b9fad126ba8dee5e7a1272de392f2062f950b0d1ac2883c52f"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@internationalized/date.jsonl",
+    "bytes": 1038380,
+    "allocated_bytes": 1040384,
+    "dev": 27,
+    "inode": 791240,
+    "sha256": "9aff0d8df1c3eef5e83f59bfd7a003f3551a1e635eb5bfda26a5f33a3f3630dd"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@nodable/entities.jsonl",
+    "bytes": 6063,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 796088,
+    "sha256": "63ecd73e7548fdc9ceae8d306426326a68ee5f617496a8451750f16dcaebb5e1"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@xstate/react.jsonl",
+    "bytes": 160058,
+    "allocated_bytes": 163840,
+    "dev": 27,
+    "inode": 799465,
+    "sha256": "c213ad94745a33907262a36be96832d3e003aaa1494fab842b34a78ea030734d"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@exodus/bytes.jsonl",
+    "bytes": 48872,
+    "allocated_bytes": 49152,
+    "dev": 27,
+    "inode": 791217,
+    "sha256": "51919154895798392c246e90eb4d309fc2bea7d09044be7640bc6760f173934f"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@ungap/structured-clone.jsonl",
+    "bytes": 28458,
+    "allocated_bytes": 28672,
+    "dev": 27,
+    "inode": 798912,
+    "sha256": "3b74b18ee70bcfba0512886032bbcc348e285bd93c4bfeb82730cd35cc94e339"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@csstools/css-calc.jsonl",
+    "bytes": 33347,
+    "allocated_bytes": 36864,
+    "dev": 27,
+    "inode": 791192,
+    "sha256": "aeb1cd912bbff61acfd2e692689de3aaee077ef8fe08767e825cc6c2cc798b13"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@csstools/css-syntax-patches-for-csstree.jsonl",
+    "bytes": 38121,
+    "allocated_bytes": 40960,
+    "dev": 27,
+    "inode": 791220,
+    "sha256": "f4286415174610444fc9623ae258b354a9411a7abb80f3d7c444e4a3628be79d"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@csstools/css-tokenizer.jsonl",
+    "bytes": 24618,
+    "allocated_bytes": 28672,
+    "dev": 27,
+    "inode": 791685,
+    "sha256": "c26445d56d9efebf83d193ff6c3915cde15f82f9f6a872a2a0421d93e2f7aec8"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@csstools/color-helpers.jsonl",
+    "bytes": 16732,
+    "allocated_bytes": 20480,
+    "dev": 27,
+    "inode": 791188,
+    "sha256": "77a9d8d0aa6b323313456fb8bbcc6cee3110c8a2f77ba5abe9441b4cea824798"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@csstools/css-color-parser.jsonl",
+    "bytes": 58593,
+    "allocated_bytes": 61440,
+    "dev": 27,
+    "inode": 791221,
+    "sha256": "b4c560b8e7001262ef4d55120a8ed0b8f16b1472ab1f3d5cafe85e53ed87f82a"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@csstools/css-parser-algorithms.jsonl",
+    "bytes": 25875,
+    "allocated_bytes": 28672,
+    "dev": 27,
+    "inode": 791191,
+    "sha256": "fea0f1446b2acf918b6ab5ff9441f29b5bb6255072ddb8495da8bdcd2e1d45e4"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@fast-csv/parse.jsonl",
+    "bytes": 38908,
+    "allocated_bytes": 40960,
+    "dev": 27,
+    "inode": 791243,
+    "sha256": "895e223f76f2e27e47ea0414a1038cf70732449caf044ea6e0e71c62ab83b1fa"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@fast-csv/format.jsonl",
+    "bytes": 31867,
+    "allocated_bytes": 32768,
+    "dev": 27,
+    "inode": 791216,
+    "sha256": "8a78bc58ed44c5dc5baaab445e7df6301eba25578cb6da1a57c2880a0b41accf"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@jridgewell/sourcemap-codec.jsonl",
+    "bytes": 19659,
+    "allocated_bytes": 20480,
+    "dev": 27,
+    "inode": 791225,
+    "sha256": "2f33f9884f13097ee0519aab301b721771bb93f4e44cb9165ba889e7d5a5d240"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@jridgewell/resolve-uri.jsonl",
+    "bytes": 26993,
+    "allocated_bytes": 28672,
+    "dev": 27,
+    "inode": 791227,
+    "sha256": "6a5cdfda9bd63ac2a9d068c669549efa0cc329ff50c3f3e3a9b6f14a12a577c9"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@jridgewell/trace-mapping.jsonl",
+    "bytes": 70601,
+    "allocated_bytes": 73728,
+    "dev": 27,
+    "inode": 791210,
+    "sha256": "9565c83e60f5a745fc44f0bd0fe3bad636b758739d515c3348f34daca7cfd17f"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@vitest/mocker.jsonl",
+    "bytes": 138851,
+    "allocated_bytes": 139264,
+    "dev": 27,
+    "inode": 798915,
+    "sha256": "c52400d69603072c450214b1430d629547d1790a7eb29b95545033cc7974a352"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@vitest/spy.jsonl",
+    "bytes": 169553,
+    "allocated_bytes": 172032,
+    "dev": 27,
+    "inode": 798919,
+    "sha256": "9e91de945147943000d799a88c4f81fd1e2a7e35a97ddc57f123bf67ecdb455c"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@babel/runtime.jsonl",
+    "bytes": 228065,
+    "allocated_bytes": 229376,
+    "dev": 27,
+    "inode": 791190,
+    "sha256": "a011d9b1dcde04a1fc3b93e063b2784232320269c2cbd144c3332e35765ba7bd"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@babel/code-frame.jsonl",
+    "bytes": 98418,
+    "allocated_bytes": 102400,
+    "dev": 27,
+    "inode": 791183,
+    "sha256": "4cb6e3d5fa7bbc7eb6695e0217dcb4aaa37968750d39bbe9263f9f2079d933b1"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@babel/helper-validator-identifier.jsonl",
+    "bytes": 65250,
+    "allocated_bytes": 65536,
+    "dev": 27,
+    "inode": 791184,
+    "sha256": "2ef1eaba3ecfa707a472b380446ed4d7be12a2d50e2a6a2f5c363f1fa6a92620"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@react-types/shared.jsonl",
+    "bytes": 1366128,
+    "allocated_bytes": 1368064,
+    "dev": 27,
+    "inode": 798875,
+    "sha256": "9a7e41d9e104f4ecad3a52d42a1e9b5baa4786a782c5b598b577b8dab63f80da"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@shikijs/vscode-textmate.jsonl",
+    "bytes": 9023,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 798885,
+    "sha256": "f08a018b5bcd93a73c1d00eb1ad63ffdf86edc194f3ab5fad419562e79903133"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@shikijs/core.jsonl",
+    "bytes": 113116,
+    "allocated_bytes": 114688,
+    "dev": 27,
+    "inode": 798879,
+    "sha256": "d719d3b9e0e6983b90d7c4b5b80e01333b83515405348872033cce7de47a8b23"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@shikijs/engine-oniguruma.jsonl",
+    "bytes": 79178,
+    "allocated_bytes": 81920,
+    "dev": 27,
+    "inode": 798878,
+    "sha256": "f5e0cbc11f07f6fd046907ca3d6390373551e5cbb1eaa2f93e09c8d1804029f8"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@shikijs/types.jsonl",
+    "bytes": 71047,
+    "allocated_bytes": 73728,
+    "dev": 27,
+    "inode": 798894,
+    "sha256": "e06b0513bca558555bc5edfff83db4cfc9fb2d30728d4991c0b193e4270c3dde"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@shikijs/themes.jsonl",
+    "bytes": 56642,
+    "allocated_bytes": 57344,
+    "dev": 27,
+    "inode": 798893,
+    "sha256": "007d08fe4a3ac8d0d463befe42e37cb6a7f48101301f9c2a9b45fd2b2f372149"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@shikijs/engine-javascript.jsonl",
+    "bytes": 78124,
+    "allocated_bytes": 81920,
+    "dev": 27,
+    "inode": 798888,
+    "sha256": "7bd31499916a824071cc07d6c433e68c57d9818322bda02f33e13d1b92b79756"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@shikijs/langs.jsonl",
+    "bytes": 56530,
+    "allocated_bytes": 57344,
+    "dev": 27,
+    "inode": 798889,
+    "sha256": "3fee1f022c508b6115901f8aba0f4abba7a2b773d190ec6443c9e1f47bfda5d8"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@shikijs/primitive.jsonl",
+    "bytes": 11526,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 798891,
+    "sha256": "6e653c0d3670c47e7a1d3b9378b5af3afc309c15c8a58a4926b3eaa60e72984a"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@deepseek-ai/libreoffice-kit-win32-x64.jsonl",
+    "bytes": 9373,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 791224,
+    "sha256": "54687031fb4a5e4a4446e5180d1382a9ab6a9707497f8833b5f1cb629bfa67aa"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@deepseek-ai/libreoffice-kit-darwin-x64.jsonl",
+    "bytes": 8779,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 791212,
+    "sha256": "8eaa151ae55e119771ba24e89022e9d91f5870ae0431682f37989bf161eeb7bc"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@deepseek-ai/libreoffice-kit-darwin-arm64.jsonl",
+    "bytes": 8885,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 791206,
+    "sha256": "5d5819a9e6585edd499713de044930b63c330603d5b50a889e0315c537e68ae6"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@deepseek-ai/libreoffice-kit-wasm.jsonl",
+    "bytes": 10704,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 791219,
+    "sha256": "7da8ee7ff03477e9c9c6c262c1e2bb3ffb309803d98d0273e3b90f7307e73bcb"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@deepseek-ai/libreoffice-kit.jsonl",
+    "bytes": 18597,
+    "allocated_bytes": 20480,
+    "dev": 27,
+    "inode": 791214,
+    "sha256": "30022f362a6899f3e3dc72c09a02710765a3671b609c4db2c213b925042f8386"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@deepseek-ai/libreoffice-kit-win32-arm64.jsonl",
+    "bytes": 7454,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 791211,
+    "sha256": "45dcdbd98f602bce4ea96a08b2e595f49d69ae37454b2822515f31388e974584"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@earendil-works/pi-tui.jsonl",
+    "bytes": 55323,
+    "allocated_bytes": 57344,
+    "dev": 27,
+    "inode": 822557,
+    "sha256": "f3f45b982b52967078a4fec44c6224c9a9212234c1ba5643c0c41794f37a0850"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@formulajs/formulajs.jsonl",
+    "bytes": 105713,
+    "allocated_bytes": 106496,
+    "dev": 27,
+    "inode": 791249,
+    "sha256": "79095017c9a1a3615742eac2e658d01b06d9796df5d808924bb5a0c1fe692d22"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@tanstack/devtools-event-client.jsonl",
+    "bytes": 16606,
+    "allocated_bytes": 20480,
+    "dev": 27,
+    "inode": 798887,
+    "sha256": "2a70277b53c9b5f134522691526c67e6a7ef0beffd001c954924ba559d7060c5"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@tanstack/react-virtual.jsonl",
+    "bytes": 199181,
+    "allocated_bytes": 200704,
+    "dev": 27,
+    "inode": 798896,
+    "sha256": "e4b89d01961f60b503ee538dd53877566fbf233145b1f40481eac4fbf4d6b74a"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@tanstack/react-form.jsonl",
+    "bytes": 315053,
+    "allocated_bytes": 315392,
+    "dev": 27,
+    "inode": 798897,
+    "sha256": "c49f7776db0e8c7f88ee58181fc43f6a7eff0ce3defbfdb24f0ae2adab935927"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@tanstack/virtual-core.jsonl",
+    "bytes": 143313,
+    "allocated_bytes": 143360,
+    "dev": 27,
+    "inode": 798904,
+    "sha256": "39ae894cfa5d0f601274b7a0fc059c489ede6d3bcf13a087924de23f7f0db7a1"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@tanstack/react-store.jsonl",
+    "bytes": 89962,
+    "allocated_bytes": 90112,
+    "dev": 27,
+    "inode": 798895,
+    "sha256": "b0e5e31578d4df8640e3f51b64e732d252b94845fe375b446802fe29ee906d63"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@tanstack/form-core.jsonl",
+    "bytes": 194199,
+    "allocated_bytes": 196608,
+    "dev": 27,
+    "inode": 798903,
+    "sha256": "1e97b22d1c1bbf0ccadc8ce577e555da6540562a3832b0a073ea72cdd8ba9a0b"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@tanstack/pacer-lite.jsonl",
+    "bytes": 5468,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 798898,
+    "sha256": "ec6b280858790f9cf5d71c5c9ce676d66083bdb29f55f144681d3f6ac9c47214"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@tanstack/store.jsonl",
+    "bytes": 60225,
+    "allocated_bytes": 61440,
+    "dev": 27,
+    "inode": 798907,
+    "sha256": "5c37b40af58ecd660176e203b1d06be4322686f71cc9cd775e2fbd3d211dfe9b"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@axe-core/playwright.jsonl",
+    "bytes": 758314,
+    "allocated_bytes": 761856,
+    "dev": 27,
+    "inode": 791194,
+    "sha256": "08044de498636e39c09f08bc9948be1681c99e2a21d8aaa6b1fe3ceaee396636"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@vitejs/plugin-react.jsonl",
+    "bytes": 122467,
+    "allocated_bytes": 122880,
+    "dev": 27,
+    "inode": 798917,
+    "sha256": "364a9820804882b0e4f97b3f1e4d3b7eaf749a39e7c73e9f38b596db9562903f"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@floating-ui/core.jsonl",
+    "bytes": 80867,
+    "allocated_bytes": 81920,
+    "dev": 27,
+    "inode": 791230,
+    "sha256": "4eb8b199d0d9c3ab8a9f6697cc9c166a35bb37d3f2a22f48b3c63b0ac3114890"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@floating-ui/utils.jsonl",
+    "bytes": 12009,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 791200,
+    "sha256": "a2121237e75c37b770407c769b7b439f1e8dd2aad81f2619e1d90eb3e1687c22"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@floating-ui/react-dom.jsonl",
+    "bytes": 86933,
+    "allocated_bytes": 90112,
+    "dev": 27,
+    "inode": 791234,
+    "sha256": "5847db85efdbc8a19651117d961b102e84185fc4406588a662983a1acf8e8ed6"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@floating-ui/dom.jsonl",
+    "bytes": 118854,
+    "allocated_bytes": 122880,
+    "dev": 27,
+    "inode": 791231,
+    "sha256": "20a43df688cbb182e78bc6c3ee3eddb185f9220ca826e4baffe0bc2e28b87fb5"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@testing-library/react.jsonl",
+    "bytes": 207859,
+    "allocated_bytes": 208896,
+    "dev": 27,
+    "inode": 798925,
+    "sha256": "fe4fe60e6f076a7f210705a0801f3525b5b29de72a3fe45ac464775ff4a33cf2"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@testing-library/dom.jsonl",
+    "bytes": 408056,
+    "allocated_bytes": 409600,
+    "dev": 27,
+    "inode": 798921,
+    "sha256": "486a2fbdcde6430b95c9941f98f2188e53c5abb77e2675967b2dd7df6696b0b2"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@types/aria-query.jsonl",
+    "bytes": 11498,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 798900,
+    "sha256": "36deaa78d1149439df79c0ba7849f9beadc86891a54ce532ebc4866601cbc903"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@types/node.jsonl",
+    "bytes": 2333653,
+    "allocated_bytes": 2334720,
+    "dev": 27,
+    "inode": 798929,
+    "sha256": "5c7022d7fc75af3d22a370563ad9432cadf1be5c013f868dc8ad2ca1897f1b00"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@types/debug.jsonl",
+    "bytes": 22862,
+    "allocated_bytes": 24576,
+    "dev": 27,
+    "inode": 798923,
+    "sha256": "24666b7a14460ba7cb86d9df43181df0df514128d2c73e6aa4a94bb37fc00351"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@types/hast.jsonl",
+    "bytes": 14492,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 798927,
+    "sha256": "957f46f74e4186e2bae34fe7fa544840bbae44391553c39d828059cf1565d533"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@types/trusted-types.jsonl",
+    "bytes": 18962,
+    "allocated_bytes": 20480,
+    "dev": 27,
+    "inode": 798908,
+    "sha256": "1557169d4692febbe310c23a61b5c67f072cd9de0257122590037195bdd2c360"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@types/unist.jsonl",
+    "bytes": 15808,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 799277,
+    "sha256": "21b2324253556e3e0f32e0d6f5ef63286713af4ad6a0337488579f604293d105"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@types/chai.jsonl",
+    "bytes": 82415,
+    "allocated_bytes": 86016,
+    "dev": 27,
+    "inode": 798913,
+    "sha256": "f9f08788028746ef5a6a54a1b33e79118dcb0837326fd7b38ae5debc3df58cc6"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@types/regenerator-runtime.jsonl",
+    "bytes": 7469,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 798938,
+    "sha256": "b799de48cc9ba9c83f729ef871172d1fb416344873cc7a31c2aba8dd1e1f559e"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@types/react-dom.jsonl",
+    "bytes": 178867,
+    "allocated_bytes": 180224,
+    "dev": 27,
+    "inode": 798909,
+    "sha256": "98533d58a2ce447400ac8dbac86c66fd0a9f0e8feccb4ea96440b16f11c55c9f"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@types/ms.jsonl",
+    "bytes": 10105,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 798926,
+    "sha256": "976de2439e14926a92144f450071c2de52a342b03d410cd45be940d54a93c9ae"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@types/deep-eql.jsonl",
+    "bytes": 3085,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 798922,
+    "sha256": "836643f042970dd1132462fcd702965e039fbf65f9f8feaab9b2a17a6679f65c"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@types/pngjs.jsonl",
+    "bytes": 12837,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 798906,
+    "sha256": "a407c003158a217a679f08a35796ad9e685f5da710e488ca35b102a806d7a7ac"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@types/katex.jsonl",
+    "bytes": 20984,
+    "allocated_bytes": 24576,
+    "dev": 27,
+    "inode": 798918,
+    "sha256": "0f065a2dac075518041e5fa03878ffd665018019208966e94ecf0c5880daba34"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@types/react.jsonl",
+    "bytes": 666208,
+    "allocated_bytes": 667648,
+    "dev": 27,
+    "inode": 798910,
+    "sha256": "00d2e3697b83eb7f98be3ee309df3d22a562115d6be8612ffcccf7c9f414f295"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@types/papaparse.jsonl",
+    "bytes": 65308,
+    "allocated_bytes": 65536,
+    "dev": 27,
+    "inode": 798905,
+    "sha256": "42dec54fc6e58025d60684c91aa2d58cdc21f8f5e197329ee913e4fadf3f5729"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@types/mdast.jsonl",
+    "bytes": 23293,
+    "allocated_bytes": 24576,
+    "dev": 27,
+    "inode": 798928,
+    "sha256": "bca1bd5f274a0ef08b04034e9a7bce5a29f73e5572153e834e63992465165ff8"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@types/estree.jsonl",
+    "bytes": 37766,
+    "allocated_bytes": 40960,
+    "dev": 27,
+    "inode": 798924,
+    "sha256": "63cf7f10bd43208ea6cbbdde3a44503c7eb638c8664d53aec2f6f32faa239f56"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@napi-rs/canvas-win32-arm64-msvc.jsonl",
+    "bytes": 26048,
+    "allocated_bytes": 28672,
+    "dev": 27,
+    "inode": 791258,
+    "sha256": "cd1cc647f08ec23a10098cc80a68014ce710914ea24048edacd94b368652dd3e"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@napi-rs/canvas-darwin-arm64.jsonl",
+    "bytes": 131637,
+    "allocated_bytes": 135168,
+    "dev": 27,
+    "inode": 791233,
+    "sha256": "476d68906e7f2292abcdae4044cf9aca0cdb89f72b543e8ac97b261df423a0a0"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@napi-rs/canvas-win32-x64-msvc.jsonl",
+    "bytes": 132149,
+    "allocated_bytes": 135168,
+    "dev": 27,
+    "inode": 791266,
+    "sha256": "a0e55244aacde68c321dc3560c01581406c88d249627bc136ea7b978c28d5c57"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@napi-rs/canvas-linux-riscv64-gnu.jsonl",
+    "bytes": 43562,
+    "allocated_bytes": 45056,
+    "dev": 27,
+    "inode": 791245,
+    "sha256": "dc4cac1590837d35610ebdd0846005e3db060aa62f34f21b2076038dd5b29d17"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@napi-rs/canvas-linux-arm-gnueabihf.jsonl",
+    "bytes": 134340,
+    "allocated_bytes": 135168,
+    "dev": 27,
+    "inode": 791238,
+    "sha256": "6079c1c599d934e24aa0304b3565f17ff583a6c5a67a1e9b98dd4252adda639b"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@napi-rs/canvas-linux-x64-gnu.jsonl",
+    "bytes": 132516,
+    "allocated_bytes": 135168,
+    "dev": 27,
+    "inode": 791257,
+    "sha256": "45a473f5dc649f0a6ecce9f896a8f1595ead7f2d866bdb3a1aec75682ff83761"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@napi-rs/canvas.jsonl",
+    "bytes": 293967,
+    "allocated_bytes": 294912,
+    "dev": 27,
+    "inode": 796031,
+    "sha256": "5501c399ac3cefa996036a8c3021c8fe501f6f529cd6fe54d87793d7c7d92d3b"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@napi-rs/canvas-linux-x64-musl.jsonl",
+    "bytes": 132948,
+    "allocated_bytes": 135168,
+    "dev": 27,
+    "inode": 791255,
+    "sha256": "89d4ee8f15e95107b6fe3334d25fbf809fe262d435ef4221fcd4909cdb051b63"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@napi-rs/canvas-linux-arm64-gnu.jsonl",
+    "bytes": 133632,
+    "allocated_bytes": 135168,
+    "dev": 27,
+    "inode": 791253,
+    "sha256": "acde2593c5a5c9780bde8d0facf3a45ab003884a3cb3985fdf0652356ac3a794"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@napi-rs/canvas-darwin-x64.jsonl",
+    "bytes": 130538,
+    "allocated_bytes": 131072,
+    "dev": 27,
+    "inode": 791254,
+    "sha256": "b5758d398ac0380ae8049dad04dbfd85bc41f02618d93ac7dc7ab79477d77071"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@napi-rs/canvas-linux-arm64-musl.jsonl",
+    "bytes": 123284,
+    "allocated_bytes": 126976,
+    "dev": 27,
+    "inode": 791620,
+    "sha256": "092cb0793776e4f947e5c492b9e0930f427659ae9f108b110e9dcfc80da81190"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@napi-rs/canvas-android-arm64.jsonl",
+    "bytes": 132212,
+    "allocated_bytes": 135168,
+    "dev": 27,
+    "inode": 791239,
+    "sha256": "558903bcd89094083e1469eaeef1d2c68fb7417d9499b47ee0d027f500fc2103"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@swc/helpers.jsonl",
+    "bytes": 96728,
+    "allocated_bytes": 98304,
+    "dev": 27,
+    "inode": 798902,
+    "sha256": "49d1f96754492856b0145aee6bb5321e1efe18fccb87c95d6c0082f74676b439"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@koromix/koffi-linux-loong64.jsonl",
+    "bytes": 13160,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 791203,
+    "sha256": "8dc710f5064f35f2a52331f3965ddd816b84ac080284ff2b362a0b3cb8d7e96e"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@koromix/koffi-linux-riscv64.jsonl",
+    "bytes": 12485,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 791205,
+    "sha256": "9a1813eed40751b67242bd816c5ada1f57297961f8fc290e0bcfa17e3addb88a"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@koromix/koffi-openbsd-ia32.jsonl",
+    "bytes": 12926,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 791235,
+    "sha256": "563901b6777385433ab763cfec6d08653893d4f172f2d36f40cba7645628c460"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@koromix/koffi-darwin-x64.jsonl",
+    "bytes": 12604,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 791222,
+    "sha256": "9d03a25ebcfe3e2f09d5a4df7f991d7880bf4eed5f6795b44cdb53e93554516c"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@koromix/koffi-darwin-arm64.jsonl",
+    "bytes": 13430,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 791199,
+    "sha256": "8f85bf93adb21cd36eaba36fc99c8bf23cec124f36e865ec92a03d06c1ac3538"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@koromix/koffi-win32-x64.jsonl",
+    "bytes": 12693,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 791247,
+    "sha256": "45edeea40f6471c93647f0c465a3c7f155880721c72f9d450dce3e2a4e2f014f"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@koromix/koffi-win32-arm64.jsonl",
+    "bytes": 9030,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 791256,
+    "sha256": "e471f9aae303b695a1f847c24836cfd7d5cd21831d9031158e9f4fd9110518ed"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@koromix/koffi-linux-arm64.jsonl",
+    "bytes": 12849,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 791204,
+    "sha256": "c68fff269e53c4610c1db1b9bae10d7ab83892be9090ed14856837b4a1585bdd"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@koromix/koffi-freebsd-x64.jsonl",
+    "bytes": 12849,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 791226,
+    "sha256": "208603d46e7022c3e7053d4cbc345873b49a0d705b1ea6d12a3f51dbb7dfa687"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@koromix/koffi-linux-x64.jsonl",
+    "bytes": 13199,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 791244,
+    "sha256": "a9c6c47dc788bf0fe415843f139b272fdece8b0d436e0db8d74a35d119c2a51f"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@koromix/koffi-linux-ia32.jsonl",
+    "bytes": 12772,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 791246,
+    "sha256": "67a0b8e66a9951a0b34bf5976c5d6096a24cb17a26f89a592c22a1c224b3c436"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@koromix/koffi-freebsd-ia32.jsonl",
+    "bytes": 12922,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 791223,
+    "sha256": "0f846355754c54a18c59aab2dcf59f20af84fe91c0e966cc00aedf01015a0b8d"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@koromix/koffi-freebsd-arm64.jsonl",
+    "bytes": 12835,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 791242,
+    "sha256": "ec35a6b4e6e17d8fe4f6d1e4e3e7ca96a5df6d3a545f6b439bb976b1efe3ac55"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@koromix/koffi-win32-ia32.jsonl",
+    "bytes": 12770,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 791252,
+    "sha256": "18242c43d55e8d699bdd862008263577f92a9221362241dd85dbfefa26aaa1a0"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@koromix/koffi-openbsd-x64.jsonl",
+    "bytes": 12681,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 791201,
+    "sha256": "ac969b50b6d24b3cbb36561e9a02c397d8dc7f2367c95f8bab5e28c0397ff85a"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@oxc-project/types.jsonl",
+    "bytes": 113822,
+    "allocated_bytes": 114688,
+    "dev": 27,
+    "inode": 798761,
+    "sha256": "ae9901b53c3a3b30b8cb9082a0ffdc890c365de1bd542a53eed7e4c183514955"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@rolldown/binding-linux-x64-musl.jsonl",
+    "bytes": 536417,
+    "allocated_bytes": 536576,
+    "dev": 27,
+    "inode": 798884,
+    "sha256": "01fe9de66777d413fc8c6662472b044f1a9e5ae2efff04891f5925e805420ff2"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@rolldown/binding-linux-arm-gnueabihf.jsonl",
+    "bytes": 548591,
+    "allocated_bytes": 548864,
+    "dev": 27,
+    "inode": 798764,
+    "sha256": "f87784598ec27cc912cf79144beb622349e01562c1901115d39d9bf0b67c2e6e"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@rolldown/pluginutils.jsonl",
+    "bytes": 107115,
+    "allocated_bytes": 110592,
+    "dev": 27,
+    "inode": 798876,
+    "sha256": "bd3d337bf4f8105df71484cdeb85beeb7d1e21fbde8cb4c1f44f6b7b6305154a"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@rolldown/binding-darwin-x64.jsonl",
+    "bytes": 527292,
+    "allocated_bytes": 528384,
+    "dev": 27,
+    "inode": 798763,
+    "sha256": "f4456a8ea1639d0628635511e36704da9080ea176f6912cd6663ff45fc0cac76"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@rolldown/binding-android-arm-eabi.jsonl",
+    "bytes": 12225,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 798759,
+    "sha256": "de9aa20aa6d8d52ccb70f2e8f706641903d0453644cce4e555fdd28b9c793f8d"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@rolldown/binding-freebsd-x64.jsonl",
+    "bytes": 408922,
+    "allocated_bytes": 409600,
+    "dev": 27,
+    "inode": 798881,
+    "sha256": "bdfd8afad7fb9be53330b777c8fb75509f33752589466a6c01bfeabad48eb19b"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@rolldown/binding-linux-arm64-gnu.jsonl",
+    "bytes": 540087,
+    "allocated_bytes": 540672,
+    "dev": 27,
+    "inode": 798883,
+    "sha256": "e6584eec701450edce5a47057199dc5e2bde7ac707fbc2234e817fe1e5aae6e9"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@rolldown/binding-linux-ppc64-gnu.jsonl",
+    "bytes": 34066,
+    "allocated_bytes": 36864,
+    "dev": 27,
+    "inode": 798762,
+    "sha256": "23e757cb0a17c2b9f3f85eead9bd0cb1a83732422c4a347bf5258b50a38964ca"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@rolldown/binding-darwin-arm64.jsonl",
+    "bytes": 533382,
+    "allocated_bytes": 536576,
+    "dev": 27,
+    "inode": 798880,
+    "sha256": "99a812fd86871ce454e78b6964e35d74e3b1e804931931c004c58266a8369f3a"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@rolldown/binding-linux-s390x-gnu.jsonl",
+    "bytes": 34066,
+    "allocated_bytes": 36864,
+    "dev": 27,
+    "inode": 798874,
+    "sha256": "be5a55f61e9ea22cd8d44b540010210809e40cbba59a6af6d5873af9aba091e2"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@rolldown/binding-linux-x64-gnu.jsonl",
+    "bytes": 533979,
+    "allocated_bytes": 536576,
+    "dev": 27,
+    "inode": 798882,
+    "sha256": "444532dc9bd4b51980e0113fea2b5a8b5c326312b41151c70cbbcaa91e3384cb"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@rolldown/binding-win32-arm64-msvc.jsonl",
+    "bytes": 542514,
+    "allocated_bytes": 544768,
+    "dev": 27,
+    "inode": 798890,
+    "sha256": "8381d62c3d83bcf0f74fc139c470c9a56b7e7d8e0d3f710ef75c7635d4c6b2cc"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@rolldown/binding-openharmony-arm64.jsonl",
+    "bytes": 65150,
+    "allocated_bytes": 65536,
+    "dev": 27,
+    "inode": 798892,
+    "sha256": "7c357f37fb74ff84adfbf8990480fe2eed49133e104e981214d0a32287b83f2e"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@rolldown/binding-android-arm64.jsonl",
+    "bytes": 78605,
+    "allocated_bytes": 81920,
+    "dev": 27,
+    "inode": 798771,
+    "sha256": "df99fa6fb179cf05268601b829b8de48704b56a34dae48b924458fade5fdd9ce"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@rolldown/binding-win32-x64-msvc.jsonl",
+    "bytes": 535541,
+    "allocated_bytes": 536576,
+    "dev": 27,
+    "inode": 798831,
+    "sha256": "27784df5557770ac6083b4f6f049c1474ebc922509a9e3095082a47f7d4d7b45"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@rolldown/binding-linux-arm64-musl.jsonl",
+    "bytes": 542510,
+    "allocated_bytes": 544768,
+    "dev": 27,
+    "inode": 798768,
+    "sha256": "07e17572e1356d03d32d524279626ca8e1f7d876dd94202d2f58e2e8902926a3"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@base-ui/utils.jsonl",
+    "bytes": 12320,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 791218,
+    "sha256": "5538ccac9148f63bb9bb4071202f9498d7f1408cb185c853362988ece1a5e5e2"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@base-ui/react.jsonl",
+    "bytes": 16167,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 791198,
+    "sha256": "a4a3bcb2faac990741c3f763e243f1adf06b950352e93a236e0808c08d34ed27"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@bramus/specificity.jsonl",
+    "bytes": 39624,
+    "allocated_bytes": 40960,
+    "dev": 27,
+    "inode": 791208,
+    "sha256": "cfdaa3bbe0bb054642cbd427b0610b7a5a9ff447d4a634a528281b44c7fc0c5e"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@xterm/xterm.jsonl",
+    "bytes": 789084,
+    "allocated_bytes": 790528,
+    "dev": 27,
+    "inode": 800560,
+    "sha256": "1e26c4289e85e69ee8605c16d2e8eaeebb0b1551865f54f76a849809ce552d55"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata/registry.npmjs.org/@xterm/addon-fit.jsonl",
+    "bytes": 305728,
+    "allocated_bytes": 307200,
+    "dev": 27,
+    "inode": 799374,
+    "sha256": "4cfe47bf84dc61f48c4147dfbb842bf7a96c417db3b2e9bf4e5567c64289fa47"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata-full/registry.npmjs.org/lodash.jsonl",
+    "bytes": 247766,
+    "allocated_bytes": 249856,
+    "dev": 27,
+    "inode": 820184,
+    "sha256": "fc43cd215eaf7ee9859d59a32329f6e53be272b58e1051e0040cfc3745dd7355"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata-full/registry.npmjs.org/fast-uri.jsonl",
+    "bytes": 137740,
+    "allocated_bytes": 139264,
+    "dev": 27,
+    "inode": 822676,
+    "sha256": "744caa5355534cde1c268029a38c71614ff33f0587aa3ec52ca6312e52eb2475"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata-full/registry.npmjs.org/typescript.jsonl",
+    "bytes": 15818254,
+    "allocated_bytes": 15818752,
+    "dev": 27,
+    "inode": 820637,
+    "sha256": "89bffbf90cb343a377c635a4384efafcd218e28ccedcc0c3df0b2714f649e32f"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata-full/registry.npmjs.org/react-is.jsonl",
+    "bytes": 5718383,
+    "allocated_bytes": 5722112,
+    "dev": 27,
+    "inode": 820636,
+    "sha256": "48f822322bf70608e3e33720bac5ba4d744b4b5ce5ab67d259a3c653ae24c332"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata-full/registry.npmjs.org/undici-types.jsonl",
+    "bytes": 283937,
+    "allocated_bytes": 286720,
+    "dev": 27,
+    "inode": 823091,
+    "sha256": "b2330605060748e1d620848303e953c00c34d9af84ae07c00f6edb790e1b0345"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata-full/registry.npmjs.org/bl.jsonl",
+    "bytes": 242080,
+    "allocated_bytes": 245760,
+    "dev": 27,
+    "inode": 812019,
+    "sha256": "7a26c4e26bb1542bad23af1d0fb5c979dc34ea646c84eed14a99c9e8ac5645ff"
+  },
+  {
+    "path": "/workspace/pr485-study/xdg-cache/pnpm/v11/metadata-full/registry.npmjs.org/@shikijs/vscode-textmate.jsonl",
+    "bytes": 27735,
+    "allocated_bytes": 28672,
+    "dev": 27,
+    "inode": 801931,
+    "sha256": "fb167d21299c14cdcbc4e1fd86700f9fc314227b0ae835d5b168bc321d91a6cf"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/4c332982",
+    "bytes": 416020,
+    "allocated_bytes": 417792,
+    "dev": 27,
+    "inode": 826510,
+    "sha256": "6b22c4ee9f8ae09cd73b291cac294721bba08013055cd5570ffc3c136868e948"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/ce466365",
+    "bytes": 3260,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823589,
+    "sha256": "cc933be42d356c146a8a1636390b284234c9f6fbb299ab3e688a6d82cbcc5359"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/39a526c3",
+    "bytes": 1276,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823532,
+    "sha256": "4523b3af08f590c16556247d2f556aed00ea98b3ed61a946aa4cbf1bc09d37bc"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/ae573607",
+    "bytes": 1468,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823587,
+    "sha256": "8d6d9d7e2484b971711667c14bf100f069a1f1e3559e2959870abff837781a4d"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/c05095a2",
+    "bytes": 2268,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823634,
+    "sha256": "5bded174056921d696fd8af9b156c6ad24bb1868316abbe277338cdb83bda7f2"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/bba7157b",
+    "bytes": 1964,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 822466,
+    "sha256": "f23e1f051eb183c68de2c228ecd8721bc7aa04660c602fc3806ec41bf35c0e10"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/54506ce3",
+    "bytes": 4532,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 823524,
+    "sha256": "14aebcd94a6f0ce408b7a643eca552ba7e0bd5f83aa4da558dde5b87ad36d45b"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/c2762f5b",
+    "bytes": 676,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 822477,
+    "sha256": "b0e85a1d92edcd8da96fb276bde5e9f918d91223b9e7b7da5934f2d43edf27d0"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/86488f7d",
+    "bytes": 1268,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 822467,
+    "sha256": "9e41ac68ba972bc778ab8d9b5033168b913069d461ac9beb2bc24c321e0a2c63"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/e8646b52",
+    "bytes": 416020,
+    "allocated_bytes": 417792,
+    "dev": 27,
+    "inode": 826507,
+    "sha256": "e7c3f408724905933ed2a206ae4d48d83318d15c35370d70811747599ed72001"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/6e14cab7",
+    "bytes": 2180,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823615,
+    "sha256": "d87aa5cd8ee416530d2f36557e07743fbcdc7dfd98f9f94263a639ca119b7a22"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/02020858",
+    "bytes": 5908,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 823565,
+    "sha256": "157def5664005f4551c118f8bc016bf9a2cc4db4c17afdfbbce3b8e50b03371b"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/0c8b06a2",
+    "bytes": 1596,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823591,
+    "sha256": "dfc8dfe388bbab22eca2ed489d5daecc8a1907f54da0682183337ae6fdb4d25c"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/9c7ebfa7",
+    "bytes": 1724,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823642,
+    "sha256": "bf2ce6763e324b0a21ffffac42f646d343a36a0ffa5d7c598961506357ebf365"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/262377b7",
+    "bytes": 416028,
+    "allocated_bytes": 417792,
+    "dev": 27,
+    "inode": 826636,
+    "sha256": "cdec2a7e2f48ee68344040e8e8391180e7286e014e2a29a85c4db94833c5d55e"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/a2fa17ca",
+    "bytes": 416004,
+    "allocated_bytes": 417792,
+    "dev": 27,
+    "inode": 826525,
+    "sha256": "714b69af411fe4fdcbce3df34f9f6a64226dc33cf1d1243c8d63655b667dde38"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/3956451e",
+    "bytes": 940,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823523,
+    "sha256": "3810ac869d8f6f23eb992702d26858cbe68e2834e344819de570f1f3ac773ba6"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/784b2913",
+    "bytes": 1108,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823638,
+    "sha256": "a1ed28fc9f27a9f72fddd5cf6c6f902719fa0f40954b58796a6459f90ad436e6"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/e8260358",
+    "bytes": 2636,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 789538,
+    "sha256": "ae568bd6c55459d14bd181ff9d2f132a1c36c843d05f0561e585be7f9b94ac7f"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/dd6f5670",
+    "bytes": 78116,
+    "allocated_bytes": 81920,
+    "dev": 27,
+    "inode": 823551,
+    "sha256": "59f0b63669c4be315afdc3c1e671e4925a3c26f3b31c6981ff56538abfaae5d2"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/72729689",
+    "bytes": 6492,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 823533,
+    "sha256": "559543ab66810259590058ea7bcb67cdc9485e4c9ff190481dc5174e3030fcac"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/48a61e46",
+    "bytes": 10604,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 823558,
+    "sha256": "b6623972ba15b494e9b4d4306e2f516ec88da9cb1153aec6926d513432e7ad25"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/e87d75a2",
+    "bytes": 1108,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823644,
+    "sha256": "7c709fae7aca1c83960c8ff475e214bfde8749cbbf9c6eb4ae4d63d604f3dd68"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/1b3a99f8",
+    "bytes": 1028,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823606,
+    "sha256": "ede559c374d0723323ce946c4c2f98141b403a054f71d45a4daff54741a46e1b"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/4369e40b",
+    "bytes": 11500,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 822482,
+    "sha256": "30e93448eaf0cfc5ba0f8554443d1177b9642bb898c391baf3c341f0686780e3"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/480ae464",
+    "bytes": 151004,
+    "allocated_bytes": 151552,
+    "dev": 27,
+    "inode": 823553,
+    "sha256": "8eac93d494863f4ca0c0507c38b220a0a43a8fe511e6ae6fe842be948a04a479"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/1c634d10",
+    "bytes": 9812,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 822491,
+    "sha256": "e8cb49e92064e1fa3847062805de3f3c66f0f03ef8ef690527be604a9b07ab2b"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/12d9a55a",
+    "bytes": 1492,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823617,
+    "sha256": "a26542f79924db049e27c699d8e8f49ac2d4308ae0618b73cfed3ba0d8d09c99"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/3024043a",
+    "bytes": 1988,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823633,
+    "sha256": "4c9440a5b301dff0969dc9c7d82eaecbd85d4c76dce636fb753d172fca0f9b63"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/ac71c134",
+    "bytes": 1812,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823658,
+    "sha256": "dfab265d2eeeeaba5ecbaa2daa6526f1b5231c08e21c82a288db759b37607db1"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/f6fe0651",
+    "bytes": 1860,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 789545,
+    "sha256": "6755e89f2c0b96eed79dcc60d4191549832262a5f9bd4c8db51823cb187790a3"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/4fc4cde0",
+    "bytes": 2324,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823578,
+    "sha256": "9a893e7b549b9e7ae45501fbc29a6c35ed6fdd1593e5c7abaeaab8c4e85d1e98"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/b3f44180",
+    "bytes": 1628,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823610,
+    "sha256": "83fdb35869643e60011f510e83af2103e5dadc147b899f42c11aace2d8cccc00"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/2509b3ef",
+    "bytes": 416028,
+    "allocated_bytes": 417792,
+    "dev": 27,
+    "inode": 827150,
+    "sha256": "4296b8d67da36756df65761589bfee6993dbd8df80f8de2be56a231668addcac"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/65cf1234",
+    "bytes": 3276,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823629,
+    "sha256": "3ce67335326ca77d8242c434005eefcf340f2a3e36e5deddb4742aab618360ff"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/b8128c29",
+    "bytes": 1420,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 822465,
+    "sha256": "5f49320dec7865d2930a7e2227723d642636cb3988789b4e18d3806c301390eb"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/f503bccd",
+    "bytes": 416028,
+    "allocated_bytes": 417792,
+    "dev": 27,
+    "inode": 826883,
+    "sha256": "670db20fa225404ae408825dd9024e3d1f9b72f43889c74e5e6ee4b8fbd4fbba"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/edcc8d7d",
+    "bytes": 8900,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 822478,
+    "sha256": "c02105b9314794d4ab01f4900af84d5b43779035801f93bd8a47d0a98274af45"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/ccb2d2f9",
+    "bytes": 10540,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 822475,
+    "sha256": "faecaf1dd12001bcb8d67f4c3ab5bd637a9369829589d2cf926f2e2633abbd4d"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/b9fb61e5",
+    "bytes": 140580,
+    "allocated_bytes": 143360,
+    "dev": 27,
+    "inode": 789546,
+    "sha256": "e2117d0d7f2b8c813fc95215448485f441b659245f09a8161186d837e0561573"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/b063d303",
+    "bytes": 416020,
+    "allocated_bytes": 417792,
+    "dev": 27,
+    "inode": 826504,
+    "sha256": "90e9ad72e4415b38cd047c36023fc9c89882281081f79d3d85c0bb2e9a5b8ead"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/43032786",
+    "bytes": 2596,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823544,
+    "sha256": "ee4e0a459d68cf05595db724a1460dbcd44595301a5893bca53956d254f6ebc2"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/ffb45f04",
+    "bytes": 5164,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 823668,
+    "sha256": "26aafa777ed91dd423dc4b69cd26209de72417a69ff08331f4f562f2a7c912b4"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/970c4f39",
+    "bytes": 1204,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823628,
+    "sha256": "03b3c39672e05cfbbe5a33d24ed760c9b4845d4432f551603d2be97aa801c83d"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/acd07edf",
+    "bytes": 2316,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823646,
+    "sha256": "cb8ec2e5caa7ed80e5fdf9ff485df68c0f82a1505116126f83c8d8cd6677a3d1"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/24f54136",
+    "bytes": 1708,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823639,
+    "sha256": "6506df98e1c9c9f7b56cfb73a544ba6e71c8583d17a1417851e3e62854fc768c"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/a96fd809",
+    "bytes": 884,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823583,
+    "sha256": "52844b9e550fa0669f63d9867499d43d361d835ffa35425f3573b3a8c0032390"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/e1df5a4c",
+    "bytes": 1108,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823547,
+    "sha256": "37eee692db182ff68b667884225f240947b60f98c5a0996caafeff6d3bf5cc18"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/8b9ef89c",
+    "bytes": 9084,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 823656,
+    "sha256": "539546cc07994b0d2182715ed606dae22a2da55a68cc795022f728f966449235"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/fc778bb7",
+    "bytes": 1796,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823521,
+    "sha256": "96a5ebe63e771b67485002813c2d784020b84f2619ea794af6816222ede46b74"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/ae8ea653",
+    "bytes": 1716,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823654,
+    "sha256": "e39f8f075fa4026ed299ab36cf56b9b50cd8ca0d30490e51a7885bf4f0d574af"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/8176f1be",
+    "bytes": 1356,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823645,
+    "sha256": "90c6270d5e7b46dbdcfc3bfc7123b50287e80cfc88d76d26d31ec1d22d92f8cc"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/4fa19d11",
+    "bytes": 3668,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823598,
+    "sha256": "31dffbb86d37cdefd8226867588cba361d13e23c4ba4a584d14c43422e9c6124"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/bcef8e82",
+    "bytes": 1380,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823561,
+    "sha256": "816fd7cddbdba5235648073066b8de868cd7f12ff5fab1ccc55cd04be86681fd"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/fc9303cc",
+    "bytes": 3068,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 822464,
+    "sha256": "ac367e910fdd8b459a22194aa97c2a01ef6a41e3995562f9920489aac367118b"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/4e37e35e",
+    "bytes": 1308,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823635,
+    "sha256": "4afad16271e15477f4aed2a0781ebcd9ca926313f385234bb6c992d30cc437c0"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/2e83de3e",
+    "bytes": 1068,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 789543,
+    "sha256": "9bd699ee9cf5929fc1ec6a24f32759ad422c60a910ea3642a39dce4e4f02a739"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/bf26e95f",
+    "bytes": 5284,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 823612,
+    "sha256": "d50fb7ec178cb0ed2dabcf6b9b00c435b97117836ec8514f8449a3bc974782a6"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/aeb921da",
+    "bytes": 1588,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823592,
+    "sha256": "fecd4e959e92e13267f6e077eb03875210a475fb1959db9dbd15dea4ed1ab6bd"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/bd7423dc",
+    "bytes": 1908,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823535,
+    "sha256": "aef77ca17e8c7cafd3e8d1ce921585e4102bfde8df20c63b9ac992cac091b675"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/d90f19b6",
+    "bytes": 1972,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823580,
+    "sha256": "6c4d77b7852730d3ea399a64ea906f9995557bc854ba66c27fd2218dac45127f"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/ee94932c",
+    "bytes": 4020,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823607,
+    "sha256": "1b495da3f06e5ab7a1cbbfa8f51af9c9fd666ab3922930ce9973313cd5a23e7d"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/0046235f",
+    "bytes": 465668,
+    "allocated_bytes": 466944,
+    "dev": 27,
+    "inode": 822470,
+    "sha256": "626c4c9cf1d35f5706a8972c5ff2d262e05e66467d5a2a87964877927c633b56"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/387d2c0f",
+    "bytes": 1468,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823595,
+    "sha256": "a206a63ca0cbdffa8d645124846b6add755047c76a6c61d3e621aa0c1ea6d0d5"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/f493c4f9",
+    "bytes": 5284,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 823627,
+    "sha256": "8dd040b6de550831a65dc6f9b1892d316eaeb0eeb8ddb957670a3c3543314f5c"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/e0ed6a06",
+    "bytes": 416020,
+    "allocated_bytes": 417792,
+    "dev": 27,
+    "inode": 826521,
+    "sha256": "a4640c7cf3a09b8f8485e12aa81230e4955e733128fdb8c567fd315467368bed"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/d9a4b78b",
+    "bytes": 416012,
+    "allocated_bytes": 417792,
+    "dev": 27,
+    "inode": 827301,
+    "sha256": "7aa2bd6c3b3038a34a9fc9047d4b773a4681fcc516b80736773da196173139f4"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/3254909f",
+    "bytes": 416012,
+    "allocated_bytes": 417792,
+    "dev": 27,
+    "inode": 826517,
+    "sha256": "cb7ba120ff132e5443a56cb061d815b77b5466400a58ed85df146c6d39dcb3ca"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/8db7ac6d",
+    "bytes": 3116,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823624,
+    "sha256": "c06274868fe4a6a8b344a154d1b827af8d2471cbc31943da52eec4e51d80f235"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/ea4a0833",
+    "bytes": 1268,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823630,
+    "sha256": "29d7a5f3da3970c20c770f5e883da70c5e359db6bde436fb0051d72087ed19a3"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/bba4efb6",
+    "bytes": 2852,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823596,
+    "sha256": "2ce3b707182ed2ba84a9e8b957567811cd0e8736f384f9e3be2e93dfc5805dc5"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/228ae0cf",
+    "bytes": 1116,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823549,
+    "sha256": "a536a2ed5e11b03d3e7c77c3e3edf7b08cf6ee396567e30727d17df37d59a9ac"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/94fce1be",
+    "bytes": 4652,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 823576,
+    "sha256": "a009a33d67900c942f21415b22ff7e11198e75af7e5f055cded38013a58f1ddb"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/89987c33",
+    "bytes": 1044,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823599,
+    "sha256": "2d7a227e55bba8c9127df8db732710b31d2299b224b79527a5a1e88dd239e868"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/2b5818c6",
+    "bytes": 47468,
+    "allocated_bytes": 49152,
+    "dev": 27,
+    "inode": 822480,
+    "sha256": "7986e30a61cde2852766642f38b16492a93724a0d2777544d01f2f711a4c33e8"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/c4fe0f93",
+    "bytes": 1276,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823637,
+    "sha256": "5e2c57395afa9592d1fd0df7b4aaeebd80c3e238e87c30154e58e0bdf6965169"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/b6db16ab",
+    "bytes": 2924,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823618,
+    "sha256": "e316892da9272629e8f979a2f4c30dae6484f0243d02e9db92f23fb82ad2f829"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/81391fb8",
+    "bytes": 1292,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823665,
+    "sha256": "57c42fb6dfde1f655c46be6f4ba21df19bb29b7687e7eb8603d729388f1f440a"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/5b56d0b6",
+    "bytes": 1292,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823640,
+    "sha256": "73cb9efbe01297d01b29fc837fd9d47c5eda232f1c74e28f7e0dfe3acaa569a8"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/9c994fdf",
+    "bytes": 6172,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 822471,
+    "sha256": "875a2b0d46083a07b1db52b5d4fb65be82889bdd5a6d686e526af850f84eeeff"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/385966f7",
+    "bytes": 1284,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823620,
+    "sha256": "9cb2acac480c1eb14424af501e497b3e2d825aa80097a1a7c57c515a67670d56"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/df16291d",
+    "bytes": 2788,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 822487,
+    "sha256": "554532a83df3c0c996a720f4dcf36896bee02abe52707f946f3f333a0f0c01a9"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/b81e92de",
+    "bytes": 1572,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823649,
+    "sha256": "5642f01b7e95f2071db1b423550344075fe68648bfe73f328f20bd4b52190d3f"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/16e655a3",
+    "bytes": 1644,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823570,
+    "sha256": "317c5f1f28cefea2cb5a80c535c2b1c80ce5900f3ac18daf1c9fdbeb9731a6e5"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/6bacf5cd",
+    "bytes": 416004,
+    "allocated_bytes": 417792,
+    "dev": 27,
+    "inode": 826523,
+    "sha256": "0f3ca76257f7f68fa8403398f4ba43056199ca75ef4fff8d78d27ad1a1a9c214"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/5cc36e58",
+    "bytes": 2660,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 822472,
+    "sha256": "864d0de20251640f70d9eab3d2c4c5916d30578a19cc50ce2865a8bad77e052f"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/221b64c2",
+    "bytes": 4484,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 823550,
+    "sha256": "8dbe1fb0bbd4a17cc5cbe891df860047bd9d35bb238058573cff88af7dc7748a"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/243ce392",
+    "bytes": 416012,
+    "allocated_bytes": 417792,
+    "dev": 27,
+    "inode": 826511,
+    "sha256": "e064233a6aa510098246817f953cc475acd20b2a2de771dbb62925b5c268cc95"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/c395226b",
+    "bytes": 1548,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823568,
+    "sha256": "eb70e84bd012beae939a21413bf0111cefac082a682aeb20e491ef1c2598ebf4"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/63b0563a",
+    "bytes": 2908,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 822483,
+    "sha256": "071e81abd985c7d10585ecce9a30801627511756409235cf99568e146ea4b37c"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/bd34c45b",
+    "bytes": 1900,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823661,
+    "sha256": "00fc5e0e9a9f6bae8a0b77224a1ea07c96cf10384e3199df6775fe634e70e1fd"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/cdda3db5",
+    "bytes": 1612,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823647,
+    "sha256": "70d012bcba4d6e348e5e5c5fdb50204967b44035c8d9a78a57b273276a006b51"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/1179ab20",
+    "bytes": 1596,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823540,
+    "sha256": "b72f9a80a906e432a1b27a8287eb4b42dd0671c9aca9f557bc02485aac0c55d0"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/b7d7a0a8",
+    "bytes": 2500,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 822476,
+    "sha256": "cf1736b5e40b65cd0e3ce123ab7b429a02706fa2e93b9dc3606e999584e67fd7"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/c842e081",
+    "bytes": 416020,
+    "allocated_bytes": 417792,
+    "dev": 27,
+    "inode": 826515,
+    "sha256": "713dd15377cc570a67944f4d378a7c894d57d75d4b5dcec0a5c023c0efda0d77"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/72c06f10",
+    "bytes": 16276,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 822468,
+    "sha256": "1d8af45e7b6e2ead07b00aac2f5ba92fe9a513b9a71df3636c5595a9ae438f2e"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/d63f92e9",
+    "bytes": 1604,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823631,
+    "sha256": "de1ba97d58babe0bd33a543b9c6710286156e36e3eeb6e541fd771a2c9db07ef"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/21e54215",
+    "bytes": 1484,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823537,
+    "sha256": "9ba15bb412bda9afb1da75d928b09ad1afd1c8aab7936a0f27534f4f59241f6d"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/22a8f00a",
+    "bytes": 1324,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823557,
+    "sha256": "81ccd991d683d372b370ad2fa38c243a619395012d519bb104d4ca0057676fe3"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/fbe77d89",
+    "bytes": 416012,
+    "allocated_bytes": 417792,
+    "dev": 27,
+    "inode": 826996,
+    "sha256": "765224da1db5d3599eca1d141f7a7d85fbe9be9e53b74bd42a1f11b5b0558708"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/9c14aa81",
+    "bytes": 4444,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 823564,
+    "sha256": "734070a70e051717e00d7501526364b56b726dabde2b6bf73b14946bba8e313a"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/4928d18e",
+    "bytes": 1196,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823538,
+    "sha256": "464a8ce52dda54c57309ed1316480983e2c3fde5b030f1bd0fc3b6f537249d36"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/efa88f16",
+    "bytes": 14116,
+    "allocated_bytes": 16384,
+    "dev": 27,
+    "inode": 822479,
+    "sha256": "0bc83a7c4789d1c575e606048f959b7933ab3dfdb6f273688144d55f9013fee6"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/4e525089",
+    "bytes": 94124,
+    "allocated_bytes": 94208,
+    "dev": 27,
+    "inode": 822486,
+    "sha256": "d60b241afc15ee2fd5a0a3b59b954da4e542da420c424a65ae53226dfbcd9266"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/84e5bf1a",
+    "bytes": 416020,
+    "allocated_bytes": 417792,
+    "dev": 27,
+    "inode": 826512,
+    "sha256": "67a9c3b51ec1d71b07fcaa9c49bdc41fa82e60908ce015a900bea6fcbaf9451b"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/87a7df2c",
+    "bytes": 884,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823619,
+    "sha256": "39f07234e90c6baf142c0fd583ba9e1944d9a3ac457395c3f3ecbc9fa3d891bb"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/c7294a7e",
+    "bytes": 2186604,
+    "allocated_bytes": 2187264,
+    "dev": 27,
+    "inode": 789544,
+    "sha256": "d866db9d40a4c1026379b4ddf97b058b7a83a54f2559036adf07c9d18156483a"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/7b927f26",
+    "bytes": 1268,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823582,
+    "sha256": "77c00d71bccbfe155a0f02a4208a3603ae803d5e748d4be412ac7c0b686ed19d"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/1de26efa",
+    "bytes": 1852,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823563,
+    "sha256": "1aa5ef3f249232c9ead6dc86fd21c59d66576a1b0149eb947cd176c449cb1a01"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/0c551b91",
+    "bytes": 10396,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 823581,
+    "sha256": "fb000b0cb11f37528323b1e69a205af78f6b6781e45ed448c0ced5dc824fe6a2"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/bfea9cf5",
+    "bytes": 1076,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823559,
+    "sha256": "27d397c4a78bd68a4f152dd951286b9d5956954f356f0c422c4fe4ec27d6f28d"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/ff0abb1f",
+    "bytes": 1332,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823659,
+    "sha256": "c116c20c498220dea27f7e167ed9a5c4e46449877b145cec2a384b85b488e0ba"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/5e883721",
+    "bytes": 1652,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823546,
+    "sha256": "79101adf212796891eb2b035d530815948781bfb4aa496f2b4390c936fb4f8b5"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/d26a9152",
+    "bytes": 1260,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823574,
+    "sha256": "061ca79750157b0f71821241e3bf0315f9820c16d2694bf77e779530b947b54a"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/61d749fd",
+    "bytes": 5772,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 822474,
+    "sha256": "39d7deae19fc72fc480ea9baac9aba99e01ecc183d5915493c66e69afeaa5f9d"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/16ab1d03",
+    "bytes": 5012,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 823588,
+    "sha256": "1af77e0957e096e8ae3cb3f8e31f6dce082b71ec8645e47ce3ef1e2b8696a235"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/9d1bde77",
+    "bytes": 2884,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823555,
+    "sha256": "dcb09aa5de7ba330e48ab8a123dddd6e95a0dd18266f0925bde54a398140b16c"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/cddda992",
+    "bytes": 1220,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823536,
+    "sha256": "8448854271aa9b423c94329e4aa63459cdeb0ec75458f6c76eeb990af5f5ed6a"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/b2af2b3c",
+    "bytes": 2820,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823531,
+    "sha256": "a457d71f8d141400ed418efa3dd8b4ad3eeea849b88d4f654d8fcc7758db0f45"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/b45bc8b4",
+    "bytes": 1788,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823614,
+    "sha256": "f7bc6ee7d48b75b68d31fb929213f679c717363b8b765de3769ed0521ab7e880"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/cfa09988",
+    "bytes": 1564,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 822462,
+    "sha256": "c3aa75107cf9a9c2fbe468ab481038e1db5edb8d2c1f28cd97bfc34206158b05"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/601e1efc",
+    "bytes": 1676,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823545,
+    "sha256": "4763394ccd2ad53f7ff640d355e7b0b60bdd39d9ace6c803f4642fc1074884dd"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/2164922d",
+    "bytes": 780,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 822490,
+    "sha256": "c0459a6182c915b0a119f185f000b3637a493c352018c2d1d4176ee1ef15149a"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/c788956d",
+    "bytes": 1588,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823593,
+    "sha256": "bbec3401c757fcfa347b8f022cad7aa1d6d00286fbca741fd9e2bd6a28276706"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/e6d47895",
+    "bytes": 1324,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823600,
+    "sha256": "6d7704b76eea0a17b7333f10d0b198d14942516ea8ab63677f7bfbf3b161860c"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/6aa815b8",
+    "bytes": 3348,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823597,
+    "sha256": "7db4e2c9daf12c176b6bc2576dd6fbccc0b8a804f55730d388907c480cf2ef61"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/c7ea0307",
+    "bytes": 3572,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823562,
+    "sha256": "8b5db4209b1b8b144f9e7fc55e832310012b145ff7369d8a3986dc3034e1fa4b"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/ec31f060",
+    "bytes": 1884,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823585,
+    "sha256": "35e0a10142f12b2b510ad1f11821de92a2693ffc05b3e331e0a17f9061f54f52"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/a58dfe02",
+    "bytes": 5036,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 823571,
+    "sha256": "5d2c045bad2ff546718a2af60addd139cfef43547d820a27d27d1cb0405f4675"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/f3c2d3a8",
+    "bytes": 972,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823542,
+    "sha256": "1dd032edc5952732db38cceac6992c09f8b921486dd2992fd1e3eb5155aab855"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/ab609c81",
+    "bytes": 1788,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823569,
+    "sha256": "97386b4fd5e5056f610cacf275ce26cc4e36fc45f243035545222545b0b8b1a7"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/5f790886",
+    "bytes": 416020,
+    "allocated_bytes": 417792,
+    "dev": 27,
+    "inode": 826501,
+    "sha256": "29fffdf17a4be2db745484e057243675b4f147eb73d8b223edfd5356ca197de9"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/751880b6",
+    "bytes": 416012,
+    "allocated_bytes": 417792,
+    "dev": 27,
+    "inode": 820670,
+    "sha256": "4a3ea76b00fc5cf1bd2098ed5e12a7e17c2d1ec53bdc05197d36425fbbf5d8f3"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/24c110b4",
+    "bytes": 2316,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 822485,
+    "sha256": "5e5530e003abf5d161ce3bcac94792310fe6a3c5e93e60e5a40d5426f5d14f7e"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/72dcc7c5",
+    "bytes": 2860,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823622,
+    "sha256": "60f17561723aed67501615cb122e49d2ff2f97c771990e621c3e0a03b6b07aea"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/16ee1353",
+    "bytes": 1244,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823608,
+    "sha256": "fa1b41588cfdb163a7799b56178959a04bca1e4ae536f394025aeb8af15e277a"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/f78a6ef4",
+    "bytes": 1852,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823572,
+    "sha256": "b3f6fa5426a73dd23d9effecf5c4b78274eefe3f3fd11a6c02c76c8044ccdd93"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/05c5035c",
+    "bytes": 7724,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 823556,
+    "sha256": "83945b24e2dde33f775fa91b3129925fb1cb8ba4b3708bbd359239b50e35ff9c"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/a0cdc111",
+    "bytes": 1108,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823605,
+    "sha256": "86e1b706995bbc6e91667cc43d120351c5db92a6e9bfff41473d849ed3da24d0"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/22355adb",
+    "bytes": 21388,
+    "allocated_bytes": 24576,
+    "dev": 27,
+    "inode": 823613,
+    "sha256": "d198d9440b2a6979796fb16d081479c183403ec5d48d8fa19db58b918db825b3"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/ff6e9854",
+    "bytes": 2892,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823609,
+    "sha256": "fbac4caa1e28a1553f5f2fe8abfe58a4bb19c23392646db3bb50f5da49a957a0"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/387fba54",
+    "bytes": 1916,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823641,
+    "sha256": "3e23ac7ae1b926df6703cc06f696a2cc32874504f5b49b39f6ddfe326db7b30b"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/9bf51e81",
+    "bytes": 2580,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 822460,
+    "sha256": "1c9374a4e533e94238d97ee0cebef4800139aaeb338116a4ca1a47bb061d9e84"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/ce2d718b",
+    "bytes": 4132,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 823601,
+    "sha256": "1ce231b0b26d13ed12b6c452b50c0a54b525fa95c42f36a40c72f082319da1b9"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/e7b723dd",
+    "bytes": 1156,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823530,
+    "sha256": "bb96fd1a3498fc22e4d2dc7623f7a4d374a26690d982e6e682c07622abe253e1"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/5ce6ac81",
+    "bytes": 1124,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 822473,
+    "sha256": "fc46e17ee9687428c5de687bd4797dec23bd1a4b0f4ee0701524e7b63c55fdfb"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/33936790",
+    "bytes": 6148,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 789542,
+    "sha256": "10861c64a2e59752c518e425c60f04a8faa564c11e87a315c9d27cb3314ebd50"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/e9ccfd93",
+    "bytes": 2540,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 822461,
+    "sha256": "05df98c3396b428ccac7e3c9bfa95ef4ac18b9497f24899e9e5df0e70bd6d93f"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/b3ff5e49",
+    "bytes": 4684,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 823543,
+    "sha256": "e54460ea972f3bf70381316e316d15db6f8914ba6ca6d8f648ef1f6aa123c521"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/cf45eecb",
+    "bytes": 4092,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823573,
+    "sha256": "2dc51f5aaf8c5a9027b1ff698d99baade069a6bfb9842dc8432dd11cf0cee3d7"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/7c7aa71f",
+    "bytes": 416020,
+    "allocated_bytes": 417792,
+    "dev": 27,
+    "inode": 826540,
+    "sha256": "528d62068043fca26696a88d6cc0014d98ea367580659fb3c9cf00aa5b63cfa2"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/82588ac1",
+    "bytes": 416020,
+    "allocated_bytes": 417792,
+    "dev": 27,
+    "inode": 826688,
+    "sha256": "0b1b161d4de76424611460deef2f8de75c6f8c6ca2069322d5c2c8e399809f09"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/5a0c9f54",
+    "bytes": 1212,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823623,
+    "sha256": "8de6a15279699c04aca188b5d6533c435d2d4a21842759d3c8f4d5501732b9bf"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/eafd9233",
+    "bytes": 1932,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823652,
+    "sha256": "5055b4da3bb8b0c9261aa52c4d335f1e1293f121ec3ac49cba50aeedc42d9f58"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/cbd92bd7",
+    "bytes": 3284,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 822488,
+    "sha256": "e8e3e78b3afbfc9a8435fd9c0dfe675eec15adbcea4d53a3d44bcc5d42f42b70"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/71201e30",
+    "bytes": 416012,
+    "allocated_bytes": 417792,
+    "dev": 27,
+    "inode": 826516,
+    "sha256": "872a6354201dac560fd898603aebd8bd23c3ef40687d0fee7623e8baa38f1bd5"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/76eefd5b",
+    "bytes": 1708,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823664,
+    "sha256": "af016f9aeece21f47e3a53285fe55d2f5717ce17feceda85db7fb79de3c7c11a"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/911c0ee8",
+    "bytes": 1772,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823636,
+    "sha256": "268c572d88f39d5b1c86296d98e28b47da745eb67e14b34387750f26c51876ba"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/9e1f947b",
+    "bytes": 1316,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823603,
+    "sha256": "f6ed1b60c9f239125104e9ba98213b82e259a38d2829c881dc7c2ab7a7f477d2"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/69213ce0",
+    "bytes": 1652,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823539,
+    "sha256": "0cab49b6ecb9f63f51aba3645ac74298d648f32254dc360fbde940714fadd139"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/b727408f",
+    "bytes": 1836,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823604,
+    "sha256": "73a87506421e282734c48e1112db2ffbcf7c3ff3bdc7f277a8c21ba16c31110b"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/ee27d34a",
+    "bytes": 1276,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823621,
+    "sha256": "0dcef14896485965c48eca159d2e30405299168ed1120f632343f422501af40b"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/49d61f64",
+    "bytes": 416020,
+    "allocated_bytes": 417792,
+    "dev": 27,
+    "inode": 827284,
+    "sha256": "8e58a09c8385b4145b93f7008bf137b09525fc35e2ebda3d8f57af2daf25c2b6"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/dc15e431",
+    "bytes": 860,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823579,
+    "sha256": "9625a637c605fe64032581535fa2ca58971b04bbc7428cc3e161891d574ecb4d"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/14dc715f",
+    "bytes": 416028,
+    "allocated_bytes": 417792,
+    "dev": 27,
+    "inode": 826520,
+    "sha256": "c42d793d117723757643ae3f460fb4e2bd66c86d200fd6aa3baed4f451861219"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/54019973",
+    "bytes": 35436,
+    "allocated_bytes": 36864,
+    "dev": 27,
+    "inode": 822459,
+    "sha256": "81e66febcbb59e844cd4316fcdd117a15ec9eeb2cd8a71cce6c1a688b7ddef28"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/62207b74",
+    "bytes": 1356,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823657,
+    "sha256": "9e3c332ee385af0d651cbe500e5c2df670e040ca6a0c8289579c9329f1030949"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/4c6ffceb",
+    "bytes": 416020,
+    "allocated_bytes": 417792,
+    "dev": 27,
+    "inode": 826522,
+    "sha256": "5f34c55f067cba9737081e651d5e1e8e4c43d323abee2f5fb49d62c62d91bdb7"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/7b83ea0c",
+    "bytes": 2164,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823651,
+    "sha256": "522172c9d357dee3ac38f33e0b5f82b80eb1291d058ffdc516e2fdf6de4e2a01"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/5b7c800c",
+    "bytes": 1260,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823541,
+    "sha256": "7ab02fbaf85a10c835c0cad0a458e5c6f81e8db1e5b5339f384435700ce44684"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/27306b7a",
+    "bytes": 1124,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823554,
+    "sha256": "2f80e05be3af3819c7d87874afba06194aea2d186cbad29eb3d38715cae3678a"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/509cb1e8",
+    "bytes": 1404,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823522,
+    "sha256": "18068d4bb040e3f228f08748eab685348793d575dd993d1e6b54950ddcd2ad68"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/ea06baf8",
+    "bytes": 2116,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823667,
+    "sha256": "4467839e3cb82e85b38423dad772a60f102dcd9d7666a8c8be64b2869a70ba56"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/324d26cd",
+    "bytes": 415828,
+    "allocated_bytes": 417792,
+    "dev": 27,
+    "inode": 822469,
+    "sha256": "20ae69a9d23c3ca6210b2eea959ccc4dd34e505260979d55253f76568da35842"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/22c258ec",
+    "bytes": 9220,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 822484,
+    "sha256": "149f385f13b5732e206f0cc6bb0af2e7d39ae99fb1f0af577060d6d135467d2f"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/e58aeb23",
+    "bytes": 416028,
+    "allocated_bytes": 417792,
+    "dev": 27,
+    "inode": 826784,
+    "sha256": "98fc95a010fc38f7a392d46603fe5735873270532572968b3b6a4995647258a8"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/246e2f59",
+    "bytes": 2988,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823525,
+    "sha256": "2fd79ed32799bd99e595578ad17545e65fe7b92ee2545e99d93ef33921648c5f"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/8bcb38fb",
+    "bytes": 2292,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 789541,
+    "sha256": "a0c04522f238f72eef0e4010428149bc527f17239e9594ad15a5290d5dbb0f79"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/311c7ec6",
+    "bytes": 1716,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823663,
+    "sha256": "d263c64dde98b884362b029cc27b27555b5b5d7557d8f6b8ec6be13186fabbc0"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/0c0e379f",
+    "bytes": 2068,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 822457,
+    "sha256": "da97c58e4c6762c33237b5591b483127328e10e89920784e47fde63f98c10e35"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/e2071916",
+    "bytes": 1452,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823548,
+    "sha256": "097eca20eebde871a241b5862bad19b2d2251094aeb742fae011da0f7f17fad8"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/10d33111",
+    "bytes": 924,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823527,
+    "sha256": "0939917f742d97ceaa93a728ea517096eed0c6f00db68433a5269ee2086fdc2c"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/501b1f7e",
+    "bytes": 1028,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823632,
+    "sha256": "20ab5ed860528842c4f6238ece943391bf8ee55ef3dc105f48d50007d7d94dd0"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/8f5655ac",
+    "bytes": 1564,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823528,
+    "sha256": "7687378a4e520f6608547f12eddcd56c1c316fd0f3e5a3037af1d2fa21e78252"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/e528abac",
+    "bytes": 1684,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823575,
+    "sha256": "e97fa7213ceac8ef975d9553b750a2492323cc5d8f20bd108f9cf947841d7e1c"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/beb4aaf2",
+    "bytes": 416028,
+    "allocated_bytes": 417792,
+    "dev": 27,
+    "inode": 826509,
+    "sha256": "71e0e44e0cf544850c81860bea8ed37b5f417be2ecd74ebb1deba4d975176358"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/a8f1bd3d",
+    "bytes": 3220,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823526,
+    "sha256": "d1e3a208cba6586367e585caa6c097fb372fe1d889428718deb9972beb613cf7"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/8cfc4a15",
+    "bytes": 416020,
+    "allocated_bytes": 417792,
+    "dev": 27,
+    "inode": 823577,
+    "sha256": "eb9d3d3f6048d8b51eac4668ea8448db75efb600c2ce4cd7eb35159fd22fbc81"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/d38e5880",
+    "bytes": 1284,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823584,
+    "sha256": "57936c4b1d8d07128f1da50bc51db89fd1b55232fd5b3524b066f79e44183d31"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/1a8f13d3",
+    "bytes": 26124,
+    "allocated_bytes": 28672,
+    "dev": 27,
+    "inode": 822481,
+    "sha256": "97cea730418f01787c7a4b9409e29faff53c1dfb21709def0d15fce26f178862"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/e2dd0063",
+    "bytes": 2044,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 789539,
+    "sha256": "dbc12bca2779845ce11bf1cca1bc420ce060216c9725906edbbe3830d8c4d464"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/5e02295e",
+    "bytes": 1748,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823626,
+    "sha256": "534a59bf3efe9ea08744cc921965d05ad2fdb8069853b51111b37c33f907e6bf"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/b3caa7f1",
+    "bytes": 416020,
+    "allocated_bytes": 417792,
+    "dev": 27,
+    "inode": 820687,
+    "sha256": "e63cb710db0d704ff5c10edcd7dacff5cf184cdfa8f30a43a8663bf13ef0dfa7"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/6af3504e",
+    "bytes": 1644,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823567,
+    "sha256": "273f6345e22f79af83d83c60d8e98141d06e736a2d53c9015b2dc78da4231524"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/a3eb3d6b",
+    "bytes": 1124,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823660,
+    "sha256": "a0801d412feffae36106bf594d5509c1a278323eb22c5fa5d5ab1023051aa70f"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/2a462f2f",
+    "bytes": 1564,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823653,
+    "sha256": "19c1f5270ae03566b75206c396521acdc97d0ab279344e5edcb45be325ccccc7"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/c7ef666e",
+    "bytes": 4644,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 822489,
+    "sha256": "f80f3314395ad6ad5df1b86ad2779fdd973440f28e7fd3279deee2abec995165"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/6bf3441d",
+    "bytes": 2764,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 789540,
+    "sha256": "40fffc58ea8549556c4052cabcd99e531d503f3fba1dc48fd38e7da88aa09944"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/05b70347",
+    "bytes": 1748,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 822463,
+    "sha256": "a830ceb520131c7ffdbcebc18324134b68f6fcf2ab6525d87258381cf9ec8f6c"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/bc4f5f03",
+    "bytes": 416020,
+    "allocated_bytes": 417792,
+    "dev": 27,
+    "inode": 826585,
+    "sha256": "a2cbd8158cc4d20e11fe67ff8b651c34809a99b928e5efe1e9074af28614a256"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/1af547e6",
+    "bytes": 2916,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823616,
+    "sha256": "392daa06df8023799d3fed5c864b569cb8c00c751a3f99c495c0479428821935"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/10cc1f73",
+    "bytes": 1796,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823662,
+    "sha256": "23b8e339f277b22b0a58f8ae5cc2c93433e107c6fa84c293117c0a197151c015"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/58db78a8",
+    "bytes": 1876,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823650,
+    "sha256": "4879562d2aff156b9fd06b9a31c6b67390565e0b23924dd6dd1494348037831e"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/79bf7fbe",
+    "bytes": 1212,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823648,
+    "sha256": "0adae0b2e26dfb0708cf5fd28a91c11666be9495b94479f736cd21050036dde9"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/a645a15c",
+    "bytes": 1340,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823666,
+    "sha256": "6a4ad069b3ccd63ba30e83b01904aaa1417a861be3426f7880584615548815af"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/29bca68d",
+    "bytes": 1244,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823602,
+    "sha256": "712fa47fe7415cc2b54d6389b524919e86512806b3affbe348022becf9c297c0"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/7db5c91e",
+    "bytes": 1516,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823655,
+    "sha256": "f8e5b53e8b761f1d21df5491e9ab74fc4615b9450eae65b2ad89fe2b202c8e1a"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/ad7a7529",
+    "bytes": 1812,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 822458,
+    "sha256": "8e99f4e9c2e6710c4f5b9e97ab3e3f45a3b44a7290d1a8db13d87db67e77dbc9"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/afd088bd",
+    "bytes": 11740,
+    "allocated_bytes": 12288,
+    "dev": 27,
+    "inode": 823566,
+    "sha256": "e7157b7bfb4ada7dc728bfcaf188eb5d4bcaf90180b7150a2aed123cc4b2eb48"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/85708cab",
+    "bytes": 2348,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823643,
+    "sha256": "9b710438254ed13cc29db8770d4bb597f6b93d25d9e9019ce55a2729ec8366ff"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/9d302bdb",
+    "bytes": 1700,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823552,
+    "sha256": "9a202d3597953a09027b06cf9f71059d594f1931a9ceef135a98b2bb9706243c"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/ad2a696a",
+    "bytes": 416020,
+    "allocated_bytes": 417792,
+    "dev": 27,
+    "inode": 826548,
+    "sha256": "57052f89e61c19d0ce304e8ab27bda5071d4c4ba9571cc1fc59a3a5a7d3eb411"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/41bc0367",
+    "bytes": 2820,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823611,
+    "sha256": "c77fb06276e3531cc0385072dece36c162023824d2aa675c57671c743ec29e0d"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/4f28dd1d",
+    "bytes": 1572,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823590,
+    "sha256": "cec7ad72b5476f54b7c8516167f83d5a776e2ac5e16c62cad270e86675ad1c71"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/2ff793d9",
+    "bytes": 6004,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 823594,
+    "sha256": "707b2bb0ad6ec6f3730817b3b10ce73125d19fafd438f11512b84b4d78638d2a"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/1ebca180",
+    "bytes": 3668,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823529,
+    "sha256": "ae8f1977956d1d158b9e432cd47d6b8711fc03cff6ecbe27567193dd4e9d30d2"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/a175f592",
+    "bytes": 416028,
+    "allocated_bytes": 417792,
+    "dev": 27,
+    "inode": 826506,
+    "sha256": "b2f666ab7393c85062eba18cf9cfd9088a3edc376f844cac957c4126a7257427"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/a31f5dd0",
+    "bytes": 1916,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823586,
+    "sha256": "74f5064647b47ba8808f9818d262ecd3a0910d8195fdcea7fa86e0ede0814408"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/7dbfa6d4",
+    "bytes": 4756,
+    "allocated_bytes": 8192,
+    "dev": 27,
+    "inode": 823534,
+    "sha256": "7762cd9344f4cf8f9701cacf5351a2a4aa5e9443e38cdde1d41c6a716abbda56"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/fe80d435",
+    "bytes": 1796,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823560,
+    "sha256": "72dae72af836cbb9f3e7fb94db7a09f04f035da1d35a804c02110957023b2cfa"
+  },
+  {
+    "path": "/workspace/pr485-study/tmp/node-compile-cache/v24.19.0-x64-cf738c9d-1000/20dfe3f3",
+    "bytes": 1292,
+    "allocated_bytes": 4096,
+    "dev": 27,
+    "inode": 823625,
+    "sha256": "a353350eea53831137f64c40789e609dadce102f7ab429b7ac216701e29dff29"
+  }
+]

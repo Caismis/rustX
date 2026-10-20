@@ -1,0 +1,25 @@
+test_allocated_count_deduplicates_hardlinks (test_ownership_adapter.AdapterTests.test_allocated_count_deduplicates_hardlinks) ... ok
+test_entry_gates_do_not_start_a_child_or_create_output (test_ownership_adapter.AdapterTests.test_entry_gates_do_not_start_a_child_or_create_output) ... ok
+test_exact_ordinary_product_mapping_and_rejections (test_ownership_adapter.AdapterTests.test_exact_ordinary_product_mapping_and_rejections) ... ok
+test_first_pair_oracle_failure_stops_before_next_pair (test_ownership_adapter.AdapterTests.test_first_pair_oracle_failure_stops_before_next_pair) ... /workspace/pr485-study/native-evidence-public/docs/pi-durable-cost-model/evidence/fresh-source-20261020/ownership-driver-compare-revisions.py:19: ResourceWarning: unclosed file <_io.BufferedReader name='/tmp/tmpq44fks1i/before'>
+  manifest={'observer_mode':args.observer_mode,'clock_ticks':os.sysconf('SC_CLK_TCK'),'pairs':args.pairs,'pair_offset':args.pair_offset,'cases':args.case or CASES,'executables':{name:{'path':str(getattr(args,name).resolve()),'sha256':hashlib.file_digest(getattr(args,name).open('rb'),'sha256').hexdigest()} for name in ('before','after')},'head':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'scope':'runtime plus driver; sibling provider; evidence output after cleanup; see baseline identity for fixed build and hardware'}
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/workspace/pr485-study/native-evidence-public/docs/pi-durable-cost-model/evidence/fresh-source-20261020/ownership-driver-compare-revisions.py:19: ResourceWarning: unclosed file <_io.BufferedReader name='/tmp/tmpq44fks1i/after'>
+  manifest={'observer_mode':args.observer_mode,'clock_ticks':os.sysconf('SC_CLK_TCK'),'pairs':args.pairs,'pair_offset':args.pair_offset,'cases':args.case or CASES,'executables':{name:{'path':str(getattr(args,name).resolve()),'sha256':hashlib.file_digest(getattr(args,name).open('rb'),'sha256').hexdigest()} for name in ('before','after')},'head':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'scope':'runtime plus driver; sibling provider; evidence output after cleanup; see baseline identity for fixed build and hardware'}
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_first_product_oracle_failure_stops_before_second_product (test_ownership_adapter.AdapterTests.test_first_product_oracle_failure_stops_before_second_product) ... /workspace/pr485-study/native-evidence-public/docs/pi-durable-cost-model/evidence/fresh-source-20261020/ownership-driver-compare-revisions.py:19: ResourceWarning: unclosed file <_io.BufferedReader name='/tmp/tmp8h39ala2/before'>
+  manifest={'observer_mode':args.observer_mode,'clock_ticks':os.sysconf('SC_CLK_TCK'),'pairs':args.pairs,'pair_offset':args.pair_offset,'cases':args.case or CASES,'executables':{name:{'path':str(getattr(args,name).resolve()),'sha256':hashlib.file_digest(getattr(args,name).open('rb'),'sha256').hexdigest()} for name in ('before','after')},'head':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'scope':'runtime plus driver; sibling provider; evidence output after cleanup; see baseline identity for fixed build and hardware'}
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/workspace/pr485-study/native-evidence-public/docs/pi-durable-cost-model/evidence/fresh-source-20261020/ownership-driver-compare-revisions.py:19: ResourceWarning: unclosed file <_io.BufferedReader name='/tmp/tmp8h39ala2/after'>
+  manifest={'observer_mode':args.observer_mode,'clock_ticks':os.sysconf('SC_CLK_TCK'),'pairs':args.pairs,'pair_offset':args.pair_offset,'cases':args.case or CASES,'executables':{name:{'path':str(getattr(args,name).resolve()),'sha256':hashlib.file_digest(getattr(args,name).open('rb'),'sha256').hexdigest()} for name in ('before','after')},'head':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'scope':'runtime plus driver; sibling provider; evidence output after cleanup; see baseline identity for fixed build and hardware'}
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_memory_disk_and_timeout_criteria (test_ownership_adapter.AdapterTests.test_memory_disk_and_timeout_criteria) ... ok
+test_schedule_is_fixed_and_bounded (test_ownership_adapter.AdapterTests.test_schedule_is_fixed_and_bounded) ... ok
+test_timeout_kills_only_registered_process_group_and_retains_stop (test_ownership_adapter.AdapterTests.test_timeout_kills_only_registered_process_group_and_retains_stop) ... ok
+
+----------------------------------------------------------------------
+Ran 8 tests in 2.534s
+
+OK
