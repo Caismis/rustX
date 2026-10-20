@@ -29,7 +29,8 @@ const PROJECT_CONTEXT_FILENAMES: [&str; 5] = [
 ];
 const MAX_RESOURCE_DIAGNOSTIC_BYTES: usize = 4096;
 
-/// The authoring scope a resource identity was discovered in.
+// The authoring scope a resource identity was discovered in. (A plain
+// comment: this wire type's schema carries no description.)
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
 )]

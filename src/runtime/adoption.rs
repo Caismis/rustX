@@ -17,7 +17,8 @@ use crate::model::request_shape::CacheImpact;
 use crate::model::session::SessionModelState;
 use crate::runtime::resources::RuntimeResourceSnapshot;
 
-/// Why the runtime refused to adopt a prepared configuration.
+// Why the runtime refused to adopt a prepared configuration. (A plain
+// comment: this wire type's schema carries no description.)
 #[derive(
     Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
 )]
@@ -44,8 +45,9 @@ pub enum AdoptionEligibility {
     Unavailable,
 }
 
-/// The configuration facts an admitted Attempt froze at its admission
-/// linearization point. Later adoption never mutates them.
+// The configuration facts an admitted Attempt froze at its admission
+// linearization point; later adoption never mutates them. (A plain comment:
+// this wire type's schema carries no description.)
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct AdmittedConfiguration {
     pub approval_mode: crate::runtime::ApprovalMode,
