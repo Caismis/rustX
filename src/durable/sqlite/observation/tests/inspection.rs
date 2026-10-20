@@ -359,6 +359,7 @@ fn t10_t12_t19_trace_definition_missing_and_ambiguous_catalogs_never_become_abse
     );
 }
 #[test]
+#[allow(clippy::too_many_lines)] // rustfmt now formats this former include! fragment
 fn t08_t12_t15_t19_trace_adoption_advances_and_validates_only_selected_native_members() {
     let store = store();
     store.initialize(&[]).unwrap();

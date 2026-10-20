@@ -1,4 +1,4 @@
-//! The ProjectionStore implementation over the projection, compaction, and lineage readers.
+//! The `ProjectionStore` implementation over the projection, compaction, and lineage readers.
 
 #[cfg(test)]
 mod tests;

@@ -1,4 +1,4 @@
-//! The ObservationStore implementation: bounded native observation reads.
+//! The `ObservationStore` implementation: bounded native observation reads.
 
 use crate::durable::sqlite::canonical::ordinary_user_by_id;
 use crate::durable::sqlite::canonical::transcript::TRANSCRIPT_ATTEMPTS_SQL;

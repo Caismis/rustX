@@ -2125,6 +2125,7 @@ fn turn_directory_mixed_terminal_and_local_turns_reuse_exact_validated_navigatio
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // rustfmt now formats this former include! fragment
 fn inherited_turn_membership_is_exact_in_both_directions_with_valid_payload_digests() {
     fn hash(input: &str) -> String {
         use std::fmt::Write as _;
