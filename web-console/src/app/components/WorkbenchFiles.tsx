@@ -1,5 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from FilesBody and TextPreview; see PROVENANCE.md. */
 import { DocumentBody } from './workbench-documents/DocumentBody';
+import { documentFailure } from './documents/errors';
 import { viewersForPath, loadsBytes, type Viewer } from './workbench-documents/definitions';
 import type { ZoomPreference } from './workbench-documents/zoom/types';
 import type { PreviewViewState } from '../../presentation/right-panel/preview-view-state';
@@ -64,7 +65,7 @@ export function WorkspaceFile({ path, call, view, onOpen }: { path: string; call
   const [mode, setMode] = useState<Viewer>(view.mode ?? viewersForPath(path)[0]), [menu, setMenu] = useState(false);
   useEffect(() => {
     const abort = new AbortController(); setError(''); setValue(undefined);
-    void call({ kind: mode === 'office' ? 'office' : loadsBytes(mode) ? 'bytes' : 'read', path }, abort.signal).then(result => { if (!abort.signal.aborted && revision === view.revision) setValue(result); }, cause => { if (!abort.signal.aborted) setError(String(cause)); });
+    void call({ kind: mode === 'office' ? 'office' : loadsBytes(mode) ? 'bytes' : 'read', path }, abort.signal).then(result => { if (!abort.signal.aborted && revision === view.revision) setValue(result); }, cause => { if (!abort.signal.aborted) setError(mode === 'office' ? documentFailure(cause) : String(cause)); });
     return () => abort.abort();
   }, [path, call, revision, view, mode]);
   useLayoutEffect(() => { const el = scroll.current; if (!el) return; el.scrollTop = view.line !== undefined && mode === 'code' ? Math.max(0, view.line - 1) * parseFloat(getComputedStyle(el.querySelector('.line') ?? el).lineHeight) : view.top; el.scrollLeft = view.left; view.line = undefined; return () => { view.top = el.scrollTop; view.left = el.scrollLeft; }; }, [view, !!value, mode]);
@@ -74,7 +75,7 @@ export function WorkspaceFile({ path, call, view, onOpen }: { path: string; call
   const fullPath = value?.cwd ? `${value.cwd.replace(/\/$/, '')}/${path}` : path;
   return <section className={css.root} data-workbench-file={path}>
     <div className={css.header}><PathLabel path={fullPath} className={css.path}/><Menu open={menu} onClose={() => setMenu(false)} align="end" dense autoFocus selectedId={mode} items={viewersForPath(path).map(id => ({ id, label: tx(`artifacts:workbench.${id}`) }))} onSelect={id => { view.mode = id as Viewer; setMode(view.mode); setMenu(false); }} anchor={<button type="button" className={`${css.tool} ${css.viewer}`} aria-label={tx('artifacts:workbench.viewer')} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>{tx(`artifacts:workbench.${mode}`)}</button>}/><button hidden={mode !== 'text' && mode !== 'code'} type="button" className={css.tool} aria-label={tx('artifacts:artifact-preview.wrap-lines')} aria-pressed={wrap} title={tx('artifacts:artifact-preview.wrap-lines')} onClick={() => { view.wrap = !wrap; setWrap(!wrap); }}><IconWrapLinesOutline16/></button><Reload reload={() => { view.revision++; refresh(view.revision); }}/><OpenFileApp call={call} path={path} directory={false}/></div>
-    {error && <p className={css.note} role="alert">{error}</p>}
+    {error && <p className={css.note} role="alert">{mode === 'office' ? tx(`artifacts:document.${documentFailure(new Error(error))}`) : error}</p>}
     {!value ? !error && <p className={css.note}>{tx('artifacts:workbench.loading')}</p> : mode !== 'text' && mode !== 'code' ? <div ref={scroll} className={css.document}><DocumentBody key={mode} call={call} onOpen={onOpen} mode={mode} text={value.text ?? ''} bytes={bytes} path={path} view={view} signal={lifetime.signal} retry={() => { view.revision++; refresh(view.revision); }}/></div> : mode === 'text' ? <div ref={scroll} className={css.plainText} data-wrap={wrap}><pre>{value.text}</pre></div> : <div className={css.renderer} data-wrap={wrap}><CodeBlock className={css.code} contentRef={scroll} code={value.text ?? ''} lang={languageForPath(path)} lineNumbers copyLabel={tx('common:search-block.copy')} copiedLabel={tx('common:search-block.copied')} toolbarLabel={tx('artifacts:workbench.code')}/></div>}
   </section>;
 }

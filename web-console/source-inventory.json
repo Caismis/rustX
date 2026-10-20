@@ -4349,6 +4349,7 @@
         "../../presentation/right-panel/preview-view-state",
         "../../workspaces/desktop",
         "../../workspaces/workbench",
+        "./documents/errors",
         "./workbench-documents/DocumentBody",
         "./workbench-documents/definitions",
         "./workbench-documents/zoom/types",
@@ -4374,7 +4375,7 @@
           "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime."
         }
       ],
-      "local_sha256": "c5ef52c29408a3802e48317d0b18c47b42c582c2688c0464c0c572331f093f8b"
+      "local_sha256": "b992b2db3bdada1824a51a41df439c85bb0ba6665070b7897c8bff1a00998b08"
     },
     {
       "upstream": "packages/client/ui-sidebar-files/src/client/FilesBody.module.css",

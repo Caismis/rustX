@@ -8,6 +8,8 @@ fixtures with fixed ZIP timestamps and fixed PDF object offsets.
 - `sample.pdf`: three textual pages, for navigation, zoom and selectable text.
 - `sample.docx`, `sample.pptx`: real minimal OPC packages, exercised through the
   real sandboxed system LibreOffice converter (not mocked converted outputs).
+- `linked.docx`, `linked.pptx`: original variants containing a web hyperlink and
+  an inert binary printer-settings part, for Office admission and conversion.
 - `sample.xlsx`: two sheets; `C1` stores formula `A1+B1` and deliberately stale
   cached value `99`; `D1` stores `NOW()` with no cached result. A viewer must not
   evaluate either formula.
