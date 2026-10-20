@@ -1,8 +1,15 @@
 //! Source capture: rereading the User and Workspace documents, overlaying
 //! them, resolving paths and resources, and producing one immutable
 //! [`ProspectiveSessionConfig`] or captured application input.
+#[cfg(test)]
+use super::ConfigurationHooks;
 use super::semantics::{SemanticFailure, catalog_document, composition_semantics};
-use super::*;
+use super::{
+    AdmittedSource, BTreeMap, Digest, IndependentPolicy, LaunchFailure, LayerCapture, ModelCatalog,
+    Origin, OsStrExt, Path, PathBuf, ProspectiveSessionConfig, ResourceDefinition, ResourceFamily,
+    RuntimeLayer, SessionConfigInput, SessionLocations, Sha256, SourceCapture, SourceReread,
+    SourceScope, UserConfigManager, UserConfigSources, application, read_bounded, repair,
+};
 
 /// Canonical authoring identity determines the base of relative user bindings.
 pub(in crate::local_runtime) fn canonical_settings_source(path: &Path) -> Result<PathBuf, String> {

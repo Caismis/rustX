@@ -742,11 +742,9 @@ async fn t04_session_relative_prefix_and_t09_policy_noop() {
     );
     for runtime in &runtimes {
         assert_eq!(
-            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
-                &runtime
-            )
-            .unwrap()
-            .approval_mode,
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(runtime)
+                .unwrap()
+                .approval_mode,
             crate::runtime::ApprovalMode::FullAccess
         );
     }

@@ -1,4 +1,4 @@
-//! Shared fixtures of the ConversationRuntime domain tests: headless runtime
+//! Shared fixtures of the `ConversationRuntime` domain tests: headless runtime
 //! construction over scripted models, durable seeds, and observation waits.
 
 pub(super) use std::sync::Arc;

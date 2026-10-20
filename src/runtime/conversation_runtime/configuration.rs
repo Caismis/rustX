@@ -3,7 +3,13 @@
 //! adoption eligibility. Authored-configuration composition is the
 //! application owner's concern (`local_runtime::configuration`).
 
-use super::*;
+use super::{
+    AdoptionEligibility, AdoptionError, Arc, CapabilityCoordinator, ConfigurationCut,
+    ContextBinding, ConversationLifecycleState, ConversationObservation, ConversationRuntime,
+    CoordinatorState, IdleProbe, PreparedConfiguration, PreparedRuntimeResources,
+    RuntimeConfiguration, RuntimeInner, RuntimeResourceSnapshot, SessionModelConfig,
+    SessionModelState, configuration_cache_impact, validate_model_context,
+};
 
 impl RuntimeInner {
     /// Whether this live runtime could adopt a prepared configuration now.

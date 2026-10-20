@@ -361,10 +361,12 @@ mod probe;
 #[cfg(test)]
 mod test_support;
 
-use admission::*;
-use compaction::*;
-use drain::*;
-use durability::*;
+use admission::{IdleProbe, SemanticInboundClass, WakeGate};
+use compaction::CurrentManualCompaction;
+use drain::{DrainCompletion, DrainTrigger};
+use durability::{
+    AdmissionDurabilityCycle, AdmissionRetryBudget, BackgroundFailureSink, SubagentFailureSink,
+};
 
 #[cfg(test)]
 pub(crate) use admission::IdleBusyReason;

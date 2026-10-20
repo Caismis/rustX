@@ -1,6 +1,6 @@
 //! Native semantic constraints of authored sources and their composition,
 //! and the authored document schema.
-use super::*;
+use super::{BTreeMap, LaunchFailure, ModelCatalog, Origin, PathBuf, RuntimeLayer, Value};
 
 /// A native semantic constraint an authored source or composition fails.
 ///

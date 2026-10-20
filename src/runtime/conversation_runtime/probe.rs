@@ -1,7 +1,13 @@
 //! Deterministic test synchronization hooks of the coordinator. Every hook is
 //! compiled only for tests; production paths call no-op probe entry points.
 
-use super::*;
+#[cfg(test)]
+use super::{
+    AgentId, Arc, ConversationId, ConversationRuntimeError, ConversationState, DurableOperation,
+    MessageBlock, MessageId, Mutex, PendingObservations, RuntimeBootstrapError,
+    RuntimeBootstrapSnapshot, RuntimeConversationConfig, Weak,
+};
+use super::{ConversationRuntime, RuntimeInner};
 
 /// Test-only synchronization hooks of the conversation coordinator.
 ///

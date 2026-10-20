@@ -273,7 +273,7 @@ impl ConfigurationObservationSource {
         let composition = resident.composition.lock().expect("composition mutex");
         let mut view =
             crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
-                &composition.as_ref()?.runtime(),
+                composition.as_ref()?.runtime(),
             )?;
         view.application = application.view(session.as_ref());
         view.process_bindings = Some(manager.process_policy());

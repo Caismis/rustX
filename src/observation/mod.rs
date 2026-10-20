@@ -1,6 +1,6 @@
 //! Native bounded observation contracts.
 //!
-//! Every value here is prepared by a native owner — the ConversationStore at
+//! Every value here is prepared by a native owner — the `ConversationStore` at
 //! its commit, the runtime at a published generation, or an interaction or
 //! status source — and is read unchanged by every adapter. These are finite
 //! read descriptors, never execution, settlement, or recovery authority:

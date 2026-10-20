@@ -4,7 +4,10 @@
 //! moves a unit's values, provenance and component revision together; the
 //! same rules serve source availability, retained Session bindings and the
 //! runtime generation (see [`super::generation`]).
-use super::*;
+use super::{
+    BTreeMap, CurrentRuntimeConfig, IndependentPolicy, Origin, ProspectiveSessionConfig,
+    RuntimeLayer, application,
+};
 
 /// Fixed unit ownership, shared by source and runtime projections. Replacing
 /// the owned keys also removes provenance for fields no longer authored.

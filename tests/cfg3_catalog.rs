@@ -852,7 +852,7 @@ async fn malformed_workspace_mcp_reserves_shadow_and_unused_definition_warns() {
         core.runtime().activate();
         assert!(
             !rustx::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
-                &core.runtime()
+                core.runtime()
             )
             .unwrap()
             .resources

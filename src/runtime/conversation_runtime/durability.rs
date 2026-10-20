@@ -2,7 +2,10 @@
 //! absorbing `DurabilityFailed` fact, and the background/subagent terminal
 //! publication failure sinks.
 
-use super::*;
+use super::{
+    ConversationObservation, ConversationRuntime, CoordinatorState, DurabilityFailureCommit,
+    DurableOperation, RuntimeInner, Weak,
+};
 
 /// The semantic durable operations of the coordinator's durability-health
 /// contract (Issue #63).

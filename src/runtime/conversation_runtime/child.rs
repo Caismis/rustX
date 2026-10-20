@@ -1,7 +1,10 @@
 //! Subagent-child coordination: parent guidance, child turn gating, child
 //! settlement observation, and the child's physical lifetime.
 
-use super::*;
+use super::{
+    ConversationRuntime, DrainTrigger, DurableOperation, InboundAdmission, InboundAdmissionError,
+    NativeAttemptSettlement, SemanticInboundClass, UserContentBlock, UserSource,
+};
 
 /// The result of one child-conversation terminal seal evaluation (Issue
 /// #193).

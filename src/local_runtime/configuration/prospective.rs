@@ -1,7 +1,10 @@
 //! Comparison, composition and admission of one immutable prospective
 //! Session capture. Nothing here reads a source document again.
 use super::units::{copy_unit_provenance, owns, unit_keys};
-use super::*;
+use super::{
+    AdmittedSessionConfig, BTreeMap, CurrentRuntimeConfig, IndependentPolicy, Origin,
+    ProspectiveSessionConfig, SessionLocations, application,
+};
 
 impl ProspectiveSessionConfig {
     /// The physical/profile closure admitted by Root selection and Workflow
