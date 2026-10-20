@@ -117,7 +117,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg_attr(not(test), allow(unused_imports))]
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
-use super::projection::{RuntimeClientProjection, SubscriberPoll, background_view};
+use super::projection::views::background_view;
+use super::projection::{RuntimeClientProjection, SubscriberPoll};
 use super::types::{
     AttachmentId, RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientCursor, RuntimeClientError,
     RuntimeClientProtocolEvent, RuntimeClientResult,
@@ -499,7 +500,7 @@ fn observation_domain_sources(
             agent: Some(agent),
             snapshot,
         } => {
-            let view = super::projection::agent_view(agent, snapshot);
+            let view = super::projection::views::agent_view(agent, snapshot);
             vec![pair(
                 format!("agents.{}", view.agent_id),
                 DomainSource::Agent(source_value(view)),
@@ -549,7 +550,7 @@ fn activity_domain_sources(
             if agent.activation_id != snapshot.subagent_id {
                 return Vec::new();
             }
-            let view = super::projection::activation_view(
+            let view = super::projection::views::activation_view(
                 snapshot,
                 agent.state,
                 agent.current_activation.clone(),
@@ -623,7 +624,7 @@ fn observation_terminal_positions(
         }
         #[cfg(test)]
         ConversationObservation::Event { attempt_id, event }
-            if super::projection::is_attempt_terminal(event) =>
+            if super::projection::views::is_attempt_terminal(event) =>
         {
             through
                 .and_then(|through| store.observation_attempt_summary(attempt_id, through).ok())
@@ -2481,7 +2482,7 @@ impl ClientInner {
                 for (index, source) in source.items.iter().enumerate() {
                     source.with_value(|value| {
                         items.push(collection_page_item(
-                            &super::projection::background_source_view(value),
+                            &super::projection::views::background_source_view(value),
                             value.job_id.to_string(),
                             offset + index as u64,
                         ));
@@ -2497,7 +2498,7 @@ impl ClientInner {
                 for (index, source) in source.items.iter().enumerate() {
                     source.with_value(|value| {
                         items.push(collection_page_item(
-                            &super::projection::agent_source_view(value),
+                            &super::projection::views::agent_source_view(value),
                             value.agent_id.to_string(),
                             offset + index as u64,
                         ));
@@ -2549,7 +2550,7 @@ impl ClientInner {
                         (offset == 0)
                             .then(|| {
                                 collection_page_item(
-                                    &super::projection::background_source_view(value),
+                                    &super::projection::views::background_source_view(value),
                                     value.job_id.to_string(),
                                     0,
                                 )
@@ -2565,7 +2566,7 @@ impl ClientInner {
                         (offset == 0)
                             .then(|| {
                                 collection_page_item(
-                                    &super::projection::agent_source_view(value),
+                                    &super::projection::views::agent_source_view(value),
                                     value.agent_id.to_string(),
                                     0,
                                 )
@@ -4821,7 +4822,7 @@ impl ClientInner {
                 agent_id: id.clone(),
             }
         })?;
-        Ok(super::projection::agent_view(&agent, &activation))
+        Ok(super::projection::views::agent_view(&agent, &activation))
     }
 
     pub(crate) async fn agent_statistics(

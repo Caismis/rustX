@@ -17664,7 +17664,7 @@ mod tests {
         let (owner, activation) = subagents
             .agent_snapshot_with_activation(&admitted.child_agent_id)
             .expect("fresh owner snapshot");
-        let expected = crate::runtime_client::projection::agent_view(&owner, &activation);
+        let expected = crate::runtime_client::projection::views::agent_view(&owner, &activation);
         assert_eq!(*streamed, expected);
         let status = attachment.handle_request(RuntimeClientRequest::AgentStatus {
             id: RequestId::new(1),
