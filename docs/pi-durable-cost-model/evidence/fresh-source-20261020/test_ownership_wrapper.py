@@ -37,29 +37,12 @@ class FullWrapperTests(unittest.TestCase):
         driver = (self.here / 'ownership-driver-compare-revisions.py').read_bytes()
         (self.runtime / 'compare-revisions.py').write_bytes(driver)
         self.binaries = {}
-        for label in ['baseline', 'geometry', 'scoped', 'ownership']:
-            build = self.root / ('evidence/build-' + label)
-            build.mkdir()
-            binary = build / 'conformance'
-            binary.write_bytes(label.encode())
-            self.binaries[label] = binary
-            identity = {'head': adapter.BASE if label == 'baseline' else adapter.HEAD,
-                        'production_tree': adapter.TREE, 'verified': True, 'harness': {'fixture': 'fixed'},
-                        'binary': str(binary), 'sha256': adapter.sha(binary), 'root_artifacts': []}
-            artifacts = []
-            if label == 'ownership':
-                library = build / 'ordinary.rlib'
-                library.write_bytes(b'ordinary library fixture')
-                identity.update(library_sha256=adapter.sha(library), root_artifacts=[
-                    {'name': 'rustx', 'kind': ['lib'], 'fresh': False},
-                    {'name': 'conformance', 'kind': ['test'], 'fresh': False}])
-                for name, kind, test, file in [('rustx', ['lib'], False, library), ('conformance', ['test'], True, binary)]:
-                    artifacts.append({'name': name, 'kind': kind, 'target': str(file), 'preserved': str(file),
-                                      'sha256': adapter.sha(file), 'features': [],
-                                      'profile': {'opt_level': '3', 'debuginfo': 0, 'test': test,
-                                                  'debug_assertions': False, 'overflow_checks': False}})
-            (build / 'identity.json').write_text(json.dumps(identity))
-            (build / 'preserved-artifacts.json').write_text(json.dumps({'source_head': adapter.HEAD, 'artifacts': artifacts}))
+        from test_fresh_host import fixture
+        for label in ['baseline', 'ownership']:
+            identity, _ = fixture(self.root, label)
+            identity['harness'] = {'benchmarks/runtime/' + name: adapter.sha(self.runtime / name) for name in ('compare-revisions.py', 'controller.py', 'observer_oracle.py')}
+            (Path(identity['binary']).parent / 'identity.json').write_text(json.dumps(identity))
+            self.binaries[label] = Path(identity['binary'])
         self.calls = []
 
     def argv(self):
@@ -93,12 +76,10 @@ class FullWrapperTests(unittest.TestCase):
         def iterdir(path):
             return iter(()) if str(path) == '/proc' else real_iterdir(path)
         source = self.wrapper.read_text()
-        literal = "root = Path('/workspace/pr485-study')"
-        self.assertEqual(source.count(literal), 1)
-        code = compile(source.replace(literal, 'root = Path(' + repr(str(self.root)) + ')'), str(self.wrapper), 'exec')
+        code = compile(source, str(self.wrapper), 'exec')
         cwd, paths, error = os.getcwd(), list(sys.path), None
         try:
-            with patch.dict(os.environ, {'RUSTX_BENCH_CANDIDATE_BUILD': str(self.binaries['ownership'].parent)}), \
+            with patch.dict(os.environ, {'RUSTX_BENCH_CANDIDATE_BUILD': str(self.binaries['ownership'].parent), 'RUSTX_BENCH_BASELINE_BUILD': str(self.binaries['baseline'].parent), 'RUSTX_BENCH_WORKSPACE': str(self.root), 'RUSTX_BENCH_REPO': str(self.root / 'repo')}), \
                  patch.dict(sys.modules, {'controller': controller}), patch.object(sys, 'argv', [str(self.wrapper), *argv]), \
                  patch.object(subprocess, 'Popen', forbidden), patch.object(subprocess, 'check_output', output_command), \
                  patch.object(subprocess, 'run', lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, '', '')), \
@@ -118,7 +99,7 @@ class FullWrapperTests(unittest.TestCase):
     def test_mixed_equals_duplicates_rejected_before_any_sample(self):
         base = self.argv()
         for suffix in [
-            ['--after=' + str(self.binaries['geometry'])], ['--before=' + str(self.binaries['geometry'])],
+            ['--after=' + str(self.binaries['baseline'])], ['--before=' + str(self.binaries['baseline'])],
             ['--output=' + str(self.products / 'unmonitored')], ['--pairs=3'], ['--pairs', '4']]:
             with self.subTest(suffix=suffix):
                 error = self.run_wrapper(base + suffix)
@@ -161,7 +142,7 @@ class FullWrapperTests(unittest.TestCase):
             self.assertTrue(Path(block[block.index('--output') + 1]).is_relative_to(output))
 
     def test_wrong_registered_artifact_is_rejected(self):
-        argv = self.argv(); argv[3] = str(self.binaries['geometry'])
+        argv = self.argv(); argv[3] = str(self.binaries['baseline'])
         error = self.run_wrapper(argv)
         self.assertIsInstance(error, AssertionError)
         self.assertIn('exact baseline/candidate pair', str(error))

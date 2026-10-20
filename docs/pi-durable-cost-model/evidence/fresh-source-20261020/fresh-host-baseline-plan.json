@@ -1,0 +1,86 @@
+{
+  "status": "plan-only; independent review required before launch",
+  "label": "baseline",
+  "head": "623b41b869a95c888eb04f907cbf607232699a2f",
+  "production_tree": "19ff7d6bd64993a6b9fc08bbcd687787dacfe08e",
+  "repo": "/workspace/pr485-baseline",
+  "build_output": "/workspace/pr485-fresh-study/evidence/build-baseline",
+  "launch_argv": [
+    "python3",
+    "/workspace/pr485-harness/docs/pi-durable-cost-model/evidence/fresh-source-20261020/ownership_adapter.py",
+    "--watch-build",
+    "--workspace",
+    "/workspace/pr485-fresh-study",
+    "--repo",
+    "/workspace/pr485-baseline",
+    "--label",
+    "baseline",
+    "--toolchain",
+    "/workspace/.rustup/toolchains/stable-x86_64-unknown-linux-gnu",
+    "--libclang",
+    "/lib/x86_64-linux-gnu",
+    "--output",
+    "/workspace/pr485-fresh-study/evidence/build-baseline"
+  ],
+  "cargo_argv": [
+    "/workspace/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo",
+    "test",
+    "--release",
+    "--locked",
+    "--offline",
+    "--test",
+    "conformance",
+    "--no-run",
+    "--message-format=json",
+    "-vv",
+    "-j",
+    "2"
+  ],
+  "preservation": {
+    "conformance": "/workspace/pr485-fresh-study/evidence/build-baseline/conformance",
+    "ordinary_library": "/workspace/pr485-fresh-study/evidence/build-baseline/artifacts/<Cargo-reported-rlib-name>",
+    "helpers": {
+      "rustx": {
+        "embedded_target": "/workspace/pr485-fresh-study/target/release/rustx",
+        "preserved": "/workspace/pr485-fresh-study/evidence/build-baseline/artifacts/rustx"
+      },
+      "bash-supervisor": {
+        "embedded_target": "/workspace/pr485-fresh-study/target/release/bash-supervisor",
+        "preserved": "/workspace/pr485-fresh-study/evidence/build-baseline/artifacts/bash-supervisor"
+      },
+      "interactive-supervisor": {
+        "embedded_target": "/workspace/pr485-fresh-study/target/release/interactive-supervisor",
+        "preserved": "/workspace/pr485-fresh-study/evidence/build-baseline/artifacts/interactive-supervisor"
+      }
+    },
+    "shared_libraries": "/workspace/pr485-fresh-study/evidence/build-baseline/artifacts/<each-target-release-deps-so>",
+    "fake_provider": "/workspace/pr485-baseline/test-support/fake-provider"
+  },
+  "limits": {
+    "build_entry_GiB": 18,
+    "cohort_entry_GiB": 16,
+    "build_disk_stop_GiB": 18,
+    "build_growth_cap_GiB": 2,
+    "memory_limit_GiB": 16,
+    "memory_anon_shmem_stop_GiB": 14,
+    "memory_stop_duration_seconds": 3,
+    "pressure_full_avg10_stop_percent": 10,
+    "pressure_stop_duration_seconds": 5,
+    "build_timeout_seconds": 3600,
+    "sampling_seconds": 0.5
+  },
+  "environment": {
+    "CARGO_HOME": "/workspace/.cargo",
+    "RUSTUP_HOME": "/workspace/.rustup",
+    "CARGO_TARGET_DIR": "/workspace/pr485-fresh-study/target",
+    "TMPDIR": "/workspace/pr485-fresh-study/tmp",
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+    "CARGO_PROFILE_RELEASE_DEBUG": "0",
+    "RUSTFLAGS": "-Copt-level=3 -Cdebuginfo=0",
+    "RUSTC": "/workspace/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc",
+    "LIBCLANG_PATH": "/lib/x86_64-linux-gnu",
+    "BINDGEN_EXTRA_CLANG_ARGS": "-isystem /usr/lib/gcc/x86_64-linux-gnu/14/include"
+  }
+}

@@ -14,6 +14,8 @@ GIB = 2**30
 HEAD = '1dfdf7e53bf20e1869099578b8f41c434e275961'
 TREE = '6b4e4e4b47592ab9369c364574331daac923ca4e'
 BASE = '623b41b869a95c888eb04f907cbf607232699a2f'
+BASE_TREE = '19ff7d6bd64993a6b9fc08bbcd687787dacfe08e'
+SOURCES = {'baseline': (BASE, BASE_TREE), 'ownership': (HEAD, TREE)}
 COHORT_ENTRY = 16 * GIB  # Preserve the existing wrapper's reserve.
 BUILD_ENTRY = COHORT_ENTRY + 2 * GIB
 
@@ -53,6 +55,88 @@ def validate_candidate(identity, preserved, baseline):
     if not any(Path(item['preserved']).resolve() == Path(identity['binary']).resolve()
                and item['sha256'] == identity['sha256'] for item in products):
         raise ValueError('conformance identity is not the preserved executable')
+
+
+LOCKED_INPUTS = {
+    'Cargo.toml': '59162af233790d4c4c0340046f6fc91c18bac5cfb8d416ca6ba4a109a6e998e4',
+    'Cargo.lock': '5a88074d3762bdf268b191882358bd58d48805a9c079806897dbcdc4a920da51',
+    'rust-toolchain.toml': 'c910997cb152c6dc8ed13b1fdf9fa28a4ed30d6776123e27dd6170e5c66067a0'}
+PINNED_ENV = {'RUSTFLAGS': '-Copt-level=3 -Cdebuginfo=0', 'CARGO_PROFILE_RELEASE_OPT_LEVEL': '3',
+              'CARGO_PROFILE_RELEASE_DEBUG': '0', 'CARGO_BUILD_JOBS': '2', 'CARGO_INCREMENTAL': '0'}
+
+
+def validate_build_inputs(identity):
+    if any(identity['source_sha256'].get(k) != v for k, v in LOCKED_INPUTS.items()):
+        raise ValueError('locked build inputs differ')
+    if any(identity['build_environment'].get(k) != v for k, v in PINNED_ENV.items()):
+        raise ValueError('build profile environment differs')
+    if ('rustc 1.98.1 (48a229cea 2026-09-01)' not in identity['rustc'] or
+        'commit-hash: 48a229ceaefd4985c50990b14116b6d856af0985' not in identity['rustc'] or
+        'host: x86_64-unknown-linux-gnu' not in identity['rustc'] or
+        'LLVM version: 22.1.8' not in identity['rustc'] or
+        identity['cargo'].strip() != 'cargo 1.98.1 (797e8a9bc 2026-08-05)'):
+        raise ValueError('toolchain differs from pinned provenance')
+
+
+def validate_product(identity, preserved, label):
+    """Validate either fresh-host product, including every helper mapping."""
+    head, tree = SOURCES[label]
+    validate_build_inputs(identity)
+    if (identity.get('head'), identity.get('production_tree')) != (head, tree):
+        raise ValueError('wrong pinned build source')
+    if identity.get('verified') is not True or preserved.get('source_head') != head:
+        raise ValueError('unverified product')
+    repo = Path(identity['repo']).resolve()
+    target = Path(identity['build_environment']['CARGO_TARGET_DIR']).resolve()
+    required = [('rustx', ['lib'], False, 'src/lib.rs'),
+                ('conformance', ['test'], True, 'tests/conformance/main.rs'),
+                ('rustx', ['bin'], False, 'src/main.rs'),
+                ('bash-supervisor', ['bin'], False, 'src/bin/bash_supervisor.rs'),
+                ('interactive-supervisor', ['bin'], False, 'src/bin/interactive_supervisor.rs')]
+    for name, kind, test, source in required:
+        roots = [r for r in identity['root_artifacts'] if r['name'] == name and r['kind'] == kind]
+        if len(roots) != 1 or roots[0]['fresh'] is not False or Path(roots[0]['source_path']).resolve() != repo / source:
+            raise ValueError('missing, cached or foreign root product/helper')
+        items = [r for r in preserved['artifacts'] if r['name'] == name and r['kind'] == kind]
+        if not items or (kind == ['lib'] and not any(r['preserved'].endswith('.rlib') for r in items)):
+            raise ValueError('missing product/helper artifact')
+        for item in items:
+            profile = item['profile']
+            if (str(profile['opt_level']), profile['debuginfo'], profile['test'], item['features'],
+                profile.get('debug_assertions'), profile.get('overflow_checks')) != ('3', 0, test, [], False, False):
+                raise ValueError('wrong ordinary optimized artifact profile')
+            if kind == ['bin'] and Path(item['target']).resolve() != target / 'release' / name:
+                raise ValueError('wrong embedded helper destination')
+    if 'Linker: LLD 22.1.8' not in identity['linker_comment']:
+        raise ValueError('unexpected final ELF linker')
+    shared = {r['target']: r['sha256'] for r in preserved['artifacts'] if r['kind'] == ['shared-library']}
+    if shared != identity['shared_libraries']:
+        raise ValueError('shared-library inventory differs')
+    for item in preserved['artifacts']:
+        if not Path(item['target']).resolve().is_relative_to(target):
+            raise ValueError('artifact target outside declared target directory')
+        if sha(item['preserved']) != item['sha256']:
+            raise ValueError('preserved artifact digest mismatch')
+    library = next(r for r in preserved['artifacts'] if r['kind'] == ['lib'] and r['preserved'].endswith('.rlib'))
+    if library['sha256'] != identity['library_sha256']:
+        raise ValueError('ordinary library identity mismatch')
+    products = [r for r in preserved['artifacts'] if r['name'] == 'conformance' and r['kind'] == ['test']]
+    if not any(Path(r['preserved']).resolve() == Path(identity['binary']).resolve() and r['sha256'] == identity['sha256'] for r in products):
+        raise ValueError('conformance identity mismatch')
+    if sha(identity['binary']) != identity['sha256']:
+        raise ValueError('conformance digest mismatch')
+
+
+def validate_pair(baseline, candidate):
+    if baseline['head'] != BASE or candidate['head'] != HEAD:
+        raise ValueError('wrong baseline/candidate pair')
+    for key in ('harness', 'rustc', 'cargo'):
+        if baseline[key] != candidate[key]:
+            raise ValueError('unmatched build provenance: ' + key)
+    for key in ('RUSTFLAGS', 'CARGO_PROFILE_RELEASE_OPT_LEVEL', 'CARGO_PROFILE_RELEASE_DEBUG',
+                'CARGO_BUILD_JOBS', 'CARGO_INCREMENTAL', 'RUSTC', 'LIBCLANG_PATH', 'BINDGEN_EXTRA_CLANG_ARGS'):
+        if baseline['build_environment'][key] != candidate['build_environment'][key]:
+            raise ValueError('unmatched build environment: ' + key)
 
 
 def allocated(paths):
@@ -132,7 +216,8 @@ class Guard:
             'kind': self.kind, 'adapter_sha256': sha(__file__), 'initial': self.initial,
             'evidence_directory': str(self.evidence), 'monitored_allocated_paths': [str(path) for path in self.paths],
             'entry_bytes': BUILD_ENTRY if self.kind == 'build' else COHORT_ENTRY,
-            'hard_floor_bytes': 5 * GIB, 'soft_stop_bytes': 6 * GIB,
+            'hard_floor_bytes': 5 * GIB, 'soft_stop_bytes': BUILD_ENTRY if self.kind == 'build' else 6 * GIB,
+            'protected_cohort_reserve_bytes': COHORT_ENTRY,
             'allocated_growth_cap_bytes': 2 * GIB if self.kind == 'build' else GIB,
             'evidence_cap_bytes': int(.75 * GIB), 'temporary_growth_cap_bytes': int(.25 * GIB),
             'deadline_monotonic': self.deadline, 'per_product_seconds': 180,
@@ -162,6 +247,8 @@ class Guard:
 
     def reason(self, point, growth, evidence=0, temporary=0):
         now = point['monotonic']
+        if self.kind == 'build' and point['free'] <= BUILD_ENTRY:
+            return 'build-protected-cohort-reserve-18GiB'
         if point['free'] <= 6 * GIB:
             return 'disk-soft-stop-6GiB'
         if growth > (2 * GIB if self.kind == 'build' else GIB):
@@ -334,37 +421,50 @@ def expected_plan(options):
     return plan
 
 
-def watch_build(repo, output):
+def watch_build(repo, output, workspace, label, toolchain, libclang, baseline_build=None):
     """Fixed ordinary-product build; intentionally never runs cargo clean."""
-    workspace = Path('/workspace/pr485-study')
+    workspace = Path(workspace).resolve()
+    toolchain = Path(toolchain).resolve()
+    head, tree = SOURCES[label]
     repo, output = Path(repo).resolve(), Path(output).resolve()
     def git(*args):
         return subprocess.check_output(['git', *args], cwd=repo, text=True).strip()
-    if git('rev-parse', 'HEAD') != HEAD or git('rev-parse', 'HEAD:src') != TREE:
-        raise ValueError('build checkout is not reviewed 1df source')
+    if git('rev-parse', 'HEAD') != head or git('rev-parse', 'HEAD:src') != tree:
+        raise ValueError('build checkout is not the pinned source for this label')
     inputs = ['src', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'tests/conformance', 'tests/common/provider_emulator.rs', 'benchmarks/runtime', 'test-support/fake-provider']
     if git('status', '--porcelain', '--', *inputs):
         raise ValueError('uncommitted build input')
     env = dict(os.environ)
     for key in list(env):
-        if key.startswith('CARGO_PROFILE_RELEASE_') or key in ('CARGO_ENCODED_RUSTFLAGS', 'RUSTC_WRAPPER', 'RUSTC_WORKSPACE_WRAPPER', 'LD_PRELOAD', 'CPUPROFILE'):
+        if key.startswith(('CARGO_PROFILE_', 'CARGO_TARGET_')) or key in ('CARGO_ENCODED_RUSTFLAGS', 'RUSTC_WRAPPER', 'RUSTC_WORKSPACE_WRAPPER', 'LD_PRELOAD', 'CPUPROFILE', 'RUSTUP_TOOLCHAIN', 'RUSTC', 'RUSTDOC', 'CARGO_BUILD_TARGET', 'CARGO_BUILD_RUSTC', 'CARGO_BUILD_RUSTFLAGS', 'CARGO_BUILD_RUSTC_WRAPPER', 'CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER'):
             env.pop(key)
-    env.update(PATH='/workspace/.cargo/bin:' + env['PATH'], CARGO_HOME='/workspace/.cargo',
-               RUSTUP_HOME='/workspace/.rustup', RUSTUP_TOOLCHAIN='1.98.1', CARGO_INCREMENTAL='0',
+    env.update(PATH=str(toolchain / 'bin') + ':' + env['PATH'], CARGO_HOME='/workspace/.cargo',
+               RUSTUP_HOME='/workspace/.rustup', RUSTC=str(toolchain / 'bin/rustc'), RUSTDOC=str(toolchain / 'bin/rustdoc'), CARGO_INCREMENTAL='0',
                CARGO_TARGET_DIR=str(workspace / 'target'), CARGO_BUILD_JOBS='2',
                CARGO_PROFILE_RELEASE_OPT_LEVEL='3', CARGO_PROFILE_RELEASE_DEBUG='0',
                RUSTFLAGS='-Copt-level=3 -Cdebuginfo=0', TMPDIR=str(workspace / 'tmp'),
-               BINDGEN_EXTRA_CLANG_ARGS='-isystem /usr/lib/gcc/x86_64-linux-gnu/14/include', LIBCLANG_PATH='/usr/lib/llvm-19/lib')
-    argv = ['cargo', 'test', '--release', '--locked', '--offline', '--test', 'conformance', '--no-run', '--message-format=json', '-vv', '-j', '2']
-    guard = Guard(workspace, output, 'build').start()
+               BINDGEN_EXTRA_CLANG_ARGS='-isystem /usr/lib/gcc/x86_64-linux-gnu/14/include', LIBCLANG_PATH=str(Path(libclang).resolve()))
+    argv = [str(toolchain / 'bin/cargo'), 'test', '--release', '--locked', '--offline', '--test', 'conformance', '--no-run', '--message-format=json', '-vv', '-j', '2']
+    guard = Guard(workspace, output, 'build')
     safe_env = ['CARGO_TARGET_DIR', 'CARGO_BUILD_JOBS', 'CARGO_INCREMENTAL', 'CARGO_PROFILE_RELEASE_OPT_LEVEL', 'CARGO_PROFILE_RELEASE_DEBUG',
-                'RUSTFLAGS', 'RUSTUP_TOOLCHAIN', 'TMPDIR', 'BINDGEN_EXTRA_CLANG_ARGS', 'LIBCLANG_PATH']
-    identity = {'head': HEAD, 'production_tree': TREE, 'verified': False, 'commands': [argv],
+                'RUSTFLAGS', 'RUSTC', 'TMPDIR', 'BINDGEN_EXTRA_CLANG_ARGS', 'LIBCLANG_PATH']
+    identity = {'head': head, 'production_tree': tree, 'repo': str(repo), 'verified': False, 'commands': [argv],
                 'build_environment': {key: env[key] for key in safe_env},
                 'rustc': subprocess.check_output(['rustc', '--version', '--verbose'], env=env, text=True),
                 'cargo': subprocess.check_output(['cargo', '--version'], env=env, text=True),
-                'source_sha256': {name: sha(repo / name) for name in ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'src/runtime_client/projection.rs', 'src/runtime_client/projection/metadata_ownership_tests.rs']},
+                'source_sha256': {name: sha(repo / name) for name in ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'src/runtime_client/projection.rs']},
                 'root_artifacts': [], 'harness': {}}
+    if 'rustc 1.98.1 (48a229cea 2026-09-01)' not in identity['rustc'] or 'LLVM version: 22.1.8' not in identity['rustc'] or identity['cargo'].strip() != 'cargo 1.98.1 (797e8a9bc 2026-08-05)':
+        raise ValueError('toolchain differs from pinned provenance')
+    validate_build_inputs(identity)
+    baseline = None
+    if label == 'ownership':
+        if baseline_build is None:
+            raise ValueError('candidate requires a verified fresh baseline build')
+        baseline = json.loads((Path(baseline_build) / 'identity.json').read_text())
+        validate_product(baseline, json.loads((Path(baseline_build) / 'preserved-artifacts.json').read_text()), 'baseline')
+    (workspace / 'tmp').mkdir(parents=True, exist_ok=True)
+    guard.start()
     try:
         guard.check()
         with (output / 'build.stdout').open('w') as stdout, (output / 'build.stderr').open('w') as stderr:
@@ -374,7 +474,7 @@ def watch_build(repo, output):
         guard.check()
         if identity['build_exit'] != 0:
             raise RuntimeError('candidate build failed; output retained')
-        if git('rev-parse', 'HEAD') != HEAD or git('status', '--porcelain', '--', *inputs):
+        if git('rev-parse', 'HEAD') != head or git('status', '--porcelain', '--', *inputs):
             raise RuntimeError('build inputs changed')
         rows = [json.loads(line) for line in (output / 'build.stdout').read_text().splitlines() if line.startswith('{')]
         roots = [row for row in rows if row.get('reason') == 'compiler-artifact' and row['target']['name'] in ('rustx', 'conformance', 'bash-supervisor', 'interactive-supervisor')]
@@ -400,17 +500,22 @@ def watch_build(repo, output):
             artifacts.append({'target': str(source), 'preserved': str(destination), 'name': source.name,
                               'kind': ['shared-library'], 'sha256': sha(destination), 'bytes': destination.stat().st_size})
             guard.check()
-        for source in [repo / 'tests/common/provider_emulator.rs', repo / 'tests/conformance/agent_loop/runtime_benchmark.rs',
-                       *sorted((repo / 'tests/conformance/agent_loop/runtime_benchmark').rglob('*'))]:
-            if source.is_file():
-                identity['harness'][str(source.relative_to(repo))] = sha(source)
+        for name in git('ls-files', '--', 'tests/common/provider_emulator.rs',
+                        'tests/conformance/agent_loop/runtime_benchmark.rs',
+                        'tests/conformance/agent_loop/runtime_benchmark', 'benchmarks/runtime',
+                        'test-support/fake-provider').splitlines():
+            identity['harness'][name] = sha(repo / name)
+        identity['linker_comment'] = subprocess.check_output(['readelf', '-p', '.comment', str(output / 'conformance')], text=True)
+        identity['shared_libraries'] = {r['target']: r['sha256'] for r in artifacts if r['kind'] == ['shared-library']}
         identity.update(binary=str(output / 'conformance'), sha256=sha(output / 'conformance'),
                         library_sha256=next(item['sha256'] for item in artifacts if item['kind'] == ['lib'] and item['preserved'].endswith('.rlib')))
-        preserved = {'source_head': HEAD, 'artifacts': artifacts}
+        preserved = {'source_head': head, 'artifacts': artifacts}
         (output / 'preserved-artifacts.json').write_text(json.dumps(preserved, indent=2) + '\n')
-        baseline = json.loads((workspace / 'evidence/build-baseline/identity.json').read_text())
         identity['verified'] = True
-        validate_candidate(identity, preserved, baseline)
+        validate_product(identity, preserved, label)
+        if baseline is not None:
+            validate_pair(baseline, identity)
+            validate_candidate(identity, preserved, baseline)
         guard.check()
     except BaseException:
         identity['verified'] = False
@@ -431,5 +536,10 @@ if __name__ == '__main__':
     parser.add_argument('--watch-build', action='store_true', required=True)
     parser.add_argument('--repo', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--workspace', type=Path, required=True)
+    parser.add_argument('--label', choices=tuple(SOURCES), required=True)
+    parser.add_argument('--toolchain', type=Path, required=True)
+    parser.add_argument('--libclang', type=Path, required=True)
+    parser.add_argument('--baseline-build', type=Path)
     args = parser.parse_args()
-    watch_build(args.repo, args.output)
+    watch_build(args.repo, args.output, args.workspace, args.label, args.toolchain, args.libclang, args.baseline_build)

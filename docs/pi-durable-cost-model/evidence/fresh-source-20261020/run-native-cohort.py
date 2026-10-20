@@ -11,12 +11,15 @@ import subprocess
 import sys
 import time
 import traceback
-from ownership_adapter import Guard, accepted, cohort_arguments, comparison_runner, expected_plan, parse_ownership_args, validate_candidate
+from ownership_adapter import Guard, accepted, cohort_arguments, comparison_runner, expected_plan, parse_ownership_args, validate_candidate, validate_product, validate_pair
 
-root = Path('/workspace/pr485-study')
-candidate_build = os.environ.get('RUSTX_BENCH_CANDIDATE_BUILD')
+for key in ('RUSTX_BENCH_WORKSPACE', 'RUSTX_BENCH_REPO', 'RUSTX_BENCH_BASELINE_BUILD', 'RUSTX_BENCH_CANDIDATE_BUILD'):
+    if not os.environ.get(key):
+        raise ValueError('explicit fresh-host path required: ' + key)
+root = Path(os.environ['RUSTX_BENCH_WORKSPACE']).resolve()
+candidate_build = os.environ['RUSTX_BENCH_CANDIDATE_BUILD']
 ownership_options = parse_ownership_args(sys.argv[1:], root) if candidate_build else None
-repo = root / 'repo'
+repo = Path(os.environ['RUSTX_BENCH_REPO']).resolve()
 runtime = repo / 'benchmarks/runtime'
 os.environ['TMPDIR'] = str(root / 'tmp')
 assert not os.environ.get('LD_PRELOAD'), 'instrumentation preload is not allowed'
@@ -30,7 +33,7 @@ def sha(path):
 
 identities = {}
 build_identities = {}
-builds = [(label, root / 'evidence' / ('build-' + label)) for label in ('baseline', 'geometry', 'scoped')]
+builds = [('baseline', Path(os.environ['RUSTX_BENCH_BASELINE_BUILD']).resolve())]
 if candidate_build:
     builds.append(('ownership', Path(candidate_build).resolve()))
 for label, build in builds:
@@ -38,7 +41,9 @@ for label, build in builds:
     preserved = json.loads((build / 'preserved-artifacts.json').read_text())
     assert identity['verified'] is True
     assert sha(Path(identity['binary'])) == identity['sha256']
+    validate_product(identity, preserved, label)
     if label == 'ownership':
+        validate_pair(build_identities['baseline'], identity)
         validate_candidate(identity, preserved, build_identities['baseline'])
         assert str(Path(identity['binary']).resolve()) not in identities
     build_identities[label] = identity
@@ -66,6 +71,9 @@ if candidate_build:
     assert sha(runtime / 'compare-revisions.py') == sha(frozen_driver), 'runtime driver differs from tested frozen workload'
     protected.append(frozen_driver)
 hashes = {str(p): sha(p) for p in protected}
+for name in ('compare-revisions.py', 'controller.py', 'observer_oracle.py'):
+    if sha(runtime / name) != build_identities['baseline']['harness']['benchmarks/runtime/' + name]:
+        raise ValueError('runtime workload differs from built provenance: ' + name)
 node_version = subprocess.check_output(['node', '--version'], text=True).strip()
 assert node_version == 'v24.19.0'
 cohort = {'start_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
