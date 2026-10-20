@@ -1524,7 +1524,18 @@ tools/mcp/                MCP adapter: protocol-revision negotiation,
                            configured server runtime, paginated discovery,
                            list-change invalidation, canonical calls,
                            progress, cancellation, stdio
-                           protocol-corruption observation (`framing.rs`)
+                           protocol-corruption observation (`framing.rs`).
+                           One owner (`McpServerRuntime`, `runtime.rs`)
+                           extended by focused modules: `connect.rs`
+                           (generation construction), `invalidation.rs`
+                           (the one tools/list_changed sink both revision
+                           entry points feed), `generation.rs` (resource
+                           generations, leases, retirement), `invocation.rs`
+                           (MRTR orchestration), `request.rs`
+                           (`dispatch_owned_request`), `outcome.rs`,
+                           `task_driver.rs` (SEP-2663), `progress.rs`
+                           (router, leases, subscriptions), `result.rs`
+                           (materialization), `executor.rs`
 tools/python.rs           managed FastMCP package discovery, fingerprint-keyed
                            uv environment preparation, and synthesis of the
                            generic MCP server bindings (`python:<folder>`)
