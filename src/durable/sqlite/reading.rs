@@ -1,4 +1,7 @@
 //! One transaction owns outline identity, location and bounded transcript selection.
+
+#[cfg(test)]
+mod tests;
 use super::{
     Connection, ConversationStoreError, OptionalExtension,
     canonical::transcript::load_transcript_page, nonnegative, params, seq_to_i64, storage,

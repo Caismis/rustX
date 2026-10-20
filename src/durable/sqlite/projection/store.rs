@@ -1,6 +1,9 @@
 //! The ProjectionStore implementation over the projection, compaction, and lineage readers.
 
 #[cfg(test)]
+mod tests;
+
+#[cfg(test)]
 use super::super::CompactionFaultOperation;
 use crate::conversation::SurfaceRevision;
 use crate::durable::sqlite::request::snapshot::load_request_snapshot_bounded;

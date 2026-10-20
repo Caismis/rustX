@@ -2,6 +2,9 @@
 //! pending mutation, each committed in the caller's single transaction.
 
 #[cfg(test)]
+mod tests;
+
+#[cfg(test)]
 use super::AdmissionFaultOperation;
 use super::canonical::canonical_observation_batch;
 use super::canonical::ledger::{

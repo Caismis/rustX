@@ -1,5 +1,8 @@
 //! The canonical Message Ledger, Surface, and transcript domain.
 
+#[cfg(test)]
+mod tests;
+
 use crate::durable::ProjectionStore;
 use rusqlite::OptionalExtension;
 use sha2::Digest;

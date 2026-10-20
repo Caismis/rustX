@@ -1004,7 +1004,7 @@ fn recovery_safety_fails_closed_on_incomplete_or_compacted_prefixes() {
 
 // WEB-06: sequential claim/mutation outcomes and concurrent mutation CAS.
 // Forced concurrent claim/mutation writer orders live in
-// durable::sqlite::pending_transaction_tests; these public-contract tests
+// durable::sqlite::inbox::tests::pending_transaction; these public-contract tests
 // require no test hooks. No mailbox, transport, or browser mutex is involved.
 fn pending_ref(item: &AcceptedInbound) -> rustx::durable::inbox::PendingInboundRef {
     rustx::durable::inbox::PendingInboundRef {

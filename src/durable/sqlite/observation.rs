@@ -1,5 +1,8 @@
 //! Native-transaction descriptor indexes with bounded physical observation reads.
 
+#[cfg(test)]
+mod tests;
+
 mod store;
 use super::{
     Connection, ConversationStoreError, OptionalExtension, Transaction, nonnegative, params,

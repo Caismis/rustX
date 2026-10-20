@@ -1,5 +1,8 @@
 //! The Request Snapshot domain and the atomic model-turn start transition.
 
+#[cfg(test)]
+mod tests;
+
 use rusqlite::OptionalExtension;
 pub(super) mod contribution;
 pub(crate) mod snapshot;

@@ -4,6 +4,9 @@
 //! creates the development schema only for a new file; there is no migration
 //! or legacy reader.
 
+#[cfg(test)]
+mod tests;
+
 use rusqlite::OptionalExtension;
 pub(super) mod shape;
 

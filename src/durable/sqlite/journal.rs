@@ -1,5 +1,8 @@
 //! The Event Journal domain: validated execution-fact persistence.
 
+#[cfg(test)]
+mod tests;
+
 use rusqlite::OptionalExtension;
 pub(super) mod reference;
 
