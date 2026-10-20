@@ -11,6 +11,7 @@ use crate::runtime_client::content::{
 };
 
 #[derive(Debug, Default)]
+#[allow(clippy::struct_excessive_bools)] // Independent branch witnesses can overlap.
 struct BaselinePath {
     captured_eviction: bool,
     fitted: bool,
@@ -122,7 +123,7 @@ fn binding(draft: &PublicationDraft, message: &MessageBlock, path: Vec<String>) 
             },
             representation: ContentRepresentation::Utf8Text,
             version: 1,
-            content_revision: u64::MAX,
+            content_revision: 1,
             readable_end: 7,
         },
         deferred: true,
@@ -130,6 +131,11 @@ fn binding(draft: &PublicationDraft, message: &MessageBlock, path: Vec<String>) 
 }
 
 fn add_owned_metadata(draft: &mut PublicationDraft) {
+    draft
+        .seed
+        .read_cut
+        .domain_revisions
+        .insert("metadata-ownership-wide-native".into(), u64::MAX);
     let message = compactable_user("metadata-ownership-message");
     let evidence = binding(
         draft,
