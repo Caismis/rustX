@@ -83,6 +83,23 @@ that remembered material. Selecting Local fetches and validates bootstrap before
 requesting a transition. `selectedMode` describes the material-entry selection;
 `mode` describes committed ownership and never changes on admission refusal.
 
+## Client module ownership (Issue #487)
+
+`client/app-server.ts` (`AppServerClient`) owns the connection lifecycle, the
+one published `ClientView`, the Session lifecycle projection and the composition
+of narrow collaborators; it is the only writer of client state. Each
+collaborator receives a port listing exactly what it reads and writes:
+
+| Module | Owns |
+| --- | --- |
+| `client/contracts.ts`, `client/errors.ts` | published view/operation contracts and request outcome errors, below both the client and application flows |
+| `client/request-pipeline.ts` | request ids, lanes from the shared `protocol/app-server/method-policy.ts`, admission re-validation adjacent to send, correlation, deadlines, exactly-once uncertainty at disconnect |
+| `client/session-catalog.ts` | catalog pages, exact summary reads and native invalidations |
+| `client/session-reads.ts`, `client/configuration-observations.ts` | bounded domain/model/settings/content reads; the per-scope configuration cache |
+| `client/reading.ts`, `client/cold-reads.ts`, `client/trace-reads.ts` | Turn outline and transcript windows; read-only previews of opening Sessions; Trace reads and their authority |
+| `client/session-controls.ts`, `client/model-selection.ts`, `client/interactions.ts`, `client/session-uploads.ts` | Goal/inbound/compaction/cancellation, model selection, pending interactions, the native upload operation |
+| `client/source-repairs.ts` | the connection's Source repair observations under the shared `protocol/app-server/source-repair.ts` rules |
+
 AppServerClient owns endpoint/token validation and replacement admission. Its
 side-effect-free admission check runs immediately before synchronous fencing, with
 no intervening await. Eight detached evidence batches or more than 64

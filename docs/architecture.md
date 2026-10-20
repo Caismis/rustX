@@ -847,12 +847,13 @@ exponent-notation variation); and **closed over the domain** — the wire
 alphabet *is* the domain, so a decimal binary64 cannot hold, `9007199254740993`,
 has no wire representation at all rather than one the runtime must detect and
 refuse. `FiniteNumber::from_wire` is the one authoritative parse, and
-`tui/src/protocol/number.ts` is the client's single conversion seam; every
-bound and every answer on both sides goes through them.
+`protocol/app-server/number.ts` is the clients' single conversion and reading
+seam, shared by the TUI and the Web console; every bound and every answer on
+both sides goes through them.
 
 The representation is internal to the Runtime Client protocol and the durable
-audit. A human never sees it — the TUI reads a decimal draft, validates it with
-`readNumberDraft`, and renders bounds as ordinary decimals — and an MCP server
+audit. A human never sees it — each client reads a decimal draft, validates it with
+the shared `readNumberDraft`/`readScalarAnswer` (machine-readable reasons each UI words itself), and renders bounds as ordinary decimals — and an MCP server
 never sees it either: `accept.content` carries the ordinary JSON number built
 from the same bits.
 
