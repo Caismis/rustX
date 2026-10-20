@@ -1453,6 +1453,7 @@ pub(crate) struct RuntimeInner {
     /// [`RuntimeInner::record_durability_failure`]; the registries hold it
     /// across their ownership durable writes.
     durability_gate: Arc<DurabilityGate>,
+    auxiliary_capacity: crate::runtime::auxiliary::capacity::ConversationCapacity,
     /// The immutable result of this runtime's startup recovery (Issue #12,
     /// M9a): the deterministic classification, exactly which recovery facts
     /// were committed, and what continuation is permitted.
@@ -4209,6 +4210,9 @@ impl ConversationRuntime {
                 Arc::new(SystemMonotonicClock::new()) as Arc<dyn MonotonicClock>
             }),
             durability_gate: durability_gate.clone(),
+            auxiliary_capacity:
+                crate::runtime::auxiliary::capacity::ProcessCapacity::shared_process()
+                    .conversation(),
             recovery,
             executor,
             state: Mutex::new(CoordinatorState {
@@ -5408,6 +5412,16 @@ impl ConversationRuntime {
             if state.current_attempt.is_some() || state.manual_compaction.is_some() {
                 return Err(ManualCompactionError::Busy);
             }
+            let auxiliary_permit =
+                self.inner
+                    .auxiliary_capacity
+                    .reserve_compaction()
+                    .map_err(|busy| {
+                        ManualCompactionError::Context(ContextError::new(
+                            ContextErrorKind::AuxiliaryBusy,
+                            busy.to_string(),
+                        ))
+                    })?;
             let model = state.model.snapshot().map_err(|error| {
                 ManualCompactionError::ModelUnavailable {
                     diagnostic: error.to_string(),
@@ -5508,6 +5522,7 @@ impl ConversationRuntime {
                     }
                 }
                 inner.finish_manual_compaction(task, &completion_for_task, request_id.as_ref());
+                drop(auxiliary_permit);
                 drop(admission);
             });
             completion

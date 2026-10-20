@@ -428,6 +428,19 @@ policy and retry orchestration remain intentionally outside this architecture.
 
 ## 1.2 Runtime supervision and quiescence (M9c / Issue #12)
 
+`runtime::auxiliary::capacity` owns nonblocking process and Conversation Call
+reservations, including required-writer capacity. Runtime instances share the
+native process domain and retain their own Conversation domain. Manual
+Compaction reserves protected capacity before model/context preparation and
+keeps it under native operation ownership. Ordinary consumers cannot select
+the crate-private protected admission path.
+
+`context::compaction_budget` owns cumulative business accounting independently
+of physical execution capacity. Its clones share the same operation identity,
+deadline, start reservations and shrink count. Request receipts and typed
+noncommit evidence resolve reservations; an unknown transaction remains a
+logical budget obligation rather than permission for another physical start.
+
 `ConversationRuntime` owns one lifecycle authority:
 
 ```text

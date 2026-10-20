@@ -303,6 +303,23 @@ Pre-1.0 development does not preserve compatibility with previous runtimes, lega
 
 ## Core ownership
 
+Native auxiliary capacity is acquired without waiting, process before
+Conversation, and all partial reservations unwind on refusal. Each process
+has 32 total and 24 general Call slots; each Conversation has four total and
+three general slots. Only native Compaction admission can use total capacity
+without a general slot. Attribution strings grant no protected authority.
+Every admitted Call also reserves its serialized required-write responsibility.
+Native owners retain these resources through physical work and confirmation;
+reply receivers and observers never own their release.
+
+One Compaction budget spans all input shrink and carryover re-entry: twelve
+confirmed or unresolved starts, three shrinks and one five-minute monotonic
+deadline. A matching Store receipt confirms a start; only Store-proven
+noncommit refunds it. Dropping a reservation preserves logical uncertainty
+without retaining an execution permit. Capacity, deadline, supervision and
+required-durability failures retain typed distinctions from rejected Summary
+content.
+
 The agent kernel owns agent execution semantics. Provider SDKs, MCP SDKs, storage clients, HTTP frameworks, and control-plane schemas must not define kernel types.
 
 ## Native durable authority (M8 / Issue #11)

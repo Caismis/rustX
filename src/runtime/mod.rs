@@ -21,6 +21,7 @@
 //! public runtime API.
 
 pub mod agent_profile;
+pub mod auxiliary;
 pub mod cancellation;
 pub mod capability_inspection;
 pub mod continuation;
