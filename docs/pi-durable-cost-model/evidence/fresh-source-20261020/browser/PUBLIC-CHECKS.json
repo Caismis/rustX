@@ -1,0 +1,15 @@
+{
+  "all_authored_files_strict_git_diff_check": "passed",
+  "frozen_fixture_files": 11,
+  "all_fixture_bytes_match_original_published_manifest": true,
+  "inherited_blank_at_eof_retained_exactly": [
+    "canonical_history.rs",
+    "common.rs",
+    "verify_requests.rs"
+  ],
+  "numeric_checks": "754paired rows,580summary rows,386finite intervals,8synthetic counter/churn scenarios",
+  "wire_replay": "27products1350logical proofs",
+  "requests": "1356requests,13complete pairs630pairedrequests",
+  "originals_and_binaries_retained": true,
+  "source_or_fixture_edits": false
+}

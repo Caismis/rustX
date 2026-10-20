@@ -1,0 +1,3581 @@
+{
+  "start_utc": "2026-10-20T03:14:36.087509+00:00",
+  "comparison": [
+    "baseline",
+    "geometry"
+  ],
+  "pairs": 3,
+  "cases": [
+    "short-small",
+    "short-large",
+    "details-resync"
+  ],
+  "fixture_commit": "bddf435705f545f9b05ccd9b637d0fe85d4baa47",
+  "fixture_sha256": {
+    "verify_requests.rs": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945",
+    "expected_tools.json": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d",
+    "host.rs": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c",
+    "canonical_history.rs": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86",
+    "run.mjs": "43d9fe73fc33d3702b7e413b6ce0a238942b33749894ccd0a9c837ead11d02f9",
+    "request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461",
+    "common.rs": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823",
+    "provider.py": "b6b451f207d065a84f71648c9486928703b59624242dd330889a5aff7a5bf21e",
+    "README.txt": "ec05599048a1454f6f953e89cfd1f9621d5a178d19b5912b029f256a306a2c73",
+    "drain.mjs": "53c965c5c20fc777441387f099c8752a81228ad5c32fa1ed5caab603cf0bec34",
+    "build-host.py": "bb8e1ab11950917c256f86a724dafabd02daff21717bdaca019d1e14bb98fc87"
+  },
+  "frontend": {
+    "built_utc": "2026-10-20T03:04:50.892215+00:00",
+    "build_head": "31668f7a74b63446c538e00ed41ebfc42f0bc1a8",
+    "input_trees": {
+      "baseline": {
+        "web-console": "adc9e8d68ffbb989b683a7d01b548d363f53999a",
+        "protocol": "7144300c1d570752096bea44ae0d67f2daef5426",
+        "tui": "98032392446dad21eb1b6aaf440e695916c7722d",
+        "dev": "8d15d160cf2611b17bd26a51aae8d0fa533425fc"
+      },
+      "geometry": {
+        "web-console": "adc9e8d68ffbb989b683a7d01b548d363f53999a",
+        "protocol": "7144300c1d570752096bea44ae0d67f2daef5426",
+        "tui": "98032392446dad21eb1b6aaf440e695916c7722d",
+        "dev": "8d15d160cf2611b17bd26a51aae8d0fa533425fc"
+      },
+      "scoped": {
+        "web-console": "adc9e8d68ffbb989b683a7d01b548d363f53999a",
+        "protocol": "7144300c1d570752096bea44ae0d67f2daef5426",
+        "tui": "98032392446dad21eb1b6aaf440e695916c7722d",
+        "dev": "8d15d160cf2611b17bd26a51aae8d0fa533425fc"
+      }
+    },
+    "node": "24.19.0",
+    "pnpm": "11.13.1",
+    "setup_identity": "frontend-setup-v3/identity.json",
+    "dist_sha256": {
+      "LICENSE-DeepSeek-Harness.txt": "ebb4f09972aee8608be255debaf78451a68e95c290f55c240dec2ecfa16ea6be",
+      "LICENSE-Lucide-1.17.txt": "b495047bd93a9b06913511076f504daba17d5bbeb3e0650f3bb53a4220329c57",
+      "LICENSE-Lucide.txt": "1e7290b35280a048667bbf0ebabac1c7fd52a75300e8b2946ac165715997f2bc",
+      "THIRD-PARTY-NOTICES.txt": "3da8851b7d7931537ef9b65764408205fb4afa1cbeea312ecc8e60fb2b27e4fb",
+      "assets/KaTeX_AMS-Regular-BQhdFMY1.woff2": "0cdd387c9590a1a9f9794560022dbb59654a7d86f187aa0c81495ad42d3a7308",
+      "assets/KaTeX_AMS-Regular-DMm9YOAa.woff": "30da91e84c893f875e252689faebdc590b2871145e8adc7f9a9d4dbd8ce0b251",
+      "assets/KaTeX_AMS-Regular-DRggAlZN.ttf": "68534840bcfdd2bffb6f0e8deb48684dd01e7f04ea2813267577afb906de1d13",
+      "assets/KaTeX_Caligraphic-Bold-ATXxdsX0.ttf": "07d8e303ce4fc12b4bb54f1004170dd190a1f3db45d400fe68060df3e0897268",
+      "assets/KaTeX_Caligraphic-Bold-BEiXGLvX.woff": "1ae6bd7475590e97e7f145a89e09ccde322f7a6bc0b91607b1c8b8ee28290fed",
+      "assets/KaTeX_Caligraphic-Bold-Dq_IR9rO.woff2": "de7701e42cf1f4cf0b766c03fb27977207eee2f4fd5d76fa82188406da43ea4c",
+      "assets/KaTeX_Caligraphic-Regular-CTRA-rTL.woff": "3398dd02302557a793f2863f88e02d96ce10df2abffa07c8e9fa90775116e65c",
+      "assets/KaTeX_Caligraphic-Regular-Di6jR-x-.woff2": "5d53e70ad607c2352162dec9e0923fb54ecdafaccbf604cd8dcf7d00facb989b",
+      "assets/KaTeX_Caligraphic-Regular-wX97UBjC.ttf": "ed0b74372feefcbb9c0666b2e210da37b7e49fa7fbbf3eeb11db5f693dacfbb7",
+      "assets/KaTeX_Fraktur-Bold-BdnERNNW.ttf": "9163df9c7122432e6495b4229fa9071cf9ae86a758ae5efc4924ec2e1a6dbce1",
+      "assets/KaTeX_Fraktur-Bold-BsDP51OF.woff": "9be7ceb88004ab8ad124082246fbfcca4091e36385d4ec6ed1df67375dad50fb",
+      "assets/KaTeX_Fraktur-Bold-CL6g_b3V.woff2": "74444efd593c005e3f4573b44524704c0af0a937fe911cca9e94068d0d140d3f",
+      "assets/KaTeX_Fraktur-Regular-CB_wures.ttf": "1e6f9579e90e2cac37f8f60a597c436e075c114385652b7cbeb0dec0421291b3",
+      "assets/KaTeX_Fraktur-Regular-CTYiF6lA.woff2": "51814d270d06ff0255dba0799994fa4d8c84d11f09951d47595f4abb1f3602dc",
+      "assets/KaTeX_Fraktur-Regular-Dxdc4cR9.woff": "5e28753be717dac97f559f49bc10be9cf3c124ddcabda6659d11cb68febc6463",
+      "assets/KaTeX_Main-Bold-Cx986IdX.woff2": "0f60d1b897938ec918c8ce073092411baf9438f6739465693ff18b0f9d20b021",
+      "assets/KaTeX_Main-Bold-Jm3AIy58.woff": "c76c5d696297d51b9cb1639c7da4334f0e7dec81b42b11213b5e25ef671bb822",
+      "assets/KaTeX_Main-Bold-waoOVXN0.ttf": "138ac28d1663b3037e9c5f52371fa5c63d8324f4a38d22cd573e6ea3a3fd0cf8",
+      "assets/KaTeX_Main-BoldItalic-DxDJ3AOS.woff2": "99cd42a3c072d918f2f44984a807cf7aa16e13545fd0875fc07c6c65f99e715b",
+      "assets/KaTeX_Main-BoldItalic-DzxPMmG6.ttf": "70ee1f64a20f2048c21940ef46d0144fd215baa953ca69afd1e31e98544f708f",
+      "assets/KaTeX_Main-BoldItalic-SpSLRI95.woff": "a6f7ec0d846ac7ad975adb8959c37ed49b94acbc4ae436db9ce9e20287e4a64c",
+      "assets/KaTeX_Main-Italic-3WenGoN9.ttf": "0d85ae7cc30f23790a7f1a58c4a112fdca8aae769b6ba11429af1d98b1b6cb3a",
+      "assets/KaTeX_Main-Italic-BMLOBm91.woff": "f1d6ef86f3b11a528bd5185199bd2443ecb2b0dead96d88674b5a2c12be24bdf",
+      "assets/KaTeX_Main-Italic-NWA7e6Wa.woff2": "97479ca6cce906abc961ecac96faa5f9ca2e61b8e7670d475826bcdee9a7c267",
+      "assets/KaTeX_Main-Regular-B22Nviop.woff2": "c2342cd8b869e01752a9321dc17213fc40d4d04c79688c1d43f2cf316abd7866",
+      "assets/KaTeX_Main-Regular-Dr94JaBh.woff": "c6368d87e8a1a3a5d337623d83d8dc4b868f242a9ad476237d6f8d1e0f168cdc",
+      "assets/KaTeX_Main-Regular-ypZvNtVU.ttf": "d0332f52868370fd83ae7fa46470f90c8f2eab2fcf12bc4f88080b340c95a830",
+      "assets/KaTeX_Math-BoldItalic-B3XSjfu4.ttf": "f9377ab0271cda59af24bcffbd46a4d0c8a3572ffafdbb38de2ad5ea7b0d5ee5",
+      "assets/KaTeX_Math-BoldItalic-CZnvNsCZ.woff2": "dc47344dbb6cb5b655c8460d561f4df5f501b90c804ad3c6cec65fe322351ab1",
+      "assets/KaTeX_Math-BoldItalic-iY-2wyZ7.woff": "850c0af5c2238497febaf5e461d880bf458c341f42f4f330f1b1ab5698b1998e",
+      "assets/KaTeX_Math-Italic-DA0__PXp.woff": "8a8d244581371912b8f3f5a23e2437cb2a59cd9bcaebb0346e722c05737a2571",
+      "assets/KaTeX_Math-Italic-flOr_0UB.ttf": "08ce98e51b04d58945a301e639e02b6998af29fdfd61a7b8afdd07bbfc479d4a",
+      "assets/KaTeX_Math-Italic-t53AETM-.woff2": "7af58c5ec8f132a2ddde9027c6d7814decce4d3b822a11192a42a20e2e973264",
+      "assets/KaTeX_SansSerif-Bold-CFMepnvq.ttf": "1ece03f79f95277d57dc7f6b435a74e1379b0d46104a8530286b60ff49369ea0",
+      "assets/KaTeX_SansSerif-Bold-D1sUS0GD.woff2": "e99ae51144bf1232efcc1bfe5add36262c6866b0faab24fa75740e1b98577a62",
+      "assets/KaTeX_SansSerif-Bold-DbIhKOiC.woff": "ece03cfd83e22c212cdef66feb8442d25a083beb988db3f1883f3f9738d750ba",
+      "assets/KaTeX_SansSerif-Italic-C3H0VqGB.woff2": "00b26ac825e2095056396e0553b8ac26d3f8ad158c3826e28b4c45b385c4714a",
+      "assets/KaTeX_SansSerif-Italic-DN2j7dab.woff": "91ee67500cc0129aa0ace3ac5c61ff1692102f0f31d02b69347fba35dcb75bf2",
+      "assets/KaTeX_SansSerif-Italic-YYjJ1zSn.ttf": "3931dd81faed86ba021bb2bbdc36f5bed9a38d6b4f4077aca59b265aa1b02083",
+      "assets/KaTeX_SansSerif-Regular-BNo7hRIc.ttf": "f36ea897e19f4a2e571d1e900e4e3710e438deb05a842486045ba0a3e616a4ad",
+      "assets/KaTeX_SansSerif-Regular-CS6fqUqJ.woff": "11e4dc8a6471ff6d6ee561d53d10fde8f7489e798257ff449c5d37c197435605",
+      "assets/KaTeX_SansSerif-Regular-DDBCnlJ7.woff2": "68e8c73ef42afd3ccec58bf0fba302cce448938e7fc020a5e31f8a952eee1342",
+      "assets/KaTeX_Script-Regular-C5JkGWo-.ttf": "1c67f068fea8bb09bf099c088b1cf64bd27516a6e07f4684344873564bb66a67",
+      "assets/KaTeX_Script-Regular-D3wIWfF6.woff2": "036d4e95149b69ff9bcc0cd55771efeb25ffa3947293e69acd78d5ac328c684b",
+      "assets/KaTeX_Script-Regular-D5yQViql.woff": "d96cdf2b3bdd4d64a8fd5f74a4c467f123a8a73931cd435889f08ffaf9bf947a",
+      "assets/KaTeX_Size1-Regular-C195tn64.woff": "c943cc986384f59e86bea5fd7dc50a9c4dfe567a7c05eb40d6790720dead97c9",
+      "assets/KaTeX_Size1-Regular-Dbsnue_I.ttf": "95b6d2f1a50173bfedb8c63e1d1c99b10427d0a4df4201cb44513b226951a22b",
+      "assets/KaTeX_Size1-Regular-mCD8mA8B.woff2": "6b47c40166b6dbe21a5dfca7718413f2147fd2399be1ba605d8ad39cedf25dfe",
+      "assets/KaTeX_Size2-Regular-B7gKUWhC.ttf": "a6b2099fb555c60e3a0db3a08842ebf1d732c6eb4e4bf44913613bed4fc4e39b",
+      "assets/KaTeX_Size2-Regular-Dy4dx90m.woff2": "d04c54219f9eaec6d4d4fd42dfb28785975a4794d6b2fc71e566b9cd6db842dd",
+      "assets/KaTeX_Size2-Regular-oD1tc_U0.woff": "2014c523c3210bcc166648c4d4cc57f05b747df07a24277bf71c51e67dc79e3d",
+      "assets/KaTeX_Size3-Regular-CTq5MqoE.woff": "6ab6b62e9b62dae2c00dd90f791bd10950be0ecc3490d7d6045f51c2e8fe0949",
+      "assets/KaTeX_Size3-Regular-DgpXs0kz.ttf": "500e04d54f0d51666332c9d2089aa803be22aa878eca539e59fa53c6e522b082",
+      "assets/KaTeX_Size4-Regular-BF-4gkZK.woff": "99f9c6750b489c9462bf04900bd3f939df9b829339daaaaa99ef5495cdddea58",
+      "assets/KaTeX_Size4-Regular-DWFBv043.ttf": "c647367d1dd4e162468717d020e1fc0f1dc5c26ebfdffbe55261713bf88c5877",
+      "assets/KaTeX_Size4-Regular-Dl5lxZxV.woff2": "a4af7d414440a1c1790825cfb700cf9cf43b0f2c4b04f0ebc523011ad9853ec0",
+      "assets/KaTeX_Typewriter-Regular-C0xS9mPB.woff": "e14fed02b1aba7ce9f5afd5844b5d0321b22351febc720e0de8b8723527609f7",
+      "assets/KaTeX_Typewriter-Regular-CO6r4hn1.woff2": "71d517d67827787cfabdf186914cc3358eda539e37931941f2b2fd4a21f68c0b",
+      "assets/KaTeX_Typewriter-Regular-D3Ib7_Hf.ttf": "f01f3e87d9c6a61c0c081ceb577abd864eb00a612f7ac1620dd6915fad2ef5aa",
+      "assets/PdfPreview-CsKtgDXz.js": "8691570085a4e3555749c9fd9cb04dcbec98da7731ced2aa4b59d86ef6d77a75",
+      "assets/PdfPreview-VMOOdqPI.css": "ce9cce8ae9593da6cd31a83c0b50dd5bb983bdb8008f345126033dd5dceb74c6",
+      "assets/WorkbenchTerminal-BrP-ENHg.css": "0e5386f16cb4be78a2fe911e014a810da76ea2db47d8c8b2a966516b2fd5270b",
+      "assets/WorkbenchTerminal-BwEHCX3f.js": "7d58cca52b0cd06ccdf4ccec7f0d76b216185383cdb55ca4b0e1c88db1a2e0a0",
+      "assets/excel-BlwJlBr6.css": "a1bd96815904abfbee6b424cc630e1d94cefdc8d7efe291ad561e7f7a28d1342",
+      "assets/excel-Djra_a4s.js": "cc963c772e81df81754ff37fd833436fa95ad20fc4e61b029884c893215e5845",
+      "assets/index-DOeYmXy8.js": "2bc3a27fc95630fb5d8c7dc02b3546726f9b31a16069cc92f8cb5807a3c9e1d1",
+      "assets/index-JZcZN10_.css": "4da5cc174dc73c7102575ea0f7343149e4efe195cd634316b7a21425248d7e56",
+      "assets/pdf.worker.min-CjEcRF4W.mjs": "9536359f1b8367850d485731ca1d5e45c159a7b7a0912325e539937aa21ceb18",
+      "assets/python-gzcpVVnB.js": "be0bae300e9d8dbae905d9faa24b84adc622796c87170848bf0460d01ad4049c",
+      "assets/running-whale@2x-jEQE5fYU.png": "f3a305155b01a4187847b0ecd7c2106a6249806b58a37aee3c3e1041322b26eb",
+      "assets/rust-Cfkwpbl8.js": "8fedcfe76b25574d9afbb86db6b972ab86d8231284e91fe3b10779a30129a5a5",
+      "assets/worker-w9kmO1Oi.js": "9a0d31dbf977b6e19e159aa1b25041c9da0ecfab74696327164c822972f36097",
+      "index.html": "1759c7de8262eabb192ad5956b6f22e09a29082450d80abc2e6a48a6cdb09252"
+    },
+    "native_node_modules_sha256": {
+      "host/workspace-fs/build/Release/workspace_fs.node": "ae378316a67ce92f36324ee3995edb000f8fbd6666aefd96794ef0a0802223a8",
+      "host/workspace-fs/build/Release/obj.target/workspace_fs.node": "ae378316a67ce92f36324ee3995edb000f8fbd6666aefd96794ef0a0802223a8",
+      "node_modules/.pnpm/@rolldown+binding-linux-x64-gnu@1.2.8/node_modules/@rolldown/binding-linux-x64-gnu/rolldown-binding.linux-x64-gnu.node": "389f5583c0cc531fa065b644b7aa51f95463430c6235e66135676afbdff18900",
+      "node_modules/.pnpm/@napi-rs+canvas-linux-x64-gnu@1.0.10/node_modules/@napi-rs/canvas-linux-x64-gnu/skia.linux-x64-gnu.node": "eff464d8c283ad1e73e36c636d9ec9a6469ae34c3c04b298794735c89f9c863a",
+      "node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/build/Release/pty.node": "30879cb7fb49f32b9bf6eb4cfc9cf880f66b0bd652b22f396df3519cae699cab",
+      "node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/build/Release/obj.target/pty.node": "30879cb7fb49f32b9bf6eb4cfc9cf880f66b0bd652b22f396df3519cae699cab",
+      "node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/prebuilds/darwin-arm64/pty.node": "e6457d66f45af3facd02920a5b212164e80fe0bb758afe6e6eab1eceeba3fc9a",
+      "node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/prebuilds/darwin-x64/pty.node": "edab585d5c5c7bf35143a7a53b7d72652e90723b5f9635dfd55b2333f7069198",
+      "node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/prebuilds/win32-arm64/conpty_console_list.node": "fda76b16afb3bf9a4de085c943b5fb4138ecbeb08e8254c09d5555ea5426bd4e",
+      "node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/prebuilds/win32-arm64/pty.node": "eae1266e3c34f4c7b67a756a6ff342b699847deaf29c944b7a6bed190ec61982",
+      "node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/prebuilds/win32-arm64/conpty.node": "25a06916c5cb1a3aac7acc401424d8e6a6a9e8eea441a3604cd657a0619555cd",
+      "node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/prebuilds/win32-x64/conpty_console_list.node": "879dd94cfc79f1e263a00077597ae9448a5394b7d193381aaa50d992a1f91090",
+      "node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/prebuilds/win32-x64/pty.node": "ae323edd0835ee7b9e18cc96a7b2bb4b8173ff768317d178af2788406feb71ff",
+      "node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/prebuilds/win32-x64/conpty.node": "ee8f4e6f4dad71939eecfda11de249400e34bfefe4c8b48af13f3b5476f4035b",
+      "node_modules/.pnpm/@koromix+koffi-linux-x64@3.1.1/node_modules/@koromix/koffi-linux-x64/linux_x64/koffi.node": "df687b8c68598c3ee83d06dcbc1d72fca032475e62b6108c4badfb5e43a3e7ff",
+      "node_modules/.pnpm/@koromix+koffi-linux-x64@3.1.1/node_modules/@koromix/koffi-linux-x64/musl_x64/koffi.node": "41adcb13df1a3ffac902dab2d3a1baef4f4dc1470964971ccfff1618c8aeb804",
+      "node_modules/.pnpm/lightningcss-linux-x64-gnu@1.33.0/node_modules/lightningcss-linux-x64-gnu/lightningcss.linux-x64-gnu.node": "84c6f35fb9c78f9920090f4017a9dc6dc50842a56c543f509943a0d434325d93"
+    },
+    "locks": {
+      "web-console/pnpm-lock.yaml": "cd823864af33c191f5c49fa2dec74c643f9ffe93fab49ac2ef4ea8d863af8b7b",
+      "tui/pnpm-lock.yaml": "1bf9543f6ad05e49a7aca4a450fe24d5700627d8de99f0e534adb5a87762a56f"
+    }
+  },
+  "browser_image": "mcr.microsoft.com/playwright:v1.63.0-noble@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7",
+  "runs": [
+    {
+      "label": "baseline",
+      "case": "short-small",
+      "pair": 0,
+      "preflight_started_utc": "2026-10-20T03:14:36.100292+00:00",
+      "idle_evidence": {
+        "utc": "2026-10-20T03:14:36.247944+00:00",
+        "forbidden_or_timed_processes": [],
+        "active_benchmark_containers": []
+      },
+      "space_before": {
+        "paths": [
+          {
+            "path": "/workspace/pr485-study",
+            "device": 27,
+            "usable_bytes": 13723197440,
+            "total_bytes": 33770192896
+          },
+          {
+            "path": "/var/lib/docker",
+            "device": 27,
+            "usable_bytes": 13723197440,
+            "total_bytes": 33770192896
+          }
+        ],
+        "distinct_backing_filesystems": 1
+      },
+      "image_inspect": [
+        {
+          "Id": "sha256:2c1f4e0fd6450f43ddb46d60c2a6df30855a8588e165b1f2559fb0eda8d7ff35",
+          "RepoTags": [],
+          "RepoDigests": [
+            "mcr.microsoft.com/playwright@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7"
+          ],
+          "Parent": "",
+          "Comment": "buildkit.dockerfile.v0",
+          "Created": "2026-09-04T23:42:21.248887746Z",
+          "DockerVersion": "",
+          "Author": "",
+          "Architecture": "amd64",
+          "Os": "linux",
+          "Size": 2505762089,
+          "GraphDriver": {
+            "Data": null,
+            "Name": "vfs"
+          },
+          "RootFS": {
+            "Type": "layers",
+            "Layers": [
+              "sha256:b9a65b3c65ab22d490085bd0bf5490e2409da8748b406870f2463bdc41cd6795",
+              "sha256:05b61f708389aecf2a9b2e058f554db6d84eb17811415f3b34768feebe0bea14",
+              "sha256:73a48c91864c16f507959610c8534667ab25537630e84399f31d968661ed94f9",
+              "sha256:cd7e6e338465408114835eb137df15785b6ac45c2b8046f78773557fe7c0a51c",
+              "sha256:67c5b2ab4bb8dd6c3ece663ece744316ccae0552a54bc2b27e811611cf366472",
+              "sha256:cd321a6dc023a72bba4dc6b34cef9892a2112c17860f4225691daa6a333aa005",
+              "sha256:656afaafaa812f188da425142df4d594b7639d8918fd42490523da6f151b11a8"
+            ]
+          },
+          "Metadata": {
+            "LastTagTime": "0001-01-01T00:00:00Z"
+          },
+          "Config": {
+            "Cmd": [
+              "/bin/bash"
+            ],
+            "Entrypoint": null,
+            "Env": [
+              "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+              "LANG=C.UTF-8",
+              "LC_ALL=C.UTF-8",
+              "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright"
+            ],
+            "Labels": {
+              "org.opencontainers.image.version": "24.04"
+            },
+            "OnBuild": null,
+            "User": "",
+            "Volumes": null,
+            "WorkingDir": ""
+          }
+        }
+      ],
+      "native_build": {
+        "head": "623b41b869a95c888eb04f907cbf607232699a2f",
+        "production_tree": "19ff7d6bd64993a6b9fc08bbcd687787dacfe08e",
+        "harness": {
+          "tests/common/provider_emulator.rs": "cb055ee1f9c9bc55c8af5cae080bb8564f2417226bacab76159f837261a2e47e",
+          "tests/conformance/agent_loop/runtime_benchmark.rs": "d71e6c80216b128927e09828631135b00b9b64748625fdb9fb2e5e9eb6c660f6",
+          "tests/conformance/agent_loop/runtime_benchmark/aligned.rs": "751fa58a98c9067eecd5e9a6c3eee8b6ec35b8987d1cd9a6f4cdc28915c08133",
+          "tests/conformance/agent_loop/runtime_benchmark/expected_tools.json": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d",
+          "tests/conformance/agent_loop/runtime_benchmark/profiling.rs": "12362c4abf9f80deed923b77855a2529d4aeb427cfffe39d6953cad823de0c66",
+          "tests/conformance/agent_loop/runtime_benchmark/request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+        },
+        "start_utc": "2026-10-20T01:10:38.299342+00:00",
+        "commands": [
+          [
+            "cargo",
+            "clean",
+            "--release",
+            "--package",
+            "rustx"
+          ],
+          [
+            "cargo",
+            "test",
+            "--release",
+            "--locked",
+            "--test",
+            "conformance",
+            "--no-run",
+            "--message-format=json"
+          ]
+        ],
+        "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+        "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)\n",
+        "build_environment": {
+          "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+          "CARGO_PROFILE_RELEASE_DEBUG": "0",
+          "RUSTFLAGS": "-Copt-level=3 -Cdebuginfo=0",
+          "CARGO_BUILD_JOBS": "2"
+        },
+        "clean_exit": 0,
+        "build_exit": 0,
+        "root_artifacts": [
+          {
+            "name": "rustx",
+            "kind": [
+              "lib"
+            ],
+            "source_path": "/workspace/pr485-study/repo/src/lib.rs",
+            "fresh": false
+          },
+          {
+            "name": "rustx",
+            "kind": [
+              "bin"
+            ],
+            "source_path": "/workspace/pr485-study/repo/src/main.rs",
+            "fresh": false
+          },
+          {
+            "name": "conformance",
+            "kind": [
+              "test"
+            ],
+            "source_path": "/workspace/pr485-study/repo/tests/conformance/main.rs",
+            "fresh": false
+          }
+        ],
+        "binary": "/workspace/pr485-study/evidence/build-baseline/conformance",
+        "sha256": "711b5af1ac3500e36f0f1bd827d108fb975a088b5e24a8d3a99218d7812ed388",
+        "library_sha256": "c529acd9a2f6d18fb297e0c38facfdd46597ce04e1c44890d0048ed9e99dffb6",
+        "verified": true,
+        "end_utc": "2026-10-20T01:57:15.845286+00:00"
+      },
+      "host_build": {
+        "native_library_build": {
+          "head": "623b41b869a95c888eb04f907cbf607232699a2f",
+          "production_tree": "19ff7d6bd64993a6b9fc08bbcd687787dacfe08e",
+          "harness": {
+            "tests/common/provider_emulator.rs": "cb055ee1f9c9bc55c8af5cae080bb8564f2417226bacab76159f837261a2e47e",
+            "tests/conformance/agent_loop/runtime_benchmark.rs": "d71e6c80216b128927e09828631135b00b9b64748625fdb9fb2e5e9eb6c660f6",
+            "tests/conformance/agent_loop/runtime_benchmark/aligned.rs": "751fa58a98c9067eecd5e9a6c3eee8b6ec35b8987d1cd9a6f4cdc28915c08133",
+            "tests/conformance/agent_loop/runtime_benchmark/expected_tools.json": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d",
+            "tests/conformance/agent_loop/runtime_benchmark/profiling.rs": "12362c4abf9f80deed923b77855a2529d4aeb427cfffe39d6953cad823de0c66",
+            "tests/conformance/agent_loop/runtime_benchmark/request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+          },
+          "start_utc": "2026-10-20T01:10:38.299342+00:00",
+          "commands": [
+            [
+              "cargo",
+              "clean",
+              "--release",
+              "--package",
+              "rustx"
+            ],
+            [
+              "cargo",
+              "test",
+              "--release",
+              "--locked",
+              "--test",
+              "conformance",
+              "--no-run",
+              "--message-format=json"
+            ]
+          ],
+          "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+          "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)\n",
+          "build_environment": {
+            "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+            "CARGO_PROFILE_RELEASE_DEBUG": "0",
+            "RUSTFLAGS": "-Copt-level=3 -Cdebuginfo=0",
+            "CARGO_BUILD_JOBS": "2"
+          },
+          "clean_exit": 0,
+          "build_exit": 0,
+          "root_artifacts": [
+            {
+              "name": "rustx",
+              "kind": [
+                "lib"
+              ],
+              "source_path": "/workspace/pr485-study/repo/src/lib.rs",
+              "fresh": false
+            },
+            {
+              "name": "rustx",
+              "kind": [
+                "bin"
+              ],
+              "source_path": "/workspace/pr485-study/repo/src/main.rs",
+              "fresh": false
+            },
+            {
+              "name": "conformance",
+              "kind": [
+                "test"
+              ],
+              "source_path": "/workspace/pr485-study/repo/tests/conformance/main.rs",
+              "fresh": false
+            }
+          ],
+          "binary": "/workspace/pr485-study/evidence/build-baseline/conformance",
+          "sha256": "711b5af1ac3500e36f0f1bd827d108fb975a088b5e24a8d3a99218d7812ed388",
+          "library_sha256": "c529acd9a2f6d18fb297e0c38facfdd46597ce04e1c44890d0048ed9e99dffb6",
+          "verified": true,
+          "end_utc": "2026-10-20T01:57:15.845286+00:00"
+        },
+        "extern": {
+          "rustx": {
+            "path": "/workspace/pr485-study/target/release/deps/librustx-69d6ea2c60a362a0.rlib",
+            "sha256": "c529acd9a2f6d18fb297e0c38facfdd46597ce04e1c44890d0048ed9e99dffb6"
+          },
+          "tokio": {
+            "path": "/workspace/pr485-study/target/release/deps/libtokio-c5a3333935ca0dc8.rlib",
+            "sha256": "c66d650e3b45a14d4ce91c5482e779d04078bd0a775dcf80d5f278dcb3213d3b"
+          },
+          "tokio_util": {
+            "path": "/workspace/pr485-study/target/release/deps/libtokio_util-0398387163c8f0ca.rlib",
+            "sha256": "dd9b958d76e238ff81fa058de9600498a923ec49f4b708f987aa42dd600de465"
+          },
+          "serde_json": {
+            "path": "/workspace/pr485-study/target/release/deps/libserde_json-eeacad49e039a44a.rlib",
+            "sha256": "c21980f85b85e906eb74f0bef23e24227a11d8c10b2d7099d5527fd63eccb786"
+          },
+          "chrono": {
+            "path": "/workspace/pr485-study/target/release/deps/libchrono-1ecc381af4831f21.rlib",
+            "sha256": "3bf1b06adaec1bf4943b873949ea78f0a63feff424c90f3ca99296bd38b7b969"
+          }
+        },
+        "source": {
+          "canonical_history.rs": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86",
+          "common.rs": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823",
+          "host.rs": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c",
+          "request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461",
+          "verify_requests.rs": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+        },
+        "command": [
+          "rustc",
+          "--edition=2024",
+          "-C",
+          "opt-level=3",
+          "-C",
+          "debuginfo=0",
+          "-L",
+          "dependency=/workspace/pr485-study/target/release/deps",
+          "--extern",
+          "rustx=/workspace/pr485-study/target/release/deps/librustx-69d6ea2c60a362a0.rlib",
+          "--extern",
+          "tokio=/workspace/pr485-study/target/release/deps/libtokio-c5a3333935ca0dc8.rlib",
+          "--extern",
+          "tokio_util=/workspace/pr485-study/target/release/deps/libtokio_util-0398387163c8f0ca.rlib",
+          "--extern",
+          "serde_json=/workspace/pr485-study/target/release/deps/libserde_json-eeacad49e039a44a.rlib",
+          "--extern",
+          "chrono=/workspace/pr485-study/target/release/deps/libchrono-1ecc381af4831f21.rlib",
+          "/workspace/pr485-study/inspector-fixture/host.rs",
+          "-o",
+          "/workspace/pr485-study/evidence/build-baseline/host/inspector-host"
+        ],
+        "ordinary_optimized": true,
+        "no_product_source_changes": true,
+        "exit_code": 0,
+        "binary_sha256": "12f4354c26334358c4d585d5159064c13602730346c661a6439326d31149be25"
+      },
+      "helpers_restored": [
+        "/workspace/pr485-study/target/release/interactive-supervisor",
+        "/workspace/pr485-study/target/release/rustx",
+        "/workspace/pr485-study/target/release/bash-supervisor",
+        "/workspace/pr485-study/target/release/deps/conformance-24da1f0a9d82f33c"
+      ],
+      "space_at_product_start": {
+        "paths": [
+          {
+            "path": "/workspace/pr485-study",
+            "device": 27,
+            "usable_bytes": 13722320896,
+            "total_bytes": 33770192896
+          },
+          {
+            "path": "/var/lib/docker",
+            "device": 27,
+            "usable_bytes": 13722320896,
+            "total_bytes": 33770192896
+          }
+        ],
+        "distinct_backing_filesystems": 1
+      },
+      "argv": [
+        "node",
+        "--experimental-transform-types",
+        "/workspace/pr485-study/inspector-fixture/run.mjs",
+        "/workspace/pr485-study/repo",
+        "/workspace/pr485-study/evidence/build-baseline/host/inspector-host",
+        "short-small",
+        "/workspace/pr485-study/evidence/products/browser-baseline-vs-geometry-v2/0-short-small-baseline"
+      ],
+      "product_start_utc": "2026-10-20T03:14:42.187445+00:00",
+      "product_start_monotonic_ns": 7694693424961,
+      "exit": 0,
+      "product_end_utc": "2026-10-20T03:16:18.188712+00:00",
+      "product_end_monotonic_ns": 7790694825928,
+      "space_after": {
+        "paths": [
+          {
+            "path": "/workspace/pr485-study",
+            "device": 27,
+            "usable_bytes": 13670662144,
+            "total_bytes": 33770192896
+          },
+          {
+            "path": "/var/lib/docker",
+            "device": 27,
+            "usable_bytes": 13670662144,
+            "total_bytes": 33770192896
+          }
+        ],
+        "distinct_backing_filesystems": 1
+      },
+      "sample_sha256": "513b8e5ae1271ccfc9e040ba4e79fae520e795ee97924d18f9243e4dd7c293e3",
+      "accepted_by_producer": true
+    },
+    {
+      "label": "geometry",
+      "case": "short-small",
+      "pair": 0,
+      "preflight_started_utc": "2026-10-20T03:16:19.159440+00:00",
+      "idle_evidence": {
+        "utc": "2026-10-20T03:16:19.274505+00:00",
+        "forbidden_or_timed_processes": [],
+        "active_benchmark_containers": []
+      },
+      "space_before": {
+        "paths": [
+          {
+            "path": "/workspace/pr485-study",
+            "device": 27,
+            "usable_bytes": 13670658048,
+            "total_bytes": 33770192896
+          },
+          {
+            "path": "/var/lib/docker",
+            "device": 27,
+            "usable_bytes": 13670658048,
+            "total_bytes": 33770192896
+          }
+        ],
+        "distinct_backing_filesystems": 1
+      },
+      "image_inspect": [
+        {
+          "Id": "sha256:2c1f4e0fd6450f43ddb46d60c2a6df30855a8588e165b1f2559fb0eda8d7ff35",
+          "RepoTags": [],
+          "RepoDigests": [
+            "mcr.microsoft.com/playwright@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7"
+          ],
+          "Parent": "",
+          "Comment": "buildkit.dockerfile.v0",
+          "Created": "2026-09-04T23:42:21.248887746Z",
+          "DockerVersion": "",
+          "Author": "",
+          "Architecture": "amd64",
+          "Os": "linux",
+          "Size": 2505762089,
+          "GraphDriver": {
+            "Data": null,
+            "Name": "vfs"
+          },
+          "RootFS": {
+            "Type": "layers",
+            "Layers": [
+              "sha256:b9a65b3c65ab22d490085bd0bf5490e2409da8748b406870f2463bdc41cd6795",
+              "sha256:05b61f708389aecf2a9b2e058f554db6d84eb17811415f3b34768feebe0bea14",
+              "sha256:73a48c91864c16f507959610c8534667ab25537630e84399f31d968661ed94f9",
+              "sha256:cd7e6e338465408114835eb137df15785b6ac45c2b8046f78773557fe7c0a51c",
+              "sha256:67c5b2ab4bb8dd6c3ece663ece744316ccae0552a54bc2b27e811611cf366472",
+              "sha256:cd321a6dc023a72bba4dc6b34cef9892a2112c17860f4225691daa6a333aa005",
+              "sha256:656afaafaa812f188da425142df4d594b7639d8918fd42490523da6f151b11a8"
+            ]
+          },
+          "Metadata": {
+            "LastTagTime": "0001-01-01T00:00:00Z"
+          },
+          "Config": {
+            "Cmd": [
+              "/bin/bash"
+            ],
+            "Entrypoint": null,
+            "Env": [
+              "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+              "LANG=C.UTF-8",
+              "LC_ALL=C.UTF-8",
+              "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright"
+            ],
+            "Labels": {
+              "org.opencontainers.image.version": "24.04"
+            },
+            "OnBuild": null,
+            "User": "",
+            "Volumes": null,
+            "WorkingDir": ""
+          }
+        }
+      ],
+      "native_build": {
+        "head": "89d6b618eeba8afaf4b95af4406057330baa60a6",
+        "production_tree": "7e227b5b08958c0642e2af0e7209af73cd1208e9",
+        "harness": {
+          "tests/common/provider_emulator.rs": "cb055ee1f9c9bc55c8af5cae080bb8564f2417226bacab76159f837261a2e47e",
+          "tests/conformance/agent_loop/runtime_benchmark.rs": "d71e6c80216b128927e09828631135b00b9b64748625fdb9fb2e5e9eb6c660f6",
+          "tests/conformance/agent_loop/runtime_benchmark/aligned.rs": "751fa58a98c9067eecd5e9a6c3eee8b6ec35b8987d1cd9a6f4cdc28915c08133",
+          "tests/conformance/agent_loop/runtime_benchmark/expected_tools.json": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d",
+          "tests/conformance/agent_loop/runtime_benchmark/profiling.rs": "12362c4abf9f80deed923b77855a2529d4aeb427cfffe39d6953cad823de0c66",
+          "tests/conformance/agent_loop/runtime_benchmark/request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+        },
+        "start_utc": "2026-10-20T01:58:23.787935+00:00",
+        "commands": [
+          [
+            "cargo",
+            "clean",
+            "--release",
+            "--package",
+            "rustx"
+          ],
+          [
+            "cargo",
+            "test",
+            "--release",
+            "--locked",
+            "--test",
+            "conformance",
+            "--no-run",
+            "--message-format=json"
+          ]
+        ],
+        "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+        "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)\n",
+        "build_environment": {
+          "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+          "CARGO_PROFILE_RELEASE_DEBUG": "0",
+          "RUSTFLAGS": "-Copt-level=3 -Cdebuginfo=0",
+          "CARGO_BUILD_JOBS": "2"
+        },
+        "clean_exit": 0,
+        "build_exit": 0,
+        "root_artifacts": [
+          {
+            "name": "rustx",
+            "kind": [
+              "lib"
+            ],
+            "source_path": "/workspace/pr485-study/repo/src/lib.rs",
+            "fresh": false
+          },
+          {
+            "name": "rustx",
+            "kind": [
+              "bin"
+            ],
+            "source_path": "/workspace/pr485-study/repo/src/main.rs",
+            "fresh": false
+          },
+          {
+            "name": "conformance",
+            "kind": [
+              "test"
+            ],
+            "source_path": "/workspace/pr485-study/repo/tests/conformance/main.rs",
+            "fresh": false
+          }
+        ],
+        "binary": "/workspace/pr485-study/evidence/build-geometry/conformance",
+        "sha256": "d25cae1955161392e1ecfde60b1fcdf87ee17577ee4531da1dac133391dbd4a1",
+        "library_sha256": "c72106cd7f3b0a1b8c930b2d5f109110e1c88c8bc8b362ca934555190d9aebbd",
+        "verified": true,
+        "end_utc": "2026-10-20T02:18:45.012790+00:00"
+      },
+      "host_build": {
+        "native_library_build": {
+          "head": "89d6b618eeba8afaf4b95af4406057330baa60a6",
+          "production_tree": "7e227b5b08958c0642e2af0e7209af73cd1208e9",
+          "harness": {
+            "tests/common/provider_emulator.rs": "cb055ee1f9c9bc55c8af5cae080bb8564f2417226bacab76159f837261a2e47e",
+            "tests/conformance/agent_loop/runtime_benchmark.rs": "d71e6c80216b128927e09828631135b00b9b64748625fdb9fb2e5e9eb6c660f6",
+            "tests/conformance/agent_loop/runtime_benchmark/aligned.rs": "751fa58a98c9067eecd5e9a6c3eee8b6ec35b8987d1cd9a6f4cdc28915c08133",
+            "tests/conformance/agent_loop/runtime_benchmark/expected_tools.json": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d",
+            "tests/conformance/agent_loop/runtime_benchmark/profiling.rs": "12362c4abf9f80deed923b77855a2529d4aeb427cfffe39d6953cad823de0c66",
+            "tests/conformance/agent_loop/runtime_benchmark/request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+          },
+          "start_utc": "2026-10-20T01:58:23.787935+00:00",
+          "commands": [
+            [
+              "cargo",
+              "clean",
+              "--release",
+              "--package",
+              "rustx"
+            ],
+            [
+              "cargo",
+              "test",
+              "--release",
+              "--locked",
+              "--test",
+              "conformance",
+              "--no-run",
+              "--message-format=json"
+            ]
+          ],
+          "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+          "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)\n",
+          "build_environment": {
+            "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+            "CARGO_PROFILE_RELEASE_DEBUG": "0",
+            "RUSTFLAGS": "-Copt-level=3 -Cdebuginfo=0",
+            "CARGO_BUILD_JOBS": "2"
+          },
+          "clean_exit": 0,
+          "build_exit": 0,
+          "root_artifacts": [
+            {
+              "name": "rustx",
+              "kind": [
+                "lib"
+              ],
+              "source_path": "/workspace/pr485-study/repo/src/lib.rs",
+              "fresh": false
+            },
+            {
+              "name": "rustx",
+              "kind": [
+                "bin"
+              ],
+              "source_path": "/workspace/pr485-study/repo/src/main.rs",
+              "fresh": false
+            },
+            {
+              "name": "conformance",
+              "kind": [
+                "test"
+              ],
+              "source_path": "/workspace/pr485-study/repo/tests/conformance/main.rs",
+              "fresh": false
+            }
+          ],
+          "binary": "/workspace/pr485-study/evidence/build-geometry/conformance",
+          "sha256": "d25cae1955161392e1ecfde60b1fcdf87ee17577ee4531da1dac133391dbd4a1",
+          "library_sha256": "c72106cd7f3b0a1b8c930b2d5f109110e1c88c8bc8b362ca934555190d9aebbd",
+          "verified": true,
+          "end_utc": "2026-10-20T02:18:45.012790+00:00"
+        },
+        "extern": {
+          "rustx": {
+            "path": "/workspace/pr485-study/target/release/deps/librustx-69d6ea2c60a362a0.rlib",
+            "sha256": "c72106cd7f3b0a1b8c930b2d5f109110e1c88c8bc8b362ca934555190d9aebbd"
+          },
+          "tokio": {
+            "path": "/workspace/pr485-study/target/release/deps/libtokio-c5a3333935ca0dc8.rlib",
+            "sha256": "c66d650e3b45a14d4ce91c5482e779d04078bd0a775dcf80d5f278dcb3213d3b"
+          },
+          "tokio_util": {
+            "path": "/workspace/pr485-study/target/release/deps/libtokio_util-0398387163c8f0ca.rlib",
+            "sha256": "dd9b958d76e238ff81fa058de9600498a923ec49f4b708f987aa42dd600de465"
+          },
+          "serde_json": {
+            "path": "/workspace/pr485-study/target/release/deps/libserde_json-eeacad49e039a44a.rlib",
+            "sha256": "c21980f85b85e906eb74f0bef23e24227a11d8c10b2d7099d5527fd63eccb786"
+          },
+          "chrono": {
+            "path": "/workspace/pr485-study/target/release/deps/libchrono-1ecc381af4831f21.rlib",
+            "sha256": "3bf1b06adaec1bf4943b873949ea78f0a63feff424c90f3ca99296bd38b7b969"
+          }
+        },
+        "source": {
+          "canonical_history.rs": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86",
+          "common.rs": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823",
+          "host.rs": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c",
+          "request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461",
+          "verify_requests.rs": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+        },
+        "command": [
+          "rustc",
+          "--edition=2024",
+          "-C",
+          "opt-level=3",
+          "-C",
+          "debuginfo=0",
+          "-L",
+          "dependency=/workspace/pr485-study/target/release/deps",
+          "--extern",
+          "rustx=/workspace/pr485-study/target/release/deps/librustx-69d6ea2c60a362a0.rlib",
+          "--extern",
+          "tokio=/workspace/pr485-study/target/release/deps/libtokio-c5a3333935ca0dc8.rlib",
+          "--extern",
+          "tokio_util=/workspace/pr485-study/target/release/deps/libtokio_util-0398387163c8f0ca.rlib",
+          "--extern",
+          "serde_json=/workspace/pr485-study/target/release/deps/libserde_json-eeacad49e039a44a.rlib",
+          "--extern",
+          "chrono=/workspace/pr485-study/target/release/deps/libchrono-1ecc381af4831f21.rlib",
+          "/workspace/pr485-study/inspector-fixture/host.rs",
+          "-o",
+          "/workspace/pr485-study/evidence/build-geometry/host/inspector-host"
+        ],
+        "ordinary_optimized": true,
+        "no_product_source_changes": true,
+        "exit_code": 0,
+        "binary_sha256": "fdfc4d0d9bf53d2a6796527486ddaa27a74ac82b4c65c276204b309ae842af30"
+      },
+      "helpers_restored": [
+        "/workspace/pr485-study/target/release/rustx",
+        "/workspace/pr485-study/target/release/interactive-supervisor",
+        "/workspace/pr485-study/target/release/bash-supervisor",
+        "/workspace/pr485-study/target/release/deps/conformance-24da1f0a9d82f33c"
+      ],
+      "space_at_product_start": {
+        "paths": [
+          {
+            "path": "/workspace/pr485-study",
+            "device": 27,
+            "usable_bytes": 13671510016,
+            "total_bytes": 33770192896
+          },
+          {
+            "path": "/var/lib/docker",
+            "device": 27,
+            "usable_bytes": 13671510016,
+            "total_bytes": 33770192896
+          }
+        ],
+        "distinct_backing_filesystems": 1
+      },
+      "argv": [
+        "node",
+        "--experimental-transform-types",
+        "/workspace/pr485-study/inspector-fixture/run.mjs",
+        "/workspace/pr485-study/repo",
+        "/workspace/pr485-study/evidence/build-geometry/host/inspector-host",
+        "short-small",
+        "/workspace/pr485-study/evidence/products/browser-baseline-vs-geometry-v2/0-short-small-geometry"
+      ],
+      "product_start_utc": "2026-10-20T03:16:23.466879+00:00",
+      "product_start_monotonic_ns": 7795972839082,
+      "exit": 0,
+      "product_end_utc": "2026-10-20T03:17:47.673333+00:00",
+      "product_end_monotonic_ns": 7880179416401,
+      "space_after": {
+        "paths": [
+          {
+            "path": "/workspace/pr485-study",
+            "device": 27,
+            "usable_bytes": 13620371456,
+            "total_bytes": 33770192896
+          },
+          {
+            "path": "/var/lib/docker",
+            "device": 27,
+            "usable_bytes": 13620371456,
+            "total_bytes": 33770192896
+          }
+        ],
+        "distinct_backing_filesystems": 1
+      },
+      "sample_sha256": "da6f463011df7d2e5f2d72e823f65f6c77510bfbfd30c41ccbd1d464086f70df",
+      "accepted_by_producer": true
+    },
+    {
+      "label": "geometry",
+      "case": "short-small",
+      "pair": 1,
+      "preflight_started_utc": "2026-10-20T03:17:48.683674+00:00",
+      "idle_evidence": {
+        "utc": "2026-10-20T03:17:48.817187+00:00",
+        "forbidden_or_timed_processes": [],
+        "active_benchmark_containers": []
+      },
+      "space_before": {
+        "paths": [
+          {
+            "path": "/workspace/pr485-study",
+            "device": 27,
+            "usable_bytes": 13620371456,
+            "total_bytes": 33770192896
+          },
+          {
+            "path": "/var/lib/docker",
+            "device": 27,
+            "usable_bytes": 13620371456,
+            "total_bytes": 33770192896
+          }
+        ],
+        "distinct_backing_filesystems": 1
+      },
+      "image_inspect": [
+        {
+          "Id": "sha256:2c1f4e0fd6450f43ddb46d60c2a6df30855a8588e165b1f2559fb0eda8d7ff35",
+          "RepoTags": [],
+          "RepoDigests": [
+            "mcr.microsoft.com/playwright@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7"
+          ],
+          "Parent": "",
+          "Comment": "buildkit.dockerfile.v0",
+          "Created": "2026-09-04T23:42:21.248887746Z",
+          "DockerVersion": "",
+          "Author": "",
+          "Architecture": "amd64",
+          "Os": "linux",
+          "Size": 2505762089,
+          "GraphDriver": {
+            "Data": null,
+            "Name": "vfs"
+          },
+          "RootFS": {
+            "Type": "layers",
+            "Layers": [
+              "sha256:b9a65b3c65ab22d490085bd0bf5490e2409da8748b406870f2463bdc41cd6795",
+              "sha256:05b61f708389aecf2a9b2e058f554db6d84eb17811415f3b34768feebe0bea14",
+              "sha256:73a48c91864c16f507959610c8534667ab25537630e84399f31d968661ed94f9",
+              "sha256:cd7e6e338465408114835eb137df15785b6ac45c2b8046f78773557fe7c0a51c",
+              "sha256:67c5b2ab4bb8dd6c3ece663ece744316ccae0552a54bc2b27e811611cf366472",
+              "sha256:cd321a6dc023a72bba4dc6b34cef9892a2112c17860f4225691daa6a333aa005",
+              "sha256:656afaafaa812f188da425142df4d594b7639d8918fd42490523da6f151b11a8"
+            ]
+          },
+          "Metadata": {
+            "LastTagTime": "0001-01-01T00:00:00Z"
+          },
+          "Config": {
+            "Cmd": [
+              "/bin/bash"
+            ],
+            "Entrypoint": null,
+            "Env": [
+              "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+              "LANG=C.UTF-8",
+              "LC_ALL=C.UTF-8",
+              "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright"
+            ],
+            "Labels": {
+              "org.opencontainers.image.version": "24.04"
+            },
+            "OnBuild": null,
+            "User": "",
+            "Volumes": null,
+            "WorkingDir": ""
+          }
+        }
+      ],
+      "native_build": {
+        "head": "89d6b618eeba8afaf4b95af4406057330baa60a6",
+        "production_tree": "7e227b5b08958c0642e2af0e7209af73cd1208e9",
+        "harness": {
+          "tests/common/provider_emulator.rs": "cb055ee1f9c9bc55c8af5cae080bb8564f2417226bacab76159f837261a2e47e",
+          "tests/conformance/agent_loop/runtime_benchmark.rs": "d71e6c80216b128927e09828631135b00b9b64748625fdb9fb2e5e9eb6c660f6",
+          "tests/conformance/agent_loop/runtime_benchmark/aligned.rs": "751fa58a98c9067eecd5e9a6c3eee8b6ec35b8987d1cd9a6f4cdc28915c08133",
+          "tests/conformance/agent_loop/runtime_benchmark/expected_tools.json": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d",
+          "tests/conformance/agent_loop/runtime_benchmark/profiling.rs": "12362c4abf9f80deed923b77855a2529d4aeb427cfffe39d6953cad823de0c66",
+          "tests/conformance/agent_loop/runtime_benchmark/request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+        },
+        "start_utc": "2026-10-20T01:58:23.787935+00:00",
+        "commands": [
+          [
+            "cargo",
+            "clean",
+            "--release",
+            "--package",
+            "rustx"
+          ],
+          [
+            "cargo",
+            "test",
+            "--release",
+            "--locked",
+            "--test",
+            "conformance",
+            "--no-run",
+            "--message-format=json"
+          ]
+        ],
+        "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+        "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)\n",
+        "build_environment": {
+          "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+          "CARGO_PROFILE_RELEASE_DEBUG": "0",
+          "RUSTFLAGS": "-Copt-level=3 -Cdebuginfo=0",
+          "CARGO_BUILD_JOBS": "2"
+        },
+        "clean_exit": 0,
+        "build_exit": 0,
+        "root_artifacts": [
+          {
+            "name": "rustx",
+            "kind": [
+              "lib"
+            ],
+            "source_path": "/workspace/pr485-study/repo/src/lib.rs",
+            "fresh": false
+          },
+          {
+            "name": "rustx",
+            "kind": [
+              "bin"
+            ],
+            "source_path": "/workspace/pr485-study/repo/src/main.rs",
+            "fresh": false
+          },
+          {
+            "name": "conformance",
+            "kind": [
+              "test"
+            ],
+            "source_path": "/workspace/pr485-study/repo/tests/conformance/main.rs",
+            "fresh": false
+          }
+        ],
+        "binary": "/workspace/pr485-study/evidence/build-geometry/conformance",
+        "sha256": "d25cae1955161392e1ecfde60b1fcdf87ee17577ee4531da1dac133391dbd4a1",
+        "library_sha256": "c72106cd7f3b0a1b8c930b2d5f109110e1c88c8bc8b362ca934555190d9aebbd",
+        "verified": true,
+        "end_utc": "2026-10-20T02:18:45.012790+00:00"
+      },
+      "host_build": {
+        "native_library_build": {
+          "head": "89d6b618eeba8afaf4b95af4406057330baa60a6",
+          "production_tree": "7e227b5b08958c0642e2af0e7209af73cd1208e9",
+          "harness": {
+            "tests/common/provider_emulator.rs": "cb055ee1f9c9bc55c8af5cae080bb8564f2417226bacab76159f837261a2e47e",
+            "tests/conformance/agent_loop/runtime_benchmark.rs": "d71e6c80216b128927e09828631135b00b9b64748625fdb9fb2e5e9eb6c660f6",
+            "tests/conformance/agent_loop/runtime_benchmark/aligned.rs": "751fa58a98c9067eecd5e9a6c3eee8b6ec35b8987d1cd9a6f4cdc28915c08133",
+            "tests/conformance/agent_loop/runtime_benchmark/expected_tools.json": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d",
+            "tests/conformance/agent_loop/runtime_benchmark/profiling.rs": "12362c4abf9f80deed923b77855a2529d4aeb427cfffe39d6953cad823de0c66",
+            "tests/conformance/agent_loop/runtime_benchmark/request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+          },
+          "start_utc": "2026-10-20T01:58:23.787935+00:00",
+          "commands": [
+            [
+              "cargo",
+              "clean",
+              "--release",
+              "--package",
+              "rustx"
+            ],
+            [
+              "cargo",
+              "test",
+              "--release",
+              "--locked",
+              "--test",
+              "conformance",
+              "--no-run",
+              "--message-format=json"
+            ]
+          ],
+          "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+          "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)\n",
+          "build_environment": {
+            "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+            "CARGO_PROFILE_RELEASE_DEBUG": "0",
+            "RUSTFLAGS": "-Copt-level=3 -Cdebuginfo=0",
+            "CARGO_BUILD_JOBS": "2"
+          },
+          "clean_exit": 0,
+          "build_exit": 0,
+          "root_artifacts": [
+            {
+              "name": "rustx",
+              "kind": [
+                "lib"
+              ],
+              "source_path": "/workspace/pr485-study/repo/src/lib.rs",
+              "fresh": false
+            },
+            {
+              "name": "rustx",
+              "kind": [
+                "bin"
+              ],
+              "source_path": "/workspace/pr485-study/repo/src/main.rs",
+              "fresh": false
+            },
+            {
+              "name": "conformance",
+              "kind": [
+                "test"
+              ],
+              "source_path": "/workspace/pr485-study/repo/tests/conformance/main.rs",
+              "fresh": false
+            }
+          ],
+          "binary": "/workspace/pr485-study/evidence/build-geometry/conformance",
+          "sha256": "d25cae1955161392e1ecfde60b1fcdf87ee17577ee4531da1dac133391dbd4a1",
+          "library_sha256": "c72106cd7f3b0a1b8c930b2d5f109110e1c88c8bc8b362ca934555190d9aebbd",
+          "verified": true,
+          "end_utc": "2026-10-20T02:18:45.012790+00:00"
+        },
+        "extern": {
+          "rustx": {
+            "path": "/workspace/pr485-study/target/release/deps/librustx-69d6ea2c60a362a0.rlib",
+            "sha256": "c72106cd7f3b0a1b8c930b2d5f109110e1c88c8bc8b362ca934555190d9aebbd"
+          },
+          "tokio": {
+            "path": "/workspace/pr485-study/target/release/deps/libtokio-c5a3333935ca0dc8.rlib",
+            "sha256": "c66d650e3b45a14d4ce91c5482e779d04078bd0a775dcf80d5f278dcb3213d3b"
+          },
+          "tokio_util": {
+            "path": "/workspace/pr485-study/target/release/deps/libtokio_util-0398387163c8f0ca.rlib",
+            "sha256": "dd9b958d76e238ff81fa058de9600498a923ec49f4b708f987aa42dd600de465"
+          },
+          "serde_json": {
+            "path": "/workspace/pr485-study/target/release/deps/libserde_json-eeacad49e039a44a.rlib",
+            "sha256": "c21980f85b85e906eb74f0bef23e24227a11d8c10b2d7099d5527fd63eccb786"
+          },
+          "chrono": {
+            "path": "/workspace/pr485-study/target/release/deps/libchrono-1ecc381af4831f21.rlib",
+            "sha256": "3bf1b06adaec1bf4943b873949ea78f0a63feff424c90f3ca99296bd38b7b969"
+          }
+        },
+        "source": {
+          "canonical_history.rs": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86",
+          "common.rs": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823",
+          "host.rs": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c",
+          "request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461",
+          "verify_requests.rs": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+        },
+        "command": [
+          "rustc",
+          "--edition=2024",
+          "-C",
+          "opt-level=3",
+          "-C",
+          "debuginfo=0",
+          "-L",
+          "dependency=/workspace/pr485-study/target/release/deps",
+          "--extern",
+          "rustx=/workspace/pr485-study/target/release/deps/librustx-69d6ea2c60a362a0.rlib",
+          "--extern",
+          "tokio=/workspace/pr485-study/target/release/deps/libtokio-c5a3333935ca0dc8.rlib",
+          "--extern",
+          "tokio_util=/workspace/pr485-study/target/release/deps/libtokio_util-0398387163c8f0ca.rlib",
+          "--extern",
+          "serde_json=/workspace/pr485-study/target/release/deps/libserde_json-eeacad49e039a44a.rlib",
+          "--extern",
+          "chrono=/workspace/pr485-study/target/release/deps/libchrono-1ecc381af4831f21.rlib",
+          "/workspace/pr485-study/inspector-fixture/host.rs",
+          "-o",
+          "/workspace/pr485-study/evidence/build-geometry/host/inspector-host"
+        ],
+        "ordinary_optimized": true,
+        "no_product_source_changes": true,
+        "exit_code": 0,
+        "binary_sha256": "fdfc4d0d9bf53d2a6796527486ddaa27a74ac82b4c65c276204b309ae842af30"
+      },
+      "helpers_restored": [],
+      "space_at_product_start": {
+        "paths": [
+          {
+            "path": "/workspace/pr485-study",
+            "device": 27,
+            "usable_bytes": 13620371456,
+            "total_bytes": 33770192896
+          },
+          {
+            "path": "/var/lib/docker",
+            "device": 27,
+            "usable_bytes": 13620371456,
+            "total_bytes": 33770192896
+          }
+        ],
+        "distinct_backing_filesystems": 1
+      },
+      "argv": [
+        "node",
+        "--experimental-transform-types",
+        "/workspace/pr485-study/inspector-fixture/run.mjs",
+        "/workspace/pr485-study/repo",
+        "/workspace/pr485-study/evidence/build-geometry/host/inspector-host",
+        "short-small",
+        "/workspace/pr485-study/evidence/products/browser-baseline-vs-geometry-v2/1-short-small-geometry"
+      ],
+      "product_start_utc": "2026-10-20T03:17:53.227715+00:00",
+      "product_start_monotonic_ns": 7885733674726,
+      "exit": 0,
+      "product_end_utc": "2026-10-20T03:19:09.966704+00:00",
+      "product_end_monotonic_ns": 7962472779074,
+      "space_after": {
+        "paths": [
+          {
+            "path": "/workspace/pr485-study",
+            "device": 27,
+            "usable_bytes": 13568897024,
+            "total_bytes": 33770192896
+          },
+          {
+            "path": "/var/lib/docker",
+            "device": 27,
+            "usable_bytes": 13568897024,
+            "total_bytes": 33770192896
+          }
+        ],
+        "distinct_backing_filesystems": 1
+      },
+      "sample_sha256": "43aaa2fcfb7676063d6f3fec103588ed49ec08eb7e218f0d666e9712349cafc1",
+      "accepted_by_producer": true
+    },
+    {
+      "label": "baseline",
+      "case": "short-small",
+      "pair": 1,
+      "preflight_started_utc": "2026-10-20T03:19:11.155731+00:00",
+      "idle_evidence": {
+        "utc": "2026-10-20T03:19:11.282526+00:00",
+        "forbidden_or_timed_processes": [],
+        "active_benchmark_containers": []
+      },
+      "space_before": {
+        "paths": [
+          {
+            "path": "/workspace/pr485-study",
+            "device": 27,
+            "usable_bytes": 13568897024,
+            "total_bytes": 33770192896
+          },
+          {
+            "path": "/var/lib/docker",
+            "device": 27,
+            "usable_bytes": 13568897024,
+            "total_bytes": 33770192896
+          }
+        ],
+        "distinct_backing_filesystems": 1
+      },
+      "image_inspect": [
+        {
+          "Id": "sha256:2c1f4e0fd6450f43ddb46d60c2a6df30855a8588e165b1f2559fb0eda8d7ff35",
+          "RepoTags": [],
+          "RepoDigests": [
+            "mcr.microsoft.com/playwright@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7"
+          ],
+          "Parent": "",
+          "Comment": "buildkit.dockerfile.v0",
+          "Created": "2026-09-04T23:42:21.248887746Z",
+          "DockerVersion": "",
+          "Author": "",
+          "Architecture": "amd64",
+          "Os": "linux",
+          "Size": 2505762089,
+          "GraphDriver": {
+            "Data": null,
+            "Name": "vfs"
+          },
+          "RootFS": {
+            "Type": "layers",
+            "Layers": [
+              "sha256:b9a65b3c65ab22d490085bd0bf5490e2409da8748b406870f2463bdc41cd6795",
+              "sha256:05b61f708389aecf2a9b2e058f554db6d84eb17811415f3b34768feebe0bea14",
+              "sha256:73a48c91864c16f507959610c8534667ab25537630e84399f31d968661ed94f9",
+              "sha256:cd7e6e338465408114835eb137df15785b6ac45c2b8046f78773557fe7c0a51c",
+              "sha256:67c5b2ab4bb8dd6c3ece663ece744316ccae0552a54bc2b27e811611cf366472",
+              "sha256:cd321a6dc023a72bba4dc6b34cef9892a2112c17860f4225691daa6a333aa005",
+              "sha256:656afaafaa812f188da425142df4d594b7639d8918fd42490523da6f151b11a8"
+            ]
+          },
+          "Metadata": {
+            "LastTagTime": "0001-01-01T00:00:00Z"
+          },
+          "Config": {
+            "Cmd": [
+              "/bin/bash"
+            ],
+            "Entrypoint": null,
+            "Env": [
+              "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+              "LANG=C.UTF-8",
+              "LC_ALL=C.UTF-8",
+              "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright"
+            ],
+            "Labels": {
+              "org.opencontainers.image.version": "24.04"
+            },
+            "OnBuild": null,
+            "User": "",
+            "Volumes": null,
+            "WorkingDir": ""
+          }
+        }
+      ],
+      "native_build": {
+        "head": "623b41b869a95c888eb04f907cbf607232699a2f",
+        "production_tree": "19ff7d6bd64993a6b9fc08bbcd687787dacfe08e",
+        "harness": {
+          "tests/common/provider_emulator.rs": "cb055ee1f9c9bc55c8af5cae080bb8564f2417226bacab76159f837261a2e47e",
+          "tests/conformance/agent_loop/runtime_benchmark.rs": "d71e6c80216b128927e09828631135b00b9b64748625fdb9fb2e5e9eb6c660f6",
+          "tests/conformance/agent_loop/runtime_benchmark/aligned.rs": "751fa58a98c9067eecd5e9a6c3eee8b6ec35b8987d1cd9a6f4cdc28915c08133",
+          "tests/conformance/agent_loop/runtime_benchmark/expected_tools.json": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d",
+          "tests/conformance/agent_loop/runtime_benchmark/profiling.rs": "12362c4abf9f80deed923b77855a2529d4aeb427cfffe39d6953cad823de0c66",
+          "tests/conformance/agent_loop/runtime_benchmark/request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+        },
+        "start_utc": "2026-10-20T01:10:38.299342+00:00",
+        "commands": [
+          [
+            "cargo",
+            "clean",
+            "--release",
+            "--package",
+            "rustx"
+          ],
+          [
+            "cargo",
+            "test",
+            "--release",
+            "--locked",
+            "--test",
+            "conformance",
+            "--no-run",
+            "--message-format=json"
+          ]
+        ],
+        "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+        "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)\n",
+        "build_environment": {
+          "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+          "CARGO_PROFILE_RELEASE_DEBUG": "0",
+          "RUSTFLAGS": "-Copt-level=3 -Cdebuginfo=0",
+          "CARGO_BUILD_JOBS": "2"
+        },
+        "clean_exit": 0,
+        "build_exit": 0,
+        "root_artifacts": [
+          {
+            "name": "rustx",
+            "kind": [
+              "lib"
+            ],
+            "source_path": "/workspace/pr485-study/repo/src/lib.rs",
+            "fresh": false
+          },
+          {
+            "name": "rustx",
+            "kind": [
+              "bin"
+            ],
+            "source_path": "/workspace/pr485-study/repo/src/main.rs",
+            "fresh": false
+          },
+          {
+            "name": "conformance",
+            "kind": [
+              "test"
+            ],
+            "source_path": "/workspace/pr485-study/repo/tests/conformance/main.rs",
+            "fresh": false
+          }
+        ],
+        "binary": "/workspace/pr485-study/evidence/build-baseline/conformance",
+        "sha256": "711b5af1ac3500e36f0f1bd827d108fb975a088b5e24a8d3a99218d7812ed388",
+        "library_sha256": "c529acd9a2f6d18fb297e0c38facfdd46597ce04e1c44890d0048ed9e99dffb6",
+        "verified": true,
+        "end_utc": "2026-10-20T01:57:15.845286+00:00"
+      },
+      "host_build": {
+        "native_library_build": {
+          "head": "623b41b869a95c888eb04f907cbf607232699a2f",
+          "production_tree": "19ff7d6bd64993a6b9fc08bbcd687787dacfe08e",
+          "harness": {
+            "tests/common/provider_emulator.rs": "cb055ee1f9c9bc55c8af5cae080bb8564f2417226bacab76159f837261a2e47e",
+            "tests/conformance/agent_loop/runtime_benchmark.rs": "d71e6c80216b128927e09828631135b00b9b64748625fdb9fb2e5e9eb6c660f6",
+            "tests/conformance/agent_loop/runtime_benchmark/aligned.rs": "751fa58a98c9067eecd5e9a6c3eee8b6ec35b8987d1cd9a6f4cdc28915c08133",
+            "tests/conformance/agent_loop/runtime_benchmark/expected_tools.json": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d",
+            "tests/conformance/agent_loop/runtime_benchmark/profiling.rs": "12362c4abf9f80deed923b77855a2529d4aeb427cfffe39d6953cad823de0c66",
+            "tests/conformance/agent_loop/runtime_benchmark/request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+          },
+          "start_utc": "2026-10-20T01:10:38.299342+00:00",
+          "commands": [
+            [
+              "cargo",
+              "clean",
+              "--release",
+              "--package",
+              "rustx"
+            ],
+            [
+              "cargo",
+              "test",
+              "--release",
+              "--locked",
+              "--test",
+              "conformance",
+              "--no-run",
+              "--message-format=json"
+            ]
+          ],
+          "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+          "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)\n",
+          "build_environment": {
+            "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+            "CARGO_PROFILE_RELEASE_DEBUG": "0",
+            "RUSTFLAGS": "-Copt-level=3 -Cdebuginfo=0",
+            "CARGO_BUILD_JOBS": "2"
+          },
+          "clean_exit": 0,
+          "build_exit": 0,
+          "root_artifacts": [
+            {
+              "name": "rustx",
+              "kind": [
+                "lib"
+              ],
+              "source_path": "/workspace/pr485-study/repo/src/lib.rs",
+              "fresh": false
+            },
+            {
+              "name": "rustx",
+              "kind": [
+                "bin"
+              ],
+              "source_path": "/workspace/pr485-study/repo/src/main.rs",
+              "fresh": false
+            },
+            {
+              "name": "conformance",
+              "kind": [
+                "test"
+              ],
+              "source_path": "/workspace/pr485-study/repo/tests/conformance/main.rs",
+              "fresh": false
+            }
+          ],
+          "binary": "/workspace/pr485-study/evidence/build-baseline/conformance",
+          "sha256": "711b5af1ac3500e36f0f1bd827d108fb975a088b5e24a8d3a99218d7812ed388",
+          "library_sha256": "c529acd9a2f6d18fb297e0c38facfdd46597ce04e1c44890d0048ed9e99dffb6",
+          "verified": true,
+          "end_utc": "2026-10-20T01:57:15.845286+00:00"
+        },
+        "extern": {
+          "rustx": {
+            "path": "/workspace/pr485-study/target/release/deps/librustx-69d6ea2c60a362a0.rlib",
+            "sha256": "c529acd9a2f6d18fb297e0c38facfdd46597ce04e1c44890d0048ed9e99dffb6"
+          },
+          "tokio": {
+            "path": "/workspace/pr485-study/target/release/deps/libtokio-c5a3333935ca0dc8.rlib",
+            "sha256": "c66d650e3b45a14d4ce91c5482e779d04078bd0a775dcf80d5f278dcb3213d3b"
+          },
+          "tokio_util": {
+            "path": "/workspace/pr485-study/target/release/deps/libtokio_util-0398387163c8f0ca.rlib",
+            "sha256": "dd9b958d76e238ff81fa058de9600498a923ec49f4b708f987aa42dd600de465"
+          },
+          "serde_json": {
+            "path": "/workspace/pr485-study/target/release/deps/libserde_json-eeacad49e039a44a.rlib",
+            "sha256": "c21980f85b85e906eb74f0bef23e24227a11d8c10b2d7099d5527fd63eccb786"
+          },
+          "chrono": {
+            "path": "/workspace/pr485-study/target/release/deps/libchrono-1ecc381af4831f21.rlib",
+            "sha256": "3bf1b06adaec1bf4943b873949ea78f0a63feff424c90f3ca99296bd38b7b969"
+          }
+        },
+        "source": {
+          "canonical_history.rs": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86",
+          "common.rs": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823",
+          "host.rs": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c",
+          "request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461",
+          "verify_requests.rs": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+        },
+        "command": [
+          "rustc",
+          "--edition=2024",
+          "-C",
+          "opt-level=3",
+          "-C",
+          "debuginfo=0",
+          "-L",
+          "dependency=/workspace/pr485-study/target/release/deps",
+          "--extern",
+          "rustx=/workspace/pr485-study/target/release/deps/librustx-69d6ea2c60a362a0.rlib",
+          "--extern",
+          "tokio=/workspace/pr485-study/target/release/deps/libtokio-c5a3333935ca0dc8.rlib",
+          "--extern",
+          "tokio_util=/workspace/pr485-study/target/release/deps/libtokio_util-0398387163c8f0ca.rlib",
+          "--extern",
+          "serde_json=/workspace/pr485-study/target/release/deps/libserde_json-eeacad49e039a44a.rlib",
+          "--extern",
+          "chrono=/workspace/pr485-study/target/release/deps/libchrono-1ecc381af4831f21.rlib",
+          "/workspace/pr485-study/inspector-fixture/host.rs",
+          "-o",
+          "/workspace/pr485-study/evidence/build-baseline/host/inspector-host"
+        ],
+        "ordinary_optimized": true,
+        "no_product_source_changes": true,
+        "exit_code": 0,
+        "binary_sha256": "12f4354c26334358c4d585d5159064c13602730346c661a6439326d31149be25"
+      },
+      "helpers_restored": [
+        "/workspace/pr485-study/target/release/interactive-supervisor",
+        "/workspace/pr485-study/target/release/rustx",
+        "/workspace/pr485-study/target/release/bash-supervisor",
+        "/workspace/pr485-study/target/release/deps/conformance-24da1f0a9d82f33c"
+      ],
+      "space_at_product_start": {
+        "paths": [
+          {
+            "path": "/workspace/pr485-study",
+            "device": 27,
+            "usable_bytes": 13568040960,
+            "total_bytes": 33770192896
+          },
+          {
+            "path": "/var/lib/docker",
+            "device": 27,
+            "usable_bytes": 13568040960,
+            "total_bytes": 33770192896
+          }
+        ],
+        "distinct_backing_filesystems": 1
+      },
+      "argv": [
+        "node",
+        "--experimental-transform-types",
+        "/workspace/pr485-study/inspector-fixture/run.mjs",
+        "/workspace/pr485-study/repo",
+        "/workspace/pr485-study/evidence/build-baseline/host/inspector-host",
+        "short-small",
+        "/workspace/pr485-study/evidence/products/browser-baseline-vs-geometry-v2/1-short-small-baseline"
+      ],
+      "product_start_utc": "2026-10-20T03:19:16.446852+00:00",
+      "product_start_monotonic_ns": 7968952859696,
+      "exit": 0,
+      "product_end_utc": "2026-10-20T03:20:51.923557+00:00",
+      "product_end_monotonic_ns": 8064429614038,
+      "space_after": {
+        "paths": [
+          {
+            "path": "/workspace/pr485-study",
+            "device": 27,
+            "usable_bytes": 13516763136,
+            "total_bytes": 33770192896
+          },
+          {
+            "path": "/var/lib/docker",
+            "device": 27,
+            "usable_bytes": 13516763136,
+            "total_bytes": 33770192896
+          }
+        ],
+        "distinct_backing_filesystems": 1
+      },
+      "sample_sha256": "b2768e8575055b9d263b9122d09405303b8fdd0445247f33832338e68c9ad7e2",
+      "accepted_by_producer": true
+    },
+    {
+      "label": "baseline",
+      "case": "short-small",
+      "pair": 2,
+      "preflight_started_utc": "2026-10-20T03:20:53.056053+00:00",
+      "idle_evidence": {
+        "utc": "2026-10-20T03:20:53.242384+00:00",
+        "forbidden_or_timed_processes": [],
+        "active_benchmark_containers": []
+      },
+      "space_before": {
+        "paths": [
+          {
+            "path": "/workspace/pr485-study",
+            "device": 27,
+            "usable_bytes": 13516763136,
+            "total_bytes": 33770192896
+          },
+          {
+            "path": "/var/lib/docker",
+            "device": 27,
+            "usable_bytes": 13516763136,
+            "total_bytes": 33770192896
+          }
+        ],
+        "distinct_backing_filesystems": 1
+      },
+      "image_inspect": [
+        {
+          "Id": "sha256:2c1f4e0fd6450f43ddb46d60c2a6df30855a8588e165b1f2559fb0eda8d7ff35",
+          "RepoTags": [],
+          "RepoDigests": [
+            "mcr.microsoft.com/playwright@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7"
+          ],
+          "Parent": "",
+          "Comment": "buildkit.dockerfile.v0",
+          "Created": "2026-09-04T23:42:21.248887746Z",
+          "DockerVersion": "",
+          "Author": "",
+          "Architecture": "amd64",
+          "Os": "linux",
+          "Size": 2505762089,
+          "GraphDriver": {
+            "Data": null,
+            "Name": "vfs"
+          },
+          "RootFS": {
+            "Type": "layers",
+            "Layers": [
+              "sha256:b9a65b3c65ab22d490085bd0bf5490e2409da8748b406870f2463bdc41cd6795",
+              "sha256:05b61f708389aecf2a9b2e058f554db6d84eb17811415f3b34768feebe0bea14",
+              "sha256:73a48c91864c16f507959610c8534667ab25537630e84399f31d968661ed94f9",
+              "sha256:cd7e6e338465408114835eb137df15785b6ac45c2b8046f78773557fe7c0a51c",
+              "sha256:67c5b2ab4bb8dd6c3ece663ece744316ccae0552a54bc2b27e811611cf366472",
+              "sha256:cd321a6dc023a72bba4dc6b34cef9892a2112c17860f4225691daa6a333aa005",
+              "sha256:656afaafaa812f188da425142df4d594b7639d8918fd42490523da6f151b11a8"
+            ]
+          },
+          "Metadata": {
+            "LastTagTime": "0001-01-01T00:00:00Z"
+          },
+          "Config": {
+            "Cmd": [
+              "/bin/bash"
+            ],
+            "Entrypoint": null,
+            "Env": [
+              "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+              "LANG=C.UTF-8",
+              "LC_ALL=C.UTF-8",
+              "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright"
+            ],
+            "Labels": {
+              "org.opencontainers.image.version": "24.04"
+            },
+            "OnBuild": null,
+            "User": "",
+            "Volumes": null,
+            "WorkingDir": ""
+          }
+        }
+      ],
+      "native_build": {
+        "head": "623b41b869a95c888eb04f907cbf607232699a2f",
+        "production_tree": "19ff7d6bd64993a6b9fc08bbcd687787dacfe08e",
+        "harness": {
+          "tests/common/provider_emulator.rs": "cb055ee1f9c9bc55c8af5cae080bb8564f2417226bacab76159f837261a2e47e",
+          "tests/conformance/agent_loop/runtime_benchmark.rs": "d71e6c80216b128927e09828631135b00b9b64748625fdb9fb2e5e9eb6c660f6",
+          "tests/conformance/agent_loop/runtime_benchmark/aligned.rs": "751fa58a98c9067eecd5e9a6c3eee8b6ec35b8987d1cd9a6f4cdc28915c08133",
+          "tests/conformance/agent_loop/runtime_benchmark/expected_tools.json": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d",
+          "tests/conformance/agent_loop/runtime_benchmark/profiling.rs": "12362c4abf9f80deed923b77855a2529d4aeb427cfffe39d6953cad823de0c66",
+          "tests/conformance/agent_loop/runtime_benchmark/request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+        },
+        "start_utc": "2026-10-20T01:10:38.299342+00:00",
+        "commands": [
+          [
+            "cargo",
+            "clean",
+            "--release",
+            "--package",
+            "rustx"
+          ],
+          [
+            "cargo",
+            "test",
+            "--release",
+            "--locked",
+            "--test",
+            "conformance",
+            "--no-run",
+            "--message-format=json"
+          ]
+        ],
+        "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+        "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)\n",
+        "build_environment": {
+          "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+          "CARGO_PROFILE_RELEASE_DEBUG": "0",
+          "RUSTFLAGS": "-Copt-level=3 -Cdebuginfo=0",
+          "CARGO_BUILD_JOBS": "2"
+        },
+        "clean_exit": 0,
+        "build_exit": 0,
+        "root_artifacts": [
+          {
+            "name": "rustx",
+            "kind": [
+              "lib"
+            ],
+            "source_path": "/workspace/pr485-study/repo/src/lib.rs",
+            "fresh": false
+          },
+          {
+            "name": "rustx",
+            "kind": [
+              "bin"
+            ],
+            "source_path": "/workspace/pr485-study/repo/src/main.rs",
+            "fresh": false
+          },
+          {
+            "name": "conformance",
+            "kind": [
+              "test"
+            ],
+            "source_path": "/workspace/pr485-study/repo/tests/conformance/main.rs",
+            "fresh": false
+          }
+        ],
+        "binary": "/workspace/pr485-study/evidence/build-baseline/conformance",
+        "sha256": "711b5af1ac3500e36f0f1bd827d108fb975a088b5e24a8d3a99218d7812ed388",
+        "library_sha256": "c529acd9a2f6d18fb297e0c38facfdd46597ce04e1c44890d0048ed9e99dffb6",
+        "verified": true,
+        "end_utc": "2026-10-20T01:57:15.845286+00:00"
+      },
+      "host_build": {
+        "native_library_build": {
+          "head": "623b41b869a95c888eb04f907cbf607232699a2f",
+          "production_tree": "19ff7d6bd64993a6b9fc08bbcd687787dacfe08e",
+          "harness": {
+            "tests/common/provider_emulator.rs": "cb055ee1f9c9bc55c8af5cae080bb8564f2417226bacab76159f837261a2e47e",
+            "tests/conformance/agent_loop/runtime_benchmark.rs": "d71e6c80216b128927e09828631135b00b9b64748625fdb9fb2e5e9eb6c660f6",
+            "tests/conformance/agent_loop/runtime_benchmark/aligned.rs": "751fa58a98c9067eecd5e9a6c3eee8b6ec35b8987d1cd9a6f4cdc28915c08133",
+            "tests/conformance/agent_loop/runtime_benchmark/expected_tools.json": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d",
+            "tests/conformance/agent_loop/runtime_benchmark/profiling.rs": "12362c4abf9f80deed923b77855a2529d4aeb427cfffe39d6953cad823de0c66",
+            "tests/conformance/agent_loop/runtime_benchmark/request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+          },
+          "start_utc": "2026-10-20T01:10:38.299342+00:00",
+          "commands": [
+            [
+              "cargo",
+              "clean",
+              "--release",
+              "--package",
+              "rustx"
+            ],
+            [
+              "cargo",
+              "test",
+              "--release",
+              "--locked",
+              "--test",
+              "conformance",
+              "--no-run",
+              "--message-format=json"
+            ]
+          ],
+          "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+          "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)\n",
+          "build_environment": {
+            "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+            "CARGO_PROFILE_RELEASE_DEBUG": "0",
+            "RUSTFLAGS": "-Copt-level=3 -Cdebuginfo=0",
+            "CARGO_BUILD_JOBS": "2"
+          },
+          "clean_exit": 0,
+          "build_exit": 0,
+          "root_artifacts": [
+            {
+              "name": "rustx",
+              "kind": [
+                "lib"
+              ],
+              "source_path": "/workspace/pr485-study/repo/src/lib.rs",
+              "fresh": false
+            },
+            {
+              "name": "rustx",
+              "kind": [
+                "bin"
+              ],
+              "source_path": "/workspace/pr485-study/repo/src/main.rs",
+              "fresh": false
+            },
+            {
+              "name": "conformance",
+              "kind": [
+                "test"
+              ],
+              "source_path": "/workspace/pr485-study/repo/tests/conformance/main.rs",
+              "fresh": false
+            }
+          ],
+          "binary": "/workspace/pr485-study/evidence/build-baseline/conformance",
+          "sha256": "711b5af1ac3500e36f0f1bd827d108fb975a088b5e24a8d3a99218d7812ed388",
+          "library_sha256": "c529acd9a2f6d18fb297e0c38facfdd46597ce04e1c44890d0048ed9e99dffb6",
+          "verified": true,
+          "end_utc": "2026-10-20T01:57:15.845286+00:00"
+        },
+        "extern": {
+          "rustx": {
+            "path": "/workspace/pr485-study/target/release/deps/librustx-69d6ea2c60a362a0.rlib",
+            "sha256": "c529acd9a2f6d18fb297e0c38facfdd46597ce04e1c44890d0048ed9e99dffb6"
+          },
+          "tokio": {
+            "path": "/workspace/pr485-study/target/release/deps/libtokio-c5a3333935ca0dc8.rlib",
+            "sha256": "c66d650e3b45a14d4ce91c5482e779d04078bd0a775dcf80d5f278dcb3213d3b"
+          },
+          "tokio_util": {
+            "path": "/workspace/pr485-study/target/release/deps/libtokio_util-0398387163c8f0ca.rlib",
+            "sha256": "dd9b958d76e238ff81fa058de9600498a923ec49f4b708f987aa42dd600de465"
+          },
+          "serde_json": {
+            "path": "/workspace/pr485-study/target/release/deps/libserde_json-eeacad49e039a44a.rlib",
+            "sha256": "c21980f85b85e906eb74f0bef23e24227a11d8c10b2d7099d5527fd63eccb786"
+          },
+          "chrono": {
+            "path": "/workspace/pr485-study/target/release/deps/libchrono-1ecc381af4831f21.rlib",
+            "sha256": "3bf1b06adaec1bf4943b873949ea78f0a63feff424c90f3ca99296bd38b7b969"
+          }
+        },
+        "source": {
+          "canonical_history.rs": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86",
+          "common.rs": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823",
+          "host.rs": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c",
+          "request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461",
+          "verify_requests.rs": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+        },
+        "command": [
+          "rustc",
+          "--edition=2024",
+          "-C",
+          "opt-level=3",
+          "-C",
+          "debuginfo=0",
+          "-L",
+          "dependency=/workspace/pr485-study/target/release/deps",
+          "--extern",
+          "rustx=/workspace/pr485-study/target/release/deps/librustx-69d6ea2c60a362a0.rlib",
+          "--extern",
+          "tokio=/workspace/pr485-study/target/release/deps/libtokio-c5a3333935ca0dc8.rlib",
+          "--extern",
+          "tokio_util=/workspace/pr485-study/target/release/deps/libtokio_util-0398387163c8f0ca.rlib",
+          "--extern",
+          "serde_json=/workspace/pr485-study/target/release/deps/libserde_json-eeacad49e039a44a.rlib",
+          "--extern",
+          "chrono=/workspace/pr485-study/target/release/deps/libchrono-1ecc381af4831f21.rlib",
+          "/workspace/pr485-study/inspector-fixture/host.rs",
+          "-o",
+          "/workspace/pr485-study/evidence/build-baseline/host/inspector-host"
+        ],
+        "ordinary_optimized": true,
+        "no_product_source_changes": true,
+        "exit_code": 0,
+        "binary_sha256": "12f4354c26334358c4d585d5159064c13602730346c661a6439326d31149be25"
+      },
+      "helpers_restored": [],
+      "space_at_product_start": {
+        "paths": [
+          {
+            "path": "/workspace/pr485-study",
+            "device": 27,
+            "usable_bytes": 13516763136,
+            "total_bytes": 33770192896
+          },
+          {
+            "path": "/var/lib/docker",
+            "device": 27,
+            "usable_bytes": 13516763136,
+            "total_bytes": 33770192896
+          }
+        ],
+        "distinct_backing_filesystems": 1
+      },
+      "argv": [
+        "node",
+        "--experimental-transform-types",
+        "/workspace/pr485-study/inspector-fixture/run.mjs",
+        "/workspace/pr485-study/repo",
+        "/workspace/pr485-study/evidence/build-baseline/host/inspector-host",
+        "short-small",
+        "/workspace/pr485-study/evidence/products/browser-baseline-vs-geometry-v2/2-short-small-baseline"
+      ],
+      "product_start_utc": "2026-10-20T03:20:57.806023+00:00",
+      "product_start_monotonic_ns": 8070311983228,
+      "exit": 0,
+      "product_end_utc": "2026-10-20T03:22:13.546316+00:00",
+      "product_end_monotonic_ns": 8146052436511,
+      "space_after": {
+        "paths": [
+          {
+            "path": "/workspace/pr485-study",
+            "device": 27,
+            "usable_bytes": 13465755648,
+            "total_bytes": 33770192896
+          },
+          {
+            "path": "/var/lib/docker",
+            "device": 27,
+            "usable_bytes": 13465755648,
+            "total_bytes": 33770192896
+          }
+        ],
+        "distinct_backing_filesystems": 1
+      },
+      "sample_sha256": "25c1378fcd312660694212adcfba835935b7cbc199e34293771bf65ab5ce1ccf",
+      "accepted_by_producer": true
+    },
+    {
+      "label": "geometry",
+      "case": "short-small",
+      "pair": 2,
+      "preflight_started_utc": "2026-10-20T03:22:14.526707+00:00",
+      "idle_evidence": {
+        "utc": "2026-10-20T03:22:14.642758+00:00",
+        "forbidden_or_timed_processes": [],
+        "active_benchmark_containers": []
+      },
+      "space_before": {
+        "paths": [
+          {
+            "path": "/workspace/pr485-study",
+            "device": 27,
+            "usable_bytes": 13465755648,
+            "total_bytes": 33770192896
+          },
+          {
+            "path": "/var/lib/docker",
+            "device": 27,
+            "usable_bytes": 13465755648,
+            "total_bytes": 33770192896
+          }
+        ],
+        "distinct_backing_filesystems": 1
+      },
+      "image_inspect": [
+        {
+          "Id": "sha256:2c1f4e0fd6450f43ddb46d60c2a6df30855a8588e165b1f2559fb0eda8d7ff35",
+          "RepoTags": [],
+          "RepoDigests": [
+            "mcr.microsoft.com/playwright@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7"
+          ],
+          "Parent": "",
+          "Comment": "buildkit.dockerfile.v0",
+          "Created": "2026-09-04T23:42:21.248887746Z",
+          "DockerVersion": "",
+          "Author": "",
+          "Architecture": "amd64",
+          "Os": "linux",
+          "Size": 2505762089,
+          "GraphDriver": {
+            "Data": null,
+            "Name": "vfs"
+          },
+          "RootFS": {
+            "Type": "layers",
+            "Layers": [
+              "sha256:b9a65b3c65ab22d490085bd0bf5490e2409da8748b406870f2463bdc41cd6795",
+              "sha256:05b61f708389aecf2a9b2e058f554db6d84eb17811415f3b34768feebe0bea14",
+              "sha256:73a48c91864c16f507959610c8534667ab25537630e84399f31d968661ed94f9",
+              "sha256:cd7e6e338465408114835eb137df15785b6ac45c2b8046f78773557fe7c0a51c",
+              "sha256:67c5b2ab4bb8dd6c3ece663ece744316ccae0552a54bc2b27e811611cf366472",
+              "sha256:cd321a6dc023a72bba4dc6b34cef9892a2112c17860f4225691daa6a333aa005",
+              "sha256:656afaafaa812f188da425142df4d594b7639d8918fd42490523da6f151b11a8"
+            ]
+          },
+          "Metadata": {
+            "LastTagTime": "0001-01-01T00:00:00Z"
+          },
+          "Config": {
+            "Cmd": [
+              "/bin/bash"
+            ],
+            "Entrypoint": null,
+            "Env": [
+              "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+              "LANG=C.UTF-8",
+              "LC_ALL=C.UTF-8",
+              "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright"
+            ],
+            "Labels": {
+              "org.opencontainers.image.version": "24.04"
+            },
+            "OnBuild": null,
+            "User": "",
+            "Volumes": null,
+            "WorkingDir": ""
+          }
+        }
+      ],
+      "native_build": {
+        "head": "89d6b618eeba8afaf4b95af4406057330baa60a6",
+        "production_tree": "7e227b5b08958c0642e2af0e7209af73cd1208e9",
+        "harness": {
+          "tests/common/provider_emulator.rs": "cb055ee1f9c9bc55c8af5cae080bb8564f2417226bacab76159f837261a2e47e",
+          "tests/conformance/agent_loop/runtime_benchmark.rs": "d71e6c80216b128927e09828631135b00b9b64748625fdb9fb2e5e9eb6c660f6",
+          "tests/conformance/agent_loop/runtime_benchmark/aligned.rs": "751fa58a98c9067eecd5e9a6c3eee8b6ec35b8987d1cd9a6f4cdc28915c08133",
+          "tests/conformance/agent_loop/runtime_benchmark/expected_tools.json": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d",
+          "tests/conformance/agent_loop/runtime_benchmark/profiling.rs": "12362c4abf9f80deed923b77855a2529d4aeb427cfffe39d6953cad823de0c66",
+          "tests/conformance/agent_loop/runtime_benchmark/request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+        },
+        "start_utc": "2026-10-20T01:58:23.787935+00:00",
+        "commands": [
+          [
+            "cargo",
+            "clean",
+            "--release",
+            "--package",
+            "rustx"
+          ],
+          [
+            "cargo",
+            "test",
+            "--release",
+            "--locked",
+            "--test",
+            "conformance",
+            "--no-run",
+            "--message-format=json"
+          ]
+        ],
+        "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+        "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)\n",
+        "build_environment": {
+          "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+          "CARGO_PROFILE_RELEASE_DEBUG": "0",
+          "RUSTFLAGS": "-Copt-level=3 -Cdebuginfo=0",
+          "CARGO_BUILD_JOBS": "2"
+        },
+        "clean_exit": 0,
+        "build_exit": 0,
+        "root_artifacts": [
+          {
+            "name": "rustx",
+            "kind": [
+              "lib"
+            ],
+            "source_path": "/workspace/pr485-study/repo/src/lib.rs",
+            "fresh": false
+          },
+          {
+            "name": "rustx",
+            "kind": [
+              "bin"
+            ],
+            "source_path": "/workspace/pr485-study/repo/src/main.rs",
+            "fresh": false
+          },
+          {
+            "name": "conformance",
+            "kind": [
+              "test"
+            ],
+            "source_path": "/workspace/pr485-study/repo/tests/conformance/main.rs",
+            "fresh": false
+          }
+        ],
+        "binary": "/workspace/pr485-study/evidence/build-geometry/conformance",
+        "sha256": "d25cae1955161392e1ecfde60b1fcdf87ee17577ee4531da1dac133391dbd4a1",
+        "library_sha256": "c72106cd7f3b0a1b8c930b2d5f109110e1c88c8bc8b362ca934555190d9aebbd",
+        "verified": true,
+        "end_utc": "2026-10-20T02:18:45.012790+00:00"
+      },
+      "host_build": {
+        "native_library_build": {
+          "head": "89d6b618eeba8afaf4b95af4406057330baa60a6",
+          "production_tree": "7e227b5b08958c0642e2af0e7209af73cd1208e9",
+          "harness": {
+            "tests/common/provider_emulator.rs": "cb055ee1f9c9bc55c8af5cae080bb8564f2417226bacab76159f837261a2e47e",
+            "tests/conformance/agent_loop/runtime_benchmark.rs": "d71e6c80216b128927e09828631135b00b9b64748625fdb9fb2e5e9eb6c660f6",
+            "tests/conformance/agent_loop/runtime_benchmark/aligned.rs": "751fa58a98c9067eecd5e9a6c3eee8b6ec35b8987d1cd9a6f4cdc28915c08133",
+            "tests/conformance/agent_loop/runtime_benchmark/expected_tools.json": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d",
+            "tests/conformance/agent_loop/runtime_benchmark/profiling.rs": "12362c4abf9f80deed923b77855a2529d4aeb427cfffe39d6953cad823de0c66",
+            "tests/conformance/agent_loop/runtime_benchmark/request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+          },
+          "start_utc": "2026-10-20T01:58:23.787935+00:00",
+          "commands": [
+            [
+              "cargo",
+              "clean",
+              "--release",
+              "--package",
+              "rustx"
+            ],
+            [
+              "cargo",
+              "test",
+              "--release",
+              "--locked",
+              "--test",
+              "conformance",
+              "--no-run",
+              "--message-format=json"
+            ]
+          ],
+          "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+          "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)\n",
+          "build_environment": {
+            "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+            "CARGO_PROFILE_RELEASE_DEBUG": "0",
+            "RUSTFLAGS": "-Copt-level=3 -Cdebuginfo=0",
+            "CARGO_BUILD_JOBS": "2"
+          },
+          "clean_exit": 0,
+          "build_exit": 0,
+          "root_artifacts": [
+            {
+              "name": "rustx",
+              "kind": [
+                "lib"
+              ],
+              "source_path": "/workspace/pr485-study/repo/src/lib.rs",
+              "fresh": false
+            },
+            {
+              "name": "rustx",
+              "kind": [
+                "bin"
+              ],
+              "source_path": "/workspace/pr485-study/repo/src/main.rs",
+              "fresh": false
+            },
+            {
+              "name": "conformance",
+              "kind": [
+                "test"
+              ],
+              "source_path": "/workspace/pr485-study/repo/tests/conformance/main.rs",
+              "fresh": false
+            }
+          ],
+          "binary": "/workspace/pr485-study/evidence/build-geometry/conformance",
+          "sha256": "d25cae1955161392e1ecfde60b1fcdf87ee17577ee4531da1dac133391dbd4a1",
+          "library_sha256": "c72106cd7f3b0a1b8c930b2d5f109110e1c88c8bc8b362ca934555190d9aebbd",
+          "verified": true,
+          "end_utc": "2026-10-20T02:18:45.012790+00:00"
+        },
+        "extern": {
+          "rustx": {
+            "path": "/workspace/pr485-study/target/release/deps/librustx-69d6ea2c60a362a0.rlib",
+            "sha256": "c72106cd7f3b0a1b8c930b2d5f109110e1c88c8bc8b362ca934555190d9aebbd"
+          },
+          "tokio": {
+            "path": "/workspace/pr485-study/target/release/deps/libtokio-c5a3333935ca0dc8.rlib",
+            "sha256": "c66d650e3b45a14d4ce91c5482e779d04078bd0a775dcf80d5f278dcb3213d3b"
+          },
+          "tokio_util": {
+            "path": "/workspace/pr485-study/target/release/deps/libtokio_util-0398387163c8f0ca.rlib",
+            "sha256": "dd9b958d76e238ff81fa058de9600498a923ec49f4b708f987aa42dd600de465"
+          },
+          "serde_json": {
+            "path": "/workspace/pr485-study/target/release/deps/libserde_json-eeacad49e039a44a.rlib",
+            "sha256": "c21980f85b85e906eb74f0bef23e24227a11d8c10b2d7099d5527fd63eccb786"
+          },
+          "chrono": {
+            "path": "/workspace/pr485-study/target/release/deps/libchrono-1ecc381af4831f21.rlib",
+            "sha256": "3bf1b06adaec1bf4943b873949ea78f0a63feff424c90f3ca99296bd38b7b969"
+          }
+        },
+        "source": {
+          "canonical_history.rs": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86",
+          "common.rs": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823",
+          "host.rs": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c",
+          "request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461",
+          "verify_requests.rs": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+        },
+        "command": [
+          "rustc",
+          "--edition=2024",
+          "-C",
+          "opt-level=3",
+          "-C",
+          "debuginfo=0",
+          "-L",
+          "dependency=/workspace/pr485-study/target/release/deps",
+          "--extern",
+          "rustx=/workspace/pr485-study/target/release/deps/librustx-69d6ea2c60a362a0.rlib",
+          "--extern",
+          "tokio=/workspace/pr485-study/target/release/deps/libtokio-c5a3333935ca0dc8.rlib",
+          "--extern",
+          "tokio_util=/workspace/pr485-study/target/release/deps/libtokio_util-0398387163c8f0ca.rlib",
+          "--extern",
+          "serde_json=/workspace/pr485-study/target/release/deps/libserde_json-eeacad49e039a44a.rlib",
+          "--extern",
+          "chrono=/workspace/pr485-study/target/release/deps/libchrono-1ecc381af4831f21.rlib",
+          "/workspace/pr485-study/inspector-fixture/host.rs",
+          "-o",
+          "/workspace/pr485-study/evidence/build-geometry/host/inspector-host"
+        ],
+        "ordinary_optimized": true,
+        "no_product_source_changes": true,
+        "exit_code": 0,
+        "binary_sha256": "fdfc4d0d9bf53d2a6796527486ddaa27a74ac82b4c65c276204b309ae842af30"
+      },
+      "helpers_restored": [
+        "/workspace/pr485-study/target/release/rustx",
+        "/workspace/pr485-study/target/release/interactive-supervisor",
+        "/workspace/pr485-study/target/release/bash-supervisor",
+        "/workspace/pr485-study/target/release/deps/conformance-24da1f0a9d82f33c"
+      ],
+      "space_at_product_start": {
+        "paths": [
+          {
+            "path": "/workspace/pr485-study",
+            "device": 27,
+            "usable_bytes": 13466611712,
+            "total_bytes": 33770192896
+          },
+          {
+            "path": "/var/lib/docker",
+            "device": 27,
+            "usable_bytes": 13466611712,
+            "total_bytes": 33770192896
+          }
+        ],
+        "distinct_backing_filesystems": 1
+      },
+      "argv": [
+        "node",
+        "--experimental-transform-types",
+        "/workspace/pr485-study/inspector-fixture/run.mjs",
+        "/workspace/pr485-study/repo",
+        "/workspace/pr485-study/evidence/build-geometry/host/inspector-host",
+        "short-small",
+        "/workspace/pr485-study/evidence/products/browser-baseline-vs-geometry-v2/2-short-small-geometry"
+      ],
+      "product_start_utc": "2026-10-20T03:22:20.000244+00:00",
+      "product_start_monotonic_ns": 8152506228902,
+      "exit": 0,
+      "product_end_utc": "2026-10-20T03:23:44.300722+00:00",
+      "product_end_monotonic_ns": 8236806903464,
+      "space_after": {
+        "paths": [
+          {
+            "path": "/workspace/pr485-study",
+            "device": 27,
+            "usable_bytes": 13415702528,
+            "total_bytes": 33770192896
+          },
+          {
+            "path": "/var/lib/docker",
+            "device": 27,
+            "usable_bytes": 13415702528,
+            "total_bytes": 33770192896
+          }
+        ],
+        "distinct_backing_filesystems": 1
+      },
+      "sample_sha256": "cdef57bbabfebbe62ade3bfb9a134e4ff8e3abaa9110c9b88205de8993761430",
+      "accepted_by_producer": true
+    },
+    {
+      "label": "geometry",
+      "case": "short-large",
+      "pair": 0,
+      "preflight_started_utc": "2026-10-20T03:23:45.500979+00:00",
+      "idle_evidence": {
+        "utc": "2026-10-20T03:23:45.628803+00:00",
+        "forbidden_or_timed_processes": [],
+        "active_benchmark_containers": []
+      },
+      "space_before": {
+        "paths": [
+          {
+            "path": "/workspace/pr485-study",
+            "device": 27,
+            "usable_bytes": 13415698432,
+            "total_bytes": 33770192896
+          },
+          {
+            "path": "/var/lib/docker",
+            "device": 27,
+            "usable_bytes": 13415698432,
+            "total_bytes": 33770192896
+          }
+        ],
+        "distinct_backing_filesystems": 1
+      },
+      "image_inspect": [
+        {
+          "Id": "sha256:2c1f4e0fd6450f43ddb46d60c2a6df30855a8588e165b1f2559fb0eda8d7ff35",
+          "RepoTags": [],
+          "RepoDigests": [
+            "mcr.microsoft.com/playwright@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7"
+          ],
+          "Parent": "",
+          "Comment": "buildkit.dockerfile.v0",
+          "Created": "2026-09-04T23:42:21.248887746Z",
+          "DockerVersion": "",
+          "Author": "",
+          "Architecture": "amd64",
+          "Os": "linux",
+          "Size": 2505762089,
+          "GraphDriver": {
+            "Data": null,
+            "Name": "vfs"
+          },
+          "RootFS": {
+            "Type": "layers",
+            "Layers": [
+              "sha256:b9a65b3c65ab22d490085bd0bf5490e2409da8748b406870f2463bdc41cd6795",
+              "sha256:05b61f708389aecf2a9b2e058f554db6d84eb17811415f3b34768feebe0bea14",
+              "sha256:73a48c91864c16f507959610c8534667ab25537630e84399f31d968661ed94f9",
+              "sha256:cd7e6e338465408114835eb137df15785b6ac45c2b8046f78773557fe7c0a51c",
+              "sha256:67c5b2ab4bb8dd6c3ece663ece744316ccae0552a54bc2b27e811611cf366472",
+              "sha256:cd321a6dc023a72bba4dc6b34cef9892a2112c17860f4225691daa6a333aa005",
+              "sha256:656afaafaa812f188da425142df4d594b7639d8918fd42490523da6f151b11a8"
+            ]
+          },
+          "Metadata": {
+            "LastTagTime": "0001-01-01T00:00:00Z"
+          },
+          "Config": {
+            "Cmd": [
+              "/bin/bash"
+            ],
+            "Entrypoint": null,
+            "Env": [
+              "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+              "LANG=C.UTF-8",
+              "LC_ALL=C.UTF-8",
+              "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright"
+            ],
+            "Labels": {
+              "org.opencontainers.image.version": "24.04"
+            },
+            "OnBuild": null,
+            "User": "",
+            "Volumes": null,
+            "WorkingDir": ""
+          }
+        }
+      ],
+      "native_build": {
+        "head": "89d6b618eeba8afaf4b95af4406057330baa60a6",
+        "production_tree": "7e227b5b08958c0642e2af0e7209af73cd1208e9",
+        "harness": {
+          "tests/common/provider_emulator.rs": "cb055ee1f9c9bc55c8af5cae080bb8564f2417226bacab76159f837261a2e47e",
+          "tests/conformance/agent_loop/runtime_benchmark.rs": "d71e6c80216b128927e09828631135b00b9b64748625fdb9fb2e5e9eb6c660f6",
+          "tests/conformance/agent_loop/runtime_benchmark/aligned.rs": "751fa58a98c9067eecd5e9a6c3eee8b6ec35b8987d1cd9a6f4cdc28915c08133",
+          "tests/conformance/agent_loop/runtime_benchmark/expected_tools.json": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d",
+          "tests/conformance/agent_loop/runtime_benchmark/profiling.rs": "12362c4abf9f80deed923b77855a2529d4aeb427cfffe39d6953cad823de0c66",
+          "tests/conformance/agent_loop/runtime_benchmark/request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+        },
+        "start_utc": "2026-10-20T01:58:23.787935+00:00",
+        "commands": [
+          [
+            "cargo",
+            "clean",
+            "--release",
+            "--package",
+            "rustx"
+          ],
+          [
+            "cargo",
+            "test",
+            "--release",
+            "--locked",
+            "--test",
+            "conformance",
+            "--no-run",
+            "--message-format=json"
+          ]
+        ],
+        "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+        "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)\n",
+        "build_environment": {
+          "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+          "CARGO_PROFILE_RELEASE_DEBUG": "0",
+          "RUSTFLAGS": "-Copt-level=3 -Cdebuginfo=0",
+          "CARGO_BUILD_JOBS": "2"
+        },
+        "clean_exit": 0,
+        "build_exit": 0,
+        "root_artifacts": [
+          {
+            "name": "rustx",
+            "kind": [
+              "lib"
+            ],
+            "source_path": "/workspace/pr485-study/repo/src/lib.rs",
+            "fresh": false
+          },
+          {
+            "name": "rustx",
+            "kind": [
+              "bin"
+            ],
+            "source_path": "/workspace/pr485-study/repo/src/main.rs",
+            "fresh": false
+          },
+          {
+            "name": "conformance",
+            "kind": [
+              "test"
+            ],
+            "source_path": "/workspace/pr485-study/repo/tests/conformance/main.rs",
+            "fresh": false
+          }
+        ],
+        "binary": "/workspace/pr485-study/evidence/build-geometry/conformance",
+        "sha256": "d25cae1955161392e1ecfde60b1fcdf87ee17577ee4531da1dac133391dbd4a1",
+        "library_sha256": "c72106cd7f3b0a1b8c930b2d5f109110e1c88c8bc8b362ca934555190d9aebbd",
+        "verified": true,
+        "end_utc": "2026-10-20T02:18:45.012790+00:00"
+      },
+      "host_build": {
+        "native_library_build": {
+          "head": "89d6b618eeba8afaf4b95af4406057330baa60a6",
+          "production_tree": "7e227b5b08958c0642e2af0e7209af73cd1208e9",
+          "harness": {
+            "tests/common/provider_emulator.rs": "cb055ee1f9c9bc55c8af5cae080bb8564f2417226bacab76159f837261a2e47e",
+            "tests/conformance/agent_loop/runtime_benchmark.rs": "d71e6c80216b128927e09828631135b00b9b64748625fdb9fb2e5e9eb6c660f6",
+            "tests/conformance/agent_loop/runtime_benchmark/aligned.rs": "751fa58a98c9067eecd5e9a6c3eee8b6ec35b8987d1cd9a6f4cdc28915c08133",
+            "tests/conformance/agent_loop/runtime_benchmark/expected_tools.json": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d",
+            "tests/conformance/agent_loop/runtime_benchmark/profiling.rs": "12362c4abf9f80deed923b77855a2529d4aeb427cfffe39d6953cad823de0c66",
+            "tests/conformance/agent_loop/runtime_benchmark/request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+          },
+          "start_utc": "2026-10-20T01:58:23.787935+00:00",
+          "commands": [
+            [
+              "cargo",
+              "clean",
+              "--release",
+              "--package",
+              "rustx"
+            ],
+            [
+              "cargo",
+              "test",
+              "--release",
+              "--locked",
+              "--test",
+              "conformance",
+              "--no-run",
+              "--message-format=json"
+            ]
+          ],
+          "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+          "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)\n",
+          "build_environment": {
+            "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+            "CARGO_PROFILE_RELEASE_DEBUG": "0",
+            "RUSTFLAGS": "-Copt-level=3 -Cdebuginfo=0",
+            "CARGO_BUILD_JOBS": "2"
+          },
+          "clean_exit": 0,
+          "build_exit": 0,
+          "root_artifacts": [
+            {
+              "name": "rustx",
+              "kind": [
+                "lib"
+              ],
+              "source_path": "/workspace/pr485-study/repo/src/lib.rs",
+              "fresh": false
+            },
+            {
+              "name": "rustx",
+              "kind": [
+                "bin"
+              ],
+              "source_path": "/workspace/pr485-study/repo/src/main.rs",
+              "fresh": false
+            },
+            {
+              "name": "conformance",
+              "kind": [
+                "test"
+              ],
+              "source_path": "/workspace/pr485-study/repo/tests/conformance/main.rs",
+              "fresh": false
+            }
+          ],
+          "binary": "/workspace/pr485-study/evidence/build-geometry/conformance",
+          "sha256": "d25cae1955161392e1ecfde60b1fcdf87ee17577ee4531da1dac133391dbd4a1",
+          "library_sha256": "c72106cd7f3b0a1b8c930b2d5f109110e1c88c8bc8b362ca934555190d9aebbd",
+          "verified": true,
+          "end_utc": "2026-10-20T02:18:45.012790+00:00"
+        },
+        "extern": {
+          "rustx": {
+            "path": "/workspace/pr485-study/target/release/deps/librustx-69d6ea2c60a362a0.rlib",
+            "sha256": "c72106cd7f3b0a1b8c930b2d5f109110e1c88c8bc8b362ca934555190d9aebbd"
+          },
+          "tokio": {
+            "path": "/workspace/pr485-study/target/release/deps/libtokio-c5a3333935ca0dc8.rlib",
+            "sha256": "c66d650e3b45a14d4ce91c5482e779d04078bd0a775dcf80d5f278dcb3213d3b"
+          },
+          "tokio_util": {
+            "path": "/workspace/pr485-study/target/release/deps/libtokio_util-0398387163c8f0ca.rlib",
+            "sha256": "dd9b958d76e238ff81fa058de9600498a923ec49f4b708f987aa42dd600de465"
+          },
+          "serde_json": {
+            "path": "/workspace/pr485-study/target/release/deps/libserde_json-eeacad49e039a44a.rlib",
+            "sha256": "c21980f85b85e906eb74f0bef23e24227a11d8c10b2d7099d5527fd63eccb786"
+          },
+          "chrono": {
+            "path": "/workspace/pr485-study/target/release/deps/libchrono-1ecc381af4831f21.rlib",
+            "sha256": "3bf1b06adaec1bf4943b873949ea78f0a63feff424c90f3ca99296bd38b7b969"
+          }
+        },
+        "source": {
+          "canonical_history.rs": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86",
+          "common.rs": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823",
+          "host.rs": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c",
+          "request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461",
+          "verify_requests.rs": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+        },
+        "command": [
+          "rustc",
+          "--edition=2024",
+          "-C",
+          "opt-level=3",
+          "-C",
+          "debuginfo=0",
+          "-L",
+          "dependency=/workspace/pr485-study/target/release/deps",
+          "--extern",
+          "rustx=/workspace/pr485-study/target/release/deps/librustx-69d6ea2c60a362a0.rlib",
+          "--extern",
+          "tokio=/workspace/pr485-study/target/release/deps/libtokio-c5a3333935ca0dc8.rlib",
+          "--extern",
+          "tokio_util=/workspace/pr485-study/target/release/deps/libtokio_util-0398387163c8f0ca.rlib",
+          "--extern",
+          "serde_json=/workspace/pr485-study/target/release/deps/libserde_json-eeacad49e039a44a.rlib",
+          "--extern",
+          "chrono=/workspace/pr485-study/target/release/deps/libchrono-1ecc381af4831f21.rlib",
+          "/workspace/pr485-study/inspector-fixture/host.rs",
+          "-o",
+          "/workspace/pr485-study/evidence/build-geometry/host/inspector-host"
+        ],
+        "ordinary_optimized": true,
+        "no_product_source_changes": true,
+        "exit_code": 0,
+        "binary_sha256": "fdfc4d0d9bf53d2a6796527486ddaa27a74ac82b4c65c276204b309ae842af30"
+      },
+      "helpers_restored": [],
+      "space_at_product_start": {
+        "paths": [
+          {
+            "path": "/workspace/pr485-study",
+            "device": 27,
+            "usable_bytes": 13415698432,
+            "total_bytes": 33770192896
+          },
+          {
+            "path": "/var/lib/docker",
+            "device": 27,
+            "usable_bytes": 13415698432,
+            "total_bytes": 33770192896
+          }
+        ],
+        "distinct_backing_filesystems": 1
+      },
+      "argv": [
+        "node",
+        "--experimental-transform-types",
+        "/workspace/pr485-study/inspector-fixture/run.mjs",
+        "/workspace/pr485-study/repo",
+        "/workspace/pr485-study/evidence/build-geometry/host/inspector-host",
+        "short-large",
+        "/workspace/pr485-study/evidence/products/browser-baseline-vs-geometry-v2/0-short-large-geometry"
+      ],
+      "product_start_utc": "2026-10-20T03:23:49.591225+00:00",
+      "product_start_monotonic_ns": 8242097174916,
+      "exit": 0,
+      "product_end_utc": "2026-10-20T03:26:29.695219+00:00",
+      "product_end_monotonic_ns": 8402201396664,
+      "space_after": {
+        "paths": [
+          {
+            "path": "/workspace/pr485-study",
+            "device": 27,
+            "usable_bytes": 13250023424,
+            "total_bytes": 33770192896
+          },
+          {
+            "path": "/var/lib/docker",
+            "device": 27,
+            "usable_bytes": 13250023424,
+            "total_bytes": 33770192896
+          }
+        ],
+        "distinct_backing_filesystems": 1
+      },
+      "sample_sha256": "c2a05a0e979d052771cdbc88f1ee4c90977906fee20e54bfc2b6ad97927d701d",
+      "accepted_by_producer": true
+    },
+    {
+      "label": "baseline",
+      "case": "short-large",
+      "pair": 0,
+      "preflight_started_utc": "2026-10-20T03:26:32.830251+00:00",
+      "idle_evidence": {
+        "utc": "2026-10-20T03:26:32.978781+00:00",
+        "forbidden_or_timed_processes": [],
+        "active_benchmark_containers": []
+      },
+      "space_before": {
+        "paths": [
+          {
+            "path": "/workspace/pr485-study",
+            "device": 27,
+            "usable_bytes": 13250023424,
+            "total_bytes": 33770192896
+          },
+          {
+            "path": "/var/lib/docker",
+            "device": 27,
+            "usable_bytes": 13250023424,
+            "total_bytes": 33770192896
+          }
+        ],
+        "distinct_backing_filesystems": 1
+      },
+      "image_inspect": [
+        {
+          "Id": "sha256:2c1f4e0fd6450f43ddb46d60c2a6df30855a8588e165b1f2559fb0eda8d7ff35",
+          "RepoTags": [],
+          "RepoDigests": [
+            "mcr.microsoft.com/playwright@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7"
+          ],
+          "Parent": "",
+          "Comment": "buildkit.dockerfile.v0",
+          "Created": "2026-09-04T23:42:21.248887746Z",
+          "DockerVersion": "",
+          "Author": "",
+          "Architecture": "amd64",
+          "Os": "linux",
+          "Size": 2505762089,
+          "GraphDriver": {
+            "Data": null,
+            "Name": "vfs"
+          },
+          "RootFS": {
+            "Type": "layers",
+            "Layers": [
+              "sha256:b9a65b3c65ab22d490085bd0bf5490e2409da8748b406870f2463bdc41cd6795",
+              "sha256:05b61f708389aecf2a9b2e058f554db6d84eb17811415f3b34768feebe0bea14",
+              "sha256:73a48c91864c16f507959610c8534667ab25537630e84399f31d968661ed94f9",
+              "sha256:cd7e6e338465408114835eb137df15785b6ac45c2b8046f78773557fe7c0a51c",
+              "sha256:67c5b2ab4bb8dd6c3ece663ece744316ccae0552a54bc2b27e811611cf366472",
+              "sha256:cd321a6dc023a72bba4dc6b34cef9892a2112c17860f4225691daa6a333aa005",
+              "sha256:656afaafaa812f188da425142df4d594b7639d8918fd42490523da6f151b11a8"
+            ]
+          },
+          "Metadata": {
+            "LastTagTime": "0001-01-01T00:00:00Z"
+          },
+          "Config": {
+            "Cmd": [
+              "/bin/bash"
+            ],
+            "Entrypoint": null,
+            "Env": [
+              "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+              "LANG=C.UTF-8",
+              "LC_ALL=C.UTF-8",
+              "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright"
+            ],
+            "Labels": {
+              "org.opencontainers.image.version": "24.04"
+            },
+            "OnBuild": null,
+            "User": "",
+            "Volumes": null,
+            "WorkingDir": ""
+          }
+        }
+      ],
+      "native_build": {
+        "head": "623b41b869a95c888eb04f907cbf607232699a2f",
+        "production_tree": "19ff7d6bd64993a6b9fc08bbcd687787dacfe08e",
+        "harness": {
+          "tests/common/provider_emulator.rs": "cb055ee1f9c9bc55c8af5cae080bb8564f2417226bacab76159f837261a2e47e",
+          "tests/conformance/agent_loop/runtime_benchmark.rs": "d71e6c80216b128927e09828631135b00b9b64748625fdb9fb2e5e9eb6c660f6",
+          "tests/conformance/agent_loop/runtime_benchmark/aligned.rs": "751fa58a98c9067eecd5e9a6c3eee8b6ec35b8987d1cd9a6f4cdc28915c08133",
+          "tests/conformance/agent_loop/runtime_benchmark/expected_tools.json": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d",
+          "tests/conformance/agent_loop/runtime_benchmark/profiling.rs": "12362c4abf9f80deed923b77855a2529d4aeb427cfffe39d6953cad823de0c66",
+          "tests/conformance/agent_loop/runtime_benchmark/request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+        },
+        "start_utc": "2026-10-20T01:10:38.299342+00:00",
+        "commands": [
+          [
+            "cargo",
+            "clean",
+            "--release",
+            "--package",
+            "rustx"
+          ],
+          [
+            "cargo",
+            "test",
+            "--release",
+            "--locked",
+            "--test",
+            "conformance",
+            "--no-run",
+            "--message-format=json"
+          ]
+        ],
+        "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+        "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)\n",
+        "build_environment": {
+          "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+          "CARGO_PROFILE_RELEASE_DEBUG": "0",
+          "RUSTFLAGS": "-Copt-level=3 -Cdebuginfo=0",
+          "CARGO_BUILD_JOBS": "2"
+        },
+        "clean_exit": 0,
+        "build_exit": 0,
+        "root_artifacts": [
+          {
+            "name": "rustx",
+            "kind": [
+              "lib"
+            ],
+            "source_path": "/workspace/pr485-study/repo/src/lib.rs",
+            "fresh": false
+          },
+          {
+            "name": "rustx",
+            "kind": [
+              "bin"
+            ],
+            "source_path": "/workspace/pr485-study/repo/src/main.rs",
+            "fresh": false
+          },
+          {
+            "name": "conformance",
+            "kind": [
+              "test"
+            ],
+            "source_path": "/workspace/pr485-study/repo/tests/conformance/main.rs",
+            "fresh": false
+          }
+        ],
+        "binary": "/workspace/pr485-study/evidence/build-baseline/conformance",
+        "sha256": "711b5af1ac3500e36f0f1bd827d108fb975a088b5e24a8d3a99218d7812ed388",
+        "library_sha256": "c529acd9a2f6d18fb297e0c38facfdd46597ce04e1c44890d0048ed9e99dffb6",
+        "verified": true,
+        "end_utc": "2026-10-20T01:57:15.845286+00:00"
+      },
+      "host_build": {
+        "native_library_build": {
+          "head": "623b41b869a95c888eb04f907cbf607232699a2f",
+          "production_tree": "19ff7d6bd64993a6b9fc08bbcd687787dacfe08e",
+          "harness": {
+            "tests/common/provider_emulator.rs": "cb055ee1f9c9bc55c8af5cae080bb8564f2417226bacab76159f837261a2e47e",
+            "tests/conformance/agent_loop/runtime_benchmark.rs": "d71e6c80216b128927e09828631135b00b9b64748625fdb9fb2e5e9eb6c660f6",
+            "tests/conformance/agent_loop/runtime_benchmark/aligned.rs": "751fa58a98c9067eecd5e9a6c3eee8b6ec35b8987d1cd9a6f4cdc28915c08133",
+            "tests/conformance/agent_loop/runtime_benchmark/expected_tools.json": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d",
+            "tests/conformance/agent_loop/runtime_benchmark/profiling.rs": "12362c4abf9f80deed923b77855a2529d4aeb427cfffe39d6953cad823de0c66",
+            "tests/conformance/agent_loop/runtime_benchmark/request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+          },
+          "start_utc": "2026-10-20T01:10:38.299342+00:00",
+          "commands": [
+            [
+              "cargo",
+              "clean",
+              "--release",
+              "--package",
+              "rustx"
+            ],
+            [
+              "cargo",
+              "test",
+              "--release",
+              "--locked",
+              "--test",
+              "conformance",
+              "--no-run",
+              "--message-format=json"
+            ]
+          ],
+          "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+          "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)\n",
+          "build_environment": {
+            "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+            "CARGO_PROFILE_RELEASE_DEBUG": "0",
+            "RUSTFLAGS": "-Copt-level=3 -Cdebuginfo=0",
+            "CARGO_BUILD_JOBS": "2"
+          },
+          "clean_exit": 0,
+          "build_exit": 0,
+          "root_artifacts": [
+            {
+              "name": "rustx",
+              "kind": [
+                "lib"
+              ],
+              "source_path": "/workspace/pr485-study/repo/src/lib.rs",
+              "fresh": false
+            },
+            {
+              "name": "rustx",
+              "kind": [
+                "bin"
+              ],
+              "source_path": "/workspace/pr485-study/repo/src/main.rs",
+              "fresh": false
+            },
+            {
+              "name": "conformance",
+              "kind": [
+                "test"
+              ],
+              "source_path": "/workspace/pr485-study/repo/tests/conformance/main.rs",
+              "fresh": false
+            }
+          ],
+          "binary": "/workspace/pr485-study/evidence/build-baseline/conformance",
+          "sha256": "711b5af1ac3500e36f0f1bd827d108fb975a088b5e24a8d3a99218d7812ed388",
+          "library_sha256": "c529acd9a2f6d18fb297e0c38facfdd46597ce04e1c44890d0048ed9e99dffb6",
+          "verified": true,
+          "end_utc": "2026-10-20T01:57:15.845286+00:00"
+        },
+        "extern": {
+          "rustx": {
+            "path": "/workspace/pr485-study/target/release/deps/librustx-69d6ea2c60a362a0.rlib",
+            "sha256": "c529acd9a2f6d18fb297e0c38facfdd46597ce04e1c44890d0048ed9e99dffb6"
+          },
+          "tokio": {
+            "path": "/workspace/pr485-study/target/release/deps/libtokio-c5a3333935ca0dc8.rlib",
+            "sha256": "c66d650e3b45a14d4ce91c5482e779d04078bd0a775dcf80d5f278dcb3213d3b"
+          },
+          "tokio_util": {
+            "path": "/workspace/pr485-study/target/release/deps/libtokio_util-0398387163c8f0ca.rlib",
+            "sha256": "dd9b958d76e238ff81fa058de9600498a923ec49f4b708f987aa42dd600de465"
+          },
+          "serde_json": {
+            "path": "/workspace/pr485-study/target/release/deps/libserde_json-eeacad49e039a44a.rlib",
+            "sha256": "c21980f85b85e906eb74f0bef23e24227a11d8c10b2d7099d5527fd63eccb786"
+          },
+          "chrono": {
+            "path": "/workspace/pr485-study/target/release/deps/libchrono-1ecc381af4831f21.rlib",
+            "sha256": "3bf1b06adaec1bf4943b873949ea78f0a63feff424c90f3ca99296bd38b7b969"
+          }
+        },
+        "source": {
+          "canonical_history.rs": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86",
+          "common.rs": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823",
+          "host.rs": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c",
+          "request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461",
+          "verify_requests.rs": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+        },
+        "command": [
+          "rustc",
+          "--edition=2024",
+          "-C",
+          "opt-level=3",
+          "-C",
+          "debuginfo=0",
+          "-L",
+          "dependency=/workspace/pr485-study/target/release/deps",
+          "--extern",
+          "rustx=/workspace/pr485-study/target/release/deps/librustx-69d6ea2c60a362a0.rlib",
+          "--extern",
+          "tokio=/workspace/pr485-study/target/release/deps/libtokio-c5a3333935ca0dc8.rlib",
+          "--extern",
+          "tokio_util=/workspace/pr485-study/target/release/deps/libtokio_util-0398387163c8f0ca.rlib",
+          "--extern",
+          "serde_json=/workspace/pr485-study/target/release/deps/libserde_json-eeacad49e039a44a.rlib",
+          "--extern",
+          "chrono=/workspace/pr485-study/target/release/deps/libchrono-1ecc381af4831f21.rlib",
+          "/workspace/pr485-study/inspector-fixture/host.rs",
+          "-o",
+          "/workspace/pr485-study/evidence/build-baseline/host/inspector-host"
+        ],
+        "ordinary_optimized": true,
+        "no_product_source_changes": true,
+        "exit_code": 0,
+        "binary_sha256": "12f4354c26334358c4d585d5159064c13602730346c661a6439326d31149be25"
+      },
+      "helpers_restored": [
+        "/workspace/pr485-study/target/release/interactive-supervisor",
+        "/workspace/pr485-study/target/release/rustx",
+        "/workspace/pr485-study/target/release/bash-supervisor",
+        "/workspace/pr485-study/target/release/deps/conformance-24da1f0a9d82f33c"
+      ],
+      "space_at_product_start": {
+        "paths": [
+          {
+            "path": "/workspace/pr485-study",
+            "device": 27,
+            "usable_bytes": 13249171456,
+            "total_bytes": 33770192896
+          },
+          {
+            "path": "/var/lib/docker",
+            "device": 27,
+            "usable_bytes": 13249171456,
+            "total_bytes": 33770192896
+          }
+        ],
+        "distinct_backing_filesystems": 1
+      },
+      "argv": [
+        "node",
+        "--experimental-transform-types",
+        "/workspace/pr485-study/inspector-fixture/run.mjs",
+        "/workspace/pr485-study/repo",
+        "/workspace/pr485-study/evidence/build-baseline/host/inspector-host",
+        "short-large",
+        "/workspace/pr485-study/evidence/products/browser-baseline-vs-geometry-v2/0-short-large-baseline"
+      ],
+      "product_start_utc": "2026-10-20T03:26:39.546265+00:00",
+      "product_start_monotonic_ns": 8412052223036,
+      "exit": 0,
+      "product_end_utc": "2026-10-20T03:30:31.640505+00:00",
+      "product_end_monotonic_ns": 8644146996015,
+      "space_after": {
+        "paths": [
+          {
+            "path": "/workspace/pr485-study",
+            "device": 27,
+            "usable_bytes": 13085069312,
+            "total_bytes": 33770192896
+          },
+          {
+            "path": "/var/lib/docker",
+            "device": 27,
+            "usable_bytes": 13085069312,
+            "total_bytes": 33770192896
+          }
+        ],
+        "distinct_backing_filesystems": 1
+      },
+      "sample_sha256": "1578429ed6605c5f19d2151833e775a6e59d12abf5f964716b41a3b82a6353ab",
+      "accepted_by_producer": true
+    },
+    {
+      "label": "baseline",
+      "case": "short-large",
+      "pair": 1,
+      "preflight_started_utc": "2026-10-20T03:30:35.991617+00:00",
+      "idle_evidence": {
+        "utc": "2026-10-20T03:30:36.200195+00:00",
+        "forbidden_or_timed_processes": [],
+        "active_benchmark_containers": []
+      },
+      "space_before": {
+        "paths": [
+          {
+            "path": "/workspace/pr485-study",
+            "device": 27,
+            "usable_bytes": 13085069312,
+            "total_bytes": 33770192896
+          },
+          {
+            "path": "/var/lib/docker",
+            "device": 27,
+            "usable_bytes": 13085069312,
+            "total_bytes": 33770192896
+          }
+        ],
+        "distinct_backing_filesystems": 1
+      },
+      "image_inspect": [
+        {
+          "Id": "sha256:2c1f4e0fd6450f43ddb46d60c2a6df30855a8588e165b1f2559fb0eda8d7ff35",
+          "RepoTags": [],
+          "RepoDigests": [
+            "mcr.microsoft.com/playwright@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7"
+          ],
+          "Parent": "",
+          "Comment": "buildkit.dockerfile.v0",
+          "Created": "2026-09-04T23:42:21.248887746Z",
+          "DockerVersion": "",
+          "Author": "",
+          "Architecture": "amd64",
+          "Os": "linux",
+          "Size": 2505762089,
+          "GraphDriver": {
+            "Data": null,
+            "Name": "vfs"
+          },
+          "RootFS": {
+            "Type": "layers",
+            "Layers": [
+              "sha256:b9a65b3c65ab22d490085bd0bf5490e2409da8748b406870f2463bdc41cd6795",
+              "sha256:05b61f708389aecf2a9b2e058f554db6d84eb17811415f3b34768feebe0bea14",
+              "sha256:73a48c91864c16f507959610c8534667ab25537630e84399f31d968661ed94f9",
+              "sha256:cd7e6e338465408114835eb137df15785b6ac45c2b8046f78773557fe7c0a51c",
+              "sha256:67c5b2ab4bb8dd6c3ece663ece744316ccae0552a54bc2b27e811611cf366472",
+              "sha256:cd321a6dc023a72bba4dc6b34cef9892a2112c17860f4225691daa6a333aa005",
+              "sha256:656afaafaa812f188da425142df4d594b7639d8918fd42490523da6f151b11a8"
+            ]
+          },
+          "Metadata": {
+            "LastTagTime": "0001-01-01T00:00:00Z"
+          },
+          "Config": {
+            "Cmd": [
+              "/bin/bash"
+            ],
+            "Entrypoint": null,
+            "Env": [
+              "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+              "LANG=C.UTF-8",
+              "LC_ALL=C.UTF-8",
+              "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright"
+            ],
+            "Labels": {
+              "org.opencontainers.image.version": "24.04"
+            },
+            "OnBuild": null,
+            "User": "",
+            "Volumes": null,
+            "WorkingDir": ""
+          }
+        }
+      ],
+      "native_build": {
+        "head": "623b41b869a95c888eb04f907cbf607232699a2f",
+        "production_tree": "19ff7d6bd64993a6b9fc08bbcd687787dacfe08e",
+        "harness": {
+          "tests/common/provider_emulator.rs": "cb055ee1f9c9bc55c8af5cae080bb8564f2417226bacab76159f837261a2e47e",
+          "tests/conformance/agent_loop/runtime_benchmark.rs": "d71e6c80216b128927e09828631135b00b9b64748625fdb9fb2e5e9eb6c660f6",
+          "tests/conformance/agent_loop/runtime_benchmark/aligned.rs": "751fa58a98c9067eecd5e9a6c3eee8b6ec35b8987d1cd9a6f4cdc28915c08133",
+          "tests/conformance/agent_loop/runtime_benchmark/expected_tools.json": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d",
+          "tests/conformance/agent_loop/runtime_benchmark/profiling.rs": "12362c4abf9f80deed923b77855a2529d4aeb427cfffe39d6953cad823de0c66",
+          "tests/conformance/agent_loop/runtime_benchmark/request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+        },
+        "start_utc": "2026-10-20T01:10:38.299342+00:00",
+        "commands": [
+          [
+            "cargo",
+            "clean",
+            "--release",
+            "--package",
+            "rustx"
+          ],
+          [
+            "cargo",
+            "test",
+            "--release",
+            "--locked",
+            "--test",
+            "conformance",
+            "--no-run",
+            "--message-format=json"
+          ]
+        ],
+        "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+        "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)\n",
+        "build_environment": {
+          "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+          "CARGO_PROFILE_RELEASE_DEBUG": "0",
+          "RUSTFLAGS": "-Copt-level=3 -Cdebuginfo=0",
+          "CARGO_BUILD_JOBS": "2"
+        },
+        "clean_exit": 0,
+        "build_exit": 0,
+        "root_artifacts": [
+          {
+            "name": "rustx",
+            "kind": [
+              "lib"
+            ],
+            "source_path": "/workspace/pr485-study/repo/src/lib.rs",
+            "fresh": false
+          },
+          {
+            "name": "rustx",
+            "kind": [
+              "bin"
+            ],
+            "source_path": "/workspace/pr485-study/repo/src/main.rs",
+            "fresh": false
+          },
+          {
+            "name": "conformance",
+            "kind": [
+              "test"
+            ],
+            "source_path": "/workspace/pr485-study/repo/tests/conformance/main.rs",
+            "fresh": false
+          }
+        ],
+        "binary": "/workspace/pr485-study/evidence/build-baseline/conformance",
+        "sha256": "711b5af1ac3500e36f0f1bd827d108fb975a088b5e24a8d3a99218d7812ed388",
+        "library_sha256": "c529acd9a2f6d18fb297e0c38facfdd46597ce04e1c44890d0048ed9e99dffb6",
+        "verified": true,
+        "end_utc": "2026-10-20T01:57:15.845286+00:00"
+      },
+      "host_build": {
+        "native_library_build": {
+          "head": "623b41b869a95c888eb04f907cbf607232699a2f",
+          "production_tree": "19ff7d6bd64993a6b9fc08bbcd687787dacfe08e",
+          "harness": {
+            "tests/common/provider_emulator.rs": "cb055ee1f9c9bc55c8af5cae080bb8564f2417226bacab76159f837261a2e47e",
+            "tests/conformance/agent_loop/runtime_benchmark.rs": "d71e6c80216b128927e09828631135b00b9b64748625fdb9fb2e5e9eb6c660f6",
+            "tests/conformance/agent_loop/runtime_benchmark/aligned.rs": "751fa58a98c9067eecd5e9a6c3eee8b6ec35b8987d1cd9a6f4cdc28915c08133",
+            "tests/conformance/agent_loop/runtime_benchmark/expected_tools.json": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d",
+            "tests/conformance/agent_loop/runtime_benchmark/profiling.rs": "12362c4abf9f80deed923b77855a2529d4aeb427cfffe39d6953cad823de0c66",
+            "tests/conformance/agent_loop/runtime_benchmark/request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+          },
+          "start_utc": "2026-10-20T01:10:38.299342+00:00",
+          "commands": [
+            [
+              "cargo",
+              "clean",
+              "--release",
+              "--package",
+              "rustx"
+            ],
+            [
+              "cargo",
+              "test",
+              "--release",
+              "--locked",
+              "--test",
+              "conformance",
+              "--no-run",
+              "--message-format=json"
+            ]
+          ],
+          "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+          "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)\n",
+          "build_environment": {
+            "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+            "CARGO_PROFILE_RELEASE_DEBUG": "0",
+            "RUSTFLAGS": "-Copt-level=3 -Cdebuginfo=0",
+            "CARGO_BUILD_JOBS": "2"
+          },
+          "clean_exit": 0,
+          "build_exit": 0,
+          "root_artifacts": [
+            {
+              "name": "rustx",
+              "kind": [
+                "lib"
+              ],
+              "source_path": "/workspace/pr485-study/repo/src/lib.rs",
+              "fresh": false
+            },
+            {
+              "name": "rustx",
+              "kind": [
+                "bin"
+              ],
+              "source_path": "/workspace/pr485-study/repo/src/main.rs",
+              "fresh": false
+            },
+            {
+              "name": "conformance",
+              "kind": [
+                "test"
+              ],
+              "source_path": "/workspace/pr485-study/repo/tests/conformance/main.rs",
+              "fresh": false
+            }
+          ],
+          "binary": "/workspace/pr485-study/evidence/build-baseline/conformance",
+          "sha256": "711b5af1ac3500e36f0f1bd827d108fb975a088b5e24a8d3a99218d7812ed388",
+          "library_sha256": "c529acd9a2f6d18fb297e0c38facfdd46597ce04e1c44890d0048ed9e99dffb6",
+          "verified": true,
+          "end_utc": "2026-10-20T01:57:15.845286+00:00"
+        },
+        "extern": {
+          "rustx": {
+            "path": "/workspace/pr485-study/target/release/deps/librustx-69d6ea2c60a362a0.rlib",
+            "sha256": "c529acd9a2f6d18fb297e0c38facfdd46597ce04e1c44890d0048ed9e99dffb6"
+          },
+          "tokio": {
+            "path": "/workspace/pr485-study/target/release/deps/libtokio-c5a3333935ca0dc8.rlib",
+            "sha256": "c66d650e3b45a14d4ce91c5482e779d04078bd0a775dcf80d5f278dcb3213d3b"
+          },
+          "tokio_util": {
+            "path": "/workspace/pr485-study/target/release/deps/libtokio_util-0398387163c8f0ca.rlib",
+            "sha256": "dd9b958d76e238ff81fa058de9600498a923ec49f4b708f987aa42dd600de465"
+          },
+          "serde_json": {
+            "path": "/workspace/pr485-study/target/release/deps/libserde_json-eeacad49e039a44a.rlib",
+            "sha256": "c21980f85b85e906eb74f0bef23e24227a11d8c10b2d7099d5527fd63eccb786"
+          },
+          "chrono": {
+            "path": "/workspace/pr485-study/target/release/deps/libchrono-1ecc381af4831f21.rlib",
+            "sha256": "3bf1b06adaec1bf4943b873949ea78f0a63feff424c90f3ca99296bd38b7b969"
+          }
+        },
+        "source": {
+          "canonical_history.rs": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86",
+          "common.rs": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823",
+          "host.rs": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c",
+          "request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461",
+          "verify_requests.rs": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+        },
+        "command": [
+          "rustc",
+          "--edition=2024",
+          "-C",
+          "opt-level=3",
+          "-C",
+          "debuginfo=0",
+          "-L",
+          "dependency=/workspace/pr485-study/target/release/deps",
+          "--extern",
+          "rustx=/workspace/pr485-study/target/release/deps/librustx-69d6ea2c60a362a0.rlib",
+          "--extern",
+          "tokio=/workspace/pr485-study/target/release/deps/libtokio-c5a3333935ca0dc8.rlib",
+          "--extern",
+          "tokio_util=/workspace/pr485-study/target/release/deps/libtokio_util-0398387163c8f0ca.rlib",
+          "--extern",
+          "serde_json=/workspace/pr485-study/target/release/deps/libserde_json-eeacad49e039a44a.rlib",
+          "--extern",
+          "chrono=/workspace/pr485-study/target/release/deps/libchrono-1ecc381af4831f21.rlib",
+          "/workspace/pr485-study/inspector-fixture/host.rs",
+          "-o",
+          "/workspace/pr485-study/evidence/build-baseline/host/inspector-host"
+        ],
+        "ordinary_optimized": true,
+        "no_product_source_changes": true,
+        "exit_code": 0,
+        "binary_sha256": "12f4354c26334358c4d585d5159064c13602730346c661a6439326d31149be25"
+      },
+      "helpers_restored": [],
+      "space_at_product_start": {
+        "paths": [
+          {
+            "path": "/workspace/pr485-study",
+            "device": 27,
+            "usable_bytes": 13085069312,
+            "total_bytes": 33770192896
+          },
+          {
+            "path": "/var/lib/docker",
+            "device": 27,
+            "usable_bytes": 13085069312,
+            "total_bytes": 33770192896
+          }
+        ],
+        "distinct_backing_filesystems": 1
+      },
+      "argv": [
+        "node",
+        "--experimental-transform-types",
+        "/workspace/pr485-study/inspector-fixture/run.mjs",
+        "/workspace/pr485-study/repo",
+        "/workspace/pr485-study/evidence/build-baseline/host/inspector-host",
+        "short-large",
+        "/workspace/pr485-study/evidence/products/browser-baseline-vs-geometry-v2/1-short-large-baseline"
+      ],
+      "product_start_utc": "2026-10-20T03:30:40.621918+00:00",
+      "product_start_monotonic_ns": 8653128032550,
+      "exit": 0,
+      "product_end_utc": "2026-10-20T03:33:49.048826+00:00",
+      "product_end_monotonic_ns": 8841554997011,
+      "space_after": {
+        "paths": [
+          {
+            "path": "/workspace/pr485-study",
+            "device": 27,
+            "usable_bytes": 12919959552,
+            "total_bytes": 33770192896
+          },
+          {
+            "path": "/var/lib/docker",
+            "device": 27,
+            "usable_bytes": 12919959552,
+            "total_bytes": 33770192896
+          }
+        ],
+        "distinct_backing_filesystems": 1
+      },
+      "sample_sha256": "6e2911c8d143e1f4745f28ece17f695ae8c2889ad41c28628823c471368da5c3",
+      "accepted_by_producer": true
+    },
+    {
+      "label": "geometry",
+      "case": "short-large",
+      "pair": 1,
+      "preflight_started_utc": "2026-10-20T03:33:55.642889+00:00",
+      "idle_evidence": {
+        "utc": "2026-10-20T03:33:55.863297+00:00",
+        "forbidden_or_timed_processes": [],
+        "active_benchmark_containers": []
+      },
+      "space_before": {
+        "paths": [
+          {
+            "path": "/workspace/pr485-study",
+            "device": 27,
+            "usable_bytes": 12919955456,
+            "total_bytes": 33770192896
+          },
+          {
+            "path": "/var/lib/docker",
+            "device": 27,
+            "usable_bytes": 12919955456,
+            "total_bytes": 33770192896
+          }
+        ],
+        "distinct_backing_filesystems": 1
+      },
+      "image_inspect": [
+        {
+          "Id": "sha256:2c1f4e0fd6450f43ddb46d60c2a6df30855a8588e165b1f2559fb0eda8d7ff35",
+          "RepoTags": [],
+          "RepoDigests": [
+            "mcr.microsoft.com/playwright@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7"
+          ],
+          "Parent": "",
+          "Comment": "buildkit.dockerfile.v0",
+          "Created": "2026-09-04T23:42:21.248887746Z",
+          "DockerVersion": "",
+          "Author": "",
+          "Architecture": "amd64",
+          "Os": "linux",
+          "Size": 2505762089,
+          "GraphDriver": {
+            "Data": null,
+            "Name": "vfs"
+          },
+          "RootFS": {
+            "Type": "layers",
+            "Layers": [
+              "sha256:b9a65b3c65ab22d490085bd0bf5490e2409da8748b406870f2463bdc41cd6795",
+              "sha256:05b61f708389aecf2a9b2e058f554db6d84eb17811415f3b34768feebe0bea14",
+              "sha256:73a48c91864c16f507959610c8534667ab25537630e84399f31d968661ed94f9",
+              "sha256:cd7e6e338465408114835eb137df15785b6ac45c2b8046f78773557fe7c0a51c",
+              "sha256:67c5b2ab4bb8dd6c3ece663ece744316ccae0552a54bc2b27e811611cf366472",
+              "sha256:cd321a6dc023a72bba4dc6b34cef9892a2112c17860f4225691daa6a333aa005",
+              "sha256:656afaafaa812f188da425142df4d594b7639d8918fd42490523da6f151b11a8"
+            ]
+          },
+          "Metadata": {
+            "LastTagTime": "0001-01-01T00:00:00Z"
+          },
+          "Config": {
+            "Cmd": [
+              "/bin/bash"
+            ],
+            "Entrypoint": null,
+            "Env": [
+              "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+              "LANG=C.UTF-8",
+              "LC_ALL=C.UTF-8",
+              "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright"
+            ],
+            "Labels": {
+              "org.opencontainers.image.version": "24.04"
+            },
+            "OnBuild": null,
+            "User": "",
+            "Volumes": null,
+            "WorkingDir": ""
+          }
+        }
+      ],
+      "native_build": {
+        "head": "89d6b618eeba8afaf4b95af4406057330baa60a6",
+        "production_tree": "7e227b5b08958c0642e2af0e7209af73cd1208e9",
+        "harness": {
+          "tests/common/provider_emulator.rs": "cb055ee1f9c9bc55c8af5cae080bb8564f2417226bacab76159f837261a2e47e",
+          "tests/conformance/agent_loop/runtime_benchmark.rs": "d71e6c80216b128927e09828631135b00b9b64748625fdb9fb2e5e9eb6c660f6",
+          "tests/conformance/agent_loop/runtime_benchmark/aligned.rs": "751fa58a98c9067eecd5e9a6c3eee8b6ec35b8987d1cd9a6f4cdc28915c08133",
+          "tests/conformance/agent_loop/runtime_benchmark/expected_tools.json": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d",
+          "tests/conformance/agent_loop/runtime_benchmark/profiling.rs": "12362c4abf9f80deed923b77855a2529d4aeb427cfffe39d6953cad823de0c66",
+          "tests/conformance/agent_loop/runtime_benchmark/request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+        },
+        "start_utc": "2026-10-20T01:58:23.787935+00:00",
+        "commands": [
+          [
+            "cargo",
+            "clean",
+            "--release",
+            "--package",
+            "rustx"
+          ],
+          [
+            "cargo",
+            "test",
+            "--release",
+            "--locked",
+            "--test",
+            "conformance",
+            "--no-run",
+            "--message-format=json"
+          ]
+        ],
+        "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+        "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)\n",
+        "build_environment": {
+          "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+          "CARGO_PROFILE_RELEASE_DEBUG": "0",
+          "RUSTFLAGS": "-Copt-level=3 -Cdebuginfo=0",
+          "CARGO_BUILD_JOBS": "2"
+        },
+        "clean_exit": 0,
+        "build_exit": 0,
+        "root_artifacts": [
+          {
+            "name": "rustx",
+            "kind": [
+              "lib"
+            ],
+            "source_path": "/workspace/pr485-study/repo/src/lib.rs",
+            "fresh": false
+          },
+          {
+            "name": "rustx",
+            "kind": [
+              "bin"
+            ],
+            "source_path": "/workspace/pr485-study/repo/src/main.rs",
+            "fresh": false
+          },
+          {
+            "name": "conformance",
+            "kind": [
+              "test"
+            ],
+            "source_path": "/workspace/pr485-study/repo/tests/conformance/main.rs",
+            "fresh": false
+          }
+        ],
+        "binary": "/workspace/pr485-study/evidence/build-geometry/conformance",
+        "sha256": "d25cae1955161392e1ecfde60b1fcdf87ee17577ee4531da1dac133391dbd4a1",
+        "library_sha256": "c72106cd7f3b0a1b8c930b2d5f109110e1c88c8bc8b362ca934555190d9aebbd",
+        "verified": true,
+        "end_utc": "2026-10-20T02:18:45.012790+00:00"
+      },
+      "host_build": {
+        "native_library_build": {
+          "head": "89d6b618eeba8afaf4b95af4406057330baa60a6",
+          "production_tree": "7e227b5b08958c0642e2af0e7209af73cd1208e9",
+          "harness": {
+            "tests/common/provider_emulator.rs": "cb055ee1f9c9bc55c8af5cae080bb8564f2417226bacab76159f837261a2e47e",
+            "tests/conformance/agent_loop/runtime_benchmark.rs": "d71e6c80216b128927e09828631135b00b9b64748625fdb9fb2e5e9eb6c660f6",
+            "tests/conformance/agent_loop/runtime_benchmark/aligned.rs": "751fa58a98c9067eecd5e9a6c3eee8b6ec35b8987d1cd9a6f4cdc28915c08133",
+            "tests/conformance/agent_loop/runtime_benchmark/expected_tools.json": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d",
+            "tests/conformance/agent_loop/runtime_benchmark/profiling.rs": "12362c4abf9f80deed923b77855a2529d4aeb427cfffe39d6953cad823de0c66",
+            "tests/conformance/agent_loop/runtime_benchmark/request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+          },
+          "start_utc": "2026-10-20T01:58:23.787935+00:00",
+          "commands": [
+            [
+              "cargo",
+              "clean",
+              "--release",
+              "--package",
+              "rustx"
+            ],
+            [
+              "cargo",
+              "test",
+              "--release",
+              "--locked",
+              "--test",
+              "conformance",
+              "--no-run",
+              "--message-format=json"
+            ]
+          ],
+          "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+          "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)\n",
+          "build_environment": {
+            "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+            "CARGO_PROFILE_RELEASE_DEBUG": "0",
+            "RUSTFLAGS": "-Copt-level=3 -Cdebuginfo=0",
+            "CARGO_BUILD_JOBS": "2"
+          },
+          "clean_exit": 0,
+          "build_exit": 0,
+          "root_artifacts": [
+            {
+              "name": "rustx",
+              "kind": [
+                "lib"
+              ],
+              "source_path": "/workspace/pr485-study/repo/src/lib.rs",
+              "fresh": false
+            },
+            {
+              "name": "rustx",
+              "kind": [
+                "bin"
+              ],
+              "source_path": "/workspace/pr485-study/repo/src/main.rs",
+              "fresh": false
+            },
+            {
+              "name": "conformance",
+              "kind": [
+                "test"
+              ],
+              "source_path": "/workspace/pr485-study/repo/tests/conformance/main.rs",
+              "fresh": false
+            }
+          ],
+          "binary": "/workspace/pr485-study/evidence/build-geometry/conformance",
+          "sha256": "d25cae1955161392e1ecfde60b1fcdf87ee17577ee4531da1dac133391dbd4a1",
+          "library_sha256": "c72106cd7f3b0a1b8c930b2d5f109110e1c88c8bc8b362ca934555190d9aebbd",
+          "verified": true,
+          "end_utc": "2026-10-20T02:18:45.012790+00:00"
+        },
+        "extern": {
+          "rustx": {
+            "path": "/workspace/pr485-study/target/release/deps/librustx-69d6ea2c60a362a0.rlib",
+            "sha256": "c72106cd7f3b0a1b8c930b2d5f109110e1c88c8bc8b362ca934555190d9aebbd"
+          },
+          "tokio": {
+            "path": "/workspace/pr485-study/target/release/deps/libtokio-c5a3333935ca0dc8.rlib",
+            "sha256": "c66d650e3b45a14d4ce91c5482e779d04078bd0a775dcf80d5f278dcb3213d3b"
+          },
+          "tokio_util": {
+            "path": "/workspace/pr485-study/target/release/deps/libtokio_util-0398387163c8f0ca.rlib",
+            "sha256": "dd9b958d76e238ff81fa058de9600498a923ec49f4b708f987aa42dd600de465"
+          },
+          "serde_json": {
+            "path": "/workspace/pr485-study/target/release/deps/libserde_json-eeacad49e039a44a.rlib",
+            "sha256": "c21980f85b85e906eb74f0bef23e24227a11d8c10b2d7099d5527fd63eccb786"
+          },
+          "chrono": {
+            "path": "/workspace/pr485-study/target/release/deps/libchrono-1ecc381af4831f21.rlib",
+            "sha256": "3bf1b06adaec1bf4943b873949ea78f0a63feff424c90f3ca99296bd38b7b969"
+          }
+        },
+        "source": {
+          "canonical_history.rs": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86",
+          "common.rs": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823",
+          "host.rs": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c",
+          "request_oracle.rs": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461",
+          "verify_requests.rs": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+        },
+        "command": [
+          "rustc",
+          "--edition=2024",
+          "-C",
+          "opt-level=3",
+          "-C",
+          "debuginfo=0",
+          "-L",
+          "dependency=/workspace/pr485-study/target/release/deps",
+          "--extern",
+          "rustx=/workspace/pr485-study/target/release/deps/librustx-69d6ea2c60a362a0.rlib",
+          "--extern",
+          "tokio=/workspace/pr485-study/target/release/deps/libtokio-c5a3333935ca0dc8.rlib",
+          "--extern",
+          "tokio_util=/workspace/pr485-study/target/release/deps/libtokio_util-0398387163c8f0ca.rlib",
+          "--extern",
+          "serde_json=/workspace/pr485-study/target/release/deps/libserde_json-eeacad49e039a44a.rlib",
+          "--extern",
+          "chrono=/workspace/pr485-study/target/release/deps/libchrono-1ecc381af4831f21.rlib",
+          "/workspace/pr485-study/inspector-fixture/host.rs",
+          "-o",
+          "/workspace/pr485-study/evidence/build-geometry/host/inspector-host"
+        ],
+        "ordinary_optimized": true,
+        "no_product_source_changes": true,
+        "exit_code": 0,
+        "binary_sha256": "fdfc4d0d9bf53d2a6796527486ddaa27a74ac82b4c65c276204b309ae842af30"
+      },
+      "helpers_restored": [
+        "/workspace/pr485-study/target/release/rustx",
+        "/workspace/pr485-study/target/release/interactive-supervisor",
+        "/workspace/pr485-study/target/release/bash-supervisor",
+        "/workspace/pr485-study/target/release/deps/conformance-24da1f0a9d82f33c"
+      ],
+      "space_at_product_start": {
+        "paths": [
+          {
+            "path": "/workspace/pr485-study",
+            "device": 27,
+            "usable_bytes": 12920807424,
+            "total_bytes": 33770192896
+          },
+          {
+            "path": "/var/lib/docker",
+            "device": 27,
+            "usable_bytes": 12920807424,
+            "total_bytes": 33770192896
+          }
+        ],
+        "distinct_backing_filesystems": 1
+      },
+      "argv": [
+        "node",
+        "--experimental-transform-types",
+        "/workspace/pr485-study/inspector-fixture/run.mjs",
+        "/workspace/pr485-study/repo",
+        "/workspace/pr485-study/evidence/build-geometry/host/inspector-host",
+        "short-large",
+        "/workspace/pr485-study/evidence/products/browser-baseline-vs-geometry-v2/1-short-large-geometry"
+      ],
+      "product_start_utc": "2026-10-20T03:34:03.871385+00:00",
+      "product_start_monotonic_ns": 8856377367607,
+      "exit": 1,
+      "product_end_utc": "2026-10-20T03:36:52.369414+00:00",
+      "product_end_monotonic_ns": 9024875565894,
+      "space_after": {
+        "paths": [
+          {
+            "path": "/workspace/pr485-study",
+            "device": 27,
+            "usable_bytes": 12911529984,
+            "total_bytes": 33770192896
+          },
+          {
+            "path": "/var/lib/docker",
+            "device": 27,
+            "usable_bytes": 12911529984,
+            "total_bytes": 33770192896
+          }
+        ],
+        "distinct_backing_filesystems": 1
+      },
+      "error": "fixture failed; stop this cohort and inspect retained failure",
+      "stopped_utc": "2026-10-20T03:36:52.531508+00:00"
+    }
+  ],
+  "interpretation": "Conditional Rust/Rust comparison. Fixed raw performance_eligible:false is preserved; successful producer oracle is not formal independent acceptance.",
+  "wire_drain_scope": "Observed wire coverage at exact cut, current epoch no pending RPC, two requestAnimationFrame callbacks with unchanged generation. Reply observation precedes route.send. Not proof of all React queues, offscreen rendering or completed paints.",
+  "runtime_environment": {
+    "node": "24.19.0",
+    "TZ": "UTC",
+    "TMPDIR": "/workspace/pr485-study/tmp",
+    "LD_PRELOAD": null,
+    "clock_ticks": 100,
+    "cpu_max": "400000 100000",
+    "memory_max": "17179869184"
+  },
+  "stopped_on_failure": true
+}

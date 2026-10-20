@@ -1,0 +1,16 @@
+{
+  "cohort": "browser-baseline-vs-geometry-v2",
+  "case": "short-large",
+  "pair": 1,
+  "label": "geometry",
+  "phase": "warm",
+  "completed_warmup_turns": 4,
+  "measured_turns": 0,
+  "error": "TimeoutError: locator.fill: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByLabel('Message', { exact: true })\u001b[22m\n\u001b[2m    - locator resolved to <textarea rows=\"1\" disabled aria-label=\"Message\" class=\"_input_3tqmv_137\" placeholder=\"Give this Session a task\u2026\"></textarea>\u001b[22m\n\u001b[2m    - fill(\"benchmark turn 0004\")\u001b[22m\n\u001b[2m  - attempting fill action\u001b[22m\n\u001b[2m    2 \u00d7 waiting for element to be visible, enabled and editable\u001b[22m\n\u001b[2m      - element is not enabled\u001b[22m\n\u001b[2m    - retrying fill action\u001b[22m\n\u001b[2m    - waiting 20ms\u001b[22m\n\u001b[2m    2 \u00d7 waiting for element to be visible, enabled and editable\u001b[22m\n\u001b[2m      - element is not enabled\u001b[22m\n\u001b[2m    - retrying fill action\u001b[22m\n\u001b[2m      - waiting 100ms\u001b[22m\n\u001b[2m    59 \u00d7 waiting for element to be visible, enabled and editable\u001b[22m\n\u001b[2m       - element is not enabled\u001b[22m\n\u001b[2m     - retrying fill action\u001b[22m\n\u001b[2m       - waiting 500ms\u001b[22m\n",
+  "body": "rX\nrustX\nNew Conversation\nWorkspaces\n\nDisconnected. Last confirmed groups are shown.\n\nInspector Workspace\nbenchmark turn 0000\nConnection interrupted\nnow\nSettings\nbenchmark turn 0000\n\nConfiguration status unavailable. Retaining the last observation.\n\nChat\nTrajectory\nConnection interrupted\n\nReconnect to see current work. Your previous requests will not be sent again.\n\nReconnect\nDuration\n\u229f\nTurns\n\u229f\nCalls\nInput\nModel\nTools\nSYSTEM\nInitial System Prompt\nTurn 1\n#1\nUSER\nbenchmark turn 0000\nCONTEXT\n<system-reminder> Timezone: UTC Current time: 2026-10-19 00:00:00 </system-reminder>\nASSISTANT\nreply 0000\nTurn 2\n#2\nUSER\nbenchmark turn 0001\nASSISTANT\nreply 0001\nTurn 3\n#3\nUSER\nbenchmark turn 0002\nASSISTANT\nreply 0002\nTurn 4\n#4\nUSER\nbenchmark turn 0003\nASSISTANT\nreply 0003\nRequest #1\nTurn 1\n\u00d7\nSummary\nOptions\nUsage\nTiming\nStatus\nCompleted\nModel\nchat-model\nTool calls\n0\nResult\nAssistant Message\nOptions\n{\nmodel:\"chat-model\"\n}\nUsage\n\nUsage not reported\n\nTiming\nStarted\n2026-10-20 03:35:34.026\nTotal duration\n91 ms\nTTFT\n34 ms\nGeneration\n0 ms\nThroughput\nUsage unavailable\nPermissions\nemulator/chat-model\n4 turns 4 steps",
+  "last_warmup_current_row_ms": 41382.91382199999,
+  "last_warmup_wire_drain_ms": 41418.74720500001,
+  "retry": false,
+  "source_or_fixture_edits": false,
+  "root_cause": "unestablished"
+}

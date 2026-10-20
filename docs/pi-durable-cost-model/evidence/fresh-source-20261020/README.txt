@@ -28,3 +28,5 @@ python3 native-delivery/read-native-pairs.py --build-root . --output recomputed 
 No source fix or merger is proposed by these measurements. Browser work is separate and still pending. Its unchanged fixture uses a fixed performance_eligible:false label; later results require a separate conditional cohort manifest and distinct visible-row/wire-drain metrics, with the previously disclosed rendering limitations.
 
 Public CSV copies use LF newlines for repository whitespace checks. Every parsed cell equals the archived original CSV, whose CRLF bytes remain preserved in the raw archive.
+
+Browser follow-up:see browser/README.txt for all18scoped products and the stopped geometry cohort,raw-data delivery,visible-row vs logical wire-drain,counter limits and geometry attribution plan. Native CSV complete_self_cpu_ms_since_exec and complete_process_write_mib_since_exec are cumulative through after_cleanup; later evidence-JSON emission and final OS-exit CPU/rusage were not captured. Numeric Native results are unchanged.

@@ -1,0 +1,23 @@
+{
+  "utc": "2026-10-20T04:22:27.526403+00:00",
+  "cohorts": [
+    {
+      "cohort": "browser-baseline-vs-geometry-v2",
+      "accepted": 9,
+      "attempted": 10,
+      "stopped": true,
+      "end_utc": null
+    },
+    {
+      "cohort": "browser-baseline-vs-scoped",
+      "accepted": 18,
+      "attempted": 18,
+      "stopped": null,
+      "end_utc": "2026-10-20T04:22:14.918621+00:00"
+    }
+  ],
+  "active_timed_or_build_or_profile_processes": [],
+  "usable_bytes": 9978671104,
+  "memory_current": "12235608064",
+  "memory_events": "low 0\nhigh 0\nmax 308139\noom 0\noom_kill 0\noom_group_kill 0\n"
+}

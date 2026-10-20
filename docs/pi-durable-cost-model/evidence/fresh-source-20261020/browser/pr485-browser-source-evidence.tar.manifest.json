@@ -1,0 +1,2962 @@
+{
+  "browser-arithmetic-and-interval-verification.json": {
+    "bytes": 390,
+    "sha256": "e3390c6d7ec7f87314f1fb25b4ccfe0ec6edf9ff7614b759f046ae80f0d23a64"
+  },
+  "browser-arithmetic-selfcheck.json": {
+    "bytes": 151,
+    "sha256": "384229501084054a89d1cffe2008240e42a6d855ed4913664e16013f0c720637"
+  },
+  "browser-delivery/README.txt": {
+    "bytes": 14909,
+    "sha256": "4494210adc008c4a103f9301a70725c63ab2dda94a3a972358282edb3b0d579e"
+  },
+  "browser-delivery/attribution-plan.txt": {
+    "bytes": 6681,
+    "sha256": "b0320c20862262b6575843fe3c766dbe16af0a63e2594c4031836f9b23ec05b8"
+  },
+  "browser-delivery/build-baseline/host-identity.json": {
+    "bytes": 5285,
+    "sha256": "113df7106bb7e7a716268220c1eafffb9f1713df69012349e72c7f159c2cc029"
+  },
+  "browser-delivery/build-baseline/identity.json": {
+    "bytes": 2590,
+    "sha256": "db12affce3bf8dced1b9f77970921775718029448bb5686bd5f0740f93ad98f7"
+  },
+  "browser-delivery/build-baseline/root-rustc-invocations.txt": {
+    "bytes": 27936,
+    "sha256": "04f48efa91ac24560f10a1c428aefc92bfe5da102a51f2594ae8e42cdb76564a"
+  },
+  "browser-delivery/build-baseline/selected-root-artifacts.json": {
+    "bytes": 3234,
+    "sha256": "0ac04bcd6493463901a9ee230a64ac4a454b5cef74d8a6593283e8b09046e14e"
+  },
+  "browser-delivery/build-geometry/host-identity.json": {
+    "bytes": 5285,
+    "sha256": "a94cae121687357924868e5771872a1ee27878c0c6f809fd9afab75dcca880ff"
+  },
+  "browser-delivery/build-geometry/identity.json": {
+    "bytes": 2590,
+    "sha256": "b99b5174d26295755a1963edd45b16dad1e731792ebc0816999e69a8c6c2fc89"
+  },
+  "browser-delivery/build-geometry/root-rustc-invocations.txt": {
+    "bytes": 27936,
+    "sha256": "a30e71a4739836773dbf0c3134b4c0b60bc15694d1caca7c8f61ddee136581a7"
+  },
+  "browser-delivery/build-geometry/selected-root-artifacts.json": {
+    "bytes": 3234,
+    "sha256": "b81830c3466d8b4e98ffa9e34fba50bb3627ed7171bba0a402b3cfcec88f1e4c"
+  },
+  "browser-delivery/build-scoped/host-identity.json": {
+    "bytes": 5281,
+    "sha256": "72a8d46179d4026fa8127315b0b385d97fa449638e1ab5bc78acf1ea270e2cce"
+  },
+  "browser-delivery/build-scoped/identity.json": {
+    "bytes": 2588,
+    "sha256": "1261400491172bf12c3c074723ac5c5273120171d5664562ac7242406fd2bb2d"
+  },
+  "browser-delivery/build-scoped/root-rustc-invocations.txt": {
+    "bytes": 27936,
+    "sha256": "507ab69bd49ecdc744679c0d4a28197ea6adfb9affcf66b80d46fab4773f04f2"
+  },
+  "browser-delivery/build-scoped/selected-root-artifacts.json": {
+    "bytes": 3222,
+    "sha256": "8c00e7c34b458db97f33c35ae62b4262a7b953d944c4595c5c350a55f7e1e62d"
+  },
+  "browser-delivery/common-frontend-dist/LICENSE-DeepSeek-Harness.txt": {
+    "bytes": 1065,
+    "sha256": "ebb4f09972aee8608be255debaf78451a68e95c290f55c240dec2ecfa16ea6be"
+  },
+  "browser-delivery/common-frontend-dist/LICENSE-Lucide-1.17.txt": {
+    "bytes": 3208,
+    "sha256": "b495047bd93a9b06913511076f504daba17d5bbeb3e0650f3bb53a4220329c57"
+  },
+  "browser-delivery/common-frontend-dist/LICENSE-Lucide.txt": {
+    "bytes": 880,
+    "sha256": "1e7290b35280a048667bbf0ebabac1c7fd52a75300e8b2946ac165715997f2bc"
+  },
+  "browser-delivery/common-frontend-dist/THIRD-PARTY-NOTICES.txt": {
+    "bytes": 496504,
+    "sha256": "3da8851b7d7931537ef9b65764408205fb4afa1cbeea312ecc8e60fb2b27e4fb"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_AMS-Regular-BQhdFMY1.woff2": {
+    "bytes": 28076,
+    "sha256": "0cdd387c9590a1a9f9794560022dbb59654a7d86f187aa0c81495ad42d3a7308"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_AMS-Regular-DMm9YOAa.woff": {
+    "bytes": 33516,
+    "sha256": "30da91e84c893f875e252689faebdc590b2871145e8adc7f9a9d4dbd8ce0b251"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_AMS-Regular-DRggAlZN.ttf": {
+    "bytes": 63632,
+    "sha256": "68534840bcfdd2bffb6f0e8deb48684dd01e7f04ea2813267577afb906de1d13"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Caligraphic-Bold-ATXxdsX0.ttf": {
+    "bytes": 12368,
+    "sha256": "07d8e303ce4fc12b4bb54f1004170dd190a1f3db45d400fe68060df3e0897268"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Caligraphic-Bold-BEiXGLvX.woff": {
+    "bytes": 7716,
+    "sha256": "1ae6bd7475590e97e7f145a89e09ccde322f7a6bc0b91607b1c8b8ee28290fed"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Caligraphic-Bold-Dq_IR9rO.woff2": {
+    "bytes": 6912,
+    "sha256": "de7701e42cf1f4cf0b766c03fb27977207eee2f4fd5d76fa82188406da43ea4c"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Caligraphic-Regular-CTRA-rTL.woff": {
+    "bytes": 7656,
+    "sha256": "3398dd02302557a793f2863f88e02d96ce10df2abffa07c8e9fa90775116e65c"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Caligraphic-Regular-Di6jR-x-.woff2": {
+    "bytes": 6908,
+    "sha256": "5d53e70ad607c2352162dec9e0923fb54ecdafaccbf604cd8dcf7d00facb989b"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Caligraphic-Regular-wX97UBjC.ttf": {
+    "bytes": 12344,
+    "sha256": "ed0b74372feefcbb9c0666b2e210da37b7e49fa7fbbf3eeb11db5f693dacfbb7"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Fraktur-Bold-BdnERNNW.ttf": {
+    "bytes": 19584,
+    "sha256": "9163df9c7122432e6495b4229fa9071cf9ae86a758ae5efc4924ec2e1a6dbce1"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Fraktur-Bold-BsDP51OF.woff": {
+    "bytes": 13296,
+    "sha256": "9be7ceb88004ab8ad124082246fbfcca4091e36385d4ec6ed1df67375dad50fb"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Fraktur-Bold-CL6g_b3V.woff2": {
+    "bytes": 11348,
+    "sha256": "74444efd593c005e3f4573b44524704c0af0a937fe911cca9e94068d0d140d3f"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Fraktur-Regular-CB_wures.ttf": {
+    "bytes": 19572,
+    "sha256": "1e6f9579e90e2cac37f8f60a597c436e075c114385652b7cbeb0dec0421291b3"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Fraktur-Regular-CTYiF6lA.woff2": {
+    "bytes": 11316,
+    "sha256": "51814d270d06ff0255dba0799994fa4d8c84d11f09951d47595f4abb1f3602dc"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Fraktur-Regular-Dxdc4cR9.woff": {
+    "bytes": 13208,
+    "sha256": "5e28753be717dac97f559f49bc10be9cf3c124ddcabda6659d11cb68febc6463"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Main-Bold-Cx986IdX.woff2": {
+    "bytes": 25324,
+    "sha256": "0f60d1b897938ec918c8ce073092411baf9438f6739465693ff18b0f9d20b021"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Main-Bold-Jm3AIy58.woff": {
+    "bytes": 29912,
+    "sha256": "c76c5d696297d51b9cb1639c7da4334f0e7dec81b42b11213b5e25ef671bb822"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Main-Bold-waoOVXN0.ttf": {
+    "bytes": 51336,
+    "sha256": "138ac28d1663b3037e9c5f52371fa5c63d8324f4a38d22cd573e6ea3a3fd0cf8"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Main-BoldItalic-DxDJ3AOS.woff2": {
+    "bytes": 16780,
+    "sha256": "99cd42a3c072d918f2f44984a807cf7aa16e13545fd0875fc07c6c65f99e715b"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Main-BoldItalic-DzxPMmG6.ttf": {
+    "bytes": 32968,
+    "sha256": "70ee1f64a20f2048c21940ef46d0144fd215baa953ca69afd1e31e98544f708f"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Main-BoldItalic-SpSLRI95.woff": {
+    "bytes": 19412,
+    "sha256": "a6f7ec0d846ac7ad975adb8959c37ed49b94acbc4ae436db9ce9e20287e4a64c"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Main-Italic-3WenGoN9.ttf": {
+    "bytes": 33580,
+    "sha256": "0d85ae7cc30f23790a7f1a58c4a112fdca8aae769b6ba11429af1d98b1b6cb3a"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Main-Italic-BMLOBm91.woff": {
+    "bytes": 19676,
+    "sha256": "f1d6ef86f3b11a528bd5185199bd2443ecb2b0dead96d88674b5a2c12be24bdf"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Main-Italic-NWA7e6Wa.woff2": {
+    "bytes": 16988,
+    "sha256": "97479ca6cce906abc961ecac96faa5f9ca2e61b8e7670d475826bcdee9a7c267"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Main-Regular-B22Nviop.woff2": {
+    "bytes": 26272,
+    "sha256": "c2342cd8b869e01752a9321dc17213fc40d4d04c79688c1d43f2cf316abd7866"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Main-Regular-Dr94JaBh.woff": {
+    "bytes": 30772,
+    "sha256": "c6368d87e8a1a3a5d337623d83d8dc4b868f242a9ad476237d6f8d1e0f168cdc"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Main-Regular-ypZvNtVU.ttf": {
+    "bytes": 53580,
+    "sha256": "d0332f52868370fd83ae7fa46470f90c8f2eab2fcf12bc4f88080b340c95a830"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Math-BoldItalic-B3XSjfu4.ttf": {
+    "bytes": 31196,
+    "sha256": "f9377ab0271cda59af24bcffbd46a4d0c8a3572ffafdbb38de2ad5ea7b0d5ee5"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Math-BoldItalic-CZnvNsCZ.woff2": {
+    "bytes": 16400,
+    "sha256": "dc47344dbb6cb5b655c8460d561f4df5f501b90c804ad3c6cec65fe322351ab1"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Math-BoldItalic-iY-2wyZ7.woff": {
+    "bytes": 18668,
+    "sha256": "850c0af5c2238497febaf5e461d880bf458c341f42f4f330f1b1ab5698b1998e"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Math-Italic-DA0__PXp.woff": {
+    "bytes": 18748,
+    "sha256": "8a8d244581371912b8f3f5a23e2437cb2a59cd9bcaebb0346e722c05737a2571"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Math-Italic-flOr_0UB.ttf": {
+    "bytes": 31308,
+    "sha256": "08ce98e51b04d58945a301e639e02b6998af29fdfd61a7b8afdd07bbfc479d4a"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Math-Italic-t53AETM-.woff2": {
+    "bytes": 16440,
+    "sha256": "7af58c5ec8f132a2ddde9027c6d7814decce4d3b822a11192a42a20e2e973264"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_SansSerif-Bold-CFMepnvq.ttf": {
+    "bytes": 24504,
+    "sha256": "1ece03f79f95277d57dc7f6b435a74e1379b0d46104a8530286b60ff49369ea0"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_SansSerif-Bold-D1sUS0GD.woff2": {
+    "bytes": 12216,
+    "sha256": "e99ae51144bf1232efcc1bfe5add36262c6866b0faab24fa75740e1b98577a62"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_SansSerif-Bold-DbIhKOiC.woff": {
+    "bytes": 14408,
+    "sha256": "ece03cfd83e22c212cdef66feb8442d25a083beb988db3f1883f3f9738d750ba"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_SansSerif-Italic-C3H0VqGB.woff2": {
+    "bytes": 12028,
+    "sha256": "00b26ac825e2095056396e0553b8ac26d3f8ad158c3826e28b4c45b385c4714a"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_SansSerif-Italic-DN2j7dab.woff": {
+    "bytes": 14112,
+    "sha256": "91ee67500cc0129aa0ace3ac5c61ff1692102f0f31d02b69347fba35dcb75bf2"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_SansSerif-Italic-YYjJ1zSn.ttf": {
+    "bytes": 22364,
+    "sha256": "3931dd81faed86ba021bb2bbdc36f5bed9a38d6b4f4077aca59b265aa1b02083"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_SansSerif-Regular-BNo7hRIc.ttf": {
+    "bytes": 19436,
+    "sha256": "f36ea897e19f4a2e571d1e900e4e3710e438deb05a842486045ba0a3e616a4ad"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_SansSerif-Regular-CS6fqUqJ.woff": {
+    "bytes": 12316,
+    "sha256": "11e4dc8a6471ff6d6ee561d53d10fde8f7489e798257ff449c5d37c197435605"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_SansSerif-Regular-DDBCnlJ7.woff2": {
+    "bytes": 10344,
+    "sha256": "68e8c73ef42afd3ccec58bf0fba302cce448938e7fc020a5e31f8a952eee1342"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Script-Regular-C5JkGWo-.ttf": {
+    "bytes": 16648,
+    "sha256": "1c67f068fea8bb09bf099c088b1cf64bd27516a6e07f4684344873564bb66a67"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Script-Regular-D3wIWfF6.woff2": {
+    "bytes": 9644,
+    "sha256": "036d4e95149b69ff9bcc0cd55771efeb25ffa3947293e69acd78d5ac328c684b"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Script-Regular-D5yQViql.woff": {
+    "bytes": 10588,
+    "sha256": "d96cdf2b3bdd4d64a8fd5f74a4c467f123a8a73931cd435889f08ffaf9bf947a"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Size1-Regular-C195tn64.woff": {
+    "bytes": 6496,
+    "sha256": "c943cc986384f59e86bea5fd7dc50a9c4dfe567a7c05eb40d6790720dead97c9"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Size1-Regular-Dbsnue_I.ttf": {
+    "bytes": 12228,
+    "sha256": "95b6d2f1a50173bfedb8c63e1d1c99b10427d0a4df4201cb44513b226951a22b"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Size1-Regular-mCD8mA8B.woff2": {
+    "bytes": 5468,
+    "sha256": "6b47c40166b6dbe21a5dfca7718413f2147fd2399be1ba605d8ad39cedf25dfe"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Size2-Regular-B7gKUWhC.ttf": {
+    "bytes": 11508,
+    "sha256": "a6b2099fb555c60e3a0db3a08842ebf1d732c6eb4e4bf44913613bed4fc4e39b"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Size2-Regular-Dy4dx90m.woff2": {
+    "bytes": 5208,
+    "sha256": "d04c54219f9eaec6d4d4fd42dfb28785975a4794d6b2fc71e566b9cd6db842dd"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Size2-Regular-oD1tc_U0.woff": {
+    "bytes": 6188,
+    "sha256": "2014c523c3210bcc166648c4d4cc57f05b747df07a24277bf71c51e67dc79e3d"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Size3-Regular-CTq5MqoE.woff": {
+    "bytes": 4420,
+    "sha256": "6ab6b62e9b62dae2c00dd90f791bd10950be0ecc3490d7d6045f51c2e8fe0949"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Size3-Regular-DgpXs0kz.ttf": {
+    "bytes": 7588,
+    "sha256": "500e04d54f0d51666332c9d2089aa803be22aa878eca539e59fa53c6e522b082"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Size4-Regular-BF-4gkZK.woff": {
+    "bytes": 5980,
+    "sha256": "99f9c6750b489c9462bf04900bd3f939df9b829339daaaaa99ef5495cdddea58"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Size4-Regular-DWFBv043.ttf": {
+    "bytes": 10364,
+    "sha256": "c647367d1dd4e162468717d020e1fc0f1dc5c26ebfdffbe55261713bf88c5877"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Size4-Regular-Dl5lxZxV.woff2": {
+    "bytes": 4928,
+    "sha256": "a4af7d414440a1c1790825cfb700cf9cf43b0f2c4b04f0ebc523011ad9853ec0"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Typewriter-Regular-C0xS9mPB.woff": {
+    "bytes": 16028,
+    "sha256": "e14fed02b1aba7ce9f5afd5844b5d0321b22351febc720e0de8b8723527609f7"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Typewriter-Regular-CO6r4hn1.woff2": {
+    "bytes": 13568,
+    "sha256": "71d517d67827787cfabdf186914cc3358eda539e37931941f2b2fd4a21f68c0b"
+  },
+  "browser-delivery/common-frontend-dist/assets/KaTeX_Typewriter-Regular-D3Ib7_Hf.ttf": {
+    "bytes": 27556,
+    "sha256": "f01f3e87d9c6a61c0c081ceb577abd864eb00a612f7ac1620dd6915fad2ef5aa"
+  },
+  "browser-delivery/common-frontend-dist/assets/PdfPreview-CsKtgDXz.js": {
+    "bytes": 437183,
+    "sha256": "8691570085a4e3555749c9fd9cb04dcbec98da7731ced2aa4b59d86ef6d77a75"
+  },
+  "browser-delivery/common-frontend-dist/assets/PdfPreview-VMOOdqPI.css": {
+    "bytes": 2921,
+    "sha256": "ce9cce8ae9593da6cd31a83c0b50dd5bb983bdb8008f345126033dd5dceb74c6"
+  },
+  "browser-delivery/common-frontend-dist/assets/WorkbenchTerminal-BrP-ENHg.css": {
+    "bytes": 3939,
+    "sha256": "0e5386f16cb4be78a2fe911e014a810da76ea2db47d8c8b2a966516b2fd5270b"
+  },
+  "browser-delivery/common-frontend-dist/assets/WorkbenchTerminal-BwEHCX3f.js": {
+    "bytes": 336344,
+    "sha256": "7d58cca52b0cd06ccdf4ccec7f0d76b216185383cdb55ca4b0e1c88db1a2e0a0"
+  },
+  "browser-delivery/common-frontend-dist/assets/excel-BlwJlBr6.css": {
+    "bytes": 2101,
+    "sha256": "a1bd96815904abfbee6b424cc630e1d94cefdc8d7efe291ad561e7f7a28d1342"
+  },
+  "browser-delivery/common-frontend-dist/assets/excel-Djra_a4s.js": {
+    "bytes": 2762407,
+    "sha256": "cc963c772e81df81754ff37fd833436fa95ad20fc4e61b029884c893215e5845"
+  },
+  "browser-delivery/common-frontend-dist/assets/index-DOeYmXy8.js": {
+    "bytes": 3063265,
+    "sha256": "2bc3a27fc95630fb5d8c7dc02b3546726f9b31a16069cc92f8cb5807a3c9e1d1"
+  },
+  "browser-delivery/common-frontend-dist/assets/index-JZcZN10_.css": {
+    "bytes": 354601,
+    "sha256": "4da5cc174dc73c7102575ea0f7343149e4efe195cd634316b7a21425248d7e56"
+  },
+  "browser-delivery/common-frontend-dist/assets/pdf.worker.min-CjEcRF4W.mjs": {
+    "bytes": 1264342,
+    "sha256": "9536359f1b8367850d485731ca1d5e45c159a7b7a0912325e539937aa21ceb18"
+  },
+  "browser-delivery/common-frontend-dist/assets/python-gzcpVVnB.js": {
+    "bytes": 69945,
+    "sha256": "be0bae300e9d8dbae905d9faa24b84adc622796c87170848bf0460d01ad4049c"
+  },
+  "browser-delivery/common-frontend-dist/assets/running-whale@2x-jEQE5fYU.png": {
+    "bytes": 36224,
+    "sha256": "f3a305155b01a4187847b0ecd7c2106a6249806b58a37aee3c3e1041322b26eb"
+  },
+  "browser-delivery/common-frontend-dist/assets/rust-Cfkwpbl8.js": {
+    "bytes": 15062,
+    "sha256": "8fedcfe76b25574d9afbb86db6b972ab86d8231284e91fe3b10779a30129a5a5"
+  },
+  "browser-delivery/common-frontend-dist/assets/worker-w9kmO1Oi.js": {
+    "bytes": 2137713,
+    "sha256": "9a0d31dbf977b6e19e159aa1b25041c9da0ecfab74696327164c822972f36097"
+  },
+  "browser-delivery/common-frontend-dist/index.html": {
+    "bytes": 371,
+    "sha256": "1759c7de8262eabb192ad5956b6f22e09a29082450d80abc2e6a48a6cdb09252"
+  },
+  "browser-delivery/continue-browser-cohort.py": {
+    "bytes": 2657,
+    "sha256": "b64044bc74fd758c1d5a8b5c7a52ac476a196a109b37a0197f2f3f271e81712c"
+  },
+  "browser-delivery/driver-and-verifier-identities.json": {
+    "bytes": 13718,
+    "sha256": "044a18fcc2dfe1477e1374790757a6d441503c4b1ebc4aa9d45c9b4ebd9564d4"
+  },
+  "browser-delivery/frozen-fixture/README.txt": {
+    "bytes": 4326,
+    "sha256": "ec05599048a1454f6f953e89cfd1f9621d5a178d19b5912b029f256a306a2c73"
+  },
+  "browser-delivery/frozen-fixture/build-host.py": {
+    "bytes": 2032,
+    "sha256": "bb8e1ab11950917c256f86a724dafabd02daff21717bdaca019d1e14bb98fc87"
+  },
+  "browser-delivery/frozen-fixture/canonical_history.rs": {
+    "bytes": 1956,
+    "sha256": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86"
+  },
+  "browser-delivery/frozen-fixture/common.rs": {
+    "bytes": 435,
+    "sha256": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823"
+  },
+  "browser-delivery/frozen-fixture/drain.mjs": {
+    "bytes": 3738,
+    "sha256": "53c965c5c20fc777441387f099c8752a81228ad5c32fa1ed5caab603cf0bec34"
+  },
+  "browser-delivery/frozen-fixture/expected_tools.json": {
+    "bytes": 15661,
+    "sha256": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d"
+  },
+  "browser-delivery/frozen-fixture/host.rs": {
+    "bytes": 7525,
+    "sha256": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c"
+  },
+  "browser-delivery/frozen-fixture/provider.py": {
+    "bytes": 1068,
+    "sha256": "b6b451f207d065a84f71648c9486928703b59624242dd330889a5aff7a5bf21e"
+  },
+  "browser-delivery/frozen-fixture/request_oracle.rs": {
+    "bytes": 11765,
+    "sha256": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+  },
+  "browser-delivery/frozen-fixture/run.mjs": {
+    "bytes": 26319,
+    "sha256": "43d9fe73fc33d3702b7e413b6ce0a238942b33749894ccd0a9c837ead11d02f9"
+  },
+  "browser-delivery/frozen-fixture/verify_requests.rs": {
+    "bytes": 2781,
+    "sha256": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+  },
+  "browser-delivery/native-build-and-driver-identities.json": {
+    "bytes": 24315,
+    "sha256": "08b40b106a5b059b3d4311b65d570598945146ec93171aa066cdb7d8473b2271"
+  },
+  "browser-delivery/orchestration-preflight-correction.diff": {
+    "bytes": 650,
+    "sha256": "9babf231df940dc865e4f6724a8c50d0a35c812384ce22f6687fcfcaa97175b9"
+  },
+  "browser-delivery/pi-oracle.mjs": {
+    "bytes": 3214,
+    "sha256": "f251b2f4a475cd766ca074aac3e93d777aae9a2d856e29d1d4e037f67b16df8a"
+  },
+  "browser-delivery/read-browser-pairs.py": {
+    "bytes": 18082,
+    "sha256": "e854981964627faeef1aad8ed507b50b7c2f5dba7e9e5db3457d123324fe220b"
+  },
+  "browser-delivery/replay-browser-proofs.mjs": {
+    "bytes": 1987,
+    "sha256": "f185155a4aad52f4cf9193fea6db87008c65391bcd8ea78f617acfb236aaa744"
+  },
+  "browser-delivery/run-browser-cohort.py": {
+    "bytes": 9026,
+    "sha256": "22414c5f8872c0e7d5885eaee8c7ee6b77765315242d12ae73f338e030ee36a1"
+  },
+  "browser-delivery/verify-browser-products.py": {
+    "bytes": 1568,
+    "sha256": "3abdce2d131af865ceb07a9872372267969c052e0821fa5cbe58ec36de46d9fb"
+  },
+  "browser-delivery/verify-browser-requests.mjs": {
+    "bytes": 3119,
+    "sha256": "cd7097aae6091ec52ac809b4f6bc31025957c8e69c78497a79a54ce110889c3d"
+  },
+  "browser-failure-summary.json": {
+    "bytes": 2740,
+    "sha256": "ad4c613e3cfb54667df0aef081b94e2d36a8db6c8f73b90ffb1be3908bf49c8c"
+  },
+  "browser-geometry-v2.stderr": {
+    "bytes": 323,
+    "sha256": "122ed22faf23b4bf1d29e137277650415e0f38bc721dcb37171e70316a88e430"
+  },
+  "browser-geometry-v2.stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "browser-geometry.stderr": {
+    "bytes": 482,
+    "sha256": "857511fbbeb9e8637a33b6b31604457bf40bb0ba865b27ee96ac403b0eeff6a3"
+  },
+  "browser-geometry.stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "browser-image-pull-resources.jsonl": {
+    "bytes": 1216,
+    "sha256": "367e82a08c4a2430d688e91fb0e3203088bc681ca2a36ca3a50571ff0028e5c9"
+  },
+  "browser-image-pull.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "browser-image-pull.stdout": {
+    "bytes": 1380,
+    "sha256": "8771cec3035bd7e6d295427fe1d548e182d99c2f3254c28154bb9e11fafdc6fe"
+  },
+  "browser-image-setup.json": {
+    "bytes": 280,
+    "sha256": "6ee3ea9e169afdcf079a4bb90eb118aa9868f06bc98d25470a3d34c82a7c5c36"
+  },
+  "browser-independent-verification/requests-verification.json": {
+    "bytes": 9989,
+    "sha256": "b19fe87831963c8dd0412316d55c8b16bb47ade9d96f54558a8b6fd8715834d9"
+  },
+  "browser-independent-verification/verifier-identities.json": {
+    "bytes": 290,
+    "sha256": "afe329ac7d20c3d28ce43c74b77f30948d559241d820685fa0913a6621d0c036"
+  },
+  "browser-independent-verification/wire-proof-replay.json": {
+    "bytes": 8656,
+    "sha256": "83cf3b3cbe746b2ffa78d1c44b9f483f6909eaeef9eb46a2a1d4c4037120da68"
+  },
+  "browser-readable-v3/all-turn-wall-times.csv": {
+    "bytes": 138840,
+    "sha256": "ba1dbaaa3eeff0bc7ef66f4a478a714b1b6c7f338598e3cef910172bed0d23c5"
+  },
+  "browser-readable-v3/method.json": {
+    "bytes": 2445,
+    "sha256": "df61ba18d401a616e5758069c03b82c42002452d3c97871e831a6219aaf3a91d"
+  },
+  "browser-readable-v3/pair-coverage.json": {
+    "bytes": 2926,
+    "sha256": "64a378766a85b1a8dd2a85c8c67511ccc45b3ddc58b79745759bbbc0d66a5c13"
+  },
+  "browser-readable-v3/paired-costs.csv": {
+    "bytes": 74965,
+    "sha256": "3cf3acd62f095f5e721ec829c0a2830d7d115d479e60ec363f91ecf07b7d63b6"
+  },
+  "browser-readable-v3/paired-summary.csv": {
+    "bytes": 133618,
+    "sha256": "cfc3cf08891ef438024c17047fad3745656f2f653e8633d9f3590573cc795e61"
+  },
+  "browser-readable-v3/raw-input-sha256.json": {
+    "bytes": 5311,
+    "sha256": "26b77ccf34291fe326bc42102e93041bd5f36bc158d0394c9015d9e30936d43c"
+  },
+  "browser-readable-v3/run-costs.csv": {
+    "bytes": 135670,
+    "sha256": "ea21caaa13433127011f6fad3cb590663fb16c77cfffaee413771f49aadb35bf"
+  },
+  "browser-readable-v3/runs.csv": {
+    "bytes": 6146,
+    "sha256": "4b81f49d7c58b16ddf5987df4b9c1bb9b96ee1770aa2311205528fc7c3b09687"
+  },
+  "browser-ready-capacity.json": {
+    "bytes": 2256,
+    "sha256": "886a7ba81ad15b7d0531f4e1b5ef6162663f3ecc5572203953bc6778f8b53e02"
+  },
+  "browser-scoped.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "browser-scoped.stdout": {
+    "bytes": 98,
+    "sha256": "3fe0a467c7c8fc4b50cff9088662d91040dd6c820e4eb4e847f862eb8dd4cbbf"
+  },
+  "browser-sequential-continuation.json": {
+    "bytes": 343,
+    "sha256": "51858f9cae51211455a2fffcc72659f65097edcf79358742fdf9318a697f7b37"
+  },
+  "browser-sequential-continuation.stderr": {
+    "bytes": 411,
+    "sha256": "72f40f3e3e9ddd2c2907793ab258cd4382b7ad25e594814baf2e2f544ad14c0f"
+  },
+  "browser-sequential-continuation.stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "browser-timing-completion.json": {
+    "bytes": 603,
+    "sha256": "e3b2ed7a21f948586fad8d7f8d90db715e960ce425b6ef954285e005af2ad64a"
+  },
+  "browser-verification.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "browser-verification.stdout": {
+    "bytes": 304,
+    "sha256": "0d6db101772a0ce232daa3060a6238325230ffeac422698c71d2ebb5e8c24a3c"
+  },
+  "common-frontend.json": {
+    "bytes": 12924,
+    "sha256": "a4842b8a1cd2f67a6a7d852320990689eafe7e4b80ceadc4fa1af4cfba0481be"
+  },
+  "environment-events.jsonl": {
+    "bytes": 2521,
+    "sha256": "b6ccdae752526a92707501a24ef53731dae3c0393d7cb76b0c573fb98ede9b32"
+  },
+  "fixture-verification.json": {
+    "bytes": 1128,
+    "sha256": "3d8870353dfa30a392be9fdd16e475d763c49bcc7a5fc8be21d765d49d6f16ed"
+  },
+  "frontend-setup/identity.json": {
+    "bytes": 967,
+    "sha256": "63fbbc04950e8e3c1d7cfc87f0c31312624c615ba2a9f29c27cfc348f615fe2c"
+  },
+  "frontend-setup/install.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "frontend-setup/install.stdout": {
+    "bytes": 940,
+    "sha256": "a9ca174b16750a25cfa7d72ce63ecbe19aa9ceba1d5810061388cfd363e95ac1"
+  },
+  "frontend-setup/version.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "frontend-setup/version.stdout": {
+    "bytes": 8,
+    "sha256": "9e506f63f29732fe5178ff3d2e9536bcd84d57e2521c1c4caba68b88caf895c4"
+  },
+  "frontend-setup-v2/build.stderr": {
+    "bytes": 7110,
+    "sha256": "76f0b39f539402a34f8c2fa910aefd225ad7a9f052e857b8b74a6934c440237a"
+  },
+  "frontend-setup-v2/build.stdout": {
+    "bytes": 881,
+    "sha256": "0a2c624bee4dbaa38dba6d37a2aba7ebb0f9ae7cce9465c1852c853616b36f72"
+  },
+  "frontend-setup-v2/identity.json": {
+    "bytes": 1953,
+    "sha256": "17ef7bc3b0c36e7f06bf420f365f719a379e188ea167953bd1c7c27d5d50a256"
+  },
+  "frontend-setup-v2/install.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "frontend-setup-v2/install.stdout": {
+    "bytes": 14791,
+    "sha256": "c6c29d2456eefd3e6b53467ef019af8b21d329ad62fb12cb97cfc32d1777859c"
+  },
+  "frontend-setup-v2/version.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "frontend-setup-v2/version.stdout": {
+    "bytes": 8,
+    "sha256": "9e506f63f29732fe5178ff3d2e9536bcd84d57e2521c1c4caba68b88caf895c4"
+  },
+  "frontend-setup-v3/identity.json": {
+    "bytes": 1836,
+    "sha256": "7fb120675fce1894352e2999309608d62d9a8c47f62a4e3bcb925b2dac052d2f"
+  },
+  "frontend-setup-v3/tui-install.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "frontend-setup-v3/tui-install.stdout": {
+    "bytes": 1034,
+    "sha256": "58c010e4406e23128c74804d67d66ceeeab0a86e747104ff6b4e25949d854ec8"
+  },
+  "frontend-setup-v3/web-build.stderr": {
+    "bytes": 4902,
+    "sha256": "8df7d1d3bd77f0a1f5d2b064fc6a6f39953f896aea86eb893d75b1a63eb20f47"
+  },
+  "frontend-setup-v3/web-build.stdout": {
+    "bytes": 6105,
+    "sha256": "ae8e1528bf9d89135d5fb6d65206f86acc567e12af5dd91c06c1992b63d95728"
+  },
+  "github-jobs-39343003710.json": {
+    "bytes": 39286,
+    "sha256": "d2ef8d3f2db09fe1d4cdfe0098e297efc46e5bdbb891ea283d23572a8d40cf57"
+  },
+  "github-jobs-39346281958.json": {
+    "bytes": 39286,
+    "sha256": "64843becb2a05c87e37e6febf070164e6c2e4fb65d6b5088fddb600628f6fdbe"
+  },
+  "github-run-39343003710.json": {
+    "bytes": 12868,
+    "sha256": "db4602e889d26a32a974878a91c5a25e5947908b78027e602ff0ec5eab9e3296"
+  },
+  "github-run-39346281958.json": {
+    "bytes": 12880,
+    "sha256": "9bd70e8a7a23abe669f26fc1c09803368e51a23366c6ba24997a00cf329e89b2"
+  },
+  "handoff-fixture-identity.json": {
+    "bytes": 957,
+    "sha256": "854f00b4a64c6b7a01b5581f5c774f19074ca06a6f62227099a671943254f766"
+  },
+  "handoff-pinned-inputs.json": {
+    "bytes": 1255,
+    "sha256": "8c82e187f79a653513cec8bbc1c37c48def97b9efc47bcad52150a0969f3065f"
+  },
+  "post-browser-binary-verification.json": {
+    "bytes": 1084,
+    "sha256": "eaa28b0bca56261e082b22faa59459e03832025e3a79d219071e17a142dff943"
+  },
+  "products/browser-baseline-vs-geometry/cohort-manifest.json": {
+    "bytes": 18234,
+    "sha256": "3f7dfe1b05bb52c9cfb3271bbcab48303f36c2897dacc06f8d5eca3a2db048a4"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-baseline/fixture/rustx.toml": {
+    "bytes": 688,
+    "sha256": "62ceec908460896a6ba207184a007c518b5cfc10cc5925a2b6db2fb3a9e18286"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-baseline/fixture/workspace/note.txt": {
+    "bytes": 31,
+    "sha256": "6155527e5fdd2a54735d1d085c8095129cb174b72bf4840982799e8b49cd088f"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-baseline/fixture/workspaces.json": {
+    "bytes": 116,
+    "sha256": "4c52d99bebe936b1b6bf0751bea9e0beafa21433fad58bce02894616567a579a"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-baseline/fixture-source/README.txt": {
+    "bytes": 4326,
+    "sha256": "ec05599048a1454f6f953e89cfd1f9621d5a178d19b5912b029f256a306a2c73"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-baseline/fixture-source/build-host.py": {
+    "bytes": 2032,
+    "sha256": "bb8e1ab11950917c256f86a724dafabd02daff21717bdaca019d1e14bb98fc87"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-baseline/fixture-source/canonical_history.rs": {
+    "bytes": 1956,
+    "sha256": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-baseline/fixture-source/common.rs": {
+    "bytes": 435,
+    "sha256": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-baseline/fixture-source/drain.mjs": {
+    "bytes": 3738,
+    "sha256": "53c965c5c20fc777441387f099c8752a81228ad5c32fa1ed5caab603cf0bec34"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-baseline/fixture-source/expected_tools.json": {
+    "bytes": 15661,
+    "sha256": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-baseline/fixture-source/host.rs": {
+    "bytes": 7525,
+    "sha256": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-baseline/fixture-source/provider.py": {
+    "bytes": 1068,
+    "sha256": "b6b451f207d065a84f71648c9486928703b59624242dd330889a5aff7a5bf21e"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-baseline/fixture-source/request_oracle.rs": {
+    "bytes": 11765,
+    "sha256": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-baseline/fixture-source/run.mjs": {
+    "bytes": 26319,
+    "sha256": "43d9fe73fc33d3702b7e413b6ce0a238942b33749894ccd0a9c837ead11d02f9"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-baseline/fixture-source/verify_requests.rs": {
+    "bytes": 2781,
+    "sha256": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-baseline/native.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-baseline/preview.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-baseline/provider.stderr": {
+    "bytes": 72,
+    "sha256": "e57dc8a9ed212618f1b0e292efca93479134e245a3f6bbcff959ebe8b2c37efb"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-baseline/sample.json": {
+    "bytes": 163521110,
+    "sha256": "1578429ed6605c5f19d2151833e775a6e59d12abf5f964716b41a3b82a6353ab"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-baseline.stderr": {
+    "bytes": 178,
+    "sha256": "fee4f68d4ba574de689524f0da5cda0fdf72d005a025e060b14649f136a58cab"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-baseline.stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-geometry/fixture/rustx.toml": {
+    "bytes": 688,
+    "sha256": "e7ef4b0bc0390cad38e1e70c2b3447dedc9b2fe219ca977e2f3d70cc2e1b5e1b"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-geometry/fixture/workspace/note.txt": {
+    "bytes": 31,
+    "sha256": "6155527e5fdd2a54735d1d085c8095129cb174b72bf4840982799e8b49cd088f"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-geometry/fixture/workspaces.json": {
+    "bytes": 116,
+    "sha256": "eeaa4b7e2082c268d1e9f7b1755be27777f711def388f33e3665b8412a372cec"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-geometry/fixture-source/README.txt": {
+    "bytes": 4326,
+    "sha256": "ec05599048a1454f6f953e89cfd1f9621d5a178d19b5912b029f256a306a2c73"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-geometry/fixture-source/build-host.py": {
+    "bytes": 2032,
+    "sha256": "bb8e1ab11950917c256f86a724dafabd02daff21717bdaca019d1e14bb98fc87"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-geometry/fixture-source/canonical_history.rs": {
+    "bytes": 1956,
+    "sha256": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-geometry/fixture-source/common.rs": {
+    "bytes": 435,
+    "sha256": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-geometry/fixture-source/drain.mjs": {
+    "bytes": 3738,
+    "sha256": "53c965c5c20fc777441387f099c8752a81228ad5c32fa1ed5caab603cf0bec34"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-geometry/fixture-source/expected_tools.json": {
+    "bytes": 15661,
+    "sha256": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-geometry/fixture-source/host.rs": {
+    "bytes": 7525,
+    "sha256": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-geometry/fixture-source/provider.py": {
+    "bytes": 1068,
+    "sha256": "b6b451f207d065a84f71648c9486928703b59624242dd330889a5aff7a5bf21e"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-geometry/fixture-source/request_oracle.rs": {
+    "bytes": 11765,
+    "sha256": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-geometry/fixture-source/run.mjs": {
+    "bytes": 26319,
+    "sha256": "43d9fe73fc33d3702b7e413b6ce0a238942b33749894ccd0a9c837ead11d02f9"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-geometry/fixture-source/verify_requests.rs": {
+    "bytes": 2781,
+    "sha256": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-geometry/native.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-geometry/preview.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-geometry/provider.stderr": {
+    "bytes": 72,
+    "sha256": "cf63430bfb88c6e844dd5297385b756881f9e4935ebb49ff2abad1974b54d744"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-geometry/sample.json": {
+    "bytes": 165092312,
+    "sha256": "c2a05a0e979d052771cdbc88f1ee4c90977906fee20e54bfc2b6ad97927d701d"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-geometry.stderr": {
+    "bytes": 178,
+    "sha256": "adfe51b38fff1366912e18d2e85ca76af139390faed7913a25313cbd6a81e852"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-large-geometry.stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-baseline/fixture/rustx.toml": {
+    "bytes": 688,
+    "sha256": "76d7170b33096e87c494e47e80299681eb3d2f6b98681752444ab2eaadf65c19"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-baseline/fixture/workspace/note.txt": {
+    "bytes": 31,
+    "sha256": "6155527e5fdd2a54735d1d085c8095129cb174b72bf4840982799e8b49cd088f"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-baseline/fixture/workspaces.json": {
+    "bytes": 116,
+    "sha256": "7ecef30bef70d330db5f62a0c08a2fca452b891a2f146ecb6923847e3e1cf422"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-baseline/fixture-source/README.txt": {
+    "bytes": 4326,
+    "sha256": "ec05599048a1454f6f953e89cfd1f9621d5a178d19b5912b029f256a306a2c73"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-baseline/fixture-source/build-host.py": {
+    "bytes": 2032,
+    "sha256": "bb8e1ab11950917c256f86a724dafabd02daff21717bdaca019d1e14bb98fc87"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-baseline/fixture-source/canonical_history.rs": {
+    "bytes": 1956,
+    "sha256": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-baseline/fixture-source/common.rs": {
+    "bytes": 435,
+    "sha256": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-baseline/fixture-source/drain.mjs": {
+    "bytes": 3738,
+    "sha256": "53c965c5c20fc777441387f099c8752a81228ad5c32fa1ed5caab603cf0bec34"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-baseline/fixture-source/expected_tools.json": {
+    "bytes": 15661,
+    "sha256": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-baseline/fixture-source/host.rs": {
+    "bytes": 7525,
+    "sha256": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-baseline/fixture-source/provider.py": {
+    "bytes": 1068,
+    "sha256": "b6b451f207d065a84f71648c9486928703b59624242dd330889a5aff7a5bf21e"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-baseline/fixture-source/request_oracle.rs": {
+    "bytes": 11765,
+    "sha256": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-baseline/fixture-source/run.mjs": {
+    "bytes": 26319,
+    "sha256": "43d9fe73fc33d3702b7e413b6ce0a238942b33749894ccd0a9c837ead11d02f9"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-baseline/fixture-source/verify_requests.rs": {
+    "bytes": 2781,
+    "sha256": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-baseline/native.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-baseline/preview.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-baseline/provider.stderr": {
+    "bytes": 72,
+    "sha256": "295ed69277370d6a30a348b1e3050e1bb6cddb122083275ba485356b4852cb0f"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-baseline/sample.json": {
+    "bytes": 51023669,
+    "sha256": "513b8e5ae1271ccfc9e040ba4e79fae520e795ee97924d18f9243e4dd7c293e3"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-baseline.stderr": {
+    "bytes": 178,
+    "sha256": "ba3d4121bd9e33fd59a11e35f1aef39e0174c822c9720c7db1733d1db34a6388"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-baseline.stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-geometry/fixture/rustx.toml": {
+    "bytes": 688,
+    "sha256": "b4a8b34b9f7a4041b65e17af8b92feca5064023002ec7bfd435274ffdd6bc2f4"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-geometry/fixture/workspace/note.txt": {
+    "bytes": 31,
+    "sha256": "6155527e5fdd2a54735d1d085c8095129cb174b72bf4840982799e8b49cd088f"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-geometry/fixture/workspaces.json": {
+    "bytes": 116,
+    "sha256": "34dae4376c58b2fb41a409dae3614285e1be142b64c1a6e6f4b7689e04e1d9af"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-geometry/fixture-source/README.txt": {
+    "bytes": 4326,
+    "sha256": "ec05599048a1454f6f953e89cfd1f9621d5a178d19b5912b029f256a306a2c73"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-geometry/fixture-source/build-host.py": {
+    "bytes": 2032,
+    "sha256": "bb8e1ab11950917c256f86a724dafabd02daff21717bdaca019d1e14bb98fc87"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-geometry/fixture-source/canonical_history.rs": {
+    "bytes": 1956,
+    "sha256": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-geometry/fixture-source/common.rs": {
+    "bytes": 435,
+    "sha256": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-geometry/fixture-source/drain.mjs": {
+    "bytes": 3738,
+    "sha256": "53c965c5c20fc777441387f099c8752a81228ad5c32fa1ed5caab603cf0bec34"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-geometry/fixture-source/expected_tools.json": {
+    "bytes": 15661,
+    "sha256": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-geometry/fixture-source/host.rs": {
+    "bytes": 7525,
+    "sha256": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-geometry/fixture-source/provider.py": {
+    "bytes": 1068,
+    "sha256": "b6b451f207d065a84f71648c9486928703b59624242dd330889a5aff7a5bf21e"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-geometry/fixture-source/request_oracle.rs": {
+    "bytes": 11765,
+    "sha256": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-geometry/fixture-source/run.mjs": {
+    "bytes": 26319,
+    "sha256": "43d9fe73fc33d3702b7e413b6ce0a238942b33749894ccd0a9c837ead11d02f9"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-geometry/fixture-source/verify_requests.rs": {
+    "bytes": 2781,
+    "sha256": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-geometry/native.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-geometry/preview.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-geometry/provider.stderr": {
+    "bytes": 72,
+    "sha256": "6e330a5514029a9a540235bbd23ba0b6b8c17bf7e7deb0c86b31d2686968d0aa"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-geometry/sample.json": {
+    "bytes": 50561720,
+    "sha256": "da6f463011df7d2e5f2d72e823f65f6c77510bfbfd30c41ccbd1d464086f70df"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-geometry.stderr": {
+    "bytes": 178,
+    "sha256": "49439df0380dffdc144002d27abdbbe183e1bccd629517ac1923d1e6944d43d7"
+  },
+  "products/browser-baseline-vs-geometry-v2/0-short-small-geometry.stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-baseline/fixture/rustx.toml": {
+    "bytes": 688,
+    "sha256": "a612dbbdfe7e10e53786a39189d442d1bca3129ddf6f4961882ead6e04a3a023"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-baseline/fixture/workspace/note.txt": {
+    "bytes": 31,
+    "sha256": "6155527e5fdd2a54735d1d085c8095129cb174b72bf4840982799e8b49cd088f"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-baseline/fixture/workspaces.json": {
+    "bytes": 116,
+    "sha256": "0b4a00e7293d32a4d4c00eee4fd2b4d914c167789dcbd75357bc1df101addcd4"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-baseline/fixture-source/README.txt": {
+    "bytes": 4326,
+    "sha256": "ec05599048a1454f6f953e89cfd1f9621d5a178d19b5912b029f256a306a2c73"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-baseline/fixture-source/build-host.py": {
+    "bytes": 2032,
+    "sha256": "bb8e1ab11950917c256f86a724dafabd02daff21717bdaca019d1e14bb98fc87"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-baseline/fixture-source/canonical_history.rs": {
+    "bytes": 1956,
+    "sha256": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-baseline/fixture-source/common.rs": {
+    "bytes": 435,
+    "sha256": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-baseline/fixture-source/drain.mjs": {
+    "bytes": 3738,
+    "sha256": "53c965c5c20fc777441387f099c8752a81228ad5c32fa1ed5caab603cf0bec34"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-baseline/fixture-source/expected_tools.json": {
+    "bytes": 15661,
+    "sha256": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-baseline/fixture-source/host.rs": {
+    "bytes": 7525,
+    "sha256": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-baseline/fixture-source/provider.py": {
+    "bytes": 1068,
+    "sha256": "b6b451f207d065a84f71648c9486928703b59624242dd330889a5aff7a5bf21e"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-baseline/fixture-source/request_oracle.rs": {
+    "bytes": 11765,
+    "sha256": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-baseline/fixture-source/run.mjs": {
+    "bytes": 26319,
+    "sha256": "43d9fe73fc33d3702b7e413b6ce0a238942b33749894ccd0a9c837ead11d02f9"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-baseline/fixture-source/verify_requests.rs": {
+    "bytes": 2781,
+    "sha256": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-baseline/native.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-baseline/preview.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-baseline/provider.stderr": {
+    "bytes": 72,
+    "sha256": "bff7f2698f9bc55a4db70c2c459a434c3ada361302a93f8fc0d1c696bd28fb6a"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-baseline/sample.json": {
+    "bytes": 164534008,
+    "sha256": "6e2911c8d143e1f4745f28ece17f695ae8c2889ad41c28628823c471368da5c3"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-baseline.stderr": {
+    "bytes": 178,
+    "sha256": "0abd9e4bde7f4553f239776185c9a8a8d19ddf31fe928bb6afd37cf7ff6929d2"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-baseline.stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-geometry/failure.json": {
+    "bytes": 2544980,
+    "sha256": "c2c4e57116b767ab6808c4ee299976d016d19425fa7deed84484f6441f23cddc"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-geometry/fixture/native/.product-writer.lock": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-geometry/fixture/native/conversation-reservations/conv_01a1575f-a305-7ff1-83a8-4bdc5445c1d2": {
+    "bytes": 41,
+    "sha256": "b5eb8610ed533f773a9335840ffce16d556bb519c68452f48be574126c53d459"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-geometry/fixture/native/sessions/catalog.json": {
+    "bytes": 1271,
+    "sha256": "1b0b1733b76ab7f4076a374688cff21dbfb704f4fa6c6e449c032796681d8b7d"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-geometry/fixture/native/sessions/ses_01a1575f-a305-7ff1-83a8-4bb53a4e6c3c/conversations/conv_01a1575f-a305-7ff1-83a8-4bdc5445c1d2/conversation.sqlite": {
+    "bytes": 1642496,
+    "sha256": "7131169eb3b0984a6d8bcddabca7b16a0cd40e7c98ce0933e10fd0db76ba70b2"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-geometry/fixture/native/sessions/ses_01a1575f-a305-7ff1-83a8-4bb53a4e6c3c/conversations/conv_01a1575f-a305-7ff1-83a8-4bdc5445c1d2/conversation.sqlite-shm": {
+    "bytes": 32768,
+    "sha256": "02724450f5160dc82db3f4ed48d2ee69e2cc17c932e78688a9f0266671afb550"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-geometry/fixture/native/sessions/ses_01a1575f-a305-7ff1-83a8-4bb53a4e6c3c/conversations/conv_01a1575f-a305-7ff1-83a8-4bdc5445c1d2/conversation.sqlite-wal": {
+    "bytes": 4420792,
+    "sha256": "d23261a235bb37ec596ffb8667e19012f1b9d2abf3a292043dc703f8105f86c2"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-geometry/fixture/rustx.toml": {
+    "bytes": 688,
+    "sha256": "9a026eb57934df573438a49dec66cfe02e18ca0afe3d1510273adf9c195aa275"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-geometry/fixture/workspace/note.txt": {
+    "bytes": 31,
+    "sha256": "6155527e5fdd2a54735d1d085c8095129cb174b72bf4840982799e8b49cd088f"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-geometry/fixture/workspaces.json": {
+    "bytes": 116,
+    "sha256": "fde40035c9d000491da8f2e58449beb224eb3b572f9953c18179a9aeef3bb192"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-geometry/fixture-source/README.txt": {
+    "bytes": 4326,
+    "sha256": "ec05599048a1454f6f953e89cfd1f9621d5a178d19b5912b029f256a306a2c73"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-geometry/fixture-source/build-host.py": {
+    "bytes": 2032,
+    "sha256": "bb8e1ab11950917c256f86a724dafabd02daff21717bdaca019d1e14bb98fc87"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-geometry/fixture-source/canonical_history.rs": {
+    "bytes": 1956,
+    "sha256": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-geometry/fixture-source/common.rs": {
+    "bytes": 435,
+    "sha256": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-geometry/fixture-source/drain.mjs": {
+    "bytes": 3738,
+    "sha256": "53c965c5c20fc777441387f099c8752a81228ad5c32fa1ed5caab603cf0bec34"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-geometry/fixture-source/expected_tools.json": {
+    "bytes": 15661,
+    "sha256": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-geometry/fixture-source/host.rs": {
+    "bytes": 7525,
+    "sha256": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-geometry/fixture-source/provider.py": {
+    "bytes": 1068,
+    "sha256": "b6b451f207d065a84f71648c9486928703b59624242dd330889a5aff7a5bf21e"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-geometry/fixture-source/request_oracle.rs": {
+    "bytes": 11765,
+    "sha256": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-geometry/fixture-source/run.mjs": {
+    "bytes": 26319,
+    "sha256": "43d9fe73fc33d3702b7e413b6ce0a238942b33749894ccd0a9c837ead11d02f9"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-geometry/fixture-source/verify_requests.rs": {
+    "bytes": 2781,
+    "sha256": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-geometry/native.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-geometry/preview.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-geometry/provider.stderr": {
+    "bytes": 5388,
+    "sha256": "2e71b1decb1f1ae6513415debae2999ce59ca3321baa009e10b18822b65d2b4c"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-geometry.stderr": {
+    "bytes": 178,
+    "sha256": "e6b703d9fa0d7261845b972a9dba071c102b0ad6edca5efe478c7fe744f47bcf"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-large-geometry.stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-baseline/fixture/rustx.toml": {
+    "bytes": 688,
+    "sha256": "0f91a44e52fdee23bf30b471c256b873b455c8792cbe14c3ddbeb800cbf39632"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-baseline/fixture/workspace/note.txt": {
+    "bytes": 31,
+    "sha256": "6155527e5fdd2a54735d1d085c8095129cb174b72bf4840982799e8b49cd088f"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-baseline/fixture/workspaces.json": {
+    "bytes": 116,
+    "sha256": "233168fd6b0c163b3b3fb27a3d51dbbdaf36804a3322afa8e4e280e550f2a8da"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-baseline/fixture-source/README.txt": {
+    "bytes": 4326,
+    "sha256": "ec05599048a1454f6f953e89cfd1f9621d5a178d19b5912b029f256a306a2c73"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-baseline/fixture-source/build-host.py": {
+    "bytes": 2032,
+    "sha256": "bb8e1ab11950917c256f86a724dafabd02daff21717bdaca019d1e14bb98fc87"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-baseline/fixture-source/canonical_history.rs": {
+    "bytes": 1956,
+    "sha256": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-baseline/fixture-source/common.rs": {
+    "bytes": 435,
+    "sha256": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-baseline/fixture-source/drain.mjs": {
+    "bytes": 3738,
+    "sha256": "53c965c5c20fc777441387f099c8752a81228ad5c32fa1ed5caab603cf0bec34"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-baseline/fixture-source/expected_tools.json": {
+    "bytes": 15661,
+    "sha256": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-baseline/fixture-source/host.rs": {
+    "bytes": 7525,
+    "sha256": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-baseline/fixture-source/provider.py": {
+    "bytes": 1068,
+    "sha256": "b6b451f207d065a84f71648c9486928703b59624242dd330889a5aff7a5bf21e"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-baseline/fixture-source/request_oracle.rs": {
+    "bytes": 11765,
+    "sha256": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-baseline/fixture-source/run.mjs": {
+    "bytes": 26319,
+    "sha256": "43d9fe73fc33d3702b7e413b6ce0a238942b33749894ccd0a9c837ead11d02f9"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-baseline/fixture-source/verify_requests.rs": {
+    "bytes": 2781,
+    "sha256": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-baseline/native.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-baseline/preview.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-baseline/provider.stderr": {
+    "bytes": 72,
+    "sha256": "5a069613bd6c27ea08d02413ed6e6970b4b0a78be083dbf53725c41714cc13b0"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-baseline/sample.json": {
+    "bytes": 50683859,
+    "sha256": "b2768e8575055b9d263b9122d09405303b8fdd0445247f33832338e68c9ad7e2"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-baseline.stderr": {
+    "bytes": 178,
+    "sha256": "673fc32c4eb87e6a249b2ab1014ac821ca35d7ee4586bf51da606062db8dba54"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-baseline.stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-geometry/fixture/rustx.toml": {
+    "bytes": 688,
+    "sha256": "77b63fbb379e65105a1ddc02f3a3f9eb91ed67ac58d36324fdc327284c4b80ac"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-geometry/fixture/workspace/note.txt": {
+    "bytes": 31,
+    "sha256": "6155527e5fdd2a54735d1d085c8095129cb174b72bf4840982799e8b49cd088f"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-geometry/fixture/workspaces.json": {
+    "bytes": 116,
+    "sha256": "c305e3c314f9f5959cb94c79bce9a36a0999d007045f11d8ffc8cb17bb18f09f"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-geometry/fixture-source/README.txt": {
+    "bytes": 4326,
+    "sha256": "ec05599048a1454f6f953e89cfd1f9621d5a178d19b5912b029f256a306a2c73"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-geometry/fixture-source/build-host.py": {
+    "bytes": 2032,
+    "sha256": "bb8e1ab11950917c256f86a724dafabd02daff21717bdaca019d1e14bb98fc87"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-geometry/fixture-source/canonical_history.rs": {
+    "bytes": 1956,
+    "sha256": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-geometry/fixture-source/common.rs": {
+    "bytes": 435,
+    "sha256": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-geometry/fixture-source/drain.mjs": {
+    "bytes": 3738,
+    "sha256": "53c965c5c20fc777441387f099c8752a81228ad5c32fa1ed5caab603cf0bec34"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-geometry/fixture-source/expected_tools.json": {
+    "bytes": 15661,
+    "sha256": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-geometry/fixture-source/host.rs": {
+    "bytes": 7525,
+    "sha256": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-geometry/fixture-source/provider.py": {
+    "bytes": 1068,
+    "sha256": "b6b451f207d065a84f71648c9486928703b59624242dd330889a5aff7a5bf21e"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-geometry/fixture-source/request_oracle.rs": {
+    "bytes": 11765,
+    "sha256": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-geometry/fixture-source/run.mjs": {
+    "bytes": 26319,
+    "sha256": "43d9fe73fc33d3702b7e413b6ce0a238942b33749894ccd0a9c837ead11d02f9"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-geometry/fixture-source/verify_requests.rs": {
+    "bytes": 2781,
+    "sha256": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-geometry/native.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-geometry/preview.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-geometry/provider.stderr": {
+    "bytes": 72,
+    "sha256": "5316b9c751a36afedf4bd288d5d1fc69ba9a66c23e72755df601c5ede4e49979"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-geometry/sample.json": {
+    "bytes": 50899334,
+    "sha256": "43aaa2fcfb7676063d6f3fec103588ed49ec08eb7e218f0d666e9712349cafc1"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-geometry.stderr": {
+    "bytes": 178,
+    "sha256": "d04fda94341350f676de9832e6aca2f2e8d388242e2eefee869b284a8aae3ecc"
+  },
+  "products/browser-baseline-vs-geometry-v2/1-short-small-geometry.stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-baseline/fixture/rustx.toml": {
+    "bytes": 688,
+    "sha256": "ec75e20b0a851447a2efc4a41194dfb82d405fe14457ba752b39d3fe215ec826"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-baseline/fixture/workspace/note.txt": {
+    "bytes": 31,
+    "sha256": "6155527e5fdd2a54735d1d085c8095129cb174b72bf4840982799e8b49cd088f"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-baseline/fixture/workspaces.json": {
+    "bytes": 116,
+    "sha256": "b57ea21cd9c514c233eded924c59bfa29461755db0e75f6457ef56b9cb7191d4"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-baseline/fixture-source/README.txt": {
+    "bytes": 4326,
+    "sha256": "ec05599048a1454f6f953e89cfd1f9621d5a178d19b5912b029f256a306a2c73"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-baseline/fixture-source/build-host.py": {
+    "bytes": 2032,
+    "sha256": "bb8e1ab11950917c256f86a724dafabd02daff21717bdaca019d1e14bb98fc87"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-baseline/fixture-source/canonical_history.rs": {
+    "bytes": 1956,
+    "sha256": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-baseline/fixture-source/common.rs": {
+    "bytes": 435,
+    "sha256": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-baseline/fixture-source/drain.mjs": {
+    "bytes": 3738,
+    "sha256": "53c965c5c20fc777441387f099c8752a81228ad5c32fa1ed5caab603cf0bec34"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-baseline/fixture-source/expected_tools.json": {
+    "bytes": 15661,
+    "sha256": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-baseline/fixture-source/host.rs": {
+    "bytes": 7525,
+    "sha256": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-baseline/fixture-source/provider.py": {
+    "bytes": 1068,
+    "sha256": "b6b451f207d065a84f71648c9486928703b59624242dd330889a5aff7a5bf21e"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-baseline/fixture-source/request_oracle.rs": {
+    "bytes": 11765,
+    "sha256": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-baseline/fixture-source/run.mjs": {
+    "bytes": 26319,
+    "sha256": "43d9fe73fc33d3702b7e413b6ce0a238942b33749894ccd0a9c837ead11d02f9"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-baseline/fixture-source/verify_requests.rs": {
+    "bytes": 2781,
+    "sha256": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-baseline/native.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-baseline/preview.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-baseline/provider.stderr": {
+    "bytes": 72,
+    "sha256": "aa5760ed58cce3b4036d121cc9a977464db9ace8532647bb734b51a8733df7f5"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-baseline/sample.json": {
+    "bytes": 50428297,
+    "sha256": "25c1378fcd312660694212adcfba835935b7cbc199e34293771bf65ab5ce1ccf"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-baseline.stderr": {
+    "bytes": 178,
+    "sha256": "c3c4f0e5263cfceb5e82a2574c724d7a4176a3bbb47b7c80189b294e4c620fb8"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-baseline.stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-geometry/fixture/rustx.toml": {
+    "bytes": 688,
+    "sha256": "2a484425f9f22c5cf033439eda804fb3f820e77da5c719e98b14ed4511b085f8"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-geometry/fixture/workspace/note.txt": {
+    "bytes": 31,
+    "sha256": "6155527e5fdd2a54735d1d085c8095129cb174b72bf4840982799e8b49cd088f"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-geometry/fixture/workspaces.json": {
+    "bytes": 116,
+    "sha256": "476ec3ae28d250392b02f67aefe61d81fba7cb7f90173332c98b1f05d7c30c68"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-geometry/fixture-source/README.txt": {
+    "bytes": 4326,
+    "sha256": "ec05599048a1454f6f953e89cfd1f9621d5a178d19b5912b029f256a306a2c73"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-geometry/fixture-source/build-host.py": {
+    "bytes": 2032,
+    "sha256": "bb8e1ab11950917c256f86a724dafabd02daff21717bdaca019d1e14bb98fc87"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-geometry/fixture-source/canonical_history.rs": {
+    "bytes": 1956,
+    "sha256": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-geometry/fixture-source/common.rs": {
+    "bytes": 435,
+    "sha256": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-geometry/fixture-source/drain.mjs": {
+    "bytes": 3738,
+    "sha256": "53c965c5c20fc777441387f099c8752a81228ad5c32fa1ed5caab603cf0bec34"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-geometry/fixture-source/expected_tools.json": {
+    "bytes": 15661,
+    "sha256": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-geometry/fixture-source/host.rs": {
+    "bytes": 7525,
+    "sha256": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-geometry/fixture-source/provider.py": {
+    "bytes": 1068,
+    "sha256": "b6b451f207d065a84f71648c9486928703b59624242dd330889a5aff7a5bf21e"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-geometry/fixture-source/request_oracle.rs": {
+    "bytes": 11765,
+    "sha256": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-geometry/fixture-source/run.mjs": {
+    "bytes": 26319,
+    "sha256": "43d9fe73fc33d3702b7e413b6ce0a238942b33749894ccd0a9c837ead11d02f9"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-geometry/fixture-source/verify_requests.rs": {
+    "bytes": 2781,
+    "sha256": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-geometry/native.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-geometry/preview.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-geometry/provider.stderr": {
+    "bytes": 72,
+    "sha256": "c105bebffec98d526c80f4f782231755b6418e2fc83b545c8bb15e3b759066b7"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-geometry/sample.json": {
+    "bytes": 50336204,
+    "sha256": "cdef57bbabfebbe62ade3bfb9a134e4ff8e3abaa9110c9b88205de8993761430"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-geometry.stderr": {
+    "bytes": 178,
+    "sha256": "f4ec40200184f25e76df5d6e57c2971c413dc192b16c810ec68c67da6747bdb1"
+  },
+  "products/browser-baseline-vs-geometry-v2/2-short-small-geometry.stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-geometry-v2/cohort-manifest.json": {
+    "bytes": 153776,
+    "sha256": "218631f6690167d3187d40654f673292c21c7556f0f5712d63512893f81656e4"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-baseline/fixture/rustx.toml": {
+    "bytes": 688,
+    "sha256": "b2dbda237c7c247c0c2865ae5432eb15b2a79280df043cf87f6e46dc8dd4d724"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-baseline/fixture/workspace/note.txt": {
+    "bytes": 31,
+    "sha256": "6155527e5fdd2a54735d1d085c8095129cb174b72bf4840982799e8b49cd088f"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-baseline/fixture/workspaces.json": {
+    "bytes": 116,
+    "sha256": "0424b1b272bfa11deb47fb3c65efe59653aa8c7b50095ecb3f89949d2ca048d2"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-baseline/fixture-source/README.txt": {
+    "bytes": 4326,
+    "sha256": "ec05599048a1454f6f953e89cfd1f9621d5a178d19b5912b029f256a306a2c73"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-baseline/fixture-source/build-host.py": {
+    "bytes": 2032,
+    "sha256": "bb8e1ab11950917c256f86a724dafabd02daff21717bdaca019d1e14bb98fc87"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-baseline/fixture-source/canonical_history.rs": {
+    "bytes": 1956,
+    "sha256": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-baseline/fixture-source/common.rs": {
+    "bytes": 435,
+    "sha256": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-baseline/fixture-source/drain.mjs": {
+    "bytes": 3738,
+    "sha256": "53c965c5c20fc777441387f099c8752a81228ad5c32fa1ed5caab603cf0bec34"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-baseline/fixture-source/expected_tools.json": {
+    "bytes": 15661,
+    "sha256": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-baseline/fixture-source/host.rs": {
+    "bytes": 7525,
+    "sha256": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-baseline/fixture-source/provider.py": {
+    "bytes": 1068,
+    "sha256": "b6b451f207d065a84f71648c9486928703b59624242dd330889a5aff7a5bf21e"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-baseline/fixture-source/request_oracle.rs": {
+    "bytes": 11765,
+    "sha256": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-baseline/fixture-source/run.mjs": {
+    "bytes": 26319,
+    "sha256": "43d9fe73fc33d3702b7e413b6ce0a238942b33749894ccd0a9c837ead11d02f9"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-baseline/fixture-source/verify_requests.rs": {
+    "bytes": 2781,
+    "sha256": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-baseline/native.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-baseline/preview.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-baseline/provider.stderr": {
+    "bytes": 65,
+    "sha256": "6fc8b08de9fcec780db46ae4a9fdf589d3ec64015efa1a20a63ef834808bc1e7"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-baseline/sample.json": {
+    "bytes": 271359851,
+    "sha256": "49b3d87b31f0643e474e5e92aaa113f65c3701d7db3456cb818bbfffa8a378b5"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-baseline.stderr": {
+    "bytes": 178,
+    "sha256": "d8abeccd326a7016d621791b8e05162bac099e6083ab30a693ba4d26d435b8f1"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-baseline.stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-scoped/fixture/rustx.toml": {
+    "bytes": 688,
+    "sha256": "3dbb3f85b0791449626f7bb32149831179732c8156873c351bf091481bb80c73"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-scoped/fixture/workspace/note.txt": {
+    "bytes": 31,
+    "sha256": "6155527e5fdd2a54735d1d085c8095129cb174b72bf4840982799e8b49cd088f"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-scoped/fixture/workspaces.json": {
+    "bytes": 116,
+    "sha256": "02914f2be48d4ec1e63ee1a0b435025f3d34127a0cac666e46b6f2a60299adc9"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-scoped/fixture-source/README.txt": {
+    "bytes": 4326,
+    "sha256": "ec05599048a1454f6f953e89cfd1f9621d5a178d19b5912b029f256a306a2c73"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-scoped/fixture-source/build-host.py": {
+    "bytes": 2032,
+    "sha256": "bb8e1ab11950917c256f86a724dafabd02daff21717bdaca019d1e14bb98fc87"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-scoped/fixture-source/canonical_history.rs": {
+    "bytes": 1956,
+    "sha256": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-scoped/fixture-source/common.rs": {
+    "bytes": 435,
+    "sha256": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-scoped/fixture-source/drain.mjs": {
+    "bytes": 3738,
+    "sha256": "53c965c5c20fc777441387f099c8752a81228ad5c32fa1ed5caab603cf0bec34"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-scoped/fixture-source/expected_tools.json": {
+    "bytes": 15661,
+    "sha256": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-scoped/fixture-source/host.rs": {
+    "bytes": 7525,
+    "sha256": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-scoped/fixture-source/provider.py": {
+    "bytes": 1068,
+    "sha256": "b6b451f207d065a84f71648c9486928703b59624242dd330889a5aff7a5bf21e"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-scoped/fixture-source/request_oracle.rs": {
+    "bytes": 11765,
+    "sha256": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-scoped/fixture-source/run.mjs": {
+    "bytes": 26319,
+    "sha256": "43d9fe73fc33d3702b7e413b6ce0a238942b33749894ccd0a9c837ead11d02f9"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-scoped/fixture-source/verify_requests.rs": {
+    "bytes": 2781,
+    "sha256": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-scoped/native.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-scoped/preview.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-scoped/provider.stderr": {
+    "bytes": 65,
+    "sha256": "125aeb283aae1219c0eadea73ef9a070a8f8b1a14451824e2c7d2fbb6ef0f231"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-scoped/sample.json": {
+    "bytes": 271595271,
+    "sha256": "51553ab4992dcd403a330974355c618e0121f8bbccf3d7519dfb3857c479122a"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-scoped.stderr": {
+    "bytes": 178,
+    "sha256": "7645c13dc7bae29a4f6d681f668548e21ce0e4989ba2254904a949ec57c8a70e"
+  },
+  "products/browser-baseline-vs-scoped/0-details-resync-scoped.stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-baseline/fixture/rustx.toml": {
+    "bytes": 688,
+    "sha256": "9708063a69ef1037668f4f85b87d83c159b90e40949c0fc3520e1a4f377d8bff"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-baseline/fixture/workspace/note.txt": {
+    "bytes": 31,
+    "sha256": "6155527e5fdd2a54735d1d085c8095129cb174b72bf4840982799e8b49cd088f"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-baseline/fixture/workspaces.json": {
+    "bytes": 116,
+    "sha256": "0a81e99e9b83f199373a3824207fe22f0f1c293c598bad7a31e0854cc0eff827"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-baseline/fixture-source/README.txt": {
+    "bytes": 4326,
+    "sha256": "ec05599048a1454f6f953e89cfd1f9621d5a178d19b5912b029f256a306a2c73"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-baseline/fixture-source/build-host.py": {
+    "bytes": 2032,
+    "sha256": "bb8e1ab11950917c256f86a724dafabd02daff21717bdaca019d1e14bb98fc87"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-baseline/fixture-source/canonical_history.rs": {
+    "bytes": 1956,
+    "sha256": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-baseline/fixture-source/common.rs": {
+    "bytes": 435,
+    "sha256": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-baseline/fixture-source/drain.mjs": {
+    "bytes": 3738,
+    "sha256": "53c965c5c20fc777441387f099c8752a81228ad5c32fa1ed5caab603cf0bec34"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-baseline/fixture-source/expected_tools.json": {
+    "bytes": 15661,
+    "sha256": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-baseline/fixture-source/host.rs": {
+    "bytes": 7525,
+    "sha256": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-baseline/fixture-source/provider.py": {
+    "bytes": 1068,
+    "sha256": "b6b451f207d065a84f71648c9486928703b59624242dd330889a5aff7a5bf21e"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-baseline/fixture-source/request_oracle.rs": {
+    "bytes": 11765,
+    "sha256": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-baseline/fixture-source/run.mjs": {
+    "bytes": 26319,
+    "sha256": "43d9fe73fc33d3702b7e413b6ce0a238942b33749894ccd0a9c837ead11d02f9"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-baseline/fixture-source/verify_requests.rs": {
+    "bytes": 2781,
+    "sha256": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-baseline/native.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-baseline/preview.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-baseline/provider.stderr": {
+    "bytes": 72,
+    "sha256": "4acfcb3a0f033d4a062d1bf96d970d1823fe2a3b88a436a970a716e5a31179aa"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-baseline/sample.json": {
+    "bytes": 165444275,
+    "sha256": "d34ac207e8c42def8c748de7f956f7e3c41e0194851ee1c176c9e17c1381c1f0"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-baseline.stderr": {
+    "bytes": 178,
+    "sha256": "9953bdb1c1cf291e2b8a6ec5c91eafdbdde3efbe15c8d30c1132fe45c967d3f4"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-baseline.stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-scoped/fixture/rustx.toml": {
+    "bytes": 688,
+    "sha256": "07c8f1a0a1abde4956e7dd5c4092a6dfd56e7d09a9c2384deeedf1db444d98bd"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-scoped/fixture/workspace/note.txt": {
+    "bytes": 31,
+    "sha256": "6155527e5fdd2a54735d1d085c8095129cb174b72bf4840982799e8b49cd088f"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-scoped/fixture/workspaces.json": {
+    "bytes": 116,
+    "sha256": "65fcd174124eef9bb71071199c528fc781239832ba2dfaff066469791138cb3c"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-scoped/fixture-source/README.txt": {
+    "bytes": 4326,
+    "sha256": "ec05599048a1454f6f953e89cfd1f9621d5a178d19b5912b029f256a306a2c73"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-scoped/fixture-source/build-host.py": {
+    "bytes": 2032,
+    "sha256": "bb8e1ab11950917c256f86a724dafabd02daff21717bdaca019d1e14bb98fc87"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-scoped/fixture-source/canonical_history.rs": {
+    "bytes": 1956,
+    "sha256": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-scoped/fixture-source/common.rs": {
+    "bytes": 435,
+    "sha256": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-scoped/fixture-source/drain.mjs": {
+    "bytes": 3738,
+    "sha256": "53c965c5c20fc777441387f099c8752a81228ad5c32fa1ed5caab603cf0bec34"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-scoped/fixture-source/expected_tools.json": {
+    "bytes": 15661,
+    "sha256": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-scoped/fixture-source/host.rs": {
+    "bytes": 7525,
+    "sha256": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-scoped/fixture-source/provider.py": {
+    "bytes": 1068,
+    "sha256": "b6b451f207d065a84f71648c9486928703b59624242dd330889a5aff7a5bf21e"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-scoped/fixture-source/request_oracle.rs": {
+    "bytes": 11765,
+    "sha256": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-scoped/fixture-source/run.mjs": {
+    "bytes": 26319,
+    "sha256": "43d9fe73fc33d3702b7e413b6ce0a238942b33749894ccd0a9c837ead11d02f9"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-scoped/fixture-source/verify_requests.rs": {
+    "bytes": 2781,
+    "sha256": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-scoped/native.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-scoped/preview.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-scoped/provider.stderr": {
+    "bytes": 72,
+    "sha256": "e924326804621721a6005fb3e4662609b6cda234c5e750ca53872ef9a33bca6c"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-scoped/sample.json": {
+    "bytes": 164307488,
+    "sha256": "a6327f2c4ba5e3b3fd3efa9937e5ca1527d1f7adb532de4aaabd8089dfd80f7a"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-scoped.stderr": {
+    "bytes": 178,
+    "sha256": "52b2b60453087b4c8dc28394379aa6dca31a33e182613864cd9156348171ed42"
+  },
+  "products/browser-baseline-vs-scoped/0-short-large-scoped.stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-baseline/fixture/rustx.toml": {
+    "bytes": 688,
+    "sha256": "565cc757d2cbd55f4a8911a032ee81b1e194b99939bb970cfc09acd3d32ddc85"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-baseline/fixture/workspace/note.txt": {
+    "bytes": 31,
+    "sha256": "6155527e5fdd2a54735d1d085c8095129cb174b72bf4840982799e8b49cd088f"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-baseline/fixture/workspaces.json": {
+    "bytes": 116,
+    "sha256": "400d8793217e93c4627a8705469ca553910f9e90c6464aadb878492e32118bd5"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-baseline/fixture-source/README.txt": {
+    "bytes": 4326,
+    "sha256": "ec05599048a1454f6f953e89cfd1f9621d5a178d19b5912b029f256a306a2c73"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-baseline/fixture-source/build-host.py": {
+    "bytes": 2032,
+    "sha256": "bb8e1ab11950917c256f86a724dafabd02daff21717bdaca019d1e14bb98fc87"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-baseline/fixture-source/canonical_history.rs": {
+    "bytes": 1956,
+    "sha256": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-baseline/fixture-source/common.rs": {
+    "bytes": 435,
+    "sha256": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-baseline/fixture-source/drain.mjs": {
+    "bytes": 3738,
+    "sha256": "53c965c5c20fc777441387f099c8752a81228ad5c32fa1ed5caab603cf0bec34"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-baseline/fixture-source/expected_tools.json": {
+    "bytes": 15661,
+    "sha256": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-baseline/fixture-source/host.rs": {
+    "bytes": 7525,
+    "sha256": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-baseline/fixture-source/provider.py": {
+    "bytes": 1068,
+    "sha256": "b6b451f207d065a84f71648c9486928703b59624242dd330889a5aff7a5bf21e"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-baseline/fixture-source/request_oracle.rs": {
+    "bytes": 11765,
+    "sha256": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-baseline/fixture-source/run.mjs": {
+    "bytes": 26319,
+    "sha256": "43d9fe73fc33d3702b7e413b6ce0a238942b33749894ccd0a9c837ead11d02f9"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-baseline/fixture-source/verify_requests.rs": {
+    "bytes": 2781,
+    "sha256": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-baseline/native.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-baseline/preview.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-baseline/provider.stderr": {
+    "bytes": 72,
+    "sha256": "3a6425e5b080c5b1006cff1201abf8018f6226c7838437e00979518ac22519c0"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-baseline/sample.json": {
+    "bytes": 50814839,
+    "sha256": "98bdb1049435306db929d9b07b498dc30e1c62263f5bb55ab3680020737ad1b6"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-baseline.stderr": {
+    "bytes": 178,
+    "sha256": "bb8796a0ec37e208c78bd1cdece13c4184297cb770f45fecfbd2df92ef8f6512"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-baseline.stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-scoped/fixture/rustx.toml": {
+    "bytes": 688,
+    "sha256": "dd5bde20f3a2b58347b4a69be266a6aae03f2dc564ac90563cef648378595665"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-scoped/fixture/workspace/note.txt": {
+    "bytes": 31,
+    "sha256": "6155527e5fdd2a54735d1d085c8095129cb174b72bf4840982799e8b49cd088f"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-scoped/fixture/workspaces.json": {
+    "bytes": 116,
+    "sha256": "a470eb5e6037e3a61838859476de971f8860f003ef8795520b8ddecb6bbf95eb"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-scoped/fixture-source/README.txt": {
+    "bytes": 4326,
+    "sha256": "ec05599048a1454f6f953e89cfd1f9621d5a178d19b5912b029f256a306a2c73"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-scoped/fixture-source/build-host.py": {
+    "bytes": 2032,
+    "sha256": "bb8e1ab11950917c256f86a724dafabd02daff21717bdaca019d1e14bb98fc87"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-scoped/fixture-source/canonical_history.rs": {
+    "bytes": 1956,
+    "sha256": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-scoped/fixture-source/common.rs": {
+    "bytes": 435,
+    "sha256": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-scoped/fixture-source/drain.mjs": {
+    "bytes": 3738,
+    "sha256": "53c965c5c20fc777441387f099c8752a81228ad5c32fa1ed5caab603cf0bec34"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-scoped/fixture-source/expected_tools.json": {
+    "bytes": 15661,
+    "sha256": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-scoped/fixture-source/host.rs": {
+    "bytes": 7525,
+    "sha256": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-scoped/fixture-source/provider.py": {
+    "bytes": 1068,
+    "sha256": "b6b451f207d065a84f71648c9486928703b59624242dd330889a5aff7a5bf21e"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-scoped/fixture-source/request_oracle.rs": {
+    "bytes": 11765,
+    "sha256": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-scoped/fixture-source/run.mjs": {
+    "bytes": 26319,
+    "sha256": "43d9fe73fc33d3702b7e413b6ce0a238942b33749894ccd0a9c837ead11d02f9"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-scoped/fixture-source/verify_requests.rs": {
+    "bytes": 2781,
+    "sha256": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-scoped/native.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-scoped/preview.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-scoped/provider.stderr": {
+    "bytes": 72,
+    "sha256": "2c13880ddbe8732a3e479152b37492eeb0879db65d3b885b248985acefa737d4"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-scoped/sample.json": {
+    "bytes": 50229640,
+    "sha256": "9d73aba8b29b5a3417b2a4df260896b4a0f30243f62fc0f730c3bb66b79af022"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-scoped.stderr": {
+    "bytes": 178,
+    "sha256": "404d94b28e20d29ff6ce9dd92f9c1987112868cd5b81c045187bf1976ac439ab"
+  },
+  "products/browser-baseline-vs-scoped/0-short-small-scoped.stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-baseline/fixture/rustx.toml": {
+    "bytes": 688,
+    "sha256": "da70522407fb93c3d0220416cb01369362b6decbd3d4f2ee83114917fab3003a"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-baseline/fixture/workspace/note.txt": {
+    "bytes": 31,
+    "sha256": "6155527e5fdd2a54735d1d085c8095129cb174b72bf4840982799e8b49cd088f"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-baseline/fixture/workspaces.json": {
+    "bytes": 116,
+    "sha256": "7a3ae21ad7f03c8bce91996ca88507f325b3190b5fce6234528e06d9998ce0ec"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-baseline/fixture-source/README.txt": {
+    "bytes": 4326,
+    "sha256": "ec05599048a1454f6f953e89cfd1f9621d5a178d19b5912b029f256a306a2c73"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-baseline/fixture-source/build-host.py": {
+    "bytes": 2032,
+    "sha256": "bb8e1ab11950917c256f86a724dafabd02daff21717bdaca019d1e14bb98fc87"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-baseline/fixture-source/canonical_history.rs": {
+    "bytes": 1956,
+    "sha256": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-baseline/fixture-source/common.rs": {
+    "bytes": 435,
+    "sha256": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-baseline/fixture-source/drain.mjs": {
+    "bytes": 3738,
+    "sha256": "53c965c5c20fc777441387f099c8752a81228ad5c32fa1ed5caab603cf0bec34"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-baseline/fixture-source/expected_tools.json": {
+    "bytes": 15661,
+    "sha256": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-baseline/fixture-source/host.rs": {
+    "bytes": 7525,
+    "sha256": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-baseline/fixture-source/provider.py": {
+    "bytes": 1068,
+    "sha256": "b6b451f207d065a84f71648c9486928703b59624242dd330889a5aff7a5bf21e"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-baseline/fixture-source/request_oracle.rs": {
+    "bytes": 11765,
+    "sha256": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-baseline/fixture-source/run.mjs": {
+    "bytes": 26319,
+    "sha256": "43d9fe73fc33d3702b7e413b6ce0a238942b33749894ccd0a9c837ead11d02f9"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-baseline/fixture-source/verify_requests.rs": {
+    "bytes": 2781,
+    "sha256": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-baseline/native.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-baseline/preview.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-baseline/provider.stderr": {
+    "bytes": 65,
+    "sha256": "50aaca766fc8bcf912b13c90bb5d26c5812b751237c7c0e3b52bf7c242167579"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-baseline/sample.json": {
+    "bytes": 271619115,
+    "sha256": "c620c7aadcc1df990045c89622c000d96d7b73d21fa30c200de36b68c604fc4c"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-baseline.stderr": {
+    "bytes": 178,
+    "sha256": "e341801316d57e18ce70cfb4f27ce343ed27de98ad347a1f6063161caf0f678f"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-baseline.stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-scoped/fixture/rustx.toml": {
+    "bytes": 688,
+    "sha256": "f8627d694fec7e13127cb99f030080b4ee4de43d1554a80bcdbb814eeadbd467"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-scoped/fixture/workspace/note.txt": {
+    "bytes": 31,
+    "sha256": "6155527e5fdd2a54735d1d085c8095129cb174b72bf4840982799e8b49cd088f"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-scoped/fixture/workspaces.json": {
+    "bytes": 116,
+    "sha256": "8433ab202a0ef363950235cb340dc46fa2746693576b456c6e59455744cc94b6"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-scoped/fixture-source/README.txt": {
+    "bytes": 4326,
+    "sha256": "ec05599048a1454f6f953e89cfd1f9621d5a178d19b5912b029f256a306a2c73"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-scoped/fixture-source/build-host.py": {
+    "bytes": 2032,
+    "sha256": "bb8e1ab11950917c256f86a724dafabd02daff21717bdaca019d1e14bb98fc87"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-scoped/fixture-source/canonical_history.rs": {
+    "bytes": 1956,
+    "sha256": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-scoped/fixture-source/common.rs": {
+    "bytes": 435,
+    "sha256": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-scoped/fixture-source/drain.mjs": {
+    "bytes": 3738,
+    "sha256": "53c965c5c20fc777441387f099c8752a81228ad5c32fa1ed5caab603cf0bec34"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-scoped/fixture-source/expected_tools.json": {
+    "bytes": 15661,
+    "sha256": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-scoped/fixture-source/host.rs": {
+    "bytes": 7525,
+    "sha256": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-scoped/fixture-source/provider.py": {
+    "bytes": 1068,
+    "sha256": "b6b451f207d065a84f71648c9486928703b59624242dd330889a5aff7a5bf21e"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-scoped/fixture-source/request_oracle.rs": {
+    "bytes": 11765,
+    "sha256": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-scoped/fixture-source/run.mjs": {
+    "bytes": 26319,
+    "sha256": "43d9fe73fc33d3702b7e413b6ce0a238942b33749894ccd0a9c837ead11d02f9"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-scoped/fixture-source/verify_requests.rs": {
+    "bytes": 2781,
+    "sha256": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-scoped/native.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-scoped/preview.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-scoped/provider.stderr": {
+    "bytes": 65,
+    "sha256": "3a19411d0981b15167eae1b2b75e51b16dba07d7d7cda2723cdb18e4c5d66fe9"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-scoped/sample.json": {
+    "bytes": 271493039,
+    "sha256": "a5a64067c46e8d0aefd6baa3831df1791be3f1a5bd31ea55f2e684945ad62824"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-scoped.stderr": {
+    "bytes": 178,
+    "sha256": "9d84c464b179a6d8e433a73d27e9bd9be7881452e5a78e4e35103bb48abeb075"
+  },
+  "products/browser-baseline-vs-scoped/1-details-resync-scoped.stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-baseline/fixture/rustx.toml": {
+    "bytes": 688,
+    "sha256": "cce5516d26f8aa7affedba89578031eb386b4bbfb9188767715d46064fe71b9d"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-baseline/fixture/workspace/note.txt": {
+    "bytes": 31,
+    "sha256": "6155527e5fdd2a54735d1d085c8095129cb174b72bf4840982799e8b49cd088f"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-baseline/fixture/workspaces.json": {
+    "bytes": 116,
+    "sha256": "f7d5fdcde2a0ae48c9d1a53528e49dbcd40efbacb395ff076b601524352a50eb"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-baseline/fixture-source/README.txt": {
+    "bytes": 4326,
+    "sha256": "ec05599048a1454f6f953e89cfd1f9621d5a178d19b5912b029f256a306a2c73"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-baseline/fixture-source/build-host.py": {
+    "bytes": 2032,
+    "sha256": "bb8e1ab11950917c256f86a724dafabd02daff21717bdaca019d1e14bb98fc87"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-baseline/fixture-source/canonical_history.rs": {
+    "bytes": 1956,
+    "sha256": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-baseline/fixture-source/common.rs": {
+    "bytes": 435,
+    "sha256": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-baseline/fixture-source/drain.mjs": {
+    "bytes": 3738,
+    "sha256": "53c965c5c20fc777441387f099c8752a81228ad5c32fa1ed5caab603cf0bec34"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-baseline/fixture-source/expected_tools.json": {
+    "bytes": 15661,
+    "sha256": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-baseline/fixture-source/host.rs": {
+    "bytes": 7525,
+    "sha256": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-baseline/fixture-source/provider.py": {
+    "bytes": 1068,
+    "sha256": "b6b451f207d065a84f71648c9486928703b59624242dd330889a5aff7a5bf21e"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-baseline/fixture-source/request_oracle.rs": {
+    "bytes": 11765,
+    "sha256": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-baseline/fixture-source/run.mjs": {
+    "bytes": 26319,
+    "sha256": "43d9fe73fc33d3702b7e413b6ce0a238942b33749894ccd0a9c837ead11d02f9"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-baseline/fixture-source/verify_requests.rs": {
+    "bytes": 2781,
+    "sha256": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-baseline/native.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-baseline/preview.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-baseline/provider.stderr": {
+    "bytes": 72,
+    "sha256": "1704f1f20f760df5022a4bb2447f8ff3106df848642c73de010a512ff4bfe280"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-baseline/sample.json": {
+    "bytes": 165432043,
+    "sha256": "0e66f6c6d30c068159fe164c7e714bd7c6af3575f96a7f5c2c0cf8c133aa5ff7"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-baseline.stderr": {
+    "bytes": 178,
+    "sha256": "91feb0a2be965fde1d2f8eb2572df73c74f47a0aa45f6ef5d7d9e18e29aee355"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-baseline.stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-scoped/fixture/rustx.toml": {
+    "bytes": 688,
+    "sha256": "51d07cccdb84b174338aafa7c671bc10e2877af48971f43da6c20d3df9f5e86a"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-scoped/fixture/workspace/note.txt": {
+    "bytes": 31,
+    "sha256": "6155527e5fdd2a54735d1d085c8095129cb174b72bf4840982799e8b49cd088f"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-scoped/fixture/workspaces.json": {
+    "bytes": 116,
+    "sha256": "0cb0c8ac909650e6641e799e7112561a944a2269edb4ad8f940cedce4f002ea5"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-scoped/fixture-source/README.txt": {
+    "bytes": 4326,
+    "sha256": "ec05599048a1454f6f953e89cfd1f9621d5a178d19b5912b029f256a306a2c73"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-scoped/fixture-source/build-host.py": {
+    "bytes": 2032,
+    "sha256": "bb8e1ab11950917c256f86a724dafabd02daff21717bdaca019d1e14bb98fc87"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-scoped/fixture-source/canonical_history.rs": {
+    "bytes": 1956,
+    "sha256": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-scoped/fixture-source/common.rs": {
+    "bytes": 435,
+    "sha256": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-scoped/fixture-source/drain.mjs": {
+    "bytes": 3738,
+    "sha256": "53c965c5c20fc777441387f099c8752a81228ad5c32fa1ed5caab603cf0bec34"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-scoped/fixture-source/expected_tools.json": {
+    "bytes": 15661,
+    "sha256": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-scoped/fixture-source/host.rs": {
+    "bytes": 7525,
+    "sha256": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-scoped/fixture-source/provider.py": {
+    "bytes": 1068,
+    "sha256": "b6b451f207d065a84f71648c9486928703b59624242dd330889a5aff7a5bf21e"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-scoped/fixture-source/request_oracle.rs": {
+    "bytes": 11765,
+    "sha256": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-scoped/fixture-source/run.mjs": {
+    "bytes": 26319,
+    "sha256": "43d9fe73fc33d3702b7e413b6ce0a238942b33749894ccd0a9c837ead11d02f9"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-scoped/fixture-source/verify_requests.rs": {
+    "bytes": 2781,
+    "sha256": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-scoped/native.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-scoped/preview.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-scoped/provider.stderr": {
+    "bytes": 72,
+    "sha256": "c2d44e82736446090da886b42e5f74b055dbe299342e40627aca6ccb26ba5297"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-scoped/sample.json": {
+    "bytes": 164759711,
+    "sha256": "3c1d3b8708a36bae31045ee1ea0240d10ca8ddadfaae9713ca7d130dfdd634dc"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-scoped.stderr": {
+    "bytes": 178,
+    "sha256": "1a015293003c561afe52cb5e214e983a4af3ebf845002907bcfa579052ed2435"
+  },
+  "products/browser-baseline-vs-scoped/1-short-large-scoped.stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-baseline/fixture/rustx.toml": {
+    "bytes": 688,
+    "sha256": "605b81331f900a0800f581345bb39508a8f70affa7997fa2fd37fcf59d22bfb5"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-baseline/fixture/workspace/note.txt": {
+    "bytes": 31,
+    "sha256": "6155527e5fdd2a54735d1d085c8095129cb174b72bf4840982799e8b49cd088f"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-baseline/fixture/workspaces.json": {
+    "bytes": 116,
+    "sha256": "a501975552f267b4fcb7d59286b6fcfa37e34632f3d7fe61d181c854dffe0ee0"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-baseline/fixture-source/README.txt": {
+    "bytes": 4326,
+    "sha256": "ec05599048a1454f6f953e89cfd1f9621d5a178d19b5912b029f256a306a2c73"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-baseline/fixture-source/build-host.py": {
+    "bytes": 2032,
+    "sha256": "bb8e1ab11950917c256f86a724dafabd02daff21717bdaca019d1e14bb98fc87"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-baseline/fixture-source/canonical_history.rs": {
+    "bytes": 1956,
+    "sha256": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-baseline/fixture-source/common.rs": {
+    "bytes": 435,
+    "sha256": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-baseline/fixture-source/drain.mjs": {
+    "bytes": 3738,
+    "sha256": "53c965c5c20fc777441387f099c8752a81228ad5c32fa1ed5caab603cf0bec34"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-baseline/fixture-source/expected_tools.json": {
+    "bytes": 15661,
+    "sha256": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-baseline/fixture-source/host.rs": {
+    "bytes": 7525,
+    "sha256": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-baseline/fixture-source/provider.py": {
+    "bytes": 1068,
+    "sha256": "b6b451f207d065a84f71648c9486928703b59624242dd330889a5aff7a5bf21e"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-baseline/fixture-source/request_oracle.rs": {
+    "bytes": 11765,
+    "sha256": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-baseline/fixture-source/run.mjs": {
+    "bytes": 26319,
+    "sha256": "43d9fe73fc33d3702b7e413b6ce0a238942b33749894ccd0a9c837ead11d02f9"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-baseline/fixture-source/verify_requests.rs": {
+    "bytes": 2781,
+    "sha256": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-baseline/native.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-baseline/preview.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-baseline/provider.stderr": {
+    "bytes": 72,
+    "sha256": "b611d98aba9af656f10b2931b26722c5ac9b0b8597ece866b0d61a9bde3f2698"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-baseline/sample.json": {
+    "bytes": 49915102,
+    "sha256": "92ab19d2aba2fbe6a79c7d72c341824c43dadf156db2df747a9eaa48da18c1d7"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-baseline.stderr": {
+    "bytes": 178,
+    "sha256": "077f34486596895c3d559dcb355119c802c1bd1a999679df9c80a139905d4047"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-baseline.stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-scoped/fixture/rustx.toml": {
+    "bytes": 688,
+    "sha256": "83479dca6ceac9f3704605570a0e5d380da4192588abb5c745205f10a66490d6"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-scoped/fixture/workspace/note.txt": {
+    "bytes": 31,
+    "sha256": "6155527e5fdd2a54735d1d085c8095129cb174b72bf4840982799e8b49cd088f"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-scoped/fixture/workspaces.json": {
+    "bytes": 116,
+    "sha256": "4ee332da5a14f9b8ad457d95c1edce08274d24adb61f3e98399b5c3088dc5ba8"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-scoped/fixture-source/README.txt": {
+    "bytes": 4326,
+    "sha256": "ec05599048a1454f6f953e89cfd1f9621d5a178d19b5912b029f256a306a2c73"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-scoped/fixture-source/build-host.py": {
+    "bytes": 2032,
+    "sha256": "bb8e1ab11950917c256f86a724dafabd02daff21717bdaca019d1e14bb98fc87"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-scoped/fixture-source/canonical_history.rs": {
+    "bytes": 1956,
+    "sha256": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-scoped/fixture-source/common.rs": {
+    "bytes": 435,
+    "sha256": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-scoped/fixture-source/drain.mjs": {
+    "bytes": 3738,
+    "sha256": "53c965c5c20fc777441387f099c8752a81228ad5c32fa1ed5caab603cf0bec34"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-scoped/fixture-source/expected_tools.json": {
+    "bytes": 15661,
+    "sha256": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-scoped/fixture-source/host.rs": {
+    "bytes": 7525,
+    "sha256": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-scoped/fixture-source/provider.py": {
+    "bytes": 1068,
+    "sha256": "b6b451f207d065a84f71648c9486928703b59624242dd330889a5aff7a5bf21e"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-scoped/fixture-source/request_oracle.rs": {
+    "bytes": 11765,
+    "sha256": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-scoped/fixture-source/run.mjs": {
+    "bytes": 26319,
+    "sha256": "43d9fe73fc33d3702b7e413b6ce0a238942b33749894ccd0a9c837ead11d02f9"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-scoped/fixture-source/verify_requests.rs": {
+    "bytes": 2781,
+    "sha256": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-scoped/native.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-scoped/preview.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-scoped/provider.stderr": {
+    "bytes": 72,
+    "sha256": "51822a182c68a9f7b53523185b8726fec5cac869c19abf789148bf219c1cad1b"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-scoped/sample.json": {
+    "bytes": 50442086,
+    "sha256": "f430b80638ce8cb8f4f82ffca66e04b1d137aeaffef601949aa875a988b6efb9"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-scoped.stderr": {
+    "bytes": 178,
+    "sha256": "c55ed46a92aba4092b327612fc9c04883ca0606079a20b8f3cb29ce5c1573229"
+  },
+  "products/browser-baseline-vs-scoped/1-short-small-scoped.stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-baseline/fixture/rustx.toml": {
+    "bytes": 688,
+    "sha256": "633cf8613402b0c6a0487b36b10ede5e26597493cba009b297e56952f9de5117"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-baseline/fixture/workspace/note.txt": {
+    "bytes": 31,
+    "sha256": "6155527e5fdd2a54735d1d085c8095129cb174b72bf4840982799e8b49cd088f"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-baseline/fixture/workspaces.json": {
+    "bytes": 116,
+    "sha256": "14cd543b7531a148dd7087a30e592b95633c53f78ea96bac7c5f3eb9439b8dea"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-baseline/fixture-source/README.txt": {
+    "bytes": 4326,
+    "sha256": "ec05599048a1454f6f953e89cfd1f9621d5a178d19b5912b029f256a306a2c73"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-baseline/fixture-source/build-host.py": {
+    "bytes": 2032,
+    "sha256": "bb8e1ab11950917c256f86a724dafabd02daff21717bdaca019d1e14bb98fc87"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-baseline/fixture-source/canonical_history.rs": {
+    "bytes": 1956,
+    "sha256": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-baseline/fixture-source/common.rs": {
+    "bytes": 435,
+    "sha256": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-baseline/fixture-source/drain.mjs": {
+    "bytes": 3738,
+    "sha256": "53c965c5c20fc777441387f099c8752a81228ad5c32fa1ed5caab603cf0bec34"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-baseline/fixture-source/expected_tools.json": {
+    "bytes": 15661,
+    "sha256": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-baseline/fixture-source/host.rs": {
+    "bytes": 7525,
+    "sha256": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-baseline/fixture-source/provider.py": {
+    "bytes": 1068,
+    "sha256": "b6b451f207d065a84f71648c9486928703b59624242dd330889a5aff7a5bf21e"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-baseline/fixture-source/request_oracle.rs": {
+    "bytes": 11765,
+    "sha256": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-baseline/fixture-source/run.mjs": {
+    "bytes": 26319,
+    "sha256": "43d9fe73fc33d3702b7e413b6ce0a238942b33749894ccd0a9c837ead11d02f9"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-baseline/fixture-source/verify_requests.rs": {
+    "bytes": 2781,
+    "sha256": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-baseline/native.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-baseline/preview.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-baseline/provider.stderr": {
+    "bytes": 65,
+    "sha256": "3cd19f3d50c3ff2adb5882ae5a7a4f046d2192a218c680b33bc058936c51d793"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-baseline/sample.json": {
+    "bytes": 271781617,
+    "sha256": "b815378085bb57ed818a5bba62381cb2e59e3467301d4643009321f00f7aee73"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-baseline.stderr": {
+    "bytes": 178,
+    "sha256": "b61726ff8ad6be02fe04fde33c06659cb02ab7177d9917cd9ba621062f44b6e4"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-baseline.stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-scoped/fixture/rustx.toml": {
+    "bytes": 688,
+    "sha256": "3d7317557ccb3a030cbb584d1c23ea1633710f8b0a89846365e6623352998048"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-scoped/fixture/workspace/note.txt": {
+    "bytes": 31,
+    "sha256": "6155527e5fdd2a54735d1d085c8095129cb174b72bf4840982799e8b49cd088f"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-scoped/fixture/workspaces.json": {
+    "bytes": 116,
+    "sha256": "cd8f97f0e2a166f90e722c9d8e0edefde40ee4c793eacb72c1bf4844207b3881"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-scoped/fixture-source/README.txt": {
+    "bytes": 4326,
+    "sha256": "ec05599048a1454f6f953e89cfd1f9621d5a178d19b5912b029f256a306a2c73"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-scoped/fixture-source/build-host.py": {
+    "bytes": 2032,
+    "sha256": "bb8e1ab11950917c256f86a724dafabd02daff21717bdaca019d1e14bb98fc87"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-scoped/fixture-source/canonical_history.rs": {
+    "bytes": 1956,
+    "sha256": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-scoped/fixture-source/common.rs": {
+    "bytes": 435,
+    "sha256": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-scoped/fixture-source/drain.mjs": {
+    "bytes": 3738,
+    "sha256": "53c965c5c20fc777441387f099c8752a81228ad5c32fa1ed5caab603cf0bec34"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-scoped/fixture-source/expected_tools.json": {
+    "bytes": 15661,
+    "sha256": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-scoped/fixture-source/host.rs": {
+    "bytes": 7525,
+    "sha256": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-scoped/fixture-source/provider.py": {
+    "bytes": 1068,
+    "sha256": "b6b451f207d065a84f71648c9486928703b59624242dd330889a5aff7a5bf21e"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-scoped/fixture-source/request_oracle.rs": {
+    "bytes": 11765,
+    "sha256": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-scoped/fixture-source/run.mjs": {
+    "bytes": 26319,
+    "sha256": "43d9fe73fc33d3702b7e413b6ce0a238942b33749894ccd0a9c837ead11d02f9"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-scoped/fixture-source/verify_requests.rs": {
+    "bytes": 2781,
+    "sha256": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-scoped/native.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-scoped/preview.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-scoped/provider.stderr": {
+    "bytes": 65,
+    "sha256": "36f255b44927cc0e1f04ca3c6c3ded370be804f52ae3ec43f1de9e3804f8a715"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-scoped/sample.json": {
+    "bytes": 271423498,
+    "sha256": "0440be0e51d4d4403996fd9a96b89ae2f49af715bd4bfc171a627652d803da28"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-scoped.stderr": {
+    "bytes": 178,
+    "sha256": "16bfe36953331af3a29d63ea0ea804404074185a6c22c632ae36a67af17bacd9"
+  },
+  "products/browser-baseline-vs-scoped/2-details-resync-scoped.stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-baseline/fixture/rustx.toml": {
+    "bytes": 688,
+    "sha256": "c3117fec3fdeb675bcc475b93636895aea0f765703a2a470f300b79395b30ee7"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-baseline/fixture/workspace/note.txt": {
+    "bytes": 31,
+    "sha256": "6155527e5fdd2a54735d1d085c8095129cb174b72bf4840982799e8b49cd088f"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-baseline/fixture/workspaces.json": {
+    "bytes": 116,
+    "sha256": "c916cdf29e94f99162da1b345086c86ba66374cab441e4ad0706df03da2665bb"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-baseline/fixture-source/README.txt": {
+    "bytes": 4326,
+    "sha256": "ec05599048a1454f6f953e89cfd1f9621d5a178d19b5912b029f256a306a2c73"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-baseline/fixture-source/build-host.py": {
+    "bytes": 2032,
+    "sha256": "bb8e1ab11950917c256f86a724dafabd02daff21717bdaca019d1e14bb98fc87"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-baseline/fixture-source/canonical_history.rs": {
+    "bytes": 1956,
+    "sha256": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-baseline/fixture-source/common.rs": {
+    "bytes": 435,
+    "sha256": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-baseline/fixture-source/drain.mjs": {
+    "bytes": 3738,
+    "sha256": "53c965c5c20fc777441387f099c8752a81228ad5c32fa1ed5caab603cf0bec34"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-baseline/fixture-source/expected_tools.json": {
+    "bytes": 15661,
+    "sha256": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-baseline/fixture-source/host.rs": {
+    "bytes": 7525,
+    "sha256": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-baseline/fixture-source/provider.py": {
+    "bytes": 1068,
+    "sha256": "b6b451f207d065a84f71648c9486928703b59624242dd330889a5aff7a5bf21e"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-baseline/fixture-source/request_oracle.rs": {
+    "bytes": 11765,
+    "sha256": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-baseline/fixture-source/run.mjs": {
+    "bytes": 26319,
+    "sha256": "43d9fe73fc33d3702b7e413b6ce0a238942b33749894ccd0a9c837ead11d02f9"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-baseline/fixture-source/verify_requests.rs": {
+    "bytes": 2781,
+    "sha256": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-baseline/native.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-baseline/preview.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-baseline/provider.stderr": {
+    "bytes": 72,
+    "sha256": "f31b1ed9d3ee0e53da65e855b1c4b9f17ffe9cfd124d5ef02c7662f1b9a5059e"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-baseline/sample.json": {
+    "bytes": 164658465,
+    "sha256": "86b6e365d8070f5169aeed03b7c655def369a634e3290cc1116f56d50f8a5b34"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-baseline.stderr": {
+    "bytes": 178,
+    "sha256": "6cfaff450bb79a8252af864f90cebffa4f71eaf5013dc903884352c8f6c173eb"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-baseline.stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-scoped/fixture/rustx.toml": {
+    "bytes": 688,
+    "sha256": "774a53d854f8fdd5d351a296bf10353d77d6d985da893fec7a1cd38d4d68e014"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-scoped/fixture/workspace/note.txt": {
+    "bytes": 31,
+    "sha256": "6155527e5fdd2a54735d1d085c8095129cb174b72bf4840982799e8b49cd088f"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-scoped/fixture/workspaces.json": {
+    "bytes": 116,
+    "sha256": "9887564090d1b0579bf5db2565281a67dbb77aa7d939d1a8fcae557e430f9744"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-scoped/fixture-source/README.txt": {
+    "bytes": 4326,
+    "sha256": "ec05599048a1454f6f953e89cfd1f9621d5a178d19b5912b029f256a306a2c73"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-scoped/fixture-source/build-host.py": {
+    "bytes": 2032,
+    "sha256": "bb8e1ab11950917c256f86a724dafabd02daff21717bdaca019d1e14bb98fc87"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-scoped/fixture-source/canonical_history.rs": {
+    "bytes": 1956,
+    "sha256": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-scoped/fixture-source/common.rs": {
+    "bytes": 435,
+    "sha256": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-scoped/fixture-source/drain.mjs": {
+    "bytes": 3738,
+    "sha256": "53c965c5c20fc777441387f099c8752a81228ad5c32fa1ed5caab603cf0bec34"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-scoped/fixture-source/expected_tools.json": {
+    "bytes": 15661,
+    "sha256": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-scoped/fixture-source/host.rs": {
+    "bytes": 7525,
+    "sha256": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-scoped/fixture-source/provider.py": {
+    "bytes": 1068,
+    "sha256": "b6b451f207d065a84f71648c9486928703b59624242dd330889a5aff7a5bf21e"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-scoped/fixture-source/request_oracle.rs": {
+    "bytes": 11765,
+    "sha256": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-scoped/fixture-source/run.mjs": {
+    "bytes": 26319,
+    "sha256": "43d9fe73fc33d3702b7e413b6ce0a238942b33749894ccd0a9c837ead11d02f9"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-scoped/fixture-source/verify_requests.rs": {
+    "bytes": 2781,
+    "sha256": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-scoped/native.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-scoped/preview.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-scoped/provider.stderr": {
+    "bytes": 72,
+    "sha256": "ee24b227ceeb960b9561e3989d91c1850744ca8509dd929eb299bb8c3f967a88"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-scoped/sample.json": {
+    "bytes": 164177039,
+    "sha256": "ec091a17932f14351b3aac434a8b818da6c48f396d6449e513b6b6f3e8f8c836"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-scoped.stderr": {
+    "bytes": 178,
+    "sha256": "19c0bd0c17171a019f54ca3e415185738d7ed3a7e4e6a5cdef73b438acb4e292"
+  },
+  "products/browser-baseline-vs-scoped/2-short-large-scoped.stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-baseline/fixture/rustx.toml": {
+    "bytes": 688,
+    "sha256": "2ef3ec40451239d592402d75c6f9118782d4365d942e45f23546fad1d12f6058"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-baseline/fixture/workspace/note.txt": {
+    "bytes": 31,
+    "sha256": "6155527e5fdd2a54735d1d085c8095129cb174b72bf4840982799e8b49cd088f"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-baseline/fixture/workspaces.json": {
+    "bytes": 116,
+    "sha256": "460cb9a28c0311ee2bbb30858adf34aa8d00aae4f60d74c8bde55f4d2bd91438"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-baseline/fixture-source/README.txt": {
+    "bytes": 4326,
+    "sha256": "ec05599048a1454f6f953e89cfd1f9621d5a178d19b5912b029f256a306a2c73"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-baseline/fixture-source/build-host.py": {
+    "bytes": 2032,
+    "sha256": "bb8e1ab11950917c256f86a724dafabd02daff21717bdaca019d1e14bb98fc87"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-baseline/fixture-source/canonical_history.rs": {
+    "bytes": 1956,
+    "sha256": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-baseline/fixture-source/common.rs": {
+    "bytes": 435,
+    "sha256": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-baseline/fixture-source/drain.mjs": {
+    "bytes": 3738,
+    "sha256": "53c965c5c20fc777441387f099c8752a81228ad5c32fa1ed5caab603cf0bec34"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-baseline/fixture-source/expected_tools.json": {
+    "bytes": 15661,
+    "sha256": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-baseline/fixture-source/host.rs": {
+    "bytes": 7525,
+    "sha256": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-baseline/fixture-source/provider.py": {
+    "bytes": 1068,
+    "sha256": "b6b451f207d065a84f71648c9486928703b59624242dd330889a5aff7a5bf21e"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-baseline/fixture-source/request_oracle.rs": {
+    "bytes": 11765,
+    "sha256": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-baseline/fixture-source/run.mjs": {
+    "bytes": 26319,
+    "sha256": "43d9fe73fc33d3702b7e413b6ce0a238942b33749894ccd0a9c837ead11d02f9"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-baseline/fixture-source/verify_requests.rs": {
+    "bytes": 2781,
+    "sha256": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-baseline/native.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-baseline/preview.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-baseline/provider.stderr": {
+    "bytes": 72,
+    "sha256": "bd33f41d033f7feec1ebc958b7bed5da8d445a0cf1555252a21dc34675c6e888"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-baseline/sample.json": {
+    "bytes": 51050494,
+    "sha256": "eacb84851fb784a4978b270ed20e2a6f7f29d6f21527118700f44e511fd01122"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-baseline.stderr": {
+    "bytes": 178,
+    "sha256": "0277450d34fe2f36df1bdf627f310db76e54b81bcec074602578cb534c849136"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-baseline.stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-scoped/fixture/rustx.toml": {
+    "bytes": 688,
+    "sha256": "793ec3678b0eb4f1cdbd589e2bfda940246b34a4abcfef58b31a969eeb93c944"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-scoped/fixture/workspace/note.txt": {
+    "bytes": 31,
+    "sha256": "6155527e5fdd2a54735d1d085c8095129cb174b72bf4840982799e8b49cd088f"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-scoped/fixture/workspaces.json": {
+    "bytes": 116,
+    "sha256": "ec32a06d789454f84a414452762397b892f91d214ea20507093e837a3942ee92"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-scoped/fixture-source/README.txt": {
+    "bytes": 4326,
+    "sha256": "ec05599048a1454f6f953e89cfd1f9621d5a178d19b5912b029f256a306a2c73"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-scoped/fixture-source/build-host.py": {
+    "bytes": 2032,
+    "sha256": "bb8e1ab11950917c256f86a724dafabd02daff21717bdaca019d1e14bb98fc87"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-scoped/fixture-source/canonical_history.rs": {
+    "bytes": 1956,
+    "sha256": "d1b45a8d5dbb05a526a6b30e13c7d9a5eae59956afcd14808831aaf5154a6c86"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-scoped/fixture-source/common.rs": {
+    "bytes": 435,
+    "sha256": "635ac42bb7a724092abe27e1fc3fe81316b34828c92632520054bfac491fd823"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-scoped/fixture-source/drain.mjs": {
+    "bytes": 3738,
+    "sha256": "53c965c5c20fc777441387f099c8752a81228ad5c32fa1ed5caab603cf0bec34"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-scoped/fixture-source/expected_tools.json": {
+    "bytes": 15661,
+    "sha256": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-scoped/fixture-source/host.rs": {
+    "bytes": 7525,
+    "sha256": "0a166bdee8eed77461170ec04208a40bf267c5069c08764ceab2a93c4d27a87c"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-scoped/fixture-source/provider.py": {
+    "bytes": 1068,
+    "sha256": "b6b451f207d065a84f71648c9486928703b59624242dd330889a5aff7a5bf21e"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-scoped/fixture-source/request_oracle.rs": {
+    "bytes": 11765,
+    "sha256": "87a4cd5e5b90b8e521978a3cc758b2e245245bb2910c61401ac2beb792fa5461"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-scoped/fixture-source/run.mjs": {
+    "bytes": 26319,
+    "sha256": "43d9fe73fc33d3702b7e413b6ce0a238942b33749894ccd0a9c837ead11d02f9"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-scoped/fixture-source/verify_requests.rs": {
+    "bytes": 2781,
+    "sha256": "d8df63d62e3515a1ea221a8e6d81ab2abbac4567a3f234fb9fa1dbdd3ef8a945"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-scoped/native.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-scoped/preview.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-scoped/provider.stderr": {
+    "bytes": 72,
+    "sha256": "51b7eb90d20191f6fb65eba7a86a10a45ca31eef44410619d99fa9f149988b0a"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-scoped/sample.json": {
+    "bytes": 51056499,
+    "sha256": "081e183f534fdf4f797fb59b2f5cbe8cf7640b188eeee9656ebfbe775f8842e5"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-scoped.stderr": {
+    "bytes": 178,
+    "sha256": "c6155c6f4a216a2c21101aadaa45abb790808778c82228ce49d60cc01ce3e94f"
+  },
+  "products/browser-baseline-vs-scoped/2-short-small-scoped.stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "products/browser-baseline-vs-scoped/cohort-manifest.json": {
+    "bytes": 264507,
+    "sha256": "6da2109837c51e43f0ad12e19d0cf07d72efbd3b4e1c3d35da6ed886a42e0bcd"
+  },
+  "three-build-verification.json": {
+    "bytes": 9506,
+    "sha256": "bd39ee1045b792c9738154257ffa860a7fe6ba3fe72cd8eff4ce91ed1aa67d67"
+  }
+}

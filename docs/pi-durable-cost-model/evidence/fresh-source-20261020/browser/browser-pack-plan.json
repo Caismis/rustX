@@ -1,0 +1,31 @@
+{
+  "patterns": [
+    "products/browser-*/**/*",
+    "browser-delivery/**/*",
+    "browser-readable-v3/**/*",
+    "browser-independent-verification/**/*",
+    "browser*.json",
+    "browser*.jsonl",
+    "browser*.stdout",
+    "browser*.stderr",
+    "environment-events.jsonl",
+    "common-frontend.json",
+    "fixture-verification.json",
+    "handoff-fixture-identity.json",
+    "handoff-pinned-inputs.json",
+    "post-browser-binary-verification.json",
+    "three-build-verification.json",
+    "frontend-setup*/**/*",
+    "github-run-39343003710.json",
+    "github-run-39346281958.json",
+    "github-jobs-39343003710.json",
+    "github-jobs-39346281958.json"
+  ],
+  "files": 740,
+  "input_bytes": 3742987807,
+  "available_bytes_before_archive": 9965428736,
+  "one_archive_attempt": true,
+  "originals_retained": true,
+  "timed_products_ended_utc": "2026-10-20T04:22:14.918621+00:00",
+  "start_utc": "2026-10-20T04:28:31.819159+00:00"
+}

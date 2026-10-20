@@ -1,0 +1,73 @@
+{
+  "checked_utc": "2026-10-20T03:07:07.832456+00:00",
+  "paths": [
+    {
+      "path": "/workspace/pr485-study",
+      "device": 27,
+      "available_bytes": 13912285184
+    },
+    {
+      "path": "/var/lib/docker",
+      "device": 27,
+      "available_bytes": 13912285184
+    }
+  ],
+  "distinct_backing_filesystems": 1,
+  "browser_strict_5gib_guard_passed": true,
+  "planning_16gib_after_setup_met": false,
+  "image": [
+    {
+      "Id": "sha256:2c1f4e0fd6450f43ddb46d60c2a6df30855a8588e165b1f2559fb0eda8d7ff35",
+      "RepoTags": [],
+      "RepoDigests": [
+        "mcr.microsoft.com/playwright@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7"
+      ],
+      "Parent": "",
+      "Comment": "buildkit.dockerfile.v0",
+      "Created": "2026-09-04T23:42:21.248887746Z",
+      "DockerVersion": "",
+      "Author": "",
+      "Architecture": "amd64",
+      "Os": "linux",
+      "Size": 2505762089,
+      "GraphDriver": {
+        "Data": null,
+        "Name": "vfs"
+      },
+      "RootFS": {
+        "Type": "layers",
+        "Layers": [
+          "sha256:b9a65b3c65ab22d490085bd0bf5490e2409da8748b406870f2463bdc41cd6795",
+          "sha256:05b61f708389aecf2a9b2e058f554db6d84eb17811415f3b34768feebe0bea14",
+          "sha256:73a48c91864c16f507959610c8534667ab25537630e84399f31d968661ed94f9",
+          "sha256:cd7e6e338465408114835eb137df15785b6ac45c2b8046f78773557fe7c0a51c",
+          "sha256:67c5b2ab4bb8dd6c3ece663ece744316ccae0552a54bc2b27e811611cf366472",
+          "sha256:cd321a6dc023a72bba4dc6b34cef9892a2112c17860f4225691daa6a333aa005",
+          "sha256:656afaafaa812f188da425142df4d594b7639d8918fd42490523da6f151b11a8"
+        ]
+      },
+      "Metadata": {
+        "LastTagTime": "0001-01-01T00:00:00Z"
+      },
+      "Config": {
+        "Cmd": [
+          "/bin/bash"
+        ],
+        "Entrypoint": null,
+        "Env": [
+          "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+          "LANG=C.UTF-8",
+          "LC_ALL=C.UTF-8",
+          "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright"
+        ],
+        "Labels": {
+          "org.opencontainers.image.version": "24.04"
+        },
+        "OnBuild": null,
+        "User": "",
+        "Volumes": null,
+        "WorkingDir": ""
+      }
+    }
+  ]
+}

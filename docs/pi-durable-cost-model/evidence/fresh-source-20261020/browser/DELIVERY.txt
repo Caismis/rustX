@@ -1,0 +1,5 @@
+Raw archive:pr485-browser-source-evidence.tar.xz
+SHA256:221a57db606c4a72645a74be999ec95d3ad97e91f4412ee5295148c4929ffc3d
+Bytes:19450824
+Library:libfile_83e7b0cc2c0c819196e8d9b58f1fec5e
+The archive contains all740selected original evidence files with an embedded SHA256/length manifest verified against every member. Original local files and all3compiled Native/host/library binaries remain preserved. Archive package includes raw success/failure/partial products,frozenfixture,common frontend dist,all cohort manifests,readableCSV,replayers,setup/failure/events and selected build identities. OriginalSource/fixture files were not edited.

@@ -1,0 +1,23 @@
+{
+  "baseline": {
+    "head": "623b41b869a95c888eb04f907cbf607232699a2f",
+    "conformance": "711b5af1ac3500e36f0f1bd827d108fb975a088b5e24a8d3a99218d7812ed388",
+    "host": "12f4354c26334358c4d585d5159064c13602730346c661a6439326d31149be25",
+    "library": "c529acd9a2f6d18fb297e0c38facfdd46597ce04e1c44890d0048ed9e99dffb6",
+    "retained_and_verified": true
+  },
+  "geometry": {
+    "head": "89d6b618eeba8afaf4b95af4406057330baa60a6",
+    "conformance": "d25cae1955161392e1ecfde60b1fcdf87ee17577ee4531da1dac133391dbd4a1",
+    "host": "fdfc4d0d9bf53d2a6796527486ddaa27a74ac82b4c65c276204b309ae842af30",
+    "library": "c72106cd7f3b0a1b8c930b2d5f109110e1c88c8bc8b362ca934555190d9aebbd",
+    "retained_and_verified": true
+  },
+  "scoped": {
+    "head": "31668f7a74b63446c538e00ed41ebfc42f0bc1a8",
+    "conformance": "6e8ea40f0c64a698aa527b52db9a9a10a2deb516d3863180590bfa553ef358aa",
+    "host": "74adcd52ad62656c2d48f4052ea40347555ffea2fbc6ac5b4b968ae9a37f2088",
+    "library": "b53c656b3bbd3e76466a9301bd0b4cf26745a130a44aade95556ba00a229a737",
+    "retained_and_verified": true
+  }
+}

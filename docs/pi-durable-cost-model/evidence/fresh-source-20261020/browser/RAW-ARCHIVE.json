@@ -1,0 +1,19 @@
+{
+  "path": "/workspace/pr485-study/delivery/pr485-browser-source-evidence.tar.xz",
+  "bytes": 19450824,
+  "sha256": "221a57db606c4a72645a74be999ec95d3ad97e91f4412ee5295148c4929ffc3d",
+  "members_verified": 740,
+  "original_bytes": 3742987807,
+  "one_archive_attempt": true,
+  "library": {
+    "status": "succeeded",
+    "library_file_id": "libfile_83e7b0cc2c0c819196e8d9b58f1fec5e",
+    "file_id": "file_00000000b6f882308d6eb00e63aa02de",
+    "file_name": "pr485-browser-source-evidence.tar.xz",
+    "path": "/pr485-browser-source-evidence.tar.xz",
+    "current_version_number": 0,
+    "file_size_bytes": 19450824
+  },
+  "archive_filename": "pr485-browser-source-evidence.tar.xz",
+  "external_manifest_filename": "pr485-browser-source-evidence.tar.manifest.json"
+}

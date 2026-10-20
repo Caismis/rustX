@@ -1,0 +1,11 @@
+--- untimed-external-driver-before-preflight-correction.py
++++ actual-external-driver-before-first-product.py
+@@ -77,7 +77,7 @@
+     assert host['extern']['rustx']['sha256'] == identity['library_sha256']
+     assert sha(build / 'host/inspector-host') == host['binary_sha256']
+     libraries = [item for item in preserved['artifacts'] if item['kind'] == ['lib']
+-                 and item['name'] == 'rustx']
++                 and item['name'] == 'rustx' and item['preserved'].endswith('.rlib')]
+     assert len(libraries) == 1 and sha(libraries[0]['preserved']) == identity['library_sha256']
+     copied = []
+     for item in preserved['artifacts']:

@@ -1,0 +1,198 @@
+{
+  "oracle_sha256": "f251b2f4a475cd766ca074aac3e93d777aae9a2d856e29d1d4e037f67b16df8a",
+  "expected_tools_sha256": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d",
+  "scope": "All native tools included using published pi-oracle normalized(body,workspace,dynamic=true), exact model time, exact recorded fixture workspace/note.txt substitution only. Text/content/null/tool-argument representation normalization, not literal HTTP-byte equality. This oracle has no sameEngine parameter. No Rust/Pi assertion. Failed products have no accepted complete/provider report and are excluded from this pass, with raw failures retained.",
+  "complete_pairs": 13,
+  "paired_requests": 630,
+  "results": [
+    {
+      "file": "/workspace/pr485-study/evidence/products/browser-baseline-vs-geometry-v2/0-short-small-baseline/sample.json",
+      "sha256": "513b8e5ae1271ccfc9e040ba4e79fae520e795ee97924d18f9243e4dd7c293e3",
+      "source": "623b41b869a95c888eb04f907cbf607232699a2f",
+      "requests": 40,
+      "full_semantic_expected_equal": true
+    },
+    {
+      "file": "/workspace/pr485-study/evidence/products/browser-baseline-vs-geometry-v2/0-short-small-geometry/sample.json",
+      "sha256": "da6f463011df7d2e5f2d72e823f65f6c77510bfbfd30c41ccbd1d464086f70df",
+      "source": "89d6b618eeba8afaf4b95af4406057330baa60a6",
+      "requests": 40,
+      "full_semantic_expected_equal": true
+    },
+    {
+      "file": "/workspace/pr485-study/evidence/products/browser-baseline-vs-geometry-v2/1-short-small-geometry/sample.json",
+      "sha256": "43aaa2fcfb7676063d6f3fec103588ed49ec08eb7e218f0d666e9712349cafc1",
+      "source": "89d6b618eeba8afaf4b95af4406057330baa60a6",
+      "requests": 40,
+      "full_semantic_expected_equal": true
+    },
+    {
+      "file": "/workspace/pr485-study/evidence/products/browser-baseline-vs-geometry-v2/1-short-small-baseline/sample.json",
+      "sha256": "b2768e8575055b9d263b9122d09405303b8fdd0445247f33832338e68c9ad7e2",
+      "source": "623b41b869a95c888eb04f907cbf607232699a2f",
+      "requests": 40,
+      "full_semantic_expected_equal": true
+    },
+    {
+      "file": "/workspace/pr485-study/evidence/products/browser-baseline-vs-geometry-v2/2-short-small-baseline/sample.json",
+      "sha256": "25c1378fcd312660694212adcfba835935b7cbc199e34293771bf65ab5ce1ccf",
+      "source": "623b41b869a95c888eb04f907cbf607232699a2f",
+      "requests": 40,
+      "full_semantic_expected_equal": true
+    },
+    {
+      "file": "/workspace/pr485-study/evidence/products/browser-baseline-vs-geometry-v2/2-short-small-geometry/sample.json",
+      "sha256": "cdef57bbabfebbe62ade3bfb9a134e4ff8e3abaa9110c9b88205de8993761430",
+      "source": "89d6b618eeba8afaf4b95af4406057330baa60a6",
+      "requests": 40,
+      "full_semantic_expected_equal": true
+    },
+    {
+      "file": "/workspace/pr485-study/evidence/products/browser-baseline-vs-geometry-v2/0-short-large-geometry/sample.json",
+      "sha256": "c2a05a0e979d052771cdbc88f1ee4c90977906fee20e54bfc2b6ad97927d701d",
+      "source": "89d6b618eeba8afaf4b95af4406057330baa60a6",
+      "requests": 96,
+      "full_semantic_expected_equal": true
+    },
+    {
+      "file": "/workspace/pr485-study/evidence/products/browser-baseline-vs-geometry-v2/0-short-large-baseline/sample.json",
+      "sha256": "1578429ed6605c5f19d2151833e775a6e59d12abf5f964716b41a3b82a6353ab",
+      "source": "623b41b869a95c888eb04f907cbf607232699a2f",
+      "requests": 96,
+      "full_semantic_expected_equal": true
+    },
+    {
+      "file": "/workspace/pr485-study/evidence/products/browser-baseline-vs-geometry-v2/1-short-large-baseline/sample.json",
+      "sha256": "6e2911c8d143e1f4745f28ece17f695ae8c2889ad41c28628823c471368da5c3",
+      "source": "623b41b869a95c888eb04f907cbf607232699a2f",
+      "requests": 96,
+      "full_semantic_expected_equal": true
+    },
+    {
+      "file": "/workspace/pr485-study/evidence/products/browser-baseline-vs-scoped/0-short-small-baseline/sample.json",
+      "sha256": "98bdb1049435306db929d9b07b498dc30e1c62263f5bb55ab3680020737ad1b6",
+      "source": "623b41b869a95c888eb04f907cbf607232699a2f",
+      "requests": 40,
+      "full_semantic_expected_equal": true
+    },
+    {
+      "file": "/workspace/pr485-study/evidence/products/browser-baseline-vs-scoped/0-short-small-scoped/sample.json",
+      "sha256": "9d73aba8b29b5a3417b2a4df260896b4a0f30243f62fc0f730c3bb66b79af022",
+      "source": "31668f7a74b63446c538e00ed41ebfc42f0bc1a8",
+      "requests": 40,
+      "full_semantic_expected_equal": true
+    },
+    {
+      "file": "/workspace/pr485-study/evidence/products/browser-baseline-vs-scoped/1-short-small-scoped/sample.json",
+      "sha256": "f430b80638ce8cb8f4f82ffca66e04b1d137aeaffef601949aa875a988b6efb9",
+      "source": "31668f7a74b63446c538e00ed41ebfc42f0bc1a8",
+      "requests": 40,
+      "full_semantic_expected_equal": true
+    },
+    {
+      "file": "/workspace/pr485-study/evidence/products/browser-baseline-vs-scoped/1-short-small-baseline/sample.json",
+      "sha256": "92ab19d2aba2fbe6a79c7d72c341824c43dadf156db2df747a9eaa48da18c1d7",
+      "source": "623b41b869a95c888eb04f907cbf607232699a2f",
+      "requests": 40,
+      "full_semantic_expected_equal": true
+    },
+    {
+      "file": "/workspace/pr485-study/evidence/products/browser-baseline-vs-scoped/2-short-small-baseline/sample.json",
+      "sha256": "eacb84851fb784a4978b270ed20e2a6f7f29d6f21527118700f44e511fd01122",
+      "source": "623b41b869a95c888eb04f907cbf607232699a2f",
+      "requests": 40,
+      "full_semantic_expected_equal": true
+    },
+    {
+      "file": "/workspace/pr485-study/evidence/products/browser-baseline-vs-scoped/2-short-small-scoped/sample.json",
+      "sha256": "081e183f534fdf4f797fb59b2f5cbe8cf7640b188eeee9656ebfbe775f8842e5",
+      "source": "31668f7a74b63446c538e00ed41ebfc42f0bc1a8",
+      "requests": 40,
+      "full_semantic_expected_equal": true
+    },
+    {
+      "file": "/workspace/pr485-study/evidence/products/browser-baseline-vs-scoped/0-short-large-scoped/sample.json",
+      "sha256": "a6327f2c4ba5e3b3fd3efa9937e5ca1527d1f7adb532de4aaabd8089dfd80f7a",
+      "source": "31668f7a74b63446c538e00ed41ebfc42f0bc1a8",
+      "requests": 96,
+      "full_semantic_expected_equal": true
+    },
+    {
+      "file": "/workspace/pr485-study/evidence/products/browser-baseline-vs-scoped/0-short-large-baseline/sample.json",
+      "sha256": "d34ac207e8c42def8c748de7f956f7e3c41e0194851ee1c176c9e17c1381c1f0",
+      "source": "623b41b869a95c888eb04f907cbf607232699a2f",
+      "requests": 96,
+      "full_semantic_expected_equal": true
+    },
+    {
+      "file": "/workspace/pr485-study/evidence/products/browser-baseline-vs-scoped/1-short-large-baseline/sample.json",
+      "sha256": "0e66f6c6d30c068159fe164c7e714bd7c6af3575f96a7f5c2c0cf8c133aa5ff7",
+      "source": "623b41b869a95c888eb04f907cbf607232699a2f",
+      "requests": 96,
+      "full_semantic_expected_equal": true
+    },
+    {
+      "file": "/workspace/pr485-study/evidence/products/browser-baseline-vs-scoped/1-short-large-scoped/sample.json",
+      "sha256": "3c1d3b8708a36bae31045ee1ea0240d10ca8ddadfaae9713ca7d130dfdd634dc",
+      "source": "31668f7a74b63446c538e00ed41ebfc42f0bc1a8",
+      "requests": 96,
+      "full_semantic_expected_equal": true
+    },
+    {
+      "file": "/workspace/pr485-study/evidence/products/browser-baseline-vs-scoped/2-short-large-scoped/sample.json",
+      "sha256": "ec091a17932f14351b3aac434a8b818da6c48f396d6449e513b6b6f3e8f8c836",
+      "source": "31668f7a74b63446c538e00ed41ebfc42f0bc1a8",
+      "requests": 96,
+      "full_semantic_expected_equal": true
+    },
+    {
+      "file": "/workspace/pr485-study/evidence/products/browser-baseline-vs-scoped/2-short-large-baseline/sample.json",
+      "sha256": "86b6e365d8070f5169aeed03b7c655def369a634e3290cc1116f56d50f8a5b34",
+      "source": "623b41b869a95c888eb04f907cbf607232699a2f",
+      "requests": 96,
+      "full_semantic_expected_equal": true
+    },
+    {
+      "file": "/workspace/pr485-study/evidence/products/browser-baseline-vs-scoped/0-details-resync-scoped/sample.json",
+      "sha256": "51553ab4992dcd403a330974355c618e0121f8bbccf3d7519dfb3857c479122a",
+      "source": "31668f7a74b63446c538e00ed41ebfc42f0bc1a8",
+      "requests": 2,
+      "full_semantic_expected_equal": true
+    },
+    {
+      "file": "/workspace/pr485-study/evidence/products/browser-baseline-vs-scoped/0-details-resync-baseline/sample.json",
+      "sha256": "49b3d87b31f0643e474e5e92aaa113f65c3701d7db3456cb818bbfffa8a378b5",
+      "source": "623b41b869a95c888eb04f907cbf607232699a2f",
+      "requests": 2,
+      "full_semantic_expected_equal": true
+    },
+    {
+      "file": "/workspace/pr485-study/evidence/products/browser-baseline-vs-scoped/1-details-resync-baseline/sample.json",
+      "sha256": "c620c7aadcc1df990045c89622c000d96d7b73d21fa30c200de36b68c604fc4c",
+      "source": "623b41b869a95c888eb04f907cbf607232699a2f",
+      "requests": 2,
+      "full_semantic_expected_equal": true
+    },
+    {
+      "file": "/workspace/pr485-study/evidence/products/browser-baseline-vs-scoped/1-details-resync-scoped/sample.json",
+      "sha256": "a5a64067c46e8d0aefd6baa3831df1791be3f1a5bd31ea55f2e684945ad62824",
+      "source": "31668f7a74b63446c538e00ed41ebfc42f0bc1a8",
+      "requests": 2,
+      "full_semantic_expected_equal": true
+    },
+    {
+      "file": "/workspace/pr485-study/evidence/products/browser-baseline-vs-scoped/2-details-resync-scoped/sample.json",
+      "sha256": "0440be0e51d4d4403996fd9a96b89ae2f49af715bd4bfc171a627652d803da28",
+      "source": "31668f7a74b63446c538e00ed41ebfc42f0bc1a8",
+      "requests": 2,
+      "full_semantic_expected_equal": true
+    },
+    {
+      "file": "/workspace/pr485-study/evidence/products/browser-baseline-vs-scoped/2-details-resync-baseline/sample.json",
+      "sha256": "b815378085bb57ed818a5bba62381cb2e59e3467301d4643009321f00f7aee73",
+      "source": "623b41b869a95c888eb04f907cbf607232699a2f",
+      "requests": 2,
+      "full_semantic_expected_equal": true
+    }
+  ]
+}

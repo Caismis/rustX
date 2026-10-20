@@ -1,0 +1,10 @@
+{
+  "paired_rows_verified": 754,
+  "summary_rows_verified": 580,
+  "finite_intervals_verified": 386,
+  "complete_pairs": 13,
+  "attempted_timed_products": 28,
+  "nonoverlapping_product_intervals": true,
+  "max_utc_vs_monotonic_duration_difference_seconds": 0.0010477620000131083,
+  "logical_lifecycle_cpu_scope": "through after_cleanup; evidence emission/final OS-exit rusage unmeasured"
+}
