@@ -11,6 +11,7 @@ let page: any, document: any, destroy: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   api.load.mockReset(); api.bridge.mockReset(); api.text.mockReset(); api.cleanup.mockReset();
   vi.stubGlobal('Worker', FakeWorker);
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage: vi.fn() } as unknown as CanvasRenderingContext2D);
   destroy = vi.fn(async () => {}); api.bridge.mockReturnValue({ destroy: vi.fn() }); api.text.mockResolvedValue(undefined);
   page = { getViewport: vi.fn(() => ({ width: 600, height: 800 })), cleanup: vi.fn(),
     render: vi.fn(() => ({ promise: Promise.resolve(), cancel: vi.fn() })),
@@ -69,7 +70,8 @@ it('bounds scratch canvas count, individual and aggregate pixels before allocati
     const entries = Array.from({ length: 4 }, () => budget.create(2048, 2048));
     expect(() => budget.create(1, 1)).toThrow('parser_limit'); expect(context).toHaveBeenCalledTimes(4);
     budget.reset(entries[0], 1, 1);
-    const extra = Array.from({ length: 4 }, () => budget.create(1, 1));
+    // Ordinary Office knockout groups need more than eight tiny canvases.
+    const extra = Array.from({ length: 124 }, () => budget.create(1, 1));
     expect(() => budget.create(1, 1)).toThrow('parser_limit');
     expect(() => budget.reset(extra[0], 2048, 2048)).toThrow('parser_limit');
     const backing = [...entries, ...extra].map(entry => entry.canvas!);
@@ -97,6 +99,36 @@ it('terminal retirement clears the selected page backing store and text nodes', 
   expect(document.filterFactory.destroy).toHaveBeenCalled();
   expect(() => pdf.document).toThrow('obsolete');
 });
+it('keeps finite page geometry while releasing independent offscreen bitmaps', async () => {
+  const pdf = owner(), a = view(), b = view();
+  expect(await pdf.pageSizes).toEqual(Array.from({ length: 3 }, () => ({ width: 600, height: 800 })));
+  expect(page.render).not.toHaveBeenCalled();
+  await pdf.render(1, 1, a.canvas, a.layer, a.signal.signal);
+  await pdf.render(2, 1, b.canvas, b.layer, b.signal.signal);
+  expect([a.canvas.width, b.canvas.width]).toEqual([600, 600]);
+  pdf.release(a.canvas);
+  expect([a.canvas.width, b.canvas.width]).toEqual([0, 600]);
+  pdf.dispose(); expect(b.canvas.width).toBe(0);
+});
+it('preserves PDF-point admission while bounding the fitted CSS raster separately', async () => {
+  page.getViewport.mockImplementation(({ scale }: { scale: number }) => ({ width: 3500 * scale, height: 1000 * scale, scale }));
+  const pdf = owner(), v = view();
+  expect((await pdf.pageSizes)[0].width).toBeGreaterThan(4096);
+  await pdf.render(1, 0.25, v.canvas, v.layer, v.signal.signal);
+  expect(v.canvas.width).toBeLessThan(4096);
+  expect(v.canvas.width * v.canvas.height).toBeLessThanOrEqual(4 * 1024 * 1024);
+});
+it('publishes zoom replacements only after their bitmap and text finish', async () => {
+  const pdf = owner(), v = view();
+  await pdf.render(1, 1, v.canvas, v.layer, v.signal.signal);
+  const held = deferred<void>(), started = deferred<void>();
+  page.render.mockImplementationOnce(() => { started.resolve(); return { promise: held.promise, cancel: vi.fn() }; });
+  const work = pdf.render(1, 0.5, v.canvas, v.layer, v.signal.signal);
+  await started.promise;
+  expect(v.canvas.width).toBe(600); expect(v.layer.childElementCount).toBe(1);
+  held.resolve(); await work;
+  expect(v.canvas.width).toBe(300); expect(v.layer.childElementCount).toBe(1);
+});
 
 it('retirement cancels a held text stream and cannot start a text layer afterwards', async () => {
   const entered = deferred<void>(), canceled = vi.fn();
@@ -105,6 +137,7 @@ it('retirement cancels a held text stream and cannot start a text layer afterwar
   const rejected = expect(work).rejects.toThrow('obsolete');
   await entered.promise; pdf.dispose(); await rejected;
   expect(canceled).toHaveBeenCalledOnce(); expect(api.text).not.toHaveBeenCalled();
+  expect(canceled).toHaveBeenCalledWith(expect.any(Error));
   expect(v.canvas.width).toBe(0); expect(v.layer.childNodes.length).toBe(0);
 });
 it('cleans the global text measurement cache again after a canceled text task settles', async () => {

@@ -2,9 +2,6 @@
 .document-toolbar { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; padding: .5rem 0; }
 .document-toolbar button, .document-toolbar select { font: inherit; color: inherit; background: var(--color-bg); border: 1px solid currentColor; border-radius: 4px; padding: .25rem; }
 .document-toolbar button:disabled { opacity: .5; }
-.document-page { position: relative; width: max-content; background: white; }
-.document-page canvas { display: block; }
-.document-page .textLayer { position: absolute; inset: 0; }
 .document-view iframe { width: 100%; min-height: 480px; border: 0; background: white; }
 .document-source { max-height: none; overflow: visible; white-space: pre-wrap; overflow-wrap: anywhere; }
 .document-view table { border-collapse: collapse; width: 100%; table-layout: fixed; }

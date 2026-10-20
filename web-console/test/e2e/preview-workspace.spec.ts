@@ -60,7 +60,7 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
     await page.getByRole('button', { name: 'Send', exact: true }).click(); await fixture.gate('workspace-stream');
     const modelRequests = (await fixture.control('requests')).requests.length;
     await page.setViewportSize({ width: 1920, height: 1000 });
-    await open('sample.pdf'); await expect(panel.locator('.textLayer')).toContainText('page 1');
+    await open('sample.pdf'); await expect(panel.locator('[data-pdf-page="1"] .textLayer').first()).toContainText('page 1');
     await open('sample.pdf', 1); await expect(tabs).toHaveCount(2);
     await expect.poll(liveWorkers).toBe(1);
     const occurrences = await tabs.evaluateAll(elements => elements.map(element => element.getAttribute('data-preview-tab')));
@@ -69,7 +69,7 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
     expect(await tabs.evaluateAll(elements => elements.map(element => element.getAttribute('data-preview-tab')))).toEqual(occurrences);
 
     await panel.getByRole('button', { name: 'Split preview', exact: true }).focus(); await page.keyboard.press('Enter');
-    await expect(panes).toHaveCount(2); await expect(panel.locator('.textLayer')).toHaveCount(2); await expect.poll(liveWorkers).toBe(2);
+    await expect(panes).toHaveCount(2); await expect(panel.locator('[data-pdf-preview]')).toHaveCount(2); await expect.poll(liveWorkers).toBe(2);
     await expect(panel.getByRole('button', { name: 'Split preview', exact: true }).first()).toHaveAttribute('aria-disabled', 'true');
     const beforeDownload = await tabs.evaluateAll(elements => elements.map(element => ({ id: element.getAttribute('data-preview-tab'), selected: element.getAttribute('aria-selected') })));
     const activePaneBeforeDownload = await workspace.locator('[data-preview-active]').getAttribute('data-preview-pane');
@@ -126,11 +126,11 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
       await page.evaluate(() => { (window as any).previewObservation.revealMaximumWorkers = 0; });
       await page.getByRole('button', { name: 'Reopen previews', exact: true }).click();
       await expect(workspace.locator('[data-preview-pane]:visible')).toHaveCount(1);
-      await expect(panel.locator('.textLayer')).toHaveCount(1); await expect.poll(liveWorkers).toBe(1);
+      await expect(panel.locator('[data-pdf-preview]')).toHaveCount(1); await expect.poll(liveWorkers).toBe(1);
       expect(reads.length - readsBeforeReveal).toBe(1);
       expect(await page.evaluate(() => (window as any).previewObservation.revealMaximumWorkers)).toBe(1);
       await page.setViewportSize({ width: 1920, height: 1000 });
-      await expect(panel.locator('.textLayer')).toHaveCount(2); await expect.poll(liveWorkers).toBe(2);
+      await expect(panel.locator('[data-pdf-preview]')).toHaveCount(2); await expect.poll(liveWorkers).toBe(2);
     }
 
     await open('notes.txt'); await expect(tabs).toHaveCount(3); await expect.poll(liveWorkers).toBe(1);
@@ -147,12 +147,12 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
     await textPane.getByRole('button', { name: 'Move tab to other pane', exact: true }).focus(); await page.keyboard.press('Enter');
     await expect(panes).toHaveCount(2); await expect(tabs).toHaveCount(3);
 
-    await open('sample.docx'); await expect(panel.getByText('Derived preview', { exact: false })).toBeVisible();
-    await expect(panel.locator('.textLayer')).toHaveCount(2); await expect.poll(liveWorkers).toBe(2);
+    await open('sample.docx'); await expect(panel.locator('[data-pdf-page="1"] .textLayer').filter({ hasText: 'rustX document preview' })).toBeVisible();
+    await expect(panel.locator('[data-pdf-preview]')).toHaveCount(2); await expect.poll(liveWorkers).toBe(2);
     const officePane = panes.filter({ has: page.getByRole('tab', { name: 'sample.docx', exact: true }) });
     const pdfPane = panes.filter({ hasNot: page.getByRole('tab', { name: 'sample.docx', exact: true }) });
     await pdfPane.getByRole('tab', { name: 'sample.pdf', exact: true }).click();
-    await open('sample.pptx'); await expect(panel.locator('.textLayer')).toHaveCount(2); await expect.poll(liveWorkers).toBe(2);
+    await open('sample.pptx'); await expect(panel.locator('[data-pdf-preview]')).toHaveCount(2); await expect.poll(liveWorkers).toBe(2);
     await officePane.getByRole('tab', { name: 'sample.docx', exact: true }).focus();
     const selectedBeforeKeys = await officePane.locator('[role="tab"][aria-selected="true"]').getAttribute('data-preview-tab');
     await page.keyboard.press('Home'); await page.keyboard.press('End');
@@ -165,7 +165,7 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
     for (const name of ['sample.xlsx', 'benign.html', 'second.txt']) await open(name);
     await expect(tabs).toHaveCount(8);
     await officePane.getByRole('tab', { name: 'sample.docx', exact: true }).click();
-    await expect(panel.locator('.textLayer')).toHaveCount(2); await expect.poll(liveWorkers).toBe(2);
+    await expect(panel.locator('[data-pdf-preview]')).toHaveCount(2); await expect.poll(liveWorkers).toBe(2);
 
     await panel.getByRole('button', { name: 'Collapse preview workspace', exact: true }).click();
     await expect(panel).not.toBeVisible(); await expect.poll(liveWorkers).toBe(0); await expect.poll(liveUrls).toBe(0);
@@ -181,11 +181,11 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
     const readsBeforeOfficeReveal = reads.length, derivationsBeforeReveal = derivations.length;
     expect(derivationsBeforeReveal).toBeGreaterThan(0);
     await page.getByRole('button', { name: 'Reopen previews', exact: true }).click();
-    await expect(panel.locator('.textLayer')).toHaveCount(1); await expect.poll(liveWorkers).toBe(1);
+    await expect(panel.locator('[data-pdf-preview]')).toHaveCount(1); await expect.poll(liveWorkers).toBe(1);
     expect(reads.length - readsBeforeOfficeReveal).toBe(1);
     expect(derivations.length).toBe(derivationsBeforeReveal);
     await page.setViewportSize({ width: 1920, height: 1000 });
-    await expect(panel.locator('.textLayer')).toHaveCount(2); await expect.poll(liveWorkers).toBe(2);
+    await expect(panel.locator('[data-pdf-preview]')).toHaveCount(2); await expect.poll(liveWorkers).toBe(2);
     await officePane.getByRole('tab', { name: 'sample.docx', exact: true }).click();
 
     await page.setViewportSize({ width: 390, height: 844 });
@@ -194,7 +194,7 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
     const strip = workspace.locator('[data-preview-active] [role="tablist"]');
     await expect.poll(() => strip.evaluate(element => element.scrollWidth - element.clientWidth)).toBeGreaterThan(0);
     const selectedBeforeOverflow = await activeTab.getAttribute('data-preview-tab');
-    const selectedDocument = workspace.locator('[data-preview-active] .textLayer');
+    const selectedDocument = workspace.locator('[data-preview-active] [data-pdf-page="1"] .textLayer');
     await expect(selectedDocument).toContainText('rustX document preview');
     const selectedDocumentText = await selectedDocument.innerText();
     const focusedItemBounds = () => strip.evaluate(element => {
@@ -278,8 +278,8 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
     await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文');
     await page.getByRole('button', { name: '关闭设置', exact: true }).click();
     const chinesePanel = page.getByRole('complementary', { name: '预览', exact: true });
-    await expect(chinesePanel.locator('.textLayer').nth(0)).toContainText('rustX');
-    await expect(chinesePanel.locator('.textLayer').nth(1)).toContainText('rustX');
+    await expect(chinesePanel.locator('[data-pdf-page="1"] .textLayer').nth(0)).toContainText('rustX');
+    await expect(chinesePanel.locator('[data-pdf-page="1"] .textLayer').nth(1)).toContainText('rustX');
     await page.screenshot({ animations: 'disabled', path: info.outputPath('workspace-two-heavy-dark-zh.png') });
     await info.attach('workspace-two-heavy-dark-zh', { path: info.outputPath('workspace-two-heavy-dark-zh.png'), contentType: 'image/png' });
     await expect(chinesePanel).toBeVisible();

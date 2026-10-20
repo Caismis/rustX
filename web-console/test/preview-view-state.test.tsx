@@ -12,8 +12,10 @@ const boundary = vi.hoisted(() => ({ owners: [] as OwnerRecord[] }));
 vi.mock('../src/client/pdf-document', () => ({ PdfDocumentOwner: class {
   resolveDocument!: (document: { numPages: number }) => void;
   document = new Promise<{ numPages: number }>(resolve => { this.resolveDocument = resolve; });
+  pageSizes = this.document.then(document => Array.from({ length: document.numPages }, () => ({ width: 800, height: 1200 })));
   renders: RenderRecord[] = [];
-  dispose = vi.fn();
+  release(canvas: HTMLCanvasElement) { const record = this.renders.find(record => record.canvas === canvas); if (record) { canvas.width = canvas.height = 0; record.layer.replaceChildren(); } }
+  dispose = vi.fn(() => { for (const record of this.renders) this.release(record.canvas); });
   constructor() { boundary.owners.push(this); }
   render(number: number, zoom: number, canvas: HTMLCanvasElement, layer: HTMLDivElement, signal: AbortSignal) {
     canvas.width = 800; canvas.height = 1200; layer.textContent = `page ${number}`;
@@ -22,7 +24,7 @@ vi.mock('../src/client/pdf-document', () => ({ PdfDocumentOwner: class {
 } }));
 import PdfPreview from '../src/app/components/documents/PdfPreview';
 
-afterEach(() => { cleanup(); boundary.owners.splice(0); vi.useRealTimers(); });
+afterEach(() => { cleanup(); boundary.owners.splice(0); vi.useRealTimers(); vi.unstubAllGlobals(); });
 function Retained({ visible = true, initial = {}, children }: { visible?: boolean; initial?: PreviewViewState; children: (props: PreviewViewStateProps) => ReactNode }) {
   const [viewState, update] = useState(initial);
   return visible ? children({ viewState, onViewStateChange: patch => update(state => ({ ...state, ...patch })) }) : null;
@@ -81,14 +83,16 @@ it('Workbook restores selected sheet, finite row window and scroll; changed sour
   expect(view.getAllByRole('row')).toHaveLength(1);
 });
 
-it('PDF remount reclaims heavy resources and restores page, zoom and position with a fresh owner', async () => {
+it('PDF remount reclaims heavy resources and restores continuous reading zoom and position with a fresh owner', async () => {
+  vi.stubGlobal('IntersectionObserver', class { observe() {} disconnect() {} });
   const bytes = new Uint8Array([1]), lease = new AbortController();
   const content = (props: PreviewViewStateProps) => <PdfPreview bytes={bytes} signal={lease.signal} retry={() => {}} {...props}/>;
-  const initial = { pdfPage: 7, pdfZoom: 1.5, pdfScrollTop: 62, pdfScrollLeft: 13 };
+  const initial: PreviewViewState = { pdfZoom: { kind: 'fixed', scale: 1.5 }, pdfScrollTop: 62, pdfScrollLeft: 13 };
   const view = render(<Retained initial={initial}>{content}</Retained>);
   const first = boundary.owners[0];
   await act(async () => first.resolveDocument({ numPages: 10 }));
-  expect(first.renders).toHaveLength(1); expect(first.renders[0]).toMatchObject({ number: 7, zoom: 1.5 });
+  expect(first.renders).toHaveLength(1); expect(first.renders[0]).toMatchObject({ number: 1, zoom: 1.5 });
+  expect(view.container.querySelectorAll('[data-pdf-page]')).toHaveLength(10);
   await act(async () => first.renders[0].resolve());
   const port = view.container.querySelector('[data-preview-scroll="pdf"]')!;
   expect(port.scrollTop).toBe(62); expect(port.scrollLeft).toBe(13);
@@ -100,23 +104,26 @@ it('PDF remount reclaims heavy resources and restores page, zoom and position wi
   view.rerender(<Retained initial={initial}>{content}</Retained>);
   const second = boundary.owners[1];
   await act(async () => second.resolveDocument({ numPages: 10 }));
-  expect(second.renders[0]).toMatchObject({ number: 7, zoom: 1.5 });
+  expect(second.renders[0]).toMatchObject({ number: 1, zoom: 1.5 });
   await act(async () => second.renders[0].resolve());
   expect(view.container.querySelector('[data-preview-scroll="pdf"]')!.scrollTop).toBe(320);
-  expect((view.getByRole('combobox', { name: 'Zoom' }) as HTMLSelectElement).value).toBe('1.5');
+  expect(view.getByRole('button', { name: 'Zoom', hidden: true }).textContent).toContain('150%');
+  vi.unstubAllGlobals();
 });
 
 it('retiring a PDF lease immediately cancels a gated render and clears both canvases and text before unmount', async () => {
+  vi.stubGlobal('IntersectionObserver', class { observe() {} disconnect() {} });
   vi.useFakeTimers();
   const lease = new AbortController();
-  const view = render(<PdfPreview bytes={new Uint8Array([1])} signal={lease.signal} viewState={{}} onViewStateChange={() => {}} retry={() => {}}/>);
+  const view = render(<PdfPreview bytes={new Uint8Array([1])} signal={lease.signal} viewState={{ pdfZoom: { kind: 'fixed', scale: 1 } }} onViewStateChange={() => {}} retry={() => {}}/>);
   const owner = boundary.owners[0];
   await act(async () => owner.resolveDocument({ numPages: 2 }));
-  expect(owner.renders[0].canvas.width).toBe(800); expect(vi.getTimerCount()).toBe(1);
+  expect(owner.renders[0].canvas.width).toBe(800); expect(vi.getTimerCount()).toBeGreaterThanOrEqual(1);
   act(() => lease.abort());
   expect(owner.dispose).toHaveBeenCalledOnce(); expect(owner.renders[0].signal.aborted).toBe(true);
   expect(owner.renders[0].canvas.width).toBe(0); expect(owner.renders[0].canvas.height).toBe(0);
   expect(owner.renders[0].layer.childNodes).toHaveLength(0); expect(vi.getTimerCount()).toBe(0);
   await act(async () => owner.renders[0].resolve());
   expect(view.queryByRole('alert')).toBeNull(); expect(owner.renders[0].canvas.width).toBe(0);
+  vi.unstubAllGlobals();
 });

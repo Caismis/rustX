@@ -1,11 +1,15 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Page geometry/rendering adapted; native resource owner retained. See PROVENANCE.md. */
+import { createPdfBinaryDataFactory } from './pdf-assets';
 import { DERIVED_PDF_MAX_BYTES } from '../../shared/documents.ts';
 import { getDocument, PDFWorker, TextLayer, type PDFDocumentProxy, type RenderTask } from 'pdfjs-dist';
 import type { BaseFilterFactory } from 'pdfjs-dist/types/src/display/filter_factory';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { PDF_LIMITS as limits } from './pdf-limits';
 
+export interface PdfPageSize { readonly width: number; readonly height: number }
+
 type CanvasEntry = { canvas: HTMLCanvasElement | null; context: CanvasRenderingContext2D | null };
-/** Bounds PDF.js scratch canvases separately from the single presentation canvas. */
+/** Bounds PDF.js scratch canvases separately from the resident page bitmaps. */
 export class PdfCanvasBudget {
   private entries = new Map<CanvasEntry, number>();
   private pixels = 0;
@@ -40,7 +44,8 @@ export class PdfCanvasBudget {
     entry.canvas = null; entry.context = null;
     this.entries.delete(entry); this.pixels -= previous;
   }
-  dispose() { this.retired = true; for (const entry of this.entries.keys()) this.destroy(entry); }
+  clear() { for (const entry of this.entries.keys()) this.destroy(entry); }
+  dispose() { this.retired = true; this.clear(); }
 }
 let workers = 0;
 /** One explicit native worker, one serialized page render, no global workerPort. */
@@ -58,7 +63,38 @@ export class PdfDocumentOwner {
   private retired = false;
   private tail: Promise<unknown> = Promise.resolve();
   private cancelPage?: () => void;
-  private presentation?: { canvas: HTMLCanvasElement; container: HTMLDivElement };
+  private readonly presentations = new Map<HTMLCanvasElement, { container: HTMLDivElement; pixels: number }>();
+  private rendering?: HTMLCanvasElement;
+  private sizes?: Promise<readonly PdfPageSize[]>;
+  /** Finite geometry lets every page hold its place while bitmaps remain viewport-local. */
+  get pageSizes(): Promise<readonly PdfPageSize[]> {
+    return this.sizes ??= this.document.then(async document => {
+      const sizes: PdfPageSize[] = [];
+      for (let number = 1; number <= document.numPages; number++) {
+        if (this.retired) throw new Error('obsolete');
+        const page = await document.getPage(number);
+        try { if (this.retired) throw new Error('obsolete'); sizes.push(this.pageSize(page)); }
+        finally { page.cleanup(); }
+      }
+      return sizes;
+    });
+  }
+  private pageSize(page: Awaited<ReturnType<PDFDocumentProxy['getPage']>>): PdfPageSize {
+    const { width, height } = page.getViewport({ scale: 96 / 72 });
+    // Admission stays in PDF points; CSS uses the same 96/72 conversion as DSH.
+    // Raster allocations below remain independently capped at the native limits.
+    const pointsWidth = width * 72 / 96, pointsHeight = height * 72 / 96;
+    if (!Number.isFinite(width * height) || pointsWidth < 1 || pointsHeight < 1 || pointsWidth > limits.canvasSide || pointsHeight > limits.canvasSide || pointsWidth * pointsHeight > limits.canvasPixels) throw new Error('parser_limit');
+    return { width, height };
+  }
+  /** Release only the page leaving the reading window; its layout metadata stays inert. */
+  release(canvas: HTMLCanvasElement) {
+    const held = this.presentations.get(canvas);
+    if (!held) return;
+    canvas.width = canvas.height = 0;
+    held.container.replaceChildren();
+    this.presentations.delete(canvas);
+  }
   constructor(bytes: Uint8Array<ArrayBuffer>, failed: (code: string) => void) {
     if (bytes.length > DERIVED_PDF_MAX_BYTES) throw new Error('too_large');
     if (workers >= limits.workers) throw new Error('capacity');
@@ -76,7 +112,7 @@ export class PdfDocumentOwner {
         reset = budget.reset.bind(budget);
         destroy = budget.destroy.bind(budget);
       }
-      this.loading = getDocument({ CanvasFactory, enableHWA: false, isOffscreenCanvasSupported: false, isImageDecoderSupported: false, data: bytes.slice(), worker: this.pdfWorker, useWasm: false, enableXfa: false,
+      this.loading = getDocument({ BinaryDataFactory: createPdfBinaryDataFactory(), cMapPacked: true, CanvasFactory, enableHWA: false, isOffscreenCanvasSupported: false, isImageDecoderSupported: false, data: bytes.slice(), worker: this.pdfWorker, useWasm: false, enableXfa: false,
         useWorkerFetch: false, useSystemFonts: false, disableFontFace: true, maxImageSize: limits.canvasPixels, canvasMaxAreaInBytes: limits.canvasPixels * 4,
         disableAutoFetch: true, disableStream: true, disableRange: true, stopAtErrors: true });
     } catch {
@@ -86,15 +122,16 @@ export class PdfDocumentOwner {
     this.ready = this.loading.promise.then(document => {
       if (this.retired) throw new Error('obsolete');
       this.loaded = document;
-      if (document.numPages > limits.pdfPages) throw new Error('parser_limit');
+      if (document.numPages < 1 || document.numPages > limits.pdfPages) throw new Error('parser_limit');
       return document;
     });
     // The owner observes terminal rejection even when closed before a consumer subscribes.
     void this.document.catch(() => {});
   }
   render(number: number, zoom: number, canvas: HTMLCanvasElement, container: HTMLDivElement, signal: AbortSignal): Promise<void> {
+    if (this.retired || signal.aborted) return Promise.reject(new Error('obsolete'));
+    if (!this.presentations.has(canvas)) this.presentations.set(canvas, { container, pixels: canvas.width * canvas.height });
     const current = () => { signal.throwIfAborted(); if (this.retired) throw new Error('obsolete'); };
-    this.cancelPage?.();
     const work = this.tail.catch(() => {}).then(async () => {
       current();
       const document = await this.document; current();
@@ -103,22 +140,28 @@ export class PdfDocumentOwner {
       const abort = () => { render?.cancel(); text?.cancel(); cancelTextRead?.(); };
       this.cancelPage = abort;
       signal.addEventListener('abort', abort, { once: true });
+      const buffer = window.document.createElement('canvas'); this.rendering = buffer;
       try {
         current();
-        const viewport = page.getViewport({ scale: zoom });
-        const width = Math.ceil(viewport.width), height = Math.ceil(viewport.height);
-        if (!Number.isFinite(width * height) || width < 1 || height < 1 || width > limits.canvasSide || height > limits.canvasSide
-          || width * height > limits.canvasPixels) throw new Error('parser_limit');
-        this.presentation = { canvas, container };
-        canvas.width = width; canvas.height = height;
-        container.style.setProperty('--scale-factor', String(zoom));
-        container.style.setProperty('--total-scale-factor', String(zoom));
-        container.style.width = `${width}px`; container.style.height = `${height}px`;
-        render = page.render({ canvas, viewport });
+        const size = this.pageSize(page);
+        if (!Number.isFinite(zoom) || zoom <= 0 || zoom > 4) throw new Error('parser_limit');
+        const viewport = page.getViewport({ scale: 96 / 72 });
+        const ratio = Math.min((globalThis.devicePixelRatio || 1) * zoom, Math.sqrt(limits.canvasPixels / (size.width * size.height)), limits.canvasSide / size.width, limits.canvasSide / size.height);
+        const width = Math.max(1, Math.floor(size.width * ratio)), height = Math.max(1, Math.floor(size.height * ratio));
+        const pixels = [...this.presentations].reduce((total, [node, entry]) => total + (node === canvas ? 0 : entry.pixels), 0);
+        if (pixels + width * height > limits.scratchPixels) throw new Error('parser_limit');
+        buffer.width = width; buffer.height = height;
+        const layer = window.document.createElement('div'); layer.className = 'textLayer';
+        layer.style.setProperty('--scale-factor', String(viewport.scale));
+        layer.style.setProperty('--total-scale-factor', String(viewport.scale));
+        layer.style.width = `${size.width}px`; layer.style.height = `${size.height}px`;
+        render = page.render({ canvas: buffer, viewport, transform: ratio === 1 ? undefined : [ratio, 0, 0, ratio, 0, 0] });
         await render.promise;
         current();
         const reader = page.streamTextContent().getReader();
-        const cancelReader = () => { void reader.cancel().catch(() => {}); };
+        // PDF.js requires an Error reason before marking its stream controller
+        // closed. Omitting it leaves queued worker chunks targeting a closed RS.
+        const cancelReader = () => { void reader.cancel(new Error('obsolete')).catch(() => {}); };
         cancelTextRead = cancelReader;
         const content: Awaited<ReturnType<typeof page.getTextContent>> = { items: [], styles: {}, lang: null };
         let characters = 0;
@@ -132,12 +175,22 @@ export class PdfDocumentOwner {
           }
         } finally { cancelTextRead = undefined; cancelReader(); }
         current();
-        text = new TextLayer({ textContentSource: content, container, viewport });
+        text = new TextLayer({ textContentSource: content, container: layer, viewport });
         await text.render(); current();
+        const context = canvas.getContext('2d');
+        if (!context) throw new Error('worker_failure');
+        // Publish a complete bitmap and matching text together. Zooming never
+        // clears the old readable page while a replacement is being rendered.
+        canvas.width = width; canvas.height = height;
+        context.drawImage(buffer, 0, 0);
+        container.replaceChildren(layer);
+        this.presentations.set(canvas, { container, pixels: width * height });
       } finally {
+        buffer.width = buffer.height = 0;
+        if (this.rendering === buffer) this.rendering = undefined;
         signal.removeEventListener('abort', abort);
         if (this.cancelPage === abort) this.cancelPage = undefined;
-        abort(); page.cleanup(); (document.filterFactory as BaseFilterFactory).destroy(); TextLayer.cleanup();
+        abort(); page.cleanup(); this.canvases.clear(); (document.filterFactory as BaseFilterFactory).destroy(); TextLayer.cleanup();
       }
     });
     this.tail = work;
@@ -157,9 +210,7 @@ export class PdfDocumentOwner {
     if (worker) { worker.onerror = null; worker.onmessageerror = null; }
     this.pdfWorker?.destroy(); this.pdfWorker = undefined; worker?.terminate(); workers--;
     this.canvases.dispose(); TextLayer.cleanup();
-    if (this.presentation) {
-      this.presentation.canvas.width = this.presentation.canvas.height = 0;
-      this.presentation.container.replaceChildren(); this.presentation = undefined;
-    }
+    if (this.rendering) this.rendering.width = this.rendering.height = 0;
+    for (const canvas of this.presentations.keys()) this.release(canvas);
   }
 }

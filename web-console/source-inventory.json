@@ -3599,7 +3599,7 @@
           "upstream_sha256": "4840dc1d554a4f2457b51339e9195041b6230822c72fc5b10c8f3c2aad971cdb"
         }
       ],
-      "local_sha256": "32d691be5c096c3dc4a7f6c8a951502eaf82ba24377dd7be03f78dc18cfb90e8"
+      "local_sha256": "3554cc48132241ca798889eccb69b6c0e0ad5eb62b414c01920078c2d264f8ca"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/locales.ts",
@@ -4375,7 +4375,7 @@
           "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime."
         }
       ],
-      "local_sha256": "b992b2db3bdada1824a51a41df439c85bb0ba6665070b7897c8bff1a00998b08"
+      "local_sha256": "0f7954a60138de1f2ace13b6df45ff8fdf573f78f67dd081010b1b9cb65faa69"
     },
     {
       "upstream": "packages/client/ui-sidebar-files/src/client/FilesBody.module.css",
@@ -5178,7 +5178,7 @@
         "Harness Cordis runtime, slots and resource transport"
       ],
       "retained_dependencies": [],
-      "local_sha256": "70572fab5decdc344dc01c2bc11ebf77963366a1f0d3ad7832858d6d3fd8dab7"
+      "local_sha256": "ea328e12e04dc9d067c2400f186b5edd475ee2981da55cab4140dbc3c67571d0"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/zoom/ZoomControls.tsx",
@@ -5196,7 +5196,7 @@
         "./types.ts",
         "react"
       ],
-      "local_sha256": "9b5f4fa6fd08cdc31fe75454230bc4e9a70f2457081aa70517cb1b0446f2c181"
+      "local_sha256": "7ac215f32e1aa16913b768982a0ba8162b8cd5c468d785d7be088e3abd780913"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/zoom/ZoomViewport.module.css",
@@ -6780,6 +6780,75 @@
         "Harness Agent execution and session observation authority"
       ],
       "local_sha256": "5b1f06e7d313c3d0049e5ce5207dae35f9edd90a0f2cced641b095c91ab51d74"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/pdf/pdf.tsx",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "62398432150c88965ad970a2bfab21aa1ac3f6908ebbd1c57ab53beb145c4b97",
+      "destination": "web-console/src/app/components/documents/PdfPreview.tsx",
+      "treatment": "Continuous PDF/Office page presentation adapted to the existing bounded native document owner, tab metadata and locale adapter.",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "../../../client/pdf-document",
+        "../../../client/pdf-limits",
+        "../../../locale/react",
+        "../../../presentation/right-panel/preview-view-state",
+        "../workbench-documents/zoom/ZoomViewport",
+        "../workbench-documents/zoom/types",
+        "./PdfPreview.module.css",
+        "./errors",
+        "react"
+      ],
+      "excluded_dependencies": [
+        "Harness tab/store/slots and PDF runtime authority; rustX keeps its native preview resource owner"
+      ],
+      "local_sha256": "9ae305d179367af5e76088e632541cb969e9cedc42b034e37c7c6f948151deb9"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/pdf/PdfBody.module.css",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "6f057689cb3239eb107a6a820838badf2364cdb25adbfddb59fd0e56abb9fb6c",
+      "destination": "web-console/src/app/components/documents/PdfPreview.module.css",
+      "treatment": "Continuous pages, document background, page gaps, centering, placeholder and selectable text presentation; geometry held while offscreen bitmaps are released.",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [
+        "Harness tab/store/slots and PDF runtime authority; rustX keeps its native preview resource owner"
+      ],
+      "local_sha256": "fd1970ea94923dde849c9002ff6b7a8eddca1609caac50ba52f1aa16c4c3ba59"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/pdf/document.ts",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "580881e2d93332089f2eb6f4a7851fd03e78fcfcdd876901bd49b5f2d7380936",
+      "destination": "web-console/src/client/pdf-document.ts",
+      "treatment": "Page geometry, raster scaling and atomic bitmap publication adapted within the existing native PDF worker, page/text limits and resource retirement owner.",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "../../shared/documents.ts",
+        "./pdf-assets",
+        "./pdf-limits",
+        "pdfjs-dist",
+        "pdfjs-dist/build/pdf.worker.min.mjs?url",
+        "pdfjs-dist/types/src/display/filter_factory"
+      ],
+      "excluded_dependencies": [
+        "Harness tab/store/slots and PDF runtime authority; rustX keeps its native preview resource owner"
+      ],
+      "local_sha256": "ae2bf9ac752b389c8d4ce74aaabcf6c57164f4f1b05bdf856175bf5e2f96a3ab"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/pdf/assets.ts",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "bfce49c3fe4e6e316f4adcfddcc9a3f274f36d39d4f64d78b9546bdf9afa433c",
+      "destination": "web-console/src/client/pdf-assets.ts",
+      "treatment": "Build-owned exact-name PDF binary resource factory; worker source remains native and resource bytes come from the pinned pdfjs-dist install.",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [
+        "Harness build configuration and worker-source loading"
+      ],
+      "local_sha256": "d958aead3259fded30c601e23cbf121dabe98ab49f4e6e4f7a13e3d039845272"
     }
   ],
   "inspected_only": [

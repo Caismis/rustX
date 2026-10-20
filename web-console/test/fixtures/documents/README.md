@@ -10,6 +10,7 @@ fixtures with fixed ZIP timestamps and fixed PDF object offsets.
   real sandboxed system LibreOffice converter (not mocked converted outputs).
 - `linked.docx`, `linked.pptx`: original variants containing a web hyperlink and
   an inert binary printer-settings part, for Office admission and conversion.
+- `slides.pptx`: three original slides for continuous scrolling and viewport zoom.
 - `sample.xlsx`: two sheets; `C1` stores formula `A1+B1` and deliberately stale
   cached value `99`; `D1` stores `NOW()` with no cached result. A viewer must not
   evaluate either formula.

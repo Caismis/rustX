@@ -35,6 +35,19 @@ for ext,root in [('docx','word'),('pptx','ppt')]:
         for path,data in parts.items():
             info=zipfile.ZipInfo(path,date_time=(2020,1,1,0,0,0));info.compress_type=zipfile.ZIP_DEFLATED
             z.writestr(info,data)
+# Three original slides exercise the continuous Office reader.
+with zipfile.ZipFile(p/'sample.pptx') as z:
+    parts={name:z.read(name) for name in z.namelist()}
+parts['ppt/presentation.xml']=parts['ppt/presentation.xml'].decode().replace('<p:sldId id="256" r:id="slide1"/>',''.join(f'<p:sldId id="{255+i}" r:id="slide{i}"/>' for i in range(1,4)))
+parts['ppt/_rels/presentation.xml.rels']=f'<Relationships xmlns="{ns}package/2006/relationships">'+''.join(f'<Relationship Id="slide{i}" Type="{rel}/slide" Target="slides/slide{i}.xml"/>' for i in range(1,4))+'</Relationships>'
+slide=parts['ppt/slides/slide1.xml'].decode()
+for i in range(1,4):
+    parts[f'ppt/slides/slide{i}.xml']=slide.replace('rustX presentation preview',f'rustX presentation preview — slide {i}')
+parts['[Content_Types].xml']=parts['[Content_Types].xml'].decode().replace('</Types>',''.join(f'<Override PartName="/ppt/slides/slide{i}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>' for i in [2,3])+'</Types>')
+with zipfile.ZipFile(p/'slides.pptx','w') as z:
+    for path,data in parts.items():
+        info=zipfile.ZipInfo(path,date_time=(2020,1,1,0,0,0));info.compress_type=zipfile.ZIP_DEFLATED
+        z.writestr(info,data)
 # Minimal real PDF with correct cross-reference offsets and three textual pages.
 objects=['<< /Type /Catalog /Pages 2 0 R >>','<< /Type /Pages /Kids [3 0 R 5 0 R 7 0 R] /Count 3 >>']
 for i in range(3):

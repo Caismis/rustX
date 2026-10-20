@@ -3582,3 +3582,66 @@ origin `http://127.0.0.1:5273`. Both 1440x1000 screenshots were visually reviewe
 `/tmp/rustx-office-sidebar-{en,zh}.png`. No screenshot references or comparison
 tolerances changed. Other browser engines and macOS conversion were not exercised
 on this Linux host. The existing large-chunk build warning remains.
+
+## Office and PDF continuous-reader alignment
+
+The Office screenshot reference uses a continuous PDF scrollport, fit-width pages,
+12 px page gaps and floating zoom controls. The previous rustX viewer instead had
+native form controls and one selected page. `PdfPreview` now adapts DSH's PDF page
+presentation and CSS at `687f282e8625c6b8d11ff58211a90524be2e4317`, reusing the
+existing source-derived `ZoomViewport` and `ZoomControls`. PDF and converted Office
+share this surface. Single-viewer files no longer show an empty viewer choice;
+the extra derived-preview paragraph and obsolete single-page/text-layer paths
+were removed. Tab-local fit/fixed zoom and scroll metadata replace the page picker.
+Geometry uses the source's 96/72 CSS scale while admission remains in PDF points.
+
+Native Worker ownership, serial render settlement, finite page/text/pixel limits,
+source authorization and converter isolation remain rustX-owned. Page geometry is
+held independently from viewport-local bitmaps. Zoom replacements publish their
+complete bitmap and matching text together. Leaving the reading window releases
+backing stores; closing a preview retires every owned page and Worker.
+
+Rendered QA found and fixed three integration mismatches:
+
+- The zoom menu's minimum width was applied to its anchor. It now uses Menu's
+  `listClassName`; source-sized buttons override the native Button padding. The
+  floating toolbar measures 132 px in pinned DPR=1 Chromium (28/58/28 px controls),
+  including device-rounded hairline borders. The menu keeps its compact 112 px
+  width token without widening the trigger.
+- Standard-font rendering requested resources that were not supplied. The lazy
+  reader now bundles exact-version PDF.js standard fonts and CMaps through the
+  source-derived binary resource factory, without network fallback. The Adobe,
+  Foxit and Liberation data licenses are included in generated production notices.
+- The original presentation's normal knockout text/card groups needed more than
+  eight temporary canvases; the ninth request was only 12x8 px. The count budget
+  is now 128 while the 16M aggregate scratch pixels and 4M per-canvas pixels stay
+  enforced. Completed page renders also clear their temporary surfaces. An
+  intermittent rapid-switch failure was separately traced to `reader.cancel()`
+  without the Error reason required by PDF.js 6. Cancellation now marks the
+  SDK controller closed before late Worker chunks arrive, with a regression
+  assertion for the Error reason. No global error suppression was added.
+
+Validation passed: 131 tests across 13 focused files; TypeScript, i18n ownership,
+production build, 311 source records and notices for 267 production entries. All
+13 final browser scenarios passed, including real native dual-PDF/Office workspace
+lifetime, rapid tab/pane changes, narrow layouts, original downloads, selection
+and copy after zoom, localized failure/refresh, continuous page scrolling,
+fit-width/fixed zoom and restored reading positions. The copy check waits for the
+matching completed bitmap/text replacement. No screenshot references or comparison
+tolerances changed. The lazy PDF chunk includes the font/CMap data; the existing
+large-chunk build warning remains.
+
+Browser plugin not available: rendered QA used pinned Playwright 1.63 Linux
+Chromium, fixture origin `http://127.0.0.1:5274` and production preview origin
+`http://127.0.0.1:5273`. The Office matrix covers English/Chinese, light/dark and
+1440x1000/390x1000. Desktop light and narrow dark captures were visually reviewed:
+`/tmp/rustx-office-continuous-zh-{light-1440,dark-390}.png`.
+
+The user's original PPTX was copied only into the ephemeral, authorized fixture
+workspace and opened through the real Workbench Host conversion. All 10 pages
+were scrolled and rendered without alerts, uncaught errors or external requests.
+At 1900x1000 the pages fit at about 65%, with a measured 12 px gap; offscreen
+backing stores were released while geometry remained. The reference capture was
+visually reviewed: `/tmp/rustx-office-reference-aligned.png`. The user's bytes
+were not changed or committed. Other browser engines and macOS conversion were
+not exercised here. No native protocol, Agent execution or TUI logic changed.

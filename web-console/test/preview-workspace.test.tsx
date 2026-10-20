@@ -62,8 +62,8 @@ it('duplicate opens reveal the existing other-pane occurrence; close and reopen 
 it('eight tabs reject overflow without loss and retain metadata without hidden leases', () => {
   const ids = Array.from({ length: PREVIEW_POLICY.tabsPerSession }, (_, index) => owner.openPreview(artifact(String(index)))!);
   const before = workspace(); expect(owner.openPreview(artifact('overflow'))).toBeUndefined(); expect(owner.getSnapshot().problem).toBe('tabs'); expect(workspace()).toBe(before);
-  owner.updateView(ids[0], { bodyScrollTop: 83, wrap: false, pdfPage: 7, workbookOffset: 200, htmlMode: 'source' });
-  owner.selectTab(ids[0]); expect(workspace().tabs[0].view).toMatchObject({ bodyScrollTop: 83, wrap: false, pdfPage: 7 }); expect(live()).toHaveLength(1);
+  owner.updateView(ids[0], { bodyScrollTop: 83, wrap: false, pdfScrollTop: 7, workbookOffset: 200, htmlMode: 'source' });
+  owner.selectTab(ids[0]); expect(workspace().tabs[0].view).toMatchObject({ bodyScrollTop: 83, wrap: false, pdfScrollTop: 7 }); expect(live()).toHaveLength(1);
   owner.selectTab(ids[1]); expect(live()).toHaveLength(1); owner.selectTab(ids[0]); expect(workspace().tabs[0].view.bodyScrollTop).toBe(83);
 });
 it('selected close prefers right then left; unselected close preserves selection; final pane has no default document', () => {
@@ -92,9 +92,9 @@ it('Workbench retains logical state and reacquires only selected visible bodies'
   owner.reveal(); expect(owner.getSnapshot().mode).toBe('preview'); expect(owner.getSnapshot().leases.get(id)).not.toBe(lease);
 });
 it('Session A to B retains only metadata and restores exact tab state; scope replacement retires immediately', async () => {
-  const a = owner.openPreview(artifact('a'))!; owner.updateView(a, { pdfPage: 7 }); const lease = owner.getSnapshot().leases.get(a)!;
+  const a = owner.openPreview(artifact('a'))!; owner.updateView(a, { pdfScrollTop: 7 }); const lease = owner.getSnapshot().leases.get(a)!;
   owner.selectSession('B'); expect(live()).toHaveLength(0); expect(lease.signal.aborted).toBe(true); owner.openPreview(artifact('b'));
-  owner.selectSession('A'); expect(workspace().tabs[0].id).toBe(a); expect(workspace().tabs[0].view.pdfPage).toBe(7);
+  owner.selectSession('A'); expect(workspace().tabs[0].id).toBe(a); expect(workspace().tabs[0].view.pdfScrollTop).toBe(7);
   const active = owner.getSnapshot().leases.get(a)!; await server.client.release('A'); await server.client.attach('A');
   expect(active.signal.aborted).toBe(true); expect(owner.getSnapshot().workspace).toBeUndefined();
 });
