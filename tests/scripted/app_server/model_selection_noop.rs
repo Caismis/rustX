@@ -65,7 +65,7 @@ async fn fixture() -> Fixture {
 }
 
 async fn published_activation(host: &crate::runtime_client::RuntimeClientHost) {
-    use crate::local_runtime::configuration::application::AdoptionEligibility;
+    use crate::runtime::adoption::AdoptionEligibility;
     use crate::runtime_client::{EventDelivery, RuntimeClientCursor, RuntimeClientEvent};
     let (reader, _) = host
         .attach_read_only(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
@@ -126,7 +126,9 @@ async fn assert_noop(f: &Fixture, stage: Option<&NoopStage>) {
     let binding = retained();
     let resources = runtime.runtime_resources();
     let view = runtime.model_view();
-    let configuration = runtime.configuration_view().unwrap();
+    let configuration =
+        crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(&runtime)
+            .unwrap();
     mark("no-op baseline publication");
     host.projection_settled().await;
     mark("no-op parked baseline");
@@ -171,7 +173,11 @@ async fn assert_noop(f: &Fixture, stage: Option<&NoopStage>) {
     );
     assert!(Arc::ptr_eq(&runtime.runtime_resources(), &resources));
     assert_eq!(runtime.model_view(), view);
-    assert_eq!(runtime.configuration_view().unwrap(), configuration);
+    assert_eq!(
+        crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(&runtime)
+            .unwrap(),
+        configuration
+    );
     host.inner.unpark_projection_worker();
     mark("no-op subsequent publication");
     host.projection_settled().await;
@@ -242,7 +248,7 @@ async fn identical_explicit_selection_is_inert_during_an_attempt() {
         let baseline = host.checkpoint().unwrap();
         assert_eq!(
             baseline.snapshot.configuration_adoption_eligibility,
-            crate::local_runtime::configuration::application::AdoptionEligibility::Eligible
+            crate::runtime::adoption::AdoptionEligibility::Eligible
         );
         let (reader, _) = host
             .attach_read_only(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
@@ -367,7 +373,12 @@ async fn inherited_current_selection_commits_explicit_intent_then_becomes_inert(
         assert!(before.1.model.is_none());
         let runtime = f.manager.configuration_runtime(id).unwrap();
         let view = runtime.model_view();
-        let binding = runtime.configuration_view().unwrap().adopted_binding;
+        let binding =
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime,
+            )
+            .unwrap()
+            .adopted_binding;
         assert_eq!(
             f.manager
                 .set_model(id, view.configured.clone())
@@ -383,7 +394,11 @@ async fn inherited_current_selection_commits_explicit_intent_then_becomes_inert(
         // runtime binding. Persisting explicit intent changes the catalog, not
         // that identical resolved invocation.
         assert_eq!(
-            runtime.configuration_view().unwrap().adopted_binding,
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime
+            )
+            .unwrap()
+            .adopted_binding,
             binding
         );
         published_activation(&f.manager.configuration_host(id).unwrap()).await;

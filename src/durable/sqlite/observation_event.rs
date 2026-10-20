@@ -212,7 +212,7 @@ fn tool_status(status: &crate::tools::types::ToolExecutionStatus) -> serde_json:
     }
 }
 fn model_error(error: &crate::model::error::ModelError) -> serde_json::Value {
-    serde_json::json!({"kind":error.kind,"message":prefix(&error.message),"retry_disposition":error.retry_disposition,"retry_after_ms":error.retry_after_ms.map(|value|value.to_string()),"provider_code":error.provider_code.as_deref().map(prefix),"context_overflow":crate::runtime_client::checkpoint::structural_value(&error.context_overflow),"malformed_tool_proposal":crate::runtime_client::checkpoint::structural_value(&error.malformed_tool_proposal),"timeout_phase":error.timeout_phase,"generation":crate::runtime_client::checkpoint::structural_value(&error.generation)})
+    serde_json::json!({"kind":error.kind,"message":prefix(&error.message),"retry_disposition":error.retry_disposition,"retry_after_ms":error.retry_after_ms.map(|value|value.to_string()),"provider_code":error.provider_code.as_deref().map(prefix),"context_overflow":crate::observation::bounded::structural_value(&error.context_overflow),"malformed_tool_proposal":crate::observation::bounded::structural_value(&error.malformed_tool_proposal),"timeout_phase":error.timeout_phase,"generation":crate::observation::bounded::structural_value(&error.generation)})
 }
 fn terminal_fields(
     connection: &Connection,
@@ -239,7 +239,7 @@ fn terminal_fields(
         } => value["error"] = serde_json::json!({"type":"model","error":model_error(error)}),
         Event::AttemptFailed { .. } => {
             if let Some(attempt) = &event.attempt_id
-                && let Some(crate::runtime_client::event::RuntimeClientAttemptFailure::Runtime {
+                && let Some(crate::observation::failure::RuntimeClientAttemptFailure::Runtime {
                     error,
                 }) = super::observation_execution::summary(connection, attempt, event.sequence)?
                     .failure
@@ -249,7 +249,7 @@ fn terminal_fields(
         }
         Event::ModelRequestFailed { error, .. } => value["error"] = model_error(error),
         Event::ToolExecutionCompleted { result, .. } => {
-            value["result"] = serde_json::json!({"status":tool_status(&result.status),"duration_ms":result.duration_ms.to_string(),"exit_code":result.exit_code,"truncation":crate::runtime_client::checkpoint::structural_value(&result.truncation),"content":[],"artifacts":[],"deliveries":[]});
+            value["result"] = serde_json::json!({"status":tool_status(&result.status),"duration_ms":result.duration_ms.to_string(),"exit_code":result.exit_code,"truncation":crate::observation::bounded::structural_value(&result.truncation),"content":[],"artifacts":[],"deliveries":[]});
         }
         Event::ToolExecutionFailed { error, .. } | Event::CompactionFailed { error, .. } => {
             value["error"] = serde_json::json!(prefix(error));
@@ -288,11 +288,10 @@ fn terminal_fields(
             value["generation"] = serde_json::json!(generation.to_string());
             value["checkpoint_id"] = serde_json::json!(checkpoint_id);
             value["activation_id"] = serde_json::json!(activation_id.0.to_string());
-            value["tokens_before"] =
-                crate::runtime_client::checkpoint::structural_value(tokens_before)
-                    .unwrap_or(serde_json::Value::Null);
+            value["tokens_before"] = crate::observation::bounded::structural_value(tokens_before)
+                .unwrap_or(serde_json::Value::Null);
             value["estimated_tokens_after"] = serde_json::json!(estimated_tokens_after.to_string());
-            value["occupancy"] = crate::runtime_client::checkpoint::structural_value(occupancy)
+            value["occupancy"] = crate::observation::bounded::structural_value(occupancy)
                 .unwrap_or(serde_json::Value::Null);
         }
         _ => {}
@@ -339,7 +338,7 @@ fn mandatory_witness(
         fields: Vec::new(),
         deferred: true,
     };
-    let bytes = crate::runtime_client::checkpoint::bounded_bytes(&witness, 16384 - 128)
+    let bytes = crate::observation::bounded::bounded_bytes(&witness, 16384 - 128)
         .ok_or_else(|| storage("mandatory native witness exceeded finite bound"))?;
     connection
         .execute(
@@ -451,7 +450,7 @@ fn index_with_paths(
         deferred: !fields.is_empty(),
         fields,
     };
-    let bytes = crate::runtime_client::checkpoint::bounded_bytes(&witness, 16384 - 128)
+    let bytes = crate::observation::bounded::bounded_bytes(&witness, 16384 - 128)
         .ok_or_else(|| storage("native event witness exceeds bounded layout"))?;
     connection
         .execute(
@@ -604,11 +603,10 @@ fn identity_fields(
             ..
         } => {
             value["request_id"] = identity(request_id.as_str());
-            value["usage"] = crate::runtime_client::checkpoint::structural_value(usage)
+            value["usage"] = crate::observation::bounded::structural_value(usage)
                 .ok_or_else(|| storage("usage witness exceeds finite header"))?;
-            value["generation"] =
-                crate::runtime_client::checkpoint::structural_value(generation)
-                    .ok_or_else(|| storage("generation witness exceeds finite header"))?;
+            value["generation"] = crate::observation::bounded::structural_value(generation)
+                .ok_or_else(|| storage("generation witness exceeds finite header"))?;
         }
         Event::ToolExecutionStarted {
             tool_call_id,
@@ -643,18 +641,18 @@ fn identity_fields(
             emission,
             logical_step_origin,
         } => {
-            value["producer"] = crate::runtime_client::checkpoint::bounded_bytes(producer, 1024)
+            value["producer"] = crate::observation::bounded::bounded_bytes(producer, 1024)
                 .and_then(|bytes| serde_json::from_slice(&bytes).ok())
                 .unwrap_or(serde_json::Value::Null);
             value["request_id"] = identity(request_id.as_str());
             value["message_id"] = identity(message_id.as_str());
             value["logical_step_origin"] = serde_json::json!(logical_step_origin);
-            value["emission"] = crate::runtime_client::checkpoint::bounded_bytes(emission, 2048)
+            value["emission"] = crate::observation::bounded::bounded_bytes(emission, 2048)
                 .and_then(|bytes| serde_json::from_slice(&bytes).ok())
                 .unwrap_or(serde_json::Value::Null);
         }
         Event::Goal { fact } => {
-            value["fact"] = crate::runtime_client::checkpoint::bounded_bytes(fact, 2048)
+            value["fact"] = crate::observation::bounded::bounded_bytes(fact, 2048)
                 .and_then(|bytes| serde_json::from_slice(&bytes).ok())
                 .unwrap_or(serde_json::Value::Null);
         }

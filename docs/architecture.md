@@ -4573,7 +4573,23 @@ conversation_runtime.rs       ConversationRuntime: the conversation
                               inactive/running/draining/quiescent lifecycle
                               boundary, and the adapter
                               bootstrap handshake; publishes semantic
-                              observations
+                              observations. One owner and one coordinator
+                              lock; its inherent impls live in child
+                              modules by responsibility: bootstrap,
+                              admission, attempt, child, compaction,
+                              drain, durability, configuration,
+                              model_selection, controls, history,
+                              observer and probe (test hooks), each with
+                              its domain tests (<domain>/tests.rs)
+runtime/adoption.rs           native configuration-adoption contracts:
+                              PreparedConfiguration, AdoptionEligibility,
+                              AdoptionError, the AdmittedConfiguration an
+                              Attempt freezes, ConfigurationCut, and the
+                              one cache-impact rule
+runtime/resources.rs          immutable RuntimeResourceSnapshot
+                              generations; RuntimeConfiguration (execution
+                              bindings plus an inert AuthoredConfiguration)
+                              and ContextBinding
 runtime/observation.rs        the runtime-owned semantic observation
                               contract (Issue #61): ConversationObservation
                               (semantic source types only), the primary

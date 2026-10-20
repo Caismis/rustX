@@ -54,16 +54,16 @@ use rustx::message::content::TextBlock;
 use rustx::message::types::{ContentBlockIndex, MessageBlock, UserContentBlock};
 use rustx::model::event::ModelEvent;
 use rustx::model::finish::ModelFinishReason;
+use rustx::observation::tool::ForegroundToolState;
 use rustx::runtime::identity::ToolExecutionId;
 use rustx::runtime::types::CancellationReason;
 use rustx::runtime_client::transport::stdio::{
     StdioSessionEnd, StdioTransportError, serve_stdio_jsonl_with_io,
 };
 use rustx::runtime_client::{
-    EventDelivery, ForegroundToolState, RequestId, RuntimeClientCursor, RuntimeClientEndpoint,
-    RuntimeClientError, RuntimeClientEvent, RuntimeClientHost, RuntimeClientOutcome,
-    RuntimeClientProtocolEvent, RuntimeClientRequest, RuntimeClientResponse, RuntimeClientResult,
-    RuntimeClientSnapshot,
+    EventDelivery, RequestId, RuntimeClientCursor, RuntimeClientEndpoint, RuntimeClientError,
+    RuntimeClientEvent, RuntimeClientHost, RuntimeClientOutcome, RuntimeClientProtocolEvent,
+    RuntimeClientRequest, RuntimeClientResponse, RuntimeClientResult, RuntimeClientSnapshot,
 };
 use rustx::tools::executor::ToolRegistry;
 use rustx::tools::types::{
@@ -506,7 +506,7 @@ pub async fn snapshot(
 pub async fn transcript_page(
     driver: &mut dyn RuntimeClientProtocolDriver,
     id: u64,
-) -> rustx::runtime_client::RuntimeClientTranscriptPage {
+) -> rustx::observation::transcript::RuntimeClientTranscriptPage {
     let RuntimeClientResult::TranscriptPage { page } = result(
         driver
             .request(RuntimeClientRequest::TranscriptPageGet {
@@ -529,7 +529,7 @@ pub async fn transcript_page(
 async fn capability_field<T: serde::de::DeserializeOwned + schemars::JsonSchema>(
     driver: &mut dyn RuntimeClientProtocolDriver,
     id: u64,
-    cut: &rustx::runtime_client::checkpoint::CheckpointReadCut,
+    cut: &rustx::observation::cut::CheckpointReadCut,
     domain: &str,
     item_offset: u64,
     field: &str,
@@ -574,14 +574,14 @@ async fn capability_field<T: serde::de::DeserializeOwned + schemars::JsonSchema>
             serde_json::from_slice(&bytes).expect("original native structural field")
         }
     };
-    rustx::runtime_client::checkpoint::decode_domain_value(value)
+    rustx::observation::bounded::decode_domain_value(value)
         .expect("typed original capability field")
 }
 
 /// Positive per-canonical Assistant carriers keep C results distinct from J state.
 pub fn transcript_tool_slots(
-    page: &rustx::runtime_client::RuntimeClientTranscriptPage,
-) -> Vec<rustx::runtime_client::ForegroundToolExecution> {
+    page: &rustx::observation::transcript::RuntimeClientTranscriptPage,
+) -> Vec<rustx::observation::tool::ForegroundToolExecution> {
     let mut slots: Vec<_> = page
         .entries
         .iter()
@@ -594,8 +594,8 @@ pub fn transcript_tool_slots(
         if value.get("tool_calls").is_none() {
             continue;
         }
-        let descriptor: rustx::runtime_client::snapshot::RuntimeClientMessageDescriptor =
-            rustx::runtime_client::checkpoint::decode_domain_value(value.clone())
+        let descriptor: rustx::observation::transcript::RuntimeClientMessageDescriptor =
+            rustx::observation::bounded::decode_domain_value(value.clone())
                 .expect("typed finite native message descriptor");
         slots.extend(descriptor.tool_calls);
     }
@@ -706,7 +706,7 @@ pub async fn await_model_parked(model: &FakeModel) {
 /// `initialize` admits the attachment with its finite native identity receipt;
 /// a separate checkpoint supplies the complete captured read cut.
 pub async fn initialize_admits_the_attachment(factory: &dyn DriverFactory) {
-    use rustx::local_runtime::configuration::application::AdoptionEligibility;
+    use rustx::runtime::adoption::AdoptionEligibility;
 
     let fixture = ConformanceFixture::builder(&conversation(factory, "init"))
         .build()
@@ -1041,7 +1041,7 @@ pub async fn shutdown_is_not_detach(factory: &dyn DriverFactory) {
 
     let (after, _) = snapshot_of(&mut *driver, 5).await;
     assert_eq!(after.messages, before.messages);
-    let _: rustx::runtime_client::snapshot::CapabilityView =
+    let _: rustx::observation::capability_source::CapabilityView =
         super::super::common::native_domain_single(result(
             driver
                 .request(RuntimeClientRequest::CapabilityGet {
@@ -1884,7 +1884,7 @@ pub async fn background_execution_lifecycle(factory: &dyn DriverFactory) {
     };
     assert_eq!(page.items.len(), 1);
     let execution: rustx::runtime_client::RuntimeClientJob =
-        rustx::runtime_client::structural_json::decode(
+        rustx::observation::structural_json::decode(
             page.items[0].value.clone().expect("small job inline"),
         )
         .expect("native job");
@@ -2258,7 +2258,7 @@ pub async fn capability_projection_covers_python_origins() {
     for factory in all_driver_factories() {
         let mut driver = connect(&fixture, &*factory);
         initialize(&mut *driver, 1).await;
-        let capabilities: rustx::runtime_client::snapshot::CapabilityView =
+        let capabilities: rustx::observation::capability_source::CapabilityView =
             super::super::common::native_domain_single(result(
                 driver
                     .request(RuntimeClientRequest::CapabilityGet {
@@ -2343,7 +2343,7 @@ pub async fn capability_projection_covers_mcp_origins(
     let mut driver = connect(&fixture, factory);
     initialize(&mut *driver, 1).await;
 
-    let capabilities: rustx::runtime_client::snapshot::CapabilityView =
+    let capabilities: rustx::observation::capability_source::CapabilityView =
         super::super::common::native_domain_single(result(
             driver
                 .request(RuntimeClientRequest::CapabilityGet {

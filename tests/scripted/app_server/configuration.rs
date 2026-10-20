@@ -3,9 +3,10 @@
 #![allow(clippy::large_futures)] // bounded fixture futures; no recursive or unbounded stack growth
 use super::*;
 use crate::local_runtime::configuration::application::{
-    AdoptionEligibility, AdoptionError, ApplyUnit, ConfigurationApplication, UnitApplication,
+    ApplyUnit, ConfigurationApplication, UnitApplication,
 };
 use crate::local_runtime::configuration::settings::{ConfigMutation, SourceMutation};
+use crate::runtime::adoption::{AdoptionEligibility, AdoptionError};
 mod adoption;
 mod available;
 mod catalog_agents;

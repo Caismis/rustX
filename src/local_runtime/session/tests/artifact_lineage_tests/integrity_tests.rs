@@ -2,7 +2,7 @@
 use super::super::super::LineageSide;
 use super::*;
 use crate::message::types::ContentBlockIndex;
-use crate::runtime_client::content::{
+use crate::observation::content::{
     CanonicalContentComponent, CanonicalContentLocator, ContentRef, ContentRepresentation,
     ContentSource,
 };

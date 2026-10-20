@@ -53,9 +53,9 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use super::event::RuntimeClientEvent;
-use super::snapshot::{RuntimeClientTranscriptCursor, RuntimeClientTranscriptPage};
 use crate::message::types::UserContentBlock;
 use crate::model::session::SessionModelConfig;
+use crate::observation::transcript::{RuntimeClientTranscriptCursor, RuntimeClientTranscriptPage};
 use crate::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, ToolExecutionId};
 use crate::runtime::inbound::InboundSequence;
 use crate::runtime::interaction::{InteractionRef, InteractionResponse};
@@ -442,9 +442,9 @@ pub enum RuntimeClientRequest {
     /// Read finite Trace records and exact own lifecycle interests.
     TracePageGet {
         id: RequestId,
-        before: Option<super::trace::TraceCursor>,
+        before: Option<crate::observation::trace::TraceCursor>,
         limit: usize,
-        records: Vec<super::trace::TraceCursor>,
+        records: Vec<crate::observation::trace::TraceCursor>,
     },
     /// Read one bounded durable transcript page. `before_cursor` is the
     /// exclusive boundary for older history; omitting it returns the newest
@@ -478,20 +478,20 @@ pub enum RuntimeClientRequest {
     },
     ContentRead {
         id: RequestId,
-        content_ref: super::content::ContentRef,
+        content_ref: crate::observation::content::ContentRef,
         offset: u64,
         max_bytes: u32,
     },
     CheckpointPageGet {
         id: RequestId,
-        cut: super::checkpoint::CheckpointReadCut,
+        cut: crate::observation::cut::CheckpointReadCut,
         domain: String,
         offset: u64,
         limit: usize,
     },
     CheckpointValueRead {
         id: RequestId,
-        cut: super::checkpoint::CheckpointReadCut,
+        cut: crate::observation::cut::CheckpointReadCut,
         domain: String,
         item_offset: u64,
         path: Vec<String>,
@@ -598,9 +598,9 @@ pub enum RuntimeClientRequest {
     AgentTrace {
         id: RequestId,
         agent_id: crate::runtime::identity::AgentId,
-        before: Option<super::trace::TraceCursor>,
+        before: Option<crate::observation::trace::TraceCursor>,
         limit: usize,
-        records: Vec<super::trace::TraceCursor>,
+        records: Vec<crate::observation::trace::TraceCursor>,
     },
     AgentTraceDetail {
         id: RequestId,
@@ -860,7 +860,7 @@ pub enum RuntimeClientResult {
     ContextCompacted {
         /// Always present on success: the exact receipt for this invocation,
         /// independently of the latest published context.
-        compaction: Option<super::snapshot::RuntimeClientCompactionView>,
+        compaction: Option<crate::observation::head::RuntimeClientCompactionView>,
     },
 
     /// `interaction_respond` succeeded: the coordinator accepted the one
@@ -882,7 +882,7 @@ pub enum RuntimeClientResult {
     },
     /// Bounded read-only Trace page of summary records.
     TracePage {
-        page: super::trace::TracePage,
+        page: crate::observation::trace::TracePage,
     },
     TraceToolLocation {
         location: Option<super::trace::TraceToolLocation>,
@@ -891,14 +891,14 @@ pub enum RuntimeClientResult {
         window: Box<super::snapshot::ConversationWindow>,
     },
     ConversationTurns {
-        page: crate::runtime_client::turn::ObservedTurnPage,
+        page: crate::observation::turn::ObservedTurnPage,
     },
     TranscriptPage {
         /// The bounded durable transcript page.
         page: RuntimeClientTranscriptPage,
     },
     ContentChunk {
-        chunk: super::content::ContentChunk,
+        chunk: crate::observation::content::ContentChunk,
     },
     CheckpointPage {
         page: super::checkpoint::CheckpointPage,
@@ -963,7 +963,7 @@ pub enum RuntimeClientResult {
         observation: super::agent_observation::AgentObservation,
     },
     AgentStatistics {
-        metrics: super::agent_statistics::AgentStatistics,
+        metrics: crate::observation::statistics::AgentStatistics,
     },
 
     AgentMessage {
@@ -1008,7 +1008,7 @@ pub struct InteractionFieldItem {
 pub enum RuntimeClientError {
     /// Native Session adoption/model fence refusal.
     ConfigurationAdoption {
-        rejection: crate::local_runtime::configuration::application::AdoptionError,
+        rejection: crate::runtime::adoption::AdoptionError,
     },
     /// The negotiated protocol version is not supported by this runtime.
     UnsupportedProtocolVersion {

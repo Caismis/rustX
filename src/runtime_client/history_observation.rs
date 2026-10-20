@@ -1,14 +1,17 @@
 //! Historical display domains read only the supplied native immutable cut.
-use super::checkpoint::{
-    CheckpointPage, CheckpointPageItem, CheckpointReadCut, CheckpointValueChunk,
-};
+use super::checkpoint::{CheckpointPage, CheckpointValueChunk};
 use super::{RuntimeClientCursor, RuntimeClientError};
 use crate::durable::ConversationStore;
+use crate::observation::cut::{CheckpointPageItem, CheckpointReadCut};
 
-fn locator(value: &str) -> Result<super::content::CanonicalContentLocator, RuntimeClientError> {
+fn locator(
+    value: &str,
+) -> Result<crate::observation::content::CanonicalContentLocator, RuntimeClientError> {
     if let Some(position) = value.strip_prefix("ledger:") {
         let position = value_as_position(position)?;
-        return Ok(super::content::CanonicalContentLocator::ByLedgerPosition { position });
+        return Ok(
+            crate::observation::content::CanonicalContentLocator::ByLedgerPosition { position },
+        );
     }
     let value =
         value
@@ -21,9 +24,11 @@ fn locator(value: &str) -> Result<super::content::CanonicalContentLocator, Runti
             message: "historical locator is too long".into(),
         });
     }
-    Ok(super::content::CanonicalContentLocator::ByMessageId {
-        message_id: crate::runtime::identity::MessageId::new(value),
-    })
+    Ok(
+        crate::observation::content::CanonicalContentLocator::ByMessageId {
+            message_id: crate::runtime::identity::MessageId::new(value),
+        },
+    )
 }
 fn value_as_position(value: &str) -> Result<u64, RuntimeClientError> {
     value
@@ -102,7 +107,7 @@ type PageComponents = (
     u64,
     Vec<CheckpointPageItem>,
     Option<u64>,
-    Vec<super::checkpoint::CollectionFrontier>,
+    Vec<crate::observation::cut::CollectionFrontier>,
 );
 fn message_page(
     store: &dyn ConversationStore,
@@ -133,11 +138,13 @@ fn message_page(
             value: header
                 .display
                 .as_ref()
-                .and_then(super::checkpoint::structural_value)
+                .and_then(crate::observation::bounded::structural_value)
                 .or_else(|| {
-                    super::snapshot::RuntimeClientMessageDescriptor::from_header(&header)
-                        .as_ref()
-                        .and_then(super::checkpoint::structural_value)
+                    crate::observation::transcript::RuntimeClientMessageDescriptor::from_header(
+                        &header,
+                    )
+                    .as_ref()
+                    .and_then(crate::observation::bounded::structural_value)
                 }),
             content: header
                 .content
@@ -172,7 +179,7 @@ fn transcript_page(
             limit,
         )
         .map_err(source_error)?;
-    let mut decorated = super::snapshot::transcript_header_view(page.clone());
+    let mut decorated = crate::observation::transcript::transcript_header_view(page.clone());
     super::response::decorate_through(store, &mut decorated, through)
         .map_err(RuntimeClientError::observation_store_error)?;
     collections.extend(decorated.collections);
@@ -182,7 +189,7 @@ fn transcript_page(
         .map(|entry| {
             (
                 entry.cursor.get(),
-                super::checkpoint::structural_value(&entry),
+                crate::observation::bounded::structural_value(&entry),
             )
         })
         .collect();
@@ -224,7 +231,7 @@ fn transcript_page(
 fn block_page(
     store: &dyn ConversationStore,
     native: &crate::durable::observation::ObservationReadCut,
-    identity: &super::content::CanonicalContentLocator,
+    identity: &crate::observation::content::CanonicalContentLocator,
     offset: u64,
     limit: usize,
 ) -> Result<PageComponents, RuntimeClientError> {

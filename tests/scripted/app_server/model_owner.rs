@@ -36,7 +36,11 @@ async fn session_owned_model_selection_rejects_runtime_client_bypass_without_div
         let binding = retained();
         let resources = runtime.runtime_resources();
         let view = runtime.model_view();
-        let configuration = runtime.configuration_view().unwrap();
+        let configuration =
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime,
+            )
+            .unwrap();
         let application = f.manager.configuration_application(id);
         let checkpoint = host.checkpoint().unwrap();
         let (projection, cursor) = (checkpoint.snapshot, checkpoint.cursor);
@@ -73,7 +77,13 @@ async fn session_owned_model_selection_rejects_runtime_client_bypass_without_div
         assert_eq!(retained(), binding);
         assert!(Arc::ptr_eq(&runtime.runtime_resources(), &resources));
         assert_eq!(runtime.model_view(), view);
-        assert_eq!(runtime.configuration_view().unwrap(), configuration);
+        assert_eq!(
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime
+            )
+            .unwrap(),
+            configuration
+        );
         assert_eq!(f.manager.configuration_application(id), application);
         let checkpoint = host.checkpoint().unwrap();
         assert_eq!(

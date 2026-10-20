@@ -1554,9 +1554,6 @@ pub(crate) mod tests {
                     crate::context::ContextAssembly::new(),
                     capability.current_snapshot(),
                 )),
-                resource_loader: Arc::new(crate::runtime::FilesystemRuntimeResourceLoader::new(
-                    &workspace,
-                )),
                 capability,
                 clock: None,
                 initial_messages: Vec::new(),

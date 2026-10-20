@@ -1,6 +1,6 @@
 //! Bounded two-scope Workflow discovery, shared by prospective analysis and immutable input capture.
-use super::configuration::settings::SourceScope;
 use crate::runtime::resources::RuntimeResourceLoadError;
+use crate::runtime::resources::SourceScope;
 use crate::runtime::workflow::{
     MAX_WORKFLOW_BYTES, WorkflowCatalog, WorkflowCompileError, WorkflowDefinition, WorkflowProgram,
 };

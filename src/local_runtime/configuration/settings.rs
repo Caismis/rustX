@@ -8,18 +8,12 @@ use super::super::settings::{AdmittedSource, SourceDirectory, SourceReread};
 use super::UserConfigManager;
 use crate::model::authoring::{Model, Provider};
 use crate::model::catalog::{CredentialSource, CredentialSourceView};
+use crate::runtime::resources::SourceScope;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
 };
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum SourceScope {
-    User,
-    Workspace,
-}
 
 /// Native source authority. A Session is never an authoring target.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -46,7 +40,8 @@ impl SourceTarget {
     pub fn validate(&self) -> Result<(), SettingsError> {
         if let Self::Workspace { directory } = self
             && (!directory.is_absolute()
-                || super::canonical_directory(directory).map_err(|_| SettingsError::Invalid)?
+                || super::capture::canonical_directory(directory)
+                    .map_err(|_| SettingsError::Invalid)?
                     != *directory)
         {
             return Err(SettingsError::Invalid);
@@ -222,17 +217,7 @@ pub struct EffectiveConfiguration {
     pub available_tools: Vec<crate::tools::types::ToolDefinition>,
     pub session_model: Option<crate::model::session::SessionModelConfig>,
     pub effective_model: crate::model::session::SessionModelView,
-    pub admitted_attempt: Option<AdmittedConfiguration>,
-}
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct AdmittedConfiguration {
-    pub approval_mode: crate::runtime::ApprovalMode,
-    pub model_timeout: Option<super::super::config::ModelTimeoutPolicyDocument>,
-    pub tool_deadline: Option<super::super::config::ToolDeadlinePolicyDocument>,
-    pub attempt: crate::runtime::identity::AttemptId,
-    pub generation: crate::runtime::identity::RuntimeResourceRevision,
-    pub model: crate::model::session::SessionModelView,
-    pub resources: crate::runtime::capability_inspection::CapabilityInspection,
+    pub admitted_attempt: Option<crate::runtime::adoption::AdmittedConfiguration>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -398,9 +383,9 @@ fn revision(bytes: Option<&[u8]>) -> String {
 /// The prospective composition's native semantics, as Session resolution and
 /// automatic repair decide them; safe text only.
 fn source_resolution_diagnostic(document: &RuntimeLayer) -> Option<String> {
-    match super::composition_semantics(document) {
-        Ok(super::Composition::Complete) => None,
-        Ok(super::Composition::NoDefaultModel) => Some(
+    match super::semantics::composition_semantics(document) {
+        Ok(super::semantics::Composition::Complete) => None,
+        Ok(super::semantics::Composition::NoDefaultModel) => Some(
             "no unambiguous default model selected; set agent.model.model in User or Workspace rustx.toml"
                 .into(),
         ),
@@ -412,16 +397,18 @@ fn view(path: PathBuf, bytes: Option<&[u8]>, workspace: bool) -> SourceView<Sour
         match crate::toml_authoring::parse_detailed::<RuntimeLayer>(bytes.unwrap_or(b"")) {
             // A document violating its source contract is not editable either:
             // ordinary writes refuse it and manual repair accepts it.
-            Ok(document) => match super::source_restrictions(&path, &document, workspace) {
-                Ok(()) => (Some(redact(document)), None),
-                Err(failure) => (
-                    None,
-                    Some(format!(
-                        "invalid rustx.toml; source was not loaded: {} at {}",
-                        failure.diagnostic.reason, failure.diagnostic.path
-                    )),
-                ),
-            },
+            Ok(document) => {
+                match super::capture::source_restrictions(&path, &document, workspace) {
+                    Ok(()) => (Some(redact(document)), None),
+                    Err(failure) => (
+                        None,
+                        Some(format!(
+                            "invalid rustx.toml; source was not loaded: {} at {}",
+                            failure.diagnostic.reason, failure.diagnostic.path
+                        )),
+                    ),
+                }
+            }
             // A request_params failure names only its field path, category
             // and locations, so it can say why the source cannot be edited.
             // Other parser messages may quote authored text.
@@ -1055,14 +1042,15 @@ impl UserConfigManager {
         if let Some(path) = &workspace {
             manifest.insert(path.clone(), revision(workspace_bytes.as_deref()));
         }
-        let input_revision = super::source_manifest_revision(&manifest);
+        let input_revision = super::capture::source_manifest_revision(&manifest);
         let mut provenance = BTreeMap::new();
         let resolved = (|| {
             // Composition reads each document under its own source contract,
             // exactly as its source view and Session resolution do.
             let mut merged = RuntimeLayer::default();
-            let user_layer = super::parse_layer(&user, user_bytes.as_deref().unwrap_or(b""), false)
-                .map_err(|_| SettingsError::Invalid)?;
+            let user_layer =
+                super::capture::parse_layer(&user, user_bytes.as_deref().unwrap_or(b""), false)
+                    .map_err(|_| SettingsError::Invalid)?;
             merged.overlay(
                 user_layer,
                 &super::Origin::User {
@@ -1072,9 +1060,12 @@ impl UserConfigManager {
                 &mut provenance,
             );
             if let Some(path) = &workspace {
-                let layer =
-                    super::parse_layer(path, workspace_bytes.as_deref().unwrap_or(b""), true)
-                        .map_err(|_| SettingsError::Invalid)?;
+                let layer = super::capture::parse_layer(
+                    path,
+                    workspace_bytes.as_deref().unwrap_or(b""),
+                    true,
+                )
+                .map_err(|_| SettingsError::Invalid)?;
                 merged.overlay(
                     layer,
                     &super::Origin::Workspace {
@@ -1238,7 +1229,7 @@ impl UserConfigManager {
                     // Manual repair exists for documents that fail their own
                     // source contract, including TOML-parsable ones; it never
                     // overwrites a valid source.
-                    if super::parse_layer(
+                    if super::capture::parse_layer(
                         &path,
                         original.as_deref().unwrap_or(b""),
                         scope == SourceScope::Workspace,
@@ -1247,7 +1238,7 @@ impl UserConfigManager {
                     {
                         return Err(SettingsError::Invalid);
                     }
-                    let repaired = super::parse_layer(
+                    let repaired = super::capture::parse_layer(
                         &path,
                         document.as_bytes(),
                         scope == SourceScope::Workspace,
@@ -1266,7 +1257,7 @@ impl UserConfigManager {
                     }
                     // Ordinary editing requires a source satisfying its own
                     // source contract; anything else is manual repair's.
-                    let mut document = super::parse_layer(
+                    let mut document = super::capture::parse_layer(
                         &path,
                         original.as_deref().unwrap_or(b""),
                         scope == SourceScope::Workspace,

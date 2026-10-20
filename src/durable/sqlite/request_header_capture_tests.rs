@@ -367,7 +367,7 @@ fn t08_t12_t19_request_headers_already_inline_complete_text_and_retain_deferred_
 }
 
 fn assert_deferred_text_remains_original(store: &SqliteConversationStore, start: u64, text: &str) {
-    use crate::runtime_client::content::ContentRepresentation;
+    use crate::observation::content::ContentRepresentation;
     use base64::Engine as _;
     let field = store
         .request_field_header_at(start, start, &["messages".into(), "1".into()])

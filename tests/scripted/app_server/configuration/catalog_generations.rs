@@ -357,7 +357,11 @@ async fn issue459_publication_selection_race(selection_first: bool) {
         assert_eq!(stale.expected_binding, binding + 2);
         assert_eq!(retained(), binding + 2);
         assert_eq!(
-            runtime.configuration_view().unwrap().adopted_binding,
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime
+            )
+            .unwrap()
+            .adopted_binding,
             binding + 2
         );
         assert_eq!(runtime.runtime_resources().revision(), revision.next());
@@ -572,7 +576,11 @@ async fn issue459_failed_mixed_generations_keep_last_good_authority() {
                 runtime.model_view(),
                 runtime.model_catalog(),
                 runtime.runtime_resources().revision(),
-                runtime.configuration_view().unwrap().adopted_binding,
+                crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                    &runtime,
+                )
+                .unwrap()
+                .adopted_binding,
                 binding,
             )
         };
@@ -626,11 +634,12 @@ async fn issue459_failed_mixed_generations_keep_last_good_authority() {
         assert!(diagnostic.contains("model catalog"), "{diagnostic}");
         assert_eq!(ledger(), good);
         assert_eq!(
-            runtime
-                .configuration_view()
-                .unwrap()
-                .root_agent
-                .instructions,
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime
+            )
+            .unwrap()
+            .root_agent
+            .instructions,
             "issue459 adopted instructions"
         );
 
@@ -904,11 +913,12 @@ async fn issue459_older_candidates_and_overtaken_generations_never_restore_autho
                 .contains("fast")
         );
         assert_eq!(
-            runtime
-                .configuration_view()
-                .unwrap()
-                .root_agent
-                .instructions,
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime
+            )
+            .unwrap()
+            .root_agent
+            .instructions,
             "issue459 first instructions"
         );
 
@@ -953,11 +963,12 @@ async fn issue459_older_candidates_and_overtaken_generations_never_restore_autho
             .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
             .unwrap();
         assert_eq!(
-            runtime
-                .configuration_view()
-                .unwrap()
-                .root_agent
-                .instructions,
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime
+            )
+            .unwrap()
+            .root_agent
+            .instructions,
             "issue459 newest instructions"
         );
         assert!(fixture.provider.request_bodies().is_empty());
@@ -1119,11 +1130,12 @@ async fn issue459_mixed_generations_keep_the_summary_policy_and_clients_agree() 
             .unwrap();
         assert_eq!(runtime.model_view(), view);
         assert_eq!(
-            runtime
-                .configuration_view()
-                .unwrap()
-                .root_agent
-                .instructions,
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime
+            )
+            .unwrap()
+            .root_agent
+            .instructions,
             "issue459 summary instructions 2"
         );
         assert!(fixture.provider.request_bodies().is_empty());

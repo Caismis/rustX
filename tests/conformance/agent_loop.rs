@@ -52,11 +52,10 @@ use rustx::message::content::TextBlock;
 use rustx::message::types::{MessageBlock, UserContentBlock};
 use rustx::model::catalog::{MapCredentialEnvironment, ModelRef};
 use rustx::model::session::{SessionModelConfig, SummaryModelPolicy};
+use rustx::observation::failure::RuntimeClientAttemptFailure;
 use rustx::runtime::recovery::{AttemptRecoveryClass, ResumeDisposition};
 use rustx::runtime_client::snapshot::RuntimeClientAttemptPhase;
-use rustx::runtime_client::{
-    RuntimeClientAttemptFailure, RuntimeClientEvent, RuntimeClientOutcome,
-};
+use rustx::runtime_client::{RuntimeClientEvent, RuntimeClientOutcome};
 
 // ---------------------------------------------------------------------------
 // The scenario contract, mirrored from the Python scenarios

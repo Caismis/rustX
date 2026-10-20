@@ -137,7 +137,12 @@ async fn issue459_removed_model_with_instructions_change_recovers_before_adoptio
         let before = runtime.runtime_resources();
         let old = before.configuration().unwrap().clone();
         let selected = runtime.model_view();
-        let binding = runtime.configuration_view().unwrap().adopted_binding;
+        let binding =
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime,
+            )
+            .unwrap()
+            .adopted_binding;
         assert_eq!(retained().binding_revision, binding);
         let mut eligibility = EligibilityStream::open(&fixture, &id);
 
@@ -188,24 +193,29 @@ async fn issue459_removed_model_with_instructions_change_recovers_before_adoptio
             "issue459 adopted instructions"
         );
         assert_eq!(
-            runtime
-                .configuration_view()
-                .unwrap()
-                .root_agent
-                .instructions,
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime
+            )
+            .unwrap()
+            .root_agent
+            .instructions,
             "issue459 adopted instructions"
         );
-        assert_eq!(new.source_revisions, old.source_revisions);
+        assert_eq!(new.authored.source_revisions, old.authored.source_revisions);
         assert_eq!(
-            new.component_revisions[&ApplyUnit::Provider],
+            new.authored.component_revisions[&ApplyUnit::Provider],
             published_revision
         );
         assert_eq!(
-            new.component_revisions[&ApplyUnit::Instructions],
-            old.component_revisions[&ApplyUnit::Instructions]
+            new.authored.component_revisions[&ApplyUnit::Instructions],
+            old.authored.component_revisions[&ApplyUnit::Instructions]
         );
         assert_eq!(
-            runtime.configuration_view().unwrap().adopted_binding,
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime
+            )
+            .unwrap()
+            .adopted_binding,
             binding + 1
         );
         let binding_now = retained();
@@ -214,7 +224,7 @@ async fn issue459_removed_model_with_instructions_change_recovers_before_adoptio
             binding_now.config().agent.instructions,
             "issue459 adopted instructions"
         );
-        assert_eq!(binding_now.source_revisions, old.source_revisions);
+        assert_eq!(binding_now.source_revisions, old.authored.source_revisions);
         assert!(matches!(
             runtime.submit_inbound(issue459_text("refused")),
             Err(InboundAdmissionError::ModelUnavailable { .. })
@@ -276,7 +286,10 @@ async fn issue459_removed_model_with_instructions_change_recovers_before_adoptio
             adopted.config.agent.instructions,
             "issue459 new instructions"
         );
-        assert_ne!(adopted.source_revisions, old.source_revisions);
+        assert_ne!(
+            adopted.authored.source_revisions,
+            old.authored.source_revisions
+        );
         let mut settlement = SettlementReceiptWait::capture(&runtime);
         runtime
             .submit_inbound(issue459_text("after adoption"))
@@ -383,11 +396,12 @@ async fn issue459_cold_session_receives_mixed_publication_on_residency() {
         assert_eq!(published.binding_revision, before.binding_revision + 1);
         assert_eq!(published.source_revisions, before.source_revisions);
         assert_eq!(
-            runtime
-                .configuration_view()
-                .unwrap()
-                .root_agent
-                .instructions,
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime
+            )
+            .unwrap()
+            .root_agent
+            .instructions,
             "issue459 adopted instructions"
         );
         assert!(matches!(
@@ -640,7 +654,11 @@ async fn issue459_removed_profile_with_capability_change_recovers_before_adoptio
         assert_eq!(binding.session_model(), &issue459_pinned(Some("deep")));
         assert_eq!(
             binding.component_revisions,
-            adopted.configuration().unwrap().component_revisions
+            adopted
+                .configuration()
+                .unwrap()
+                .authored
+                .component_revisions
         );
         // The older closure is retired: no runtime owner holds its tools.
         let registry = capability.tool_registry().clone();

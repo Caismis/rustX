@@ -156,10 +156,8 @@ impl SubagentObservationProjector {
     ) -> bool {
         let applied = match observation {
             ConversationObservation::JournalFact(witness) => {
-                crate::runtime_client::structural_json::decode::<RuntimeEvent>(
-                    witness.value.clone(),
-                )
-                .is_ok_and(|event| self.fold_event(&event))
+                crate::observation::structural_json::decode::<RuntimeEvent>(witness.value.clone())
+                    .is_ok_and(|event| self.fold_event(&event))
             }
             #[cfg(test)]
             ConversationObservation::Event { event, .. } => self.fold_event(event),
@@ -174,11 +172,11 @@ impl SubagentObservationProjector {
             } => self.apply_tool_progress(tool_call_id, progress),
             ConversationObservation::InteractionPending { interaction, .. } => {
                 let on = match &interaction.kind {
-                    crate::runtime_client::snapshot::RuntimeClientInteractionKind::Approval => SubagentWaitReason::Approval {
+                    crate::observation::interaction::RuntimeClientInteractionKind::Approval => SubagentWaitReason::Approval {
                         tool_id: interaction.approval.as_ref().expect("approval header metadata").tool_id.clone(),
                     },
-                    crate::runtime_client::snapshot::RuntimeClientInteractionKind::Questionnaire => SubagentWaitReason::Questionnaire,
-                    crate::runtime_client::snapshot::RuntimeClientInteractionKind::Review => SubagentWaitReason::Review,
+                    crate::observation::interaction::RuntimeClientInteractionKind::Questionnaire => SubagentWaitReason::Questionnaire,
+                    crate::observation::interaction::RuntimeClientInteractionKind::Review => SubagentWaitReason::Review,
                 };
                 self.visible_tool = None;
                 self.observation.activity = SubagentActivity::Waiting { on };
@@ -1019,7 +1017,7 @@ mod tests {
         assert_folded(
             &mut projector,
             &ConversationObservation::InteractionPending {
-                interaction: crate::runtime_client::checkpoint::interaction_request_header(
+                interaction: crate::observation::interaction::interaction_request_header(
                     &request,
                     crate::runtime::interaction::InteractionSource::Primary,
                 ),
@@ -1120,7 +1118,7 @@ mod tests {
         assert_folded(
             &mut projector,
             &ConversationObservation::InteractionPending {
-                interaction: crate::runtime_client::checkpoint::interaction_request_header(
+                interaction: crate::observation::interaction::interaction_request_header(
                     &request,
                     crate::runtime::interaction::InteractionSource::Primary,
                 ),
@@ -1412,7 +1410,7 @@ mod tests {
         assert_folded(
             &mut projector,
             &ConversationObservation::InteractionPending {
-                interaction: crate::runtime_client::checkpoint::interaction_request_header(
+                interaction: crate::observation::interaction::interaction_request_header(
                     &crate::runtime::interaction::InteractionRequest {
                         id: crate::runtime::identity::InteractionId::new("interaction-1"),
                         conversation_id: crate::runtime::identity::ConversationId::new(

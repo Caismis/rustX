@@ -54,7 +54,12 @@ async fn issue459_new_inherited_agent_does_not_hold_back_catalog_publication() {
         let old = before.configuration().unwrap().clone();
         assert!(old.config.agent.agents.is_empty() && old.config.agent.workflows.is_empty());
         let selected = runtime.model_view();
-        let binding = runtime.configuration_view().unwrap().adopted_binding;
+        let binding =
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime,
+            )
+            .unwrap()
+            .adopted_binding;
         let mut eligibility = EligibilityStream::open(&fixture, &id);
         let probe = fixture
             .manager
@@ -107,23 +112,31 @@ async fn issue459_new_inherited_agent_does_not_hold_back_catalog_publication() {
         assert!(Arc::ptr_eq(before.capability(), published.capability()));
         let new = published.configuration().unwrap().clone();
         assert!(new.config.agent.agents.is_empty() && new.config.agent.workflows.is_empty());
-        assert_eq!(new.source_revisions, old.source_revisions);
+        assert_eq!(new.authored.source_revisions, old.authored.source_revisions);
         assert_eq!(
-            new.component_revisions[&ApplyUnit::Provider],
+            new.authored.component_revisions[&ApplyUnit::Provider],
             published_revision
         );
         assert_eq!(
-            new.component_revisions.get(&ApplyUnit::Capabilities),
-            old.component_revisions.get(&ApplyUnit::Capabilities)
+            new.authored
+                .component_revisions
+                .get(&ApplyUnit::Capabilities),
+            old.authored
+                .component_revisions
+                .get(&ApplyUnit::Capabilities)
         );
         assert_eq!(
-            runtime.configuration_view().unwrap().adopted_binding,
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime
+            )
+            .unwrap()
+            .adopted_binding,
             binding + 1
         );
         let binding_now = retained();
         assert_eq!(binding_now.binding_revision, binding + 1);
         assert!(binding_now.config().agent.agents.is_empty());
-        assert_eq!(binding_now.source_revisions, old.source_revisions);
+        assert_eq!(binding_now.source_revisions, old.authored.source_revisions);
         assert!(matches!(
             runtime.submit_inbound(issue459_text("refused")),
             Err(InboundAdmissionError::ModelUnavailable { .. })
@@ -755,18 +768,21 @@ async fn issue462_agent_control_group_follows_one_admitted_generation() {
         // call) is held while a nonempty-to-nonempty publication lands.
         runtime.submit_inbound(input("request-B held")).unwrap();
         fixture.gates[1].wait_entered().await;
-        let admitted = runtime
-            .configuration_view()
+        let admitted =
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime,
+            )
             .unwrap()
             .admitted_attempt
             .unwrap();
         let replacement = issue462_admit(&fixture, &["explorer"]).await;
         assert_eq!(
-            runtime
-                .configuration_view()
-                .unwrap()
-                .admitted_attempt
-                .unwrap(),
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime
+            )
+            .unwrap()
+            .admitted_attempt
+            .unwrap(),
             admitted
         );
         let mut settlement = SettlementReceiptWait::capture(&runtime);

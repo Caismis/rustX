@@ -9,7 +9,7 @@ use super::{
     OptionalExtension, PublicationAudit, PublicationFrame, PublicationPayload, PublicationStreamId,
     Serialize, params, storage,
 };
-use crate::runtime_client::content::{
+use crate::observation::content::{
     CONTENT_READ_MAX_BYTES, CONTENT_SAFE_INTEGER_MAX, CanonicalContentComponent,
     CanonicalContentLocator, ContentChunk, ContentRef, ContentRepresentation as Rep,
     ContentSource as Source,
@@ -817,7 +817,7 @@ pub(super) fn frame_receipt(
     start: &crate::publication::PublicationStreamStart,
     frame: &PublicationFrame,
 ) -> Result<crate::publication::PublicationFrameReceipt, ConversationStoreError> {
-    use crate::runtime_client::content::PublicationContentComponent;
+    use crate::observation::content::PublicationContentComponent;
     let(block_total,tool_total):(u64,u64)=connection.query_row("SELECT total,tool_total FROM publication_observation_counts WHERE stream_id=?1 AND revision=?2",params![frame.stream_id.as_str(),frame.sequence.checked_add(1).ok_or_else(invalid)?],|row|Ok((row.get(0)?,row.get(1)?))).map_err(|error|storage(error.to_string()))?;
     let (block, representation, suffix_bytes, metadata) = match &frame.payload {
         PublicationPayload::TextSuffix {
@@ -975,7 +975,7 @@ pub(super) fn live_block_header_page(
     through: u64,
     offset: u64,
     limit: usize,
-) -> Result<crate::runtime_client::content::LiveBlockHeaderPage, ConversationStoreError> {
+) -> Result<crate::observation::content::LiveBlockHeaderPage, ConversationStoreError> {
     live_headers(
         connection,
         conversation,
@@ -993,7 +993,7 @@ pub(super) fn live_tool_header_page(
     through: u64,
     offset: u64,
     limit: usize,
-) -> Result<crate::runtime_client::content::LiveBlockHeaderPage, ConversationStoreError> {
+) -> Result<crate::observation::content::LiveBlockHeaderPage, ConversationStoreError> {
     live_headers(
         connection,
         conversation,
@@ -1012,8 +1012,8 @@ fn live_headers(
     offset: u64,
     limit: usize,
     tools: bool,
-) -> Result<crate::runtime_client::content::LiveBlockHeaderPage, ConversationStoreError> {
-    use crate::runtime_client::content::{
+) -> Result<crate::observation::content::LiveBlockHeaderPage, ConversationStoreError> {
+    use crate::observation::content::{
         LiveBlockHeader, LiveBlockHeaderPage, PublicationContentComponent,
     };
     if limit == 0
@@ -1606,7 +1606,7 @@ pub(super) fn index_structural_value<T: serde::Serialize + schemars::JsonSchema>
         written: 0,
         segment: 0,
     };
-    crate::runtime_client::structural_json::to_writer(&mut writer, value)
+    crate::observation::structural_json::to_writer(&mut writer, value)
         .map_err(|error| storage(error.to_string()))?;
     writer.flush().map_err(|error| storage(error.to_string()))?;
     connection
@@ -1724,10 +1724,10 @@ pub(super) fn validate_source_cut(
 }
 
 fn live_representations() -> [(
-    crate::runtime_client::content::PublicationContentComponent,
+    crate::observation::content::PublicationContentComponent,
     Rep,
 ); 4] {
-    use crate::runtime_client::content::PublicationContentComponent;
+    use crate::observation::content::PublicationContentComponent;
     [
         (PublicationContentComponent::Payload, Rep::Utf8Text),
         (PublicationContentComponent::Payload, Rep::RawJsonUtf8),

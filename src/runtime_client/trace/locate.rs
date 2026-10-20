@@ -2,15 +2,17 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::{TRACE_PAGE_LIMIT, TraceCursor, TracePage, TraceProjection};
+use super::{TRACE_PAGE_LIMIT, TraceProjection};
+
 use crate::durable::ConversationStoreError;
+use crate::observation::trace::{TraceCursor, TracePage};
 use crate::runtime::identity::{ToolCallId, ToolId};
 
 /// Native occurrence identity owns navigation; optional inline IDs are checks.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TraceToolLocator {
-    pub occurrence: crate::runtime_client::snapshot::RuntimeClientToolOccurrence,
+    pub occurrence: crate::observation::tool::RuntimeClientToolOccurrence,
     pub call_id: Option<ToolCallId>,
     pub tool_id: Option<ToolId>,
 }
@@ -40,7 +42,7 @@ impl TraceProjection<'_> {
                 .tool_id
                 .as_ref()
                 .is_some_and(|id| id.as_str().len() > 256)
-            || matches!(&locator.occurrence.locator,crate::runtime_client::content::CanonicalContentLocator::ByMessageId {message_id} if message_id.as_str().len()>256)
+            || matches!(&locator.occurrence.locator,crate::observation::content::CanonicalContentLocator::ByMessageId {message_id} if message_id.as_str().len()>256)
             || cut != self.cut()?
         {
             return Err(ConversationStoreError::InvalidReference(
@@ -71,7 +73,7 @@ impl TraceProjection<'_> {
         {
             return Ok(None);
         }
-        let crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { position } =
+        let crate::observation::content::CanonicalContentLocator::ByLedgerPosition { position } =
             page.locator
         else {
             return Err(ConversationStoreError::InvalidReference(

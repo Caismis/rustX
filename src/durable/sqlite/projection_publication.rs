@@ -47,7 +47,7 @@ pub(super) fn index(
             journal_range: batch.journal_range,
             witness: witness.clone(),
         };
-        let bytes = crate::runtime_client::checkpoint::bounded_bytes(&evidence, MAX)
+        let bytes = crate::observation::bounded::bounded_bytes(&evidence, MAX)
             .ok_or_else(|| storage("compaction publication exceeds bound"))?;
         let witness = digest(native, &bytes);
         transaction.execute("UPDATE compaction_operations SET observation_receipt=?1,observation_receipt_witness=?2 WHERE operation_id=?3",params![bytes,witness.as_slice(),id.as_str()]).map_err(|error|storage(error.to_string()))?;

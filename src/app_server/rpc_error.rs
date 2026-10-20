@@ -81,7 +81,7 @@ pub(super) fn model_selection_error(
         | ModelSelectionError::Persistence(
             crate::local_runtime::session::SessionError::StaleSettings { .. },
         ) => domain(ErrorData::ConfigurationAdoption {
-            rejection: crate::local_runtime::configuration::application::AdoptionError::Conflict,
+            rejection: crate::runtime::adoption::AdoptionError::Conflict,
         }),
         ModelSelectionError::Model(ModelUpdateError::Inactive) => domain(ErrorData::StaleRuntime),
         ModelSelectionError::Model(ModelUpdateError::InvalidConfiguration(diagnostic)) => {

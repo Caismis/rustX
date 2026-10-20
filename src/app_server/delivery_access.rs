@@ -83,7 +83,7 @@ pub(crate) fn unauthorized() -> RpcError {
 /// A selected read coordinate is independent of the native present authoring limit.
 fn validate_index(index: usize) -> Result<(), RpcError> {
     let index = u64::try_from(index).map_err(|_| domain(ErrorData::InvalidParams))?;
-    if index > crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX {
+    if index > crate::observation::content::CONTENT_SAFE_INTEGER_MAX {
         return Err(domain(ErrorData::InvalidParams));
     }
     Ok(())
@@ -95,7 +95,7 @@ fn validate_index(index: usize) -> Result<(), RpcError> {
 pub(super) async fn request(
     host: AppServerHost,
     route: Arc<Route>,
-    locator: crate::runtime_client::content::CanonicalContentLocator,
+    locator: crate::observation::content::CanonicalContentLocator,
     delivery_index: usize,
     roots: Roots,
     access: Access,
@@ -175,7 +175,7 @@ async fn resolve(
     route: &Arc<Route>,
     authority: &Arc<crate::runtime_client::host::ClientInner>,
     sessions: crate::local_runtime::session_controller::SessionController,
-    locator: crate::runtime_client::content::CanonicalContentLocator,
+    locator: crate::observation::content::CanonicalContentLocator,
     delivery_index: usize,
     roots: Roots,
     access: Access,

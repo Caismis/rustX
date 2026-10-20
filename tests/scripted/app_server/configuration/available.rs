@@ -639,7 +639,9 @@ async fn t03_t06_t09_t15_t16_healthy_registration_preserves_complete_policy_auth
     )
     .await;
     let application = settled(&fixture, 0).await;
-    let independent = runtime.configuration_view().unwrap();
+    let independent =
+        crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(&runtime)
+            .unwrap();
     assert_eq!(
         independent.approval_mode,
         crate::runtime::ApprovalMode::FullAccess
@@ -723,7 +725,10 @@ async fn t03_t06_t09_t15_t16_healthy_registration_preserves_complete_policy_auth
     fixture.manager.load(second, None).await.unwrap();
     let second_runtime = fixture.manager.configuration_runtime(second).unwrap();
     let second_resources = second_runtime.runtime_resources();
-    let view = second_runtime.configuration_view().unwrap();
+    let view = crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+        &second_runtime,
+    )
+    .unwrap();
     assert_eq!(view.approval_mode, crate::runtime::ApprovalMode::FullAccess);
     assert_eq!(adopted.config.approval_mode, view.approval_mode);
     assert_eq!(view.document.approval_mode, Some(view.approval_mode));
@@ -776,7 +781,7 @@ async fn t03_t06_t09_t15_t16_healthy_registration_preserves_complete_policy_auth
         assert_eq!(view.provenance[field], adopted.provenance[field]);
         assert_eq!(
             view.provenance[field],
-            resources.configuration().unwrap().provenance[field]
+            resources.configuration().unwrap().authored.provenance[field]
         );
     }
     for unit in [
@@ -789,6 +794,7 @@ async fn t03_t06_t09_t15_t16_healthy_registration_preserves_complete_policy_auth
             second_resources
                 .configuration()
                 .unwrap()
+                .authored
                 .component_revisions[&unit]
         );
     }

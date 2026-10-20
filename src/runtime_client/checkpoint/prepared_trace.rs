@@ -1,6 +1,7 @@
 //! Admission belongs to one installed finite Trace record head, not its cut.
-use super::{CHECKPOINT_PAGE_ITEMS, Capture, prepare_capture_item};
-use crate::runtime_client::trace::TraceRecord;
+use crate::observation::bounded::{CHECKPOINT_PAGE_ITEMS, prepare_capture_item};
+use crate::observation::capture::Capture;
+use crate::observation::trace::TraceRecord;
 use std::sync::{Arc, OnceLock};
 
 #[derive(Debug)]

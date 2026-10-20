@@ -11,7 +11,7 @@ fn t09_t12_t19_pending_layout_cleanup_failure_cannot_refuse_native_adoption() {
         let original = store
             .pending_value_read(&before, accepted.sequence.get(), 0, 65_536)
             .unwrap();
-        let original: UserMessageBlock = crate::runtime_client::checkpoint::decode_domain_value(
+        let original: UserMessageBlock = crate::observation::bounded::decode_domain_value(
             serde_json::from_slice(&original.bytes).unwrap(),
         )
         .unwrap();
@@ -284,8 +284,8 @@ fn t08_t12_t19_successful_tool_j_before_c_keeps_original_content_and_available_s
         .find(|field| field.path.last().is_some_and(|name| name == "result"))
         .unwrap();
     assert!(field.content.is_empty() && field.collections.is_empty());
-    let schema = crate::runtime_client::structural_json::root::<ToolExecutionResult>();
-    let expected = serde_json::to_vec(&crate::runtime_client::structural_json::Encoded {
+    let schema = crate::observation::structural_json::root::<ToolExecutionResult>();
+    let expected = serde_json::to_vec(&crate::observation::structural_json::Encoded {
         value: &result,
         schema: &schema,
         root: &schema,
@@ -524,7 +524,7 @@ fn t08_t14_t19_giant_final_member_identity_is_deferred_until_original_terminal()
     assert!(before.final_message_id_deferred);
     assert!(matches!(
         before.final_message_locator,
-        Some(crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { .. })
+        Some(crate::observation::content::CanonicalContentLocator::ByLedgerPosition { .. })
     ));
     assert!(serde_json::to_vec(&before).unwrap().len() <= 16_384);
     assert_eq!(
@@ -583,7 +583,7 @@ fn t08_t14_t19_giant_final_member_identity_is_deferred_until_original_terminal()
 
 fn member_original_identity(
     store: &SqliteConversationStore,
-    reference: &crate::runtime_client::content::ContentRef,
+    reference: &crate::observation::content::ContentRef,
 ) -> String {
     use base64::Engine;
     let mut bytes = Vec::new();
@@ -782,8 +782,8 @@ fn t14_t19_unowned_assistant_journal_has_no_fabricated_member_owner() {
 fn member_source_page(
     store: &SqliteConversationStore,
     cut: &crate::durable::observation::ObservationReadCut,
-) -> crate::runtime_client::snapshot::RuntimeClientTranscriptPage {
-    let mut page = crate::runtime_client::snapshot::transcript_header_view(
+) -> crate::observation::transcript::RuntimeClientTranscriptPage {
+    let mut page = crate::observation::transcript::transcript_header_view(
         store.transcript_header_page(cut, None, 32).unwrap(),
     );
     crate::runtime_client::response::decorate_window(store, &mut page, cut.read.journal).unwrap();
@@ -872,7 +872,7 @@ fn t08_t14_t19_deferred_member_descriptor_preserves_original_fields_and_frozen_p
     let reference =
         serde_json::from_value(value["turn_process"]["final_message_id_source"].clone()).unwrap();
     assert_eq!(member_original_identity(&store, &reference), original);
-    assert!(crate::runtime_client::checkpoint::bounded_bytes(row, 16_384).is_some());
+    assert!(crate::observation::bounded::bounded_bytes(row, 16_384).is_some());
 }
 
 #[test]

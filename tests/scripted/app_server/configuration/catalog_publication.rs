@@ -862,11 +862,11 @@ async fn issue459_catalog_publication_metadata_names_what_was_published() {
         // The Provider unit is published with its own component revision; the
         // adopted-source baseline and every other unit keep theirs.
         assert_eq!(
-            new.component_revisions[&ApplyUnit::Provider],
+            new.authored.component_revisions[&ApplyUnit::Provider],
             published_revision
         );
         assert_ne!(
-            old.component_revisions[&ApplyUnit::Provider],
+            old.authored.component_revisions[&ApplyUnit::Provider],
             published_revision
         );
         for unit in [
@@ -876,17 +876,20 @@ async fn issue459_catalog_publication_metadata_names_what_was_published() {
             ApplyUnit::SharedCapacity,
         ] {
             assert_eq!(
-                new.component_revisions[&unit], old.component_revisions[&unit],
+                new.authored.component_revisions[&unit], old.authored.component_revisions[&unit],
                 "{unit:?}"
             );
         }
-        assert_eq!(new.source_revisions, old.source_revisions);
+        assert_eq!(new.authored.source_revisions, old.authored.source_revisions);
         assert_eq!(
-            new.effective.models.as_ref().unwrap()["local/b"].max_output_tokens,
+            new.authored.effective.models.as_ref().unwrap()["local/b"].max_output_tokens,
             1024
         );
         // The restart-bound process field is neither in the generation nor live.
-        assert_eq!(new.effective.app_server, old.effective.app_server);
+        assert_eq!(
+            new.authored.effective.app_server,
+            old.authored.effective.app_server
+        );
         assert_eq!(
             fixture.manager.process_policy().shutdown_deadline_ms,
             process.shutdown_deadline_ms
@@ -894,11 +897,17 @@ async fn issue459_catalog_publication_metadata_names_what_was_published() {
         // The retained binding carries the same facts, so a reload composes
         // exactly this generation's metadata.
         let binding = retained();
-        assert_eq!(binding.component_revisions, new.component_revisions);
-        assert_eq!(binding.source_revisions, old.source_revisions);
+        assert_eq!(
+            binding.component_revisions,
+            new.authored.component_revisions
+        );
+        assert_eq!(binding.source_revisions, old.authored.source_revisions);
         // The wire projection keeps the adopted-source baseline.
-        let view = runtime.configuration_view().unwrap();
-        assert_eq!(view.source_revisions, old.source_revisions);
+        let view = crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+            &runtime,
+        )
+        .unwrap();
+        assert_eq!(view.source_revisions, old.authored.source_revisions);
         assert_eq!(
             view.document.models.as_ref().unwrap()["local/b"].max_output_tokens,
             1024
@@ -933,13 +942,19 @@ async fn issue459_catalog_publication_metadata_names_what_was_published() {
             .unwrap();
         let adopted = runtime.runtime_resources().configuration().unwrap().clone();
         let binding = retained();
-        assert_ne!(adopted.source_revisions, old.source_revisions);
-        assert_eq!(adopted.source_revisions, binding.source_revisions);
+        assert_ne!(
+            adopted.authored.source_revisions,
+            old.authored.source_revisions
+        );
+        assert_eq!(adopted.authored.source_revisions, binding.source_revisions);
         // A context adoption composes the Instructions and Provider units at
         // its revision; units it did not compose keep theirs.
         let revision = candidate.identity.input_revision.unwrap();
         for unit in [ApplyUnit::Instructions, ApplyUnit::Provider] {
-            assert_eq!(adopted.component_revisions[&unit], revision, "{unit:?}");
+            assert_eq!(
+                adopted.authored.component_revisions[&unit], revision,
+                "{unit:?}"
+            );
         }
         for unit in [
             ApplyUnit::Capabilities,
@@ -947,12 +962,13 @@ async fn issue459_catalog_publication_metadata_names_what_was_published() {
             ApplyUnit::SharedCapacity,
         ] {
             assert_eq!(
-                adopted.component_revisions[&unit], old.component_revisions[&unit],
+                adopted.authored.component_revisions[&unit],
+                old.authored.component_revisions[&unit],
                 "{unit:?}"
             );
         }
         assert_eq!(
-            adopted.effective.models.as_ref().unwrap()["local/b"].max_output_tokens,
+            adopted.authored.effective.models.as_ref().unwrap()["local/b"].max_output_tokens,
             1024
         );
         // Adoption re-resolves through its own registry; the invocation's

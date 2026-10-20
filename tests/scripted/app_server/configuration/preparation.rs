@@ -60,7 +60,9 @@ async fn t03_mixed_application_and_true_process_binding_restart() {
     assert_eq!(fixture.host.policy().shutdown_deadline_ms, 30_000);
     let runtime = fixture.manager.configuration_runtime(id).unwrap();
     assert_eq!(
-        runtime.configuration_view().unwrap().approval_mode,
+        crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(&runtime)
+            .unwrap()
+            .approval_mode,
         crate::runtime::ApprovalMode::FullAccess
     );
     assert_ne!(
@@ -131,8 +133,7 @@ async fn t05_complete_policy_registry_publishes_while_instructions_remain_pendin
         crate::tools::types::ToolApprovalPolicy::Always
     );
     assert_eq!(
-        runtime
-            .configuration_view()
+        crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(&runtime)
             .unwrap()
             .available_tools
             .iter()
@@ -190,7 +191,11 @@ async fn t08_model_baseline_change_recaptures_prepared_context() {
         assert_eq!(recaptured.identity, application.desired);
         assert_eq!(
             recaptured.expected_binding,
-            runtime.configuration_view().unwrap().adopted_binding
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime
+            )
+            .unwrap()
+            .adopted_binding
         );
         assert!(matches!(
             application.units[&ApplyUnit::Instructions],
@@ -304,8 +309,10 @@ async fn t02_later_tool_batch_and_model_step_keep_admitted_registry_policy() {
         let runtime = fixture.manager.configuration_runtime(id).unwrap();
         runtime.submit_inbound(input("request-A")).unwrap();
         fixture.gates[0].wait_entered().await;
-        let captured = runtime
-            .configuration_view()
+        let captured =
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime,
+            )
             .unwrap()
             .admitted_attempt
             .unwrap();
@@ -397,6 +404,7 @@ async fn t09_unselected_model_and_default_edits_publish_without_adoption_t15_new
         published
             .configuration()
             .unwrap()
+            .authored
             .effective
             .models
             .as_ref()
@@ -630,11 +638,11 @@ async fn t03_t05_mixed_instructions_publication_rejects_rebound_project_path() {
         let retained = fixture.manager.sessions.configuration_bindings.lock().unwrap()[&second].clone();
         assert_eq!(retained.config.agent.instructions, "I1");
         assert_eq!(retained.config.agent.agents_md.files, vec![old_path]);
-        assert_eq!(retained.effective.agent, old.effective.agent);
-        assert_eq!(retained.effective.context, old.effective.context);
+        assert_eq!(retained.effective.agent, old.authored.effective.agent);
+        assert_eq!(retained.effective.context, old.authored.effective.context);
         assert_eq!(retained.root_agent_project_files, before.root_profile().unwrap().project_instructions.files);
-        assert_eq!(retained.component_revisions, old.component_revisions);
-        assert_eq!(retained.source_revisions, old.source_revisions);
+        assert_eq!(retained.component_revisions, old.authored.component_revisions);
+        assert_eq!(retained.source_revisions, old.authored.source_revisions);
         retained.validate_resource_authority().unwrap();
         fixture.manager.load(&second, None).await.unwrap();
         let loaded = fixture.manager.configuration_runtime(&second).unwrap().runtime_resources();
@@ -762,12 +770,12 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adop
         after.capability().skills()
     ));
     assert_eq!(
-        before.configuration().unwrap().component_revisions[&ApplyUnit::Capabilities],
-        after.configuration().unwrap().component_revisions[&ApplyUnit::Capabilities]
+        before.configuration().unwrap().authored.component_revisions[&ApplyUnit::Capabilities],
+        after.configuration().unwrap().authored.component_revisions[&ApplyUnit::Capabilities]
     );
     assert_ne!(
-        before.configuration().unwrap().component_revisions[&ApplyUnit::Instructions],
-        after.configuration().unwrap().component_revisions[&ApplyUnit::Instructions]
+        before.configuration().unwrap().authored.component_revisions[&ApplyUnit::Instructions],
+        after.configuration().unwrap().authored.component_revisions[&ApplyUnit::Instructions]
     );
     assert!(Arc::ptr_eq(
         before.capability().tool_registry(),
@@ -841,13 +849,13 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adop
         );
         assert_eq!(
             c1i2.component_revisions[&unit],
-            after.configuration().unwrap().component_revisions[&unit]
+            after.configuration().unwrap().authored.component_revisions[&unit]
         );
     }
 
     assert!(fixture.manager.applications.is_deferred(second.as_str()));
     assert!(matches!(
-        before.configuration().unwrap().provenance["agent.instructions"],
+        before.configuration().unwrap().authored.provenance["agent.instructions"],
         crate::local_runtime::configuration::Origin::User { .. }
     ));
     assert!(matches!(
@@ -855,7 +863,7 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adop
         crate::local_runtime::configuration::Origin::Workspace { .. }
     ));
     assert!(matches!(
-        after.configuration().unwrap().provenance["agent.instructions"],
+        after.configuration().unwrap().authored.provenance["agent.instructions"],
         crate::local_runtime::configuration::Origin::Workspace { .. }
     ));
     assert_eq!(
@@ -869,15 +877,15 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adop
     );
     assert_eq!(
         c1i2.component_revisions[&ApplyUnit::Instructions],
-        after.configuration().unwrap().component_revisions[&ApplyUnit::Instructions]
+        after.configuration().unwrap().authored.component_revisions[&ApplyUnit::Instructions]
     );
     assert_eq!(
         c1i2.source_revisions,
-        before.configuration().unwrap().source_revisions
+        before.configuration().unwrap().authored.source_revisions
     );
     assert_eq!(
-        after.configuration().unwrap().source_revisions,
-        before.configuration().unwrap().source_revisions
+        after.configuration().unwrap().authored.source_revisions,
+        before.configuration().unwrap().authored.source_revisions
     );
     assert_eq!(
         c1i2.config.agent.instructions,
@@ -885,7 +893,7 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adop
     );
     assert_eq!(
         c1i2.component_revisions[&ApplyUnit::Capabilities],
-        before.configuration().unwrap().component_revisions[&ApplyUnit::Capabilities]
+        before.configuration().unwrap().authored.component_revisions[&ApplyUnit::Capabilities]
     );
     assert_eq!(
         c1i2.config.native_tools,
@@ -932,6 +940,7 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adop
         second_resources
             .configuration()
             .unwrap()
+            .authored
             .component_revisions,
         c1i2.component_revisions
     );

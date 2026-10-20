@@ -609,7 +609,7 @@ mod tests {
         let page = crate::runtime_client::checkpoint::CheckpointPage {
             collections: Vec::new(),
             cursor: crate::runtime_client::types::RuntimeClientCursor::new(0),
-            read_cut: crate::runtime_client::checkpoint::CheckpointReadCut {
+            read_cut: crate::observation::cut::CheckpointReadCut {
                 canonical_foreground: None,
                 live_publication: None,
                 collection_cuts: std::collections::BTreeMap::new(),

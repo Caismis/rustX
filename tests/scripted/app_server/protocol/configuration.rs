@@ -798,10 +798,8 @@ async fn t15_source_fields_and_many_small_revisions_page_with_exact_cut_evidence
             assert!(reconstructed.insert(name, value).is_none());
         }
         let reconstructed: crate::local_runtime::configuration::settings::SourceSettings =
-            crate::runtime_client::structural_json::decode(serde_json::Value::Object(
-                reconstructed,
-            ))
-            .unwrap();
+            crate::observation::structural_json::decode(serde_json::Value::Object(reconstructed))
+                .unwrap();
         assert_eq!(reconstructed, native);
         let response = Response::Success(Box::new(Success {
             jsonrpc: JsonRpcVersion::V2,
@@ -966,7 +964,7 @@ async fn t15_cold_settings_deferred_value_advances_with_exact_catalog_revision()
             offset = next;
         }
         assert_eq!(
-            crate::runtime_client::structural_json::decode::<
+            crate::observation::structural_json::decode::<
                 crate::local_runtime::session::SessionPersistentState,
             >(serde_json::from_slice(&bytes).unwrap())
             .unwrap(),
@@ -1054,10 +1052,8 @@ async fn t15_effective_configuration_preserves_all_fields_and_advancing_pages() 
             assert!(reconstructed.insert(name, value).is_none());
         }
         let reconstructed: crate::local_runtime::configuration::settings::EffectiveConfiguration =
-            crate::runtime_client::structural_json::decode(serde_json::Value::Object(
-                reconstructed,
-            ))
-            .unwrap();
+            crate::observation::structural_json::decode(serde_json::Value::Object(reconstructed))
+                .unwrap();
         assert_eq!(reconstructed, native);
         phases.enter("source revisions pages");
         let mut offset = 0;

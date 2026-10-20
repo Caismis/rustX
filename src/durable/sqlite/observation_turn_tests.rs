@@ -95,10 +95,10 @@ fn deny_outline_original_bodies(
 
 fn original_outline_owner(
     store: &SqliteConversationStore,
-    source: &crate::runtime_client::response::AttemptIdentitySource,
+    source: &crate::observation::turn::AttemptIdentitySource,
     through: u64,
 ) -> String {
-    let crate::runtime_client::response::AttemptIdentitySource::Journal { field, .. } = source
+    let crate::observation::turn::AttemptIdentitySource::Journal { field, .. } = source
     else {
         panic!("local outline must name its original Start J");
     };

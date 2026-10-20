@@ -337,7 +337,7 @@ impl AppServerConnection {
         &self,
         id: &RequestId,
         target: &AttachmentTarget,
-        locator: crate::runtime_client::content::CanonicalContentLocator,
+        locator: crate::observation::content::CanonicalContentLocator,
         delivery_index: usize,
         access: super::delivery_access::Access,
     ) -> (

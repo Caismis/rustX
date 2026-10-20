@@ -90,7 +90,7 @@ async fn source_field<T: serde::de::DeserializeOwned + schemars::JsonSchema>(
     } else {
         field.value.clone().expect("inline source field")
     };
-    crate::runtime_client::structural_json::decode(value).unwrap()
+    crate::observation::structural_json::decode(value).unwrap()
 }
 
 fn workspace(f: &Fixture, index: usize) -> SourceTarget {

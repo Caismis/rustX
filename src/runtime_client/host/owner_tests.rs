@@ -1,6 +1,6 @@
 // Actual cold checkpoints retain original inherited owner identity sources.
 use super::*;
-use crate::runtime_client::response::{AttemptIdentitySource, InheritedAttemptIdentityKind};
+use crate::observation::turn::{AttemptIdentitySource, InheritedAttemptIdentityKind};
 
 fn giant_owner_seed(
     with_turn: bool,
@@ -191,7 +191,7 @@ async fn t08_t12_t14_t19_cold_host_giant_owner_uses_original_inherited_identity_
     );
     assert!(store.read_events(None, 32).unwrap().events.is_empty());
     assert_eq!(store.load_inherited_turns().unwrap(), seed.turns());
-    assert!(crate::runtime_client::checkpoint::bounded_bytes(&checkpoint, 786_432).is_some());
+    assert!(crate::observation::bounded::bounded_bytes(&checkpoint, 786_432).is_some());
 }
 
 #[tokio::test]
@@ -253,7 +253,7 @@ async fn t08_t12_t14_t19_cold_host_response_only_giant_owner_uses_original_ident
         store.load_inherited_responses().unwrap(),
         seed.completed_responses()
     );
-    assert!(crate::runtime_client::checkpoint::bounded_bytes(&checkpoint, 786_432).is_some());
+    assert!(crate::observation::bounded::bounded_bytes(&checkpoint, 786_432).is_some());
 }
 
 #[tokio::test]
@@ -340,8 +340,8 @@ async fn t08_t12_t14_t19_cold_giant_turn_page_navigates_by_native_ordinal() {
     assert!(checkpoint.snapshot.attempt.is_none());
     assert!(store.read_events(None, 32).unwrap().events.is_empty());
     assert_eq!(store.load_inherited_turns().unwrap(), seed.turns());
-    assert!(crate::runtime_client::checkpoint::bounded_bytes(&page, 65_536).is_some());
-    assert!(crate::runtime_client::checkpoint::bounded_bytes(&window, 786_432).is_some());
+    assert!(crate::observation::bounded::bounded_bytes(&page, 65_536).is_some());
+    assert!(crate::observation::bounded::bounded_bytes(&window, 786_432).is_some());
 }
 
 fn read_local_owner(host: &RuntimeClientHost, checkpoint: &crate::runtime_client::checkpoint::RuntimeClientCheckpoint, original: &str) {
@@ -433,14 +433,14 @@ fn t08_t14_t19_standalone_trace_keeps_the_attached_constructor_cut_after_later_c
     let RuntimeClientResult::TracePage {page: before} = host.inner.trace_page(None, 32, Vec::new()).unwrap() else {panic!("native Trace page")};
     assert_eq!(before.read_cut.as_ref(), Some(&checkpoint.read_cut));
     assert_eq!(before.records.len(), 1);
-    assert_eq!(before.records[0].state, crate::runtime_client::trace::TraceState::Incomplete);
+    assert_eq!(before.records[0].state, crate::observation::trace::TraceState::Incomplete);
     let message = MessageBlock::Assistant(crate::message::types::AssistantMessageBlock {id: MessageId::new("standalone-later-c"), content: vec![AssistantContentBlock::Text(crate::message::content::TextBlock {text: "later original C".into()})]});
     writer.append_canonical_with_event(&message, durable_event(writer.conversation_id(), "standalone-later-j", &attempt, RuntimeEvent::AssistantMessageCommitted {message_id: message.id().clone()})).unwrap();
     let RuntimeClientResult::TracePage {page: after} = host.inner.trace_page(None, 32, vec![before.records[0].position.clone()]).unwrap() else {panic!("native Trace page")};
     assert_eq!(after.read_cut, before.read_cut);
     assert_eq!(after.records, before.records);
     assert_eq!(after.updates.len(), 1);
-    assert_eq!(after.updates[0].state, crate::runtime_client::trace::TraceState::Incomplete);
+    assert_eq!(after.updates[0].state, crate::observation::trace::TraceState::Incomplete);
     let returned = after.read_cut.unwrap();
     assert_eq!(returned, checkpoint.read_cut);
     let mut selected_checkpoint = checkpoint.clone();

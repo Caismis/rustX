@@ -74,7 +74,7 @@ fn model_source<T: serde::de::DeserializeOwned + schemars::JsonSchema>(
         assert_eq!(next, bytes.len() as u64);
         offset = next;
     }
-    rustx::runtime_client::structural_json::decode(serde_json::from_slice(&bytes).unwrap())
+    rustx::observation::structural_json::decode(serde_json::from_slice(&bytes).unwrap())
         .expect("exact original native model value")
 }
 
@@ -113,7 +113,7 @@ struct CatalogHeader {
 
 fn catalog_profiles(
     attachment: &rustx::runtime_client::RuntimeAttachment,
-    cut: &rustx::runtime_client::checkpoint::CheckpointReadCut,
+    cut: &rustx::observation::cut::CheckpointReadCut,
     model_offset: u64,
     total: u64,
 ) -> Vec<rustx::model::catalog::ModelProfileView> {
@@ -1162,7 +1162,7 @@ async fn model_set_protected_keys_use_serialization_neutral_diagnostics() {
         ),
     ] {
         let config: SessionModelConfig =
-            rustx::runtime_client::structural_json::decode(config).expect("Runtime Client JSON");
+            rustx::observation::structural_json::decode(config).expect("Runtime Client JSON");
         let response = attachment.handle_request(RuntimeClientRequest::ModelSet {
             id: RequestId::new(id),
             config: Box::new(config),

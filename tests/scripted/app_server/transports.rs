@@ -123,7 +123,7 @@ async fn attach(client: &impl AppServerConformanceDriver, f: &Fixture) -> Attach
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn t08_t12_content_range_error_is_typed_correlated_and_keeps_connection_following() {
-    use crate::runtime_client::content::{CanonicalContentComponent, ContentSource};
+    use crate::observation::content::{CanonicalContentComponent, ContentSource};
     use base64::Engine as _;
     bounded(async {
         // TCP WebSocket and the production Stdio framing use the same read contract.
@@ -1043,7 +1043,7 @@ async fn websocket_delivery_access_is_a_separate_additive_revocable_credential()
                 id: RequestId::Integer(9),
                 call: Method::DeliveryRead {
                     target,
-                    locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                    locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
                         message_id: crate::runtime::identity::MessageId::new("invented"),
                     },
                     delivery_index: 0,
@@ -2300,7 +2300,7 @@ async fn product_host_credential_rotation_is_one_transition_ordered_against_publ
                     source: crate::app_server::product_host::ReadSource::SessionFile {
                         agent_id: None,
                         locator:
-                            crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                            crate::observation::content::CanonicalContentLocator::ByMessageId {
                                 message_id: tool,
                             },
                         delivery_index: 0,

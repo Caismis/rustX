@@ -1944,8 +1944,9 @@ fn an_unsupported_user_version_is_invalid_in_projection_and_resolution_alike() {
         "manual repair preserves the input's implicit current schema version"
     );
     let path = fixture.path(&SourceTarget::User);
-    let original = super::super::parse_layer(&path, USER.as_bytes(), false).unwrap();
-    let repaired_layer = super::super::parse_layer(&path, committed.as_bytes(), false).unwrap();
+    let original = super::super::capture::parse_layer(&path, USER.as_bytes(), false).unwrap();
+    let repaired_layer =
+        super::super::capture::parse_layer(&path, committed.as_bytes(), false).unwrap();
     assert_eq!(
         repaired_layer, original,
         "manual repair preserves every authored semantic field through native encoding"

@@ -4,7 +4,7 @@ use super::app_server_conformance as conformance;
 use super::{Fixture, FixturePhase, bounded, input};
 use crate::app_server::connection::AppServerConnection;
 use crate::app_server::protocol::*;
-use crate::runtime_client::content::CanonicalContentLocator;
+use crate::observation::content::CanonicalContentLocator;
 use crate::runtime_client::event::RuntimeClientEvent;
 mod admission;
 mod attachment;
@@ -296,8 +296,7 @@ async fn materialize_source_fixture(
             assert!(object.insert(name, value).is_none());
         }
         projection.inline = Some(Box::new(
-            crate::runtime_client::structural_json::decode(serde_json::Value::Object(object))
-                .unwrap(),
+            crate::observation::structural_json::decode(serde_json::Value::Object(object)).unwrap(),
         ));
         // This is loaded client fixture state. Only the original bounded
         // server response above is serialized and schema-validated.
@@ -365,8 +364,7 @@ async fn materialize_configuration_fixture(
             assert!(object.insert(name, value).is_none());
         }
         projection.inline = Some(Box::new(
-            crate::runtime_client::structural_json::decode(serde_json::Value::Object(object))
-                .unwrap(),
+            crate::observation::structural_json::decode(serde_json::Value::Object(object)).unwrap(),
         ));
     }
     MethodResult::EffectiveConfiguration { projection }
@@ -441,7 +439,7 @@ pub(super) async fn read_model_result(
         }
     }
     Box::new(
-        crate::runtime_client::structural_json::decode(serde_json::from_slice(&bytes).unwrap())
+        crate::observation::structural_json::decode(serde_json::from_slice(&bytes).unwrap())
             .unwrap(),
     )
 }
@@ -511,7 +509,7 @@ pub(super) async fn read_native_model_result(
             break;
         }
     }
-    crate::runtime_client::structural_json::decode(serde_json::from_slice(&bytes).unwrap()).unwrap()
+    crate::observation::structural_json::decode(serde_json::from_slice(&bytes).unwrap()).unwrap()
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -575,7 +573,7 @@ pub(super) fn read_catalog_result(result: MethodResult) -> ModelCatalogObservati
         .items
         .into_iter()
         .map(|item| {
-            let model: CatalogModelObservation = crate::runtime_client::structural_json::decode(
+            let model: CatalogModelObservation = crate::observation::structural_json::decode(
                 item.value.expect("finite inline catalog fixture header"),
             )
             .expect("current typed catalog header");

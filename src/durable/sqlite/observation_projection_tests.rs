@@ -409,7 +409,7 @@ fn collect_provenance_windows(
 }
 #[test]
 fn t08_t12_t19_long_original_provenance_keeps_finite_request_headers_and_exact_ranges() {
-    use crate::runtime_client::trace::TraceInputProvenance;
+    use crate::observation::trace::TraceInputProvenance;
     let (store, receipt) = original_provenance_fixture();
     let original = store.load_canonical().unwrap();
     let mut snapshot = test_request_snapshot(store.load_head().unwrap().revision, invocation());
@@ -432,7 +432,7 @@ fn t08_t12_t19_long_original_provenance_keeps_finite_request_headers_and_exact_r
         assert!(serde_json::to_vec(&field.value).unwrap().len() <= 16_384);
         assert!(field.value["provenance_source"].is_object());
         let provenance: TraceInputProvenance =
-            crate::runtime_client::checkpoint::decode_domain_value(
+            crate::observation::bounded::decode_domain_value(
                 field.value["provenance"].clone(),
             )
             .unwrap();

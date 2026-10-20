@@ -245,10 +245,6 @@ async fn runtime_with_manual_clock(
         rustx::context::ContextAssembly::new(),
         capability.current_snapshot(),
     ));
-    let resource_loader: Arc<dyn rustx::runtime::RuntimeResourceLoader> =
-        Arc::new(rustx::runtime::FilesystemRuntimeResourceLoader::new(
-            capability.current_snapshot().workspace_root(),
-        ));
     let runtime = ConversationRuntime::with_test_monotonic_clock(
         RuntimeConversationConfig {
             explicit_model: true,
@@ -269,7 +265,6 @@ async fn runtime_with_manual_clock(
             tool_runtime,
             capability,
             resources,
-            resource_loader,
             clock: None,
             initial_messages,
             subagents: None,

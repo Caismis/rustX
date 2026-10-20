@@ -28,8 +28,10 @@ async fn issue383_disabled_extension_keeps_admitted_configuration_until_settleme
         let runtime = fixture.manager.configuration_runtime(id).unwrap();
         runtime.submit_inbound(input("request-A")).unwrap();
         fixture.gates[0].wait_entered().await;
-        let admitted = runtime
-            .configuration_view()
+        let admitted =
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime,
+            )
             .unwrap()
             .admitted_attempt
             .unwrap();
@@ -43,11 +45,12 @@ async fn issue383_disabled_extension_keeps_admitted_configuration_until_settleme
         .await;
         let disabled = settled(&fixture, 0).await;
         assert_eq!(
-            runtime
-                .configuration_view()
-                .unwrap()
-                .admitted_attempt
-                .unwrap(),
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime
+            )
+            .unwrap()
+            .admitted_attempt
+            .unwrap(),
             admitted
         );
         let mut settlement = SettlementReceiptWait::capture(&runtime);
@@ -174,7 +177,9 @@ async fn t04_session_relative_prefix_and_t09_policy_noop() {
     );
     for runtime in &runtimes {
         assert_eq!(
-            runtime.configuration_view().unwrap().approval_mode,
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(runtime)
+                .unwrap()
+                .approval_mode,
             crate::runtime::ApprovalMode::FullAccess
         );
     }
@@ -335,8 +340,10 @@ async fn t01_new_attempt_captures_automatic_policy_old_attempt_retains_capture()
         let runtime = fixture.manager.configuration_runtime(id).unwrap();
         runtime.submit_inbound(input("request-A")).unwrap();
         fixture.gates[0].wait_entered().await;
-        let captured = runtime
-            .configuration_view()
+        let captured =
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime,
+            )
             .unwrap()
             .admitted_attempt
             .unwrap();
@@ -366,15 +373,20 @@ async fn t01_new_attempt_captures_automatic_policy_old_attempt_retains_capture()
         );
         assert!(applied.candidate.is_none());
         assert_eq!(
-            runtime.configuration_view().unwrap().approval_mode,
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime
+            )
+            .unwrap()
+            .approval_mode,
             crate::runtime::ApprovalMode::FullAccess
         );
         assert_eq!(
-            runtime
-                .configuration_view()
-                .unwrap()
-                .admitted_attempt
-                .unwrap(),
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime
+            )
+            .unwrap()
+            .admitted_attempt
+            .unwrap(),
             captured
         );
         let mut settlement = SettlementReceiptWait::capture(&runtime);
@@ -382,11 +394,12 @@ async fn t01_new_attempt_captures_automatic_policy_old_attempt_retains_capture()
         settlement.wait().await;
         runtime.submit_inbound(input("request-B")).unwrap();
         fixture.gates[1].wait_entered().await;
-        let later = runtime
-            .configuration_view()
-            .unwrap()
-            .admitted_attempt
-            .unwrap();
+        let later = crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+            &runtime,
+        )
+        .unwrap()
+        .admitted_attempt
+        .unwrap();
         assert_eq!(
             later.approval_mode,
             crate::runtime::ApprovalMode::FullAccess
@@ -518,11 +531,12 @@ async fn t11_admission_gate_orders_busy_adoption_without_cancelling_attempt() {
         assert_eq!(adoption.await.unwrap(), Err(AdoptionError::Busy));
         fixture.gates[0].wait_entered().await;
         assert!(
-            runtime
-                .configuration_view()
-                .unwrap()
-                .admitted_attempt
-                .is_some()
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime
+            )
+            .unwrap()
+            .admitted_attempt
+            .is_some()
         );
         // The admitted attempt makes the runtime publish Busy; the
         // configuration application is untouched by it.

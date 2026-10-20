@@ -54,7 +54,7 @@ fn start_settlement_waiter(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn projection_settled_joins_drained_activation_before_eligible_baseline() {
-    use crate::local_runtime::configuration::application::AdoptionEligibility;
+    use crate::runtime::adoption::AdoptionEligibility;
 
     let (adapter, fixture) = runtime_only_fixture(Vec::new(), ToolRegistry::new(), None).await;
     let host = RuntimeClientHost::new(RuntimeClientHostConfig {

@@ -22,7 +22,7 @@ struct ExecutionLayout {
     output_tokens: u64,
 }
 fn encode(value: &impl Serialize) -> Result<Vec<u8>, ConversationStoreError> {
-    crate::runtime_client::checkpoint::bounded_bytes(
+    crate::observation::bounded::bounded_bytes(
         value,
         crate::durable::observation::HEADER_ENCODED_MAX,
     )
@@ -211,7 +211,7 @@ fn seal_execution(
         < state.summary.models_total)
         .then_some(state.summary.models.len() as u64);
     finish_timing(state);
-    while crate::runtime_client::checkpoint::bounded_bytes(
+    while crate::observation::bounded::bounded_bytes(
         state,
         crate::durable::observation::HEADER_ENCODED_MAX,
     )
@@ -241,7 +241,7 @@ fn attempt_failed(
         super::content::index_attempt_failure(connection, event.sequence, &normalized)
     })
     .unwrap_or(0);
-    let (failure, deferred) = crate::runtime_client::event::finite_attempt_failure(error);
+    let (failure, deferred) = crate::observation::failure::finite_attempt_failure(error);
     summary.failure = Some(failure);
     summary.failure_deferred = deferred;
     close(summary, event, "attempt_failed");
@@ -291,7 +291,7 @@ fn request_started(
             && end <= 1024
         {
             state.summary.models.push(model.to_owned());
-            if crate::runtime_client::checkpoint::bounded_bytes(&state.summary, 12_288).is_none() {
+            if crate::observation::bounded::bounded_bytes(&state.summary, 12_288).is_none() {
                 state.summary.models.pop();
             }
         }
@@ -449,7 +449,7 @@ pub(super) fn model_value(
 ) -> Result<ObservationValueChunk, ConversationStoreError> {
     if max_bytes == 0
         || max_bytes > 65_536
-        || offset > crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX
+        || offset > crate::observation::content::CONTENT_SAFE_INTEGER_MAX
     {
         return Err(ConversationStoreError::InvalidContentRange);
     }
@@ -562,7 +562,7 @@ pub(super) fn model_value_at(
 ) -> Result<ObservationValueChunk, ConversationStoreError> {
     if max_bytes == 0
         || max_bytes > 65_536
-        || offset > crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX
+        || offset > crate::observation::content::CONTENT_SAFE_INTEGER_MAX
     {
         return Err(ConversationStoreError::InvalidContentRange);
     }
@@ -591,7 +591,7 @@ impl schemars::JsonSchema for BorrowedFailure<'_> {
         "RuntimeClientAttemptFailure".into()
     }
     fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        <crate::runtime_client::event::RuntimeClientAttemptFailure as schemars::JsonSchema>::json_schema(generator)
+        <crate::observation::failure::RuntimeClientAttemptFailure as schemars::JsonSchema>::json_schema(generator)
     }
 }
 impl Serialize for BorrowedFailure<'_> {
@@ -615,11 +615,8 @@ impl Serialize for BorrowedFailure<'_> {
         }
     }
 }
-fn request_source(
-    sequence: u64,
-    encoded_bytes: u64,
-) -> crate::runtime_client::snapshot::JournalFieldRef {
-    crate::runtime_client::snapshot::JournalFieldRef {
+fn request_source(sequence: u64, encoded_bytes: u64) -> crate::observation::tool::JournalFieldRef {
+    crate::observation::tool::JournalFieldRef {
         sequence,
         path: vec!["event".into(), "request_id".into()],
         encoded_bytes,
@@ -634,7 +631,7 @@ pub(super) fn failure_value(
 ) -> Result<ObservationValueChunk, ConversationStoreError> {
     if max_bytes == 0
         || max_bytes > 65_536
-        || offset > crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX
+        || offset > crate::observation::content::CONTENT_SAFE_INTEGER_MAX
     {
         return Err(ConversationStoreError::InvalidContentRange);
     }
@@ -663,7 +660,7 @@ pub(super) fn failure_at(
 ) -> Result<ObservationValueChunk, ConversationStoreError> {
     if max_bytes == 0
         || max_bytes > 65_536
-        || offset > crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX
+        || offset > crate::observation::content::CONTENT_SAFE_INTEGER_MAX
     {
         return Err(ConversationStoreError::InvalidContentRange);
     }

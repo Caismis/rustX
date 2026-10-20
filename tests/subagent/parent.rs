@@ -227,7 +227,7 @@ impl Parent {
     /// Reads original Tool definitions at the advertised capability cut.
     pub(crate) async fn capability_tools(
         &mut self,
-    ) -> Vec<rustx::runtime_client::snapshot::RuntimeClientTool> {
+    ) -> Vec<rustx::observation::capability_source::RuntimeClientTool> {
         let Ok(MethodResult::DomainPage { page: header }) = self
             .call(Method::Capability {
                 target: self.target(),
@@ -274,7 +274,7 @@ impl Parent {
                     }
                 };
                 tools.push(
-                    rustx::runtime_client::checkpoint::decode_domain_value(value)
+                    rustx::observation::bounded::decode_domain_value(value)
                         .expect("original typed Tool definition"),
                 );
                 offset += 1;
@@ -292,7 +292,7 @@ impl Parent {
     pub(crate) async fn selected_value(
         &mut self,
         agent_id: Option<rustx::runtime::identity::AgentId>,
-        cut: &rustx::runtime_client::checkpoint::CheckpointReadCut,
+        cut: &rustx::observation::cut::CheckpointReadCut,
         domain: &str,
         item_offset: u64,
         path: &[String],

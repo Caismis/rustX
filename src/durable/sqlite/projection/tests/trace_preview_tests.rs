@@ -1,6 +1,8 @@
 use super::*;
-use crate::runtime_client::checkpoint::{CheckpointReadCut, decode_domain_value};
-use crate::runtime_client::trace::{TraceInspectionHead, TraceKind, TraceProjection, TraceState};
+use crate::observation::bounded::decode_domain_value;
+use crate::observation::cut::CheckpointReadCut;
+use crate::observation::trace::{TraceKind, TraceState};
+use crate::runtime_client::trace::{TraceInspectionHead, TraceProjection};
 
 fn compact_with_trace(
     store: &SqliteConversationStore,

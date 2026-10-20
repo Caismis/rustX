@@ -22,11 +22,11 @@ fn prepared_trace_owner_reuses_exact_rows_and_retires_after_native_terminal_inst
         .trace
         .records
         .iter()
-        .find(|record| record.kind == super::super::super::trace::TraceKind::Tool)
+        .find(|record| record.kind == crate::observation::trace::TraceKind::Tool)
         .unwrap();
     assert_eq!(
         tool.state,
-        super::super::super::trace::TraceState::Running,
+        crate::observation::trace::TraceState::Running,
         "certificates follow the installed native live repair"
     );
 
@@ -74,7 +74,7 @@ fn prepared_trace_owner_reuses_exact_rows_and_retires_after_native_terminal_inst
         .unwrap();
     assert_eq!(
         current_tool.state,
-        super::super::super::trace::TraceState::Completed
+        crate::observation::trace::TraceState::Completed
     );
     assert_eq!(
         old_seed.checkpoint_candidate().unwrap(),

@@ -102,7 +102,7 @@ pub(super) fn index(
     connection: &Connection,
     snapshot: &RequestSnapshot,
 ) -> Result<(), ConversationStoreError> {
-    let fits = crate::runtime_client::trace::identity_fits;
+    let fits = crate::observation::trace::identity_fits;
     let summary = RequestReadSummary {
         request_id: fits(snapshot.request_id.as_str()).then(|| snapshot.request_id.clone()),
         attempt_id: fits(snapshot.identity.attempt_id.as_str())
@@ -112,9 +112,9 @@ pub(super) fn index(
             .then(|| snapshot.provisional_message_id.clone()),
         retry_number: snapshot.identity.retry_number,
         model: fits(&snapshot.invocation.model).then(|| snapshot.invocation.model.clone()),
-        model_preview: crate::runtime_client::trace::TracePreview::of(&snapshot.invocation.model),
+        model_preview: crate::observation::trace::TracePreview::of(&snapshot.invocation.model),
         context_window_tokens: snapshot.context_window_tokens,
-        prompt_preview: crate::runtime_client::trace::TracePreview::of(
+        prompt_preview: crate::observation::trace::TracePreview::of(
             &snapshot.effective_system_prompt,
         ),
         prompt_digest: Sha256::digest(snapshot.effective_system_prompt.as_bytes()).into(),
@@ -130,7 +130,7 @@ pub(super) fn index(
             serialized_bytes(&snapshot.tool_definitions)?
         },
     };
-    let bytes = crate::runtime_client::checkpoint::bounded_bytes(&summary, 16_384)
+    let bytes = crate::observation::bounded::bounded_bytes(&summary, 16_384)
         .ok_or_else(|| storage("native request reading header exceeds bound"))?;
     connection
         .execute(
@@ -162,7 +162,7 @@ pub(super) fn occupancy(
     usage: &crate::model::types::ModelUsage,
     through: u64,
 ) -> Result<
-    Option<crate::runtime_client::occupancy::RuntimeClientContextOccupancy>,
+    Option<crate::observation::occupancy::RuntimeClientContextOccupancy>,
     ConversationStoreError,
 > {
     let summary = read(connection, request, through)?;
@@ -174,7 +174,7 @@ pub(super) fn occupancy(
     let tool_tokens = crate::context::tokens::bytes_to_tokens(summary.tools_json_bytes);
     let deferred = summary.model.is_none();
     Ok(Some(
-        crate::runtime_client::occupancy::RuntimeClientContextOccupancy {
+        crate::observation::occupancy::RuntimeClientContextOccupancy {
             estimated: false,
             input_tokens: usage.input_tokens,
             context_window_tokens: summary.context_window_tokens,

@@ -6,14 +6,13 @@ use super::*;
 
 fn trace_content_references(
     value: &serde_json::Value,
-    output: &mut Vec<crate::runtime_client::content::ContentRef>,
+    output: &mut Vec<crate::observation::content::ContentRef>,
 ) {
     match value {
         serde_json::Value::Object(fields) => {
             if let Some(reference) = fields.get("content_ref") {
-                output.push(
-                    crate::runtime_client::structural_json::decode(reference.clone()).unwrap(),
-                );
+                output
+                    .push(crate::observation::structural_json::decode(reference.clone()).unwrap());
             }
             for field in fields.values() {
                 trace_content_references(field, output);
@@ -62,7 +61,7 @@ async fn t08_t11_t15_cold_trace_pages_read_exact_deferred_request_and_fence_fore
         let record = page
             .records
             .iter()
-            .find(|record| record.kind == crate::runtime_client::trace::TraceKind::Request)
+            .find(|record| record.kind == crate::observation::trace::TraceKind::Request)
             .unwrap();
         let MethodResult::SessionTraceHistoryDetail {
             page,
@@ -136,7 +135,7 @@ async fn t08_t11_t15_cold_trace_pages_read_exact_deferred_request_and_fence_fore
             .into_iter()
             .find(|reference| {
                 reference.representation
-                    == crate::runtime_client::content::ContentRepresentation::Utf8Text
+                    == crate::observation::content::ContentRepresentation::Utf8Text
                     && reference.readable_end == text.len() as u64
             })
             .expect("frozen canonical input content descriptor");
@@ -506,7 +505,7 @@ async fn trace_reads_are_read_only_and_reconnect_repairs_the_same_native_facts()
         assert!(
             page.records
                 .iter()
-                .any(|entry| entry.kind == crate::runtime_client::trace::TraceKind::Request)
+                .any(|entry| entry.kind == crate::observation::trace::TraceKind::Request)
         );
         assert!(matches!(
             rejected(
@@ -690,7 +689,7 @@ async fn completed_response_cut_is_shared_by_branch_and_fork_and_distinct_from_r
             let copied = SqliteConversationStore::open_existing(session.active_conversation_id, &destination.database_path).unwrap();
             let messages = copied.load_canonical().unwrap(); assert_eq!(messages.len(), 4);
             assert!(matches!(&messages[3], MessageBlock::Assistant(a) if a.content == match &original[3] { MessageBlock::Assistant(a) => a.content.clone(), _ => unreachable!() }));
-            let mut projected = crate::runtime_client::snapshot::transcript_page_view(copied.load_transcript_page(None, 64).unwrap()).unwrap();
+            let mut projected = crate::observation::transcript::transcript_page_view(copied.load_transcript_page(None, 64).unwrap()).unwrap();
             crate::runtime_client::response::native_oracle_decorate(&copied, &mut projected).unwrap();
             let tail = projected.entries.last().unwrap().completed_response.clone().unwrap();
             assert_eq!(tail.closing_message_id, Some(crate::conversation::message_id_of(&messages[3])));
@@ -729,7 +728,7 @@ async fn completed_response_cut_is_shared_by_branch_and_fork_and_distinct_from_r
             let child = controller.acquire_session(&child_id, Some(&child_node)).await.unwrap();
             let reopened = SqliteConversationStore::open_existing(child.node.conversation_id.clone(), &child.database_path).unwrap();
             assert_eq!(reopened.load_canonical().unwrap(), messages);
-            let mut reopened_page = crate::runtime_client::snapshot::transcript_page_view(reopened.load_transcript_page(None, 64).unwrap()).unwrap();
+            let mut reopened_page = crate::observation::transcript::transcript_page_view(reopened.load_transcript_page(None, 64).unwrap()).unwrap();
             crate::runtime_client::response::native_oracle_decorate(&reopened, &mut reopened_page).unwrap();
             assert_eq!(reopened_page.entries.last().unwrap().completed_response.as_ref(), Some(&tail));
             rejected(&connection, Method::SessionBranch { session_id: child_id, node_id: child_node, surface_revision: crate::conversation::SurfaceRevision::new(tail.surface_revision.get() + 1), boundary: tail.closing_locator, side: LineageSide::After }).await;
@@ -744,7 +743,7 @@ async fn completed_response_cut_is_shared_by_branch_and_fork_and_distinct_from_r
         let retry = SqliteConversationStore::open_existing(session.active_conversation_id, &destination.database_path).unwrap();
         assert_eq!(retry.load_canonical().unwrap().len(), 2);
         // Regenerate keeps only the prefix before the retried input: one turn.
-        let mut retried = crate::runtime_client::snapshot::transcript_page_view(retry.load_transcript_page(None, 64).unwrap()).unwrap();
+        let mut retried = crate::observation::transcript::transcript_page_view(retry.load_transcript_page(None, 64).unwrap()).unwrap();
         crate::runtime_client::response::native_oracle_decorate(&retry, &mut retried).unwrap();
         let totals = retried.statistics.unwrap();
         assert_eq!((totals.turns, totals.model_requests, totals.completed_responses), (1, 1, 1));
@@ -862,7 +861,7 @@ async fn t08_t13_t15_editor_and_origin_history_use_finite_native_ledger_identity
             session_id:session.id.clone(), node_id:session.active_node.clone(), limit:32,
         }).await else { panic!("finite original history anchor"); };
         assert!(serde_json::to_vec(&window).unwrap().len() <= 786_432);
-        assert!(window.page.content.iter().chain(window.page.deferred_entries.iter().flat_map(|entry| entry.content.iter())).any(|entry| matches!(&entry.content_ref.source, crate::runtime_client::content::ContentSource::CanonicalMessageBlock { locator: found, .. } if found == &locator)));
+        assert!(window.page.content.iter().chain(window.page.deferred_entries.iter().flat_map(|entry| entry.content.iter())).any(|entry| matches!(&entry.content_ref.source, crate::observation::content::ContentSource::CanonicalMessageBlock { locator: found, .. } if found == &locator)));
         let mut foreign = editor;
         foreign.source_node = session.active_node;
         rejected(&connection, Method::SessionEditorRead { locator:foreign, block_index:0, offset:0, max_bytes:1 }).await;

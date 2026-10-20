@@ -42,7 +42,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         pending_through: 0,
         pending_total: 0,
     };
-    let reading_id = crate::runtime_client::turn::ObservedTurnIdentity {
+    let reading_id = crate::observation::turn::ObservedTurnIdentity {
         conversation_id: target.conversation_id.clone(),
         attempt_id: Some(crate::runtime::identity::AttemptId::new("attempt-fixture")),
         attempt_id_source: None,
@@ -328,8 +328,8 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         Method::TraceLocateTool {
             target: target.clone(),
             locator: crate::runtime_client::trace::TraceToolLocator {
-                occurrence: crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
-                    locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                occurrence: crate::observation::tool::RuntimeClientToolOccurrence {
+                    locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
                         message_id: crate::runtime::identity::MessageId::new("assistant-fixture"),
                     },
                     block_index: crate::message::types::ContentBlockIndex::new(2),
@@ -342,8 +342,8 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             target: target.clone(),
             agent_id: crate::runtime::identity::AgentId::new("agent-fixture"),
             locator: crate::runtime_client::trace::TraceToolLocator {
-                occurrence: crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
-                    locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                occurrence: crate::observation::tool::RuntimeClientToolOccurrence {
+                    locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
                         message_id: crate::runtime::identity::MessageId::new("assistant-fixture"),
                     },
                     block_index: crate::message::types::ContentBlockIndex::new(2),
@@ -491,7 +491,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             page: crate::runtime_client::checkpoint::CheckpointPage {
                 collections: Vec::new(),
                 cursor: crate::runtime_client::types::RuntimeClientCursor::new(EXACT),
-                read_cut: crate::runtime_client::checkpoint::CheckpointReadCut {
+                read_cut: crate::observation::cut::CheckpointReadCut {
                     canonical_foreground: None,
                     live_publication: None,
                     collection_cuts: std::collections::BTreeMap::new(),
@@ -509,7 +509,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             },
         },
         MethodResult::AgentStatistics {
-            metrics: crate::runtime_client::agent_statistics::AgentStatistics::default(),
+            metrics: crate::observation::statistics::AgentStatistics::default(),
         },
         MethodResult::InboundMutation {
             outcome: crate::durable::inbox::PendingMutationOutcome::Conflict,
@@ -519,11 +519,11 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             version: EXACT,
         },
         MethodResult::ConversationTurns {
-            page: crate::runtime_client::turn::ObservedTurnPage {
+            page: crate::observation::turn::ObservedTurnPage {
                 cut: reading_cut,
                 total: 1,
                 offset: 0,
-                turns: vec![crate::runtime_client::turn::ObservedTurn {
+                turns: vec![crate::observation::turn::ObservedTurn {
                     id: reading_id,
                     ordinal: 1,
                     cursor: Some(crate::durable::TranscriptCursor::new(EXACT)),
@@ -548,13 +548,13 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                 newer_cursor: None,
                 target: None,
                 target_cursor: None,
-                page: crate::runtime_client::snapshot::RuntimeClientTranscriptPage {
+                page: crate::observation::transcript::RuntimeClientTranscriptPage {
                     source_cut: None,
                     content: Vec::new(),
                     collections: Vec::new(),
                     deferred_entries: Vec::new(),
                     inherited_through: Some(
-                        crate::runtime_client::snapshot::RuntimeClientTranscriptCursor::new(0),
+                        crate::observation::transcript::RuntimeClientTranscriptCursor::new(0),
                     ),
                     entries: Vec::new(),
                     next_cursor: None,

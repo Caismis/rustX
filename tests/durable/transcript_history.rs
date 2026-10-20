@@ -170,18 +170,26 @@ fn page_message_ids(page: &rustx::durable::TranscriptPage) -> Vec<String> {
 }
 
 fn client_page_message_ids(
-    page: &rustx::runtime_client::RuntimeClientTranscriptPage,
+    page: &rustx::observation::transcript::RuntimeClientTranscriptPage,
 ) -> Vec<String> {
     page.entries
         .iter()
         .filter_map(|entry| match &entry.item {
-            rustx::runtime_client::RuntimeClientTranscriptItem::Message { message } => {
+            rustx::observation::transcript::RuntimeClientTranscriptItem::Message { message } => {
                 Some(message_id(message).as_str().to_owned())
             }
-            rustx::runtime_client::RuntimeClientTranscriptItem::PublicationAudit { .. }
-            | rustx::runtime_client::RuntimeClientTranscriptItem::InteractionRequested { .. }
-            | rustx::runtime_client::RuntimeClientTranscriptItem::InteractionSettled { .. }
-            | rustx::runtime_client::RuntimeClientTranscriptItem::AttemptTerminal { .. } => None,
+            rustx::observation::transcript::RuntimeClientTranscriptItem::PublicationAudit {
+                ..
+            }
+            | rustx::observation::transcript::RuntimeClientTranscriptItem::InteractionRequested {
+                ..
+            }
+            | rustx::observation::transcript::RuntimeClientTranscriptItem::InteractionSettled {
+                ..
+            }
+            | rustx::observation::transcript::RuntimeClientTranscriptItem::AttemptTerminal {
+                ..
+            } => None,
         })
         .collect()
 }
@@ -635,7 +643,7 @@ fn initialized_snapshot(
 }
 
 async fn await_native_activation(attachment: &rustx::runtime_client::RuntimeAttachment) {
-    use rustx::local_runtime::configuration::application::AdoptionEligibility;
+    use rustx::runtime::adoption::AdoptionEligibility;
     use rustx::runtime_client::{EventDelivery, RuntimeClientCursor, RuntimeClientEvent};
     let subscription = attachment
         .subscribe_events(RuntimeClientCursor::new(0))
@@ -974,11 +982,11 @@ async fn requirement_11_interaction_audits_page_without_recovering_a_waiter() {
         .expect("historical audit page");
     assert!(matches!(
         page.entries[0].item,
-        rustx::runtime_client::RuntimeClientTranscriptItem::InteractionRequested { .. }
+        rustx::observation::transcript::RuntimeClientTranscriptItem::InteractionRequested { .. }
     ));
     assert!(matches!(
         page.entries[1].item,
-        rustx::runtime_client::RuntimeClientTranscriptItem::InteractionSettled { .. }
+        rustx::observation::transcript::RuntimeClientTranscriptItem::InteractionSettled { .. }
     ));
     assert!(matches!(
         runtime

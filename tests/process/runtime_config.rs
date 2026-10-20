@@ -127,7 +127,7 @@ fn capability_tools(
     endpoint: &rustx::runtime_client::endpoint::RuntimeClientEndpoint,
     header: &rustx::runtime_client::checkpoint::CheckpointPage,
     field: &str,
-) -> Vec<rustx::runtime_client::snapshot::RuntimeClientTool> {
+) -> Vec<rustx::observation::capability_source::RuntimeClientTool> {
     let domain = format!("capabilities.{field}");
     let frontier = header
         .collections
@@ -157,7 +157,7 @@ fn capability_tools(
             assert_eq!(item.offset, offset);
             assert!(!item.deferred, "small fixture tool is fully readable");
             tools.push(
-                rustx::runtime_client::checkpoint::decode_domain_value(
+                rustx::observation::bounded::decode_domain_value(
                     item.value.expect("original finite Tool value"),
                 )
                 .expect("exact typed native Tool"),
@@ -353,7 +353,7 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
     else {
         panic!("bounded capability error: {:?}", capability_view.error);
     };
-    let capabilities: rustx::runtime_client::snapshot::CapabilityView =
+    let capabilities: rustx::observation::capability_source::CapabilityView =
         crate::common::native_domain_single(RuntimeClientResult::DomainPage {
             page: capability_page.clone(),
         });

@@ -118,7 +118,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
 use super::projection::{RuntimeClientProjection, SubscriberPoll, background_view};
-use super::snapshot::{RuntimeClientTranscriptCursor, RuntimeClientTranscriptPage};
 use super::types::{
     AttachmentId, RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientCursor, RuntimeClientError,
     RuntimeClientProtocolEvent, RuntimeClientResult,
@@ -126,6 +125,7 @@ use super::types::{
 use crate::durable::{ConversationStore, TRANSCRIPT_PAGE_LIMIT_MAX};
 use crate::model::session::SessionModelConfig;
 use crate::model::{ModelRequest, RequestIdentity};
+use crate::observation::transcript::{RuntimeClientTranscriptCursor, RuntimeClientTranscriptPage};
 use crate::runtime::conversation_runtime::{
     CancelAttemptError, ConversationRuntime, InboundAdmissionError, ManualCompactionError,
     ModelUpdateError, RuntimeBootstrapError,
@@ -321,7 +321,7 @@ fn source_value<T>(value: T) -> Arc<super::domain::SourceValue<T>> {
 fn prepare_display_sources(
     observation: &mut ConversationObservation,
     model_capabilities: &mut Option<crate::model::catalog::ModelCapabilities>,
-    capability_source: &mut Option<super::capability_source::CapabilityReadSource>,
+    capability_source: &mut Option<crate::observation::capability_source::CapabilityReadSource>,
 ) {
     match observation {
         ConversationObservation::Published { observation, .. }
@@ -595,7 +595,7 @@ fn observation_terminal_positions(
         } => observations
             .iter()
             .flat_map(|observation| observation_terminal_positions(store, observation, *through))
-            .take(super::checkpoint::CHECKPOINT_PAGE_ITEMS)
+            .take(crate::observation::bounded::CHECKPOINT_PAGE_ITEMS)
             .collect(),
         ConversationObservation::JournalFact(witness)
             if witness.event_kind.starts_with("attempt_")
@@ -676,7 +676,7 @@ fn observation_headers(
                 .collect::<Vec<_>>(),
             _ => Vec::new(),
         })
-        .take(super::checkpoint::CHECKPOINT_PAGE_ITEMS)
+        .take(crate::observation::bounded::CHECKPOINT_PAGE_ITEMS)
         .collect()
 }
 
@@ -700,7 +700,7 @@ fn collection_identity<T: serde::de::DeserializeOwned>(id: &str) -> Result<T, Ru
 
 fn indexed_collection_read(
     source: &crate::runtime::read_layout::SeekableObservationSource,
-    cut: &super::checkpoint::CheckpointReadCut,
+    cut: &crate::observation::cut::CheckpointReadCut,
     domain: &str,
     item_offset: u64,
     path: &[String],
@@ -726,7 +726,7 @@ fn indexed_collection_read(
 
 fn direct_collection_read(
     text: &str,
-    cut: &super::checkpoint::CheckpointReadCut,
+    cut: &crate::observation::cut::CheckpointReadCut,
     domain: &str,
     item_offset: u64,
     path: &[String],
@@ -752,10 +752,10 @@ fn collection_page_item<T: serde::Serialize + schemars::JsonSchema>(
     value: &T,
     identity: String,
     offset: u64,
-) -> super::checkpoint::CheckpointPageItem {
-    let value = super::checkpoint::structural_value(value);
+) -> crate::observation::cut::CheckpointPageItem {
+    let value = crate::observation::bounded::structural_value(value);
     let deferred = value.is_none();
-    super::checkpoint::CheckpointPageItem {
+    crate::observation::cut::CheckpointPageItem {
         offset,
         identity,
         value,
@@ -982,14 +982,14 @@ fn model_name_page_item(
     offset: u64,
     identity: String,
     model: &super::snapshot::RuntimeClientModelName,
-) -> super::checkpoint::CheckpointPageItem {
-    super::checkpoint::CheckpointPageItem {
+) -> crate::observation::cut::CheckpointPageItem {
+    crate::observation::cut::CheckpointPageItem {
         body_complete: Some(false),
         key: None,
         offset,
         identity,
         deferred: model.value.is_none(),
-        value: super::checkpoint::structural_value(model),
+        value: crate::observation::bounded::structural_value(model),
         content: Vec::new(),
     }
 }
@@ -1096,7 +1096,7 @@ fn prepared_lock<'a>(
             .published_source_cuts_after(revision)
             .into_iter()
             .filter(|cut| cut.revision > revision)
-            .map(super::workflow_source::WorkflowReadSource::new)
+            .map(crate::observation::workflow_source::WorkflowReadSource::new)
             .collect::<Vec<_>>();
         if !cuts.is_empty() {
             apply_prepared_observations(
@@ -1118,8 +1118,8 @@ fn journal_preparation(
     observation: &ConversationObservation,
 ) -> Vec<(
     u64,
-    Option<super::event::RuntimeClientAttemptFailure>,
-    Option<super::snapshot::JournalFieldRef>,
+    Option<crate::observation::failure::RuntimeClientAttemptFailure>,
+    Option<crate::observation::tool::JournalFieldRef>,
 )> {
     observation
         .facts()
@@ -1150,7 +1150,7 @@ fn journal_preparation(
                 store
                     .event_value_read(witness.sequence, witness.sequence, &path, 0, 1)
                     .ok()
-                    .map(|chunk| super::snapshot::JournalFieldRef {
+                    .map(|chunk| crate::observation::tool::JournalFieldRef {
                         sequence: witness.sequence,
                         path,
                         encoded_bytes: chunk.readable_end,
@@ -1487,7 +1487,7 @@ impl crate::runtime::observation::PublicationProjectionCommit for NativePublicat
             .content
             .iter()
             .filter_map(|reference| {
-                let super::content::ContentSource::LivePublicationPrefix {
+                let crate::observation::content::ContentSource::LivePublicationPrefix {
                     component,
                     block_index,
                     ..
@@ -1497,7 +1497,8 @@ impl crate::runtime::observation::PublicationProjectionCommit for NativePublicat
                 };
                 Some(super::checkpoint::PreparedPublicationContent {
                     suffix: receipt.suffix_bytes.is_some()
-                        && *component == super::content::PublicationContentComponent::Payload,
+                        && *component
+                            == crate::observation::content::PublicationContentComponent::Payload,
                     stream_id: receipt.stream_id.clone(),
                     block_index: *block_index,
                     revision: reference.content_revision,
@@ -1506,7 +1507,8 @@ impl crate::runtime::observation::PublicationProjectionCommit for NativePublicat
                     base_length: receipt
                         .suffix_bytes
                         .filter(|_| {
-                            *component == super::content::PublicationContentComponent::Payload
+                            *component
+                                == crate::observation::content::PublicationContentComponent::Payload
                         })
                         .map(|bytes| {
                             reference
@@ -2330,7 +2332,7 @@ impl ClientInner {
             }
         }
         Ok(RuntimeClientResult::ContextCompacted {
-            compaction: Some(super::snapshot::RuntimeClientCompactionView {
+            compaction: Some(crate::observation::head::RuntimeClientCompactionView {
                 generation: outcome.generation,
                 checkpoint_id: outcome.checkpoint_id,
                 activation_id: outcome.activation_id,
@@ -2405,16 +2407,16 @@ impl ClientInner {
 
     pub(crate) fn content_read(
         &self,
-        reference: &super::content::ContentRef,
+        reference: &crate::observation::content::ContentRef,
         offset: u64,
         max_bytes: u32,
-    ) -> Result<super::content::ContentChunk, RuntimeClientError> {
+    ) -> Result<crate::observation::content::ContentChunk, RuntimeClientError> {
         if reference.conversation_id != self.conversation_id {
             return Err(RuntimeClientError::ContentSourceUnavailable);
         }
         let live = matches!(
             reference.source,
-            super::content::ContentSource::LivePublicationPrefix { .. }
+            crate::observation::content::ContentSource::LivePublicationPrefix { .. }
         );
         let source_cut = {
             let state = self.state.lock().expect("published native content cut");
@@ -2454,7 +2456,7 @@ impl ClientInner {
 
     fn collection_page(
         &self,
-        cut: &super::checkpoint::CheckpointReadCut,
+        cut: &crate::observation::cut::CheckpointReadCut,
         domain: &str,
         offset: u64,
         limit: usize,
@@ -2517,7 +2519,7 @@ impl ClientInner {
 
     fn collection_identity_page(
         &self,
-        cut: &super::checkpoint::CheckpointReadCut,
+        cut: &crate::observation::cut::CheckpointReadCut,
         domain: &str,
         offset: u64,
         limit: usize,
@@ -2587,7 +2589,7 @@ impl ClientInner {
     }
     fn collection_value_read(
         &self,
-        cut: &super::checkpoint::CheckpointReadCut,
+        cut: &crate::observation::cut::CheckpointReadCut,
         domain: &str,
         item_offset: u64,
         path: &[String],
@@ -2693,9 +2695,10 @@ impl ClientInner {
 
     pub(super) fn pending_read_header(
         &self,
-        cut: &super::checkpoint::CheckpointReadCut,
+        cut: &crate::observation::cut::CheckpointReadCut,
         source_offset: u64,
-    ) -> Result<super::snapshot::RuntimeClientInteractionHeader, RuntimeClientError> {
+    ) -> Result<crate::observation::interaction::RuntimeClientInteractionHeader, RuntimeClientError>
+    {
         {
             let state = self.state.lock().expect("runtime client state lock");
             state.projection.validate_checkpoint_cut(cut)?;
@@ -2741,7 +2744,7 @@ impl ClientInner {
     }
     fn live_page(
         &self,
-        cut: &super::checkpoint::CheckpointReadCut,
+        cut: &crate::observation::cut::CheckpointReadCut,
         domain: &str,
         offset: u64,
         limit: usize,
@@ -2765,7 +2768,7 @@ impl ClientInner {
                 let content = header
                     .content
                     .iter()
-                    .map(|reference| super::checkpoint::ContentBinding {
+                    .map(|reference| crate::observation::cut::ContentBinding {
                         path: vec![if reference.source.key().0 == "live_block_metadata" {
                             "metadata".into()
                         } else {
@@ -2776,11 +2779,11 @@ impl ClientInner {
                         deferred: true,
                     })
                     .collect();
-                Ok(super::checkpoint::CheckpointPageItem {
+                Ok(crate::observation::cut::CheckpointPageItem {
                     offset: header.position,
                     identity: format!("{}:{}", header.kind, header.block_index.get()),
                     value: Some(
-                        super::checkpoint::structural_value(&header)
+                        crate::observation::bounded::structural_value(&header)
                             .ok_or(RuntimeClientError::ReadCutExpired)?,
                     ),
                     body_complete: None,
@@ -2803,7 +2806,7 @@ impl ClientInner {
 
     fn canonical_foreground_page(
         &self,
-        cut: &super::checkpoint::CheckpointReadCut,
+        cut: &crate::observation::cut::CheckpointReadCut,
         offset: u64,
         limit: usize,
     ) -> Result<super::checkpoint::CheckpointPage, RuntimeClientError> {
@@ -2834,7 +2837,7 @@ impl ClientInner {
 
     fn pending_page(
         &self,
-        cut: &super::checkpoint::CheckpointReadCut,
+        cut: &crate::observation::cut::CheckpointReadCut,
         offset: u64,
         limit: usize,
     ) -> Result<super::checkpoint::CheckpointPage, RuntimeClientError> {
@@ -2901,11 +2904,11 @@ impl ClientInner {
         let items = headers
             .into_iter()
             .map(|header| {
-                Ok(super::checkpoint::CheckpointPageItem {
+                Ok(crate::observation::cut::CheckpointPageItem {
                     offset: header.source_offset,
                     identity: header.interaction.to_string(),
                     value: Some(
-                        super::checkpoint::structural_value(&header)
+                        crate::observation::bounded::structural_value(&header)
                             .ok_or(RuntimeClientError::ReadCutExpired)?,
                     ),
                     deferred: true,
@@ -2996,7 +2999,7 @@ impl ClientInner {
     }
     fn pending_value_read(
         &self,
-        cut: &super::checkpoint::CheckpointReadCut,
+        cut: &crate::observation::cut::CheckpointReadCut,
         domain: &str,
         item_offset: u64,
         path: &[String],
@@ -3049,7 +3052,7 @@ impl ClientInner {
 
     fn state_source_available(
         &self,
-        cut: &super::checkpoint::CheckpointReadCut,
+        cut: &crate::observation::cut::CheckpointReadCut,
         domain: &str,
     ) -> Result<bool, RuntimeClientError> {
         let available = super::state_observation::available(self.store.as_ref(), cut, domain)?;
@@ -3070,7 +3073,7 @@ impl ClientInner {
 
     pub(crate) fn checkpoint_value_read(
         &self,
-        cut: &super::checkpoint::CheckpointReadCut,
+        cut: &crate::observation::cut::CheckpointReadCut,
         domain: &str,
         item_offset: u64,
         path: &[String],
@@ -3133,7 +3136,7 @@ impl ClientInner {
 
     fn immutable_source_value_read(
         &self,
-        cut: &super::checkpoint::CheckpointReadCut,
+        cut: &crate::observation::cut::CheckpointReadCut,
         domain: &str,
         item_offset: u64,
         path: &[String],
@@ -3203,7 +3206,7 @@ impl ClientInner {
 
     fn selected_value_read(
         &self,
-        cut: &super::checkpoint::CheckpointReadCut,
+        cut: &crate::observation::cut::CheckpointReadCut,
         domain: &str,
         item_offset: u64,
         path: &[String],
@@ -3310,7 +3313,7 @@ impl ClientInner {
 
     fn inbound_value_read(
         &self,
-        cut: &super::checkpoint::CheckpointReadCut,
+        cut: &crate::observation::cut::CheckpointReadCut,
         domain: &str,
         item_offset: u64,
         path: &[String],
@@ -3350,7 +3353,7 @@ impl ClientInner {
 
     fn transcript_field_read(
         &self,
-        cut: &super::checkpoint::CheckpointReadCut,
+        cut: &crate::observation::cut::CheckpointReadCut,
         domain: &str,
         field: (u64, &str),
         item_offset: u64,
@@ -3402,7 +3405,7 @@ impl ClientInner {
 
     fn domain_source_page(
         &self,
-        cut: &super::checkpoint::CheckpointReadCut,
+        cut: &crate::observation::cut::CheckpointReadCut,
         domain: &str,
         offset: u64,
         limit: usize,
@@ -3425,7 +3428,7 @@ impl ClientInner {
 
     pub(crate) fn checkpoint_page(
         &self,
-        cut: &super::checkpoint::CheckpointReadCut,
+        cut: &crate::observation::cut::CheckpointReadCut,
         domain: &str,
         offset: u64,
         limit: usize,
@@ -3510,7 +3513,7 @@ impl ClientInner {
 
     fn trace_checkpoint_page(
         &self,
-        cut: &super::checkpoint::CheckpointReadCut,
+        cut: &crate::observation::cut::CheckpointReadCut,
         domain: &str,
         offset: u64,
         limit: usize,
@@ -3551,7 +3554,7 @@ impl ClientInner {
 
     fn published_checkpoint_page(
         &self,
-        cut: &super::checkpoint::CheckpointReadCut,
+        cut: &crate::observation::cut::CheckpointReadCut,
         domain: &str,
         offset: u64,
         limit: usize,
@@ -3566,7 +3569,7 @@ impl ClientInner {
 
     fn durable_checkpoint_page(
         &self,
-        cut: &super::checkpoint::CheckpointReadCut,
+        cut: &crate::observation::cut::CheckpointReadCut,
         domain: &str,
         offset: u64,
         limit: usize,
@@ -3593,7 +3596,7 @@ impl ClientInner {
     }
     fn interaction_checkpoint_page(
         &self,
-        cut: &super::checkpoint::CheckpointReadCut,
+        cut: &crate::observation::cut::CheckpointReadCut,
         domain: &str,
         ordinal: u64,
         mut selected: Vec<String>,
@@ -3609,7 +3612,7 @@ impl ClientInner {
         let items = page
             .fields
             .into_iter()
-            .map(|field| super::checkpoint::CheckpointPageItem {
+            .map(|field| crate::observation::cut::CheckpointPageItem {
                 offset: field.ordinal,
                 identity: field.ordinal.to_string(),
                 value: field.value.clone(),
@@ -3632,7 +3635,7 @@ impl ClientInner {
 
     fn pending_checkpoint_page(
         &self,
-        cut: &super::checkpoint::CheckpointReadCut,
+        cut: &crate::observation::cut::CheckpointReadCut,
         source_cut: &crate::durable::observation::ObservationReadCut,
         offset: u64,
         limit: usize,
@@ -3655,12 +3658,12 @@ impl ClientInner {
                     Some(crate::message::types::MessageBlock::User(message)) => Some(message),
                     _ => None,
                 };
-                let value = super::checkpoint::structural_value(&PendingSummary {
+                let value = crate::observation::bounded::structural_value(&PendingSummary {
                     sequence: crate::runtime::inbound::InboundSequence::new(header.sequence),
                     revision: header.revision,
                     message,
                 });
-                super::checkpoint::CheckpointPageItem {
+                crate::observation::cut::CheckpointPageItem {
                     body_complete: None,
                     key: None,
                     offset: header.sequence,
@@ -3687,7 +3690,7 @@ impl ClientInner {
 
     fn transcript_field_source(
         &self,
-        cut: &super::checkpoint::CheckpointReadCut,
+        cut: &crate::observation::cut::CheckpointReadCut,
         cursor: u64,
     ) -> Result<TranscriptFieldSource, RuntimeClientError> {
         let source_cut = cut
@@ -3714,14 +3717,14 @@ impl ClientInner {
     #[allow(clippy::too_many_arguments)]
     fn transcript_field_page(
         &self,
-        cut: &super::checkpoint::CheckpointReadCut,
+        cut: &crate::observation::cut::CheckpointReadCut,
         domain: &str,
         cursor: u64,
         field: &str,
         offset: u64,
         limit: usize,
     ) -> Result<super::checkpoint::CheckpointPage, RuntimeClientError> {
-        if !(1..=super::checkpoint::CHECKPOINT_PAGE_ITEMS).contains(&limit) {
+        if !(1..=crate::observation::bounded::CHECKPOINT_PAGE_ITEMS).contains(&limit) {
             return Err(RuntimeClientError::InvalidRequest {
                 message: "native field page limit must be in 1..=32".into(),
             });
@@ -3791,13 +3794,13 @@ impl ClientInner {
                 let items = if offset == 0 {
                     summary
                         .failure
-                        .map(|failure| super::checkpoint::CheckpointPageItem {
+                        .map(|failure| crate::observation::cut::CheckpointPageItem {
                             body_complete: None,
                             key: None,
                             offset: 0,
                             identity: format!("attempt:{sequence}"),
                             deferred: summary.failure_deferred,
-                            value: super::checkpoint::structural_value(&failure),
+                            value: crate::observation::bounded::structural_value(&failure),
                             content: Vec::new(),
                         })
                         .into_iter()
@@ -3822,18 +3825,18 @@ impl ClientInner {
 
     fn materialize_content_bindings(
         &self,
-        bindings: &mut [super::checkpoint::ContentBinding],
+        bindings: &mut [crate::observation::cut::ContentBinding],
     ) -> Result<(), RuntimeClientError> {
         for binding in bindings {
             if matches!(
                 binding.content_ref.source,
-                super::content::ContentSource::LivePublicationPrefix { .. }
+                crate::observation::content::ContentSource::LivePublicationPrefix { .. }
             ) {
                 continue;
             }
             let raw = if matches!(
                 binding.content_ref.source,
-                super::content::ContentSource::CanonicalMessageBlock { .. }
+                crate::observation::content::ContentSource::CanonicalMessageBlock { .. }
             ) && binding
                 .path
                 .last()
@@ -3842,7 +3845,7 @@ impl ClientInner {
                 self.store
                     .content_descriptor(
                         &binding.content_ref.source,
-                        super::content::ContentRepresentation::RawJsonUtf8,
+                        crate::observation::content::ContentRepresentation::RawJsonUtf8,
                     )
                     .map_err(|_| RuntimeClientError::ContentSourceUnavailable)?
             } else {
@@ -3867,7 +3870,7 @@ impl ClientInner {
     /// happens outside the Projection lock and never substitutes a moving cursor.
     pub(crate) fn checkpoint_with_trace(
         &self,
-        records: &[super::trace::TraceCursor],
+        records: &[crate::observation::trace::TraceCursor],
     ) -> Result<super::checkpoint::RuntimeClientCheckpoint, RuntimeClientError> {
         if records.len() > super::trace::TRACE_RECORD_LIMIT {
             return Err(RuntimeClientError::InvalidRequest {
@@ -3976,7 +3979,7 @@ impl ClientInner {
 
     fn materialize_checkpoint(
         &self,
-        records: &[super::trace::TraceCursor],
+        records: &[crate::observation::trace::TraceCursor],
         deadline: std::time::Instant,
     ) -> Result<super::checkpoint::RuntimeClientCheckpoint, RuntimeClientError> {
         let seed = {
@@ -3995,7 +3998,7 @@ impl ClientInner {
                 .retain(|frontier| frontier.domain != "trace_updates");
             checkpoint
                 .collections
-                .push(super::checkpoint::CollectionFrontier {
+                .push(crate::observation::cut::CollectionFrontier {
                     domain: "trace_updates".into(),
                     revision: checkpoint.read_cut.through,
                     total: checkpoint.snapshot.trace_updates.len() as u64,
@@ -4026,8 +4029,8 @@ impl ClientInner {
     fn materialize_trace(
         &self,
         snapshot: &mut super::snapshot::RuntimeClientSnapshot,
-        cut: &super::checkpoint::CheckpointReadCut,
-        records: &[super::trace::TraceCursor],
+        cut: &crate::observation::cut::CheckpointReadCut,
+        records: &[crate::observation::trace::TraceCursor],
     ) -> Result<(), RuntimeClientError> {
         #[cfg(test)]
         if let Some(hook) = self.trace_cut_hook.lock().unwrap().take() {
@@ -4073,9 +4076,9 @@ impl ClientInner {
     #[allow(clippy::needless_pass_by_value)] // Attachment dispatch owns request parameters.
     pub(crate) fn trace_page(
         &self,
-        before: Option<super::trace::TraceCursor>,
+        before: Option<crate::observation::trace::TraceCursor>,
         limit: usize,
-        records: Vec<super::trace::TraceCursor>,
+        records: Vec<crate::observation::trace::TraceCursor>,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         if limit == 0 || limit > super::trace::TRACE_PAGE_LIMIT {
             return Err(RuntimeClientError::InvalidRequest {
@@ -4247,7 +4250,7 @@ impl ClientInner {
         &self,
         offset: Option<usize>,
         limit: usize,
-    ) -> Result<crate::runtime_client::turn::ObservedTurnPage, RuntimeClientError> {
+    ) -> Result<crate::observation::turn::ObservedTurnPage, RuntimeClientError> {
         self.store
             .observation_turns(offset.map(|value| value as u64), limit)
             .map_err(RuntimeClientError::observation_store_error)
@@ -4366,15 +4369,15 @@ impl ClientInner {
             };
             match delivery {
                 EventDelivery::Event(event) => {
-                    let weight = super::checkpoint::bounded_bytes(
+                    let weight = crate::observation::bounded::bounded_bytes(
                         &event,
-                        super::checkpoint::CHECKPOINT_TARGET_BYTES,
+                        crate::observation::bounded::CHECKPOINT_TARGET_BYTES,
                     )
                     .ok_or_else(|| RuntimeClientError::InvalidState {
                         message: "projection published an unbounded transition".into(),
                     })?
                     .len();
-                    if bytes + weight > super::checkpoint::CHECKPOINT_TARGET_BYTES {
+                    if bytes + weight > crate::observation::bounded::CHECKPOINT_TARGET_BYTES {
                         break;
                     }
                     if event.cursor.get()
@@ -4391,7 +4394,7 @@ impl ClientInner {
                     bytes += weight;
                     cursor = event.cursor;
                     events.push(event);
-                    if events.len() == super::checkpoint::CHECKPOINT_PAGE_ITEMS {
+                    if events.len() == crate::observation::bounded::CHECKPOINT_PAGE_ITEMS {
                         break;
                     }
                 }
@@ -4539,7 +4542,7 @@ impl ClientInner {
     /// lineage. A browser supplies canonical coordinates, never a file path.
     pub(crate) fn session_file_reference(
         &self,
-        locator: &super::content::CanonicalContentLocator,
+        locator: &crate::observation::content::CanonicalContentLocator,
         index: usize,
     ) -> Result<crate::tools::session_files::SessionFileReference, RuntimeClientError> {
         let index = u64::try_from(index).map_err(|_| RuntimeClientError::InvalidRange)?;
@@ -4562,7 +4565,7 @@ impl ClientInner {
     pub(crate) fn agent_file_reference(
         &self,
         id: &crate::runtime::identity::AgentId,
-        locator: &super::content::CanonicalContentLocator,
+        locator: &crate::observation::content::CanonicalContentLocator,
         index: usize,
     ) -> Result<crate::tools::session_files::SessionFileReference, RuntimeClientError> {
         let agent = self.agent_view(id)?;
@@ -4699,8 +4702,7 @@ impl ClientInner {
                     message: "Session model selection requires the native Session owner".to_owned(),
                 },
                 ModelUpdateError::Conflict => RuntimeClientError::ConfigurationAdoption {
-                    rejection:
-                        crate::local_runtime::configuration::application::AdoptionError::Conflict,
+                    rejection: crate::runtime::adoption::AdoptionError::Conflict,
                 },
                 ModelUpdateError::Inactive => RuntimeClientError::InvalidState {
                     message: "the conversation runtime is not activated".to_owned(),
@@ -4852,7 +4854,7 @@ impl ClientInner {
             })?;
         let failed = RuntimeClientError::observation_store_error;
         let through = store.presentation_frontier().map_err(failed)?;
-        let metrics = super::agent_statistics::read(&store, through, || {
+        let metrics = crate::observation::statistics::read(&store, through, || {
             self.agent_registry()
                 .ok()?
                 .execution_started_at(&agent.activation_id)
@@ -4964,7 +4966,7 @@ impl ClientInner {
         id: &crate::runtime::identity::AgentId,
         offset: Option<usize>,
         limit: usize,
-    ) -> Result<crate::runtime_client::turn::ObservedTurnPage, RuntimeClientError> {
+    ) -> Result<crate::observation::turn::ObservedTurnPage, RuntimeClientError> {
         validate_transcript_page_limit(limit)?;
         self.agent_reading_store(id)?
             .observation_turns(offset.map(|value| value as u64), limit)
@@ -5044,7 +5046,7 @@ fn durable_projection(
         .observation_read_cut()
         .map_err(|error| HostConstructionError::Durable(error.to_string()))?;
     let through = source_cut.read.journal;
-    let capabilities = super::snapshot::CapabilityView {
+    let capabilities = crate::observation::capability_source::CapabilityView {
         configured_tools: Vec::new(),
         revision: crate::runtime::identity::CapabilityRevision::new(0),
         tools: Vec::new(),
@@ -5081,7 +5083,7 @@ fn durable_projection(
         .snapshot_ref()
         .messages
         .iter()
-        .take(super::checkpoint::CHECKPOINT_PAGE_ITEMS)
+        .take(crate::observation::bounded::CHECKPOINT_PAGE_ITEMS)
         .flat_map(|message| super::checkpoint::message_metadata(store, message))
         .collect();
     projection.install_content_metadata(references);
@@ -5095,9 +5097,9 @@ fn bootstrap_live_projection(
 ) -> RuntimeClientProjection {
     seed.model.prepare();
     let resource_source =
-        super::resource_source::ResourceReadSource::new(Arc::clone(&seed.resources));
+        crate::observation::resource_source::ResourceReadSource::new(Arc::clone(&seed.resources));
     resource_source.prepare();
-    let capability_source = super::capability_source::CapabilityReadSource::new(
+    let capability_source = crate::observation::capability_source::CapabilityReadSource::new(
         Arc::clone(&seed.capabilities),
         seed.capability_availability.clone(),
         seed.model.capabilities().cloned(),
@@ -5106,7 +5108,7 @@ fn bootstrap_live_projection(
     let mut projection = RuntimeClientProjection::new(
         seed.conversation_id.clone(),
         {
-            let mut capture = super::checkpoint::Capture::new(0);
+            let mut capture = crate::observation::capture::Capture::new(0);
             capture.message_page("messages", &seed.messages, &seed.conversation_id)
         },
         capability_source.header(),
@@ -5136,7 +5138,7 @@ fn bootstrap_live_projection(
     let references = seed
         .messages
         .iter()
-        .take(super::checkpoint::CHECKPOINT_PAGE_ITEMS)
+        .take(crate::observation::bounded::CHECKPOINT_PAGE_ITEMS)
         .flat_map(|message| super::checkpoint::message_metadata(store, message))
         .collect();
     projection.install_content_metadata(references);
@@ -5146,8 +5148,8 @@ fn bootstrap_live_projection(
 fn install_bootstrap_sources(
     projection: &mut RuntimeClientProjection,
     seed: &crate::runtime::conversation_runtime::RuntimeBootstrapSnapshot,
-    resource_source: &super::resource_source::ResourceReadSource,
-    capability_source: &super::capability_source::CapabilityReadSource,
+    resource_source: &crate::observation::resource_source::ResourceReadSource,
+    capability_source: &crate::observation::capability_source::CapabilityReadSource,
 ) {
     projection.install_domain_sources(weighted_sources(vec![
         (
@@ -5196,11 +5198,11 @@ fn install_bootstrap_sources(
 fn install_bootstrap_frontiers(
     projection: &mut RuntimeClientProjection,
     seed: &crate::runtime::conversation_runtime::RuntimeBootstrapSnapshot,
-    resource_source: &super::resource_source::ResourceReadSource,
-    capability_source: &super::capability_source::CapabilityReadSource,
+    resource_source: &crate::observation::resource_source::ResourceReadSource,
+    capability_source: &crate::observation::capability_source::CapabilityReadSource,
 ) {
     projection.install_source_frontiers(capability_source.frontiers());
-    projection.install_source_frontiers(vec![super::checkpoint::CollectionFrontier {
+    projection.install_source_frontiers(vec![crate::observation::cut::CollectionFrontier {
         domain: "model_catalog.models".into(),
         revision: 0,
         total: seed.model.catalog_source().model_count() as u64,
@@ -5208,7 +5210,7 @@ fn install_bootstrap_frontiers(
         next_offset: (seed.model.catalog_source().model_count() > 0).then_some(0),
     }]);
     projection.install_source_frontiers(resource_source.frontiers());
-    projection.install_source_frontiers(vec![super::checkpoint::CollectionFrontier {
+    projection.install_source_frontiers(vec![crate::observation::cut::CollectionFrontier {
         domain: "model".into(),
         revision: 0,
         total: 1,
@@ -5661,7 +5663,7 @@ impl RuntimeClientHost {
     /// space is exhausted.
     pub(crate) fn published_read_cut(
         &self,
-    ) -> Result<super::checkpoint::CheckpointReadCut, RuntimeClientError> {
+    ) -> Result<crate::observation::cut::CheckpointReadCut, RuntimeClientError> {
         let state = self.inner.state.lock().expect("runtime client state lock");
         state.projection.validate_published_source()?;
         let cut = state.projection.checkpoint_read_cut();
@@ -5687,7 +5689,7 @@ impl RuntimeClientHost {
     /// Invalid selections, expired sources, and exhausted cuts are explicit.
     pub fn checkpoint_with_trace(
         &self,
-        records: &[super::trace::TraceCursor],
+        records: &[crate::observation::trace::TraceCursor],
     ) -> Result<super::checkpoint::RuntimeClientCheckpoint, RuntimeClientError> {
         self.inner.checkpoint_with_trace(records)
     }
@@ -6127,12 +6129,12 @@ fn read_transcript_page(
         .transcript_header_page(
             &cut,
             before.map(Into::into),
-            limit.min(super::checkpoint::CHECKPOINT_PAGE_ITEMS),
+            limit.min(crate::observation::bounded::CHECKPOINT_PAGE_ITEMS),
         )
         .map_err(|error| RuntimeClientError::RuntimeFailure {
             message: error.to_string(),
         })?;
-    let mut page = super::snapshot::transcript_header_view(headers);
+    let mut page = crate::observation::transcript::transcript_header_view(headers);
     let through = cut.read.journal;
     super::response::decorate_through(store, &mut page, through).map_err(|error| {
         RuntimeClientError::RuntimeFailure {
@@ -6150,9 +6152,12 @@ fn read_conversation_window(
 ) -> Result<crate::runtime_client::snapshot::ConversationWindow, RuntimeClientError> {
     let failed = RuntimeClientError::observation_store_error;
     let read = store
-        .read_window_headers(at, limit.min(super::checkpoint::CHECKPOINT_PAGE_ITEMS))
+        .read_window_headers(
+            at,
+            limit.min(crate::observation::bounded::CHECKPOINT_PAGE_ITEMS),
+        )
         .map_err(failed)?;
-    let mut page = super::snapshot::transcript_header_view(read.page);
+    let mut page = crate::observation::transcript::transcript_header_view(read.page);
     super::response::decorate_window(store, &mut page, read.cut.read.journal).map_err(failed)?;
     if !read
         .cut
@@ -6319,14 +6324,6 @@ mod tests {
             None,
             crate::context::ContextAssembly::new(),
             capability.current_snapshot(),
-        ))
-    }
-
-    fn test_resource_loader(
-        capability: &crate::capabilities::CapabilityCoordinator,
-    ) -> Arc<dyn crate::runtime::RuntimeResourceLoader> {
-        Arc::new(crate::runtime::FilesystemRuntimeResourceLoader::new(
-            capability.current_snapshot().workspace_root(),
         ))
     }
 
@@ -6659,7 +6656,7 @@ mod tests {
                     let state = inner.lock_published_state();
                     (state.projection.snapshot_ref().configuration_adoption_eligibility.clone(), state.projection.cursor())
                 };
-                if eligibility == crate::local_runtime::configuration::application::AdoptionEligibility::Eligible {
+                if eligibility == crate::runtime::adoption::AdoptionEligibility::Eligible {
                     assert!(cursor.get() > 0, "activation eligibility is actually published");
                     break;
                 }
@@ -6816,7 +6813,6 @@ mod tests {
             },
             tool_runtime,
             resources: test_resources(&coordinator),
-            resource_loader: test_resource_loader(&coordinator),
             capability: coordinator.clone(),
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
@@ -6917,7 +6913,6 @@ mod tests {
                 },
                 tool_runtime,
                 resources: test_resources(&coordinator),
-                resource_loader: test_resource_loader(&coordinator),
                 capability: coordinator.clone(),
                 clock: Some(Arc::new(FixedRuntimeClock)),
                 initial_messages: Vec::new(),
@@ -7288,14 +7283,14 @@ mod tests {
         assert!(snapshot.transcript.entries.iter().any(|entry| {
             matches!(
                 &entry.item,
-                crate::runtime_client::snapshot::RuntimeClientTranscriptItem::Message { message }
+                crate::observation::transcript::RuntimeClientTranscriptItem::Message { message }
                     if message == &fixture.assistant
             )
         }));
         assert!(snapshot.transcript.entries.iter().any(|entry| {
             matches!(
                 &entry.item,
-                crate::runtime_client::snapshot::RuntimeClientTranscriptItem::Message { message }
+                crate::observation::transcript::RuntimeClientTranscriptItem::Message { message }
                     if message == &fixture.tool
             )
         }));
@@ -7311,9 +7306,9 @@ mod tests {
         ));
         assert!(matches!(
             attempt.foreground.as_slice(),
-            [crate::runtime_client::snapshot::ForegroundToolExecution {
+            [crate::observation::tool::ForegroundToolExecution {
                 call_id,
-                state: crate::runtime_client::snapshot::ForegroundToolState::Settled { result, .. },
+                state: crate::observation::tool::ForegroundToolState::Settled { result, .. },
                 ..
             }] if call_id.as_ref() == Some(&fixture.call.id) && result == &fixture.tool_result
         ));
@@ -7512,13 +7507,13 @@ mod tests {
         proceed: std::sync::mpsc::Sender<()>,
         encoding: std::sync::mpsc::Receiver<()>,
         finish_encoding: std::sync::mpsc::Sender<()>,
-        committed: std::sync::mpsc::Receiver<super::super::content::ContentRef>,
+        committed: std::sync::mpsc::Receiver<crate::observation::content::ContentRef>,
     }
 
     fn install_publication_encoding_probe(
         inner: &super::ClientInner,
         owner: Arc<super::ClientInner>,
-        future_reference: super::super::content::ContentRef,
+        future_reference: crate::observation::content::ContentRef,
         before: RuntimeClientCursor,
         encoding_tx: std::sync::mpsc::Sender<()>,
         encode_release_rx: std::sync::mpsc::Receiver<()>,
@@ -7587,7 +7582,7 @@ mod tests {
                         .store
                         .content_descriptor_at(
                             &source,
-                            super::super::content::ContentRepresentation::Utf8Text,
+                            crate::observation::content::ContentRepresentation::Utf8Text,
                             frame.sequence + 1,
                         )
                         .unwrap()
@@ -7842,7 +7837,7 @@ mod tests {
 
     fn wire_value<T: serde::Serialize + schemars::JsonSchema>(value: &T) -> serde_json::Value {
         let mut bytes = Vec::new();
-        super::super::structural_json::to_writer(&mut bytes, value).unwrap();
+        crate::observation::structural_json::to_writer(&mut bytes, value).unwrap();
         serde_json::from_slice(&bytes).unwrap()
     }
 
@@ -7864,12 +7859,12 @@ mod tests {
                 .unwrap();
             }
             assert!(
-                super::super::checkpoint::bounded_bytes(
+                crate::observation::bounded::bounded_bytes(
                     &super::super::snapshot::InFlightBlock::Text {
                         block_index: ContentBlockIndex::new(block),
                         text: text.clone()
                     },
-                    super::super::checkpoint::CHECKPOINT_ITEM_BYTES,
+                    crate::observation::bounded::CHECKPOINT_ITEM_BYTES,
                 )
                 .is_some(),
                 "each individual native prefix fits; aggregate pressure causes deferral"
@@ -7887,7 +7882,7 @@ mod tests {
             })
             .sum();
         let policy = crate::model::invocation::runtime_fallback_generation_safety_policy(512);
-        assert!(generated_bytes > super::super::checkpoint::CHECKPOINT_TARGET_BYTES / 8);
+        assert!(generated_bytes > crate::observation::bounded::CHECKPOINT_TARGET_BYTES / 8);
         assert!(
             u64::try_from(generated_bytes + "exact final suffix π".len()).unwrap()
                 < policy.max_generated_bytes,
@@ -8006,9 +8001,9 @@ mod tests {
         );
         assert!(event_ref.readable_end > last.readable_end);
         assert!(
-            super::super::checkpoint::bounded_bytes(
+            crate::observation::bounded::bounded_bytes(
                 &after,
-                super::super::checkpoint::CHECKPOINT_TARGET_BYTES
+                crate::observation::bounded::CHECKPOINT_TARGET_BYTES
             )
             .is_some()
         );
@@ -8588,7 +8583,7 @@ mod tests {
                         if content_ref.readable_end > 0
                             && matches!(
                                 &content_ref.source,
-                                crate::runtime_client::content::ContentSource::LivePublicationPrefix { .. }
+                                crate::observation::content::ContentSource::LivePublicationPrefix { .. }
                             ) => Some((event.cursor, content_ref.clone())),
                     _ => None,
                 })
@@ -10490,10 +10485,12 @@ mod tests {
         // can advance the cursor while this test expects an unchanged cut.
         receive_until(&subscription, |event| {
             event.event.facts().iter().any(|fact| {
-                matches!(fact, RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged {
-                    eligibility:
-                        crate::local_runtime::configuration::application::AdoptionEligibility::Busy
-                })
+                matches!(
+                    fact,
+                    RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged {
+                        eligibility: crate::runtime::adoption::AdoptionEligibility::Busy
+                    }
+                )
             })
         })
         .await;
@@ -10601,7 +10598,7 @@ mod tests {
         assert_eq!(during_terminal.trace_updates.len(), 1);
         assert_eq!(
             during_terminal.trace_updates[0].state,
-            crate::runtime_client::trace::TraceState::Running
+            crate::observation::trace::TraceState::Running
         );
         assert_eq!(during_terminal.trace_updates[0].timing.duration_ms, None);
         let RuntimeClientResult::TracePage { page: historical } =
@@ -10616,7 +10613,7 @@ mod tests {
                 .find(|entry| entry.native_id.as_deref() == Some(execution_id.as_str()))
                 .unwrap()
                 .state,
-            crate::runtime_client::trace::TraceState::Running
+            crate::observation::trace::TraceState::Running
         );
         assert_eq!(host_projection_snapshot(&inner).1, terminal_cursor);
         terminal_hook.proceed();
@@ -10632,7 +10629,7 @@ mod tests {
         );
         assert_eq!(
             settled.trace_updates[0].state,
-            crate::runtime_client::trace::TraceState::Completed
+            crate::observation::trace::TraceState::Completed
         );
     }
 
@@ -11364,7 +11361,7 @@ mod tests {
         fixture.host.install_worker_exit_probe(exited);
         probe.arm_publish();
         pending.push(ConversationObservation::GoalChanged(
-            crate::runtime_client::goal::RuntimeClientGoalView { current: None },
+            crate::observation::goal::RuntimeClientGoalView { current: None },
         ));
         probe.wait_publish_entered(); // Worker holds the projection mutex inside a fold.
         drop(fixture.host);
@@ -12220,7 +12217,7 @@ mod tests {
         }));
         assert!(matches!(
             status_event.sections.first(),
-            Some(crate::runtime_client::snapshot::RuntimeClientStatusSection::Temporal { .. })
+            Some(crate::observation::status::RuntimeClientStatusSection::Temporal { .. })
         ));
         assert_eq!(
             snapshot
@@ -12954,7 +12951,6 @@ mod tests {
             },
             tool_runtime,
             resources: test_resources(&coordinator),
-            resource_loader: test_resource_loader(&coordinator),
             capability: coordinator.clone(),
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
@@ -13058,7 +13054,6 @@ mod tests {
                 },
                 tool_runtime,
                 resources: test_resources(&coordinator),
-                resource_loader: test_resource_loader(&coordinator),
                 capability: coordinator.clone(),
                 clock: Some(Arc::new(FixedRuntimeClock)),
                 initial_messages: Vec::new(),
@@ -13181,7 +13176,6 @@ mod tests {
             },
             tool_runtime,
             resources: test_resources(&coordinator),
-            resource_loader: test_resource_loader(&coordinator),
             capability: coordinator.clone(),
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
@@ -13603,7 +13597,6 @@ mod tests {
             },
             tool_runtime: fixture.tool_runtime.clone(),
             resources: test_resources(&fixture.coordinator),
-            resource_loader: test_resource_loader(&fixture.coordinator),
             capability: fixture.coordinator.clone(),
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),

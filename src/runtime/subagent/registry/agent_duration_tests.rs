@@ -6,7 +6,7 @@ async fn agent_duration_follows_driver_evidence_through_stopping_and_durable_ter
     use super::super::ipc::{read_parent_frame, write_child_frame};
     use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
     use crate::runtime::identity::{AttemptId, EventId};
-    use crate::runtime_client::agent_statistics::StatisticsFold;
+    use crate::observation::statistics::StatisticsFold;
     for status in [
         ChildResultStatus::Succeeded,
         ChildResultStatus::Cancelled,
@@ -180,7 +180,7 @@ async fn agent_duration_freezes_at_durable_evidence_after_control_loss() {
     use super::super::ipc::{read_parent_frame, write_child_frame};
     use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
     use crate::runtime::identity::{AttemptId, EventId, TurnId};
-    use crate::runtime_client::agent_statistics::StatisticsFold;
+    use crate::observation::statistics::StatisticsFold;
     use tokio::io::AsyncWriteExt;
     let plane = plane(4);
     let mut child = stage_stubborn(&plane);
