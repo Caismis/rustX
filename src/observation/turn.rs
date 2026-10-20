@@ -130,3 +130,50 @@ pub struct TurnProcessView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ended_at: Option<chrono::DateTime<chrono::Utc>>,
 }
+
+pub(crate) fn terminal_turn(
+    event: crate::events::types::RuntimeEventEnvelope,
+    cursor: super::transcript::RuntimeClientTranscriptCursor,
+) -> Result<TurnProcessView, String> {
+    use crate::events::types::RuntimeEvent;
+    let failure = match &event.event {
+        RuntimeEvent::AttemptFailed { error, .. } => {
+            Some(super::failure::finite_attempt_failure(error).0)
+        }
+        _ => None,
+    };
+    let outcome = match event.event {
+        RuntimeEvent::AttemptCancelled { .. } => TurnProcessOutcome::Cancelled,
+        RuntimeEvent::AttemptFailed { .. } => TurnProcessOutcome::Failed,
+        RuntimeEvent::AttemptTimedOut { .. } => TurnProcessOutcome::TimedOut,
+        RuntimeEvent::AttemptLimitExceeded { .. } => TurnProcessOutcome::LimitExceeded,
+        _ => return Err("invalid terminal Attempt reference".into()),
+    };
+    Ok(TurnProcessView {
+        conversation_id: event.conversation_id,
+        attempt_id: event
+            .attempt_id
+            .as_ref()
+            .filter(|id| id.as_str().len() <= 512)
+            .cloned(),
+        attempt_id_source: event
+            .attempt_id
+            .as_ref()
+            .filter(|id| id.as_str().len() > 512)
+            .map(|id| crate::durable::sqlite::journal_attempt_source(event.sequence, id))
+            .transpose()
+            .map_err(|_| "terminal owner field unavailable")?,
+        event_id: Some(event.event_id),
+        control_cursor: cursor,
+        final_message_id: None,
+        final_message_locator: None,
+        final_message_id_deferred: false,
+        final_message_id_source: None,
+        message_count: 0,
+        tool_call_count: 0,
+        outcome,
+        failure,
+        started_at: None,
+        ended_at: Some(event.timestamp),
+    })
+}

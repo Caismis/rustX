@@ -16,7 +16,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use schemars::JsonSchema;
 use serde::Serialize;
 
+use crate::durable::reading::TurnProcessOutcome;
 use crate::durable::{ConversationStore, ConversationStoreError};
+#[cfg(test)]
 use crate::events::types::RuntimeEvent;
 #[cfg(test)]
 use crate::message::types::AssistantContentBlock;
@@ -65,52 +67,6 @@ fn response_locator(
 #[cfg(test)]
 fn inline_response_id(id: &MessageId) -> Option<MessageId> {
     (id.as_str().len() <= 256).then(|| id.clone())
-}
-
-pub use crate::durable::reading::TurnProcessOutcome;
-
-pub(crate) fn terminal_turn(
-    event: crate::events::types::RuntimeEventEnvelope,
-    cursor: crate::observation::transcript::RuntimeClientTranscriptCursor,
-) -> Result<TurnProcessView, String> {
-    let failure = match &event.event {
-        RuntimeEvent::AttemptFailed { error, .. } => Some(super::projection::client_failure(error)),
-        _ => None,
-    };
-    let outcome = match event.event {
-        RuntimeEvent::AttemptCancelled { .. } => TurnProcessOutcome::Cancelled,
-        RuntimeEvent::AttemptFailed { .. } => TurnProcessOutcome::Failed,
-        RuntimeEvent::AttemptTimedOut { .. } => TurnProcessOutcome::TimedOut,
-        RuntimeEvent::AttemptLimitExceeded { .. } => TurnProcessOutcome::LimitExceeded,
-        _ => return Err("invalid terminal Attempt reference".into()),
-    };
-    Ok(TurnProcessView {
-        conversation_id: event.conversation_id,
-        attempt_id: event
-            .attempt_id
-            .as_ref()
-            .filter(|id| id.as_str().len() <= 512)
-            .cloned(),
-        attempt_id_source: event
-            .attempt_id
-            .as_ref()
-            .filter(|id| id.as_str().len() > 512)
-            .map(|id| crate::durable::sqlite::journal_attempt_source(event.sequence, id))
-            .transpose()
-            .map_err(|_| "terminal owner field unavailable")?,
-        event_id: Some(event.event_id),
-        control_cursor: cursor,
-        final_message_id: None,
-        final_message_locator: None,
-        final_message_id_deferred: false,
-        final_message_id_source: None,
-        message_count: 0,
-        tool_call_count: 0,
-        outcome,
-        failure,
-        started_at: None,
-        ended_at: Some(event.timestamp),
-    })
 }
 
 /// Independent raw native-page oracle for fixture comparisons.

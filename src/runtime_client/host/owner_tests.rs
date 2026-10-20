@@ -160,7 +160,7 @@ async fn t08_t12_t14_t19_cold_host_giant_owner_uses_original_inherited_identity_
     assert_eq!(process.control_cursor.get(), 1);
     assert_eq!(
         process.outcome,
-        crate::runtime_client::response::TurnProcessOutcome::Completed
+        crate::durable::reading::TurnProcessOutcome::Completed
     );
     assert!(rows[0].completed_response.is_none());
     let response = rows[1].completed_response.as_ref().unwrap();

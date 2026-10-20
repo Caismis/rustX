@@ -20,7 +20,8 @@ pub(crate) fn page(
         .headers
         .iter()
         .map(|header| {
-            let view = foreground(&source, header)?;
+            let view = foreground(&source, header)
+                .map_err(super::RuntimeClientError::tool_terminal_unavailable)?;
             Ok(crate::observation::cut::CheckpointPageItem {
                 offset: u64::from(header.association.block_index.get()),
                 identity: format!(

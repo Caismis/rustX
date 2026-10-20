@@ -97,7 +97,7 @@ pub enum ForegroundToolState {
 pub(crate) fn foreground(
     page: &NativeToolObservationPage,
     header: &NativeToolObservationHeader,
-) -> Result<ForegroundToolExecution, crate::runtime_client::RuntimeClientError> {
+) -> Result<ForegroundToolExecution, ToolTerminalUnavailable> {
     let association = &header.association;
     let committed_result = header
         .committed_result
@@ -178,17 +178,10 @@ fn tool_state(
     header: &NativeToolObservationHeader,
     arguments: String,
     committed_result: Option<&crate::tools::types::ToolExecutionResult>,
-) -> Result<
-    (ForegroundToolState, Option<super::tool::JournalFieldRef>),
-    crate::runtime_client::RuntimeClientError,
-> {
+) -> Result<(ForegroundToolState, Option<super::tool::JournalFieldRef>), ToolTerminalUnavailable> {
     let value = if let Some(terminal) = &header.terminal {
         let Some(mut result) = super::tool::tool_witness_result(terminal) else {
-            return Err(
-                crate::runtime_client::RuntimeClientError::ObservationUnavailable {
-                    message: "native Tool terminal status unavailable".into(),
-                },
-            );
+            return Err(ToolTerminalUnavailable);
         };
         if let Some(committed) = committed_result {
             result.content.clone_from(&committed.content);
@@ -342,7 +335,7 @@ pub(crate) fn collections(
 pub(crate) fn enrich_message(
     header: &mut crate::durable::observation::MessageHeader,
     tools: &NativeToolObservationPage,
-) -> Result<(), crate::runtime_client::RuntimeClientError> {
+) -> Result<(), ToolTerminalUnavailable> {
     if header.role != "assistant" || tools.total == 0 {
         return Ok(());
     }
@@ -398,7 +391,7 @@ pub(crate) fn enrich_message(
 pub(crate) fn enrich_transcript_header(
     header: &mut crate::durable::observation::TranscriptHeader,
     tools: &NativeToolObservationPage,
-) -> Result<(), crate::runtime_client::RuntimeClientError> {
+) -> Result<(), ToolTerminalUnavailable> {
     if let Some(message) = &mut header.message {
         enrich_message(message, tools)?;
         message.tool_calls.clear();
@@ -414,7 +407,7 @@ pub(crate) fn enrich_transcript_header(
 pub(crate) fn enrich_loaded_transcript_header(
     header: &mut crate::durable::observation::TranscriptHeader,
     tools: &NativeToolObservationPage,
-) -> Result<(), crate::runtime_client::RuntimeClientError> {
+) -> Result<(), ToolTerminalUnavailable> {
     header.tool_calls.clear();
     if let Some(display) = &mut header.display {
         display.tool_calls.clear();
@@ -521,3 +514,13 @@ pub(crate) fn tool_witness_result(
             .and_then(|value| super::structural_json::decode(value.clone()).ok()),
     })
 }
+
+/// A native Tool terminal witness carries no decodable execution status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToolTerminalUnavailable;
+impl std::fmt::Display for ToolTerminalUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("native Tool terminal status unavailable")
+    }
+}
+impl std::error::Error for ToolTerminalUnavailable {}
