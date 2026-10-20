@@ -4582,17 +4582,29 @@ runtime_client/types.rs        protocol version, cursor, attachment/request
                                envelope, method results, typed errors
 runtime_client/event.rs        RuntimeClientEvent (external vocabulary)
 runtime_client/snapshot.rs     RuntimeClientSnapshot read model
+observation/                   native bounded observation contracts:
+                               bounded value encoding, content locators,
+                               read cuts/frontiers, descriptor capture,
+                               source-prepared descriptors (transcript,
+                               Tool, interaction, status, Trace values and
+                               request source encoding) and the
+                               capability/resource/workflow read sources;
+                               runtime and storage depend only on these
 runtime_client/projection.rs   RuntimeClientProjection: the client read
-                               model linearization owner (fold, cursor
-                               allocation, bounded replay, subscribers)
-                               and the translation of semantic
-                               observations into the client vocabulary
+  (+ projection/)              model linearization owner (fold, cursor
+                               allocation, bounded replay, subscribers);
+                               children: lifecycle, observe/fold/journal/
+                               canonical, publication, subscription,
+                               read/read_domains/checkpoint_seed, views
 runtime_client/host.rs         RuntimeClientHost: the projection + control
-                               + attachment adapter over ConversationRuntime
+  (+ host/)                    + attachment adapter over ConversationRuntime
                                — attachment admission, snapshot/cursor
                                reads, event subscriptions, protocol
                                adaptation; it owns no canonical
-                               conversation/session/admission state
+                               conversation/session/admission state;
+                               children: construction/bootstrap/worker,
+                               sources/publication, read/checkpoint/
+                               history/agents, subscription, control
 runtime_client/attachment.rs   RuntimeAttachment: one control attachment
                                plus read-only inspection attachments,
                                RAII/explicit detach, request dispatch,

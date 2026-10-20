@@ -1,7 +1,7 @@
 // Inspection consumes finite native heads; originals are read only by selected bounded gestures.
 use super::*;
-use crate::observation::cut::CheckpointReadCut;
 use crate::observation::bounded::decode_domain_value;
+use crate::observation::cut::CheckpointReadCut;
 use crate::runtime_client::host::RuntimeClientHost;
 use base64::Engine as _;
 use std::sync::Arc;
@@ -322,7 +322,9 @@ fn original_text_block(
     host: &RuntimeClientHost,
     item: &crate::observation::cut::CheckpointPageItem,
 ) -> serde_json::Value {
-    use crate::observation::content::{CanonicalContentComponent, ContentRepresentation, ContentSource};
+    use crate::observation::content::{
+        CanonicalContentComponent, ContentRepresentation, ContentSource,
+    };
     assert_eq!(item.identity, "text");
     assert!(item.deferred && item.value.is_none());
     let metadata = item

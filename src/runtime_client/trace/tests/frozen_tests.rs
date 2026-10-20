@@ -72,9 +72,7 @@ fn t08_t14_trace_live_tool_uses_numeric_occurrence_before_repeated_aliases() {
             1,
         )
         .unwrap();
-    let current =
-        crate::observation::tool::foreground(&tool_page, &tool_page.headers[0])
-            .unwrap();
+    let current = crate::observation::tool::foreground(&tool_page, &tool_page.headers[0]).unwrap();
     let mut snapshot = running_trace_snapshot(&store, &cut, current);
     let before = snapshot
         .trace
