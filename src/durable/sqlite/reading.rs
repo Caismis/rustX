@@ -700,7 +700,7 @@ fn turn_execution(
         Option<crate::model::types::ModelUsage>,
     )> = None;
     let mut closing = false;
-    let mut statement = connection.prepare("SELECT event_json FROM events INDEXED BY events_attempt_idx WHERE attempt_id=?1 AND sequence<=?2 AND json_extract(event_json,'$.event.type') IN ('turn_started','model_request_started','model_request_completed','model_request_failed','tool_execution_started','tool_execution_completed','tool_execution_failed','compaction_started','compaction_completed','assistant_message_committed','attempt_completed') ORDER BY sequence").map_err(|error| storage(error.to_string()))?;
+    let mut statement = connection.prepare("SELECT event_json FROM events INDEXED BY events_attempt_idx WHERE attempt_id=?1 AND sequence<=?2 AND json_extract(event_json,'$.event.type') IN ('turn_started','model_request_started','model_request_completed','model_request_failed','tool_execution_started','tool_execution_completed','tool_execution_failed','compaction_started','compaction_completed','assistant_message_committed','attempt_completed') AND (json_extract(event_json,'$.event.type') NOT IN ('model_request_started','model_request_completed','model_request_failed') OR json_extract(event_json,'$.event.owner.type')='agent') ORDER BY sequence").map_err(|error| storage(error.to_string()))?;
     let rows = statement
         .query_map(params![attempt.as_str(), seq_to_i64(through)?], |row| {
             row.get::<_, String>(0)

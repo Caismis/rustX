@@ -745,10 +745,24 @@ async fn proactive_compaction_before_the_next_turn() {
         },
         RuntimeEvent::TurnStarted,
         RuntimeEvent::ModelRequestStarted {
+            owner: rustx::model::ModelRequestOwner::Agent {
+                identity: rustx::model::RequestIdentity {
+                    attempt_id: AttemptId::new("attempt-1"),
+                    turn: rustx::runtime::identity::TurnId::new("1"),
+                    retry_number: 0,
+                },
+            },
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             model: "fake-model".to_owned(),
         },
         RuntimeEvent::ModelRequestCompleted {
+            owner: rustx::model::ModelRequestOwner::Agent {
+                identity: rustx::model::RequestIdentity {
+                    attempt_id: AttemptId::new("attempt-1"),
+                    turn: rustx::runtime::identity::TurnId::new("1"),
+                    retry_number: 0,
+                },
+            },
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             finish_reason: ModelFinishReason::ToolCalls,
             usage: Some(ModelUsage {
@@ -780,10 +794,24 @@ async fn proactive_compaction_before_the_next_turn() {
         compaction_event(&result, true),
         compaction_event(&result, false),
         RuntimeEvent::ModelRequestStarted {
+            owner: rustx::model::ModelRequestOwner::Agent {
+                identity: rustx::model::RequestIdentity {
+                    attempt_id: AttemptId::new("attempt-1"),
+                    turn: rustx::runtime::identity::TurnId::new("2"),
+                    retry_number: 0,
+                },
+            },
             request_id: RequestId::new("request:9:attempt-1:1:2:0"),
             model: "fake-model".to_owned(),
         },
         RuntimeEvent::ModelRequestCompleted {
+            owner: rustx::model::ModelRequestOwner::Agent {
+                identity: rustx::model::RequestIdentity {
+                    attempt_id: AttemptId::new("attempt-1"),
+                    turn: rustx::runtime::identity::TurnId::new("2"),
+                    retry_number: 0,
+                },
+            },
             request_id: RequestId::new("request:9:attempt-1:1:2:0"),
             finish_reason: ModelFinishReason::Stop,
             usage: None,
@@ -988,10 +1016,24 @@ async fn overflow_compact_and_retry_succeeds() {
         },
         RuntimeEvent::TurnStarted,
         RuntimeEvent::ModelRequestStarted {
+            owner: rustx::model::ModelRequestOwner::Agent {
+                identity: rustx::model::RequestIdentity {
+                    attempt_id: AttemptId::new("attempt-1"),
+                    turn: rustx::runtime::identity::TurnId::new("1"),
+                    retry_number: 0,
+                },
+            },
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             model: "fake-model".to_owned(),
         },
         RuntimeEvent::ModelRequestFailed {
+            owner: rustx::model::ModelRequestOwner::Agent {
+                identity: rustx::model::RequestIdentity {
+                    attempt_id: AttemptId::new("attempt-1"),
+                    turn: rustx::runtime::identity::TurnId::new("1"),
+                    retry_number: 0,
+                },
+            },
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             error: overflow_error(),
             usage: None,
@@ -1005,10 +1047,24 @@ async fn overflow_compact_and_retry_succeeds() {
             retry_delay_ms: None,
         },
         RuntimeEvent::ModelRequestStarted {
+            owner: rustx::model::ModelRequestOwner::Agent {
+                identity: rustx::model::RequestIdentity {
+                    attempt_id: AttemptId::new("attempt-1"),
+                    turn: rustx::runtime::identity::TurnId::new("1"),
+                    retry_number: 1,
+                },
+            },
             request_id: RequestId::new("request:9:attempt-1:1:1:1"),
             model: "fake-model".to_owned(),
         },
         RuntimeEvent::ModelRequestCompleted {
+            owner: rustx::model::ModelRequestOwner::Agent {
+                identity: rustx::model::RequestIdentity {
+                    attempt_id: AttemptId::new("attempt-1"),
+                    turn: rustx::runtime::identity::TurnId::new("1"),
+                    retry_number: 1,
+                },
+            },
             request_id: RequestId::new("request:9:attempt-1:1:1:1"),
             finish_reason: ModelFinishReason::Stop,
             usage: Some(ModelUsage {
@@ -2088,6 +2144,13 @@ async fn compaction_failure_after_overflow_preserves_the_overflow() {
 
     let expected_tail = vec![
         RuntimeEvent::ModelRequestFailed {
+            owner: rustx::model::ModelRequestOwner::Agent {
+                identity: rustx::model::RequestIdentity {
+                    attempt_id: AttemptId::new("attempt-1"),
+                    turn: rustx::runtime::identity::TurnId::new("1"),
+                    retry_number: 0,
+                },
+            },
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             error: overflow_error(),
             usage: None,

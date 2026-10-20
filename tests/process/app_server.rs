@@ -1491,15 +1491,25 @@ async fn app_server_archive_stdio_download_works_without_web_or_runtime_attachme
             .read_to_string(&mut manifest)
             .unwrap();
         let manifest: serde_json::Value = serde_json::from_str(&manifest).unwrap();
-        assert_eq!(manifest["format"], "rustx-session-archive/v4");
+        assert_eq!(manifest["format"], "rustx-session-archive/v7");
         assert_eq!(
             manifest["schemas"],
             serde_json::json!({
-                "journal": 2, "messages": 1, "surface": 1, "requests": 4, "projections": 1,
-                "generations": 1, "publication_audits": 1, "inherited_responses": 1, "inherited_turns": 1,
+                "journal": 5, "messages": 1, "surface": 1, "requests": 4, "projections":2,
+                "generations": 2, "auxiliary_audit": 2,"inherited_auxiliary_audit":2, "publication_audits": 1,
+                "inherited_responses": 1, "inherited_turns": 1,
             })
         );
         assert_eq!(manifest["session"]["id"], f.sessions[0].as_str());
+        let conversation = manifest["conversations"][0]["conversation_id"]
+            .as_str()
+            .unwrap();
+        let mut auxiliary_audit = String::new();
+        zip.by_name(&format!("sessions/{conversation}/auxiliary_audit.jsonl"))
+            .unwrap()
+            .read_to_string(&mut auxiliary_audit)
+            .unwrap();
+        assert!(auxiliary_audit.is_empty());
         client.close().await;
         detach_then_shutdown(&mut child).await;
         assert!(child.wait().await.unwrap().success());

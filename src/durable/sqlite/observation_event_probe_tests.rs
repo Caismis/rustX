@@ -225,6 +225,9 @@ fn t08_t14_t19_event_probe_pruning_preserves_native_request_terminals_and_option
             error.message = "original timeout 水🙂\\\"\n".repeat(2000);
             let kind = if failed {
                 RuntimeEvent::ModelRequestFailed {
+                    owner: crate::model::ModelRequestOwner::Agent {
+                        identity: snapshot.identity.clone(),
+                    },
                     request_id: snapshot.request_id.clone(),
                     error,
                     usage: None,
@@ -232,6 +235,9 @@ fn t08_t14_t19_event_probe_pruning_preserves_native_request_terminals_and_option
                 }
             } else {
                 RuntimeEvent::ModelRequestCompleted {
+                    owner: crate::model::ModelRequestOwner::Agent {
+                        identity: snapshot.identity.clone(),
+                    },
                     request_id: snapshot.request_id.clone(),
                     finish_reason,
                     usage: None,

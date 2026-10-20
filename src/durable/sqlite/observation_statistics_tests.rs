@@ -42,6 +42,9 @@ fn statistics_body_fixture() -> StatisticsBodyFixture {
         "stats-request-done",
         Some(attempt.clone()),
         RuntimeEvent::ModelRequestCompleted {
+            owner: crate::model::ModelRequestOwner::Agent {
+                identity: snapshot.identity.clone(),
+            },
             request_id: snapshot.request_id.clone(),
             finish_reason: ModelFinishReason::Other {
                 reason: "native opaque reason".repeat(130_000),

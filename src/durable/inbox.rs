@@ -18,7 +18,11 @@ use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvel
 use crate::message::types::{
     InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
-use crate::model::snapshot::RequestSnapshot;
+use crate::model::auxiliary::{
+    AuxiliaryAuditCut, AuxiliaryAuditPage, AuxiliaryCallAudit, AuxiliaryCallStart,
+    AuxiliaryCommitConfirmation, AuxiliaryRequestAudit, AuxiliaryRequestStart,
+};
+use crate::model::snapshot::{ModelRequestOwner, RequestSnapshot};
 use crate::model::types::ModelRequest;
 use crate::publication::{
     PublicationAudit, PublicationFrame, PublicationStreamRecord, PublicationStreamStart,
@@ -423,6 +427,7 @@ pub struct CanonicalRawToolArguments {
 /// raw Tool argument bytes; compaction never manufactures canonical messages.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LineageSeed {
+    auxiliary_audits: Vec<super::reading::AuxiliaryAuditSnapshot>,
     raw_tool_arguments: Vec<CanonicalRawToolArguments>,
     projections: Vec<super::projection::ProjectionCheckpoint>,
     canonical: Vec<MessageBlock>,
@@ -493,6 +498,7 @@ impl LineageSeed {
             })
             .collect();
         Self {
+            auxiliary_audits: Vec::new(),
             projections: Vec::new(),
             canonical,
             surface_history,
@@ -586,6 +592,7 @@ impl LineageSeed {
             )));
         }
         Ok(Self {
+            auxiliary_audits: Vec::new(),
             projections: Vec::new(),
             canonical,
             surface_history,
@@ -625,6 +632,91 @@ impl LineageSeed {
     #[must_use]
     pub fn projections(&self) -> &[super::projection::ProjectionCheckpoint] {
         &self.projections
+    }
+
+    /// Attach exactly the bounded source audits named by retained checkpoints.
+    /// Audits are stored in canonical `(source_conversation_id, call_id,
+    /// through_journal)` order, matching durable reload order.
+    ///
+    /// # Errors
+    /// Rejects missing, extra, duplicate or oversized source evidence.
+    pub fn with_auxiliary_audits(
+        mut self,
+        mut audits: Vec<super::reading::AuxiliaryAuditSnapshot>,
+    ) -> Result<Self, ConversationStoreError> {
+        let limits = crate::context::resources::ResourceLimits::default();
+        if audits.len() > limits.total_items {
+            return Err(ConversationStoreError::ResourceBoundExceeded(
+                "inherited auxiliary audit count exceeds lineage budget".into(),
+            ));
+        }
+        crate::context::resources::bounded_encoded_len(&audits, limits.total_bytes)?;
+        let mut expected = std::collections::BTreeSet::new();
+        for checkpoint in &self.projections {
+            if let Some(reference) = &checkpoint.candidate.summary_generation {
+                expected.insert((
+                    reference.conversation_id.clone(),
+                    reference.call_id.clone(),
+                    reference.through_journal,
+                ));
+            }
+        }
+        let mut actual = std::collections::BTreeSet::new();
+        for audit in &audits {
+            if audit.through_journal == 0
+                || audit.records.is_empty()
+                || audit
+                    .records
+                    .iter()
+                    .any(|record| record.journal_sequence > audit.through_journal)
+                || !actual.insert((
+                    audit.source_conversation_id.clone(),
+                    audit.call_id.clone(),
+                    audit.through_journal,
+                ))
+            {
+                return Err(ConversationStoreError::InvalidReference(
+                    "invalid or duplicate inherited Summary generation audit".into(),
+                ));
+            }
+            let Some(crate::model::auxiliary::AuxiliaryAuditFact::CallStarted(call)) =
+                audit.records.first().map(|record| &record.fact)
+            else {
+                return Err(ConversationStoreError::InvalidReference(
+                    "inherited Summary generation audit lacks CallStarted".into(),
+                ));
+            };
+            if call.call_id != audit.call_id || call.purpose.as_str() != "summary" {
+                return Err(ConversationStoreError::InvalidReference(
+                    "inherited generation audit is not the named Summary Call".into(),
+                ));
+            }
+        }
+        if actual != expected {
+            return Err(ConversationStoreError::InvalidReference(
+                "retained checkpoints and inherited Summary generation audits differ".into(),
+            ));
+        }
+        audits.sort_by(|left, right| {
+            let left_key = (
+                left.source_conversation_id.as_str(),
+                left.call_id.as_str(),
+                left.through_journal,
+            );
+            let right_key = (
+                right.source_conversation_id.as_str(),
+                right.call_id.as_str(),
+                right.through_journal,
+            );
+            left_key.cmp(&right_key)
+        });
+        self.auxiliary_audits = audits;
+        Ok(self)
+    }
+
+    #[must_use]
+    pub fn auxiliary_audits(&self) -> &[super::reading::AuxiliaryAuditSnapshot] {
+        &self.auxiliary_audits
     }
 
     /// Attach immutable response provenance to this seed's exact canonical identities.
@@ -2855,6 +2947,124 @@ pub trait ConversationStore: Send + Sync + 'static {
         snapshot: &RequestSnapshot,
         timestamp: DateTime<Utc>,
     ) -> Result<ModelTurnStartCommit, ConversationStoreError>;
+
+    /// Reads the ownership recorded by the exact request-start Journal fact.
+    /// Missing or inconsistent ownership for an existing request is an error.
+    fn load_request_owner(
+        &self,
+        request_id: &RequestId,
+    ) -> Result<Option<ModelRequestOwner>, ConversationStoreError>;
+
+    /// Commits one unique auxiliary Call start with bounded attribution and
+    /// exact frozen semantic/invocation fingerprints.
+    fn commit_auxiliary_call_start(
+        &self,
+        start: &AuxiliaryCallStart,
+        timestamp: DateTime<Utc>,
+    ) -> Result<crate::durable::AuxiliaryCallStartCommit, crate::durable::AuxiliaryWriteFailure>;
+
+    /// Commits one sequential physical request start under an active Call.
+    fn commit_auxiliary_request_start(
+        &self,
+        start: &AuxiliaryRequestStart,
+        timestamp: DateTime<Utc>,
+    ) -> Result<crate::durable::AuxiliaryRequestStartCommit, crate::durable::AuxiliaryWriteFailure>;
+
+    /// Atomically commits the final open request terminal and Call terminal.
+    /// Construct both with [`crate::durable::auxiliary::auxiliary_settlement_envelope`]
+    /// and retain them unchanged for retry and confirmation.
+    fn commit_auxiliary_request_settlement(
+        &self,
+        request_terminal: RuntimeEventEnvelope,
+        call_settled: RuntimeEventEnvelope,
+    ) -> Result<crate::durable::AuxiliarySettlementCommit, crate::durable::AuxiliaryWriteFailure>;
+
+    /// Construct the terminal with [`crate::durable::auxiliary::auxiliary_settlement_envelope`].
+    /// Settles one active zero-request Call. No physical request or primary
+    /// Snapshot is fabricated. Intermediate request transitions extend this
+    /// contract separately before a settled-request backoff cancellation.
+    fn commit_auxiliary_call_settlement(
+        &self,
+        call_settled: RuntimeEventEnvelope,
+    ) -> Result<crate::durable::AuxiliarySettlementCommit, crate::durable::AuxiliaryWriteFailure>;
+
+    /// Reads exact authoritative confirmation of one Call start.
+    fn confirm_auxiliary_call_start(
+        &self,
+        expected: &AuxiliaryCallStart,
+    ) -> Result<
+        AuxiliaryCommitConfirmation<crate::durable::AuxiliaryCallStartCommit>,
+        ConversationStoreError,
+    >;
+
+    /// Reads exact authoritative confirmation of one request start.
+    fn confirm_auxiliary_request_start(
+        &self,
+        expected: &AuxiliaryRequestStart,
+    ) -> Result<
+        AuxiliaryCommitConfirmation<crate::durable::AuxiliaryRequestStartCommit>,
+        ConversationStoreError,
+    >;
+
+    /// Reads exact authoritative confirmation of one atomic settlement pair.
+    fn confirm_auxiliary_settlement(
+        &self,
+        request_terminal: &RuntimeEventEnvelope,
+        call_settled: &RuntimeEventEnvelope,
+    ) -> Result<
+        AuxiliaryCommitConfirmation<crate::durable::AuxiliarySettlementCommit>,
+        ConversationStoreError,
+    >;
+
+    /// Reads exact authoritative confirmation of one Call-only settlement.
+    fn confirm_auxiliary_call_settlement(
+        &self,
+        call_settled: &RuntimeEventEnvelope,
+    ) -> Result<
+        AuxiliaryCommitConfirmation<crate::durable::AuxiliarySettlementCommit>,
+        ConversationStoreError,
+    >;
+
+    /// Captures the current Journal cut for bounded auxiliary audit reads.
+    fn auxiliary_audit_cut(&self) -> Result<AuxiliaryAuditCut, ConversationStoreError>;
+
+    /// Returns an advancing dense-offset page of auxiliary audit facts at `cut`.
+    fn read_auxiliary_audit(
+        &self,
+        cut: AuxiliaryAuditCut,
+        after_offset: Option<u64>,
+        limit: usize,
+    ) -> Result<AuxiliaryAuditPage, ConversationStoreError>;
+
+    /// Returns the dense auxiliary audit total visible at `cut`.
+    fn auxiliary_audit_total(&self, cut: AuxiliaryAuditCut) -> Result<u64, ConversationStoreError>;
+
+    /// Reads one keyed Call audit projection at `cut`.
+    fn load_auxiliary_call(
+        &self,
+        call_id: &crate::runtime::identity::AuxiliaryCallId,
+        cut: AuxiliaryAuditCut,
+    ) -> Result<Option<AuxiliaryCallAudit>, ConversationStoreError>;
+
+    /// Reads one keyed physical-request audit projection at `cut`.
+    fn load_auxiliary_request(
+        &self,
+        request_id: &RequestId,
+        cut: AuxiliaryAuditCut,
+    ) -> Result<Option<AuxiliaryRequestAudit>, ConversationStoreError>;
+
+    /// Reads at most `limit` local requests of one Call in start order at `cut`.
+    /// Pass the last returned `started_sequence` to advance; an empty page ends
+    /// iteration. A supplied cursor must name a visible request start of this
+    /// Call. Later facts and inherited source audit never enter this lookup.
+    /// Limits use [`crate::model::auxiliary::AUXILIARY_AUDIT_PAGE_LIMIT_MAX`].
+    fn read_auxiliary_call_requests(
+        &self,
+        call_id: &crate::runtime::identity::AuxiliaryCallId,
+        cut: AuxiliaryAuditCut,
+        after_started_sequence: Option<u64>,
+        limit: usize,
+    ) -> Result<Vec<AuxiliaryRequestAudit>, ConversationStoreError>;
 
     /// Reads the one pending unresolved-output source, when one exists. The
     /// pointer is durable recovery state only; its body authority remains the

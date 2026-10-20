@@ -21,12 +21,14 @@ use crate::model::invocation::ModelInvocationConfig;
 use crate::model::types::ModelRequest;
 use crate::runtime::continuation::ProviderContinuationState;
 use crate::runtime::identity::{
-    AttemptId, CapabilityRevision, MessageId, PublicationStreamId, RequestId, TurnId,
+    AttemptId, AuxiliaryCallId, CapabilityRevision, MessageId, PublicationStreamId, RequestId,
+    TurnId,
 };
 use crate::tools::types::ModelToolDefinition;
 
 /// The identity of one actual primary request attempt.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RequestIdentity {
     /// The attempt that owns this request.
     pub attempt_id: AttemptId,
@@ -36,6 +38,21 @@ pub struct RequestIdentity {
     /// logical model step. Zero is the initial request; transient and
     /// context-overflow recovery requests share the same sequence.
     pub retry_number: u32,
+}
+
+/// Ownership of one actual model request; identity grants no execution permission.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ModelRequestOwner {
+    /// A primary request owned by an Agent attempt.
+    Agent { identity: RequestIdentity },
+    /// One physical request within a logical auxiliary call.
+    Auxiliary {
+        call_id: AuxiliaryCallId,
+        /// Zero is the initial request. Physical retries have distinct request
+        /// identities and advance this ordinal within the same auxiliary call.
+        ordinal: u32,
+    },
 }
 
 impl RequestIdentity {
@@ -511,6 +528,26 @@ mod tests {
             )
             .unwrap();
         snapshot
+    }
+
+    #[test]
+    fn primary_snapshot_retains_request_identity_serialization() {
+        let request = crate::scripted_suites::common::simple_request(
+            crate::model::ModelProtocol::OpenAiChatCompletions,
+            "test",
+            "input",
+        );
+        let snapshot = frozen(&request);
+        let value = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(
+            value["identity"],
+            serde_json::json!({"attempt_id": "attempt-frozen", "turn": "1", "retry_number": 0})
+        );
+        assert!(value.get("owner").is_none());
+        assert_eq!(value["request_id"], "request:14:attempt-frozen:1:1:0");
+        let decoded: RequestSnapshot = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded, snapshot);
+        assert_eq!(decoded.request_id, decoded.identity.request_id());
     }
 
     #[test]

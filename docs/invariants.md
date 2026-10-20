@@ -7596,3 +7596,40 @@ when required by lineage/dependency closure; no stronger global audit is implied
   provenance and receipt readers. Other adjacent digest fields retain fixed-length
   preallocation gates and content-integrity comparison. These checks detect independent
   corruption, not coordinated forgery of authoritative facts and checksums.
+
+## Model request ownership
+
+- Every physical request has one authoritative owner in its Started fact.
+  Completed/Failed repeat that owner and must agree with the original fact and
+  mandatory transactional indexes.
+- Agent starts retain their exact Snapshot/native selected-input/Context
+  transaction and P/U/C rules. Auxiliary starts require an active Call and
+  sequential request ordinal; they cannot fabricate Agent execution or primary
+  publication authority.
+- Final physical request and Call outcomes commit atomically. Zero-request
+  cancellation settles only the Call. Generic Journal append cannot bypass
+  these specialized transitions.
+- Exact confirmation compares committed facts and required indexes. Missing
+  optional observation material is independent. Ordinary absence remains
+  Unknown; definite rollback evidence must come from an actually closed write.
+- Owner filtering precedes recovery mutation, native query limits, aggregation,
+  occupancy, predecessors and subagent activity. Auxiliary facts never consume
+  an adopted Agent answer obligation.
+- Purpose, activation cause and opaque consumer business references are bounded
+  attribution, not a closed list of products or execution permissions. Native
+  Compaction/Human references retain independent integrity checks at admission.
+  A business source may postdate frozen input; selected input references may not.
+- Full native input cuts remain distinct from Journal-only audit cuts.
+  Fingerprints do not reconstruct missing prompts or generated output.
+- Complete archive validation selects dependencies at its captured native cut and
+  releases each bounded local audit closure before reading the next. A live
+  materialization budget is not a limit on retained lifetime history.
+- Local audit survives for the Conversation lifetime. Inherited source audit is
+  separate from local execution, admission, quota and correlation. History
+  overlap alone does not create a Summary generation dependency.
+- A new local checkpoint's Summary generation dependency requires successful
+  physical generation and a completed local Call at its declared Journal cut.
+  Historical inspection and inherited source audit retain their captured open
+  or failed outcomes without authorizing a new checkpoint commit.
+- See [Auxiliary request facts and inspection](auxiliary-execution.md) for bounds,
+  uncertainty, source ownership and validation.

@@ -42,7 +42,7 @@ pub struct LedgerFrontier(pub u64);
 pub struct JournalFrontier(pub u64);
 
 /// One finite read authority. Pending inbound is not a compaction dependency.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceReadCut {
     pub conversation_id: ConversationId,

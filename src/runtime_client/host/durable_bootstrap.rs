@@ -94,7 +94,12 @@ pub(super) fn read(
         };
     }
     for kind in [K::TurnStarted, K::ModelRequestCompleted] {
-        if let Some(fact) = latest(store, cut, vec![kind], TraceFactScope::All, 1)?.pop()
+        let scope = if kind == K::ModelRequestCompleted {
+            TraceFactScope::Agent
+        } else {
+            TraceFactScope::All
+        };
+        if let Some(fact) = latest(store, cut, vec![kind], scope, 1)?.pop()
             && same_attempt(&start.location, &fact.location)
         {
             if let Some(B::Turn { number }) = fact.bootstrap {

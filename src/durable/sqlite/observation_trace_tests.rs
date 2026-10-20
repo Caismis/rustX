@@ -1,3 +1,8 @@
+mod auxiliary_trace_regressions {
+    use super::*;
+    include!("observation_trace_auxiliary_tests.rs");
+}
+
 // Original J/C/request bodies are an independent oracle, never default read input.
 fn trace_raw_seed() -> (LineageSeed, Vec<u8>) {
     use crate::durable::inbox::CanonicalRawToolArguments;
@@ -24,6 +29,109 @@ fn trace_raw_seed() -> (LineageSeed, Vec<u8>) {
         }])
         .unwrap();
     (seed, raw)
+}
+
+#[test]
+fn primary_request_predecessor_filters_auxiliary_start_before_limit() {
+    use crate::model::auxiliary::{
+        AuxiliaryAttribution, AuxiliaryCallStart, AuxiliaryFingerprint, AuxiliaryRequestStart,
+    };
+    use crate::runtime::identity::{AuxiliaryCallId, RequestId};
+
+    let store = store();
+    store.initialize(&[]).unwrap();
+    let identity = crate::model::RequestIdentity {
+        attempt_id: AttemptId::new("predecessor-owner"),
+        turn: TurnId::new("1"),
+        retry_number: 0,
+    };
+    let mut first = progress_request_snapshot(
+        identity.attempt_id.as_str(),
+        identity.turn.as_str(),
+        identity.retry_number,
+        store.load_head().unwrap().revision,
+        Vec::new(),
+    );
+    freeze_test_input(&store, &mut first, &[]);
+    let first_request_id = first.request_id.clone();
+    let first_start = store
+        .commit_model_turn_start(&[], &first, Utc::now())
+        .unwrap();
+
+    let fingerprint = AuxiliaryFingerprint::new("c".repeat(64)).unwrap();
+    let call_id = AuxiliaryCallId::generate();
+    store
+        .commit_auxiliary_call_start(
+            &AuxiliaryCallStart {
+                call_id: call_id.clone(),
+                purpose: AuxiliaryAttribution::new("summary").unwrap(),
+                trigger: AuxiliaryAttribution::new("automatic").unwrap(),
+                semantic_input_fingerprint: fingerprint.clone(),
+                invocation_fingerprint: fingerprint,
+                business_source: crate::model::auxiliary::AuxiliaryBusinessSource::Independent,
+                input: crate::model::auxiliary::AuxiliaryInputEvidence::Temporary,
+                selected_message_ids: Vec::new(),
+            },
+            Utc::now(),
+        )
+        .unwrap();
+    store
+        .commit_auxiliary_request_start(
+            &AuxiliaryRequestStart {
+                call_id,
+                ordinal: 0,
+                request_id: RequestId::new("auxiliary-between-primary-requests"),
+                model: "auxiliary".into(),
+            },
+            Utc::now(),
+        )
+        .unwrap();
+
+    let mut second = progress_request_snapshot(
+        identity.attempt_id.as_str(),
+        identity.turn.as_str(),
+        1,
+        store.load_head().unwrap().revision,
+        Vec::new(),
+    );
+    freeze_test_input(&store, &mut second, &[]);
+    let second = store
+        .commit_model_turn_start(&[], &second, Utc::now())
+        .unwrap();
+    let starts = store
+        .observation_trace_facts(
+            &store.observation_read_cut().unwrap(),
+            &crate::durable::observation::TraceFactQuery {
+                scope: crate::durable::observation::TraceFactScope::Agent,
+                kinds: vec![crate::durable::observation::TraceFactKind::ModelRequestStarted],
+                before: None,
+                after: 0,
+                ascending: true,
+                limit: 32,
+            },
+        )
+        .unwrap();
+    assert_eq!(starts.len(), 2);
+    assert!(starts.iter().all(|fact| matches!(
+        fact.owner.as_ref(),
+        Some(crate::durable::observation::RequestOwnerKind::Agent)
+    )));
+    let predecessor = store
+        .observation_request_predecessor_at(
+            second.started.sequence,
+            store.observation_read_cut().unwrap().read.journal,
+        )
+        .unwrap()
+        .expect("the primary predecessor exists");
+    assert_eq!(predecessor.start_sequence, first_start.started.sequence);
+    assert_eq!(predecessor.request_id.as_ref(), Some(&first_request_id));
+    assert_eq!(
+        predecessor
+            .summary
+            .as_ref()
+            .map(|summary| &summary.request_id),
+        Some(&Some(first_request_id))
+    );
 }
 fn trace_raw_occurrence() -> crate::events::types::ToolObservationOccurrence {
     crate::events::types::ToolObservationOccurrence {
@@ -174,7 +282,8 @@ fn t08_t12_t14_t19_headless_request_keeps_real_giant_owner_fields_without_native
     store
         .lock()
         .unwrap()
-        .authorizer(Some(deny_trace_original_columns)).unwrap();
+        .authorizer(Some(deny_trace_original_columns))
+        .unwrap();
     let query = |kinds| TraceFactQuery {
         scope: TraceFactScope::All,
         kinds,
@@ -208,7 +317,8 @@ fn t08_t12_t14_t19_headless_request_keeps_real_giant_owner_fields_without_native
     store
         .lock()
         .unwrap()
-        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>).unwrap();
+        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>)
+        .unwrap();
     assert_eq!(store.load_request_snapshot(&next.request_id).unwrap(), next);
 }
 fn trace_raw_publication_frames(
@@ -288,6 +398,13 @@ fn trace_commit_raw_publication(
         "trace-publication-outcome",
         Some(start.attempt_id.clone()),
         RuntimeEvent::ModelRequestCompleted {
+            owner: crate::model::ModelRequestOwner::Agent {
+                identity: crate::model::RequestIdentity {
+                    attempt_id: start.attempt_id.clone(),
+                    turn: start.turn_id.clone(),
+                    retry_number: 0,
+                },
+            },
             request_id: start.request_id.clone(),
             finish_reason: ModelFinishReason::ToolCalls,
             usage: None,
@@ -341,7 +458,8 @@ fn t08_t14_t15_t19_trace_arguments_preserve_original_raw_spelling_and_missing_fr
     store
         .lock()
         .unwrap()
-        .authorizer(Some(deny_trace_original_columns)).unwrap();
+        .authorizer(Some(deny_trace_original_columns))
+        .unwrap();
     let proposal = store
         .observation_trace_tool_proposal(&cut, &trace_raw_occurrence())
         .unwrap();
@@ -371,7 +489,8 @@ fn t08_t14_t15_t19_trace_arguments_preserve_original_raw_spelling_and_missing_fr
     store
         .lock()
         .unwrap()
-        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>).unwrap();
+        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>)
+        .unwrap();
     store.lock().unwrap().execute("DELETE FROM content_frontiers WHERE source_kind='canonical' AND source_id='ledger:1' AND block_index=0 AND representation='raw_json_utf8'", []).unwrap();
     assert!(matches!(
         store.observation_trace_tool_proposal(&cut, &trace_raw_occurrence()),
@@ -554,6 +673,9 @@ fn trace_large_request(store: &SqliteConversationStore) -> (RequestSnapshot, u64
         "trace-original-terminal",
         Some(snapshot.identity.attempt_id.clone()),
         RuntimeEvent::ModelRequestCompleted {
+            owner: crate::model::ModelRequestOwner::Agent {
+                identity: snapshot.identity.clone(),
+            },
             request_id: snapshot.request_id.clone(),
             finish_reason: ModelFinishReason::Stop,
             usage: Some(crate::model::types::ModelUsage {
@@ -584,7 +706,8 @@ fn t08_t14_t15_t19_trace_headers_and_scalar_ranges_never_read_growing_original_b
     store
         .lock()
         .unwrap()
-        .authorizer(Some(deny_trace_original_columns)).unwrap();
+        .authorizer(Some(deny_trace_original_columns))
+        .unwrap();
     let facts = store
         .observation_trace_facts(
             &cut,
@@ -654,7 +777,8 @@ fn t08_t14_t15_t19_trace_headers_and_scalar_ranges_never_read_growing_original_b
     store
         .lock()
         .unwrap()
-        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>).unwrap();
+        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>)
+        .unwrap();
     assert_eq!(
         store.load_request_snapshot(&snapshot.request_id).unwrap(),
         snapshot
@@ -833,7 +957,8 @@ fn t08_t14_t15_t19_execution_models_and_failure_use_numeric_original_request_sou
     store
         .lock()
         .unwrap()
-        .authorizer(Some(deny_trace_original_columns)).unwrap();
+        .authorizer(Some(deny_trace_original_columns))
+        .unwrap();
     assert_eq!(
         store.observation_execution_at(&before, started).unwrap(),
         frozen
@@ -854,7 +979,8 @@ fn t08_t14_t15_t19_execution_models_and_failure_use_numeric_original_request_sou
     store
         .lock()
         .unwrap()
-        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>).unwrap();
+        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>)
+        .unwrap();
     assert_eq!(
         store.load_request_snapshot(&snapshot.request_id).unwrap(),
         snapshot
@@ -982,7 +1108,8 @@ fn t08_t14_t15_t19_request_acceptance_compares_original_scalar_in_finite_windows
     store
         .lock()
         .unwrap()
-        .authorizer(Some(deny_original_request_body)).unwrap();
+        .authorizer(Some(deny_original_request_body))
+        .unwrap();
     observation_trace::accepted_compare_work();
     assert!(
         observation_trace::accepted_identity_equal(
@@ -1048,7 +1175,8 @@ fn t08_t14_t15_t19_request_acceptance_compares_original_scalar_in_finite_windows
     store
         .lock()
         .unwrap()
-        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>).unwrap();
+        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>)
+        .unwrap();
     assert_eq!(
         store.load_request_snapshot(&snapshot.request_id).unwrap(),
         snapshot

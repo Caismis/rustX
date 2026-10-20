@@ -43,8 +43,8 @@ use rustx::message::types::{
 };
 use rustx::model::catalog::{ModelCapabilities, ModelCompat};
 use rustx::model::{
-    ModelFinishReason, ModelInvocationConfig, ModelProtocol, RequestIdentity, RequestParams,
-    RequestSnapshot,
+    ModelFinishReason, ModelInvocationConfig, ModelProtocol, ModelRequestOwner, RequestIdentity,
+    RequestParams, RequestSnapshot,
 };
 use rustx::runtime::identity::{
     AgentId, AttemptId, CapabilityRevision, ConversationId, EventId, MessageId, SubagentId,
@@ -767,6 +767,9 @@ fn a_known_outcome_terminal_transfers_the_obligation_of_a_later_adopted_turn() {
                 Some(attempt.clone()),
                 Some(TurnId::new("0")),
                 RuntimeEvent::ModelRequestCompleted {
+                    owner: ModelRequestOwner::Agent {
+                        identity: snapshot.identity.clone(),
+                    },
                     request_id,
                     finish_reason: ModelFinishReason::Stop,
                     usage: None,
@@ -981,6 +984,9 @@ fn completed_model_request_before_assistant_commit_is_not_class_b() {
                 Some(attempt.clone()),
                 Some(TurnId::new("0")),
                 RuntimeEvent::ModelRequestCompleted {
+                    owner: ModelRequestOwner::Agent {
+                        identity: snapshot.identity.clone(),
+                    },
                     request_id: snapshot.request_id.clone(),
                     finish_reason: rustx::model::ModelFinishReason::Stop,
                     usage: None,
@@ -1106,6 +1112,9 @@ fn failed_model_request_before_terminal_is_not_retried() {
                 Some(attempt.clone()),
                 Some(TurnId::new("0")),
                 RuntimeEvent::ModelRequestFailed {
+                    owner: ModelRequestOwner::Agent {
+                        identity: snapshot.identity.clone(),
+                    },
                     request_id: snapshot.request_id.clone(),
                     error: rustx::model::error::ModelError {
                         kind: rustx::model::error::ModelErrorKind::ProviderError,
@@ -1448,6 +1457,9 @@ fn known_request_with_unknown_tool_outcome_stays_indeterminate() {
                 Some(attempt.clone()),
                 Some(TurnId::new("0")),
                 RuntimeEvent::ModelRequestCompleted {
+                    owner: ModelRequestOwner::Agent {
+                        identity: snapshot.identity.clone(),
+                    },
                     request_id: snapshot.request_id.clone(),
                     finish_reason: rustx::model::ModelFinishReason::ToolCalls,
                     usage: None,
@@ -2750,6 +2762,9 @@ fn the_recovery_fold_retains_only_unresolved_work() {
                     Some(attempt.clone()),
                     Some(TurnId::new("0")),
                     RuntimeEvent::ModelRequestCompleted {
+                        owner: ModelRequestOwner::Agent {
+                            identity: snapshot.identity.clone(),
+                        },
                         request_id: snapshot.request_id.clone(),
                         finish_reason: rustx::model::ModelFinishReason::Stop,
                         usage: None,

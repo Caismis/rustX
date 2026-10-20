@@ -87,6 +87,9 @@ fn snapshot_fixture() -> (
         "provider-outcome-reuse",
         Some(snapshot.identity.attempt_id.clone()),
         RuntimeEvent::ModelRequestCompleted {
+            owner: crate::model::ModelRequestOwner::Agent {
+                identity: snapshot.identity.clone(),
+            },
             request_id: snapshot.request_id.clone(),
             finish_reason: ModelFinishReason::Stop,
             usage: None,
@@ -110,6 +113,9 @@ fn t14_t19_t20_provider_outcomes_decode_the_same_transaction_snapshot_once() {
     for failed in [false, true] {
         if failed {
             event.event = RuntimeEvent::ModelRequestFailed {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: snapshot.identity.clone(),
+                },
                 request_id: snapshot.request_id.clone(),
                 error: crate::model::error::ModelError::timeout(
                     crate::model::ModelTimeoutPhase::ResponseStart,

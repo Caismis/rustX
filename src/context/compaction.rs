@@ -326,6 +326,7 @@ pub(crate) async fn execute_compaction(
         base_frontier: history.cut.ledger,
         items,
         summary_metadata: Some(metadata),
+        summary_generation: None,
     };
     let compiled =
         crate::context::checkpoint::compile_checkpoint(&candidate, |source, body_required| {
