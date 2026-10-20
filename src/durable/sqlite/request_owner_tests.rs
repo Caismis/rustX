@@ -116,6 +116,82 @@ fn request_owner_is_atomic_with_start_and_exact_replay_after_reopen() {
     assert_eq!(store.load_canonical().unwrap().len(), 2);
 }
 
+fn assert_primary_start_replay_rejects_corrupt_owner(corruption: &str, diagnostic: &str) {
+    let (_directory, store, snapshot) = owner_fixture();
+    let committed = store
+        .commit_model_turn_start(&[], &snapshot, Utc::now())
+        .unwrap();
+    let replay = store
+        .commit_model_turn_start(&[], &snapshot, Utc::now())
+        .unwrap();
+    assert_eq!(
+        replay.disposition,
+        ModelTurnStartCommitDisposition::IdempotentReplay
+    );
+    assert_eq!(replay.started, committed.started);
+    let events = store.read_events(None, 16).unwrap().events;
+    let frontier = store.presentation_frontier().unwrap();
+
+    store
+        .conn
+        .lock()
+        .unwrap()
+        .execute(corruption, [snapshot.request_id.as_str()])
+        .unwrap();
+    let owner_row = || {
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT json_object(
+                'request_id',request_id,'owner_kind',owner_kind,
+                'attempt_id',attempt_id,'turn_id',turn_id,'retry_number',retry_number,
+                'call_id',call_id,'auxiliary_ordinal',auxiliary_ordinal,
+                'start_sequence',start_sequence,'terminal_sequence',terminal_sequence,
+                'terminal_kind',terminal_kind)
+             FROM request_owners WHERE request_id=?1",
+                [snapshot.request_id.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .unwrap()
+    };
+    let corrupted = owner_row();
+    assert!(store.load_request_owner(&snapshot.request_id).is_err());
+    let error = store
+        .commit_model_turn_start(&[], &snapshot, Utc::now())
+        .unwrap_err();
+    assert!(
+        matches!(error, ConversationStoreError::InvalidReference(ref message)
+        if message.contains(diagnostic)),
+        "{error:?}"
+    );
+    assert_eq!(store.read_events(None, 16).unwrap().events, events);
+    assert_eq!(store.presentation_frontier().unwrap(), frontier);
+    assert_eq!(
+        owner_row(),
+        corrupted,
+        "replay must neither reconstruct nor repair the owner row"
+    );
+}
+
+#[test]
+fn primary_start_replay_rejects_missing_mandatory_owner_without_reconstructing_it() {
+    assert_primary_start_replay_rejects_corrupt_owner(
+        "DELETE FROM request_owners WHERE request_id=?1",
+        "no mandatory owner row",
+    );
+}
+
+#[test]
+fn primary_start_replay_rejects_mismatched_owner_identity_without_repairing_it() {
+    assert_primary_start_replay_rejects_corrupt_owner(
+        "UPDATE request_owners SET attempt_id='foreign-attempt' WHERE request_id=?1",
+        "owner identity disagrees",
+    );
+}
+
 #[test]
 fn request_owner_lookup_uses_exact_request_index_without_hydrating_unrelated_facts() {
     let (_directory, store, snapshot) = owner_fixture();

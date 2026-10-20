@@ -8154,6 +8154,7 @@ fn verify_committed_start_tx(
         )));
     }
     validate_request_start_metadata(&stored, &started)?;
+    validate_primary_request_owner_event(transaction, &started)?;
     let contribution_emissions =
         verify_contribution_start_tx(transaction, context, &stored, &started)?;
     Ok(ModelTurnStartCommit {
