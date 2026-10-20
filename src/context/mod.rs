@@ -16,6 +16,7 @@ pub mod contribution;
 
 pub mod checkpoint;
 pub(crate) mod compaction;
+pub mod compaction_budget;
 pub(crate) mod compaction_metadata;
 pub mod engine;
 pub mod error;

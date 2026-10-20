@@ -65,6 +65,18 @@ pub enum ContextErrorKind {
     /// budget instead of abandoning the conversation to the overflow that
     /// triggered it.
     SummaryInputTooLarge,
+    /// Native auxiliary capacity was unavailable before admission.
+    AuxiliaryBusy,
+    /// Native admission or preparation ended before a durable Call existed.
+    AuxiliaryNotStarted,
+    /// The absolute auxiliary Call or parent Compaction deadline expired.
+    AuxiliaryDeadlineExceeded,
+    /// The native execution task failed abnormally and required supervision.
+    AuxiliarySupervisionFailed,
+    /// Required auxiliary persistence or exact confirmation could not be established.
+    AuxiliaryDurabilityFailed,
+    /// The Compaction operation exhausted its cumulative start or shrink budget.
+    CompactionBudgetExceeded,
     /// Summary generation was cancelled.
     Cancelled,
     /// An unexpected internal context failure.
@@ -97,5 +109,41 @@ mod tests {
         let decoded: ContextError = serde_json::from_str(&json).expect("deserialize error");
         assert_eq!(decoded, error);
         assert_eq!(decoded.kind, ContextErrorKind::NoProgress);
+    }
+
+    #[test]
+    fn auxiliary_control_and_durability_errors_remain_distinct_from_summary_rejection() {
+        for (kind, tag) in [
+            (
+                ContextErrorKind::CompactionBudgetExceeded,
+                "compaction_budget_exceeded",
+            ),
+            (ContextErrorKind::AuxiliaryBusy, "auxiliary_busy"),
+            (
+                ContextErrorKind::AuxiliaryNotStarted,
+                "auxiliary_not_started",
+            ),
+            (
+                ContextErrorKind::AuxiliaryDeadlineExceeded,
+                "auxiliary_deadline_exceeded",
+            ),
+            (
+                ContextErrorKind::AuxiliarySupervisionFailed,
+                "auxiliary_supervision_failed",
+            ),
+            (
+                ContextErrorKind::AuxiliaryDurabilityFailed,
+                "auxiliary_durability_failed",
+            ),
+        ] {
+            let error = ContextError::new(kind, "native auxiliary outcome");
+            let encoded = serde_json::to_value(&error).unwrap();
+            assert_eq!(encoded["kind"], tag);
+            assert_ne!(encoded["kind"], "summary_failed");
+            assert_eq!(
+                serde_json::from_value::<ContextError>(encoded).unwrap(),
+                error
+            );
+        }
     }
 }
