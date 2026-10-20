@@ -117,12 +117,15 @@ Native ownership, grouping, tool status and disclosure state remain rustX-owned.
 ## Interrupted Assistant presentation
 
 Behavioral reference: local `../deepseek-harness` at
-`5badb15009ae1756c3afe0ae0cef1faafc290ccc`, specifically
+`687f282e8625c6b8d11ff58211a90524be2e4317`, specifically
 `packages/client/ui-chat/src/client/chat/{AssistantNodeView,AssistantMarkdown,TurnProcessNodeView,TurnTailNodeView}.tsx`.
 Harness freezes released prose/reasoning on interruption, uses the stopped
-process label, and does not replace it with a diagnostic JSON disclosure.
+process label and a quiet 11px/18px stopped tag after the partial content.
+Stopped/failed whole-Turn processes stay open. They have no diagnostic JSON disclosure.
 The rustX adapter renders typed publication-audit text, reasoning and refusal
-through the existing Assistant/Markdown components. Empty audits and unexecuted
+through the same keyed Assistant/Markdown segments as streaming output, preserving
+the rendered Markdown and open reasoning disclosures. Sparse native block indices
+survive removal of Tool proposals. Empty audits and unexecuted
 Tool proposals have no Chat body. Audits retain their native cursor; their
 message identity suppresses stale streaming duplicates. Native terminal facts
 continue to own stopped/failed labels. Copy and the native settlement time are
@@ -130,6 +133,55 @@ available for partial prose; completed-response actions are not fabricated.
 Native audit data remains available through native protocol and Trajectory reads.
 The adapter and grouping changes are rustX-authored; no Harness runtime or
 interruption state machine is copied.
+
+Stop mismatch ledger: the previous native audit path preserved the output but
+omitted the content-level stopped tag and remounted the streamed message.
+Both are repaired against the reference above. Web retains the native bounded
+publication-settlement event header until its independently cut transcript row
+arrives, avoiding an empty intermediate frame. The native settlement head owns
+retention; attachment replacement clears these headers and historical windows
+exclude them. This stores released audit facts, not expired live bytes. Explicit
+native Attempt ownership seats the stopped process above its partial output,
+without borrowing membership across conversations. The protocol audit retains its
+own native reading anchor; only its React renderer uses the released message ID.
+An unexecuted proposal without visible text/reasoning still creates no Tool row.
+The native cancellation acknowledgement, terminal outcome, Tool settlement and
+durable audit remain authoritative. TUI Stop behavior is unchanged.
+
+Deferred prose, reasoning and refusal use their exact immutable audit content
+references, including after reload. The browser compares actual inline UTF-8
+length with the native readable range: a native inline header does not claim
+that the browser's smaller live cache contains all its bytes. Already loaded
+payload bytes survive the live-to-audit handoff only when the conversation,
+stream, message, Attempt, Turn, request, block, representation, version and byte
+end all match. Changed streams or ranges reread their own source; expired live
+locators are never reread for a frozen response. Copy reads the audit's complete
+text/refusal blocks, without introducing completed-response actions.
+The current settled partial keeps its Copy/time footer visible, matching the
+reference's latest-response action reveal policy.
+Unloaded historical receipts create no placeholder Chat rows; ordinary native
+history loading recovers their bodies. Explicit native message identities take
+precedence over local cache paths, preventing a moved row from borrowing another
+message's payload.
+
+Browser validation uses the repository's pinned Playwright workflow because
+Browser plugin not available. Flow under test: native conversation -> Stop before
+output, during reasoning/text/proposal or a running foreground Tool -> retained
+partial content and stopped markers -> continue and reload the same conversation.
+
+Stop QA (2026-10-20): Web typecheck/build, i18n and source/notice checks passed;
+2,960 Web tests passed (four existing skips) and 55 provider tests passed.
+The pinned browser passed the seven unchanged Agent screenshot references and
+both compaction flows, then both new native Stop flows after correcting their
+history-loading synchronization. Stop covered empty output, reasoning, text,
+39,981-byte text, proposed Tool arguments and a real running Bash process.
+Both locales/themes retained partial Markdown and disclosure DOM through Stop,
+discarded abandoned provider output, continued normally, and recovered the same
+records and deferred body after reload plus the ordinary Load earlier gesture.
+Page identity, meaningful content, no framework overlay, no application console
+errors, screenshot evidence and interaction checks passed at
+`http://127.0.0.1:5273`, 1440x1000 light English and 390x844 dark Chinese.
+No screenshot baseline or comparison allowance was changed.
 
 ## Compaction continuation and checkpoint UI
 

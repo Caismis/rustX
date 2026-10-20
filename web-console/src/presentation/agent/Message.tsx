@@ -8,8 +8,8 @@ export function UserMessage({ label, attachments, children, actions }: { label: 
  return <article className={css.userRow} aria-label={label}><div className={css.userStack}>
  {attachments && <div className={css.attachmentRow}>{attachments}</div>}<div className={css.bubble}>{children}</div></div>{actions}</article>;
 }
-export function AssistantMessage({ label, children }: { label: string; children: ReactNode }) {
- return <article aria-label={label} data-assistant-message>{children}</article>;
+export function AssistantMessage({ label, children, stopped, actions }: { label: string; children: ReactNode; stopped?: string; actions?: ReactNode }) {
+ return <article aria-label={label} data-assistant-message>{children}{stopped && <span className={css.stopped} data-assistant-stopped="">{stopped}</span>}{actions}</article>;
 }
 
 /** Harness compaction marker/command. Only its expanded body contains summary text. */

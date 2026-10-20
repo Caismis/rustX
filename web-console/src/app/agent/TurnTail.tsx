@@ -2,7 +2,7 @@ import { attemptOwnerKey } from '../../../../protocol/app-server/attempt-identit
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from MessageIconActions; see PROVENANCE.md. */
 import { useEffect, useState, useRef } from 'react';
-import type { CompletedResponseView } from '../../../../protocol/app-server/v51';
+import type { CompletedResponseView, PublicationAudit } from '../../../../protocol/app-server/v51';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { Tooltip } from '../../presentation/primitives/Tooltip';
 import { IconCopyOutline16, IconCheckOutline16, IconBranchOutline16, IconRefreshOutline16 } from '../../presentation/primitives/icons';
@@ -18,7 +18,7 @@ export function MessageTime({ time }: { time?: string | null }) {
   const tx = useTranslation();
   return time ? <time className={css.time} dateTime={time} title={new Date(time).toLocaleString(tx.language)}>{new Date(time).toLocaleTimeString(tx.language, { hour: '2-digit', minute: '2-digit' })}</time> : null;
 }
-export function CopyMessage({ text, messageId }: { text: string; messageId?: string | null }) {
+export function CopyMessage({ text, messageId, publication }: { text: string; messageId?: string | null; publication?: PublicationAudit }) {
   const tx = useTranslation();
   const { source, read } = useContentSource(), latest = useRef(source); latest.current = source;
   const mounted = useRef(true); useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -34,6 +34,17 @@ export function CopyMessage({ text, messageId }: { text: string; messageId?: str
     const current = () => mounted.current && (!source || latest.current?.client === source.client && JSON.stringify(observationSourceIdentity(latest.current)) === identity && source.owned());
     void (async () => {
       let value = text;
+      if (publication && source) {
+        const cache = new ContentCache((ref, offset, _max, current) => read(ref, offset, current));
+        try {
+          const parts: string[] = [];
+          for (const block of publication.content) if (block.kind === 'text' || block.kind === 'refusal') {
+            const binding = messageContentBinding(source, publication.message_id, block.block_index, publication.stream_id);
+            parts.push(binding ? await readContentText(cache, binding.content_ref, current) : block.text);
+          }
+          value = parts.join('');
+        } finally { cache.clear(); }
+      }
       const message = source?.messages?.find(message => message.id === messageId) ?? [source?.transcript, source?.history].flatMap(page => page?.entries?.flatMap(entry => entry.item.type === 'message' ? [entry.item.message] : []) ?? []).find(message => message.id === messageId);
       if (message && message.role !== 'tool' && source) {
         const cache = new ContentCache((ref, offset, _max, current) => read(ref, offset, current));

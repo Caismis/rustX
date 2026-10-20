@@ -38,13 +38,14 @@ export function useContentSource() {
   return { source, read };
 }
 
-export function messageContentBinding(source: Source | undefined, id: string, index: number) {
+export function messageContentBinding(source: Source | undefined, id: string, index: number, publicationStream?: string) {
   return source?.content?.find(binding => {
-    if (!binding.deferred || binding.content_ref.representation !== 'utf8_text') return false;
+    if (binding.content_ref.representation !== 'utf8_text') return false;
     const reference = binding.content_ref.source;
     if (reference.component !== 'payload' || reference.block_index !== index) return false;
-    if ('message_id' in reference && reference.message_id === id) return true;
-    if (reference.type === 'canonical_message_block' && reference.locator.type === 'by_message_id' && reference.locator.message_id === id) return true;
+    if (publicationStream !== undefined && (reference.type !== 'durable_transcript_audit' || reference.stream_id !== publicationStream)) return false;
+    if ('message_id' in reference) return reference.message_id === id;
+    if (reference.type === 'canonical_message_block' && reference.locator.type === 'by_message_id') return reference.locator.message_id === id;
     const path = binding.path;
     if (path[0] === 'messages') return source.messages?.[Number(path[1])]?.id === id;
     const page = source.history?.content?.includes(binding) ? source.history : source.transcript;

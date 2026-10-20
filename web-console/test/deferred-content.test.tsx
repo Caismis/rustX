@@ -35,6 +35,67 @@ it('rejects a source substitution without publishing its bytes',async()=>{
  await ui.findByRole('alert');expect(ui.queryByText('bad')).toBeNull();
 });
 
+it('a native immutable audit keeps the exact already loaded publication without rereading expired live bytes', async () => {
+ const live = reference('partial', 3);
+ if(live.source.type!=='live_publication_prefix')throw Error('live source');
+ const frozen:ContentRef = {...live,source:{...live.source,type:'durable_transcript_audit'}};
+ const read=vi.fn(async(ref:ContentRef)=>chunk(ref,new TextEncoder().encode('old')));
+ const ui=render(<SourceContent bindings={[binding(live)]} owned={()=>true} read={read}/>);
+ const body=await ui.findByText('old');
+ ui.rerender(<SourceContent bindings={[binding(frozen)]} owned={()=>true} read={read}/>);
+ expect(ui.getByText('old')).toBe(body);expect(read).toHaveBeenCalledTimes(1);
+});
+
+it.each(['stream','request','length','conversation'] as const)('an audit with different %s cannot reuse loaded live bytes', async change => {
+ const live=reference('partial',3);
+ if(live.source.type!=='live_publication_prefix')throw Error('live source');
+ const frozen:ContentRef={...live,conversation_id:change==='conversation'?'another':live.conversation_id,readable_end:change==='length'?4:3,
+   source:{...live.source,type:'durable_transcript_audit',stream_id:change==='stream'?'another':live.source.stream_id,publication_request_id:change==='request'?'another':live.source.publication_request_id}};
+ const text=change==='length'?'news':'new';
+ const read=vi.fn(async(ref:ContentRef)=>chunk(ref,new TextEncoder().encode(ref.source.type==='live_publication_prefix'?'old':text)));
+ const ui=render(<SourceContent bindings={[binding(live)]} owned={()=>true} read={read}/>);await ui.findByText('old');
+ ui.rerender(<SourceContent bindings={[binding(frozen)]} owned={()=>true} read={read}/>);
+ await ui.findByText(text);expect(read).toHaveBeenCalledTimes(2);expect(ui.queryByText('old')).toBeNull();
+});
+
+it('a finite browser body reads the missing native bytes even when the native header was inline', async () => {
+ const {Server}=await import('./fixture'),{JournalSourceProvider}=await import('../src/app/agent/ObservationSource'),{Message}=await import('../src/app/agent/Message');
+ const server=new Server();await server.attached('A');
+ try {
+  const bytes=new TextEncoder().encode('Full native body'),ref=reference('large',bytes.length),data={...binding(ref),deferred:false};
+  server.handlers.set('conversation/contentRead',()=>({type:'content_chunk',chunk:chunk(ref,bytes)}));
+  const ui=render(<JournalSourceProvider source={{client:server.client,target:server.target('A'),cut:()=>undefined,owned:()=>true}} content={[data]}><Message message={{role:'assistant',id:'large',content:[{type:'text',text:''}]}}/></JournalSourceProvider>);
+  await ui.findByText('Full native body');
+ }finally{cleanup();server.client.disconnect();}
+});
+
+it('a stale local binding path cannot override an explicit native message identity', async () => {
+ const {Server}=await import('./fixture'),{JournalSourceProvider}=await import('../src/app/agent/ObservationSource'),{Message}=await import('../src/app/agent/Message');
+ const server=new Server();await server.attached('A');
+ try {
+  const message={role:'assistant' as const,id:'current',content:[{type:'text' as const,text:'Current body'}]},data={...binding(reference('other',30)),deferred:false};
+  const ui=render(<JournalSourceProvider source={{client:server.client,target:server.target('A'),cut:()=>undefined,owned:()=>true}} content={[data]} messages={[message]}><Message message={message}/></JournalSourceProvider>);
+  expect(ui.getByText('Current body')).toBeTruthy();
+  expect(server.requests.some(row=>row.request.method==='conversation/contentRead')).toBe(false);
+ }finally{cleanup();server.client.disconnect();}
+});
+
+it('partial-response copy reads only the exact immutable audit stream and omits reasoning', async () => {
+ const {Server}=await import('./fixture'),{JournalSourceProvider}=await import('../src/app/agent/ObservationSource'),{CopyMessage}=await import('../src/app/agent/TurnTail');
+ const copied=vi.spyOn(await import('../src/presentation/primitives/clipboard'),'writeClipboard').mockResolvedValue(true);
+ const server=new Server();await server.attached('A');
+ try {
+  const text='Complete frozen body',bytes=new TextEncoder().encode(text),live=reference('partial',bytes.length);
+  if(live.source.type!=='live_publication_prefix')throw Error('live source');
+  const ref:ContentRef={...live,source:{...live.source,type:'durable_transcript_audit'}};
+  const wrong:ContentRef={...ref,source:{...live.source,type:'durable_transcript_audit',stream_id:'another-stream'}};
+  server.handlers.set('conversation/contentRead',request=>{if(request.method!=='conversation/contentRead')throw Error('method');expect(request.params.content_ref).toEqual(ref);return {type:'content_chunk',chunk:chunk(ref,bytes)};});
+  const publication={stream_id:'stream-A',attempt_id:'attempt-A',turn_id:'turn-A',request_id:'request-A',message_id:'partial',kind:'incomplete' as const,settled_at:'2026-10-20T00:00:00Z',content:[{kind:'text' as const,block_index:0,text:''},{kind:'reasoning' as const,block_index:1,text:'Private reasoning'}]};
+  const ui=render(<JournalSourceProvider source={{client:server.client,target:server.target('A'),cut:()=>undefined,owned:()=>true}} content={[binding(wrong),binding(ref)]}><CopyMessage text="" publication={publication}/></JournalSourceProvider>);
+  fireEvent.click(ui.getByRole('button',{name:'Copy'}));await waitFor(()=>expect(copied).toHaveBeenCalledWith(text));
+ }finally{cleanup();server.client.disconnect();}
+});
+
 it.each(['live','child','history'] as const)('%s messages fill their existing body automatically and never render metadata readers',async kind=>{
  const {Server,readCut}=await import('./fixture');
  const {JournalSourceProvider}=await import('../src/app/agent/ObservationSource');

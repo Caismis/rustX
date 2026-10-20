@@ -828,15 +828,15 @@ it('the menu retry forces a catalog reread with cached choices and a retained re
  expect(count('session/setModel')).toBe(1);
 });
 
-it('T13/T19 a deferred Audit shows positive publication settlement without inventing an execution outcome', () => {
+it('T13/T19 an unloaded Audit receipt creates no placeholder Chat row or execution outcome', () => {
  const s=running();
  s.attempt!.in_flight={message_id:'deferred-publication',blocks:[{type:'text',block_index:0,text:'old loaded prefix'}]};
  const read_cut={read:{conversation_id:s.conversation_id,journal:'0',transcript:'1',mutation_revision:'0',ledger_through:'0',surface_revision:'0',transcript_total:'1',pending_through:'0',pending_total:'0'},ledger_through:'0',transcript_total:'1',surface_revision:'0',inherited_through:'0'};
  s.publication_settlements=[{settlement:{stream_id:'stream',message_id:'deferred-publication',attempt_id:s.attempt!.attempt_id,turn_id:'turn',request_id:'request',kind:'incomplete',settled_at:'2026-10-13T00:00:00Z',block_count:'9007199254740993'},transcript_cursor:'1',read_cut}];
  const ui=render(<AgentTranscript snapshot={s}/>);
- const deferred=ui.container.querySelector('[data-publication-settlement="incomplete"]')!;
- expect(deferred.textContent).toContain('Incomplete assistant response');
- expect(deferred.textContent).not.toMatch(/deferred|9007199254740993/i);
+ expect(ui.container.querySelector('[data-publication-settlement]')).toBeNull();
+ expect(ui.container.textContent).not.toMatch(/Incomplete assistant response|9007199254740993/i);
+ expect(s.publication_settlements[0].settlement.kind).toBe('incomplete');
  expect(ui.container.textContent).not.toContain('old loaded prefix');
  expect(s.attempt!.phase.type).toBe('running');
  expect(s.messages).toEqual([]);

@@ -323,6 +323,31 @@ def web_compaction() -> Scenario:
 SCENARIOS["web_compaction"] = web_compaction
 
 
+def web_stop() -> Scenario:
+    """Provider gates cover real cancellation before/during output and Tools."""
+    import hashlib
+    from fake_provider.scenario import Reasoning
+
+    long_body = "\n".join(f"Record {index:04d}: {hashlib.sha256(str(index).encode()).hexdigest()}" for index in range(512))
+
+    def expected(prompt: str) -> Expect:
+        return Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=(prompt,))
+
+    return Scenario("web_stop",
+        Step(expected("Stop before output"), Stream(Gate("stop-empty"), Text("Abandoned empty response."), Finish()), allow_disconnect=True),
+        Step(expected("Stop during reasoning"), Stream(Reasoning("Preserved reasoning before Stop."), Gate("stop-reasoning"), Text("Abandoned reasoning response."), Finish()), allow_disconnect=True),
+        Step(expected("Stop during text"), Stream(Reasoning("Preserved reasoning beside text."), Text("## Preserved partial answer\n\nAlready delivered text.\n\n```rust\nfn unfinished() {"), Gate("stop-text"), Text("Abandoned text response."), Finish()), allow_disconnect=True),
+        Step(expected("Stop during long text"), Stream(Text("## Long partial answer\n\n"), Text(long_body + "\n\nPreserved long tail.", pieces=16), Gate("stop-long"), Text("Abandoned long response."), Finish()), allow_disconnect=True),
+        Step(expected("Stop during proposal"), Stream(Text("Preparing a file without executing it."),
+            Raw(b'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"stopped-write","type":"function","function":{"name":"write","arguments":"{\\\"path\\\":"}}]},"finish_reason":null}]}\n\n'),
+            Gate("stop-proposal"), Finish("tool_calls")), allow_disconnect=True),
+        Step(expected("Stop running tool"), Stream(ToolCall("stopped-bash", "bash", json.dumps({"command": "sleep 30; printf must-not-run", "execution_mode": "foreground"})), Finish("tool_calls"))),
+        Step(expected("Continue after all stops"), Stream(Text("The conversation continued after all stops."), Finish())))
+
+
+SCENARIOS["web_stop"] = web_stop
+
+
 def web_advanced_documents() -> Scenario:
     expected = Expect(protocol=OPENAI_CHAT_COMPLETIONS, model='console-model', body_contains=('Preview advanced files',))
     files = [{'path': name} for name in ['sample.pdf', 'sample.docx', 'sample.pptx', 'sample.xlsx', 'benign.html', 'hostile.html', 'malformed.pdf', 'encrypted.pdf']]

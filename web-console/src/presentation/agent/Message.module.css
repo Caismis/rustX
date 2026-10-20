@@ -50,6 +50,22 @@
   padding: 2px 0;
 }
 
+/* Harness AssistantMarkdown's interruption marker, after frozen content. */
+.stopped {
+  align-self: flex-start;
+  width: fit-content;
+  padding: 0 6px;
+  border-radius: var(--dsw-radius-sm);
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  line-height: 18px;
+}
+
+:global([data-assistant-message]) > .stopped[data-assistant-stopped]:not([hidden]) {
+  margin-top: 16px;
+}
+
 /* Compaction marker: one dim 24px row with a context icon at rest and a
    hover/focus disclosure for the summary body. Dimmed title (not
    label-primary) — the row is a boundary notice, not conversation content. */
