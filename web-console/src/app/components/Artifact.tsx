@@ -6,12 +6,13 @@ import type { ArtifactResources } from '../../client/artifacts';
 import { PreviewContext } from './ArtifactPreview';
 import { Button } from '../../presentation/primitives/Button';
 import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
+import { MessageFile } from '../../presentation/agent/Message';
 import { PresentedFileCard, PresentedFiles } from '../../presentation/attachments/PresentedFileCard';
 import cardCss from '../../presentation/attachments/Deliverables.module.css';
 import { IconDownloadOutline16 } from '../../presentation/primitives/icons';
 import { presentedDeliveries, type PresentedDelivery } from '../../bindings/present';
 export const ArtifactContext = createContext<ArtifactResources | undefined>(undefined);
-export function Artifact({ id, name = id, image = false, mimeType }: { id: string; name?: string; image?: boolean; mimeType?: string }) {
+export function Artifact({ id, name = id, image = false, mimeType, messageAttachment = false }: { id: string; name?: string; image?: boolean; mimeType?: string; messageAttachment?: boolean }) {
   const tx = useTranslation();
   const resources = useContext(ArtifactContext);
   const preview = useContext(PreviewContext);
@@ -30,6 +31,7 @@ export function Artifact({ id, name = id, image = false, mimeType }: { id: strin
     }).catch(cause => { if (live) setError(String(cause)); }).finally(() => { if (live) setLoading(false); });
     return () => { live = false; if (owned) resources.release(owned); };
   }, [resources, id, mimeType, attempt]);
+  if (messageAttachment && !image) return <MessageFile name={name} onOpen={preview && resources ? () => preview.openPreview({ source: { kind: 'artifact', id }, name, image, mimeType }) : undefined}/>;
   return <div><AttachmentCard name={name} image={image} url={url} error={error} loading={loading}
     onDownload={preview && resources ? () => preview.download({ source: { kind: 'artifact', id }, name, image, mimeType }) : undefined}
     onLoad={resources ? () => setAttempt(value => value + 1) : undefined}

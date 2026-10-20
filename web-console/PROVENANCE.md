@@ -3377,3 +3377,58 @@ ordinary message footer, preserved line breaks and neutral composer. Evidence:
 Existing root strict references, child recovery and child trajectory checks also
 passed; no screenshot baselines changed. Other browser engines were not tested.
 The existing large-chunk build warning remains.
+
+### Chat file attachments use the Harness user-content stack (2026-10-20)
+
+Reference: the supplied `compose.yml` comparison and Harness
+`ui-chat/src/client/chat/UserContent.tsx` / `MessageItem.module.css` at
+`687f282e8625c6b8d11ff58211a90524be2e4317`. The old native adapter rendered every
+user block through the text bubble, including a generic AttachmentCard with a
+bold filename and generic File attachment label. User content now separates an
+ordered attachment row above ordinary text, reusing the existing rounded file
+tile, 28px FileTypeIcon, filename, uppercase extension and 8px stack gap. Empty
+text bodies are omitted for attachment-only messages. Multiple file tiles wrap
+and long names retain their full title while truncating visually.
+
+The native adapter partitions by original block indices rather than filtering
+the underlying content array: deferred text after attachments still reads its
+advertised exact field. This applies to Human and direct-parent child messages
+in both conversation mounts. Managed file artifacts use the same tile and open
+the existing original-source preview from the card without eager byte reads;
+the preview retains its native download path. Tool artifact presentations retain
+their existing resource controls. First-submit pending files use the same tile
+and actual local File size. Historical uploaded-file references currently expose
+only batch identity and filename, so their card omits size rather than inventing
+0B, deriving a host path or retaining a browser-only historical size cache.
+
+All 94 focused frontend checks, TypeScript, i18n ownership, production build,
+307 source records and notices for 264 packages passed. No native protocol,
+message source, runtime or TUI source changed. Historical source pins remain
+intact; the two shared presentation records add the exact UserContent baseline.
+
+Browser plugin not available: validation used the pinned Playwright 1.63 Linux
+Chromium container, fixture origin `http://127.0.0.1:5274` and production preview
+origin `http://127.0.0.1:5273`. All 51 final scenarios passed. The new flows cover
+1440x1000 English and 390x1000 Chinese in both themes: open the conversation,
+verify 240x64 file cards with 28px icons above the independent text bubble,
+copy only the original text, inspect file-only wrapping/long names, preserve the
+root draft while entering a child, then open that child in the sidebar. Page
+identity, meaningful content, error-overlay/console health, geometry and viewport
+bounds passed. Visual review covered desktop dark, narrow light and narrow dark
+sidebar states. Evidence: `/tmp/rustx-message-files-{dark,light}-{1440,390}.png`
+and `/tmp/rustx-message-files-{child,aside}-{dark,light}-{1440,390}.png`.
+
+Existing picker/drop/rail, uncertain upload recovery, first-submit ACK loss and
+remount ownership, native child execution and parent-message flows also passed.
+Two stale startup test locators were updated from the removed global Check status
+button to the existing filename-specific card action; their original operation,
+receipt, no-replay and explicit continuation assertions remain intact.
+
+Seven before-update Agent comparisons rejected the intentional layout change.
+After reviewing actual/diff evidence against Harness, nine affected references
+were refreshed and every strict comparison passed in the final replay. All PNG
+dimensions are unchanged; pixel differences stay inside the conversation content
+region (desktop x=436..1276, narrow x=123..362), with zero changed pixels in the
+sidebar or top chrome. The input/toolbar screenshots remain unchanged. No noise
+allowances or comparison tolerances changed. Other browser engines were not
+exercised; the existing large-chunk build warning remains.

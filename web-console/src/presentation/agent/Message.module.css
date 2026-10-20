@@ -376,7 +376,10 @@
   border-radius: 16px;
   background: var(--dsw-specific-input-major, transparent);
   box-sizing: border-box;
+  text-align: left;
 }
+.fileCard:is(button) { cursor: pointer; }
+.fileCard:is(button):hover { background: var(--dsw-alias-interactive-bg-hover); }
 
 .fileIcon {
   flex: none;

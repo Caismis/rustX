@@ -1092,13 +1092,19 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "b710688e2cf6369ccacfd456ff1b98944ae1ca021125b4fec362f936b94a6c6a",
+      "local_sha256": "378904386da5e2a93947a321fc21962f307a72917e94412e91b9d4c5919bc3cc",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/AssistantMarkdown.module.css",
           "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
           "upstream_sha256": "e10c5986e93070cf87bbd5c4a570a64a103c0d596d178ad4b8e170bbb6883908",
           "treatment": "Interrupted Assistant marker: quiet tertiary 11px/18px tag after frozen output, separated by 16px. Native publication audits own released content; terminal Attempt outcomes own process labels."
+        },
+        {
+          "upstream": "packages/client/ui-chat/src/client/chat/MessageItem.module.css",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "d82759f3805832e0087dd85b41473ec4bf93aea51aa039378f161df4ccac1038",
+          "treatment": "User attachment row above the text bubble, optional text seat, file type icon/name/metadata and compact file tile. Native adapters retain exact block indices and original-source preview ownership; unknown historical byte counts are omitted."
         }
       ]
     },
@@ -1111,7 +1117,9 @@
       "treatment": "Harness DOM and interaction pattern with finite rustX presentation props; native adapters retain typed authority. Compaction alignment: DSH command/checkpoint marker in the Chat reading flow; summary-only disclosure and Between Turns presentation, with native retention and execution ownership unchanged. Stop alignment: DSH interrupted-content marker after frozen Assistant output; preserve streamed renderer identity and native block indices, without completion actions or invented Tool executions.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
+        "../primitives/FileTypeIcon",
         "../primitives/TextShimmer",
+        "../primitives/file-size",
         "../primitives/icons",
         "./Message.module.css",
         "react"
@@ -1122,7 +1130,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "bfd2afcb128cea08f51560f81052bea29e62550da81b66a9456d55b2a242f156",
+      "local_sha256": "116baedb6e4c806dbda1a14283a85f189a5c4cc2e894d815aa87d44bc637f4ce",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/CompactionItem.tsx",
@@ -1147,6 +1155,12 @@
           "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
           "upstream_sha256": "e0d3e450a160ef395e4f50063d83a83a749763f7876fa0a36c5c2de68f6be387",
           "treatment": "Interrupted Assistant marker: quiet tertiary 11px/18px tag after frozen output, separated by 16px. Native publication audits own released content; terminal Attempt outcomes own process labels."
+        },
+        {
+          "upstream": "packages/client/ui-chat/src/client/chat/UserContent.tsx",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "44ac2d3e9a046f1e0dbe45b3cdaf07f5f6e92ae6f95fcf54762bc6d22330b7bf",
+          "treatment": "User attachment row above the text bubble, optional text seat, file type icon/name/metadata and compact file tile. Native adapters retain exact block indices and original-source preview ownership; unknown historical byte counts are omitted."
         }
       ]
     },

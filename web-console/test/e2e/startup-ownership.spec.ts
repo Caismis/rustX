@@ -141,7 +141,7 @@ for (const language of ['en', 'zh']) test(`lost ready read is reconciled from th
   await expect(page.locator('[data-first-submission]')).toHaveAttribute('data-first-submission', 'uncertain');
   await page.evaluate(() => { (window as any).startupFixture.remount(); (window as any).startupFixture.allow('session/uploadStatus'); });
   await page.evaluate(() => (window as any).startupFixture.reconnect());
-  const check = page.getByRole('button', { name: language === 'en' ? 'Check status' : '检查状态', exact: true });
+  const check = page.getByRole('button', { name: language === 'en' ? 'Check status for first.txt' : '检查 first.txt 的上传状态', exact: true });
   await expect(check).toBeEnabled(); await check.focus(); await check.press('Enter');
   await expect(page.locator('[data-first-submission]')).toHaveAttribute('data-first-submission', 'paused');
   const repaired = await page.evaluate(() => (window as any).startupFixture.operation());

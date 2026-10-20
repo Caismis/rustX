@@ -21,7 +21,7 @@ import type { ResponseAction } from '../commands/native';
 import type { CompletedResponseView } from '../../../../protocol/app-server/v51';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { responseRetryReady, type ResponseRetry } from './response-retry';
-import { UserMessage, AssistantMessage } from '../../presentation/agent/Message';
+import { UserMessage, AssistantMessage, MessageFile } from '../../presentation/agent/Message';
 import pendingCss from './PendingMessage.module.css';
 import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
 import { useTranslation } from '../../locale/react';
@@ -152,7 +152,9 @@ function PendingMessage({ client, sessionId }: { client: AppServerClient; sessio
   const flow = useSyncExternalStore(client.firstSubmissions.subscribe, () => client.firstSubmissions.session(sessionId));
   if (!flow || !['attaching', 'uploading', 'admitting'].includes(flow.phase)) return null;
   return <div className={pendingCss.root} data-pending-message="">
-    <UserMessage label={tx('agent:message.your-message')} attachments={flow.draft.files.map((file, i) => <AttachmentCard key={flow.attachmentIds[i]} name={file.name} image={file.type.startsWith('image/')}/>)}><div className={pendingCss.text}>{flow.draft.text}</div></UserMessage>
+    <UserMessage label={tx('agent:message.your-message')} attachments={flow.draft.files.length > 0 ? flow.draft.files.map((file, i) => file.type.startsWith('image/')
+      ? <AttachmentCard key={flow.attachmentIds[i]} name={file.name} image/>
+      : <MessageFile key={flow.attachmentIds[i]} name={file.name} bytes={file.size}/>) : undefined}>{flow.draft.text !== '' ? <div className={pendingCss.text}>{flow.draft.text}</div> : undefined}</UserMessage>
     <AssistantMessage label={tx('agent:message.assistant-response')}><p className={pendingCss.waiting} role="status" data-first-submission={flow.phase}><span className={pendingCss.dot} aria-hidden="true"/>{tx(flow.phase === 'attaching' ? 'common:app.connecting' : flow.phase === 'uploading' ? 'common:startup.uploading' : 'common:startup.admitting')}</p></AssistantMessage>
   </div>;
 }

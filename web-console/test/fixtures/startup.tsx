@@ -9,6 +9,7 @@ import { ConnectionController } from '../../src/connection/controller';
 import { childNavigation } from './child-navigation';
 import { childObservationRecovery } from './child-observation-recovery';
 import { childParentMessages } from './child-parent-messages';
+import { messageAttachments } from './message-attachments';
 import { agentMetrics } from '../agent-statistics-fixture';
 import { createRoot } from 'react-dom/client';
 import { ComposerDraft } from '../../src/app/composer/draft';
@@ -170,6 +171,7 @@ if (new URL(location.href).searchParams.has('subagents')) {
 }
 const releaseChildObservation = new URL(location.href).searchParams.has('subagent-observation-failure') ? childObservationRecovery(server) : undefined;
 if (new URL(location.href).searchParams.has('parent-messages')) childParentMessages(server);
+if (new URL(location.href).searchParams.has('message-attachments')) messageAttachments(server);
 if (new URL(location.href).searchParams.has('child-turn-navigation')) childNavigation(server);
 let nativeDefault = 'fixture/native';
 server.handlers.set('session/create', request => {
