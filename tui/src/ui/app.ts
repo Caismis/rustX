@@ -1,5 +1,3 @@
-import {validateInteractionBody} from '../../../protocol/app-server/interaction.ts';
-import { displayInteraction, hasInteractionBody, type DisplayInteraction } from '../presentation/interaction-display.ts';
 /**
  * The rustX terminal application.
  *
@@ -49,14 +47,10 @@ import { ComposerContext } from "./components/composer-context.ts";
 import { PendingInputView } from "./components/pending-input.ts";
 import { isAttemptActive } from "../presentation/state.ts";
 import { historyPresentation } from "../presentation/projection.ts";
-import { sanitizeField } from "../sanitize.ts";
 import type { ConnectingSession, SessionCatalogPage } from "../startup.ts";
 import {
-  Container,
-  Loader,
   ProcessTerminal,
   Spacer,
-  Text,
   TUI,
   matchesKey,
   type OverlayHandle,
@@ -64,94 +58,45 @@ import {
 } from "@earendil-works/pi-tui";
 
 import { SlashCommandAutocompleteProvider } from "../commands/autocomplete.ts";
-import {
-  CommandDispatcher,
-  type DebugDiagnostics,
-  type ExpandTarget,
-  type PreferenceChange,
-} from "../commands/dispatcher.ts";
+import { CommandDispatcher } from "../commands/dispatcher.ts";
+import type { ExpandTarget, PreferenceChange } from "../commands/outcome.ts";
+import type { DebugDiagnostics } from "../commands/presentation.ts";
 import { sessionLabel } from "../presentation/selectors.ts";
-import {
-  findPendingInteraction,
-  reconcileInteractionFocus,
-  sameInteractionRef,
-} from "../presentation/interaction-focus.ts";
 import { correlateTools } from "../presentation/tools.ts";
-import { selectTodos } from "../presentation/todos.ts";
 import type { PresentationState } from "../presentation/state.ts";
-import type { CheckpointPage } from '../../../protocol/app-server/v50.ts';
-import { AppServerRequestError, isDeliveryCancelled } from "../app-server/client.ts";
 import type { AppServerHost } from "../app-server/host.ts";
 import type { AppServerSession } from "../app-server/session.ts";
 import type {
-  CatalogModelView,
   SessionSettings,
   SessionDeleteResult,
-  SessionSummaryView,
-  SessionUserMessageBoundaryObservation,
   SessionView,
   ToolCallId,
   InteractionRef,
-  RoutedInteraction,
   UserInputBlock,
 } from "../protocol/app-server.ts";
+import { launchOpener, systemOpener, type Opener } from "../app-server/delivery-files.ts";
 import {
-  BoundarySelector,
-} from "./components/session-selector.ts";
-import { TreeSelector, type TreeSelection } from "./components/tree-selector.ts";
-import {
-  DeliverySelector,
-  type DeliveryAvailability,
-} from "./components/delivery-selector.ts";
-import type { DeliveryPage } from "../presentation/deliveries.ts";
-import {
-  DeliveryResidueError,
-  DeliveryUncertainError,
-  deliveryDestination,
-  launchOpener,
-  localEffect,
-  openDelivery,
-  residueText,
-  saveDelivery,
-  systemOpener,
-  type LocalEffect,
-  type Opener,
-} from "../app-server/delivery-files.ts";
-import { TransportClosedError } from "../app-server/transport.ts";
-import {
-  renderBackgroundSection,
-  renderInteractionSection,
-  renderOrphanExecutions,
   renderSubagentDetail,
-  renderSubagentSection,
 } from "./components/activity.ts";
 import {
   cycleSubagentSelection,
   hasSubagentSelection,
 } from "./subagent-navigation.ts";
-import { ModelSelector } from "./components/model-selector.ts";
+import { SelectorSurfaces } from "./selectors.ts";
+import { compactDiagnostic } from "../diagnostic-text.ts";
 import { InspectionView } from "./components/inspection-view.ts";
 import { SessionDeletionWorkflow } from "./session-deletion-workflow.ts";
-import { ResumeSelector } from "./components/resume-selector.ts";
+import type { ResumeSelector } from "./components/resume-selector.ts";
 import { ConfirmationView } from "./components/confirmation.ts";
 import { PopupFrame, type PopupContent } from "./components/popup-frame.ts";
 import { TransientFeedbackSurface } from "./components/transient-feedback.ts";
 import { SourceRepairStatus } from "./components/source-repair-status.ts";
-import type { SourceRepairObservation } from "../presentation/source-repairs.ts";
-import {
-  FooterView,
-  renderStartup,
-  startupVisible,
-  workingStatus,
-} from "./components/status.ts";
+import { FooterView } from "./components/status.ts";
 import type { ConversationContext } from "./components/status.ts";
 import { renderResourceBanner } from "./components/resources.ts";
-import { renderTranscript } from "./components/transcript.ts";
-import { renderTodoPanel, deferredTodoRecords } from "./components/todos.ts";
 import {
   type PresentationPreferences,
   defaultPreferences,
-  interactionKey,
   withAllCollapsed,
   withExpandedBackgroundExecutions,
   withExpandedInteractions,
@@ -161,12 +106,11 @@ import {
   withToggledInteraction,
   withToggledToolCall,
 } from "./preferences.ts";
-import { style } from "./theme.ts";
-import { banded } from "./components/transcript-block.ts";
 import { SubagentTranscript } from "../app-server/subagent-transcript.ts";
 import { SubagentTranscriptView } from "./components/subagent-transcript-view.ts";
-import { HumanInteractionOverlay } from "./components/hitl.ts";
-import type { InteractionResponse, SourceTarget } from "../protocol/app-server.ts";
+import { HumanInputController } from "./human-input.ts";
+import { ConversationView } from "./conversation-view.ts";
+import type { PresentationLease } from "./presentation-lease.ts";
 
 export interface RustxTuiAppOptions {
   /** The App Server connection, its Session catalog, and who owns its process. */
@@ -192,19 +136,6 @@ export interface RustxTuiAppOptions {
   opener?: { command: string | undefined; launch: Opener };
 }
 
-/**
- * A lease for one asynchronous client-side presentation continuation.
- *
- * The epoch is advanced whenever authoritative runtime ownership changes. The
- * attachment identity is checked as well, so a late continuation cannot
- * repaint a new attachment that happens to have the same projection shape.
- */
-interface PresentationLease {
-  epoch: number;
-  sessionListGeneration: number;
-  session: AppServerSession | undefined;
-}
-
 export class RustxTuiApp {
   #host: AppServerHost;
   readonly #reconnect: (() => Promise<AppServerHost>) | undefined;
@@ -218,22 +149,11 @@ export class RustxTuiApp {
   readonly #opener: { command: string | undefined; launch: Opener };
 
   readonly #tui: TUI;
-  readonly #startup = new Container();
-  readonly #transcript = new Container();
-  readonly #activity = new Container();
-  /**
-   * The task panel, drawn between the conversation and the editor.
-   *
-   * It is the plan the reader needs *while typing the next message*, so it
-   * sits at the bottom of the scrollback rather than inside the transcript,
-   * and it is rebuilt from the projection like every other component here.
-   */
-  readonly #todos = new Container();
+  readonly #view: ConversationView;
   readonly #transient = new TransientFeedbackSurface();
   /** Newly observed configuration repairs of the current App Server
    * authority; presentation only (Issue #464). */
   readonly #repairStatus = new SourceRepairStatus();
-  #removeRepairListener: () => void = () => {};
   readonly #footer = new FooterView(() => ({
     state: this.#connecting ? undefined : this.#session?.state,
     connection: this.#connectionLabel(),
@@ -248,38 +168,25 @@ export class RustxTuiApp {
   readonly #drafts = new Map<string, ComposerDraft>();
   #uploading = false;
   readonly #inputPaste = new PasteGuard();
-  readonly #loader: Loader;
 
   #preferences: PresentationPreferences = defaultPreferences();
   #overlay: OverlayHandle | undefined;
   /** Retires the work the current overlay owns when it closes or is replaced. */
   #overlayRetire: (() => void) | undefined;
-  #hitlOverlay: HumanInteractionOverlay | undefined;
-  /**
-   * Presentation-only focus over `pendingInteractions`, reconciled against
-   * the authoritative projection on every render. Never a semantic fact: it
-   * picks which interaction the human-input surface shows, nothing else.
-   */
-  #interactionFocus: InteractionRef | undefined;
-  #interactionPage: { session: AppServerSession; stamp: string; offset: number; page: CheckpointPage; items: DisplayInteraction[] } | undefined;
-  #interactionRead = 0;
-  #interactionBody?: {session:AppServerSession;stamp:string;interaction:InteractionRef;body:RoutedInteraction};
-  #interactionBodyRead = 0;
-  #interactionArgumentRange?: {session:AppServerSession;stamp:string;interaction:InteractionRef;text:string;offset:number;next:number|null;end:number;field:"arguments"|"reason"|"tool_name";decoder:InstanceType<typeof TextDecoder>};
-  /**
-   * The interaction the user dismissed the human-input surface on (approval
-   * Esc), plus the pending queue exactly as it stood at dismissal.
-   *
-   * Presentation-only: the dismissed interaction stays pending and
-   * unanswered, and the surface reopens on Ctrl+G. The dismissal is scoped
-   * to that exact interaction and that exact queue: the moment a *distinct*
-   * interaction arrives, the dismissal is superseded — a previously
-   * dismissed approval must never silently hide newly required human input.
-   * Settlement or removal of the dismissed interaction retires the marker.
-   */
-  #hitlDismissed:
-    | { interaction: InteractionRef; known: ReadonlySet<string> }
-    | undefined;
+  readonly #humanInput = new HumanInputController({
+    session: () => this.#session,
+    lease: () => this.#presentationLease(),
+    isCurrent: lease => this.#isCurrentPresentationLease(lease),
+    render: state => this.#renderState(state),
+    requestRender: () => this.#tui.requestRender(),
+    showTransient: (level, text) => this.#showTransient(level, text),
+    showPopup: (content, options) => { this.#showPopup(content, options); },
+    closeOverlay: () => this.#closeOverlay(),
+    interrupt: () => void this.#onInterrupt(),
+    applyPreference: change => this.#applyPreference(change),
+    preferences: () => this.#preferences,
+  });
+  readonly #selectors: SelectorSurfaces;
   #quitting = false;
   #exitCode = 0;
   #finished = false;
@@ -312,6 +219,24 @@ export class RustxTuiApp {
     this.#initialConnection = options.connecting;
     this.#workspace = options.cwd;
     this.#opener = options.opener ?? { command: systemOpener(), launch: launchOpener };
+    this.#selectors = new SelectorSurfaces({
+      lease: () => this.#presentationLease(),
+      isCurrent: lease => this.#isCurrentPresentationLease(lease),
+      host: () => this.#host,
+      session: () => this.#session,
+      dispatcher: () => this.#dispatcher,
+      deletion: () => this.#deletion,
+      switching: () => this.#switching,
+      overlay: () => this.#overlay,
+      humanInputOverlay: () => this.#humanInput.overlay,
+      showPopup: (content, options, retire) => this.#showPopup(content, options, retire),
+      closeOverlay: () => this.#closeOverlay(),
+      requestRender: () => this.#tui.requestRender(),
+      showTransient: (level, text) => this.#showTransient(level, text),
+      showInspection: (title, body, lease) => this.#showInspection(title, body, lease),
+      handleOutcome: (outcome, lease) => this.#handleOutcome(outcome, lease),
+      presentResume: selector => { this.#resumePresentation = selector; },
+    }, this.#opener);
 
     this.#tui = new TUI(new ProcessTerminal());
     this.#editor = new ComposerEditor(this.#tui);
@@ -320,7 +245,7 @@ export class RustxTuiApp {
     this.#editor.running = () => this.#session !== undefined && isAttemptActive(this.#session.state);
     this.#editor.onPrompt = (text, commands) => { void this.#onSubmit(text, false, commands); };
     this.#editor.onQueue = text => { void this.#onSubmit(text, true, false); };
-    this.#loader = new Loader(this.#tui, style.cyan, style.dim, "");
+    this.#view = new ConversationView(this.#tui);
 
     this.#dispatcher = new CommandDispatcher({
       host: this.#host,
@@ -329,12 +254,12 @@ export class RustxTuiApp {
       diagnostics: () => this.#diagnostics(),
     });
 
-    this.#tui.addChild(this.#startup);
-    this.#tui.addChild(this.#transcript);
-    this.#tui.addChild(this.#activity);
+    this.#tui.addChild(this.#view.startup);
+    this.#tui.addChild(this.#view.transcript);
+    this.#tui.addChild(this.#view.activity);
     this.#tui.addChild(this.#transient);
     this.#tui.addChild(this.#repairStatus);
-    this.#tui.addChild(this.#todos);
+    this.#tui.addChild(this.#view.todos);
     this.#tui.addChild(new Spacer(1));
     this.#tui.addChild(this.#composerContext);
     this.#tui.addChild(this.#editor);
@@ -358,49 +283,7 @@ export class RustxTuiApp {
    * while this client was away is announced to no one until that read.
    */
   #watchSourceRepairs(): void {
-    this.#removeRepairListener();
-    const host = this.#host;
-    const kept = this.#repairStatus.adopt(host.authorityId);
-    const observe = (observation: SourceRepairObservation) => {
-      if (this.#host !== host || this.#quitting || this.#finished || !this.#repairStatus.observe(host.authorityId, observation)) return;
-      if (this.#started) this.#tui.requestRender();
-    };
-    for (const observation of host.sourceRepairs()) observe(observation);
-    this.#removeRepairListener = host.onSourceRepair(observe);
-    if (this.#started) this.#tui.requestRender();
-    if (kept) void this.#reconcileSourceRepairs(host);
-  }
-
-  /**
-   * Rereads, through `host`, every source the repair line still presents:
-   * each Workspace, whose read also rereads the User, and the User alone
-   * only when no Workspace read succeeded — a Workspace that can no longer
-   * be read never keeps the independent User source from its own read.
-   * Bounded by the line's finite sources, one read at a time, and read-only
-   * (`configuration/sourcesRead` never repairs, reconciles, loads a Session
-   * or reaches a model). Each result reaches the line through the host's
-   * sequence-ordered observations, so it never overwrites a newer notice.
-   * It stops once `host` is replaced, closed or the client quits. A failed
-   * read proves nothing — the entry stays until a later read or notice —
-   * and it never fails the connection.
-   */
-  async #reconcileSourceRepairs(host: AppServerHost): Promise<void> {
-    const pending = this.#repairStatus.pendingSources();
-    let userRead = false;
-    const read = async (target: SourceTarget) => {
-      if (this.#host !== host || host.client.closed !== undefined || this.#quitting || this.#finished) return false;
-      try {
-        await host.readSourceRepairs(target);
-        userRead = true;
-      } catch {
-        // Not a withdrawal; `/settings repairs` reads again explicitly.
-      }
-      return true;
-    };
-    for (const target of pending.filter(source => source.kind === "workspace")) {
-      if (!await read(target)) return;
-    }
-    if (!userRead && pending.some(source => source.kind === "user")) await read({ kind: "user" });
+    this.#repairStatus.watch(this.#host, host => this.#host === host && !this.#quitting && !this.#finished, () => { if (this.#started) this.#tui.requestRender(); });
   }
 
   #watchConnection(): void {
@@ -410,7 +293,7 @@ export class RustxTuiApp {
       if (this.#host !== host || this.#quitting || this.#finished) return;
       if (this.#connecting) {
         this.#retainConnectingInput(this.#connecting.queued);
-        this.#connecting = undefined; this.#loader.stop(); this.#activity.clear();
+        this.#connecting = undefined; this.#view.stopWorking();
       }
       this.#deletion?.terminate();
       this.#initialResumePage = undefined;
@@ -465,7 +348,7 @@ export class RustxTuiApp {
       if (session !== undefined && this.#reconnectChild !== undefined) this.#openChildTranscript(this.#reconnectChild);
       this.#reconnectChild = undefined;
       if (session !== undefined) this.#renderState(session.state);
-      else if (this.#started) await this.#openResumeSelector();
+      else if (this.#started) await this.#selectors.openResumeSelector();
       // Rebinding creates a new connection-local workflow. Transfer only the
       // authoritative committed value, retaining its original Session identity.
       // Use the fresh selector context; a failed list read supplies no rows.
@@ -671,11 +554,10 @@ export class RustxTuiApp {
         this.#draft = previousDraft;
         this.#editor.setText(retained || previousDraft.text);
         this.#connecting = undefined;
-        this.#loader.stop(); this.#activity.clear();
+        this.#view.stopWorking();
         if (this.#session) this.#renderState(this.#session.state);
         else {
-          this.#startup.clear();
-          this.#startup.addChild(new Text("Connection failed. Press Enter to choose a Session. Your input has been retained.", 1, 0));
+          this.#view.notice("Connection failed. Press Enter to choose a Session. Your input has been retained.");
         }
       }
       this.#showTransient(
@@ -735,10 +617,10 @@ export class RustxTuiApp {
         this.#initialConnection = undefined;
         void this.#focusSession(target.sessionId, target.nodeId, undefined, undefined, this.#presentationLease());
       } else if (this.#session === undefined) {
-        this.#startup.addChild(new Text("Choose a Session to resume. Enter reopens the picker; Ctrl+C exits.", 1, 0));
+        this.#view.notice("Choose a Session to resume. Enter reopens the picker; Ctrl+C exits.", false);
         const page = this.#initialResumePage;
         this.#initialResumePage = undefined;
-        void this.#openResumeSelector(page);
+        void this.#selectors.openResumeSelector(page);
       }
       this.#tui.addInputListener((data) => {
         // Paste packets are content, even when delivered in multiple fragments.
@@ -769,7 +651,7 @@ export class RustxTuiApp {
         if (this.#session === undefined) {
           if (matchesKey(data, "ctrl+c")) { void this.quit(); return { consume: true }; }
           if (this.#overlay !== undefined) return undefined;
-          if (matchesKey(data, "ctrl+r") || matchesKey(data, "enter")) void this.#openResumeSelector();
+          if (matchesKey(data, "ctrl+r") || matchesKey(data, "enter")) void this.#selectors.openResumeSelector();
           return { consume: true };
         }
         if (this.#overlay === undefined && matchesKey(data, "ctrl+p")) {
@@ -850,8 +732,7 @@ export class RustxTuiApp {
         // dismissed it. Presentation-only: it settles nothing and never
         // targets a read-only inspection.
         if (matchesKey(data, "ctrl+g")) {
-          if (this.#hitlOverlay === undefined) {
-            this.#hitlDismissed = undefined;
+          if (this.#humanInput.reopen()) {
             const state = this.#session?.state;
             if (state.pendingInteractions.length > 0) {
               this.#renderState(state);
@@ -867,7 +748,7 @@ export class RustxTuiApp {
         }
         if (matchesKey(data, "escape")) {
           // Focused popup components own cancellation and nested presentation state.
-          if (this.#overlay !== undefined && this.#hitlOverlay === undefined) return undefined;
+          if (this.#overlay !== undefined && this.#humanInput.overlay === undefined) return undefined;
           const state = this.#session?.state;
           const attempt = state?.attempt;
           const acted = this.#overlay !== undefined || (
@@ -1101,13 +982,13 @@ export class RustxTuiApp {
         this.#showTransient(outcome.level, outcome.text);
         break;
       case "choose_model":
-        this.#showModelSelector(outcome.models, lease);
+        this.#selectors.showModelSelector(outcome.models, lease);
         break;
       case "choose_session":
-        this.#showSessionSelector(outcome.sessions, outcome.nextOffset, outcome.query, lease);
+        this.#selectors.showSessionSelector(outcome.sessions, outcome.nextOffset, outcome.query, lease);
         break;
       case "choose_fork":
-        this.#showBoundarySelector(
+        this.#selectors.showBoundarySelector(
           outcome.boundaries,
           "Fork from user message",
           "fork",
@@ -1116,7 +997,7 @@ export class RustxTuiApp {
         );
         break;
       case "choose_tree":
-        this.#showTreeSelector(
+        this.#selectors.showTreeSelector(
           outcome.session,
           outcome.nodes,
           outcome.nextNodeOffset,
@@ -1126,7 +1007,7 @@ export class RustxTuiApp {
         );
         break;
       case "choose_delivery":
-        this.#showDeliverySelector(outcome.page, lease);
+        this.#selectors.showDeliverySelector(outcome.page, lease);
         break;
       case "focus_session":
         await this.#focusSession(
@@ -1152,14 +1033,14 @@ export class RustxTuiApp {
     this.#acknowledgeTransient();
     // A stale interaction cannot consume the gesture as an interaction response.
     // Cancellation still selects its owner through the live native attachment.
-    if (this.#hitlOverlay !== undefined && this.#session?.observationPhase === 'following') {
+    if (this.#humanInput.overlay !== undefined && this.#session?.observationPhase === 'following') {
       // Escape behavior is defined per interaction kind by the surface
       // itself: a questionnaire gets its explicit typed decline; an approval
       // is dismissed without any answer. The app never answers here.
-      this.#hitlOverlay.escape();
+      this.#humanInput.overlay.escape();
       return;
     }
-    if (this.#overlay !== undefined && this.#hitlOverlay === undefined) {
+    if (this.#overlay !== undefined && this.#humanInput.overlay === undefined) {
       this.#closeOverlay();
       return;
     }
@@ -1301,124 +1182,6 @@ export class RustxTuiApp {
     return handle;
   }
 
-  /**
-   * Opens approval selection over the editor without changing runtime policy.
-   *
-   * The overlay owns focus while it is up and hands it straight back to the
-   * editor on select or cancel, so the editor is never left unfocused.
-   */
-  #showModelSelector(models: CatalogModelView[], lease: PresentationLease): void {
-    const attachedSession = lease.session;
-    if (attachedSession === undefined) return;
-    if (!this.#isCurrentPresentationLease(lease)) return;
-    const state = attachedSession.state;
-    if (state === undefined) return;
-    if (state.sessionModel === null) {
-      this.#showInspection('Model catalog', `${attachedSession.catalogDeferredNotice ?? 'Session model configuration is deferred.'}\nUse /model-position for a deliberate native-defaults selection.`, lease);
-      return;
-    }
-    const selector = new ModelSelector({
-      models,
-      sessionModel: state.sessionModel,
-      attempt: state.attempt,
-      deferredNotice: attachedSession.catalogDeferredNotice,
-    });
-    const handle = this.#showPopup(selector, { width: "80%", heightPercent: 70 });
-
-    const close = () => {
-      if (this.#overlay !== handle) return;
-      this.#closeOverlay();
-    };
-
-    selector.onChange = () => {
-      if (this.#isCurrentPresentationLease(lease)) this.#tui.requestRender();
-    };
-    selector.onCancel = () => {
-      if (this.#isCurrentPresentationLease(lease)) close();
-    };
-    const nextOffset=attachedSession.nextModelOffset;
-    if(nextOffset!==undefined)selector.onNextPage=()=>{
-      if(!this.#isCurrentPresentationLease(lease)||this.#overlay!==handle)return;
-      void attachedSession.modelCatalog(nextOffset).then(catalog=>{if(this.#isCurrentPresentationLease(lease)&&this.#overlay===handle)this.#showModelSelector(catalog.models??[],lease);}).catch(error=>{if(this.#isCurrentPresentationLease(lease))this.#showTransient('error',String(error));});
-    };
-    selector.onSelect = (model) => {
-      if (!this.#isCurrentPresentationLease(lease)) return;
-      close();
-      void this.#dispatcher.selectModel(model)
-        .then((outcome) => this.#handleOutcome(outcome, lease))
-        .catch((error: unknown) => {
-          if (this.#isCurrentPresentationLease(lease)) {
-            this.#showTransient("error", `model selection failed: ${compactDiagnostic(error)}`);
-          }
-        });
-    };
-  }
-
-  async #openResumeSelector(page?: SessionCatalogPage): Promise<void> {
-    const lease = this.#presentationLease();
-    try {
-      const catalog = page ?? await this.#host.listSessions();
-      if (!this.#isCurrentPresentationLease(lease)) return;
-      this.#showSessionSelector(catalog.sessions, catalog.nextOffset, "", lease);
-    } catch (error) {
-      if (this.#isCurrentPresentationLease(lease)) {
-        this.#showTransient("error", `session list unavailable: ${compactDiagnostic(error)}. Enter retries; Ctrl+C exits.`);
-      }
-    }
-  }
-
-  #showSessionSelector(
-    sessions: SessionSummaryView[] | undefined,
-    nextOffset: number | undefined,
-    query: string,
-    lease: PresentationLease,
-  ): void {
-    if (!this.#isCurrentPresentationLease(lease)) return;
-    if (this.#hitlOverlay !== undefined) return;
-    const workflow = this.#deletion;
-    // Initial /resume command responses obey the same mutation boundary as pages.
-    if (lease.sessionListGeneration !== workflow.generation) return;
-    if (this.#session !== undefined && sessions?.length === 0 && workflow.state.kind === "idle") {
-      this.#showTransient("info", "no persisted sessions are available");
-      return;
-    }
-    const selector = new ResumeSelector({
-      initialPage: sessions === undefined ? undefined : { sessions, nextOffset }, query, client: this.#host, workflow,
-      alive: () => this.#isCurrentPresentationLease(lease) && this.#overlay === handle,
-      feedback: (text) => this.#showTransient("info", text),
-    });
-    const handle = this.#showPopup(selector, { width: "80%", heightPercent: 70 });
-    this.#resumePresentation = selector;
-    selector.onChange = () => {
-      if (this.#isCurrentPresentationLease(lease)) this.#tui.requestRender();
-    };
-    selector.onCancel = () => {
-      if (this.#isCurrentPresentationLease(lease) && this.#overlay === handle) this.#closeOverlay();
-    };
-    if (this.#session === undefined) {
-      selector.onCreate = async () => {
-        if (!this.#isCurrentPresentationLease(lease) || this.#overlay !== handle || this.#switching) return;
-        const outcome = await this.#dispatcher.newSession();
-        if (!this.#isCurrentPresentationLease(lease)) return;
-        // A committed create invalidates the empty catalog even if attach fails.
-        // Retire its action now; reopening resume must read fresh authority.
-        if (outcome.kind === "focus_session") this.#closeOverlay();
-        await this.#handleOutcome(outcome, lease);
-      };
-    }
-    selector.onSelect = (session) => {
-      if (!this.#isCurrentPresentationLease(lease)) return;
-      void this.#handleOutcome(
-        this.#dispatcher.selectSession(session.id),
-        lease,
-      ).catch((error: unknown) => {
-        if (this.#isCurrentPresentationLease(lease)) {
-          this.#showTransient("error", `session selection failed: ${compactDiagnostic(error)}`);
-        }
-      });
-    };
-  }
-
   /** HITL and any current popup keep focus; unresolved native outcomes wait here. */
   #syncDeletionPresentation(): void {
     const workflow = this.#deletion;
@@ -1435,9 +1198,8 @@ export class RustxTuiApp {
         const next = reconciliation.kind === "ready" ? reconciliation.page.sessions.find(row => row.id !== deletionState.sessionId) : undefined;
         this.#session = undefined;
         this.#bindSession(undefined);
-        this.#startup.clear(); this.#transcript.clear(); this.#activity.clear(); this.#todos.clear();
-        this.#loader.stop();
-        if (!next) void this.#openResumeSelector();
+        this.#view.clear();
+        if (!next) void this.#selectors.openResumeSelector();
         if (next) void this.#focusSession(next.id, undefined, undefined, undefined, this.#presentationLease());
         return;
       }
@@ -1450,250 +1212,8 @@ export class RustxTuiApp {
     const reconciliation = workflow.reconciliation;
     const query = this.#resumeQuery ?? workflow.context.query;
     const page = reconciliation.kind === "ready" && reconciliation.query === query ? reconciliation.page : undefined;
-    this.#showSessionSelector(page?.sessions, page?.nextOffset,
+    this.#selectors.showSessionSelector(page?.sessions, page?.nextOffset,
       query, this.#presentationLease());
-  }
-
-  #showBoundarySelector(
-    boundaries: SessionUserMessageBoundaryObservation[],
-    title: string,
-    operation: "fork" | "tree",
-    lease: PresentationLease,
-    nextOffset?: number,
-  ): void {
-    const attachedSession = lease.session;
-    if (attachedSession === undefined) return;
-    if (!this.#isCurrentPresentationLease(lease)) return;
-    if (boundaries.length === 0) {
-      this.#showTransient(
-        "info",
-        "the active lineage has no committed user-message boundary",
-      );
-      return;
-    }
-    let currentNextOffset = nextOffset;
-    const selector = new BoundarySelector({ boundaries, title, nextOffset });
-    const handle = this.#showPopup(selector, { width: "80%", heightPercent: 70 });
-    selector.onChange = () => {
-      if (this.#isCurrentPresentationLease(lease)) this.#tui.requestRender();
-    };
-    selector.onCancel = () => {
-      if (this.#isCurrentPresentationLease(lease) && this.#overlay === handle) {
-        this.#closeOverlay();
-      }
-    };
-    selector.onLoadMore = () => {
-      const offset = currentNextOffset;
-      if (offset === undefined) return;
-      void attachedSession.boundaries(offset).then((page) => {
-        if (!this.#isCurrentPresentationLease(lease)) return;
-        currentNextOffset = page.nextOffset;
-        selector.appendPage(page.boundaries, page.nextOffset);
-      }).catch((error: unknown) => {
-        if (!this.#isCurrentPresentationLease(lease)) return;
-        this.#showTransient("error", `history page failed: ${compactDiagnostic(error)}`);
-        selector.appendPage([], currentNextOffset);
-      });
-    };
-    selector.onSelect = (boundary) => {
-      if (!this.#isCurrentPresentationLease(lease)) return;
-      this.#closeOverlay();
-      const request = operation === "fork"
-        ? this.#dispatcher.forkAt(boundary)
-        : this.#dispatcher.branchAt(boundary);
-      void request
-        .then((outcome) => this.#handleOutcome(outcome, lease))
-        .catch((error: unknown) => {
-          if (this.#isCurrentPresentationLease(lease)) {
-            this.#showTransient("error", `session switch failed: ${compactDiagnostic(error)}`);
-          }
-        });
-    };
-  }
-
-  #showTreeSelector(
-    session: SessionView,
-    nodes: import("../protocol/app-server.ts").SessionNodeView[],
-    nextNodeOffset: number | undefined,
-    boundaries: SessionUserMessageBoundaryObservation[],
-    nextHistoryOffset: number | undefined,
-    lease: PresentationLease,
-  ): void {
-    const attachedSession = lease.session;
-    if (attachedSession === undefined) return;
-    if (!this.#isCurrentPresentationLease(lease)) return;
-    const selector = new TreeSelector({
-      session,
-      nodes,
-      nextNodeOffset,
-      boundaries,
-      nextHistoryOffset,
-    });
-    const handle = this.#showPopup(selector, { width: "80%", heightPercent: 70 });
-    selector.onChange = () => {
-      if (this.#isCurrentPresentationLease(lease)) this.#tui.requestRender();
-    };
-    selector.onCancel = () => {
-      if (this.#isCurrentPresentationLease(lease) && this.#overlay === handle) {
-        this.#closeOverlay();
-      }
-    };
-    selector.onLoadMore = () => {
-      const request = selector.nextPageRequest();
-      if (request === undefined) return;
-      // The graph page and the boundary page come from their own owners.
-      void Promise.all([
-        this.#host.sessionTree(session.id, request.nodeOffset),
-        attachedSession.boundaries(request.historyOffset),
-      ]).then(([tree, page]) => {
-        if (!this.#isCurrentPresentationLease(lease)) return;
-        selector.appendPage({
-          nodes: tree.nodes,
-          nextNodeOffset: tree.nextOffset,
-          boundaries: page.boundaries,
-          nextHistoryOffset: page.nextOffset,
-        });
-      }).catch((error: unknown) => {
-        if (!this.#isCurrentPresentationLease(lease)) return;
-        this.#showTransient("error", `tree page failed: ${compactDiagnostic(error)}`);
-        selector.retryPage();
-      });
-    };
-    selector.onSelect = (selection: TreeSelection) => {
-      if (!this.#isCurrentPresentationLease(lease)) return;
-      this.#closeOverlay();
-      const outcome = selection.kind === "node"
-        ? Promise.resolve(
-            this.#dispatcher.selectTreeNode(session.id, selection.node.id),
-          )
-        : this.#dispatcher.branchAt(selection.boundary);
-      void outcome
-        .then((resolved) => this.#handleOutcome(resolved, lease))
-        .catch((error: unknown) => {
-          if (this.#isCurrentPresentationLease(lease)) {
-            this.#showTransient("error", `session focus change failed: ${compactDiagnostic(error)}`);
-          }
-        });
-    };
-  }
-
-  /**
-   * `/files`: committed deliveries and explicit client-local actions.
-   *
-   * Availability comes from facts established at composition, never from
-   * paths: delivery access is the connection's transport grant, and a shared
-   * filesystem requires that this TUI spawned the server (Open additionally
-   * verifies the leaf identity before launching anything). Each action is
-   * one owned operation under the interaction's owner: retiring the surface
-   * aborts it, and only an effect that already happened outlives it.
-   */
-  #showDeliverySelector(page: DeliveryPage, lease: PresentationLease): void {
-    const session = lease.session;
-    if (session === undefined || !this.#isCurrentPresentationLease(lease)) return;
-    const sharedHost = this.#host.ownership === "owned_child";
-    const opener = this.#opener.command;
-    const launch = this.#opener.launch;
-    const noAccess = this.#host.ownership === "owned_child"
-      ? "the App Server did not grant delivery access to this connection"
-      : "this connection holds no delivery access; reconnect with --delivery-access-token-file";
-    const availability: DeliveryAvailability = {
-      save: !session.deliveryAccess ? noAccess : undefined,
-      open: !session.deliveryAccess ? noAccess
-        : !sharedHost ? "this App Server's files are not on this machine; use Save"
-          : opener === undefined ? "no system opener on this platform" : undefined,
-    };
-    const selector = new DeliverySelector(page, availability);
-    // The one owner of this interaction's work. Every way it ends — Escape,
-    // another overlay replacing it, Session focus change, attachment or
-    // snapshot replacement, reconnect, terminal failure, quit — closes the
-    // overlay, and closing aborts it: uncommitted local effects stop and the
-    // native read or locate is cancelled on the server.
-    const interaction = new AbortController();
-    const handle = this.#showPopup(selector, { width: "80%", heightPercent: 70 }, () => interaction.abort());
-    let inFlight: { operation: number; abort: AbortController } | undefined;
-    const current = () => this.#isCurrentPresentationLease(lease) && this.#overlay === handle;
-    selector.onChange = () => {
-      if (current()) this.#tui.requestRender();
-    };
-    selector.onCancel = () => {
-      if (current()) this.#closeOverlay();
-    };
-    selector.onAbort = (operation) => {
-      if (inFlight?.operation === operation) inFlight.abort.abort();
-    };
-    selector.onLoadMore = () => {
-      const before = selector.nextCursor;
-      if (before === undefined) return;
-      void session.deliveryPage(before, selector.readCut).then((older) => {
-        if (current()) selector.appendPage(older);
-      }).catch((error: unknown) => {
-        if (!current()) return;
-        this.#showTransient("error", `delivery history page failed: ${compactDiagnostic(error)}`);
-        selector.retryPage();
-      });
-    };
-    selector.onLoadCollection = (collection) => {
-      void session.deliveryCollection(collection).then((next) => {
-        if(current()) selector.replaceCollectionPage(next);
-      }).catch((error:unknown)=>{
-        if(!current())return;
-        this.#showTransient("error", `delivery collection failed: ${compactDiagnostic(error)}`);
-        selector.retryPage();
-      });
-    };
-    selector.onAction = (operation, action, record, destination) => {
-      const abort = new AbortController();
-      const signal = AbortSignal.any([interaction.signal, abort.signal]);
-      inFlight = { operation, abort };
-      // What this action has done outside the process, recorded by the
-      // action at the moment it happens.
-      const effect = localEffect();
-      const task = (async () => {
-        if(action === "metadata") {
-          const file = await session.deliveryMetadata(record, () => current() && !signal.aborted);
-          if(current() && !signal.aborted) selector.installMetadata(operation,record,file);
-          return "Original delivery metadata loaded";
-        }
-        if(record.file == null) throw new Error("Read original delivery metadata first.");
-        if (action === "save") {
-          const saved = await saveDelivery(
-            () => session.readDelivery(record, signal),
-            deliveryDestination(destination ?? ""),
-            signal,
-            undefined,
-            effect,
-          );
-          const text = `Saved ${record.file.name} to ${saved.path}`;
-          return saved.residue === undefined ? text
-            : `${text}; warning: ${residueText(saved.residue.path, saved.residue.staged)} (${compactDiagnostic(saved.residue.cause)})`;
-        }
-        const requested = await openDelivery(() => session.locateDelivery(record, signal), {
-          sharedHost,
-          opener,
-          launch,
-          signal,
-          effect,
-        });
-        return `${requested.opener} accepted the request to open ${requested.path}`;
-      })();
-      // One terminal report per operation. A live surface shows every
-      // outcome. Once the interaction is retired, an outcome is still owed
-      // only if the action committed an external effect (a dispatched save
-      // link or a spawned opener) or left a staged file behind: it is reported
-      // once, on the transient surface, never into a successor surface. A
-      // cancelled or failed action that did neither is not reported.
-      const report = (level: "info" | "error", text: string) => {
-        const safe = sanitizeField(text);
-        if (current()) selector.settle(operation, level, safe);
-        else if (effect.committed || effect.residue) this.#showTransient(level, safe);
-      };
-      void task.then(
-        (text) => report("info", text),
-        (error: unknown) => report("error", deliveryFailure(error, signal, effect)),
-      ).finally(() => {
-        if (inFlight?.operation === operation) inFlight = undefined;
-      });
-    };
   }
 
   #closeOverlay(replacing = false): void {
@@ -1715,7 +1235,7 @@ export class RustxTuiApp {
     this.#resumePresentation = undefined;
     handle.hide();
     this.#overlay = undefined;
-    this.#hitlOverlay = undefined;
+    this.#humanInput.overlayClosed();
     this.#tui.setFocus(this.#editor);
     if (!replacing) this.#syncDeletionPresentation();
     this.#tui.requestRender();
@@ -1876,8 +1396,7 @@ export class RustxTuiApp {
     // An authoritative replacement re-derives presentation focus from the
     // new projection: no stale overlay or dismissed marker may submit
     // against, or hide, an interaction the runtime owns now.
-    this.#interactionFocus = undefined;
-    this.#hitlDismissed = undefined;
+    this.#humanInput.reset();
     this.#transient.clear();
     if (this.#started) {
       this.#tui.requestRender();
@@ -1893,17 +1412,7 @@ export class RustxTuiApp {
   }
 
   #renderConnecting(): void {
-    this.#startup.clear(); this.#transcript.clear(); this.#activity.clear(); this.#todos.clear();
-    this.#loader.stop();
-    const history = this.#connecting?.history;
-    if (history) for (const block of renderTranscript(history, this.#preferences, correlateTools(history))) {
-      this.#transcript.addChild(banded(block)); this.#transcript.addChild(new Spacer(1));
-    }
-    if (this.#connecting?.queued !== undefined) {
-      this.#transcript.addChild(new Text(sanitizeField(this.#connecting.queued, true), 1, 0));
-      this.#loader.setMessage("Connecting… Esc to withdraw.");
-      this.#loader.start(); this.#activity.addChild(this.#loader);
-    }
+    this.#view.renderConnecting(this.#connecting?.history, this.#connecting?.queued, this.#preferences);
     this.#tui.requestRender();
   }
 
@@ -1916,355 +1425,22 @@ export class RustxTuiApp {
    */
   #renderState(state: PresentationState): void {
     if (this.#connecting) { this.#renderConnecting(); return; }
-    const source = this.#session;
-    const stamp = this.#interactionStamp();
-    if (this.#interactionPage && (this.#interactionPage.session !== source || this.#interactionPage.stamp !== stamp)) {
-      this.#interactionPage = undefined;
-      this.#interactionRead += 1;
-    }
-    // The viewport is presentation-only. It never replaces a native snapshot,
-    // moves Applied Cursor, or infers settlement from an omitted identity.
-    if (this.#interactionPage) state = { ...state, pendingInteractions: this.#interactionPage.items };
-    const body=this.#interactionBody;
-    if(body && body.session===source && body.stamp===stamp) state={...state,pendingInteractions:state.pendingInteractions.map(item=>sameInteractionRef(item.interaction,body.interaction)?body.body:item)};
-    else if(body) {this.#interactionBody=undefined;this.#interactionBodyRead++;}
+    state = this.#humanInput.project(state);
     if (!hasSubagentSelection(state.agents, this.#selectedAgentId)) {
       this.#selectedAgentId = undefined;
       this.#subagentListFocused = false;
     }
-    // Reconcile the presentation-only interaction focus with the
-    // authoritative pending set before anything renders it: settling the
-    // focused interaction advances focus deterministically, and an empty
-    // queue drops it.
-    this.#interactionFocus = reconcileInteractionFocus(
-      state.pendingInteractions,
-      this.#interactionFocus,
-    );
-    // Correlated once per render and shared: the transcript and the activity
-    // area must agree on which calls have a transcript anchor.
-    const correlation = correlateTools(state);
-
-    // The welcome block is useful only before the first real turn. Session
-    // metadata is refreshed from the native Session projection and is never
-    // reconstructed from client or attachment identifiers.
-    this.#startup.clear();
-    if (startupVisible(state)) {
-      this.#startup.addChild(
-        new Text(
-          renderStartup(
-            state,
-            this.#sessionInfo,
-            this.#tui.terminal.columns,
-          ),
-          1,
-          0,
-        ),
-      );
-      // What the runtime is actually running with — its project context
-      // files, its Skill catalog, its active Tools — stated once, before the
-      // first turn, entirely from the capability and resource projections.
-      const resources = renderResourceBanner(state, {
-        workspace: this.#workspace,
-      });
-      if (resources.length > 0) {
-        this.#startup.addChild(new Spacer(1));
-        this.#startup.addChild(new Text(resources, 1, 0));
-      }
-    }
-
-    this.#transcript.clear();
-    for (const block of renderTranscript(state, this.#preferences, correlation)) {
-      this.#transcript.addChild(banded(block));
-      this.#transcript.addChild(new Spacer(1));
-    }
-
-    // The activity area holds only what is *not* conversation content. A
-    // foreground tool call renders inside the assistant message that asked
-    // for it, which is what keeps one call to one card.
-    this.#activity.clear();
-    for (const section of [
-      renderOrphanExecutions(correlation, this.#preferences),
-      renderBackgroundSection(state, this.#preferences),
-      renderSubagentSection(
-        state,
-        this.#preferences,
-        new Date(),
-        this.#subagentListFocused ? this.#selectedAgentId : undefined,
-      ),
-      renderInteractionSection(state, this.#preferences, this.#interactionFocus),
-    ]) {
-      if (section.length > 0) {
-        this.#activity.addChild(new Text(section, 1, 0));
-      }
-    }
-
-    // The native loaded task prefix and its independently advertised range.
-    // Extension absence and a deferred nonempty list remain distinct.
-    this.#todos.clear();
-    const todos = renderTodoPanel(selectTodos(state), {
-      columns: this.#tui.terminal.columns,
-      deferredTasks: deferredTodoRecords(this.#session?.checkpoint?.collections),
+    this.#view.render(state, {
+      preferences: this.#preferences,
+      sessionInfo: this.#sessionInfo,
+      workspace: this.#workspace,
+      selectedAgentId: this.#subagentListFocused ? this.#selectedAgentId : undefined,
+      interactionFocus: this.#humanInput.focus,
+      collections: this.#session?.checkpoint?.collections,
     });
-    if (todos.length > 0) {
-      this.#todos.addChild(new Text(todos, 1, 0));
-    }
-
-    const working = workingStatus(state);
-    if (working === undefined) {
-      this.#loader.stop();
-    } else {
-      this.#loader.setMessage(working);
-      this.#loader.start();
-      this.#activity.addChild(this.#loader);
-    }
-
-    this.#syncHitlOverlay(state);
+    this.#humanInput.sync(state);
     this.#syncDeletionPresentation();
     this.#tui.requestRender();
-  }
-
-  #interactionStamp(): string {
-    const cut = this.#session?.checkpoint?.read_cut;
-    return cut?.domain_revisions['pending_interactions'] ?? cut?.revision ?? '';
-  }
-
-  #interactionTotal(): bigint {
-    const frontier = this.#session?.checkpoint?.collections.find(value => value.domain === 'pending_interactions');
-    return BigInt(this.#interactionPage?.page.total ?? frontier?.total ?? this.#session?.state.pendingInteractions.length ?? 0);
-  }
-
-  #interactionPartial(): boolean {
-    return Boolean(this.#interactionPage?.offset) || this.#interactionTotal() > BigInt(this.#interactionPage?.items.length ?? this.#session?.state.pendingInteractions.length ?? 0);
-  }
-
-  #interactionPageLabel(): string | undefined {
-    if (!this.#interactionPartial()) return undefined;
-    const offset = this.#interactionPage?.offset ?? 0;
-    const total = this.#interactionTotal();
-    const end = BigInt(offset + (this.#interactionPage?.items.length ?? this.#session?.state.pendingInteractions.length ?? 0));
-    return `Pending ${offset + 1}–${end < total ? end : total} of ${total} · Ctrl+PgUp/PgDn pages`;
-  }
-
-  async #pageInteractions(direction: -1 | 1): Promise<void> {
-    const session = this.#session;
-    if (!session || typeof session.checkpointPage !== 'function') return;
-    const previous = this.#interactionPage;
-    if(direction<0 && (previous?.offset ?? 0)===0) return;
-    const offset = direction < 0 ? Math.max(0, (previous?.offset ?? 0) - 32)
-      : Number(previous?.page.next_offset ?? (previous ? previous.offset + previous.items.length : session.state.pendingInteractions.length));
-    if (!Number.isSafeInteger(offset) || offset < 0 || BigInt(offset) >= this.#interactionTotal()) return;
-    const lease = this.#presentationLease(), overlay = this.#hitlOverlay, stamp = this.#interactionStamp(), read = ++this.#interactionRead;
-    try {
-      const { page, items } = await session.checkpointPage('pending_interactions', offset, previous?.page);
-      if (!overlay || this.#hitlOverlay !== overlay || !this.#isCurrentPresentationLease(lease) || read !== this.#interactionRead || stamp !== this.#interactionStamp()) return;
-      if (page.items.length > 32) throw new Error('Pending interaction page exceeded its item bound.');
-      this.#interactionPage = { session, stamp, offset, page, items: (items as import('../../../protocol/app-server/v50.ts').RuntimeClientInteractionHeader[]).map(displayInteraction) };
-      this.#interactionFocus = this.#interactionPage.items[0]?.interaction;
-      this.#hitlDismissed = undefined;
-      this.#renderState(session.state);
-    } catch (error) {
-      if (overlay && this.#hitlOverlay === overlay && this.#isCurrentPresentationLease(lease) && read === this.#interactionRead) {
-        this.#showTransient('error', `Pending interactions unavailable: ${compactDiagnostic(error)}`);
-      }
-    }
-  }
-
-  async #readInteractionArguments(interaction: InteractionRef, next: boolean, selectedField: "arguments"|"reason"|"tool_name" = "arguments"): Promise<void> {
-    const session=this.#session, overlay=this.#hitlOverlay;
-    if(!session || !overlay) return;
-    const rows=this.#interactionPage?.items ?? session.state.pendingInteractions;
-    const index=rows.findIndex(item=>sameInteractionRef(item.interaction,interaction));
-    if(index<0) return;
-    const item=rows[index]!;
-    if(hasInteractionBody(item) || item.kind!=='approval') return;
-    const stamp=this.#interactionStamp(), old=this.#interactionArgumentRange;
-    const previous=old?.session===session && old.stamp===stamp && sameInteractionRef(old.interaction,interaction) ? old : undefined;
-    const offset=next ? previous?.next : 0;
-    const field=next ? previous?.field ?? selectedField : selectedField;
-    if(offset==null) return;
-    const lease=this.#presentationLease(), generation=++this.#interactionBodyRead;
-    const current=()=>this.#hitlOverlay===overlay && this.#isCurrentPresentationLease(lease) && generation===this.#interactionBodyRead && stamp===this.#interactionStamp() && sameInteractionRef(this.#interactionFocus ?? interaction,interaction);
-    try {
-      const chunk=await session.interactionValue(interaction,Number(this.#interactionPage?.page.items[index]?.offset ?? item.source_offset),this.#interactionPage?.page,offset,['request','kind',field]);
-      if(!current()) return;
-      if(chunk.bytes_base64.length>87_384 || chunk.bytes_base64.length%4!==0 || chunk.bytes_base64.length/4*3-(chunk.bytes_base64.endsWith('==')?2:chunk.bytes_base64.endsWith('=')?1:0)>65_536)throw new Error('Encoded native range exceeds the decoded byte bound.');
-      const bytes=Uint8Array.from(atob(chunk.bytes_base64),character=>character.charCodeAt(0));
-      if(bytes.length>65536 || !Number.isSafeInteger(chunk.readable_end) || offset+bytes.length>chunk.readable_end || (offset<chunk.readable_end && !bytes.length) || (chunk.next_offset ?? null)!==(offset+bytes.length<chunk.readable_end?offset+bytes.length:null) || (previous && next && previous.end!==chunk.readable_end)) throw new Error('Argument range frontier changed.');
-      const decoder=previous && next ? previous.decoder : new TextDecoder('utf-8',{fatal:true,ignoreBOM:true});
-      this.#interactionArgumentRange={session,stamp,interaction,text:decoder.decode(bytes,{stream:chunk.next_offset!=null}),offset,field,next:chunk.next_offset??null,end:chunk.readable_end,decoder};
-      this.#tui.requestRender();
-    } catch(error){if(current())this.#showTransient('error',`Arguments unavailable: ${compactDiagnostic(error)}`);}
-  }
-
-  async #loadInteractionBody(interaction: InteractionRef): Promise<void> {
-    const session=this.#session, overlay=this.#hitlOverlay;
-    if(!session || !overlay) return;
-    const rows=this.#interactionPage?.items ?? session.state.pendingInteractions;
-    const index=rows.findIndex(item=>sameInteractionRef(item.interaction,interaction));
-    if(index<0 || hasInteractionBody(rows[index]!)) return;
-    const selected=rows[index]!;
-    if(hasInteractionBody(selected))return;
-    const ordinal=Number(this.#interactionPage?.page.items[index]?.offset ?? selected.source_offset);
-    const lease=this.#presentationLease(), stamp=this.#interactionStamp(), generation=++this.#interactionBodyRead;
-    const current=()=>this.#hitlOverlay===overlay && this.#isCurrentPresentationLease(lease) && generation===this.#interactionBodyRead && stamp===this.#interactionStamp() && sameInteractionRef(this.#interactionFocus ?? interaction,interaction);
-    try {
-      let offset=0, total:number|undefined; const bytes:Uint8Array[]=[];
-      do {
-        const chunk=await session.interactionValue(interaction,ordinal,this.#interactionPage?.page,offset);
-        if(!current()) return;
-        if(!Number.isSafeInteger(chunk.readable_end) || chunk.readable_end>16*1024*1024 || (total!==undefined && total!==chunk.readable_end)) throw new Error('This body exceeds the selected-body cache; inspect bounded argument ranges.');
-        total=chunk.readable_end;
-        if(chunk.bytes_base64.length>87_384 || chunk.bytes_base64.length%4!==0 || chunk.bytes_base64.length/4*3-(chunk.bytes_base64.endsWith('==')?2:chunk.bytes_base64.endsWith('=')?1:0)>65_536)throw new Error('Encoded native range exceeds the decoded byte bound.');
-        const value=Uint8Array.from(atob(chunk.bytes_base64),character=>character.charCodeAt(0));
-        if(value.length>65536 || (offset<total && !value.length) || offset+value.length>total || (chunk.next_offset ?? null)!==(offset+value.length<total?offset+value.length:null)) throw new Error('Interaction range did not advance exactly.');
-        bytes.push(value);offset+=value.length;
-      } while(offset<total);
-      const data=new Uint8Array(total);let at=0;for(const value of bytes){data.set(value,at);at+=value.length;}
-      const body=JSON.parse(new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(data)) as RoutedInteraction;
-      const header=rows[index]!;
-      if(hasInteractionBody(header)) return;
-      validateInteractionBody(header,body);
-      this.#interactionBody={session,stamp,interaction,body};this.#renderState(session.state);
-    } catch(error) {if(current())this.#showTransient('error',`Interaction body unavailable: ${compactDiagnostic(error)}`);}
-  }
-
-  /**
-   * Presents the unified human-input surface from authoritative state.
-   *
-   * One surface serves every pending routed interaction — approvals and
-   * questionnaires, primary and subagent. It opens when the projection holds
-   * a focused interaction the user has not dismissed, updates in place while
-   * the projection evolves, and disappears when the interaction set empties
-   * or the surface is dismissed. The runtime remains the only owner: closing
-   * or dismissing this surface settles nothing, and a response always names
-   * the exact `InteractionRef` it was collected for.
-   */
-  #syncHitlOverlay(state: PresentationState): void {
-    // A dismissal is scoped to the exact dismissed interaction and to the
-    // queue as it stood then. A distinct arrival supersedes the dismissal:
-    // the newly required human input takes the focus (the surface was
-    // dismissed, so no in-progress panel is interrupted) and the surface
-    // reopens, while the dismissed interaction stays pending and unanswered.
-    // The move itself is presentation-only — it emits no response.
-    const dismissed = this.#hitlDismissed;
-    if (dismissed !== undefined) {
-      if (
-        !this.#interactionPartial() && findPendingInteraction(state.pendingInteractions, dismissed.interaction) === undefined
-      ) {
-        this.#hitlDismissed = undefined;
-      } else {
-        const arrival = state.pendingInteractions.find(
-          (entry) => !dismissed.known.has(interactionKey(entry.interaction)),
-        );
-        if (arrival !== undefined) {
-          this.#hitlDismissed = undefined;
-          this.#interactionFocus = arrival.interaction;
-        }
-      }
-    }
-    const focused = this.#interactionFocus;
-    if (focused === undefined) {
-      if (this.#hitlOverlay !== undefined) this.#closeOverlay();
-      return;
-    }
-    const existing = this.#hitlOverlay;
-    if (existing !== undefined) {
-      existing.update(state.pendingInteractions, focused, this.#preferences, !this.#interactionPartial());
-      this.#tui.requestRender();
-      return;
-    }
-    if (
-      this.#hitlDismissed !== undefined &&
-      sameInteractionRef(this.#hitlDismissed.interaction, focused)
-    ) {
-      return;
-    }
-    const lease = this.#presentationLease();
-    const overlay = new HumanInteractionOverlay({
-      onReview: (interaction, response) => this.#respondToInteraction(lease, overlay, interaction, { type: "review", response }),
-      onDecision: (interaction, decision) =>
-        this.#respondToInteraction(lease, overlay, interaction, {
-          type: "approval",
-          decision,
-        }),
-      onQuestionnaireSubmit: (interaction, response) =>
-        this.#respondToInteraction(lease, overlay, interaction, {
-          type: "questionnaire",
-          response,
-        }),
-      onQuestionnaireDecline: (interaction) =>
-        this.#respondToInteraction(lease, overlay, interaction, {
-          type: "questionnaire",
-          response: { type: "declined" },
-        }),
-      onDismiss: (interaction) => {
-        // Scope the dismissal to this exact interaction and to the queue as
-        // it stands now, so a later distinct arrival supersedes it.
-        this.#hitlDismissed = {
-          interaction,
-          known: new Set(
-            (this.#session?.state?.pendingInteractions ?? []).map((entry) =>
-              interactionKey(entry.interaction),
-            ),
-          ),
-        };
-        if (this.#hitlOverlay === overlay) {
-          this.#closeOverlay();
-        }
-      },
-      onInterrupt: () => void this.#onInterrupt(),
-      onNavigate: (interaction) => {
-        // Navigation is presentation-only: it moves the focus and redraws.
-        this.#interactionFocus = interaction;
-        const current = this.#session?.state;
-        if (current !== undefined) this.#renderState(current);
-      },
-      onToggleExpand: (interaction) => {
-        // Disclosure only: the same preference domain `/expand interaction`
-        // uses, never a second approval gate.
-        this.#applyPreference({ type: "expand_interaction", interaction });
-      },
-      onChange: () => this.#tui.requestRender(),
-      onPage: (direction) => { void this.#pageInteractions(direction); },
-      pageLabel: () => this.#interactionPageLabel(),
-      onLoadBody: (interaction) => { void this.#loadInteractionBody(interaction); },
-      onArguments: (interaction,next,field) => {void this.#readInteractionArguments(interaction,next,field);},
-      argumentRange: (interaction) => {const range=this.#interactionArgumentRange;return range && range.session===this.#session && range.stamp===this.#interactionStamp() && sameInteractionRef(range.interaction,interaction) ? {label:`${range.field} bytes ${range.offset}–${range.next ?? range.end} of ${range.end}`,text:range.text}:undefined;},
-    });
-    overlay.update(state.pendingInteractions, focused, this.#preferences, !this.#interactionPartial());
-    this.#showPopup(overlay, { width: "94%", minWidth: 44, heightPercent: 90 });
-    this.#hitlOverlay = overlay;
-  }
-
-  /**
-   * The one typed response path for every interaction kind.
-   *
-   * Approval decisions and questionnaire responses both go through
-   * `interaction_respond` with the exact routed identity the surface
-   * collected them for. A rejection re-enables the panel that sent it —
-   * routed by that same identity — so a failed response never double-sends
-   * and never disturbs an unrelated pending interaction.
-   */
-  #respondToInteraction(
-    lease: PresentationLease,
-    overlay: HumanInteractionOverlay,
-    interaction: InteractionRef,
-    response: InteractionResponse,
-  ): void {
-    const attachedSession = lease.session;
-    if (attachedSession === undefined) return;
-    void attachedSession
-      .respondInteraction(interaction, response)
-      .then(() => {
-        if (this.#isCurrentPresentationLease(lease) && this.#interactionPartial()) {void attachedSession.resync().catch(error=>{if(this.#isCurrentPresentationLease(lease))this.#showTransient('error',`Interaction observation requires recovery: ${compactDiagnostic(error)}`);});}
-      })
-      .catch((error: unknown) => {
-        if (!this.#isCurrentPresentationLease(lease)) return;
-        if (this.#hitlOverlay === overlay) {
-          overlay.submissionFailed(interaction);
-        }
-        this.#showTransient("error", `interaction response failed: ${compactDiagnostic(error)}`);
-      });
   }
 
   #connectionLabel(): string {
@@ -2318,7 +1494,7 @@ export class RustxTuiApp {
     this.#exitCode = code;
     const resolve = this.#resolveExit;
     this.#resolveExit = undefined;
-    this.#loader.stop();
+    this.#view.stop();
     this.#overlay?.hide();
     if (this.#started) {
       this.#tui.stop();
@@ -2336,41 +1512,6 @@ function sameSessionLineage(expected: SessionView, actual: SessionView): boolean
     expected.active_conversation_id === actual.active_conversation_id;
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function compactDiagnostic(error: unknown): string {
-  return errorMessage(error).replace(/\s*\r?\n\s*/g, " · ").trim();
-}
-
 function nextTick(): Promise<void> {
   return new Promise((resolve) => process.nextTick(resolve));
-}
-
-/** One bounded line for a failed or cancelled delivery action. */
-function deliveryFailure(error: unknown, signal: AbortSignal, effect: LocalEffect): string {
-  if (error instanceof DeliveryResidueError || error instanceof DeliveryUncertainError) return error.message;
-  // Cancellation won before Save's publication admission, Open's launch, or
-  // the server's response publication. A committed effect is never
-  // described as nothing having happened, whatever aborted afterwards.
-  if (!effect.committed && ((signal.aborted && error === signal.reason) || isDeliveryCancelled(error))) {
-    return "Cancelled; nothing was saved or opened";
-  }
-  if (error instanceof TransportClosedError) return "Disconnected from the App Server; nothing was written";
-  if (error instanceof AppServerRequestError && error.error.data?.kind === "session_file_read") {
-    const reason = error.error.data.reason;
-    const text: Record<typeof reason, string> = {
-      missing: "the delivered file no longer exists",
-      unauthorized: "this connection is not authorized to access it",
-      unavailable: "its original Session or root is unavailable",
-      not_regular: "it is no longer a regular file",
-      replaced: "it was replaced during the operation; try again",
-      too_large: "it exceeds the 512 KiB transfer limit",
-      capacity: "the App Server is busy with other file reads; try again",
-      read_failed: "the App Server could not read it",
-    };
-    return `Failed: ${text[reason]}`;
-  }
-  return `Failed: ${compactDiagnostic(error)}`;
 }

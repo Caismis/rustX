@@ -1,4 +1,6 @@
 import { transferUpload } from '../../../protocol/app-server/upload.ts';
+import { requestEffect, requestLane, type MethodEffect, type RequestLane } from '../../../protocol/app-server/method-policy.ts';
+import type { Request1 } from '../../../protocol/app-server/v50.ts';
 /**
  * The one typed App Server client.
  *
@@ -43,7 +45,7 @@ import { transferUpload } from '../../../protocol/app-server/upload.ts';
  * never to resend.
  */
 
-import { retainSource, sourceKey } from "../presentation/source-repairs.ts";
+import { retainSourceRepair, sourceRepairKey } from "../../../protocol/app-server/source-repair.ts";
 import { decodeProtocolMessage } from "../protocol/decoder.ts";
 
 import {
@@ -51,7 +53,6 @@ import {
   isFailure,
   isNotification,
   isResponse,
-  sameTarget,
   type AttachmentTarget,
   type ClientIdentity,
   type MethodName,
@@ -139,128 +140,13 @@ export class UncertainOutcomeError extends Error {
   }
 }
 
-/** Every generated method must deliberately classify a lost response. */
-export type ResponseLossClass = "read" | "side_effecting" | "connection_local";
-export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
-  "session/switchNode": "side_effecting",
-  "session/transcript": "read",
-  "session/history": "read",
-  "session/historyContentRead": "read",
-  "session/historyPage": "read",
-  "session/historyValueRead": "read",
-  "session/statistics": "read",
-  "session/traceHistory": "read",
-  "session/traceHistoryDetail": "read",
-  "session/tracePage": "read",
-  "session/traceValueRead": "read",
-  "session/traceContentRead": "read",
-  "session/turns": "read",
-  "agent/transcript": "read",
-  "agent/turns": "read",
-  "agent/trace": "read",
-  "agent/traceLocateTool": "read",
-  "agent/traceDetail": "read",
-  "agent/statistics": "read",
-  "session/trace": "read",
-  "session/traceLocateTool": "read",
-  // Inspection detail is a pure historical read: it advances no cursor,
-  // consumes no pending work, and settles nothing, so a lost response is
-  // safely retryable.
-  "session/traceDetail": "read",
-  "session/projections": "read",
-  "session/projectionDetail": "read",
-  "session/forkProjection": "side_effecting",
-  "artifact/read": "read",
-  // Bounded pure reads under transport-granted delivery access.
-  "delivery/read": "read",
-  "delivery/locate": "read",
-  // Names an in-flight request of this connection only.
-  "delivery/cancel": "connection_local",
-  "session/uploadPrepare": "side_effecting",
-  "session/uploadStatus": "read",
-  "configuration/sourcesRead": "read",
-  "mcp/probe": "read",
-  "session/effectiveConfiguration": "read",
-  "session/effectiveConfigurationValueRead": "read",
-  "session/effectiveConfigurationPage": "read",
-  "configuration/sourceWrite": "side_effecting",
-  "session/model": "read",
-  "session/models": "read",
-  "session/setModel": "side_effecting",
-  "session/selectModel": "side_effecting",
-  "resources/read": "read",
-  "context/compact": "side_effecting",
-  "goal/control": "side_effecting",
-  "job/status": "read",
-  "job/list": "read",
-  "job/wait": "read",
-  "agent/list": "read",
-  "agent/observe": "read",
-  "agent/observeCancel": "connection_local",
-  "agent/artifactRead": "read",
-  "agent/deliveryRead": "read",
-  "agent/deliveryLocate": "read",
-  "agent/sendMessage": "side_effecting",
-  // Waiting observes its captured activation; a lost response cannot mutate it.
-  // The client never automatically retries reads or mutations.
-  "agent/wait": "read",
-  "job/cancel": "side_effecting",
-  "agent/status": "read",
-  "agent/interrupt": "side_effecting",
-  // Negotiation and subscriptions die with this connection; neither changes
-  // authoritative product/runtime state. Re-establish them after reconnect.
-  "initialize": "connection_local",
-  "server/info": "read",
-  "server/diagnostics": "read",
-  "session/list": "read",
-  "session/exportPrepare": "connection_local",
-  "session/summary": "read",
-  "session/create": "side_effecting",
-  "session/read": "read",
-  "session/name": "side_effecting",
-  "session/tree": "read",
-  "session/node": "read",
-  "session/nodeValueRead": "read",
-  "session/nodeOriginHistory": "read",
-  "session/boundaries": "read",
-  "session/fork": "side_effecting",
-  "session/branch": "side_effecting",
-  "session/deletePreview": "read",
-  "session/delete": "side_effecting",
-  "session/recoverDeletion": "side_effecting",
-  "session/attach": "side_effecting",
-  "session/detach": "side_effecting",
-  "session/checkpoint": "read",
-  "configuration/sourceValueRead": "read",
-  "configuration/sourcePage": "read",
-  "session/attachmentStatus": "read",
-  "session/editorRead": "read",
-  "conversation/contentRead": "read",
-  "conversation/checkpointPage": "read",
-  "conversation/checkpointValueRead": "read",
-  "session/subscribe": "connection_local",
-  "turn/start": "side_effecting",
-  "turn/steer": "side_effecting",
-  "inbound/edit": "side_effecting",
-  "inbound/remove": "side_effecting",
-  "turn/cancel": "side_effecting",
-  "interaction/respond": "side_effecting",
-  "interaction/cancel": "side_effecting",
-  "session/settings": "read",
-  "session/settingsValueRead": "read",
-  "session/configuration": "read",
-  "session/configurationValueRead": "read",
-  "configuration/reconcile": "side_effecting",
-  "session/adoptConfiguration": "side_effecting",
-} satisfies Record<MethodName, ResponseLossClass>);
-
 /** The requests a client may cancel by id on its own connection. */
 export type DeliveryMethod = "delivery/read" | "delivery/locate";
 
 interface PendingRequest {
   readonly method: MethodName;
   readonly expect: ResultType;
-  readonly lossClass: ResponseLossClass;
+  readonly effect: MethodEffect;
   resolve: (result: MethodResult) => void;
   reject: (error: Error) => void;
 }
@@ -277,14 +163,7 @@ interface PendingRequest {
  * ordinary requests can stop a delivery's cancellation from reaching the
  * server. Cancellations wait for it in order, at most one per in-flight
  * delivery request; the server answers each at once, without awaiting work. */
-const REQUEST_CAPACITY = { observation: 8, rpc: 6, control: 2 } as const;
-function requestLane(method: MethodName): keyof typeof REQUEST_CAPACITY {
-  switch (method) {
-    case 'agent/observe': return 'observation';
-    case 'agent/observeCancel': case 'delivery/cancel': case 'turn/cancel': case 'agent/interrupt': case 'job/cancel': case 'session/detach': case 'interaction/cancel': return 'control';
-    default: return 'rpc';
-  }
-}
+const REQUEST_CAPACITY = { observation: 8, rpc: 6, control: 2 } as const satisfies Record<RequestLane, number>;
 
 type NotificationListener = (notification: Notification) => void;
 type CloseListener = (error: TransportClosedError) => void;
@@ -317,7 +196,7 @@ export class AppServerClient {
    * crowds them out. The server advances its per-source delivery cursor as
    * it sends one and never sends it again, so a dropped observation would be
    * lost for good; the latest per source is all a subscriber needs. Bounded
-   * by `retainSource`: the least recently observed Workspace goes beyond 64,
+   * by `retainSourceRepair`: the least recently observed Workspace goes beyond 64,
    * as the native ledger forgets it; the User never does. A source dropped
    * here was never observed by a subscriber, so nothing it held can go stale.
    */
@@ -516,7 +395,7 @@ export class AppServerClient {
       this.#pending.set(id, {
         method,
         expect,
-        lossClass: method==='goal/control' && (params as {control?:{action?:unknown}})?.control?.action==='show' ? 'read' : METHOD_RESPONSE_LOSS_CLASS[method],
+        effect: requestEffect({ method, params } as Request1),
         resolve: (result) => { release(); resolve(result); },
         reject: (error) => { release(); reject(error); },
       });
@@ -565,7 +444,7 @@ export class AppServerClient {
     if (isNotification(record)) {
       if (this.#unrouted !== undefined) {
         if (record.method === "configuration/sourceRepairChanged") {
-          retainSource(this.#unrouted.sourceRepairs, sourceKey(record.params.target), record);
+          this.#unrouted.sourceRepairs = new Map(retainSourceRepair(this.#unrouted.sourceRepairs, sourceRepairKey(record.params.target), record).retained);
         } else if (this.#unrouted.notifications.length < UNROUTED_NOTIFICATIONS) {
           this.#unrouted.notifications.push(record);
         }
@@ -635,7 +514,7 @@ export class AppServerClient {
     this.#pending.clear();
     for (const request of pending) {
       request.reject(
-        request.lossClass === "side_effecting"
+        request.effect === "side_effecting"
           ? new UncertainOutcomeError(request.method, error)
           : error,
       );
@@ -696,5 +575,4 @@ export function isControllerInUse(error: unknown): boolean {
 }
 
 /** Whether two targets address the same attachment in every identity domain. */
-export { sameTarget };
 export type { AttachmentTarget };

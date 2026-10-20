@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import type { AttachmentTarget, MethodResult, SessionNodeObservation, SessionSummary } from '../../../../protocol/app-server/v50';
-import { sameTarget, type AppServerClient, type SessionView } from '../../client/app-server';
+import type { AppServerClient } from '../../client/app-server';
+import type { SessionView } from '../../client/contracts';
+import { sameTarget } from '../../../../protocol/app-server/attachment-identity';
 import { sessionDisplayTitle } from '../../bindings/session-title';
 import { useTranslation } from '../../locale/react';
 import { IconBranchOutline16 } from '../../presentation/primitives/icons';

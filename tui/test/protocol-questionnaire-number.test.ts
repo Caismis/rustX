@@ -36,7 +36,7 @@ import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
 import { encodeRecord } from "../src/protocol/jsonl.ts";
-import { finiteNumberFromWire, finiteNumberToWire } from "../src/protocol/number.ts";
+import { finiteNumberFromWire, finiteNumberToWire } from "../../protocol/app-server/number.ts";
 import type {
   InteractionRef,
   InteractionRequester,

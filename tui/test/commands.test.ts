@@ -15,7 +15,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { SlashCommandAutocompleteProvider, commandPrefix } from "../src/commands/autocomplete.ts";
-import { CommandDispatcher, renderTools } from "../src/commands/dispatcher.ts";
+import { CommandDispatcher } from "../src/commands/dispatcher.ts";
+import { renderTools } from "../src/commands/presentation.ts";
 import { COMMANDS, parseCommandLine } from "../src/commands/registry.ts";
 import { emptyPresentationState } from "../src/presentation/projection.ts";
 import { TransientFeedbackSurface } from "../src/ui/components/transient-feedback.ts";

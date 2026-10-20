@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { Server } from './fixture';
 import { cfg3Effective } from './cfg3-data';
-import { RpcFailure } from '../src/client/app-server';
+import { RpcFailure } from '../src/client/errors';
 let server: Server;
 beforeEach(async () => {
   server = new Server(); await server.connect();

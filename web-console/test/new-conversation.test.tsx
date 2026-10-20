@@ -6,13 +6,14 @@ import { ConversationComposer } from '../src/app/new-conversation/ConversationCo
 import { WorkspaceAuthority } from '../src/workspaces/authority';
 import { WorkspaceAssociations } from '../src/workspaces/associations';
 import { routeFixture } from './shell-navigation-fixture';
-import { RpcFailure } from '../src/client/app-server';
+import { RpcFailure } from '../src/client/errors';
 import { sameEndpoint } from '../src/workspaces/endpoint';
 import { WorkspaceHostError, type WorkspaceCatalog, type ProductHostWorkspaces } from '../src/workspaces/host';
 import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v50';
 import { cfg3Source } from './cfg3-data';
 import { Server, snapshot, endpoint } from './fixture';
 import { modelPreferences, NewSessionModelPreference } from '../src/app/model-preference';
+import { firstSubmissions } from '../src/app/new-conversation/first-submit';
 let server: Server;
 // These catalog tests model a browser without a saved preference. The real
 // preference/creation interaction is covered by the production browser fixture.
@@ -268,7 +269,7 @@ it.each(['ready', 'navigation', 'disconnect', 'rejection', 'branch'] as const)('
     if (outcome === 'disconnect') server.socket.close(); else server.reply(request);
     await attaching;
   });
-  await waitFor(() => expect(server.client.firstSubmissions.draft('existing-A')?.phase).toBe(['ready', 'branch'].includes(outcome) ? 'admitted' : 'failed'));
+  await waitFor(() => expect(firstSubmissions(server.client).draft('existing-A')?.phase).toBe(['ready', 'branch'].includes(outcome) ? 'admitted' : 'failed'));
   expect(methods().filter(method => method === 'turn/start')).toHaveLength(['ready', 'branch'].includes(outcome) ? 1 : 0);
   expect(methods().filter(method => method === 'session/attach')).toHaveLength(1);
   expect(methods()).not.toContain('session/create');

@@ -46,14 +46,16 @@ import {
   type Notification,
   type SourceTarget,
 } from "../protocol/app-server.ts";
-import { olderSequence, retainSource, sourceKey, type SourceRepairObservation } from "../presentation/source-repairs.ts";
+import type { SourceRepairObservation } from "../presentation/source-repairs.ts";
+import { laterRepairSequence, retainSourceRepair, sourceRepairDecision, sourceRepairKey } from "../../../protocol/app-server/source-repair.ts";
 import { AppServerClient } from "./client.ts";
 import {
   AppServerChild,
   type AppServerChildOptions,
   type ChildExit,
 } from "./child-process.ts";
-import { AppServerSession, SESSION_PROJECTION_PAGE_LIMIT } from "./session.ts";
+import { AppServerSession } from "./session.ts";
+import { SESSION_PROJECTION_PAGE_LIMIT } from "./session-readers.ts";
 import { StdioTransport } from "./stdio-transport.ts";
 import {
   WebSocketTransport,
@@ -151,10 +153,10 @@ export class AppServerHost {
    * still there to present. Notices and authoritative reads are ordered by
    * their native ledger sequence, never by arrival: an older one — a read
    * answered after a newer notice, or a notice produced before a fresher read
-   * — changes nothing. Finite (`retainSource`): the User and 64 Workspaces,
+   * — changes nothing. Finite (`retainSourceRepair`): the User and 64 Workspaces,
    * the least recently observed Workspace going first.
    */
-  readonly #sourceRepairs = new Map<string, SourceRepairObservation>();
+  #sourceRepairs = new Map<string, SourceRepairObservation>();
   /**
    * The highest native sequence at which this connection forgot a source.
    * Whatever a source absent from `#sourceRepairs` held was current at or
@@ -175,8 +177,8 @@ export class AppServerHost {
    */
   readonly #reads = new Set<{ key: string; forgotten: string }>();
   /** Workspaces whose ambiguous notice awaits its recovery read; one entry
-   * per source, finite (`retainSource`), read one at a time. */
-  readonly #recoveries = new Map<string, SourceTarget>();
+   * per source, finite (`retainSourceRepair`), read one at a time. */
+  #recoveries = new Map<string, SourceTarget>();
   #recovering = false;
   readonly #sourceRepairListeners = new Set<SourceRepairListener>();
   readonly #unknownModelSelections = new Set<string>();
@@ -319,7 +321,7 @@ export class AppServerHost {
    * snapshot it is.
    */
   async readSourceRepairs(target: SourceTarget = { kind: "user" }): Promise<SourceRepairRead> {
-    const read = target.kind === "workspace" ? { key: sourceKey(target), forgotten: "0" } : undefined;
+    const read = target.kind === "workspace" ? { key: sourceRepairKey(target), forgotten: "0" } : undefined;
     if (read !== undefined) this.#reads.add(read);
     try {
       const client = this.client;
@@ -351,29 +353,22 @@ export class AppServerHost {
    * again.
    */
   #observeSourceRepair(observation: SourceRepairObservation, forgotten?: string): void {
-    const key = sourceKey(observation.target);
-    const known = this.#sourceRepairs.get(key);
-    if (known !== undefined) {
-      if (olderSequence(observation.sequence, known.sequence)) return;
-      if (!olderSequence(known.sequence, observation.sequence)) {
-        if (observation.receipt?.id !== known.receipt?.id && forgotten === undefined) this.#recover(observation.target);
-        return;
-      }
-    } else if (key !== "user" && olderSequence(observation.sequence, forgotten ?? this.#forgottenThrough)) {
-      if (forgotten === undefined) this.#recover(observation.target);
-      return;
-    }
-    const evicted = retainSource(this.#sourceRepairs, key, observation);
+    const key = sourceRepairKey(observation.target);
+    const decision = sourceRepairDecision(this.#sourceRepairs.get(key), observation, forgotten, this.#forgottenThrough);
+    if (decision === "recover") this.#recover(observation.target);
+    if (decision !== "apply") return;
+    const { retained, forgotten: evicted } = retainSourceRepair(this.#sourceRepairs, key, observation);
+    this.#sourceRepairs = new Map(retained);
     if (evicted !== undefined) this.#forget(evicted);
     for (const listener of [...this.#sourceRepairListeners]) listener(observation);
   }
 
   /** Records that this connection no longer holds `evicted`'s source. */
   #forget({ target, sequence }: SourceRepairObservation): void {
-    if (olderSequence(this.#forgottenThrough, sequence)) this.#forgottenThrough = sequence;
-    const key = sourceKey(target);
+    this.#forgottenThrough = laterRepairSequence(this.#forgottenThrough, sequence);
+    const key = sourceRepairKey(target);
     for (const read of this.#reads) {
-      if (read.key === key && olderSequence(read.forgotten, sequence)) read.forgotten = sequence;
+      if (read.key === key) read.forgotten = laterRepairSequence(read.forgotten, sequence);
     }
   }
 
@@ -386,7 +381,7 @@ export class AppServerHost {
    * and nothing is read once the connection closed.
    */
   #recover(target: SourceTarget): void {
-    retainSource(this.#recoveries, sourceKey(target), target);
+    this.#recoveries = new Map(retainSourceRepair(this.#recoveries, sourceRepairKey(target), target).retained);
     if (this.#recovering) return;
     this.#recovering = true;
     void (async () => {

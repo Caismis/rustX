@@ -1,5 +1,6 @@
 import { useMemo, useSyncExternalStore } from 'react';
-import type { AppServerClient, ClientView, SessionView } from './app-server';
+import type { AppServerClient } from './app-server';
+import type { ClientView, SessionView } from './contracts';
 
 /** Selected snapshots are cached across publications, not debounced. */
 export function useClientSelector<T>(client: AppServerClient, select: (state: ClientView) => T, equal: (a: T, b: T) => boolean = Object.is): T {

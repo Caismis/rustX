@@ -1,18 +1,9 @@
-import { ContentCache } from '../../../protocol/app-server/content-cache.ts';
-import {traceInspectionHead,traceInspectionMessage,validateCanonicalInspectionPage} from '../../../protocol/app-server/trace-inspection.ts';
-import {traceFields,traceFieldKey} from '../../../protocol/app-server/trace-identity.ts';
-import {readTraceSelectedWindow,readTraceFieldWindow} from '../../../protocol/app-server/trace-field.ts';
-import { messageDescriptor } from '../../../protocol/app-server/message-descriptor.ts';
-import { deliveryHead,deliveryItem,deliveryItemKey,deliveryPage as nativeDeliveryPage,readDeliveryMetadata as readOriginalDeliveryMetadata } from '../../../protocol/app-server/delivery-observation.ts';
-import { attemptIdentityField, attemptIdentitySourceKey } from '../../../protocol/app-server/attempt-identity.ts';
-import { deferredAttemptIdentities } from '../presentation/message-descriptors.ts';
-import { deferredJournalFields as nativeJournalFields } from './journal-fields.ts';
 import { materializeApplication } from '../../../protocol/app-server/application-observation.ts';
 import { UncertainOutcomeError, AppServerRequestError } from './client.ts';
 import { materializeEffective } from '../../../protocol/app-server/effective-observation.ts';
-import { domainItems, domainValue, type DomainReader } from '../../../protocol/app-server/domain-observation.ts';
+import { domainItems, domainValue } from '../../../protocol/app-server/domain-observation.ts';
 import { checkpointSnapshot } from '../../../protocol/app-server/projection.ts';
-import { ObservationChain, validateObservationCut, validateRootCheckpoint, validateRootEvent } from '../../../protocol/app-server/observation.ts';
+import { ObservationChain, validateRootCheckpoint, validateRootEvent } from '../../../protocol/app-server/observation.ts';
 import { uploadOperationId } from '../../../protocol/app-server/upload.ts';
 /**
  * One attached Session: its authoritative projection and its typed operations.
@@ -58,7 +49,6 @@ import { uploadOperationId } from '../../../protocol/app-server/upload.ts';
 
 import {
   compareExact,
-  sameTarget,
   type ConfigurationApplication,
   type AvailableConfiguration,
   type AttachmentTarget,
@@ -76,15 +66,10 @@ import {
   type RuntimeClientCursor,
   type RuntimeClientSnapshot,
   type RuntimeClientAgent,
-  type RuntimeClientTranscriptCursor,
-  type RuntimeClientTranscriptPage,
-  type SessionFileReference,
   type SessionModelConfig,
   type SessionModelView,
   type SessionNodeId,
-  type SessionUserMessageBoundaryObservation,
   type AgentId,
-  type SurfaceRevision,
   type ToolExecutionId,
   type UserInputBlock,
 } from "../protocol/app-server.ts";
@@ -96,33 +81,15 @@ import {
   replaceFromSnapshot,
 } from "../presentation/projection.ts";
 import type { PresentationState } from "../presentation/state.ts";
-import {
-  pageDeliveries,
-  type DeliveryLocation,
-  type DeliveryPage,
-  type DeliveryRecord,
-} from "../presentation/deliveries.ts";
-import { AppServerClient, METHOD_RESPONSE_LOSS_CLASS, isResyncRequired, isUncertainOutcome } from "./client.ts";
-
-/** Native owner bound for one bounded page. */
-export const SESSION_PROJECTION_PAGE_LIMIT = 32;
-export const TRANSCRIPT_PROJECTION_PAGE_LIMIT = 32;
+import { AppServerClient, isResyncRequired, isUncertainOutcome } from "./client.ts";
+import { requestEffect } from "../../../protocol/app-server/method-policy.ts";
+import { sameTarget } from "../../../protocol/app-server/attachment-identity.ts";
+import type { Request1 } from "../../../protocol/app-server/v50.ts";
+import { SessionReaders, TRANSCRIPT_PROJECTION_PAGE_LIMIT } from "./session-readers.ts";
 
 type StateListener = (state: PresentationState) => void;
 type SnapshotListener = () => void;
 type ClosedListener = () => void;
-
-/** One bounded page of historical fork/branch boundaries. */
-export interface BoundaryPage {
-  /** The exact committed head the page was selected against. */
-  surfaceRevision: SurfaceRevision;
-  boundaries: SessionUserMessageBoundaryObservation[];
-  nextOffset?: number;
-}
-
-function readEvidence(value:unknown):string {
-  return JSON.stringify(value,(_key,item)=>item&&typeof item==='object'&&!Array.isArray(item)?Object.fromEntries(Object.entries(item).filter(([,value])=>value!==undefined).sort(([left],[right])=>left.localeCompare(right))):item);
-}
 
 export class AppServerSession {
   readonly nodeId: SessionNodeId | undefined;
@@ -148,62 +115,6 @@ export class AppServerSession {
   #repair: Promise<void> | undefined;
   readonly #observation = new ObservationChain<Parameters<typeof reduce>[1]['event']>();
   #checkpoint?: import('../../../protocol/app-server/v50.ts').RuntimeClientCheckpoint;
-  // One explicit bounded inspection viewport, independent of projection/Applied.
-  #traceInspection?: {epoch:number;id:string;owned:()=>boolean;head?:import('../../../protocol/app-server/v50.ts').TraceInspectionHead;page?:import('../../../protocol/app-server/v50.ts').CheckpointPage;messages?:import('../../../protocol/app-server/v50.ts').TraceInspectionMessage[];collection?:import('../../../protocol/app-server/v50.ts').CheckpointPage};
-  #projectionInspection?: {epoch:number;owned:()=>boolean;detail?:import('../../../protocol/app-server/v50.ts').ProjectionDetail};
-  #currentTraceInspection() {
-    const selected=this.#traceInspection;
-    return selected?.head&&selected.page&&!this.#released&&!this.#serverClosed&&selected.epoch===this.#epoch&&selected.owned() ? selected : undefined;
-  }
-  async inspectTrace(recordId:string,owned:()=>boolean=()=>true) {
-    if(typeof recordId!=='string'||!recordId||recordId.length>256)throw new Error('Invalid native Trace selection.');
-    if(!owned())throw new Error('Trace inspection viewport was replaced.');
-    this.#projectionInspection=undefined;
-    const selected=this.#traceInspection={epoch:this.#epoch,id:recordId,owned};
-    const {page}=await this.#call('session/traceDetail',{target:this.#target,record_id:recordId},'domain_page');
-    if(this.#released||this.#serverClosed||selected.epoch!==this.#epoch||this.#traceInspection!==selected||!owned())throw new Error('Trace inspection viewport was replaced.');
-    validateObservationCut(page.read_cut,this.#target.conversation_id,null,page.cursor);
-    const head=traceInspectionHead(page,recordId);
-    if(!head)throw new Error('Selected Request fields are available through /content; this is not an inspection head.');
-    Object.assign(selected,{head,page});
-    return {head,page};
-  }
-
-  async agentTraceInspection(agent:RuntimeClientAgent,recordId:string,owned:()=>boolean) {
-    const epoch=this.#epoch;
-    const current=()=>!this.#released&&!this.#serverClosed&&epoch===this.#epoch&&owned();
-    if(!current()||!recordId||recordId.length>256)throw new Error('Child Trace view was replaced.');
-    const {page}=await this.#call('agent/traceDetail',{target:this.#target,agent_id:agent.agent_id,record_id:recordId},'domain_page');
-    if(!current())throw new Error('Child Trace view was replaced.');
-    validateObservationCut(page.read_cut,agent.child_conversation_id,agent.activation_id,page.cursor);
-    const head=traceInspectionHead(page,recordId);
-    if(!head)throw new Error('This selection is not a finite Trace inspection head.');
-    return {head,page};
-  }
-  async agentInspectionPage(agent:RuntimeClientAgent,cut:import('../../../protocol/app-server/v50.ts').CheckpointReadCut,domain:string,offset:number,owned:()=>boolean) {
-    const epoch=this.#epoch;
-    const current=()=>!this.#released&&!this.#serverClosed&&epoch===this.#epoch&&owned();
-    validateObservationCut(cut,agent.child_conversation_id,agent.activation_id,cut.revision);
-    if(!current())throw new Error('Child Trace view was replaced.');
-    const {page}=await this.#call('conversation/checkpointPage',{target:this.#target,agent_id:agent.agent_id,cut,domain,offset,limit:32},'checkpoint_page');
-    if(!current()||page.domain!==domain||readEvidence(page.read_cut)!==readEvidence(cut)||page.cursor!==cut.revision)throw new Error('Child Trace page was replaced.');
-    return page;
-  }
-  async readAgentTraceField(agent:RuntimeClientAgent,cut:import('../../../protocol/app-server/v50.ts').CheckpointReadCut,source:import('../../../protocol/app-server/v50.ts').TraceFieldSource,offset:number,owned:()=>boolean) {
-    const epoch=this.#epoch,target=this.#target;
-    const current=()=>!this.#released&&!this.#serverClosed&&epoch===this.#epoch&&owned();
-    validateObservationCut(cut,agent.child_conversation_id,agent.activation_id,cut.revision);
-    if(!current())throw new Error('Child Trace field was replaced.');
-    if(source.type==='value') {
-      const range=await readTraceFieldWindow(source,cut,offset,async at=>(await this.#call('conversation/checkpointValueRead',{target,agent_id:agent.agent_id,cut,domain:source.domain,item_offset:source.item_offset,path:source.path,offset:at,max_bytes:65536},'checkpoint_value_chunk')).chunk,current);
-      return {...range,end:source.encoded_bytes,cut};
-    }
-    if(source.binding.content_ref.conversation_id!==cut.conversation_id)throw new Error('Child Trace content source was replaced.');
-    const cache=new ContentCache((reference,at)=>this.readContent(reference,at,agent.agent_id));
-    try {const range=await cache.read(source.binding.content_ref,offset,current);return {...range,end:source.binding.content_ref.readable_end,representation:source.binding.content_ref.representation,cut};}
-    finally{cache.clear();}
-  }
-
   get observationPhase() { return this.#observation.phase; }
   /** Cancellation needs the live attachment, not an observed execution baseline. */
   get cancellationReady() { return !this.#released && !this.#serverClosed; }
@@ -220,130 +131,58 @@ export class AppServerSession {
   #call<M extends Exclude<MethodName, 'delivery/cancel'>, T extends ResultType>(
     method: M, params: MethodParams<M>, expected: T,
   ): Promise<ResultOf<T>> {
-    const goalRead = method === 'goal/control' && 'control' in params && params.control.action === 'show';
     if ('target' in params && 'session_id' in params.target
-      && METHOD_RESPONSE_LOSS_CLASS[method] === 'side_effecting' && !goalRead
+      && requestEffect({ method, params } as Request1) === 'side_effecting'
       && method !== 'session/detach' && method !== 'session/switchNode') {
       try { this.#assertControlReady(); } catch (error) { return Promise.reject(error); }
     }
     return this.#client.call(method, params, expected);
   }
   get deferredContent() { return deferredContent(this.#state); }
-  get deferredJournalFields() {
-    const fields = nativeJournalFields(this.#state.attempt), clock = this.#state.statistics?.latest_turn;
-    if (clock?.attempt_id_deferred && clock.attempt_id_source) fields.push({ label: 'Turn attempt identity', reference: clock.attempt_id_source });
-    return fields;
-  }
-  get deferredAttemptIdentities() {
-    const fields=deferredAttemptIdentities(this.#state),checkpoint=this.#checkpoint;
-    if(checkpoint)for(const record of checkpoint.snapshot.trace.records){const source=record.location.attempt_id_source;if(source&&!fields.some(field=>attemptIdentitySourceKey(field.source)===attemptIdentitySourceKey(source)))fields.push({owner:`Trace ${record.id}`,source});}
-    return fields;
-  }
-  get observationCollections() {
-    const checkpoint=this.#checkpoint;
-    if(!checkpoint)return [];
-    const rows=new Map<string,{frontier:Pick<import('../../../protocol/app-server/v50.ts').CollectionFrontier,'domain'|'total'|'loaded'|'next_offset'>;cut:import('../../../protocol/app-server/v50.ts').CheckpointReadCut;inspection?:object}>((checkpoint.collections??[]).map(frontier=>[frontier.domain,{frontier,cut:checkpoint.read_cut}]));
-    const cut=checkpoint.snapshot.trace.read_cut??checkpoint.read_cut;
-    for(const record of checkpoint.snapshot.trace.records){
-      for(const frontier of record.collections)rows.set(frontier.domain,{frontier,cut});
-      const request=record.request;
-      if(request?.context_next_offset!=null)rows.set(request.context_domain,{cut,frontier:{domain:request.context_domain,total:request.context_total,loaded:String(request.context_additions.length),next_offset:String(request.context_next_offset)}});
-    }
-    const selected=this.#currentTraceInspection();
-    if(selected?.head&&selected.page){
-      const cut=selected.page.read_cut,head=selected.head;
-      for(const frontier of head.record.collections)rows.set(frontier.domain,{frontier,cut,inspection:selected});
-      if(head.content.type==='messages'){
-        const page=head.content.page;
-        rows.set(page.domain,{cut,inspection:selected,frontier:{domain:page.domain,total:page.total,loaded:String(page.items.length),next_offset:page.next_offset==null?null:String(page.next_offset)}});
-        for(const message of selected.messages??page.items)for(const frontier of message.collections)rows.set(frontier.domain,{frontier,cut,inspection:selected});
-      }
-    }
-    return [...rows.values()];
-  }
-  get deferredTraceFields() {
-    const checkpoint=this.#checkpoint;
-    if(!checkpoint)return [];
-    const fields=new Map<string,{record:string;source:import('../../../protocol/app-server/v50.ts').TraceFieldSource;cut:import('../../../protocol/app-server/v50.ts').CheckpointReadCut;inspection?:object;projection?:object}>();
-    const cut=checkpoint.snapshot.trace.read_cut??checkpoint.read_cut;
-    for(const record of checkpoint.snapshot.trace.records)for(const source of traceFields(record))fields.set(traceFieldKey(source),{record:record.id,source,cut});
-    const selected=this.#currentTraceInspection();
-    if(selected?.head&&selected.page){
-      const head=selected.head,sources=traceFields(head.record);
-      if(head.content.type==='tool'&&head.content.definition.type==='available')sources.push(head.content.definition.field);
-      if(head.content.type==='messages')for(const message of selected.messages??head.content.page.items)sources.push(...message.fields);
-      for(const source of sources)fields.set(traceFieldKey(source),{record:head.id,source,cut:selected.page.read_cut,inspection:selected});
-    }
-    const projection=this.#projectionInspection;
-    if(projection?.detail&&!this.#released&&!this.#serverClosed&&projection.epoch===this.#epoch&&projection.owned())for(const item of projection.detail.items){
-      const source=item.content.provenance_source;
-      if(source)fields.set(traceFieldKey(source),{record:`projection:${item.occurrence.checkpoint_id}/${item.occurrence.item_index}`,source,cut:projection.detail.read_cut,projection});
-    }
-    return [...fields.values()];
-  }
-  get observationContent() {
-    const selected=this.#currentTraceInspection(),collection=selected?.collection;
-    return selected&&collection?collection.items.flatMap(item=>item.content.map(binding=>({binding,cut:collection.read_cut,inspection:selected,page:collection,item:item.offset}))):[];
-  }
-  async readObservationContent(selected:AppServerSession['observationContent'][number],offset:number) {
-    const epoch=this.#epoch,current=()=>!this.#released&&!this.#serverClosed&&epoch===this.#epoch&&this.#currentTraceInspection()===selected.inspection&&selected.inspection.collection===selected.page;
-    const reference=selected.binding.content_ref;
-    if(reference.conversation_id!==selected.cut.conversation_id||!current())throw new Error('Original observation content was replaced.');
-    const cache=new ContentCache((ref,at)=>this.readContent(ref,at));
-    try{return {...await cache.read(reference,offset,current),representation:reference.representation,end:reference.readable_end,cut:selected.cut};}finally{cache.clear();}
-  }
-  async readTraceField(selected:AppServerSession['deferredTraceFields'][number],offset:number) {
-    const epoch=this.#epoch,target=this.#target,identity=traceFieldKey(selected.source),cut=selected.cut;
-    const current=()=>!this.#released&&!this.#serverClosed&&epoch===this.#epoch&&(!selected.inspection||this.#traceInspection===selected.inspection)&&(!selected.projection||this.#projectionInspection===selected.projection)&&this.deferredTraceFields.some(field=>traceFieldKey(field.source)===identity&&readEvidence(field.cut)===readEvidence(cut)&&field.inspection===selected.inspection&&field.projection===selected.projection);
-    if(cut.conversation_id!==target.conversation_id||cut.activation_id!=null||!current())throw new Error('Trace field source was replaced.');
-    const source=selected.source;
-    if(source.type==='value') {
-      const range=await readTraceFieldWindow(source,cut,offset,async at=>(await this.#call('conversation/checkpointValueRead',{target,agent_id:null,cut,domain:source.domain,item_offset:source.item_offset,path:source.path,offset:at,max_bytes:65536},'checkpoint_value_chunk')).chunk,current);
-      return {...range,end:source.encoded_bytes,cut};
-    }
-    if(source.binding.content_ref.conversation_id!==cut.conversation_id)throw new Error('Trace content source was replaced.');
-    const cache=new ContentCache((reference,at)=>this.readContent(reference,at));
-    try {const range=await cache.read(source.binding.content_ref,offset,current);return {...range,end:source.binding.content_ref.readable_end,representation:source.binding.content_ref.representation,cut};}
-    finally{cache.clear();}
-  }
-  async readAttemptIdentity(reference:import('../../../protocol/app-server/v50.ts').AttemptIdentitySource,offset:number,
-    capturedCut?:import('../../../protocol/app-server/v50.ts').CheckpointReadCut,agentId?:string) {
-    const epoch=this.#epoch,target=this.#target,cut=capturedCut??this.#checkpoint?.read_cut;
-    const {domain,path,encodedBytes}=attemptIdentityField(reference),identity=attemptIdentitySourceKey(reference);
-    if(!cut||!Number.isSafeInteger(encodedBytes)||encodedBytes<0||!Number.isSafeInteger(offset)||offset<0||offset>encodedBytes)throw new Error('Invalid native owner identity range.');
-    const owned=()=>!this.#released&&epoch===this.#epoch&&(agentId!=null||this.deferredAttemptIdentities.some(field=>attemptIdentitySourceKey(field.source)===identity));
-    if(!owned())throw new Error('Native owner identity view was replaced.');
-    const {chunk}=await this.#call('conversation/checkpointValueRead',{target,agent_id:agentId??null,cut,domain,item_offset:0,path,offset,max_bytes:65536},'checkpoint_value_chunk');
-    if(!owned()||readEvidence(chunk.cut)!==readEvidence(cut)||chunk.domain!==domain||chunk.item_offset!==0||chunk.representation!=='canonical_json_v1'||JSON.stringify(chunk.path)!==JSON.stringify(path)||chunk.offset!==offset||chunk.readable_end!==encodedBytes)throw new Error('Native owner identity evidence changed.');
-    if(chunk.bytes_base64.length>87_384||chunk.bytes_base64.length%4!==0||chunk.bytes_base64.length/4*3-(chunk.bytes_base64.endsWith('==')?2:chunk.bytes_base64.endsWith('=')?1:0)>65_536)throw new Error('Encoded native identity exceeds the decoded byte bound.');
-    const bytes=Buffer.from(chunk.bytes_base64,'base64'),end=offset+bytes.length;
-    if(!Number.isSafeInteger(end)||bytes.length>65536||end>encodedBytes||offset<encodedBytes&&!bytes.length||(chunk.next_offset??null)!==(end<encodedBytes?end:null))throw new Error('Native owner identity did not advance exactly.');
-    return {bytes,next:chunk.next_offset??undefined,end:encodedBytes,cut};
-  }
-  async readJournalField(reference:import('../../../protocol/app-server/v50.ts').JournalFieldRef,offset:number) {
-    const checkpoint=this.#checkpoint,epoch=this.#epoch,target=this.#target;
-    if(!checkpoint || !Number.isSafeInteger(offset)||offset<0 ||offset>reference.encoded_bytes)throw new Error('Invalid deferred native field range.');
-    const identity=JSON.stringify(reference);
-    if(!this.deferredJournalFields.some(field=>JSON.stringify(field.reference)===identity))throw new Error('Native field view was replaced.');
-    const domain=`journal.${reference.sequence}`;
-    const {chunk}=await this.#call('conversation/checkpointValueRead',{target,agent_id:null,cut:checkpoint.read_cut,domain,item_offset:0,path:reference.path,offset,max_bytes:65536},'checkpoint_value_chunk');
-    if(this.#released ||epoch!==this.#epoch ||!this.deferredJournalFields.some(field=>JSON.stringify(field.reference)===identity) ||readEvidence(chunk.cut)!==readEvidence(checkpoint.read_cut) ||chunk.domain!==domain ||chunk.item_offset!==0 ||chunk.representation!=='canonical_json_v1' ||JSON.stringify(chunk.path)!==JSON.stringify(reference.path) ||chunk.offset!==offset ||chunk.readable_end!==reference.encoded_bytes)throw new Error('Deferred native field evidence changed.');
-    if(chunk.bytes_base64.length>87_384 || chunk.bytes_base64.length%4!==0 || chunk.bytes_base64.length/4*3-(chunk.bytes_base64.endsWith('==')?2:chunk.bytes_base64.endsWith('=')?1:0)>65_536)throw new Error('Encoded native range exceeds the decoded byte bound.');
-    const bytes=Buffer.from(chunk.bytes_base64,'base64');
-    if(bytes.length>65536 ||offset+bytes.length>chunk.readable_end ||offset<chunk.readable_end&&bytes.length===0 ||(chunk.next_offset==null?offset+bytes.length!==chunk.readable_end:chunk.next_offset!==offset+bytes.length||chunk.next_offset>=chunk.readable_end))throw new Error('Deferred native field did not advance exactly.');
-    return {bytes,next:chunk.next_offset??undefined};
-  }
-
-  async readChildJournalField(agentId:string,cut:import('../../../protocol/app-server/v50.ts').CheckpointReadCut,reference:import('../../../protocol/app-server/v50.ts').JournalFieldRef,offset:number) {
-    if(!Number.isSafeInteger(offset)||offset<0||offset>reference.encoded_bytes)throw new Error('Invalid Child result byte range.');
-    const epoch=this.#epoch,target=this.#target,domain=`journal.${reference.sequence}`;
-    const {chunk}=await this.#call('conversation/checkpointValueRead',{target,agent_id:agentId,cut,domain,item_offset:0,path:reference.path,offset,max_bytes:65536},'checkpoint_value_chunk');
-    if(chunk.bytes_base64.length>87_384 || chunk.bytes_base64.length%4!==0 || chunk.bytes_base64.length/4*3-(chunk.bytes_base64.endsWith('==')?2:chunk.bytes_base64.endsWith('=')?1:0)>65_536)throw new Error('Encoded native range exceeds the decoded byte bound.');
-    const bytes=Buffer.from(chunk.bytes_base64,'base64');
-    if(this.#released||epoch!==this.#epoch||readEvidence(chunk.cut)!==readEvidence(cut)||chunk.domain!==domain||chunk.item_offset!==0||chunk.representation!=='canonical_json_v1'||JSON.stringify(chunk.path)!==JSON.stringify(reference.path)||chunk.offset!==offset||chunk.readable_end!==reference.encoded_bytes||bytes.length>65536||offset+bytes.length>chunk.readable_end||offset<chunk.readable_end&&bytes.length===0||(chunk.next_offset==null?offset+bytes.length!==chunk.readable_end:chunk.next_offset!==offset+bytes.length||chunk.next_offset>=chunk.readable_end))throw new Error('Child result evidence changed.');
-    return {bytes,next:chunk.next_offset??undefined};
-  }
-
+  readonly #reads = new SessionReaders({
+    client: () => this.#client,
+    call: (method, params, expected) => this.#call(method, params, expected),
+    target: () => this.#target,
+    epoch: () => this.#epoch,
+    released: () => this.#released,
+    serverClosed: () => this.#serverClosed,
+    checkpoint: () => this.#checkpoint,
+    state: () => this.#state,
+  });
+  // Bounded native readers, fenced by this Session's epoch and target.
+  get deferredJournalFields() { return this.#reads.deferredJournalFields; }
+  get deferredAttemptIdentities() { return this.#reads.deferredAttemptIdentities; }
+  get observationCollections() { return this.#reads.observationCollections; }
+  get deferredTraceFields() { return this.#reads.deferredTraceFields; }
+  get observationContent() { return this.#reads.observationContent; }
+  get deliveryAccess() { return this.#reads.deliveryAccess; }
+  inspectTrace(...args: Parameters<SessionReaders['inspectTrace']>) { return this.#reads.inspectTrace(...args); }
+  agentTraceInspection(...args: Parameters<SessionReaders['agentTraceInspection']>) { return this.#reads.agentTraceInspection(...args); }
+  agentInspectionPage(...args: Parameters<SessionReaders['agentInspectionPage']>) { return this.#reads.agentInspectionPage(...args); }
+  readAgentTraceField(...args: Parameters<SessionReaders['readAgentTraceField']>) { return this.#reads.readAgentTraceField(...args); }
+  readObservationContent(...args: Parameters<SessionReaders['readObservationContent']>) { return this.#reads.readObservationContent(...args); }
+  readTraceField(...args: Parameters<SessionReaders['readTraceField']>) { return this.#reads.readTraceField(...args); }
+  readAttemptIdentity(...args: Parameters<SessionReaders['readAttemptIdentity']>) { return this.#reads.readAttemptIdentity(...args); }
+  readJournalField(...args: Parameters<SessionReaders['readJournalField']>) { return this.#reads.readJournalField(...args); }
+  readChildJournalField(...args: Parameters<SessionReaders['readChildJournalField']>) { return this.#reads.readChildJournalField(...args); }
+  transcriptPage(...args: Parameters<SessionReaders['transcriptPage']>) { return this.#reads.transcriptPage(...args); }
+  deliveryPage(...args: Parameters<SessionReaders['deliveryPage']>) { return this.#reads.deliveryPage(...args); }
+  deliveryCollection(...args: Parameters<SessionReaders['deliveryCollection']>) { return this.#reads.deliveryCollection(...args); }
+  deliveryMetadata(...args: Parameters<SessionReaders['deliveryMetadata']>) { return this.#reads.deliveryMetadata(...args); }
+  readDelivery(...args: Parameters<SessionReaders['readDelivery']>) { return this.#reads.readDelivery(...args); }
+  locateDelivery(...args: Parameters<SessionReaders['locateDelivery']>) { return this.#reads.locateDelivery(...args); }
+  observeAgent(...args: Parameters<SessionReaders['observeAgent']>) { return this.#reads.observeAgent(...args); }
+  readOccupancyModel(...args: Parameters<SessionReaders['readOccupancyModel']>) { return this.#reads.readOccupancyModel(...args); }
+  readContent(...args: Parameters<SessionReaders['readContent']>) { return this.#reads.readContent(...args); }
+  agentTranscriptPage(...args: Parameters<SessionReaders['agentTranscriptPage']>) { return this.#reads.agentTranscriptPage(...args); }
+  boundaries(...args: Parameters<SessionReaders['boundaries']>) { return this.#reads.boundaries(...args); }
+  observationPage(...args: Parameters<SessionReaders['observationPage']>) { return this.#reads.observationPage(...args); }
+  observationValue(...args: Parameters<SessionReaders['observationValue']>) { return this.#reads.observationValue(...args); }
+  checkpointPage(...args: Parameters<SessionReaders['checkpointPage']>) { return this.#reads.checkpointPage(...args); }
+  interactionValue(...args: Parameters<SessionReaders['interactionValue']>) { return this.#reads.interactionValue(...args); }
+  capabilitiesPage(...args: Parameters<SessionReaders['capabilitiesPage']>) { return this.#reads.capabilitiesPage(...args); }
+  projections(...args: Parameters<SessionReaders['projections']>) { return this.#reads.projections(...args); }
+  projectionDetail(...args: Parameters<SessionReaders['projectionDetail']>) { return this.#reads.projectionDetail(...args); }
 
   private constructor(
     client: AppServerClient,
@@ -653,157 +492,6 @@ export class AppServerSession {
   // Authoritative reads
   // -------------------------------------------------------------------------
 
-  /**
-   * Reads one bounded durable transcript page by its exclusive older boundary.
-   * Callers pass the previous page's `next_cursor` unchanged.
-   */
-  async transcriptPage(
-    beforeCursor?: RuntimeClientTranscriptCursor,
-    limit = TRANSCRIPT_PROJECTION_PAGE_LIMIT,
-  ): Promise<RuntimeClientTranscriptPage> {
-    const page = await this.#call(
-      "session/transcript",
-      { target: this.#target, at: beforeCursor ? { type: 'older', before: beforeCursor } : { type: 'latest' }, limit },
-      "transcript_window",
-    );
-    return page.window.page;
-  }
-
-  /**
-   * Whether this connection's transport was granted delivery access: the
-   * owned stdio child, or the separate remote delivery credential.
-   */
-  get deliveryAccess(): boolean {
-    return this.#client.capabilities?.delivery_access === true;
-  }
-
-  /** One bounded page of committed deliveries, by the same transcript paging. */
-  async deliveryPage(before?: RuntimeClientTranscriptCursor,capturedCut?:import('../../../protocol/app-server/v50.ts').CheckpointReadCut): Promise<DeliveryPage> {
-    const cut=capturedCut??this.#checkpoint?.read_cut,epoch=this.#epoch;
-    if(!cut)throw new Error('Load a native checkpoint first.');
-    const offset=before==null?0:Number(BigInt(before));if(!Number.isSafeInteger(offset)||offset<0)throw new Error('Native delivery history coordinate is unavailable.');
-    const {page}=await this.#call('conversation/checkpointPage',{target:this.#target,agent_id:null,cut,domain:'transcript.entries',offset,limit:32},'checkpoint_page');
-    if(this.#released||epoch!==this.#epoch||readEvidence(page.read_cut)!==readEvidence(cut)||page.domain!=='transcript.entries'||page.items.length>32)throw new Error('Native delivery history cut changed.');
-    const descriptors=page.items.flatMap(item=>{const value=messageDescriptor(item.value);return value?[value]:[];});
-    if(before==null&&readEvidence(this.#checkpoint!.read_cut)===readEvidence(cut))descriptors.push(...this.#state.messageDescriptors??[]);
-    const records:DeliveryRecord[]=[],collections:NonNullable<DeliveryPage['collections']>=[],covered=new Set(descriptors.filter(row=>row.deliveries&&row.identity!=null).map(row=>row.identity));
-    for(const descriptor of descriptors)if(descriptor.deliveries){const head=deliveryHead(descriptor.deliveries);for(const item of head.items){deliveryItem(item);records.push({conversationId:cut.conversation_id,locator:item.locator,index:item.index,count:head.total,file:item.file??undefined,metadata:item.file?undefined:{item,cut}});}if(head.next_offset!=null&&!collections.some(row=>row.head.domain===head.domain))collections.push({head,cut});}
-    for(const row of page.items){const value=row.value as import('../../../protocol/app-server/v50.ts').RuntimeClientTranscriptEntry|null;
-      if(value?.item?.type==='message'&&!covered.has(value.item.message.id))records.push(...pageDeliveries({entries:[value]},cut.conversation_id).records);}
-    const unique=new Map(records.map(record=>[deliveryItemKey(record),record]));
-    return {records:[...unique.values()],cut,collections,next:page.next_offset==null?undefined:String(page.next_offset)};
-  }
-  async deliveryCollection(collection:NonNullable<DeliveryPage['collections']>[number]):Promise<DeliveryPage>{
-    const {head,cut}=collection,epoch=this.#epoch;if(head.next_offset==null)throw new Error('Delivery collection is complete.');
-    const {page}=await this.#call('conversation/checkpointPage',{target:this.#target,agent_id:null,cut,domain:head.domain,offset:head.next_offset,limit:8},'checkpoint_page');
-    if(this.#released||epoch!==this.#epoch)throw new Error('Native delivery view changed.');const next=nativeDeliveryPage(head,page,cut,head.next_offset);
-    return {cut,records:next.items.map(item=>({conversationId:cut.conversation_id,locator:item.locator,index:item.index,count:head.total,file:item.file??undefined,metadata:item.file?undefined:{item,cut}})),collections:next.next_offset==null?[]:[{head:next,cut}]};
-  }
-  async deliveryMetadata(record:DeliveryRecord,current:()=>boolean):Promise<SessionFileReference>{
-    if(record.file)return record.file;const selected=record.metadata,epoch=this.#epoch;
-    if(!selected||record.conversationId!==this.#target.conversation_id||selected.cut.conversation_id!==record.conversationId)throw new Error('Native delivery metadata source is unavailable.');
-    const owned=()=>current()&&!this.#released&&epoch===this.#epoch;
-    return readOriginalDeliveryMetadata(selected.item,selected.cut,async offset=>(await this.#call('conversation/checkpointValueRead',{target:this.#target,agent_id:null,cut:selected.cut,domain:selected.item.metadata_domain,item_offset:0,path:[],offset,max_bytes:65536},'checkpoint_value_chunk')).chunk,owned);
-  }
-
-  /**
-   * Original bytes (≤ 512 KiB, base64) of one committed delivery, through
-   * this attachment. Native authority resolves the address every time; no
-   * model request, Agent, or Tool execution starts. Aborting `signal`
-   * cancels this exact native request on the server; the call then settles
-   * with the server's terminal outcome (bytes only if publication won).
-   */
-  async readDelivery(
-    record: Pick<DeliveryRecord, "conversationId" | "locator" | "index">,
-    signal: AbortSignal = new AbortController().signal,
-  ): Promise<{ file: SessionFileReference; data: string }> {
-    if(record.conversationId!==this.#target.conversation_id)throw new Error('Native delivery locator source changed.');
-    const { file, data } = await this.#client.callDelivery(
-      "delivery/read",
-      { target: this.#target, locator: record.locator, delivery_index: record.index },
-      "session_file_bytes",
-      signal,
-    );
-    return { file, data };
-  }
-
-  /**
-   * The verified server-side path and leaf identity of one delivery.
-   * Aborting `signal` cancels the native request (see `readDelivery`).
-   */
-  async locateDelivery(
-    record: Pick<DeliveryRecord, "conversationId" | "locator" | "index">,
-    signal: AbortSignal = new AbortController().signal,
-  ): Promise<DeliveryLocation> {
-    if(record.conversationId!==this.#target.conversation_id)throw new Error('Native delivery locator source changed.');
-    const { file, path, device, inode } = await this.#client.callDelivery(
-      "delivery/locate",
-      { target: this.#target, locator: record.locator, delivery_index: record.index },
-      "session_file_location",
-      signal,
-    );
-    return { file, path, device, inode };
-  }
-
-  async observeAgent(agentId: string, after: import('../../../protocol/app-server/v50.ts').AgentObservationCursor | undefined, signal: AbortSignal) {
-    const epoch = this.#epoch;
-    const result = await this.#client.observe({ target: this.#target, agent_id: agentId, after: after ?? null }, signal);
-    if (this.#released || epoch !== this.#epoch || signal.aborted) throw new Error('Child observation view was replaced.');
-    return result.observation;
-  }
-  /** One original occupancy-model field range at its captured native cut. */
-  async readOccupancyModel(offset: number, capturedCut?: import('../../../protocol/app-server/v50.ts').CheckpointReadCut) {
-    const occupancy = this.#state.context.occupancy, domain = occupancy?.model_source;
-    const cut = capturedCut ?? this.#checkpoint?.read_cut, epoch = this.#epoch, target = this.#target;
-    if (!occupancy?.model_deferred || !domain || !cut || !Number.isSafeInteger(offset) || offset < 0)
-      throw new Error('Original context model source unavailable.');
-    const {chunk} = await this.#call('conversation/checkpointValueRead', {
-      target, agent_id:null, cut, domain, item_offset:0, path:[], offset, max_bytes:65_536,
-    }, 'checkpoint_value_chunk');
-    if (this.#released || epoch !== this.#epoch || !sameTarget(target,this.#target)
-      || this.#state.context.occupancy?.model_source !== domain || readEvidence(chunk.cut) !== readEvidence(cut)
-      || chunk.domain !== domain || chunk.item_offset !== 0 || chunk.path.length !== 0
-      || chunk.offset !== offset || chunk.representation !== 'canonical_json_v1')
-      throw new Error('Original context model view was replaced.');
-    const encoded = chunk.bytes_base64;
-    if (encoded.length > 87_384 || encoded.length % 4 !== 0
-      || encoded.length / 4 * 3 - (encoded.endsWith('==') ? 2 : encoded.endsWith('=') ? 1 : 0) > 65_536)
-      throw new Error('Encoded native range exceeds the decoded byte bound.');
-    const bytes = Buffer.from(encoded,'base64'), end = offset + bytes.length;
-    if (!Number.isSafeInteger(chunk.readable_end) || !Number.isSafeInteger(end) || end > chunk.readable_end
-      || bytes.length > 65_536 || offset < chunk.readable_end && bytes.length === 0
-      || (chunk.next_offset ?? null) !== (end < chunk.readable_end ? end : null))
-      throw new Error('Original context model range did not advance exactly.');
-    return {bytes,next:chunk.next_offset ?? undefined,end:chunk.readable_end,cut};
-  }
-  async readContent(content_ref: import('../../../protocol/app-server/v50.ts').ContentRef, offset: number, agentId?: string) {
-    const epoch = this.#epoch;
-    const { chunk } = await this.#call('conversation/contentRead', { target: this.#target, agent_id: agentId ?? null, content_ref, offset, max_bytes: 65_536 }, 'content_chunk');
-    if (this.#released || epoch !== this.#epoch) throw new Error('Content view was replaced.');
-    return chunk;
-  }
-
-  /** A read is valid only in the exact parent attachment/presentation epoch. */
-  async agentTranscriptPage(
-    agentId: AgentId,
-    before?: RuntimeClientTranscriptCursor,
-  ): Promise<RuntimeClientTranscriptPage | undefined> {
-    if (this.#released || this.#serverClosed) return undefined;
-    const epoch = this.#epoch;
-    const target = this.#target;
-    try {
-      const result = await this.#call("agent/transcript", {
-        target, agent_id: agentId, at: before == null ? { type: "latest" } : { type: "older", before, cut: null },
-        limit: TRANSCRIPT_PROJECTION_PAGE_LIMIT,
-      }, "transcript_window");
-      if (epoch !== this.#epoch || !sameTarget(target, this.#target)) return undefined;
-      return result.window.page;
-    } catch (error) {
-      if (epoch !== this.#epoch || !sameTarget(target, this.#target)) return undefined;
-      throw error;
-    }
-  }
-
   /** Loads the next older page without changing the live event cursor. */
   async loadOlderTranscript(
     limit = TRANSCRIPT_PROJECTION_PAGE_LIMIT,
@@ -825,73 +513,6 @@ export class AppServerSession {
     return (page.entries ?? []).length > 0;
   }
 
-  /** Reads one bounded page of historical fork/branch boundaries. */
-  async boundaries(
-    offset = 0,
-    limit = SESSION_PROJECTION_PAGE_LIMIT,
-  ): Promise<BoundaryPage> {
-    const page = await this.#call(
-      "session/boundaries",
-      { target: this.#target, offset, limit },
-      "boundaries",
-    );
-    return {
-      surfaceRevision: page.surface_revision,
-      boundaries: page.boundaries,
-      nextOffset: page.next_offset ?? undefined,
-    };
-  }
-
-  #domainReader(): DomainReader {
-    const epoch = this.#epoch, target = this.#target;
-    return {current:()=>!this.#released && !this.#serverClosed && epoch===this.#epoch,
-      page:async(page,offset)=>(await this.#call('conversation/checkpointPage',{target,agent_id:null,cut:page.read_cut,domain:page.domain,offset,limit:32},'checkpoint_page')).page,
-      value:async(page,item,offset)=>(await this.#call('conversation/checkpointValueRead',{target,agent_id:null,cut:page.read_cut,domain:page.domain,item_offset:Number(item.offset),path:[],offset,max_bytes:65536},'checkpoint_value_chunk')).chunk};
-  }
-  /** Read a finite native domain page without loading deferred item bodies. */
-  async observationPage(domain:string,offset=0,previous?:import('../../../protocol/app-server/v50.ts').CheckpointPage,owned:()=>boolean=()=>true) {
-    const source=this.observationCollections.find(row=>row.frontier.domain===domain),inspection=source?.inspection;
-    const cut=previous?.read_cut??source?.cut??this.#checkpoint?.read_cut,epoch=this.#epoch,target=this.#target;
-    if(!cut||!owned()||!Number.isSafeInteger(offset)||offset<0||previous&&previous.domain!==domain)throw new Error('Invalid observation page ownership.');
-    const {page}=await this.#call('conversation/checkpointPage',{target,agent_id:null,cut,domain,offset,limit:32},'checkpoint_page');
-    if(this.#released||this.#serverClosed||epoch!==this.#epoch||!owned()||inspection&&this.#currentTraceInspection()!==inspection||page.domain!==domain||page.cursor!==cut.revision||readEvidence(page.read_cut)!==readEvidence(cut)||page.items.length>32)throw new Error('Observation page was replaced.');
-    const selected=this.#currentTraceInspection(),content=selected?.head?.content;
-    if(inspection&&selected&&source&&/^messages\..+\.(?:blocks|tools)$/.test(domain)){
-      validateCanonicalInspectionPage(page,offset,source.frontier.total,previous?.domain===domain&&previous.next_offset===String(offset)||source.frontier.next_offset===String(offset));selected.collection=page;
-    }
-    if(inspection&&selected?.page&&content?.type==='messages'&&domain===content.page.domain){
-      const next=BigInt(offset)+BigInt(page.items.length),total=BigInt(content.page.total);
-      if(page.total!==content.page.total||next>total||page.items.some((item,index)=>item.offset!==String(BigInt(offset)+BigInt(index)))
-        ||(page.next_offset??null)!==(next<total?String(next):null)||next<total&&!page.items.length)throw new Error('Original Trace message page failed to advance.');
-      selected.collection=undefined;selected.messages=page.items.map(item=>traceInspectionMessage(item.value));
-    }
-    return page;
-  }
-  async observationValue(page:import('../../../protocol/app-server/v50.ts').CheckpointPage,itemOffset:number,path:string[],offset:number,owned:()=>boolean=()=>true,expectedEnd?:number) {
-    if(/^messages\..+\.(?:blocks|tools)$/.test(page.domain))throw new Error('Canonical source bytes use their advertised content references.');
-    if(!Number.isSafeInteger(itemOffset)||itemOffset<0||!page.items.some(item=>item.offset===String(itemOffset)))throw new Error('Invalid selected observation range.');
-    const epoch=this.#epoch,target=this.#target,current=()=>!this.#released&&!this.#serverClosed&&epoch===this.#epoch&&owned();
-    validateObservationCut(page.read_cut,target.conversation_id,null,page.cursor);
-    const range=await readTraceSelectedWindow({domain:page.domain,item_offset:itemOffset,path},page.read_cut,offset,async at=>(await this.#call('conversation/checkpointValueRead',{target,agent_id:null,cut:page.read_cut,domain:page.domain,item_offset:itemOffset,path,offset:at,max_bytes:65536},'checkpoint_value_chunk')).chunk,current,expectedEnd);
-    return {...range,end:range.readable_end};
-  }
-  async checkpointPage(domain: string, offset=0, previous?: import('../../../protocol/app-server/v50.ts').CheckpointPage) {
-    const cut=previous?.read_cut ?? this.#checkpoint?.read_cut;
-    if (!cut) throw new Error('Load a checkpoint first.');
-    const page=(await this.#call('conversation/checkpointPage',{target:this.#target,agent_id:null,cut,domain,offset,limit:32},'checkpoint_page')).page;
-    return {page,items:await domainItems<unknown>(page,this.#domainReader())};
-  }
-  async interactionValue(interaction: InteractionRef, itemOffset: number, page: import('../../../protocol/app-server/v50.ts').CheckpointPage | undefined, offset: number, path: string[] = []) {
-    const hasIdentity=this.#state.pendingInteractions.some(value=>value.interaction.conversation_id===interaction.conversation_id && value.interaction.interaction_id===interaction.interaction_id && !('request' in value) && Number(value.source_offset)===itemOffset)
-      || page?.items.some(value=>{const header=value.value as import('../../../protocol/app-server/v50.ts').RuntimeClientInteractionHeader | null;return Number(value.offset)===itemOffset && Number(header?.source_offset)===itemOffset && header?.interaction?.conversation_id===interaction.conversation_id && header.interaction.interaction_id===interaction.interaction_id;});
-    if(!Number.isSafeInteger(itemOffset) || itemOffset<0 || !hasIdentity) throw new Error('Interaction view no longer owns this identity.');
-    const cut=page?.read_cut ?? this.#checkpoint?.read_cut;
-    if(!cut) throw new Error('Load the native checkpoint first.');
-    const epoch=this.#epoch, target=this.#target;
-    const {chunk}=await this.#call('conversation/checkpointValueRead',{target,agent_id:null,cut,domain:'pending_interactions',item_offset:itemOffset,path,offset,max_bytes:65536},'checkpoint_value_chunk');
-    if(this.#released || epoch!==this.#epoch || !sameTarget(target,this.#target) || JSON.stringify(chunk.cut)!==JSON.stringify(cut) || chunk.domain!=='pending_interactions' || chunk.item_offset!==itemOffset || chunk.offset!==offset || JSON.stringify(chunk.path)!==JSON.stringify(path)) throw new Error('Interaction body read authority changed.');
-    return chunk;
-  }
   get catalogDeferredNotice(): string | undefined {
     const page = this.#modelCatalogPage;
     if (!page) return undefined;
@@ -902,31 +523,6 @@ export class AppServerSession {
   }
   #modelCatalogPage?: import('../../../protocol/app-server/v50.ts').CheckpointPage;
   get nextModelOffset() { return this.#modelCatalogPage?.next_offset == null ? undefined : Number(this.#modelCatalogPage.next_offset); }
-  /** One bounded capability page, preserving deferred fields and continuation. */
-  async capabilitiesPage(): Promise<import('../../../protocol/app-server/v50.ts').CheckpointPage> {
-    const target = this.#target;
-    const { page } = await this.#call('resources/read', { target }, 'domain_page');
-    if (this.#target !== target) throw new Error('Capability observation was replaced.');
-    return page;
-  }
-
-  // -------------------------------------------------------------------------
-  // Maintenance and settings
-  // -------------------------------------------------------------------------
-
-  async projections(after = "0") {
-    return (await this.#client.call("session/projections", { target:this.#target, after, limit:16 }, "projections")).page;
-  }
-  async projectionDetail(checkpointId:string, offset = 0, owned:()=>boolean=()=>true) {
-    this.#traceInspection=undefined;
-    const selected=this.#projectionInspection={epoch:this.#epoch,owned};
-    const detail=(await this.#call("session/projectionDetail", { target:this.#target, checkpoint_id:checkpointId, offset, limit:16 }, "projection_detail")).detail;
-    if(this.#released||this.#serverClosed||selected.epoch!==this.#epoch||this.#projectionInspection!==selected||!owned())throw new Error('Projection inspection viewport was replaced.');
-    validateObservationCut(detail.read_cut,this.#target.conversation_id,null,detail.read_cut.revision);
-    if(detail.checkpoint.checkpoint_id!==checkpointId||detail.items.some(item=>item.occurrence.checkpoint_id!==checkpointId))throw new Error('Projection inspection checkpoint changed.');
-    Object.assign(selected,{detail});
-    return detail;
-  }
   /** Runs one manual idle compaction to its durable terminal result. */
   async compactContext(): Promise<NonNullable<ResultOf<'context_compacted'>['compaction']>> {
     if (this.#released || this.#serverClosed) throw new Error('Session attachment is unavailable.');
@@ -943,7 +539,7 @@ export class AppServerSession {
   async goal(control: GoalControl): Promise<RuntimeClientGoalView> {
     if (control.action !== 'show') await this.#call('goal/control',{target:this.#target,control},'goal_mutation');
     const {page}=await this.#call('goal/control',{target:this.#target,control:{action:'show'}},'domain_page');
-    return domainValue<RuntimeClientGoalView>(page,this.#domainReader());
+    return domainValue<RuntimeClientGoalView>(page,this.#reads.domainReader());
   }
 
   #configurationCut?:import('../../../protocol/app-server/v50.ts').BoundedSessionApplication;
@@ -994,7 +590,7 @@ export class AppServerSession {
     const epoch = this.#epoch;
     const binding = this.#state.modelStatus?.binding_revision;
     const page=offset===undefined ? (await this.#call('session/models',{target:this.#target},'domain_page')).page
-      : this.#modelCatalogPage ? await this.#domainReader().page(this.#modelCatalogPage,offset) : undefined;
+      : this.#modelCatalogPage ? await this.#reads.domainReader().page(this.#modelCatalogPage,offset) : undefined;
     if(!page) throw new Error('Load the catalog before its continuation.');
     if (this.#released || this.#serverClosed || epoch !== this.#epoch
       || binding !== this.#state.modelStatus?.binding_revision) {
@@ -1018,7 +614,7 @@ export class AppServerSession {
     if (this.#repair) await this.#repair;
     const epoch=this.#epoch;
     const {page}=await this.#call('session/model',{target:this.#target},'domain_page');
-    const model=await domainValue<SessionModelView>(page,this.#domainReader());
+    const model=await domainValue<SessionModelView>(page,this.#reads.domainReader());
     if(this.#released||this.#serverClosed||epoch!==this.#epoch)throw new Error('Model read belongs to a retired attachment; reread native authority.');
     return model;
   }
@@ -1108,12 +704,12 @@ export class AppServerSession {
 
   async jobStatus(jobId: ToolExecutionId): Promise<RuntimeClientJob> {
     const {page}=await this.#call('job/status',{target:this.#target,job_id:jobId},'domain_page');
-    return domainValue<RuntimeClientJob>(page,this.#domainReader());
+    return domainValue<RuntimeClientJob>(page,this.#reads.domainReader());
   }
 
   async listJobs() {
     const {page}=await this.#call('job/list',{target:this.#target},'domain_page');
-    const jobs=await domainItems<RuntimeClientJob>(page,this.#domainReader());
+    const jobs=await domainItems<RuntimeClientJob>(page,this.#reads.domainReader());
     return {jobs,matched:Number(page.total),returned:jobs.length,limit:32,truncated:page.next_offset!=null};
   }
 
@@ -1126,17 +722,17 @@ export class AppServerSession {
   async agentPage(offset = 0, previous?: import('../../../protocol/app-server/v50.ts').CheckpointPage) {
     const epoch=this.#epoch;
     const page=previous
-      ? await this.#domainReader().page(previous,offset)
+      ? await this.#reads.domainReader().page(previous,offset)
       : (await this.#call('agent/list',{target:this.#target},'domain_page')).page;
     if(this.#released||epoch!==this.#epoch)throw new Error('Agent viewport was replaced.');
-    const agents=await domainItems<RuntimeClientAgent>(page,this.#domainReader());
+    const agents=await domainItems<RuntimeClientAgent>(page,this.#reads.domainReader());
     if(this.#released||epoch!==this.#epoch)throw new Error('Agent viewport was replaced.');
     return {page,agents};
   }
 
   async agentStatus(agentId: AgentId): Promise<RuntimeClientAgent> {
     const {page}=await this.#call('agent/status',{target:this.#target,agent_id:agentId},'domain_page');
-    return domainValue<RuntimeClientAgent>(page,this.#domainReader());
+    return domainValue<RuntimeClientAgent>(page,this.#reads.domainReader());
   }
 
   async sendMessage(agentId: AgentId, message: string, attachments: import("../../../protocol/app-server/v50.js").UploadReceipt[] = []) {
@@ -1238,12 +834,6 @@ export class AppServerSession {
     this.#epoch += 1;
     this.#observation.retire();
     await this.#call("session/switchNode", { target: this.#target, node_id: nodeId }, "session");
-  }
-
-  /** Applies a pure local transformation of transient client state. */
-  updateState(update: (state: PresentationState) => PresentationState): void {
-    this.#state = update(this.#state);
-    this.#publish();
   }
 
   // -------------------------------------------------------------------------

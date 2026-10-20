@@ -1,8 +1,9 @@
 import type { ComposerSubmission } from '../composer/draft';
 import { UploadFailure, uploadFailureState } from '../../client/uploads';
 import { uploadOperationId } from '../../../../protocol/app-server/upload';
-import { isOutcomeUncertain } from '../../client/app-server';
+import { isOutcomeUncertain } from '../../client/errors';
 import { WorkspaceHostError } from '../../workspaces/host';
+import type { AppServerClient } from '../../client/app-server';
 import type { SessionModelConfig, UploadReceipt, UploadOutcome } from '../../../../protocol/app-server/v50';
 
 export interface FirstDraft { submission?: ComposerSubmission; workspaceId: string; text: string; files: readonly File[]; attachmentIds?: readonly string[]; model?: SessionModelConfig }
@@ -190,4 +191,20 @@ export class FirstSubmissions {
       return false;
     }
   }
+}
+
+const owners = new WeakMap<AppServerClient, FirstSubmissions>();
+/** The application-layer first-submission owner of one client lifetime. The
+ * client never composes submissions; it only announces authority replacement
+ * and its own disposal, which this owner follows. */
+export function firstSubmissions(client: AppServerClient): FirstSubmissions {
+  let owner = owners.get(client);
+  if (!owner) {
+    const created = new FirstSubmissions();
+    client.onAuthorityRetired(() => created.retireAuthority());
+    client.onDispose(() => created.dispose());
+    owners.set(client, created);
+    owner = created;
+  }
+  return owner;
 }

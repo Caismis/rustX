@@ -10,7 +10,9 @@ import { TempFixture } from '../../tui/test/support/temp-fixture.ts';
 import { ProviderEmulator } from '../../tui/test/support/provider-emulator.ts';
 import { AppServerHost } from '../../tui/src/app-server/host.ts';
 import type { AppServerSession } from '../../tui/src/app-server/session.ts';
-import { AppServerClient, RpcFailure, type Socket } from '../src/client/app-server';
+import { AppServerClient } from '../src/client/app-server';
+import type { Socket } from '../src/client/contracts';
+import { RpcFailure } from '../src/client/errors';
 import type { AttachmentTarget, ContentRef, RuntimeClientCheckpoint } from '../../protocol/app-server/v50';
 
 /** Real native ownership and transport; every wait follows data or process exit. */
@@ -108,9 +110,9 @@ it('T10 T11 disconnect preserves native execution and WebUI/TUI recover exact bo
       && reference.representation === 'utf8_text';
     const reference=view.checkpoint!.content.find(binding=>originalInput(binding.content_ref))!.content_ref;
     const current=()=>web.getSnapshot().views[created.session.id]?.target===view.target;
-    stage = 'web original content ranges'; expect(await reconstruct(reference,offset=>web.readContent(view.target!,undefined,reference,offset,current))).toEqual(bytes);
+    stage = 'web original content ranges'; expect(await reconstruct(reference,offset=>web.reads.readContent(view.target!,undefined,reference,offset,current))).toEqual(bytes);
     const execution=view.snapshot!.attempt!.phase;
-    stage = 'web forged-frontier refusal'; await expect(web.readContent(view.target!,undefined,{...reference,readable_end:reference.readable_end+1},0,current)).rejects.toBeInstanceOf(RpcFailure);
+    stage = 'web forged-frontier refusal'; await expect(web.reads.readContent(view.target!,undefined,{...reference,readable_end:reference.readable_end+1},0,current)).rejects.toBeInstanceOf(RpcFailure);
     expect(web.getSnapshot().views[created.session.id]!.snapshot!.attempt!.phase).toEqual(execution);
     stage = 'web explicit repair'; await web.refresh(created.session.id);view=web.getSnapshot().views[created.session.id]!;expect(view.observationState).toBe('following');expect(view.snapshot!.attempt!.phase).toEqual(execution);
     stage = 'original provider request count'; expect(await provider.requests()).toHaveLength(1);

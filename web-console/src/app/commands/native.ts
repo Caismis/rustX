@@ -1,6 +1,7 @@
 import { readEditor } from '../../../../protocol/app-server/editor';
 import type { CompletedResponseView, AttachmentTarget, SessionUserMessageBoundaryObservation, CanonicalContentLocator } from '../../../../protocol/app-server/v50';
-import { AppServerClient, sameTarget } from '../../client/app-server';
+import { AppServerClient } from '../../client/app-server';
+import { sameTarget } from '../../../../protocol/app-server/attachment-identity';
 import { selectSessionModel } from '../model-preference';
 import { lineageSwitchSafe } from '../../bindings/projection';
 
@@ -30,8 +31,8 @@ export class CommandSession {
   async models() {
     this.requireCurrent();
     const [current, catalog] = await Promise.all([
-      this.client.modelRead(this.target,this.current),
-      this.client.modelCatalogRead(this.target,this.current),
+      this.client.reads.modelRead(this.target,this.current),
+      this.client.reads.modelCatalogRead(this.target,this.current),
     ]);
     this.requireCurrent();
     if (this.client.getSnapshot().views[this.sessionId]?.modelMutation) await this.client.repairAgentModel(this.sessionId);

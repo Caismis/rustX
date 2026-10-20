@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { OutcomeUncertain, RequestNotDispatched } from '../src/client/app-server';
+import { OutcomeUncertain, RequestNotDispatched } from '../src/client/errors';
 import { Server } from './fixture';
 const servers: Server[] = [];
 afterEach(() => { servers.forEach(s => s.client.disconnect()); vi.restoreAllMocks(); });
@@ -55,7 +55,7 @@ it.each(['throw', 'close'] as const)('synchronous send %s is one attempted uncer
   const result = await s.client.request({ method: 'turn/start', params: { target: s.target('A'), content: [] } }, 'inbound_accepted', () => acknowledgements++).catch(error => error);
   expect(result).toBeInstanceOf(OutcomeUncertain); expect(attempts).toBe(1); expect(acknowledgements).toBe(0);
   expect(s.client.getSnapshot().uncertain.filter(row => row.method === 'turn/start')).toHaveLength(1);
-  expect((s.client as unknown as { pending: Map<string, unknown> }).pending.size).toBe(0);
+  expect((s.client as unknown as { pipeline: { size: number } }).pipeline.size).toBe(0);
   expect(count(s, 'turn/start')).toBe(0); await s.connect(); expect(count(s, 'turn/start')).toBe(0);
 });
 it('throwing diagnostic observers cannot interrupt synchronous response correlation', async () => {
@@ -68,7 +68,7 @@ it('throwing diagnostic observers cannot interrupt synchronous response correlat
   });
   const stop = s.client.log.subscribe(() => { throw new Error('observer'); });
   const result = await s.client.request({ method: 'session/read', params: { session_id: 'A' } }, 'session'); stop();
-  expect(result.session.id).toBe('A'); expect((s.client as unknown as { pending: Map<string, unknown> }).pending.size).toBe(0);
+  expect(result.session.id).toBe('A'); expect((s.client as unknown as { pipeline: { size: number } }).pipeline.size).toBe(0);
   const entries = s.client.log.getSnapshot().entries.slice(-2); expect(entries.map(e => e.direction)).toEqual(['out', 'in']);
   expect(JSON.parse(entries[0].json).id).toBe(JSON.parse(entries[1].json).id);
 });
@@ -79,8 +79,8 @@ it.each(['direct', 'validated'] as const)('reentrant caller predicate at final %
   let final = false, release: Promise<void> | undefined, resume!: () => void, entered!: () => void;
   const order: string[] = [], ready = new Promise<void>(resolve => { entered = resolve; });
   const gate = new Promise<boolean>(resolve => { resume = () => resolve(true); });
-  const transport = s.client as unknown as { sendPending(pending: unknown): void };
-  const sendPending = transport.sendPending.bind(s.client);
+  const transport = (s.client as unknown as { pipeline: { sendPending(pending: unknown): void } }).pipeline;
+  const sendPending = transport.sendPending.bind(transport);
   vi.spyOn(transport, 'sendPending').mockImplementation(pending => { final = true; try { sendPending(pending); } finally { final = false; } });
   const predicate = () => {
     order.push(final ? 'final-caller' : 'caller');
@@ -98,7 +98,7 @@ it.each(['direct', 'validated'] as const)('reentrant caller predicate at final %
   expect(await outcome).toBeInstanceOf(RequestNotDispatched); expect(s.client.getSnapshot().uncertain).toEqual([]); expect(s.claims()).toHaveLength(1);
   s.reply(await s.waitFor('session/detach', 1)); await release;
   expect(count(s, 'session/detach')).toBe(1); expect(s.claims()).toHaveLength(0);
-  expect((s.client as unknown as { pending: Map<string, unknown> }).pending.size).toBe(0);
+  expect((s.client as unknown as { pipeline: { size: number } }).pipeline.size).toBe(0);
 });
 
 it('a caller releasing A cannot revoke the independent exact proof for B', async () => {
@@ -120,7 +120,7 @@ it('a sent callback cannot replace correlated native success with a local observ
   }); void work.catch(() => {});
   const request = await s.waitFor('turn/start', 1); s.reply(request);
   expect((await work).type).toBe('inbound_accepted'); expect(sent).toBe(1); expect(acknowledged).toBe(1);
-  expect(s.client.getSnapshot().uncertain).toEqual([]); expect((s.client as unknown as { pending: Map<string, unknown> }).pending.size).toBe(0);
+  expect(s.client.getSnapshot().uncertain).toEqual([]); expect((s.client as unknown as { pipeline: { size: number } }).pipeline.size).toBe(0);
 });
 
 
@@ -131,7 +131,7 @@ it('non-reentrant final validation sends and settles exactly once', async () => 
   });
   expect(result.type).toBe('inbound_accepted'); expect([validated, sent, acknowledged]).toEqual([1, 1, 1]);
   expect(count(s, 'turn/start')).toBe(1); expect(s.client.getSnapshot().uncertain).toEqual([]);
-  expect((s.client as unknown as { pending: Map<string, unknown> }).pending.size).toBe(0);
+  expect((s.client as unknown as { pipeline: { size: number } }).pipeline.size).toBe(0);
 });
 
 it('upload freshness revocation after preparation cannot enter the carrier', async () => {

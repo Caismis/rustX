@@ -7,6 +7,7 @@ import { ConversationLive } from '../src/app/agent/ConversationLive';
 import { useForkPoint } from '../src/app/agent/ForkPoint';
 import { App } from '../src/app/App';
 import { Server, snapshot } from './fixture';
+import { firstSubmissions } from '../src/app/new-conversation/first-submit';
 
 let server: Server | undefined;
 afterEach(() => { cleanup(); server?.client.disconnect(); localStorage.clear(); });
@@ -90,9 +91,9 @@ for (const pendingInput of [false, true]) it.each(['B', 'A'])(`the source action
   if (pendingInput) {
     server.held.add('turn/start');
     const { firstSubmitPort } = await import('../src/app/new-conversation/port');
-    input = server.client.firstSubmissions.submit('native-input', { workspaceId: '', text: 'Already admitted input', files: [] }, firstSubmitPort(server.client, server.workspaceHost, () => true, () => () => {}, true), undefined, undefined, 'A');
+    input = firstSubmissions(server.client).submit('native-input', { workspaceId: '', text: 'Already admitted input', files: [] }, firstSubmitPort(server.client, server.workspaceHost, () => true, () => () => {}, true), undefined, undefined, 'A');
     await server.waitFor('turn/start', 1);
-    expect(server.client.firstSubmissions.session('A')?.phase).toBe('admitting');
+    expect(firstSubmissions(server.client).session('A')?.phase).toBe('admitting');
   }
   localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
   const before = server.requests.length, target = server.client.target('A');

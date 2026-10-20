@@ -12,7 +12,7 @@ import { RepairNotice, repairNoticeText } from '../src/app/RepairNotice';
 import { repairChangeLabel } from '../src/app/settings/advanced/AutoRepair';
 import { inspectionAcknowledger, RepairAcknowledgements } from '../src/app/repair-notices';
 import { settingsNavigationMachine, type OwnerResolution, type RepairInspection } from '../src/app/settings/machines/navigation';
-import { RpcFailure } from '../src/client/app-server';
+import { RpcFailure } from '../src/client/errors';
 import type { ProductHostWorkspaces } from '../src/workspaces/host';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import { translator } from '../src/locale/translation';

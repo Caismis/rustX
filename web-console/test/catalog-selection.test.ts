@@ -61,7 +61,7 @@ it('T15 opening a model picker retains finite headers and leaves growing rows de
   result.page.items[0].deferred = true;
   server.handlers.set('session/models', () => result);
   const before = server.requests.length;
-  const loaded = await server.client.modelCatalogRead(server.target('A'), () => true);
+  const loaded = await server.client.reads.modelCatalogRead(server.target('A'), () => true);
   expect(loaded.catalog.models).toEqual([]);
   expect(loaded.page.items[0].deferred).toBe(true);
   expect(server.requests.slice(before).map(row => row.request.method)).toEqual(['session/models']);

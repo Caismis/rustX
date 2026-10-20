@@ -5,7 +5,7 @@ import { useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import type { RuntimeClientAgent, RuntimeClientJob } from '../../protocol/app-server/v50';
-import { RpcFailure } from '../src/client/app-server';
+import { RpcFailure } from '../src/client/errors';
 import { RuntimeFacts as OtherActivity } from '../src/app/agent/Activity';
 import { AgentCard } from '../src/app/components/ActivityCards';
 import type { ComponentProps } from 'react';

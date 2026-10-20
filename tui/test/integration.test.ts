@@ -35,7 +35,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
 
-import { CommandDispatcher, renderModel } from "../src/commands/dispatcher.ts";
+import { CommandDispatcher } from "../src/commands/dispatcher.ts";
+import { renderModel } from "../src/commands/presentation.ts";
 import { parseArguments } from "../src/cli.ts";
 import { prepareStartup } from "../src/startup.ts";
 

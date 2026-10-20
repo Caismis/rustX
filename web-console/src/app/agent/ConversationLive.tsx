@@ -4,7 +4,8 @@ import { DeferredContent } from './DeferredContent';
 import { CollectionPages } from './CollectionPages';
 import { useSubagents } from './subagent-context';
 import { ToolInspectionContext, useToolTraceNavigation } from './tool-inspection';
-import type { AppServerClient, SessionView } from '../../client/app-server';
+import type { AppServerClient } from '../../client/app-server';
+import type { SessionView } from '../../client/contracts';
 import { shallowEqual, useClientSelector } from '../../client/selectors';
 import { useModelRetryFeedback } from './ModelRetry';
 import { AgentTranscript } from './AgentTranscript';
@@ -27,6 +28,7 @@ import { useTranslation } from '../../locale/react';
 import { TurnNavigator } from './TurnNavigator';
 import { transcriptContent, transcriptPresentation, turnAnchor } from '../../client/transcript';
 import { type ForkOrigin, useForkPoint } from './ForkPoint';
+import { firstSubmissions } from '../new-conversation/first-submit';
 
 export function ConversationLive({ client, sessionId, mode, disabled, historicalPending, onHistorical, onOpenSource, previewCurrent, onMode }: {
   client: AppServerClient; sessionId?: string; mode: 'chat' | 'trajectory'; disabled: boolean; historicalPending?: boolean;
@@ -37,7 +39,7 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
 }) {
   const scope = useSubagents();
   const tx=useTranslation(), viewport=useRef<ChatViewport>(null), [active,setActive]=useState<string | null>();
-  const submission = useSyncExternalStore(client.firstSubmissions.subscribe, () => sessionId ? client.firstSubmissions.session(sessionId) : undefined);
+  const submission = useSyncExternalStore(firstSubmissions(client).subscribe, () => sessionId ? firstSubmissions(client).session(sessionId) : undefined);
   const waiting = !!submission && ['attaching', 'uploading', 'admitting'].includes(submission.phase);
   const tracePreview = useClientSelector(client, state => {
     const view = sessionId ? state.views[sessionId] : undefined;
@@ -160,7 +162,7 @@ export function ConversationTotals({ client, sessionId }: { client: AppServerCli
 
 function PendingMessage({ client, sessionId }: { client: AppServerClient; sessionId: string }) {
   const tx = useTranslation();
-  const flow = useSyncExternalStore(client.firstSubmissions.subscribe, () => client.firstSubmissions.session(sessionId));
+  const flow = useSyncExternalStore(firstSubmissions(client).subscribe, () => firstSubmissions(client).session(sessionId));
   if (!flow || !['attaching', 'uploading', 'admitting'].includes(flow.phase)) return null;
   return <div className={pendingCss.root} data-pending-message="">
     <UserMessage label={tx('agent:message.your-message')} attachments={flow.draft.files.map((file, i) => <AttachmentCard key={flow.attachmentIds[i]} name={file.name} image={file.type.startsWith('image/')}/>)}><div className={pendingCss.text}>{flow.draft.text}</div></UserMessage>

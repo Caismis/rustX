@@ -251,14 +251,17 @@ terminal inference, or activation generation is performed.
 | `app-server/child-process.ts` | spawn, stdio, bounded stderr tail, stdin close, wait, fallback termination | anything semantic; it never reads stdout |
 | `protocol/jsonl.ts` | LF framing, CRLF, the 1 MiB bound in encoded bytes | protocol meaning |
 | `app-server/client.ts` | request ids, the pending RPC map, correlation, event delivery, ordered writes, terminal settlement | conversation state |
-| `app-server/session.ts` | attach receipt, checkpoint install, subscribe, resync repair, detach | agent/session semantics |
-| `presentation/projection.ts` | the ephemeral render cache and bounded transcript page | canonical history, authority of any kind |
+| `app-server/session.ts` | attach receipt, checkpoint install, subscribe, resync repair, detach, the Session epoch and control gate | agent/session semantics |
+| `app-server/session-readers.ts` | bounded epoch-fenced reads: inspection viewports, deferred fields, deliveries, child pages | the attachment or the fold |
+| `presentation/projection.ts` | the terminal transcript adaptation over the shared native fold (`protocol/app-server/projection.ts`, evaluated once per event or batch) | native-owned facts, canonical history, authority of any kind |
 | `presentation/tools.ts` | the `ToolCallId` correlation used for display | tool lifecycle, which it only reads |
 | `presentation/todos.ts` | reading the runtime's task-list projection and folding newly committed `todo` results into it | task identity, status, and dependencies, which the runtime owns |
 | `sanitize.ts` | the one rule for what externally-derived text may be handed to a terminal | what any of that text *means* |
-| `commands/` | slash-command parsing, dispatch to canonical operations | parallel runtime semantics |
+| `commands/` | slash-command parsing and dispatch (`dispatcher.ts`), typed outcomes (`outcome.ts`), pure Markdown renderers (`presentation.ts`) | parallel runtime semantics |
 | `ui/components/` | the semantic presentation grammar | every fact it displays |
 | `ui/preferences.ts` | reasoning visibility and expanded cards | anything the runtime owns |
+| `ui/app.ts` | global focus and exit, Session binding, draft/submit, the presentation lease | every fact it displays |
+| `ui/human-input.ts`, `ui/selectors.ts`, `ui/conversation-view.ts` | HITL focus/paging/responses; selection popups; the total-render conversation view — each under the app's one lease | lifecycle or epoch state |
 | `ui/` | Pi components and rendering | every fact it displays |
 
 ## Presentation surfaces

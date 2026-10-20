@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import type { SessionModelConfig } from '../../../protocol/app-server/v50';
-import { type AppServerClient, sameTarget } from '../client/app-server';
+import type { AppServerClient } from '../client/app-server';
+import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 
 const KEY = 'rustx-new-session-model-v1';
 /** Browser product preference, scoped by App Server authority. It is only

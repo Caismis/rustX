@@ -1,7 +1,7 @@
 import{traceReceipt}from'./fixture';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { MethodResult } from '../../protocol/app-server/v50';
-import { OutcomeUncertain, RpcFailure } from '../src/client/app-server';
+import { OutcomeUncertain, RpcFailure } from '../src/client/errors';
 import { checkpoint, Server, snapshot } from './fixture';
 import { traceRecord, requestDetail } from './trace-fixture';
 const servers: Server[] = [];

@@ -20,7 +20,7 @@ import {
 import { AppServerHost } from "../../src/app-server/host.ts";
 import type { AppServerSession } from "../../src/app-server/session.ts";
 import { CommandDispatcher } from "../../src/commands/dispatcher.ts";
-import type { DebugDiagnostics } from "../../src/commands/dispatcher.ts";
+import type { DebugDiagnostics } from "../../src/commands/presentation.ts";
 import type {
   AttachmentTarget,
   RuntimeClientSnapshot,

@@ -11,7 +11,7 @@ export function DeferredContent({ client, target, agentId, bindings, owned, read
   const generation = useRef(0), latestOwned = useRef(owned);latestOwned.current=owned;
   const identity = JSON.stringify(bindings.map(binding => [binding.path,binding.source_path,contentRefKey(binding.content_ref)]));
   const currentIdentity = useRef(identity); currentIdentity.current = identity;
-  const cache = useMemo(() => new ContentCache((ref,offset,_max,current)=>{if(read)return read(ref,offset,current);if(!client||!target)throw new Error('Content source is unavailable.');return client.readContent(target,agentId,ref,offset,current);}), [client,target,agentId,read]);
+  const cache = useMemo(() => new ContentCache((ref,offset,_max,current)=>{if(read)return read(ref,offset,current);if(!client||!target)throw new Error('Content source is unavailable.');return client.reads.readContent(target,agentId,ref,offset,current);}), [client,target,agentId,read]);
   useEffect(() => () => { generation.current++; cache.clear(); }, [cache, identity]);
   const [range, setRange] = useState<{ identity:string; cache:ContentCache; index: number; offset: number; next?: number; text?: string; loading?: boolean; error?: string }>();
   const reading=range?.identity===identity&&range.cache===cache?range:undefined;
