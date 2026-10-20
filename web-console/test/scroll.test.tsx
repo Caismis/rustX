@@ -359,6 +359,7 @@ for (const outcome of ['completed', 'timed_out'] as const) {
 
 it('an older page prepends above the reading position and clipped ownership comes from the merged projection', async () => {
   const v = await clippedReading('completed');
+  vi.spyOn(v.server.client, 'loadInitialHistory').mockResolvedValue();
   v.ui.unmount();
   try {
     await act(async () => { v.server.snapshots.set('A', { ...snapshot(), transcript: { entries: v.entries.slice(2), next_cursor: '120' } }); await v.server.client.refresh('A'); });
@@ -380,7 +381,7 @@ it('an older page prepends above the reading position and clipped ownership come
     const older = v.server.client.loadEarlier('A'), read = await v.server.waitFor('session/transcript', 1);
     expect(read.params).toMatchObject({ limit: 32 }); expect(read.params).toHaveProperty('at', { type: 'older', before: '120', cut: null });
     await act(async () => {
-      v.server.socket.success(read, { type: 'transcript_window', window: { cut: { conversation_id: 'conversation-A', journal: '1000', transcript: '1000', mutation_revision: '0' ,ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'}, page: { entries: v.entries.slice(0, 2), next_cursor: '100' } } });
+      v.server.socket.success(read, { type: 'transcript_window', window: { cut: { conversation_id: 'conversation-A', journal: '1000', transcript: '1000', mutation_revision: '0' ,ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'}, page: { entries: v.entries.slice(0, 2), next_cursor: null } } });
       await older;
     });
     v.flush();
@@ -487,6 +488,7 @@ it('explicit latest and navigation supersede undelivered earlier scroll samples'
 
 for (const when of ['before reply', 'before layout'] as const) it(`real viewport scroll retires a distant native Turn navigation ${when}`, async () => {
  const v=await clippedReading('completed');v.ui.unmount();
+ vi.spyOn(v.server.client, 'loadInitialHistory').mockResolvedValue();
  try {
   await act(async()=>{v.server.snapshots.set('A',{...snapshot(),transcript:{entries:v.entries.slice(2),next_cursor:'120'}});await v.server.client.refresh('A');});
   v.server.held.add('session/transcript');
@@ -523,6 +525,7 @@ for (const when of ['before reply', 'before layout'] as const) it(`real viewport
 
 it('a user scroll retires disposable history preparation without touching active reading or native attachment', async () => {
  const v=await clippedReading('completed');v.ui.unmount();
+ vi.spyOn(v.server.client, 'loadInitialHistory').mockResolvedValue();
  try {
   const retired=vi.fn();
   const state=structuredClone(v.server.snapshots.get('A')!); state.transcript.inherited_through='0';
@@ -640,4 +643,26 @@ it('Return to latest survives delayed history backfill after its first frame, un
   const reading = v.top();
   v.grow(100); v.flush(); expect(v.top()).toBe(reading);
   expect(v.ui.getByRole('button', { name: 'Return to latest' })).toBeTruthy();
+});
+
+it('initial history hydration follows the latest message and subsequent output without a reader prepend', () => {
+ let frame: FrameRequestCallback | undefined, height = 100, top = 0;
+ vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { frame = cb; return 1; });
+ vi.stubGlobal('cancelAnimationFrame', () => { frame = undefined; });
+ vi.stubGlobal('ResizeObserver', class { constructor(cb: () => void) { resize = cb; } observe() {} disconnect() {} });
+ const content = (ids: string[]) => ids.map(id => <div key={id} data-chat-anchor-key={id}>{id}</div>);
+ const ui = render(<ChatViewport initialHistoryLoading>{content(['a','b'])}</ChatViewport>);
+ const viewport = ui.container.querySelector('.conversation-scroll') as HTMLElement;
+ Object.defineProperties(viewport, { scrollHeight: { get: () => height }, clientHeight: { get: () => 200 }, scrollTop: { get: () => top, set: value => { top = value; } } });
+ const positions: Record<string, number> = { a: 0, b: 100, older: -200 };
+ vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockImplementation(function(this: HTMLElement) {
+  const offset = ui.container.querySelector('[data-chat-anchor-key="older"]') ? 200 : 0;
+  const y = this.dataset.chatAnchorKey ? positions[this.dataset.chatAnchorKey] + offset - top : 0;
+  return { top:y, bottom:y+100, x:0, y, height:100, width:500, left:0, right:500, toJSON(){} };
+ });
+ const flush = () => { const callback = frame; frame = undefined; callback?.(0); };
+ flush(); expect(top).toBe(0);
+ height = 400; ui.rerender(<ChatViewport initialHistoryLoading={false}>{content(['older','a','b'])}</ChatViewport>);flush();
+ expect(top).toBe(200);height = 800;resize();flush();expect(top).toBe(600);
+ expect(ui.queryByRole('button',{name:'Return to latest'})).toBeNull();
 });

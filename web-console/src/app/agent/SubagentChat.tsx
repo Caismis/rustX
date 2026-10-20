@@ -34,12 +34,13 @@ export function SubagentChat({ client, sessionId, admission, agent, snapshot, wo
   useEffect(() => () => reader?.dispose(), [reader]);
   useEffect(() => { if (!visible) reader?.suspend(); else if (snapshot) reader?.observe(snapshot); }, [reader, snapshot, visible]);
   const reading = useSyncExternalStore(reader?.subscribe ?? noopSubscribe, reader?.getSnapshot ?? (() => empty));
+  useEffect(() => { if (visible && snapshot) void reader?.loadInitial(); }, [reader, visible, !!snapshot]);
   const currentId = useMemo(() => snapshot?.attempt && ['admitted','running'].includes(snapshot.attempt.phase.type) ? {
     conversation_id: snapshot.conversation_id, attempt_id: snapshot.attempt.attempt_id,attempt_id_source:snapshot.attempt.attempt_id_source,
   } : undefined, [snapshot?.conversation_id, snapshot?.attempt?.attempt_id,snapshot?.attempt?.attempt_id_source, snapshot?.attempt?.phase.type]);
   const source = useObservationSource();
   return <ChatViewport chromeVisible={visible} ref={viewport} latestLabel={tx('agent:agent-transcript.return-to-latest')}
-    historical={!!reading.history?.window} onLatest={() => reader?.returnToLatest()} onActiveTurn={setActive}
+    initialHistoryLoading={reading.history?.initialLoading} historical={!!reading.history?.window} onLatest={() => { reader?.returnToLatest(); void reader?.loadInitial(); }} onActiveTurn={setActive}
     latestTurn={currentId && turnAnchor(currentId)}
     overlay={reader && <TurnNavigation page={reading.outline} currentId={currentId} location={currentTurnLocation(snapshot)}
       loading={reading.outlineLoading} pending={reading.pending} error={reading.navigationError ?? reading.outlineError}

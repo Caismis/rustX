@@ -1,3 +1,4 @@
+import { cfg3Effective } from './cfg3-data';
 import { domainReceipt, compactReceipt } from './fixture';
 import { localeController } from '../src/locale/controller';
 import { translator } from '../src/locale/translation';
@@ -103,10 +104,13 @@ function nativeFixture() {
   const nodes: SessionNodeObservation[] = [{ id: 'node-A', conversation_id: 'conversation-A', ordinal: '1', origin: { type: 'new' } }];
   const committed: Extract<MethodResult, { type: 'session_transition' }>[] = [];
   let model = 'fixture/first';
-  const modelView = () => ({ configured: { model }, effective: { model }, summary: { mode: 'session' } }) as Extract<MethodResult, { type: 'model' }>['model'];
+  const modelView = () => { const base = cfg3Effective().effective_model!; return { ...base, configured: { model }, effective: { ...base.effective!, model } }; };
   server.handlers.set('session/model', () => (domainReceipt('model',[modelView()])));
-  server.handlers.set('session/models', () => (domainReceipt('model_catalog.models',({ models: [{ model: 'fixture/first' }, { model: 'fixture/second' }] }).models??[]) as Extract<MethodResult, { type: 'models' }>));
-  server.handlers.set('session/setModel', request => { if (request.method !== 'session/setModel') throw new Error('wrong method'); model = request.params.config.model; return {type:'model_set',settings_revision:'1'}; });
+  server.handlers.set('session/models', () => (domainReceipt('model_catalog.models',({ models: [{ model: 'fixture/first' }, { model: 'fixture/second' }] }).models??[])));
+  server.handlers.set('session/setModel', request => { if (request.method !== 'session/setModel') throw new Error('wrong method'); model = request.params.config.model;
+    const next = { ...server.snapshots.get('A')!, model: { ...modelView(), configured: request.params.config } };
+    server.snapshots.set('A', next); server.nodeSnapshots.set('node-A', next);
+    return {type:'model_set',settings_revision:'1'}; });
   server.handlers.set('session/boundaries', () => ({ type: 'boundaries', surface_revision: boundary.surface_revision, boundaries: [boundary] }));
   server.handlers.set('session/tree', request => ({ type: 'tree', nodes: request.method === 'session/tree' && request.params.session_id === 'B' ? [{ id: 'node-B', conversation_id: 'conversation-B', ordinal: '1', origin: { type: 'new' } }] : nodes }));
   const transition = (request: Request): MethodResult => {

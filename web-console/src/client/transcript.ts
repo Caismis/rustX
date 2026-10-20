@@ -1,6 +1,7 @@
 import { attemptOwnerKey } from '../../../protocol/app-server/attempt-identity';
 import type { ContentBinding, ConversationReadCut, ConversationWindow, ObservedTurn, ObservedTurnPage, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v51';
 import { contentRefKey } from '../../../protocol/app-server/content-identity';
+import { HISTORY_WINDOW_ROWS } from './history-policy';
 
 export const HISTORY_PAGE_SIZE = 32;
 // Native Turn directory pages have their own count bound.
@@ -14,7 +15,7 @@ export function turnPageCount(page: ObservedTurnPage): number {
   if (total < 0n || total > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error(`Native Turn directory is unavailable at its exact total ${page.total}.`);
   return Number(total);
 }
-export const HISTORY_LIMIT = 256;
+export const HISTORY_LIMIT = HISTORY_WINDOW_ROWS;
 export const HISTORY_MAX_BYTES = 8 * 1024 * 1024;
 /** Finite presentation window. The runtime snapshot independently owns the live tail. */
 export interface TranscriptCache {
@@ -22,6 +23,8 @@ export interface TranscriptCache {
   epoch: number;
   window?: ConversationWindow;
   loading?: boolean;
+  /** Passive initial hydration must preserve tail following, unlike a reader's prepend. */
+  initialLoading?: boolean;
   error?: string;
 }
 export function entryIdentity(entry: RuntimeClientTranscriptEntry): string {

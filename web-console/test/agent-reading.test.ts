@@ -26,7 +26,9 @@ async function setup() {
     return { type: 'conversation_turns', page: { cut, total: "130", offset, turns: Array.from({ length: Math.min(64, 130 - offset) }, (_, index) => turn(offset + index + 1)) } };
   });
   server.handlers.set('agent/transcript', request => {
-    if (request.method !== 'agent/transcript' || request.params.at.type !== 'turn_ordinal') throw Error('turn window');
+    if (request.method !== 'agent/transcript') throw Error('turn window');
+    if (request.params.at.type === 'older') return { type: 'transcript_window', window: { cut, page: { entries: [entry(1)], next_cursor: null } } };
+    if (request.params.at.type !== 'turn_ordinal') throw Error('turn window');
     return window(request.params.at.ordinal);
   });
   reader.observe(live(130)); await reader.refreshTurns();
@@ -88,7 +90,7 @@ it('reads older/newer finite windows at the child cut and bounds retained entrie
   expect(reader.getSnapshot().history?.page.entries?.map(entry => entry.cursor)).toEqual(['0', '1', '2']);
   reader.returnToLatest();
   for (let n = 132; n < 500; n++) reader.observe({ ...live(n), transcript: { entries: [entry(n - 1), entry(n)], next_cursor: String(n - 1) } });
-  expect(reader.getSnapshot().history?.page.entries!.length).toBeLessThanOrEqual(256);
+  expect(reader.getSnapshot().history?.page.entries!.length).toBeLessThanOrEqual(500);
   expect(turnKey(turn(1).id)).not.toBe(turnKey(turn(130).id));
 });
 it('parent detachment rejects pending child outline adoption', async () => {

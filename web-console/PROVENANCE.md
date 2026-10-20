@@ -2963,3 +2963,83 @@ and overflow checks passed. Browser URLs were `http://127.0.0.1:5273` and
 `/tmp/rustx-model-surface-{before,after}-<pane>-<theme>-<width>.png` and
 `/tmp/rustx-model-surface-control-{old,new}.png`. Other engines and macOS were
 not exercised. No protocol, React behavior or TUI changes.
+
+## Goal diagnostics, history windows and confirmed model display (2026-10-20)
+
+Reference: DSH `687f282e8625c6b8d11ff58211a90524be2e4317`,
+`api/session-controller/src/client/sessions/session.ts` (`PAGE_MESSAGES`,
+`HISTORY_PAGE_OPTIONS`, `loadOlder`, `doOpen`) and the existing Chat/Trajectory
+views using that Session history. DSH requests at least 50 messages and two
+Turns rather than exposing each small transport page as a reading window.
+The rustX Web client now assembles initial and older reading windows from its
+unchanged native bounded pages. Transcript storage retains at most 500 records
+and its existing byte ceiling; Trace keeps its existing count/byte ceilings.
+Metadata, cuts, body references, live updates and explicit jump ownership remain
+native. Root and child reading surfaces share the threshold policy; ordinary
+contiguous initial history retains live presentation.
+
+Goal observations are model context, not ordinary Chat content. Suppress their
+native typed `goal_status` messages in the current-context fallback, loaded
+transcript and Message component. Goal state remains in the existing Goal dock,
+and Trace diagnostics retain their context data. No matching on rendered prose.
+
+The model-picker regression is a deferred body transition: the checkpoint can
+publish model status without its growing configuration body, and AgentControls
+then fell back to Workspace settings or "Choose model" before the body reread.
+Retain the last confirmed display within the same attachment while the exact
+new binding is read, and reconcile native mutation before reading that body.
+Unconfirmed/stale configuration still cannot authorize a selection. Native
+configuration, execution, persistence, and TUI behavior are unchanged.
+
+Browser plugin not available; use the pinned repository Playwright browser.
+The target flows are: open a short history with many Goal context entries → all
+Chat messages load without a manual action and Goal JSON stays out of Chat →
+Trajectory loads the same short conversation automatically with context rows →
+return to Chat with its draft intact. Also switch to a different model in a real
+native Session, observe confirmed labels across painted frames/checkpoints and
+reopen its menu. Validate desktop/light and narrow/dark, page identity, content,
+console/overlay health, overflow, focus, scroll and existing lifecycle guards.
+
+Initial hydration carries an explicit presentation flag into ChatViewport. A
+passive prepend keeps a following reader at the newest message; a user-owned
+scroll/jump still keeps its anchor and cancels obsolete work. Automatic loading
+starts on opening the reading scope and on an explicit return to latest, not on
+every cache epoch. This avoids a repeated hydration loop during child observation
+replacement or a live-cut rebase. The existing scroll/navigation checks and a
+new hydration-following check cover that distinction.
+
+Native model confirmation now verifies the chosen model/profile at the current
+binding revision, including its deferred body, before the menu reports success.
+The deferred-body regression holds those reads and checks that the menu remains
+busy, the Workspace default never replaces the confirmed label, and exactly one
+model mutation is dispatched. The command fixture now reflects its acknowledged
+model in the native checkpoint as well as the model domain; an ACK-only fixture
+cannot stand in for confirmed selection.
+
+The existing native Chat regression is updated to expect short history to load
+automatically rather than require clicks per wire chunk. The retained image
+component also retains its explicit load intent through reconnect: the browser
+asserts a replacement object URL under fresh authority, a single live lease,
+successful decode/lightbox and the existing preview/upload checks. No attachment
+implementation or screenshot/noise policy changed.
+
+Browser verification passed all nine selected scenarios: two short Chat/Trace +
+Goal flows, two real native different-model selections, two pending model/effort
+flows, two child Turn-navigation flows and the native history/rich-response/
+reconnect/image/lightbox/upload workflow. Real different-model tests also prove
+zero provider requests: changing configuration does not generate a response.
+URLs were `http://127.0.0.1:5273` (production) and
+`http://127.0.0.1:5274` (fixtures), using pinned Linux Chromium at 1440px/390px,
+with light/dark and English/Chinese coverage across those scenarios. Page
+identity, meaningful content, console/error-overlay health, viewport bounds,
+selection/checkpoint identity, focus, scrolling, drafts and reference decoding
+passed. Evidence is `/tmp/rustx-goal-history-{chat,trace}-{1440,390}.png` and
+`/tmp/rustx-model-confirmed-{1440,390}.png`. Other browser engines and macOS were
+not exercised; the existing large-chunk build warning remains.
+
+Final verification: all 191 active Web test files passed, with 2,987 tests passed
+and four existing skips. The 77 command checks passed again with the complete
+native model DTO in their checkpoint fixture. Production build, final Web
+TypeScript check, i18n ownership, all 303 source records and notices for 264
+production packages passed. The nine browser scenarios above passed with the
+same production implementation. No native protocol, runtime or TUI source changed.

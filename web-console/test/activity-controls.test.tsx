@@ -351,18 +351,20 @@ it('child transcript cannot publish from a retained cleanup claim and fresh proo
 
 it('older child transcript retains its original observation proof through native response', async () => {
   const server = new Server(); servers.push(server); await server.attached('A');
+  const originalTarget = server.client.target('A');
   const page = (text: string, cursor: string) => ({ entries: [{ cursor, item: { type: 'message' as const, message: { id: text, role: 'assistant' as const, content: [{ type: 'text' as const, text }] } } }], next_cursor: cursor });
   server.handlers.set('agent/observe', () => childConversation(page('current child page', '10')));
+  server.held.add('agent/transcript');
   const ui = render(<AgentCard agent={agentFixture()} client={server.client} sessionId="A"/>);
   await act(async () => { await server.waitFor('agent/observe', 1); });
   expect(ui.getByText('current child page')).toBeTruthy();
   server.held.add('agent/observe'); server.held.add('agent/transcript'); server.held.add('session/detach');
-  await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Load earlier' })); await server.waitFor('agent/transcript', 1); });
+  await act(async () => { await server.waitFor('agent/transcript', 1); });
   const older = await server.waitFor('agent/transcript', 1); let release!: Promise<void>;
   await act(async () => { release = server.client.release('A'); void release.catch(() => {}); await server.waitFor('session/detach', 1); });
   await act(async () => { server.socket.success(older, { type: 'transcript_window', window: { cut: { conversation_id: 'conversation-worker', journal: '10', transcript: '10', mutation_revision: '0' ,ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'}, page: page('obsolete older page', '1') } }); });
   expect(ui.queryByText('obsolete older page')).toBeNull(); expect(ui.getByText('current child page')).toBeTruthy();
-  expect(server.requests.filter(row => row.request.method === 'agent/transcript')).toHaveLength(1);
+  expect(server.requests.filter(row => row.request.method === 'agent/transcript' && row.request.params.target.attachment_id === originalTarget.attachment_id)).toHaveLength(1);
   expect(server.requests.filter(row => row.request.method === 'session/checkpoint')).toHaveLength(1);
   await act(async () => { server.reply(await server.waitFor('session/detach', 1)); await release; }); expect(server.claims()).toHaveLength(0);
   await act(async () => { await server.client.attach('A'); });
@@ -370,7 +372,7 @@ it('older child transcript retains its original observation proof through native
   const fresh = await server.waitFor('agent/observe', 2);
   await act(async () => { server.socket.success(fresh, childConversation(page('fresh child page', '20'))); });
   expect(ui.getByText('fresh child page')).toBeTruthy(); expect(ui.queryByText('current child page')).toBeNull();
-  expect(server.requests.filter(row => row.request.method === 'agent/transcript')).toHaveLength(1);
+  expect(server.requests.filter(row => row.request.method === 'agent/transcript' && row.request.params.target.attachment_id === originalTarget.attachment_id)).toHaveLength(1);
   expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(2);
   expect(server.requests.filter(row => row.request.method === 'session/detach')).toHaveLength(1); expect(server.claims()).toHaveLength(1);
 });

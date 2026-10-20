@@ -241,3 +241,35 @@ for (const [width, acknowledgement] of [[1440, 'received'], [390, 'lost']] as co
     } finally { await fixture.stop(passed); }
   });
 }
+
+for (const width of [1440, 390]) test(`a different model stays selected after native confirmation and subsequent checkpoints (${width})`, async ({ page }) => {
+  const fixture = await startDogfood('tui_multi_session');
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  const wire = await wireProbe(page);
+  try {
+    await page.setViewportSize({ width, height: 1000 });
+    await routeWorkspaceHost(page, fixture); await page.goto('/');
+    await expect(page).toHaveTitle(/rustX/);
+    await connectRemote(page, fixture.endpoint, fixture.token);
+    const id = await openEmptySession(page, fixture, 'Workspace A');
+    const collapse = page.getByRole('button', { name: 'Collapse Sidebar', exact: true });
+    if (width < 600 && await collapse.isVisible()) await collapse.click();
+    const trigger = page.locator('[data-model-select]');
+    await expect(trigger).toContainText('fixture/integration-model');
+    await chooseCurrentModel(page, 'fixture/second-model');
+    await expect(trigger).toContainText('fixture/second-model');
+    expect((await sessionSnapshot(wire, id)).model!.configured.model).toBe('fixture/second-model');
+    const labels = await trigger.evaluate(async element => {
+      const labels: string[] = [];
+      for (let i = 0; i < 30; i++) { await new Promise<void>(resolve => requestAnimationFrame(() => resolve())); labels.push(element.textContent ?? ''); }
+      return labels;
+    });
+    expect(labels.every(label => label.includes('fixture/second-model'))).toBe(true);
+    await trigger.click(); await page.getByRole('menuitem', { name: 'Model', exact: true }).click();
+    await expect(page.getByRole('menuitemradio', { name: 'fixture/second-model', exact: true })).toHaveAttribute('aria-checked', 'true');
+    await page.keyboard.press('Escape'); await page.keyboard.press('Escape');
+    await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Draft remains intact after switching models');
+    await page.screenshot({ path: `/tmp/rustx-model-confirmed-${width}.png` });
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
+  } finally { const report = await fixture.stop(false); expect(report.requestCount).toBe(0); }
+});

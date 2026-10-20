@@ -25,6 +25,7 @@ import type {
 } from '../../../protocol/app-server/v51';
 import { transferUpload, uploadOperationId } from '../../../protocol/app-server/upload';
 import { HISTORY_PAGE_SIZE, TURN_PAGE_SIZE, sameReadCut, extendTranscriptWindow, installTranscriptWindow, prependTranscript, refreshTranscript, replaceTranscript, turnKey, turnPageCount, type TranscriptCache, type TurnSelection } from './transcript';
+import { HISTORY_WINDOW_ROWS, transcriptWindowReady, traceWindowReady } from './history-policy';
 import type { ObservedTurn, ObservedTurnPage } from '../../../protocol/app-server/v51';
 
 
@@ -1748,9 +1749,19 @@ export class AppServerClient {
   }
   /** Older reads are fenced by attachment, connection and read-window epoch.
    * Ordinary live refreshes preserve the epoch only with a durable overlap. */
-  /** One older page, as Harness's loadOlder. */
+  /** One Turn-aligned reading window, assembled from bounded native pages. */
   loadEarlier(id: string) { return this.pageOlder(id); }
-  async loadEarlierTrace(id: string) {
+  loadInitialHistory(id: string) {
+    const history = this.state.views[id]?.history;
+    if (!history || history.window || history.loading || history.error || history.page.next_cursor == null || transcriptWindowReady(history.page.entries ?? [])) return Promise.resolve();
+    return this.readHistoryPage(id, { type: 'older', before: history.page.next_cursor, cut: null }, true);
+  }
+  loadInitialTrace(id: string) {
+    const trace = this.state.views[id]?.trace;
+    if (!trace || trace.located || trace.loading || trace.error || trace.page.next_cursor == null || traceWindowReady(trace.page.records)) return Promise.resolve();
+    return this.loadEarlierTrace(id, true);
+  }
+  async loadEarlierTrace(id: string, initial = false) {
     if (this.state.views[id]?.attachment === 'attaching') return this.readTracePreview(id, () => true, true);
     const observation = this.lifecycles.observe(id);
     if (!observation) return;
@@ -1765,10 +1776,22 @@ export class AppServerClient {
       && this.state.views[id]?.trace?.epoch === cache.epoch;
     this.setSession(id, { trace: { ...cache, loading: true, error: undefined } });
     try {
-      const result = await this.request({ method: 'session/trace', params: { target, before: cache.page.next_cursor, limit } }, 'trace', undefined, current);
-      standaloneTraceCut(result.page,target.conversation_id);
+      let next = cache;
+      const added: import('../../../protocol/app-server/v51').TraceRecord[] = [];
+      let pages = 0;
+      do {
+        const before = next.page.next_cursor;
+        const result = await this.request({ method: 'session/trace', params: { target, before, limit: Math.min(TRACE_PAGE_SIZE, TRACE_LIMIT - next.page.records.length) } }, 'trace', undefined, current);
+        if (!current()) return;
+        standaloneTraceCut(result.page,target.conversation_id);
+        if (result.page.next_cursor != null && result.page.next_cursor === before) throw new Error('Native Trace history did not advance.');
+        pages++;
+        added.push(...result.page.records);
+        next = prependTrace(next, result.page);
+      } while (next.page.next_cursor != null && pages < Math.ceil(HISTORY_WINDOW_ROWS / TRACE_PAGE_SIZE) && next.page.records.length < TRACE_LIMIT && !traceWindowReady(initial ? next.page.records : added));
       if (current()) {
-        this.setSession(id, { trace: prependTrace(this.state.views[id].trace!, result.page) });
+        const live = this.state.views[id].trace!;
+        this.setSession(id, { trace: { ...prependTrace(live, next.page), readCuts: { ...next.readCuts, ...live.readCuts }, loading: false } });
         // Include newly loaded identities in a repair even if their terminal
         // notification raced this pending historical read.
         await this.refreshTraceDomain(id);
@@ -2045,24 +2068,39 @@ export class AppServerClient {
     if (!history || history.page.next_cursor == null || history.loading) return Promise.resolve();
     return this.readHistoryPage(id, { type: 'older', before: history.page.next_cursor, cut: history.window?.cut ?? null });
   }
-  /** One gesture, one read. Navigation intent fences both page and anchor reads. */
-  private async readHistoryPage(id: string, at: import('../../../protocol/app-server/v51').ConversationWindowAt) {
+  /** Navigation intent fences the whole reading window, including every wire page. */
+  private async readHistoryPage(id: string, at: import('../../../protocol/app-server/v51').ConversationWindowAt, initial = false) {
     const history = this.state.views[id]?.history;
     const observation = this.lifecycles.observe(id);
     if (!history || !observation) return;
     const target = observation.target, authority = this.readingAuthority(id), intent = this.invalidateReading(id);
     const current = () => authority() && this.readingIntents.get(id) === intent && this.state.views[id]?.history?.epoch === history.epoch;
-    this.setSession(id, { history: { ...history, loading: true, error: undefined } });
+    this.setSession(id, { history: { ...history, loading: true, initialLoading: initial, error: undefined } });
     try {
-      const result = await this.request({ method: 'session/transcript', params: { target, at, limit: HISTORY_PAGE_SIZE } }, 'transcript_window', undefined, current);
+      let pageAt = at, next = history;
+      const added: import('../../../protocol/app-server/v51').RuntimeClientTranscriptEntry[] = [];
+      let pages = 0;
+      do {
+        const result = await this.request({ method: 'session/transcript', params: { target, at: pageAt, limit: HISTORY_PAGE_SIZE } }, 'transcript_window', undefined, current);
+        if (!current()) return;
+        if (result.window.cut.conversation_id !== target.conversation_id || ('cut' in pageAt && pageAt.cut && !sameReadCut(result.window.cut, pageAt.cut))) throw new Error('Invalid native history cut.');
+        if (pageAt.type === 'older' && result.window.page.next_cursor != null && BigInt(result.window.page.next_cursor) >= BigInt(pageAt.before)) throw new Error('Invalid native history page.');
+        added.push(...result.window.page.entries ?? []);
+        pages++;
+        next = extendTranscriptWindow(result.window, next, at.type === 'older');
+        if (at.type !== 'older' || next.page.next_cursor == null || pages >= Math.ceil(HISTORY_WINDOW_ROWS / HISTORY_PAGE_SIZE) || next.page.entries!.length >= HISTORY_WINDOW_ROWS || transcriptWindowReady(initial ? next.page.entries! : added)) break;
+        pageAt = { type: 'older', before: next.page.next_cursor, cut: result.window.cut };
+      } while (current());
       if (!current()) return;
-      if (result.window.cut.conversation_id !== target.conversation_id || ('cut' in at && at.cut && !sameReadCut(result.window.cut, at.cut))) throw new Error('Invalid native history cut.');
-      // Extend only the finite presentation window, trimming its opposite end.
-      if (at.type === 'older' && result.window.page.next_cursor != null && BigInt(result.window.page.next_cursor) >= BigInt(at.before)) throw new Error('Invalid native history page.');
-      const next = extendTranscriptWindow(result.window, this.state.views[id].history!, at.type === 'older');
-      this.setSession(id, { history: next });
+      // Ordinary pagination remains a live conversation. Only an explicit Turn
+      // or message jump owns a frozen historical window and its continuation.
+      if (!history.window && at.type === 'older' && next.window?.newer_cursor == null) {
+        const { window: _, ...following } = next;
+        next = refreshTranscript(following, this.state.views[id].snapshot!.transcript);
+      }
+      this.setSession(id, { history: { ...next, loading: false, initialLoading: false } });
     } catch (error) {
-      if (current()) this.setSession(id, { history: { ...this.state.views[id].history!, loading: false, error: String(error) } });
+      if (current()) this.setSession(id, { history: { ...this.state.views[id].history!, loading: false, initialLoading: false, error: String(error) } });
     }
   }
   private reconcileInteractions(id: string) {

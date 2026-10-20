@@ -7,10 +7,9 @@ import { test, expect, type Page } from '@playwright/test';
 import { startDogfood } from './dogfood-server';
 import { AppServerHost } from '../../../tui/src/app-server/host';
 
-/** One explicit gesture consumes one bounded native page, not all history. */
+/** Explicit older gestures assemble a reading window from bounded native pages. */
 async function loadOriginalHistory(page: Page) {
   const earlier = page.getByRole('button', { name: 'Load earlier', exact: true });
-  await expect(earlier).toBeVisible();
   for (let step = 0; step < 34; step++) {
     if (await earlier.count() === 0) return;
     const before = await page.locator('[data-chat-anchor-key]').count();
@@ -59,20 +58,10 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token);
     await page.locator(`button[data-session-id="${id}"]`).click();
-    await expect(page.getByRole('button', { name: 'Load earlier', exact: true })).toBeVisible();
-    await page.getByRole('button', { name: 'Load earlier', exact: true }).scrollIntoViewIfNeeded();
-    const firstKey = await page.locator('[data-chat-anchor-key]').first().getAttribute('data-chat-anchor-key');
-    const anchor = page.locator(`[data-chat-anchor-key=${JSON.stringify(firstKey)}]`);
-    const anchorTop = await anchor.evaluate(el => el.getBoundingClientRect().top);
-    await expect(page.getByText('Answer 0', { exact: true })).toHaveCount(0);
-    const beforePrepend = await page.locator('[data-chat-anchor-key]').count();
-    await page.getByRole('button', { name: 'Load earlier', exact: true }).click();
-    await expect.poll(() => page.locator('[data-chat-anchor-key]').count()).toBeGreaterThan(beforePrepend);
-    // Row insertion commits before ChatViewport's animation-frame restoration.
-    // Check this prepend before the next click deliberately scrolls to its button.
-    await expect.poll(async () => Math.abs(await anchor.evaluate(el => el.getBoundingClientRect().top) - anchorTop)).toBeLessThan(2);
+    // The initial DSH reading window covers this short conversation, even
+    // though its native transcript needs more than one bounded wire page.
+    await expect(page.getByText('Answer 0', { exact: true })).toBeAttached();
     await loadOriginalHistory(page);
-    await expect(page.getByText('Answer 0', { exact: true })).toHaveCount(1);
     await expect(page.getByRole('button', { name: 'Load earlier', exact: true })).toHaveCount(0);
     // Historical tails retain native identity after paging; pointer reveal also
     // exposes equivalent keyboard controls without a permanent wide toolbar.
@@ -104,15 +93,16 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     // Compact summaries can fit the whole first page without scrolling. Load
     // one more page to establish a real scrolling viewport before asserting
     // prepend anchoring (a short viewport necessarily clamps scrollTop to 0).
-    await trajectory.getByRole('region', { name: 'Trajectory timeline' }).getByRole('button', { name: 'Load earlier history', exact: true }).click();
+    const olderTrace = trajectory.getByRole('region', { name: 'Trajectory timeline' }).getByRole('button', { name: 'Load earlier history', exact: true });
+    if (await ledger.evaluate(el => el.scrollHeight - el.clientHeight <= 200) && await olderTrace.count()) await olderTrace.click();
     await expect.poll(() => ledger.evaluate(el => el.scrollHeight - el.clientHeight)).toBeGreaterThan(200);
     await ledger.evaluate(el => { el.scrollTop = 100; el.dispatchEvent(new Event('scroll')); });
     const traceAnchorId = await ledger.evaluate(el => Array.from(el.querySelectorAll<HTMLElement>('[data-request-owner]')).find(marker => marker.getBoundingClientRect().top >= el.getBoundingClientRect().top)!.dataset.requestOwner!);
     const traceAnchor = trajectory.locator(`[data-request-owner="${traceAnchorId}"]`);
     const traceAnchorTop = await traceAnchor.evaluate(el => el.getBoundingClientRect().top);
-    for (let pageNumber = 0; pageNumber < 4; pageNumber++) {
+    for (let pageNumber = 0; pageNumber < 4 && await olderTrace.count(); pageNumber++) {
       const before = Number(await ledger.getAttribute('aria-rowcount'));
-      await trajectory.getByRole('region', { name: 'Trajectory timeline' }).getByRole('button', { name: 'Load earlier history', exact: true }).click();
+      await olderTrace.click();
       await expect.poll(async () => Number(await ledger.getAttribute('aria-rowcount'))).toBeGreaterThan(before);
     }
     const capacity = await ledger.evaluate(el => Math.ceil(el.clientHeight / 10) + 2 * 12 + 1);
@@ -151,7 +141,7 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await loadOriginalHistory(page);
     await expect(page.getByText('Answer 0', { exact: true })).toHaveCount(1);
     await expect(page.getByLabel('Session status')).toHaveCount(0);
-    await expect(page.getByRole('status').filter({ hasText: 'Reading a history window.' })).toBeVisible();
+    await expect(page.getByRole('status').filter({ hasText: 'Reading a history window.' })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
 
     await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
@@ -222,7 +212,7 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await expandImage();
     await expect(load).toHaveCount(1);
     const decode = async () => {
-      await load.click();
+      if (await load.count()) await load.click();
       const image = canonical.locator('img');
       await expect(image).toBeVisible();
       await expect.poll(() => image.evaluate((node: HTMLImageElement) => node.complete && node.naturalWidth > 0 && node.naturalHeight > 0)).toBe(true);
@@ -234,11 +224,15 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     };
     await decode();
     expect(await urlCount()).toBe(1);
+    const previousImageUrl = await canonical.locator('img').getAttribute('src');
     await connectionAction(page, 'Reconnect');
     await expect(page.getByLabel('Transport token')).toHaveCount(0);
     await expandImage();
-    await expect(load).toHaveCount(1);
-    expect(await urlCount()).toBe(0);
+    // The hydrated history retains this component and its explicit load intent.
+    // Reconnection still replaces its byte lease and reads under fresh authority.
+    await expect(load).toHaveCount(0);
+    await expect(canonical.locator('img')).not.toHaveAttribute('src', previousImageUrl!);
+    await expect.poll(urlCount).toBe(1);
     await decode();
     expect(await urlCount()).toBe(1);
     await canonical.getByRole('button', { name: /^Preview / }).click();

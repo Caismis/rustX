@@ -1394,7 +1394,7 @@
         "Harness attachment identity and storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "1b8b2bcdfd685ea544b15fa0c438b1f15a5d11c2628f2367afff2994bfeb4a80",
+      "local_sha256": "78166869ac45179f044c04e3f3fd62b5de1a58afaa9f756b1898302d342f1411",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/ChatView.tsx",
@@ -6578,6 +6578,24 @@
       "excluded_dependencies": [
         "Harness input-modality observer and pointer suppression; not needed for this text-field correction"
       ]
+    },
+    {
+      "destination": "web-console/src/client/history-policy.ts",
+      "upstream": "packages/api/session-controller/src/client/sessions/session.ts",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "dcfe6a14f8ce0d88e101ae8ed1709512cfde0547216a3520bf69399e01681cc3",
+      "classification": "B",
+      "treatment": "Adapt DSH history message/Turn reading-window thresholds to rustX bounded transcript and Trace transports. Native cuts, source references, attachment fencing and finite storage stay rustX-owned.",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "../../../protocol/app-server/attempt-identity",
+        "../../../protocol/app-server/trace-identity",
+        "../../../protocol/app-server/v51"
+      ],
+      "excluded_dependencies": [
+        "Harness Session controller, event stream and projection assembly"
+      ],
+      "local_sha256": "82860b04baf872a40a111d5c8858e5ba3a007e8635b932a090f9f41da3514022"
     }
   ],
   "inspected_only": [

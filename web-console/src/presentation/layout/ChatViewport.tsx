@@ -14,6 +14,8 @@ interface ViewportProps {
   /** Resident hidden chats must not portal floating chrome into a visible sibling. */
   chromeVisible?: boolean;
   historical?: boolean;
+  /** Loading the initial reading window is passive; it does not detach a following reader. */
+  initialHistoryLoading?: boolean;
   onLatest?: () => void;
   latestTurn?: string;
   /** null means observed detached reading with no native owner; undefined is
@@ -207,7 +209,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
       this.markLayoutDirty(); return;
     }
     const rows = this.rows();
-    if (!this.explicitLatest && before.first && rows[0]?.dataset.chatAnchorKey !== before.first && rows.some(row => row.dataset.chatAnchorKey === before.first)) {
+    if (!_previous.initialHistoryLoading && !this.explicitLatest && before.first && rows[0]?.dataset.chatAnchorKey !== before.first && rows.some(row => row.dataset.chatAnchorKey === before.first)) {
       if (this.following) this.reading = before.position;
       this.following = false;
       if (!this.state.detached) this.setState({ detached: true });

@@ -46,15 +46,15 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
    if (!target || !current(at)) return;
      const result = await client.modelCatalogRead(target,()=>current(at),previous);
      if (!current(at)) return;
+     const mutation = client.getSnapshot().views[view!.id]?.modelMutation;
+     if (mutation && mutation.status !== 'in-flight') await client.repairAgentModel(view!.id);
+     if (!current(at)) return;
      const observed = client.getSnapshot().views[view!.id];
      if (observed?.snapshot?.model_status?.body_deferred) {
        const revision = observed.snapshot.model_status.binding_revision;
        const value = await client.modelRead(target, () => current(at));
        if (!current(at)) return;
        setOriginalModel({scope,revision,value});
-     }
-     if (observed?.modelMutation && observed.modelMutation.status !== 'in-flight') {
-       await client.repairAgentModel(view!.id);
      }
      if (current(at)) { setCatalog(result.catalog); setCatalogPage(result.page); setError(''); }
    if (current(at)) setBlocked(false);
@@ -74,7 +74,7 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
    return () => { ++epoch.current; };
  }, [target?.attachment_id, generation, view?.snapshot?.resources?.revision, view?.snapshot?.model_status?.binding_revision]);
  useEffect(()=>{if(!draft&&view?.observationState==='following'&&blocked)load();},[view?.observationState]);
- const mutate = async (operation: () => Promise<unknown>) => {
+ const mutate = async (operation: () => Promise<unknown>, requested: SessionModelConfig) => {
    if (pending || guard.current || blocked || busy || !attached || selection.current?.scope === scope) return false;
    const owner = { scope }; selection.current = owner;
    // A native binding update invalidates catalog reads, not this acknowledged
@@ -85,14 +85,33 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
        && sameTarget(owned?.target, target) && owned?.attachmentIntent === 'wanted' && !owned.deleting;
    };
    const at = epoch.current; guard.current = true; setBusy(true); setBlocked(true); setError(''); setSelectionError('');
-   try { await operation(); if (current(at)) await read(at); return owns(); }
-   catch (cause) { if (current(at)) { const notice = isOutcomeUncertain(cause) ? message('agent:copy.outcome-uncertain-no-replay-reconnect-and-reread-authority-before-continuing') : message('agent:copy.value-reread-authority-before-continuing', { p0: String(cause) }); setError(notice); setSelectionError(notice); setToastSequence(sequence => sequence + 1); } }
+   try {
+     await operation(); if (current(at)) await read(at);
+     if (!owns()) return false;
+     if (client.getSnapshot().views[view!.id]?.modelMutation) await client.repairAgentModel(view!.id);
+     if (!owns()) return false;
+     const observed = client.getSnapshot().views[view!.id].snapshot!;
+     const revision = observed.model_status?.binding_revision;
+     const confirmed = observed.model_status?.body_deferred ? await client.modelRead(target!, owns) : observed.model;
+     if (!owns()) return false;
+     if (client.getSnapshot().views[view!.id].snapshot?.model_status?.binding_revision !== revision
+       || confirmed?.configured.model !== requested.model || (confirmed.configured.profile ?? undefined) !== (requested.profile ?? undefined))
+       throw new Error('Selected model has not been confirmed. Reread model configuration before sending.');
+     if (observed.model_status?.body_deferred) setOriginalModel({ scope, revision, value: confirmed });
+     return true;
+   }
+   catch (cause) { if (owns()) { const notice = isOutcomeUncertain(cause) ? message('agent:copy.outcome-uncertain-no-replay-reconnect-and-reread-authority-before-continuing') : message('agent:copy.value-reread-authority-before-continuing', { p0: String(cause) }); setError(notice); setSelectionError(notice); setToastSequence(sequence => sequence + 1); } }
    finally { if (selection.current === owner) selection.current = undefined; if (epoch.current === at) { guard.current = false; setBusy(false); } }
  };
  const modelStatus = view?.snapshot?.model_status;
  const hasOriginalModel = !!modelStatus?.body_deferred && originalModel?.scope === scope && originalModel.revision === modelStatus?.binding_revision;
- const model = hasOriginalModel ? originalModel.value : view?.snapshot?.model;
- const configured = (queued?.phase !== 'failed' ? queued?.config : undefined) ?? (model?.configured ?? (view?.settings ? view.settings.model ?? (coldSource?.session_models?.kind === 'available' ? coldSource.session_models.default_model : undefined) : undefined));
+ const confirmedModel = hasOriginalModel ? originalModel.value : !modelStatus?.body_deferred ? view?.snapshot?.model : undefined;
+ const lastModel = useRef<{scope:object;value:NonNullable<typeof confirmedModel>} | undefined>(undefined);
+ if (confirmedModel) lastModel.current = { scope, value: confirmedModel };
+ // A deferred body is unread, not a return to Workspace defaults. Retain the
+ // confirmed label through that read; selection still requires its exact revision.
+ const model = confirmedModel ?? (modelStatus?.body_deferred && lastModel.current?.scope === scope ? lastModel.current.value : undefined);
+ const configured = (queued?.phase !== 'failed' ? queued?.config : undefined) ?? (model?.configured ?? (!modelStatus?.body_deferred && view?.settings ? view.settings.model ?? (coldSource?.session_models?.kind === 'available' ? coldSource.session_models.default_model : undefined) : undefined));
  const source = draft?.source ?? coldSource;
  const sourceChoices = draft?.source?.session_models?.kind === 'available' ? draft.source.session_models.catalog : coldCatalog?.catalog;
  const choices = useMemo(() => sourceCatalog ?? (sourceChoices ? {models:(sourceChoices.models??[]).slice(0,32)} : catalog), [sourceCatalog, sourceChoices, catalog]);
@@ -122,7 +141,7 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
      void selectSessionModel(client, view!.id, selection).catch(() => {});
      return true;
    }
-   return !!await mutate(() => selectSessionModel(client, view!.id, selection));
+   return !!await mutate(() => selectSessionModel(client, view!.id, selection), selection);
  };
  const sourceTotal = source && sourceObservation(source)?.collections.find(row=>row.field==='session_models')?.total;
  const sourceOffset = sourcePage?.next_offset ?? (sourcePage ? undefined : sourceTotal != null && Number(sourceTotal)>32 ? 32 : undefined);

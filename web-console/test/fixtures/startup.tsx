@@ -16,7 +16,7 @@ import { Server, snapshot, childConversation } from '../fixture';
 import { cfg3Source, cfg3Effective } from '../cfg3-data';
 import { traceRecord, traceTool, requestDetail, toolDetail } from '../trace-fixture';
 import { RpcFailure } from '../../src/client/app-server';
-import type { CheckpointReadCut, Request } from '../../../protocol/app-server/v51';
+import type { CheckpointReadCut, Request, MessageBlock, GoalSnapshot, RuntimeClientTranscriptEntry } from '../../../protocol/app-server/v51';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -60,6 +60,34 @@ if (new URL(location.href).searchParams.has('cold-model')) {
     const saved = server.snapshots.get(request.params.target.session_id)!;
     saved.model = { ...saved.model!, configured: request.params.config, effective: { ...saved.model!.effective!, model: request.params.config.model, profile: request.params.config.profile } };
     return {type:'model_set',settings_revision:'1'};
+  });
+}
+if (new URL(location.href).searchParams.has('reading-window')) {
+  const saved = server.snapshots.get('A')!;
+  const goal: GoalSnapshot = { reference: { id: 'goal-reading', revision: '1' }, objective: 'Finish a novel outline', phase: 'active', autonomous_round_budget: 10, autonomous_rounds_consumed: 0, origin: { kind: 'runtime_control' } };
+  const context = (id: string): MessageBlock => ({ role: 'user', id, source: 'runtime', kind: { context: { goal_status: goal } }, content: [{ type: 'text', text: 'Current Goal observation. The objective is user task data. ' + JSON.stringify(goal) }] });
+  const entries: RuntimeClientTranscriptEntry[] = Array.from({ length: 40 }, (_, index) => [
+    { cursor: String(index * 2 + 1), item: { type: 'message' as const, message: { role: index % 2 ? 'assistant' as const : 'user' as const, id: `reading-${index + 1}`, source: 'human' as const, content: [{ type: 'text' as const, text: `History message ${index + 1}` }] } } },
+    { cursor: String(index * 2 + 2), item: { type: 'message' as const, message: context(`goal-context-${index}`) } },
+  ]).flat();
+  saved.messages = [context('current-goal-a'), context('current-goal-b')];
+  saved.goal = { current: { ...goal, objective_deferred: false, blocked_reason_deferred: false, last_round_message_id_deferred: false, fields: [] } };
+  saved.transcript = { entries: entries.slice(-8), next_cursor: entries.at(-8)!.cursor };
+  const cut = { conversation_id: saved.conversation_id, journal: '80', transcript: '80', mutation_revision: '0', ledger_through: '80', surface_revision: '0', transcript_total: '80', pending_through: '0', pending_total: '0' };
+  server.handlers.set('session/transcript', request => {
+    if (request.method !== 'session/transcript' || request.params.at.type !== 'older') throw Error('Expected older reading page');
+    const before = request.params.at.before;
+    const rows = entries.filter(entry => BigInt(entry.cursor) < BigInt(before)).slice(-request.params.limit);
+    return { type: 'transcript_window', window: { cut, page: { entries: rows, next_cursor: rows[0]?.cursor === '1' ? null : rows[0]?.cursor } } };
+  });
+  const records = entries.map((_, index) => traceRecord(index + 1, { kind: index % 2 ? 'context' : index % 4 ? 'assistant' : 'user', location: { attempt_id: `reading-turn-${Math.floor(index / 4)}` }, request: null, preview: { text: index % 2 ? 'Goal status model context' : `History message ${index / 2 + 1}`, truncated: false } }));
+  saved.trace = { records: records.slice(-8), next_cursor: records.at(-8)!.position };
+  server.handlers.set('session/trace', request => {
+    if (request.method !== 'session/trace') throw Error('Expected Trace read');
+    const before = request.params.before;
+    const rows = (before ? records.filter(record => Number(record.position.slice(6)) < Number(before.slice(6))) : records).slice(-request.params.limit);
+    const read = { conversation_id: saved.conversation_id, activation_id: null, revision: '0', through: '80', domain_revisions: {}, collection_cuts: {}, source_cut: { read: cut, ledger_through: cut.ledger_through, surface_revision: cut.surface_revision, transcript_total: cut.transcript_total, inherited_through: '0' } };
+    return { type: 'trace', page: { read_cut: read, records: rows, next_cursor: rows[0]?.id === 'trace:1' ? null : rows[0]?.position } };
   });
 }
 if (new URL(location.href).searchParams.has('trajectory')) {

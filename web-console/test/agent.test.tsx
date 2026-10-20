@@ -871,3 +871,30 @@ it('a new native catalog revision retains its current menu and rows until the fe
  expect(row).toHaveProperty('disabled', false); expect(screen.getByRole('menuitemradio', { name: 'deep' })).toBeTruthy();
  expect(sent()).toEqual([]);
 });
+
+it('a deferred configuration reread never replaces the selected model with the Workspace default', async () => {
+ modelFixture(); await server.attached('A');
+ server.client.getSnapshot().views.A.settings = { cwd: '/workspace/A', model: { model: 'workspace-default' } };
+ render(<Control/>); await openModels();
+ const trigger = screen.getByRole('button', { name: 'Model and thinking effort' });
+ const full = structuredClone(server.snapshots.get('A')!.model!);
+ full.configured = { model: 'other' }; full.effective!.model = 'other'; full.effective!.profile = null;
+ const apply = server.handlers.get('session/setModel')!;
+ server.handlers.set('session/setModel', request => {
+   const result = apply(request);
+   const next = server.snapshots.get('A')!;
+   next.model = undefined; next.model_status = { available: true, body_deferred: true, binding_revision: '2' };
+   return result;
+ });
+ server.handlers.set('session/model', () => domainReceipt('model', [full])); server.held.add('session/model');
+ fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
+ await act(async () => fireEvent.click(screen.getByRole('menuitemradio', { name: 'other' })));
+ await server.waitFor('session/model', 2);
+ expect(screen.getByRole('menu')).toBeTruthy(); expect(trigger.getAttribute('aria-busy')).toBe('true');
+ expect(trigger.textContent).toContain('exact/model');
+ expect(trigger.textContent).not.toContain('workspace-default');
+ await act(async () => { server.held.delete('session/model'); for (const row of server.requests.filter(row => row.request.method === 'session/model')) server.reply(row.request); });
+ await waitFor(() => expect(trigger.textContent).toContain('other'));
+ await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+ expect(sent()).toEqual([{ model: 'other' }]);
+});

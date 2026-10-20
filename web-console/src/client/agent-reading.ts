@@ -1,6 +1,7 @@
 import type { AttachmentTarget, ObservedTurn, ObservedTurnPage, ConversationWindowAt, RuntimeClientSnapshot } from '../../../protocol/app-server/v51';
 import type { AppServerClient } from './app-server';
 import { extendTranscriptWindow, HISTORY_PAGE_SIZE, TURN_PAGE_SIZE, installTranscriptWindow, refreshTranscript, replaceTranscript, sameReadCut, turnKey, turnPageCount, type TranscriptCache, type TurnSelection } from './transcript';
+import { HISTORY_WINDOW_ROWS, transcriptWindowReady } from './history-policy';
 
 export interface AgentReadingState {
   history?: TranscriptCache;
@@ -125,24 +126,42 @@ export class AgentReading {
     if (!history?.page.next_cursor || history.loading) return Promise.resolve();
     return this.readWindow({ type: 'older', before: history.page.next_cursor, cut: history.window?.cut ?? null });
   };
+  loadInitial = () => {
+    const history = this.state.history;
+    if (!history || history.window || history.loading || history.error || !history.page.next_cursor || transcriptWindowReady(history.page.entries ?? [])) return Promise.resolve();
+    return this.readWindow({ type: 'older', before: history.page.next_cursor, cut: null }, true);
+  };
   loadLater = () => {
     const window = this.state.history?.window;
     if (!window?.newer_cursor || this.state.history?.loading) return Promise.resolve();
     return this.readWindow({ type: 'newer', after: window.newer_cursor, cut: window.cut });
   };
-  private async readWindow(at: ConversationWindowAt) {
+  private async readWindow(at: ConversationWindowAt, initial = false) {
     const history = this.state.history;
     if (!history || !this.current()) return;
     this.invalidate();
     const intent = this.intent, current = () => this.current() && this.intent === intent;
-    this.publish({ history: { ...history, loading: true, error: undefined } });
+    this.publish({ history: { ...history, loading: true, initialLoading: initial, error: undefined } });
     try {
-      const result = await this.client.request({ method: 'agent/transcript', params: { target: this.target, agent_id: this.agentId, at, limit: HISTORY_PAGE_SIZE } }, 'transcript_window', undefined, current);
+      let pageAt = at, next = history, pages = 0;
+      const added: NonNullable<typeof history.page.entries> = [];
+      do {
+        const result = await this.client.request({ method: 'agent/transcript', params: { target: this.target, agent_id: this.agentId, at: pageAt, limit: HISTORY_PAGE_SIZE } }, 'transcript_window', undefined, current);
+        if (!current()) return;
+        const window = result.window;
+        if (window.cut.conversation_id !== this.conversationId || 'cut' in pageAt && pageAt.cut && !sameReadCut(window.cut, pageAt.cut)) throw new Error('Invalid native child history cut.');
+        if (pageAt.type === 'older' && window.page.next_cursor != null && BigInt(window.page.next_cursor) >= BigInt(pageAt.before)) throw new Error('Invalid native child history page.');
+        added.push(...window.page.entries ?? []); pages++;
+        next = extendTranscriptWindow(window, next, at.type === 'older');
+        if (at.type !== 'older' || next.page.next_cursor == null || pages >= Math.ceil(HISTORY_WINDOW_ROWS / HISTORY_PAGE_SIZE) || next.page.entries!.length >= HISTORY_WINDOW_ROWS || transcriptWindowReady(initial ? next.page.entries! : added)) break;
+        pageAt = { type: 'older', before: next.page.next_cursor, cut: window.cut };
+      } while (current());
       if (!current()) return;
-      const window = result.window;
-      if (window.cut.conversation_id !== this.conversationId || 'cut' in at && at.cut && !sameReadCut(window.cut, at.cut)) throw new Error('Invalid native child history cut.');
-      if (at.type === 'older' && window.page.next_cursor != null && BigInt(window.page.next_cursor) >= BigInt(at.before)) throw new Error('Invalid native child history page.');
-      this.publish({ history: extendTranscriptWindow(window, this.state.history!, at.type === 'older') });
-    } catch (error) { if (current()) this.publish({ history: { ...this.state.history!, loading: false, error: String(error) } }); }
+      if (!history.window && at.type === 'older' && next.window?.newer_cursor == null) {
+        const { window: _, ...following } = next;
+        next = this.live ? refreshTranscript(following, this.live.transcript) : following;
+      }
+      this.publish({ history: { ...next, loading: false, initialLoading: false } });
+    } catch (error) { if (current()) this.publish({ history: { ...this.state.history!, loading: false, initialLoading: false, error: String(error) } }); }
   }
 }

@@ -1,3 +1,4 @@
+import { isRuntimeStatusContext } from '../../bindings/agent-status';
 import { InboundMessage } from './InboundMessage';
 import { useConversationPreferences } from '../conversation-preferences';
 import { useTranslation } from '../../locale/react';
@@ -45,7 +46,7 @@ function MessageText({ messageId, publicationStream, index, text, markdown, stre
 }
 export function Message({ message, publicationStream, tools = [], actions, streaming = false, stopped = false, blocks, reasoningHidden = false, include }: { reasoningHidden?: boolean; message: MessageBlock; publicationStream?: string; tools?: ForegroundToolExecution[]; actions?: ReactNode; streaming?: boolean; stopped?: boolean; blocks?: (AssistantContentBlock | InFlightBlock)[]; include?: readonly number[] }) {
   const tx = useTranslation();
-  if (message.role === 'tool') return null; // Results belong to the native call projection, never paired here.
+  if (message.role === 'tool' || isRuntimeStatusContext(message)) return null; // Results belong to the native call projection, never paired here.
   if (message.role === 'user' && message.kind && message.kind !== 'message') return <details><summary>{tx('agent:message.context')}{' '}{Object.keys(message.kind)[0]}</summary><Content messageId={message.id} blocks={message.content} markdown/></details>;
   if (message.role === 'user' && message.source !== 'human') return <InboundMessage message={message}/>;
   return message.role === 'user' ? <UserMessage label={tx('agent:message.your-message')} actions={actions}><Content messageId={message.id} blocks={message.content}/></UserMessage>

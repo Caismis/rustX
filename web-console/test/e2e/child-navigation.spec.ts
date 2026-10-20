@@ -26,7 +26,7 @@ for (const width of [1440, 390]) test(`child native turn directory locates dista
     await page.screenshot({ path: '/tmp/rustx-history-controls-mobile.png' });
     await page.getByRole('button', { name: 'Return to latest', exact: true }).click();
     await expect(input).toHaveValue('Keep composing while reading history');
-    await expect(page.getByRole('heading', { name: 'Child report 126', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: 'Child report 126', exact: true })).toBeAttached();
     const calls = await page.evaluate(() => (window as any).startupFixture.requests());
     expect(calls.some((request: any) => request.method === 'agent/turns')).toBe(true);
     expect(calls.some((request: any) => request.method === 'agent/transcript' && request.params.at.type === 'older')).toBe(true);

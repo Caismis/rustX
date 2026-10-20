@@ -2,6 +2,7 @@ import type { CheckpointReadCut,RuntimeClientAgent,TraceToolLocator } from '../.
 import type { AppServerClient } from './app-server';
 import type { Observation } from './session-lifecycle/port';
 import { standaloneTraceCut,inlineTraceDetail,retainedTraceDetailPage,bindTraceDetailReader,TRACE_LIMIT, TRACE_PAGE_SIZE, beginTraceDetail, completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterestBatches, type TraceFieldReader,type TraceCache } from './trace';
+import { HISTORY_WINDOW_ROWS, traceWindowReady } from './history-policy';
 
 /** One child Conversation's finite, read-only Trace domain. Parent attachment
  * is the access proof, not the identity of the records being inspected. */
@@ -86,7 +87,11 @@ export class AgentTraceReader {
     this.publish(replaceTrace({ records: [], next_cursor: null }, this.cache));
     await this.refresh();
   };
-  earlier = async () => {
+  initial = () => {
+    if (this.cache.located || this.cache.error || traceWindowReady(this.cache.page.records)) return Promise.resolve();
+    return this.earlier(true);
+  };
+  earlier = async (initial = false) => {
     const cache = this.cache, limit = Math.min(TRACE_PAGE_SIZE, TRACE_LIMIT - cache.page.records.length);
     if (!this.current() || cache.loading || !cache.page.next_cursor || limit < 1) return;
     const operation = {};
@@ -94,8 +99,22 @@ export class AgentTraceReader {
     this.paging = operation;
     this.publish({ ...cache, loading: true, error: undefined });
     try {
-      const result = await this.client.request({ method: 'agent/trace', params: { target: this.proof.target, agent_id: this.agentId, before: cache.page.next_cursor, limit } }, 'trace', undefined, current);
-      if (current()) { this.pageCut(result.page);this.paging = undefined; this.publish(prependTrace(this.cache, result.page)); await this.refresh(); }
+      let next = cache, pages = 0;
+      const added: TraceCache['page']['records'] = [];
+      do {
+        const before = next.page.next_cursor;
+        const result = await this.client.request({ method: 'agent/trace', params: { target: this.proof.target, agent_id: this.agentId, before, limit: Math.min(TRACE_PAGE_SIZE, TRACE_LIMIT - next.page.records.length) } }, 'trace', undefined, current);
+        if (!current()) return;
+        this.pageCut(result.page);
+        if (result.page.next_cursor != null && result.page.next_cursor === before) throw new Error('Native child Trace history did not advance.');
+        pages++; added.push(...result.page.records); next = prependTrace(next, result.page);
+      } while (next.page.next_cursor != null && pages < Math.ceil(HISTORY_WINDOW_ROWS / TRACE_PAGE_SIZE) && next.page.records.length < TRACE_LIMIT && !traceWindowReady(initial ? next.page.records : added));
+      if (current()) {
+        const live = this.cache;
+        this.paging = undefined;
+        this.publish({ ...prependTrace(live, next.page), readCuts: { ...next.readCuts, ...live.readCuts } });
+        await this.refresh();
+      }
     } catch (cause) { if (current()) this.publish({ ...this.cache, loading: false, error: String(cause) }); }
     finally { if (this.paging === operation) this.paging = undefined; }
   };

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { AgentStatusView, MessageBlock, RuntimeClientSnapshot, RuntimeClientStatusSection, RuntimeClientTranscriptEntry, UserMessageBlock } from '../../protocol/app-server/v51';
 import { App } from '../src/app/App';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
-import { agentStatusFacets, agentStatusAnchor, agentStatusPlacement, isAgentStatusContext, statusesAt } from '../src/bindings/agent-status';
+import { agentStatusFacets, agentStatusAnchor, agentStatusPlacement, isRuntimeStatusContext, statusesAt } from '../src/bindings/agent-status';
 import { todoDock } from '../src/bindings/composer-context';
 import { replaceTranscript } from '../src/client/transcript';
 import { Server, snapshot, checkpoint, readingWindow } from './fixture';
@@ -159,8 +159,8 @@ describe('Agent Status has one representation, and current Todo is never read fr
   const environment = context('ctx-env', { context: 'extension_environment' }, 'Environment context');
 
   it('the canonical Agent Status Context message never reappears through generic Context chrome', () => {
-    expect(isAgentStatusContext(agentStatusMessage)).toBe(true);
-    expect(isAgentStatusContext(environment)).toBe(false);
+    expect(isRuntimeStatusContext(agentStatusMessage)).toBe(true);
+    expect(isRuntimeStatusContext(environment)).toBe(false);
     const base = withTranscript(CONVERSATION(), [status('s1', fresh('u1'), [todoSection('Todo A')])]);
     const ui = render(<AgentTranscript snapshot={{ ...base, messages: [agentStatusMessage, environment] }} />);
     const current = screen.getByText('Current context').parentElement as HTMLElement;
@@ -188,8 +188,8 @@ describe('Agent Status has one representation, and current Todo is never read fr
 describe('cold attach, live folding and resync converge on one placement', () => {
   const statuses = [status('s1', fresh('u1'), [todoSection('Todo A')]), status('s2', batch('3'))];
   const full = () => withTranscript(CONVERSATION(), statuses, { ...snapshot(), todos: { tasks: [{ id: '1', subject: 'Todo A', status: 'in_progress' }], next_id: '2' } });
-  const mount = async (initial: RuntimeClientSnapshot) => {
-    server = new Server(); server.snapshots.set('A', initial);
+  const mount = async (initial: RuntimeClientSnapshot, holdHistory = false) => {
+    server = new Server(); if (holdHistory) server.held.add('session/transcript'); server.snapshots.set('A', initial);
     await server.attached('A');
     localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
     await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost} />); });
@@ -222,7 +222,7 @@ describe('cold attach, live folding and resync converge on one placement', () =>
 
   it('R04: paging manufactures no extra retention; the window stays the runtime\'s', async () => {
     const page = CONVERSATION();
-    await mount({ ...snapshot(), statuses: [status('old', fresh('u0')), ...statuses], transcript: { entries: page, next_cursor: '0' } });
+    await mount({ ...snapshot(), statuses: [status('old', fresh('u0')), ...statuses], transcript: { entries: page, next_cursor: '0' } }, true);
     expect(annotations(transcript())).toEqual([['s1', 'message:u1'], ['s2', 'message:t1']]);
     server.held.add('session/transcript');
     const earlier = server.client.loadEarlier('A');
@@ -268,4 +268,20 @@ it('T14 giant status and inbound identities fold and place by their exact native
   const folded = foldRuntimeEvent(initial,{type:'agent_status_composed',attempt_id:two.attempt_id,turn:two.turn,status:two,evicted_status_message_id:null,evicted_status_locator:one.source_locator});
   expect(folded.statuses).toEqual([two]);
   expect(foldRuntimeEvent(folded,{type:'agent_status_composed',attempt_id:two.attempt_id,turn:two.turn,status:two})).toEqual(folded);
+});
+
+it('Goal status is model context, with no raw JSON or empty Current context disclosure in chat', () => {
+ const goal: MessageBlock = { role: 'user', id: 'goal-status', source: 'runtime', kind: { context: { goal_status: {
+   reference: { id: 'goal-1', revision: '1' }, objective: 'Finish a novel outline', phase: 'active', blocked_reason: null,
+   autonomous_round_budget: 10, autonomous_rounds_consumed: 0, origin: { kind: 'runtime_control' }, last_round_message_id: null,
+ } } }, content: [{ type: 'text', text: 'Current Goal observation. Model-only Goal JSON' }] };
+ expect(isRuntimeStatusContext({ role: 'user', kind: 'context/goal_status' })).toBe(true);
+ expect(isRuntimeStatusContext({ role: 'user', kind: 'message' })).toBe(false);
+ const state = withTranscript(CONVERSATION(), []);
+ const ui = render(<AgentTranscript snapshot={{ ...state, messages: [goal, { ...goal, id: 'goal-status-again' }] }}/>);
+ expect(ui.container.textContent).not.toContain('Current Goal observation');
+ expect(screen.queryByText('Current context')).toBeNull();
+ ui.rerender(<AgentTranscript snapshot={{ ...state, messages: [goal], transcript: { entries: [...CONVERSATION(), { cursor: '4', item: { type: 'message', message: goal } }] } }}/>);
+ expect(ui.container.textContent).not.toContain('Model-only Goal JSON');
+ expect(screen.queryByText('Current context')).toBeNull();
 });
