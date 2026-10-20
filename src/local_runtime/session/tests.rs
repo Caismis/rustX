@@ -70,6 +70,40 @@ fn config() -> CurrentRuntimeConfig {
     CurrentRuntimeConfig::from_toml_slice(CONFIG.as_bytes()).expect("valid test config")
 }
 
+/// Deterministic UUIDv7 sequence: yields each value once, then repeats the
+/// last one, so collision-retry paths can be driven exactly.
+#[derive(Debug)]
+struct Sequence(std::sync::Mutex<std::collections::VecDeque<uuid::Uuid>>);
+
+impl crate::runtime::identity::UuidV7Generator for Sequence {
+    fn next_uuid(&self) -> uuid::Uuid {
+        let mut values = self.0.lock().unwrap();
+        if values.len() > 1 {
+            values.pop_front().unwrap()
+        } else {
+            *values.front().unwrap()
+        }
+    }
+}
+
+fn uuid(value: u64) -> uuid::Uuid {
+    uuid::Uuid::parse_str(&format!("01900000-0000-7000-8000-{value:012}")).unwrap()
+}
+
+fn identities(values: &[u64]) -> std::sync::Arc<dyn crate::runtime::identity::UuidV7Generator> {
+    std::sync::Arc::new(Sequence(std::sync::Mutex::new(
+        values.iter().map(|value| uuid(*value)).collect(),
+    )))
+}
+
+/// A Session intent bound to `/workspace` with no explicit model.
+fn workspace_state() -> SessionPersistentState {
+    SessionPersistentState {
+        cwd: std::path::PathBuf::from("/workspace"),
+        model: None,
+    }
+}
+
 fn state() -> SessionPersistentState {
     SessionPersistentState {
         model: Some(config().initial_model().clone()),
