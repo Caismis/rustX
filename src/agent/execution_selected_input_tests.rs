@@ -60,7 +60,7 @@ mod scale {
             crate::model::selected_input::take_preparation_visits();
             crate::model::selected_input::take_materialized_items();
             crate::model::selected_input::take_hash_work();
-            crate::durable::sqlite::take_request_input_reconstructions();
+            crate::durable::sqlite::request::snapshot::take_request_input_reconstructions();
             let execution = AgentExecution::new(
                 second,
                 lease,
@@ -75,7 +75,7 @@ mod scale {
             let visits = crate::model::selected_input::take_preparation_visits();
             let materialized = crate::model::selected_input::take_materialized_items();
             let hashes = crate::model::selected_input::take_hash_work();
-            let reconstruction = crate::durable::sqlite::take_request_input_reconstructions();
+            let reconstruction = crate::durable::sqlite::request::snapshot::take_request_input_reconstructions();
             assert!(
                 matches!(result.outcome, AttemptOutcome::Completed { .. }),
                 "{count}: {:?}",

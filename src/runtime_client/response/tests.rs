@@ -1202,7 +1202,8 @@ fn exact_window_decoration_keeps_attempt_tool_occurrences_and_response_identity(
             )
         })
         .collect::<Vec<_>>();
-    crate::durable::sqlite::append_assistant_history_fixture(&store, &unrelated).unwrap();
+    crate::durable::sqlite::canonical::append_assistant_history_fixture(&store, &unrelated)
+        .unwrap();
     let old = store
         .read_window_headers(
             &crate::durable::reading::ConversationWindowAt::Older {

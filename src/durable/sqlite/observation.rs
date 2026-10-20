@@ -1,4 +1,6 @@
 //! Native-transaction descriptor indexes with bounded physical observation reads.
+
+mod store;
 use super::{
     Connection, ConversationStoreError, OptionalExtension, Transaction, nonnegative, params,
     seq_to_i64, storage,
@@ -24,7 +26,7 @@ pub(super) fn cut(
         transcript_total: read.transcript_total,
         surface_revision: read.surface_revision,
         read,
-        inherited_through: super::inherited_transcript_through(connection)?,
+        inherited_through: super::canonical::transcript::inherited_transcript_through(connection)?,
     })
 }
 pub(super) fn validate(
@@ -911,12 +913,12 @@ fn transcript_message_header(
 }
 
 pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationStoreError> {
-    super::verify_unique_columns(
+    super::schema::shape::verify_unique_columns(
         connection,
         "observation_block_headers",
         &["message_id", "block_index"],
     )?;
-    super::verify_unique_columns(
+    super::schema::shape::verify_unique_columns(
         connection,
         "observation_headers",
         &["reference_kind", "reference_id"],
@@ -950,7 +952,7 @@ pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationS
             "invalid finite native observation metadata layout".into(),
         ));
     }
-    super::verify_unique_columns(
+    super::schema::shape::verify_unique_columns(
         connection,
         "observation_block_headers",
         &["ledger_position", "block_index"],

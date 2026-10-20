@@ -412,7 +412,11 @@ pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationS
         }
     }
     verify_header_layout(connection)?;
-    super::verify_unique_column(connection, "request_snapshots", "observation_source_id")?;
+    super::schema::shape::verify_unique_column(
+        connection,
+        "request_snapshots",
+        "observation_source_id",
+    )?;
     Ok(())
 }
 

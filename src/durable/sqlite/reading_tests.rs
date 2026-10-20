@@ -1,18 +1,23 @@
-use super::seq_to_i64;
-use crate::durable::reading::*;
+use chrono::Utc;
+use rusqlite::params;
+
+use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
+use crate::message::content::TextBlock;
+use crate::message::types::{
+    AssistantContentBlock, InboundKind, MessageBlock, UserContentBlock, UserMessageBlock,
+    UserSource,
+};
+use crate::runtime::identity::{AttemptId, ConversationId, EventId, MessageId};
+
 use crate::durable::{
     CanonicalStore, InboxStore, JournalStore, ObservationStore, ProjectionStore, RequestStore,
 };
-use crate::durable::{ConversationStore, LineageSeed, SqliteConversationStore};
-use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
-use crate::message::TextBlock;
-use crate::message::types::{
-    AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, UserContentBlock,
-    UserMessageBlock, UserSource,
-};
-use crate::runtime::identity::{AttemptId, ConversationId, EventId, MessageId};
-use chrono::Utc;
-use rusqlite::params;
+use crate::durable::{ConversationStore, LineageSeed};
+
+use super::seq_to_i64;
+use crate::durable::SqliteConversationStore;
+use crate::durable::reading::*;
+use crate::message::types::AssistantMessageBlock;
 include!("observation_turn_tests.rs");
 /// The exact transcript entry at a turn's native location, read as the page
 /// before the position just after it.
@@ -891,7 +896,7 @@ fn inherited_boundary_query_work_is_independent_of_seed_size() {
             assert_eq!(page.inherited_through.get(), size);
             let connection = store.lock().unwrap();
             let mut query = connection
-                .prepare(super::INHERITED_TRANSCRIPT_THROUGH_SQL)
+                .prepare(super::canonical::transcript::INHERITED_TRANSCRIPT_THROUGH_SQL)
                 .unwrap();
             let boundary: i64 = query.query_row([], |row| row.get(0)).unwrap();
             assert_eq!(boundary, i64::try_from(size).unwrap());

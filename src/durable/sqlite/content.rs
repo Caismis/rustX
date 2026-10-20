@@ -1354,7 +1354,7 @@ pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationS
         ("content_segments", "segment"),
         ("content_frontiers", "revision"),
     ] {
-        super::verify_unique_columns(
+        super::schema::shape::verify_unique_columns(
             connection,
             table,
             &[

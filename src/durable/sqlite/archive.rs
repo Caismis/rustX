@@ -145,7 +145,7 @@ impl SqliteConversationStore {
                     // Archives expose the original logical Snapshot, not its
                     // normalized storage metadata. The native loader checks the
                     // exact root and the combined 64 MiB bound before hydration.
-                    let snapshot = super::load_request_snapshot(
+                    let snapshot = super::request::snapshot::load_request_snapshot(
                         &connection,
                         &self.conversation_id,
                         &crate::runtime::identity::RequestId::new(request),

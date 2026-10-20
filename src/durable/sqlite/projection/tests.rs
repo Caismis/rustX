@@ -2446,25 +2446,28 @@ fn append_retains_checkpoint_original_dependency_validation() {
     store.append_canonical(&message(4)).unwrap();
     {
         let connection = store.lock().unwrap();
-        let full = super::super::load_head(&connection).unwrap();
+        let full = super::super::canonical::ledger::load_head(&connection).unwrap();
         assert_eq!(
             full.active_message_ids,
             vec![MessageId::new("M1"), MessageId::new("M4")]
         );
         assert_eq!(
-            super::super::append_head(&connection).unwrap(),
+            super::super::canonical::ledger::append_head(&connection).unwrap(),
             (full.revision, full.compaction_generation)
         );
         // Deliberate external corruption of the Original dependency. The
         // candidate and activation remain unchanged and must not be reblessed.
         connection.execute_batch("PRAGMA foreign_keys=OFF; DELETE FROM message_ledger WHERE message_id='M1'; PRAGMA foreign_keys=ON").unwrap();
         assert!(
-            matches!(super::super::append_head(&connection), Err(ConversationStoreError::InvalidReference(detail)) if detail.contains("Original dependency"))
+            matches!(super::super::canonical::ledger::append_head(&connection), Err(ConversationStoreError::InvalidReference(detail)) if detail.contains("Original dependency"))
         );
     }
     assert!(store.append_canonical(&message(5)).is_err());
     assert!(
-        !super::super::ledger_message_exists(&store.lock().unwrap(), &MessageId::new("M5"))
-            .unwrap()
+        !super::super::canonical::ledger::ledger_message_exists(
+            &store.lock().unwrap(),
+            &MessageId::new("M5")
+        )
+        .unwrap()
     );
 }
