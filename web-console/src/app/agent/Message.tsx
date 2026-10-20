@@ -11,7 +11,7 @@ import { Reasoning } from '../../presentation/agent/Reasoning';
 import { Tool } from './Tool';
 import { CanonicalTool } from './CanonicalTool';
 import type { ForegroundToolExecution } from '../../../../protocol/app-server/v51';
-import { useContext, type ReactNode } from 'react';
+import { Fragment, useContext, type ReactNode } from 'react';
 import { messageContentBinding, useContentSource } from './ObservationSource';
 import { SourceContent } from './SourceContent';
 
@@ -46,7 +46,7 @@ function UserMessageContent({ message, label, actions }: { message: Extract<Mess
     else if (block.text !== '' || (messageContentBinding(source, message.id, index)?.content_ref.readable_end ?? 0) > 0) text.push(index);
   });
   return <UserMessage label={label} actions={actions} attachments={attachments.length > 0 ? <Content messageId={message.id} blocks={message.content} include={attachments} messageAttachments/> : undefined}>
-    {text.length > 0 ? <Content messageId={message.id} blocks={message.content} include={text}/> : undefined}
+    {text.length > 0 ? text.map((index, position) => <Fragment key={index}>{position > 0 && '\n\n'}<Content messageId={message.id} blocks={message.content} include={[index]}/></Fragment>) : undefined}
   </UserMessage>;
 }
 function MessageText({ messageId, publicationStream, index, text, markdown, streaming, renderText }: { messageId?: string; publicationStream?: string; index: number; text: string; markdown: boolean; streaming: boolean; renderText?: (text: string) => ReactNode }) {

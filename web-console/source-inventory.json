@@ -3503,7 +3503,7 @@
           "treatment": "Task count, stop confirmation, duration and output disclosure wording follows the Harness job menu."
         }
       ],
-      "local_sha256": "7077da8a5da787b39f15bb55a2166296fd4435dda6e04552ea650fba1a350006"
+      "local_sha256": "fb30f70dd1ee9479d86f655f35869b2a62fabaec32f628eabe069ddca8f5b9db"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -5911,7 +5911,7 @@
       "upstream": "packages/client/ui-subagent/src/client/SubagentHeaderLineage.tsx",
       "destination": "web-console/src/app/agent/Subagents.tsx",
       "classification": "B",
-      "treatment": "Subagent header, exact sibling-switcher SVG, hover preview and current-item presentation adapted to native rustX agent identities, parent lineage and scoped child menus. Visited child conversations remain mounted to retain drafts and reading position. Child capabilities: one shared input component, native scoped upload receipts and task titles; native child cursor cuts and preview ownership replace committed-only child input paths. Native Tool Trace location: App Server v44 imports and exact occurrence navigation; existing upstream baseline unchanged. Main integration #456: general Model Profiles and JSON-object request parameter authoring; existing upstream baseline unchanged. Issue #467: bounded native observation, deferred source reads and exact view ownership; original presentation and license attribution retained. Issue #467: bounded resident Child views, original Agent header refresh by exact native revision, and hide cancellation; source failures remain separate from execution status. Issue #467: exact target, activation, native revision and view leases fence late off-head Agent reads; physical pending reads retain their owner until termination. #464: App Server v47 generated-protocol import path. #467: App Server v48 current generated-protocol import path. PR #477 final contract repair: mandatory App Server v49 import for nullable native-covered Tool wire correlation; upstream reference unchanged. PR #478: reconciled bounded observation with immutable model-context projections under App Server v50. App Server v51: mandatory current generated-protocol import; upstream presentation and native ownership remain unchanged.",
+      "treatment": "Subagent header, exact sibling-switcher SVG, hover preview and current-item presentation adapted to native rustX agent identities, parent lineage and scoped child menus. Visited child conversations remain mounted to retain drafts and reading position. Child capabilities: one shared input component, native scoped upload receipts and task titles; native child cursor cuts and preview ownership replace committed-only child input paths. Native Tool Trace location: App Server v44 imports and exact occurrence navigation; existing upstream baseline unchanged. Main integration #456: general Model Profiles and JSON-object request parameter authoring; existing upstream baseline unchanged. Issue #467: bounded native observation, deferred source reads and exact view ownership; original presentation and license attribution retained. Issue #467: bounded resident Child views, original Agent header refresh by exact native revision, and hide cancellation; source failures remain separate from execution status. Issue #467: exact target, activation, native revision and view leases fence late off-head Agent reads; physical pending reads retain their owner until termination. #464: App Server v47 generated-protocol import path. #467: App Server v48 current generated-protocol import path. PR #477 final contract repair: mandatory App Server v49 import for nullable native-covered Tool wire correlation; upstream reference unchanged. PR #478: reconciled bounded observation with immutable model-context projections under App Server v50. App Server v51: mandatory current generated-protocol import; upstream presentation and native ownership remain unchanged. Workflow one-shot observability: running member links and read-only record presentation adapt the same inspected Harness sources to exact native child/activation inspection. Native ownership and control admission remain separate from presentation.",
       "upstream_sha256": "a071eba1e77ee78bc4d7d90e0fd774f7242c200b4b39aa88f7424df41a95db4b",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
@@ -5928,7 +5928,7 @@
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "52fe19ac4603730e76456550a14c0d63041f5393a9453fab603f747a62f7aad4"
+      "local_sha256": "681117e755504fdd120e82056c72316c403a8c1545ef70ea1fc54564323928fd"
     },
     {
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
@@ -5940,7 +5940,7 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [],
-      "local_sha256": "a84ec3250191dc3bb9318fa95e4ae6cdfb351ae4e7af8a8534c90156afd253b8"
+      "local_sha256": "fe7f1c68d906868e48e4cc2a9d4bd712bf612cc029cb2700153332bb15597091"
     },
     {
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
@@ -6291,7 +6291,7 @@
       "destination": "web-console/src/app/agent/WorkflowRunPanel.tsx",
       "upstream_sha256": "7d51903eb8b76579565fdb858271bbd6443e5db49c6c4d92d0b0c337fde78439",
       "classification": "B",
-      "treatment": "Workflow alignment: DSH compact run/block disclosure and QuestionComposer takeover adapted to native rustX block/node identities, states, budget counters and in-workflow Review decisions. No DSH session/controller/runtime semantics retained. Workflow alignment: compact native node activity in Chat, readable review decisions and receipts, explicit execution budget labels; upstream authority remains excluded. App Server v51: mandatory current generated-protocol import; upstream presentation and native ownership remain unchanged.",
+      "treatment": "Workflow alignment: DSH compact run/block disclosure and QuestionComposer takeover adapted to native rustX block/node identities, states, budget counters and in-workflow Review decisions. No DSH session/controller/runtime semantics retained. Workflow alignment: compact native node activity in Chat, readable review decisions and receipts, explicit execution budget labels; upstream authority remains excluded. App Server v51: mandatory current generated-protocol import; upstream presentation and native ownership remain unchanged. Workflow one-shot observability: running member links and read-only record presentation adapt the same inspected Harness sources to exact native child/activation inspection. Native ownership and control admission remain separate from presentation.",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../../../protocol/app-server/v51",
@@ -6300,6 +6300,7 @@
         "../../presentation/primitives/DisclosureRow",
         "../../presentation/primitives/StateDot",
         "../../presentation/primitives/icons",
+        "./subagent-context",
         "react"
       ],
       "excluded_dependencies": [
@@ -6307,7 +6308,7 @@
         "DSH child Session navigation and controller",
         "DSH Remote interaction settlement"
       ],
-      "local_sha256": "77252bd9cb6696ec2a4955c1b5a783681650434276adf585970a63f0d3201d80"
+      "local_sha256": "f30c78f6294f422597c5a3cecd08bc31779a85f31088772b2f0d0d3b85b11c16"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
@@ -6323,7 +6324,7 @@
         "DSH child Session navigation and controller",
         "DSH Remote interaction settlement"
       ],
-      "local_sha256": "5857aebebee178591efc809a494de7c3d424b8f49e4bf2597aa2283b988d7fd2"
+      "local_sha256": "355e58e7d8af1f1272c2b7939445be7c6557934b1c99a4a0adfb717082d988ef"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
@@ -6713,7 +6714,7 @@
       "upstream": "packages/client/ui-subagent/src/client/SubagentReadOnlyComposer.tsx",
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
       "upstream_sha256": "154098fe5d9f78a064eba197a3cf952506a57a45a38d7e0e50862a3e95fac934",
-      "treatment": "Read-only child composer title/body frame adapted to native unavailable state; rustX registry, exact child observation cuts and controls retain authority. Child follow-up: remove the child model selector and the separate resume placeholder at user request; ordinary parent task/guidance messages reuse the existing UserMessage bubble and actions through child-scoped provenance.",
+      "treatment": "Read-only child composer title/body frame adapted to native unavailable state; rustX registry, exact child observation cuts and controls retain authority. Child follow-up: remove the child model selector and the separate resume placeholder at user request; ordinary parent task/guidance messages reuse the existing UserMessage bubble and actions through child-scoped provenance. Workflow one-shot observability: running member links and read-only record presentation adapt the same inspected Harness sources to exact native child/activation inspection. Native ownership and control admission remain separate from presentation.",
       "destination": "web-console/src/app/components/ActivityCards.tsx",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -6750,7 +6751,7 @@
         "Harness Cordis slots, stores and plugin runtime",
         "Harness Agent execution and session observation authority"
       ],
-      "local_sha256": "a0eba877c22787391e1a284aa3c520fcad940b18846a314385f6ce46c403ec30",
+      "local_sha256": "1c9cbf3d5865b04dba29c134495fe773c5abe43acfc97ee17a77f48bde3b4abc",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",

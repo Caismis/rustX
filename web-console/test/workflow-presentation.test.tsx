@@ -1,6 +1,8 @@
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { WorkflowRunPanel } from '../src/app/agent/WorkflowRunPanel';
+import { SubagentContext } from '../src/app/agent/subagent-context';
+import type { AppServerClient } from '../src/client/app-server';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { Review } from '../src/app/agent/Review';
 import { workflowReview, workflowRun } from './workflow-data';
@@ -90,4 +92,22 @@ it('defers a clean collapse while a block header owns focus and lets the reader 
   expect(fireEvent.mouseDown(root)).toBe(false);
   fireEvent.click(root);
   expect(root.getAttribute('aria-expanded')).toBe('false');
+});
+
+it('opens only the exact running Workflow child, retires its link after settlement, and preserves keyboard focus', async () => {
+  const run = workflowRun();
+  const node = run.instances[1]; node.kind = 'agent'; node.child = 'finite-child'; node.child_agent_id = 'finite-agent'; node.state = { type: 'running' };
+  const openWorkflow = vi.fn().mockResolvedValue(undefined);
+  const context = { client: {} as AppServerClient, agents: [], metrics: {}, metricErrors: {}, opened: [], open: vi.fn(), close: vi.fn(), openWorkflow };
+  const ui = render(<SubagentContext value={context}><WorkflowRunPanel run={run}/></SubagentContext>);
+  const button = ui.getByRole('button', { name: 'View read' });
+  act(() => button.focus()); fireEvent.click(button);
+  expect(openWorkflow).toHaveBeenCalledWith('finite-agent', 'finite-child', 'read');
+  await act(async () => {});
+  node.state = { type: 'settled', outcome: 'completed' };
+  ui.rerender(<SubagentContext value={context}><WorkflowRunPanel run={run}/></SubagentContext>);
+  expect(ui.getByRole('button', { name: 'View read' }).getAttribute('aria-disabled')).toBe('true');
+  fireEvent.click(button); expect(openWorkflow).toHaveBeenCalledTimes(1);
+  act(() => button.blur());
+  expect(ui.queryByRole('button', { name: 'View read' })).toBeNull();
 });

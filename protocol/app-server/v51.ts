@@ -11014,6 +11014,10 @@ export interface WorkflowInstanceView {
   kind: WorkflowNodeKind;
   state: WorkflowState;
   child?: SubagentId | null;
+  /**
+   * Exact read-only child identity; never grants durable Agent controls.
+   */
+  child_agent_id?: AgentId | null;
   invocation?: ToolInvocationId | null;
   tool_id?: ToolId | null;
   interaction?: InteractionRef | null;

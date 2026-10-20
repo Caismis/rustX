@@ -148,6 +148,7 @@ mod tests {
                 kind: WorkflowNodeKind::Tool,
                 state: WorkflowState::Running,
                 child: None,
+                child_agent_id: None,
                 invocation: None,
                 tool_id: None,
                 interaction: None,

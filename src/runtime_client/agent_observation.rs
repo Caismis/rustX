@@ -727,7 +727,7 @@ impl ClientInner {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
         tokio::time::timeout_at(deadline, async {
             let permit = self.reserve_inspection()?;
-            let agent = self.agent_view(id)?;
+            let agent = self.child_view(id)?;
             let result = if matches!(
                 agent.state,
                 crate::runtime::subagent::AgentState::Inactive
@@ -767,7 +767,7 @@ impl ClientInner {
                 .await?;
                 peer.trace_page(before, limit, records).await?
             };
-            let current = self.agent_view(id)?;
+            let current = self.child_view(id)?;
             if current.activation_id != agent.activation_id
                 || current.child_conversation_id != agent.child_conversation_id
             {
@@ -787,7 +787,7 @@ impl ClientInner {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
         tokio::time::timeout_at(deadline, async {
             let permit = self.reserve_inspection()?;
-            let agent = self.agent_view(id)?;
+            let agent = self.child_view(id)?;
             let result = if matches!(
                 agent.state,
                 crate::runtime::subagent::AgentState::Inactive
@@ -822,7 +822,7 @@ impl ClientInner {
                 .await?;
                 peer.trace_locate_tool(&locator).await?
             };
-            let current = self.agent_view(id)?;
+            let current = self.child_view(id)?;
             if current.activation_id != agent.activation_id
                 || current.child_conversation_id != agent.child_conversation_id
             {
@@ -1100,7 +1100,7 @@ impl ClientInner {
             Ok(checkpoint)
         })
         .await?;
-        let current = self.agent_view(&agent.agent_id)?;
+        let current = self.child_view(&agent.agent_id)?;
         if current.activation_id != agent.activation_id
             || current.child_conversation_id != checkpoint.snapshot.conversation_id
         {
@@ -1118,7 +1118,7 @@ impl ClientInner {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
         tokio::time::timeout_at(deadline, async {
             let permit = self.reserve_inspection()?;
-            let agent = self.agent_view(id)?;
+            let agent = self.child_view(id)?;
             if reference.conversation_id != agent.child_conversation_id {
                 return Err(RuntimeClientError::ContentSourceUnavailable);
             }
@@ -1145,7 +1145,7 @@ impl ClientInner {
                         .map_err(RuntimeClientError::content_read_error)
                 })
                 .await?;
-                if self.agent_view(id)?.activation_id != agent.activation_id {
+                if self.child_view(id)?.activation_id != agent.activation_id {
                     return Err(RuntimeClientError::ReadCutExpired);
                 }
                 return Ok(chunk);
@@ -1170,7 +1170,7 @@ impl ClientInner {
                     max_bytes,
                 })
                 .await?;
-            if self.agent_view(id)?.activation_id != agent.activation_id {
+            if self.child_view(id)?.activation_id != agent.activation_id {
                 return Err(RuntimeClientError::ReadCutExpired);
             }
             match result {
@@ -1194,7 +1194,7 @@ impl ClientInner {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
         tokio::time::timeout_at(deadline, async {
             let permit = self.reserve_inspection()?;
-            let agent = self.agent_view(id)?;
+            let agent = self.child_view(id)?;
             if cut.conversation_id != agent.child_conversation_id
                 || cut.activation_id.as_ref() != Some(&agent.activation_id)
             {
@@ -1223,7 +1223,7 @@ impl ClientInner {
                     )
                 })
                 .await?;
-                let current = self.agent_view(id)?;
+                let current = self.child_view(id)?;
                 if current.activation_id != agent.activation_id
                     || current.child_conversation_id != agent.child_conversation_id
                 {
@@ -1255,7 +1255,7 @@ impl ClientInner {
                     max_bytes,
                 })
                 .await?;
-            if self.agent_view(id)?.activation_id != agent.activation_id {
+            if self.child_view(id)?.activation_id != agent.activation_id {
                 return Err(RuntimeClientError::ReadCutExpired);
             }
             match result {
@@ -1281,7 +1281,7 @@ impl ClientInner {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
         tokio::time::timeout_at(deadline, async {
             let permit = self.reserve_inspection()?;
-            let agent = self.agent_view(id)?;
+            let agent = self.child_view(id)?;
             if cut.conversation_id != agent.child_conversation_id
                 || cut.activation_id.as_ref() != Some(&agent.activation_id)
             {
@@ -1301,7 +1301,7 @@ impl ClientInner {
                     cold_agent_page(&registry, &activation, &native_cut, &domain, offset, limit)
                 })
                 .await?;
-                let current = self.agent_view(id)?;
+                let current = self.child_view(id)?;
                 if current.activation_id != agent.activation_id
                     || current.child_conversation_id != agent.child_conversation_id
                 {
@@ -1331,7 +1331,7 @@ impl ClientInner {
                     limit,
                 })
                 .await?;
-            if self.agent_view(id)?.activation_id != agent.activation_id {
+            if self.child_view(id)?.activation_id != agent.activation_id {
                 return Err(RuntimeClientError::ReadCutExpired);
             }
             match result {
@@ -1382,7 +1382,7 @@ impl ClientInner {
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         let permit = self.reserve_inspection()?;
         let registry = self.agent_registry()?;
-        let mut agent = self.agent_view(id)?;
+        let mut agent = self.child_view(id)?;
         if agent.state == crate::runtime::subagent::AgentState::Admitting {
             tokio::time::timeout_at(
                 deadline,
@@ -1395,7 +1395,7 @@ impl ClientInner {
             .ok_or_else(|| RuntimeClientError::UnknownAgent {
                 agent_id: id.clone(),
             })?;
-            agent = self.agent_view(id)?;
+            agent = self.child_view(id)?;
         }
         let activation_id = agent.activation_id.clone();
         let conversation_id = agent.child_conversation_id.clone();
@@ -1449,7 +1449,7 @@ impl ClientInner {
                 None => Err(failed("live inspection source unavailable")),
             }
         };
-        let current = self.agent_view(id)?;
+        let current = self.child_view(id)?;
         if current.activation_id != activation_id {
             return Ok(resync("activation changed during observation"));
         }

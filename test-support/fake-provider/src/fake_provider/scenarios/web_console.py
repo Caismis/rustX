@@ -167,6 +167,28 @@ def web_workflow_conformance() -> Scenario:
     ))
 
 
+def web_workflow_observation() -> Scenario:
+    # Ordinary child Tool execution, then a separate reserved result commit.
+    return Scenario(
+        "web_workflow_observation",
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
+                    body_contains=("workflow conformance request",), tools_include=("review_pr",)),
+             Stream(ToolCall("call-review-pr", "review_pr", '{"task":"workflow conformance request"}'), Finish("tool_calls"))),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
+                    body_contains=("Review the request",), tools_include=("read", "workflow_output")),
+             Stream(Gate("workflow-child-admitted"), Text("Inspecting the review profile."),
+                    ToolCall("call-child-read", "read", '{"path":".agents/agents/reviewer.toml"}', pieces=2), Finish("tool_calls"))),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
+                    body_contains=("Workflow-only reviewer", "call-child-read"), tools_include=("workflow_output",)),
+             Stream(Gate("workflow-child-read"), ToolCall("call-workflow-output", "workflow_output",
+                    '{"passed":true,"summary":"native workflow child committed"}'), Finish("tool_calls"))),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
+                    body_contains=("native workflow child committed",), body_excludes=("workflow_output",)),
+             Stream(Text("workflow conformance complete"), Finish())),
+    )
+
+SCENARIOS["web_workflow_observation"] = web_workflow_observation
+
 SCENARIOS["web_workflow_conformance"] = web_workflow_conformance
 
 

@@ -5,6 +5,7 @@ import { useTranslation } from '../../locale/react';
 import { DisclosureRow } from '../../presentation/primitives/DisclosureRow';
 import { IconChevronRightOutline14 } from '../../presentation/primitives/icons';
 import { StateDot, type StateDotState } from '../../presentation/primitives/StateDot';
+import { useSubagents } from './subagent-context';
 import css from '../../presentation/agent/WorkflowRunPanel.module.css';
 
 export const workflowKey = (id: WorkflowRunId) => JSON.stringify([id.conversation_id, id.attempt_id, id.invocation]);
@@ -46,6 +47,26 @@ function StatusDisclosure({ state, count, title, summary, root, children }: {
   </DisclosureRow></div>;
 }
 
+/** One-shot member links keep their native activation and never acquire Agent controls. */
+function WorkflowMember({ instance, children }: { instance: WorkflowInstanceView; children: ReactNode }) {
+  const scope = useSubagents(), tx = useTranslation();
+  const [focused, setFocused] = useState(false), [pending, setPending] = useState(false), [error, setError] = useState(false);
+  const navigable = !!scope?.openWorkflow && instance.kind === 'agent' && !!instance.child && !!instance.child_agent_id && instance.state.type !== 'pending' && instance.state.type !== 'settled';
+  const attributes = { 'data-workflow-node': instance.node!, 'data-workflow-activation-id': instance.child ?? undefined, 'data-node-state': instance.state.type };
+  return <div className={css.memberHost}>
+    {navigable || focused ? <button type="button" {...attributes} className={`${css.member} ${navigable ? css.memberButton : ''}`}
+      aria-label={tx('common:subagents.open', { name: instance.node! })} aria-disabled={!navigable || pending || undefined} aria-busy={pending || undefined}
+      tabIndex={navigable ? undefined : -1} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
+      onClick={() => {
+        if (!navigable || pending) return;
+        setPending(true); setError(false);
+        void scope!.openWorkflow!(instance.child_agent_id!, instance.child!, instance.node!).catch(() => setError(true)).finally(() => setPending(false));
+      }}>{children}</button>
+      : <div {...attributes} className={css.member}>{children}</div>}
+    {error && <span role="alert" className={css.empty}>{tx('common:activity.unavailable')}</span>}
+  </div>;
+}
+
 /** Native block identities group nodes; budgets never masquerade as graph progress. */
 export function WorkflowRunPanel({ run, pending = [] }: { run: WorkflowRunView; pending?: readonly RuntimeClientInteractionHeader[] }) {
   const tx = useTranslation();
@@ -78,18 +99,18 @@ export function WorkflowRunPanel({ run, pending = [] }: { run: WorkflowRunView; 
         const name = first.block.definition.blocks.join(' / ') || tx('common:workflow.main');
         return <StatusDisclosure key={key} state={state} count={members.length} title={name}
           summary={<><span className={css.separator}/><span className={css.summary}>{tx('common:workflow.nodes', { count: members.length })}</span>{(block || review) && <span className={css.phaseStatus}>{review ? waiting : label(state)}</span>}</>}>
-          {members.map(instance => <div className={css.member} key={JSON.stringify([instance.node, instance.visit])} data-workflow-node={instance.node} data-workflow-activation-id={instance.child ?? undefined} data-node-state={instance.state.type}>
+          {members.map(instance => <WorkflowMember instance={instance} key={JSON.stringify([instance.node, instance.visit])}>
             <span className={css.dotSlot}><StateDot state={reviewing(instance) ? 'warning' : dot(instance.state)}/></span>
             <span className={css.memberCopy}><span className={css.memberLabel} title={instance.node!}>{instance.node}{instance.visit != null && instance.visit > 1 ? ` · ${instance.visit}` : ''}</span>
-              <span className={css.kind}>{tx(`common:workflow.kind.${instance.kind}`)}
+              {instance.kind !== 'agent' && <span className={css.kind}>{tx(`common:workflow.kind.${instance.kind}`)}
                 {instance.iteration != null && <> · {tx('common:workflow.iteration', { current: instance.iteration, max: instance.iterations_max ?? '—' })}</>}
                 {instance.loop_exit && <> · {tx(`common:workflow.loop.${instance.loop_exit}`)}</>}
                 {instance.checks_passed != null && <> · {tx(instance.checks_passed ? 'common:workflow.checks-passed' : 'common:workflow.checks-failed')}</>}
                 {instance.review_accepted != null && <> · {tx(instance.review_accepted ? 'common:workflow.accepted' : 'common:workflow.rejected')}</>}
-              </span>
+              </span>}
             </span>
             <span className={css.memberStatus}>{reviewing(instance) ? waiting : label(instance.state, run.state.type === 'settled' && instance.state.type === 'pending')}</span>
-          </div>)}
+          </WorkflowMember>)}
         </StatusDisclosure>;
       })}
       {!run.instances.length && <span className={css.empty}>{tx('common:workflow.empty')}</span>}

@@ -3645,3 +3645,64 @@ backing stores were released while geometry remained. The reference capture was
 visually reviewed: `/tmp/rustx-office-reference-aligned.png`. The user's bytes
 were not changed or committed. Other browser engines and macOS conversion were
 not exercised here. No native protocol, Agent execution or TUI logic changed.
+
+### Workflow one-shot child observability (2026-10-20)
+
+Reference: DSH `687f282e8625c6b8d11ff58211a90524be2e4317`,
+`ui-workflow-run/WorkflowRunPanel` and `ui-subagent/SubagentReadOnlyComposer`.
+The target flow is: invoke a native Workflow -> open a running Agent node ->
+inspect that child's Chat/Trajectory -> retain the record on settlement ->
+return to the original parent conversation. Browser plugin not available;
+rendered checks use the repository's pinned Playwright 1.63 Linux Chromium,
+production preview at `http://127.0.0.1:5273`, and fixture origin at port 5274.
+
+Mismatch ledger:
+- Workflow nodes previously rendered only text/status. DSH's running member
+  link is now adapted to the exact native `child_agent_id` + activation pair.
+  It becomes non-navigable on settlement, retaining an already-focused button
+  until blur. Parent conversations and visited child records remain resident.
+- Native read routing previously admitted only durable, continuable Agents.
+  Inspection now resolves Workflow-owned executions from their real Registry
+  ownership for observation, content, history, Trace, delivery and statistics.
+  No durable Agent record is created; message, resume and interrupt admission
+  still reject these finite executions. They remain outside the native Agent
+  inventory and do not create synthetic parent Trace lifecycle activities.
+- Child input is displayed in the existing user bubble; adjacent canonical
+  text blocks now have a paragraph boundary, retaining original block indices.
+  DSH's localized one-shot record title/body replaces the composer. No model
+  selector or follow-up input is added. Narrow breadcrumbs reserve space for
+  the selected child title instead of allowing the parent title to consume it.
+- rustX keeps native block/node topology, review gates and execution budgets.
+  DSH Session ownership, event assembly and executable workflow semantics are
+  excluded; the TUI interaction logic is unchanged.
+
+Initial verification: 110 focused WebUI tests, a native Registry ownership/
+control regression, WebUI and protocol TypeScript, i18n, production build,
+311 source records and 267 notice entries passed. The first three real native
+browser cases passed at 1440x1000/light and 390x1000/dark in English/Chinese;
+source-driven final settlement and existing child regression checks follow.
+No screenshot reference or comparator tolerance was changed.
+
+Final rendered validation passed: all 12 browser cases, including the existing
+four-theme/viewport parent-message and observation-recovery matrices. The new
+real native `web_workflow_observation` case executes a permitted `read`, opens
+its Result detail from the child-owned Trace, then commits `workflow_output`.
+The selected inspector DOM, Result tab and contents remain resident across
+native settlement; the header becomes Completed. The Trace reader now follows
+its exact observation cursor and is not replaced by a lifecycle-only change.
+`workflow_output` remains a reserved terminal protocol, never a fabricated Tool
+execution. The initial settlement probe incorrectly assumed an ordinary Tool
+row for that protocol; it was replaced by the actual native `read` scenario.
+The browser selector also uses the Tool inspector's existing Result tab.
+
+Final page identity, meaningful content, no framework overlay, relevant console
+health, real interaction and screenshot checks passed. Screenshots reviewed:
+`/tmp/rustx-workflow-child-{chat,trace,completed}.png` and
+`/tmp/rustx-workflow-child-zh.png`. The desktop screenshot shows the real read
+result; the narrow dark screenshot shows the selected breadcrumb, ordinary
+user bubble and localized read-only record frame without horizontal overflow.
+Verification commands: focused eight-file Vitest run (110 tests), native
+`a_workflow_child_closes_native_lifecycle_without_parent_inbound`, WebUI/protocol
+TypeScript, i18n, provenance/notices, production build and the repository pinned
+browser runner. No reference baselines, comparison tolerances or TUI interaction
+logic changed. Other browser engines and operating systems were not exercised.

@@ -18445,6 +18445,17 @@
             }
           ]
         },
+        "child_agent_id": {
+          "description": "Exact read-only child identity; never grants durable Agent controls.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "invocation": {
           "anyOf": [
             {

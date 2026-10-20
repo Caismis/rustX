@@ -6055,6 +6055,41 @@ mod tests {
             &workflow_spec(&plane.conversation_id, "return a structured result"),
         )
         .await;
+        let inspection = plane
+            .registry
+            .workflow_inspection_snapshot(&accepted.child_agent_id)
+            .expect("finite child is inspectable");
+        assert_eq!(inspection.subagent_id, accepted.subagent_id);
+        assert!(
+            plane
+                .registry
+                .agent_snapshot(&accepted.child_agent_id)
+                .is_none()
+        );
+        assert!(
+            plane
+                .registry
+                .check_message_target(&accepted.child_agent_id)
+                .is_err()
+        );
+        assert!(
+            plane
+                .registry
+                .interrupt_agent_intent(&accepted.child_agent_id)
+                .is_err()
+        );
+        assert!(
+            plane
+                .registry
+                .agent_inspection_path(&accepted.child_agent_id)
+                .is_some()
+        );
+        assert!(
+            plane
+                .registry
+                .agent_workspace(&accepted.child_agent_id)
+                .is_some()
+        );
         child
             .complete(
                 ChildResultStatus::Succeeded,

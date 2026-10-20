@@ -104,6 +104,8 @@ pub struct WorkflowInstanceView {
     pub kind: WorkflowNodeKind,
     pub state: WorkflowState,
     pub child: Option<SubagentId>,
+    /// Exact read-only child identity; never grants durable Agent controls.
+    pub child_agent_id: Option<crate::runtime::identity::AgentId>,
     pub invocation: Option<crate::tools::types::ToolInvocationId>,
     pub tool_id: Option<crate::runtime::identity::ToolId>,
     pub interaction: Option<crate::runtime::interaction::InteractionRef>,
@@ -123,6 +125,7 @@ impl WorkflowInstanceView {
             kind,
             state: WorkflowState::Pending,
             child: None,
+            child_agent_id: None,
             invocation: None,
             tool_id: None,
             interaction: None,

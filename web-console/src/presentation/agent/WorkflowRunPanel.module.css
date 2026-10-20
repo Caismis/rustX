@@ -11,7 +11,13 @@
 .separator { flex: none; width: 2px; height: 2px; border-radius: 50%; background: var(--dsw-alias-label-tertiary); }
 .phaseList { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 4px 0 0 16px; }
 .members { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding-left: 16px; }
-.member { display: flex; align-items: center; gap: 12px; width: 100%; min-width: 0; min-height: calc(24px + var(--dsh-content-font-delta, 0px)); color: var(--dsw-alias-label-secondary); }
+.member { display: flex; align-items: center; gap: 12px; width: 100%; min-width: 0; min-height: calc(24px + var(--dsh-content-font-delta, 0px)); color: var(--dsw-alias-label-secondary); box-sizing: border-box; padding: 0; border: 0; border-radius: var(--dsw-radius-sm); background: transparent; font: inherit; text-align: left; }
+.memberHost { display: block; min-width: 0; }
+.memberButton { cursor: pointer; }
+.memberButton .memberLabel { color: var(--dsw-alias-link); font-weight: 500; }
+.memberButton:hover .memberLabel, .memberButton:focus-visible .memberLabel { text-decoration: underline dotted; text-underline-offset: 3px; }
+.memberButton:focus-visible { outline: none; }
+.memberButton:focus-visible .memberCopy { outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color); outline-offset: -1px; border-radius: var(--dsw-radius-sm); }
 .dotSlot { display: inline-flex; flex: none; width: 16px; align-items: center; justify-content: center; }
 .memberCopy { display: flex; flex-direction: column; flex: 1; min-width: 0; padding: 3px 0; }
 .memberLabel { overflow: hidden; font-size: var(--dsh-content-font-size, 14px); line-height: calc(24px + var(--dsh-content-font-delta, 0px)); text-overflow: ellipsis; white-space: nowrap; }

@@ -2572,9 +2572,11 @@ async fn dispatch_runtime(
                 }
             }
         }
-        Method::AgentStatus { agent_id, .. } => {
-            read_domain(authority, format!("agents.{}", agent_id.as_str())).await
-        }
+        Method::AgentStatus { agent_id, .. } => native_result(
+            tokio::task::spawn_blocking(move || authority.agent_status(&agent_id))
+                .await
+                .map_err(|_| domain(ErrorData::OperationFailed))?,
+        ),
         Method::AgentList { .. } => read_domain(authority, "agents".into()).await,
         Method::AgentSendMessage {
             target,

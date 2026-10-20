@@ -30,6 +30,16 @@ for (const locale of ['en', 'zh'] as const) test(`native workflow review and nod
     await expect(run.locator('[data-workflow-node="review"]')).toBeVisible();
     await expect(run.locator('[data-workflow-node="decision"]')).toBeVisible();
     await expect(page.locator('[aria-label="' + copy('Canonical conversation', '规范对话') + '"] [data-workflow-run-id]')).toHaveCount(1);
+    const parentTitle = await page.locator('#session-title').innerText();
+    await run.getByRole('button', { name: copy('View review', '查看 review'), exact: true }).click();
+    const childView = page.locator('[data-agent-id][data-view="chat"]:visible');
+    await expect(childView).toContainText('Review the request and commit the result.');
+    await expect(childView.getByRole('textbox')).toHaveCount(0);
+    await expect(childView).toContainText(copy('One-shot subagent record', '一次性子智能体记录'));
+    await expect.poll(() => page.locator('#session-title span').first().evaluate(element => element.clientWidth)).toBeGreaterThan(20);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: `/tmp/rustx-workflow-child-${locale}.png` });
+    await page.getByRole('button', { name: parentTitle, exact: true }).click();
     await fixture.release('workflow-child-admitted');
     const review = page.getByRole('region', { name: copy('Review', '评审'), exact: true });
     await expect(review.getByRole('heading', { name: 'Review report' })).toBeVisible();
