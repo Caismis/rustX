@@ -26,7 +26,7 @@ import { Button } from '../../presentation/primitives/Button';
 import css from '../../presentation/agent/Composer.module.css';
 import { observeControlRow } from '../../presentation/agent/control-row-layout';
 const emptyContent: UserInputBlock[] = [];
-export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, modelPicker, onRetainedRemove, onRetainedRecover, intakeOwner, uploadPolicy, onReconcile, draftOwner, draftIdentity, receiptAuthority, conversationIdentity, submissionTarget, binding = 'default', firstSubmission, disabled, submitDisabled = false, busy, active, onSend, onUpload, onCancel, onCommand, commandAvailable, hasGoal = false, lineageSwitchSafe = false, initialContent = emptyContent, consumed, model, permission, onDraftSend, cancellationAvailable = active && !disabled, cancellationScope, cancellationOnly = false }: {
+export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, modelPicker, onRetainedRemove, onRetainedRecover, intakeOwner, uploadPolicy, onReconcile, draftOwner, draftIdentity, receiptAuthority, conversationIdentity, submissionTarget, binding = 'default', firstSubmission, disabled, submitDisabled = false, busy, active, onSend, onUpload, onCancel, onCommand, commandAvailable, hasGoal = false, lineageSwitchSafe = false, initialContent = emptyContent, consumed, model, permission, onDraftSend, cancellationAvailable = active && !disabled, cancellationScope, cancellationOnly = false, separateStop = false }: {
   placeholder?: string; messageLabel?: string; busyEnterBehavior?: import('../composer/preferences').BusyEnterBehavior;
   modelPicker?: ModelPickerState;
   onRetainedRemove?: (id: string) => void; onRetainedRecover?: (retry: boolean) => void;
@@ -36,6 +36,7 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
   onDraftSend?: (text: string, files: readonly File[], ids?: readonly string[], submission?: ComposerSubmission) => Promise<boolean>; cancellationAvailable?: boolean; cancellationScope?: StopScope;
   /** Exact live Root attachment permits cancellation while observation is unavailable. */
   cancellationOnly?: boolean;
+  separateStop?: boolean;
   onSend: (text: string, receipts: readonly UploadReceipt[], delivery: 'send' | 'steer', acknowledged?: (acceptance?: InputAcceptance, conversation?: ComposerConversation) => void) => Promise<boolean>;
   onUpload: (files: readonly File[], operation?: string) => Promise<UploadedFile[]>; onCancel: () => void;
   onCommand?: (id: CommandId) => void; commandAvailable?: (id: CommandId) => boolean; hasGoal?: boolean; lineageSwitchSafe?: boolean; initialContent?: UserInputBlock[];
@@ -119,7 +120,7 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
   const selectedCommand = selected && selected !== 'file' ? selected : parsed.type === 'command' ? parsed.id : undefined;
   const facts = { running: active, busyEnter, actionable: !!draft.trim() || files.length > 0 || restored.length > 0,
     draftKind: parsed.type === 'text' ? 'message' as const : selectedCommand ? 'command' as const : 'unsupported-command' as const,
-    blocked: disabled || submitDisabled, acknowledging: busy || owner.blocked(editor), uploadsPending: pending, cancellationAvailable };
+    blocked: disabled || submitDisabled, acknowledging: busy || owner.blocked(editor), uploadsPending: pending, cancellationAvailable, separateStop };
   const primary = composerSubmissionPolicy(facts);
   useEffect(() => { stopSequence.reset(); }, [stopSequence, binding, cancellationScope?.authority, cancellationScope?.identity, active, cancellationAvailable, menu]);
   useEffect(() => {
@@ -231,6 +232,10 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
         </div>
         <div className={css.trailing}>
           {model}
+          {separateStop && active && <button type="button" className={css.primary} data-composer-stop aria-label={tx('agent:submission.stop')} title={tx('agent:submission.stop-double-escape')}
+            disabled={!cancellationAvailable} onMouseDown={event => event.preventDefault()} onClick={onCancel}>
+            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden><rect x="3" y="3" width="10" height="10" rx="3" fill="currentColor"/></svg>
+          </button>}
           <button type="button" className={css.primary} data-composer-primary={primary.kind} aria-label={tx(primary.label)} title={tx(primary.title)}
             disabled={primary.disabled} onMouseDown={event => event.preventDefault()} onClick={() => { if (primary.kind === 'stop') onCancel(); else void submit(); }}>
             {primary.kind === 'stop'

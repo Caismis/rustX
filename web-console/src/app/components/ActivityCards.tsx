@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Child composer frame adapted from ui-subagent; native observation/control ownership is rustX. See PROVENANCE.md. */
 import { useWorkflowContent } from '../agent/useWorkflowContent';
 import { JournalSourceProvider } from '../agent/ObservationSource';
 import { ChildObservation } from '../../../../protocol/app-server/child-observation';
@@ -20,6 +21,9 @@ import { agentDot, agentRunning, agentStatus } from '../agent/subagent-state';
 import { SubagentTrajectory, type SubagentTraceHandle } from '../agent/SubagentTrajectory';
 import { ComposerSeat } from '../agent/ComposerSeat';
 import { AgentComposer } from '../agent/AgentComposer';
+import { SubagentObservationNotice } from '../agent/SubagentObservationNotice';
+import { PermissionSelect } from '../../presentation/agent/PermissionSelect';
+import { ModelSelect } from '../../presentation/agent/ModelSelect';
 import { ArtifactResources } from '../../client/artifacts';
 import { IconRefreshOutline14, IconClockOutline16, IconCloseOutline16 } from '../../presentation/primitives/icons';
 
@@ -46,7 +50,7 @@ export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible
 
   const [transcriptRefresh, refreshTranscript] = useState(0);
   const [transcriptLoading, setTranscriptLoading] = useState(false);
-  const [transcriptError, setTranscriptError] = useState<string>();
+  const [transcriptError, setTranscriptError] = useState<{ owner: object; cause: unknown }>();
   const [conversation, setConversation] = useState<ChildObservation>();
   const observationOwner=useRef<ChildObservation|undefined>(undefined);
   const observationRefresh=useRef(0);
@@ -67,7 +71,7 @@ export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible
     if (!visible || mode!=='chat' || !client || !sessionId || !admission || !client.isAttachmentObservationCurrent(sessionId, admission)) { setTranscriptLoading(false); return; }
     let observing = true; const controller = new AbortController();
     const current = () => observing && currentViewOwner.current===viewOwner && client.isAttachmentObservationCurrent(sessionId, admission);
-    setTranscriptLoading(true); setTranscriptError(undefined);
+    setTranscriptLoading(true);
     void (async () => {
       const retained=observationOwner.current;
       const observation=retained&&retained.agentId===agent.agent_id&&retained.conversationId===agent.child_conversation_id&&retained.activationId===agent.activation_id?retained:new ChildObservation(agent.agent_id,agent.child_conversation_id,agent.activation_id);
@@ -79,11 +83,12 @@ export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible
         if (!current()) return;
         observation.apply(result.observation);
         setConversation(Object.assign(Object.create(Object.getPrototypeOf(observation)), observation));
+        setTranscriptError(undefined);
         setTranscriptLoading(false);
         if (observation.phase === 'durableOnly') return;
         if (observation.phase === 'resyncRequired' && ++recoveries > 2) throw new Error('Observation recovery is unavailable. Reopen the conversation.');
       }
-    })().catch(cause => { if (current()) { setTranscriptError(cause instanceof Error ? cause.message : String(cause)); setTranscriptLoading(false); } });
+    })().catch(cause => { if (current()) { setTranscriptError({ owner: viewOwner, cause }); setTranscriptLoading(false); } });
     return () => { observing = false; controller.abort(); };
   }, [client, sessionId, admission, agent.agent_id, agent.child_conversation_id, agent.activation_id,agent.current_activation,agent.state,agent.activation_state,transcriptRefresh,visible,mode,viewOwner]);
   const ownsContent = useMemo(() => () => Boolean(visible&&mode==='chat'&&currentViewOwner.current===viewOwner&&client&&sessionId&&admission&&observationOwner.current?.activationId===agent.activation_id&&client.isAttachmentObservationCurrent(sessionId,admission)),[client,sessionId,admission,viewOwner,visible,mode,agent.activation_id]);
@@ -94,11 +99,13 @@ export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible
   const workflows = useWorkflowContent(client, admission && sessionId && conversation?.checkpoint ? { id: sessionId, target: admission.target, attachmentObservation: admission, snapshot: conversation.snapshot, checkpoint: conversation.checkpoint } : undefined, visible && mode === 'chat' && conversation?.activationId === agent.activation_id, agent.agent_id);
   const unavailable = agent.state === 'unavailable';
   const acceptsMessage = agent.state === 'active' || agent.state === 'inactive';
+  const observationError = transcriptError?.owner === viewOwner ? transcriptError : undefined;
+  const childSnapshot = conversation?.activationId === agent.activation_id ? conversation.snapshot : undefined;
+  const childModel = childSnapshot?.model;
   return <AgentConversationContext.Provider value={agent}><ArtifactContext.Provider value={artifacts}><PreviewContext.Provider value={scopedPreview}><section className={css.agentConversation} data-agent-id={agent.agent_id} data-agent-state={agent.state} data-view={mode} data-activation-id={agent.current_activation ?? undefined} aria-label={tx('common:activity.agent-label', { name: agent.agent })}>
     <div hidden={mode !== 'chat'} className={css.agentChat}><JournalSourceProvider content={conversation?.content} messages={conversation?.snapshot?.messages} transcript={conversation?.snapshot?.transcript} source={client&&admission&&conversation?.checkpoint ? {client,target:admission.target,agentId:agent.agent_id,cut:()=>conversation.checkpoint?.read_cut,owned:ownsContent} : undefined}><ToolInspectionContext value={inspect}><SubagentChat client={client} sessionId={sessionId} admission={admission} agent={agent} snapshot={conversation?.snapshot} workflows={workflows.snapshot} visible={visible && mode === 'chat'}>
       {transcriptLoading && !conversation && <p role="status">{tx('common:activity.reading')}</p>}
       {metricsError && <p role="alert">{metricsError}</p>}
-      {transcriptError && <p role="alert">{transcriptError}</p>}
       {workflows.error && <p role="alert">{workflows.error}</p>}
       {agent.detail && <p>{detail(agent.detail)}</p>}
       {settledActivation && settledActivation.proof === admission && <small role="status">{settledActivation.outcome ? tx(`common:state.${settledActivation.outcome}`) : tx('common:activity.observed-inactive')}</small>}
@@ -112,9 +119,14 @@ export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible
       {close && <button type="button" aria-label={tx('common:subagents.close-view')} title={tx('common:subagents.close-view')} onClick={close}><IconCloseOutline16/></button>}
     </div>, headerHost)}
     <ComposerSeat>
+      {observationError && <SubagentObservationNotice error={observationError.cause} loading={transcriptLoading}
+        disabled={!client || !sessionId || !client.isAttachmentObservationCurrent(sessionId, admission)} retry={() => refreshTranscript(value => value + 1)}/>}
       {!client && <div role="status"><StateDot state={agentDot(agent)}/>{agentStatus(agent, tx)}</div>}
-      {unavailable && <div className={css.readOnly} role="status"><StateDot state={agentDot(agent)}/><span>{tx('common:subagents.read-only')}</span></div>}
-      {client && sessionId && <div hidden={unavailable}><AgentComposer placeholder={agent.state === 'inactive' ? tx('common:subagents.reply-placeholder') : undefined} permission={embedded ? <span className={css.headerStatus}><StateDot state={agentDot(agent)}/>{agentStatus(agent, tx)}</span> : undefined} messageLabel={tx('common:activity.message-label', { name: agent.title })} busyEnterBehavior="steer" binding={`${sessionId}:${agent.agent_id}`}
+      {unavailable && <div className={css.readOnly} role="status"><strong>{tx('common:subagents.read-only-title')}</strong><span>{tx('common:subagents.read-only')}</span></div>}
+      {client && sessionId && <div hidden={unavailable}><AgentComposer separateStop placeholder={agent.state === 'inactive' ? tx('common:subagents.reply-placeholder') : undefined}
+        permission={childSnapshot && <PermissionSelect value={childSnapshot.effective_approval_mode} disabled choose={() => {}}/>}
+        model={childModel?.effective && <ModelSelect choices={[]} current={childModel.effective.model} effectiveProfile={childModel.effective.profile ?? undefined} disabled loading={false} load={() => {}} choose={async () => false}/>}
+        messageLabel={tx('common:activity.message-label', { name: agent.title })} busyEnterBehavior="steer" binding={`${sessionId}:${agent.agent_id}`}
         disabled={request.disabled && !request.pending || !acceptsMessage} busy={request.pending} active={agentRunning(agent)}
         uploadPolicy={client.getSnapshot().capabilities?.upload_policy}
         onUpload={(files, operation) => client.upload(sessionId, files, { current: () => client.isAttachmentControlCurrent(sessionId, admission), acknowledged: () => {} }, operation)}
@@ -124,6 +136,7 @@ export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible
           if (current()) refreshTranscript(value => value + 1);
         })}
         cancellationAvailable={!interruptRequest.disabled && !unavailable && agent.state !== 'inactive'}
+        cancellationScope={admission ? { authority: admission, identity: `${agent.agent_id}:${agent.current_activation ?? agent.activation_id}` } : undefined}
         onCancel={() => void interruptRequest.run(async (client, target, current) => { const result = await client.request({ method: 'agent/interrupt', params: { target, agent_id: agent.agent_id } }, 'agent_interruption_accepted', undefined, current); if (result.agent_id !== agent.agent_id) throw new Error('Agent interruption receipt named another native owner.'); }, false)}
       /></div>}
       <JournalSourceProvider content={conversation?.content} messages={conversation?.snapshot?.messages} transcript={conversation?.snapshot?.transcript} source={client&&admission&&conversation?.checkpoint ? {

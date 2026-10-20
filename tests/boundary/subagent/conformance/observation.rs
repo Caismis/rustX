@@ -167,6 +167,183 @@ async fn t18_live_durable_only_and_reactivation_preserve_source_and_execution_id
     parent.runtime.shutdown().await.unwrap();
 }
 
+/// The physical inspection read starts while the child is live. A real Registry
+/// settlement before the socket closes authorizes a source transition; the same
+/// closed socket while execution remains active must stay unavailable.
+async fn closing_inspection_case(settle: bool, following: bool) {
+    let directory = inspection_tempdir().unwrap();
+    let (parent, host) = parent_runtime_host_plane(
+        &directory,
+        "conv_01900000-0000-7000-8000-000000000461",
+        Vec::new(),
+    )
+    .await;
+    let conversation = ConversationId::new("conv_01900000-0000-7000-8000-000000000462");
+    let store_path = crate::runtime::subagent::child_conversation_store_path(
+        &parent.plane.runtime_root,
+        &crate::runtime::identity::SessionId::new("ses_01900000-0000-7000-8000-000000000001"),
+        &conversation,
+    );
+    let (release, released) = support::fake::model_release();
+    let child = child_fixture_scoped_at(
+        &directory,
+        &conversation,
+        vec![parking_answer_script("retained closing answer", released)],
+        ToolRegistry::new(),
+        Vec::new(),
+        store_path.parent().unwrap().to_path_buf(),
+        Some(SubagentId::for_conversation(
+            parent.runtime.conversation_id(),
+            1,
+        )),
+    )
+    .await;
+    let wired = launch_wired_child(&parent.plane, &child, "closing inspection").await;
+    await_model_parks(&child.model, 1).await;
+    child.host.projection_settled().await;
+    let agent = wired.accepted.child_agent_id.clone();
+    let activation = wired.accepted.subagent_id.clone();
+    let path = parent.plane.registry.agent_inspection_path(&agent).unwrap();
+    let listener = tokio::net::UnixListener::bind(path).unwrap();
+    let (attachment, _) = host
+        .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .unwrap();
+    let after =
+        following.then(
+            || crate::runtime_client::agent_observation::AgentObservationCursor {
+                agent_id: agent.clone(),
+                conversation_id: conversation.clone(),
+                activation_id: activation.clone(),
+                cursor: child.host.checkpoint().unwrap().cursor,
+            },
+        );
+    let mut release = Some(release);
+    let mut serve = Some(wired.serve);
+    let read = attachment.handle_request_async(RuntimeClientRequest::AgentObserve {
+        id: crate::runtime_client::RequestId::new(461),
+        agent_id: agent.clone(),
+        after,
+    });
+    let close = async {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut stream = tokio::io::BufReader::new(stream);
+        let mut line = String::new();
+        stream.read_line(&mut line).await.unwrap();
+        let request: RuntimeClientRequest = serde_json::from_str(&line).unwrap();
+        assert!(matches!(request, RuntimeClientRequest::Initialize { .. }));
+        let response = crate::runtime_client::RuntimeClientResponse {
+            id: request.id(),
+            error: None,
+            result: Some(RuntimeClientResult::Initialized {
+                attachment_id: crate::runtime_client::types::AttachmentId::new(
+                    "closing-inspection",
+                ),
+                conversation_id: conversation.clone(),
+                agent_id: agent.clone(),
+                activation_id: Some(activation.clone()),
+                protocol_version: crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
+                read_only: true,
+                capabilities: vec!["checkpoint".into()],
+            }),
+        };
+        let mut bytes = serde_json::to_vec(&response).unwrap();
+        bytes.push(b'\n');
+        stream.get_mut().write_all(&bytes).await.unwrap();
+        line.clear();
+        stream.read_line(&mut line).await.unwrap();
+        let request: RuntimeClientRequest = serde_json::from_str(&line).unwrap();
+        assert!(if following {
+            matches!(request, RuntimeClientRequest::ObserveEvents { .. })
+        } else {
+            matches!(request, RuntimeClientRequest::CheckpointGet { .. })
+        });
+        if settle {
+            release.take().unwrap().send(true).unwrap();
+            await_serve(serve.take().unwrap()).await;
+            parent
+                .plane
+                .registry
+                .wait_until_settled(&activation)
+                .await
+                .unwrap();
+        }
+        // This is a physical IPC failure, not a fabricated Runtime Client error.
+        drop(stream);
+    };
+    let (response, ()) = tokio::time::timeout(LIVENESS, async { tokio::join!(read, close) })
+        .await
+        .unwrap();
+    if settle {
+        assert!(
+            matches!(
+                response.result,
+                Some(RuntimeClientResult::AgentObserve {
+                    observation: AgentObservation::ResyncRequired {
+                        source: ObservationSource::DurableOnly,
+                        ..
+                    }
+                })
+            ),
+            "terminal handoff is not a failed read: {response:?}"
+        );
+        let AgentObservation::Checkpoint {
+            source: ObservationSource::DurableOnly,
+            checkpoint,
+            cursor: None,
+            ..
+        } = observe(&attachment, &agent, None).await
+        else {
+            panic!("next read must own retained authoritative history")
+        };
+        assert!(
+            checkpoint
+                .snapshot
+                .messages
+                .iter()
+                .any(|message| format!("{message:?}").contains("retained closing answer"))
+        );
+    } else {
+        assert!(
+            matches!(
+                response.error,
+                Some(crate::runtime_client::RuntimeClientError::ObservationUnavailable { .. })
+            ),
+            "a socket failure cannot fabricate settlement: {response:?}"
+        );
+        assert!(response.result.is_none());
+        release.take().unwrap().send(true).unwrap();
+        await_serve(serve.take().unwrap()).await;
+        parent
+            .plane
+            .registry
+            .wait_until_settled(&activation)
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        child.model.requests().len(),
+        1,
+        "observation does not start model work"
+    );
+    child.runtime.shutdown().await.unwrap();
+    parent.runtime.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_inspection_close_after_settlement_requires_retained_source_for_initial_and_following_reads()
+ {
+    for following in [false, true] {
+        closing_inspection_case(true, following).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_inspection_close_while_active_does_not_invent_retained_source_or_execution_outcome() {
+    for following in [false, true] {
+        closing_inspection_case(false, following).await;
+    }
+}
+
 struct RetainedTraceField {
     cut: crate::runtime_client::checkpoint::CheckpointReadCut,
     domain: String,

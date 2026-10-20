@@ -3268,3 +3268,63 @@ pixels. Screenshot tolerance and noise policies are unchanged. TypeScript,
 production build, all 303 source records and notices for 264 packages passed.
 No native protocol, runtime or TUI source changed. Other browser engines were
 not exercised; the existing large-chunk build warning remains.
+
+### Child observation recovery and continuable composer parity (2026-10-20)
+
+Reference: Harness `ui-conversation/src/client/skeleton/InputBar.tsx`,
+`ui-subagent/src/client/SubagentReadOnlyComposer{.tsx,.module.css}` and
+`ui-primitives/src/ConnectionIndicator{.tsx,.module.css}` at
+`687f282e8625c6b8d11ff58211a90524be2e4317`. Continuable children retain Send as
+the primary action and expose an independent Stop immediately before it. The
+shared rustX composer now follows that rule for child views, including empty or
+admission-blocked editors; root primary behavior is unchanged. Double Escape is
+fenced to the exact child activation and root attachment. Model/permission seats
+use the exact child checkpoint and are read-only under the current native child
+API; no parent model/catalog is substituted. Unavailable children use the compact
+neutral read-only frame and localized title/body.
+
+A failed live child read previously bypassed the post-read registry check and
+printed the raw RPC exception in the chat flow. Runtime Client now rechecks the
+same activation even after a live read fails. Only a proven registry transition
+to Inactive or Unavailable authorizes `resync_required` to retained native
+history. An IPC failure while still Active remains `observation_unavailable`;
+it cannot fabricate completion, trigger execution, or substitute a historical
+answer. The original total read budget and inspection capacity remain intact.
+Real Unix tests close the inspection connection during initial and following
+reads both before and after actual child settlement, then verify canonical
+retained content and exactly one model execution.
+
+Web observation failures use compact amber connection feedback above the child
+composer, adapted from Harness ConnectionIndicator. Localized retry/connecting
+states retain coherent content, the resident editor and its draft. Technical
+diagnostics remain available in an explicit Details disclosure. Retrying resets
+only the child read cursor under the existing validated source owner; it never
+replays Send, Stop or model work. Error ownership is invalidated with the view,
+activation or attachment. Existing native header controls remain available.
+Four newly attributed source records distinguish the small adapted presentation
+from rustX-owned lifecycle, observation and mutation authority; historical pins
+remain unchanged.
+
+All 10 native child-observation boundary tests (including four physical close
+cases), 107 focused frontend checks, Rust formatting, TypeScript, production
+build, i18n ownership, 307 source records and notices for 264 packages passed.
+No protocol shape or TUI presentation changed. The existing large-chunk build
+warning remains.
+
+Browser plugin not available: QA used the repository's pinned Playwright 1.63
+Linux Chromium container at fixture origin `http://127.0.0.1:5274` and production
+preview origin `http://127.0.0.1:5273`. All 40 scenarios passed, including the real
+native interrupt/wait/resume workflow, existing root strict screenshots and
+keyboard policies, child breadcrumbs/aside navigation, retained drafts,
+independent child trajectory and four controlled read-failure/recovery flows.
+The recovery flows cover 1440x900 English and 390x900 Chinese in both themes:
+enter child, retain evidence and draft, fail an actual typed read, disclose and
+close diagnostics, retry one cursor-free read while preserving the same editor
+node, then receive fresh canonical content without execution/control replay.
+Page identity, error-overlay/console health and viewport bounds passed.
+Visually inspected desktop dark and narrow light failure states and narrow dark
+recovered state: the compact warning sits above the card, Send and Stop fit the
+same row, and the native model/permission seats collapse on narrow layouts.
+Evidence: `/tmp/rustx-child-{recovery,reconnecting,recovered}-{dark,light}-{1440,390}.png`.
+No screenshot references or comparison policies changed. Other browser engines
+were not exercised.

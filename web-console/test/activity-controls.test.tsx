@@ -11,6 +11,7 @@ import { RuntimeFacts as OtherActivity } from './runtime-facts';
 import { AgentCard } from '../src/app/components/ActivityCards';
 function RuntimeFacts(props: { snapshot: ReturnType<typeof snapshot>; client?: Server['client']; sessionId?: string }) { return <><OtherActivity snapshot={props.snapshot}/>{props.snapshot.jobs?.map(job => <JobItemHarness key={job.job_id} job={job} client={props.client} sessionId={props.sessionId}/>)}{props.snapshot.agents?.map(agent => <AgentCard key={agent.agent_id} agent={agent} client={props.client} sessionId={props.sessionId}/>)}</>; }
 import { Server, snapshot, childConversation } from './fixture';
+import { cfg3Effective } from './cfg3-data';
 import { Tool } from '../src/app/agent/Tool';
 beforeEach(() => { const host = document.createElement('div'); host.id = 'subagent-header-actions'; document.body.append(host); });
 afterEach(() => { cleanup(); document.getElementById('subagent-header-actions')?.remove(); });
@@ -253,7 +254,7 @@ it('Starting activation uses authoritative Admitting owner state', async () => {
   const ui = render(<RuntimeFacts snapshot={s} client={server.client} sessionId="A"/>);
   expect(ui.getByText('Admitting…')).toBeTruthy();
   expect(ui.queryByText('Stopping…')).toBeNull();
-  expect(ui.queryByRole('button', { name: /^(Send|Steer)$/ })).toBeNull();
+  expect((ui.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
   expect((ui.getByRole('textbox', { name: 'Message Agent Worker' }) as HTMLTextAreaElement).disabled).toBe(true);
   expect((ui.getByRole('button', { name: 'Stop' }) as HTMLButtonElement).disabled).toBe(false);
 });
@@ -481,4 +482,63 @@ it('T14/T17 actual Child watch rejects a stale inner revision and resumes only f
   await act(async () => server.socket.success(following, { type: 'agent_observe', observation: { type: 'events', after: { ...identity, cursor: '11' }, cursor: { ...identity, cursor: '12' }, events: [{ cursor: '12', event: { type: 'projection_transition', events: [], metadata: { read_cut: scoped('12').read_cut, collections: [], content: [] } } }] } }));
   expect((await server.waitFor('agent/observe', 5)).params).toMatchObject({ after: { ...identity, cursor: '12' } });
   expect(ui.queryByRole('alert')).toBeNull(); expect(server.requests.some(row => ['agent/interrupt', 'conversation/cancel', 'job/cancel'].includes(row.request.method))).toBe(false);
+});
+
+it('a failed child read retains content and draft, exposes explicit recovery, and never replays Agent execution', async () => {
+  const { checkpoint } = await import('./fixture');
+  const server = new Server(); servers.push(server); await server.attached('A'); server.held.add('agent/observe');
+  const agent = agentFixture();
+  const receipt = (text: string, cursor: string, live: boolean) => {
+    const result = childConversation({ entries: [{ cursor: '1', item: { type: 'message', message: { role: 'assistant', id: 'child-report', content: [{ type: 'text', text }] } } }] }, agent.agent_id, agent.activation_id, agent.child_conversation_id);
+    if (result.observation.type !== 'checkpoint') throw Error('Fixture checkpoint');
+    const model = cfg3Effective().effective_model!;
+    result.observation.checkpoint = checkpoint({ ...result.observation.checkpoint.snapshot, effective_approval_mode: 'full_access', model: { ...model, effective: { ...model.effective!, model: 'child/own-model' } } }, cursor);
+    result.observation.checkpoint.read_cut.activation_id = agent.activation_id;
+    if (live) { result.observation.source = 'live'; result.observation.cursor = { agent_id: agent.agent_id, conversation_id: agent.child_conversation_id, activation_id: agent.activation_id, cursor }; }
+    return result;
+  };
+  const ui = render(<AgentCard agent={agent} client={server.client} sessionId="A"/>);
+  const first = await server.waitFor('agent/observe', 1);
+  await act(async () => server.socket.success(first, receipt('Retained child answer', '10', true)));
+  const second = await server.waitFor('agent/observe', 2);
+  const input = ui.getByRole('textbox', { name: 'Message Agent Worker' }) as HTMLTextAreaElement;
+  fireEvent.change(input, { target: { value: 'Retained child draft' } });
+  const model = ui.getByRole('button', { name: 'Model and thinking effort' }) as HTMLButtonElement;
+  expect(model.disabled).toBe(true); expect(model.textContent).toContain('child/own-model');
+  expect((ui.getByRole('button', { name: 'Workspace permissions' }) as HTMLButtonElement).disabled).toBe(true);
+  const diagnostic = 'child observation: Connection reset by peer (os error 104)';
+  await act(async () => server.socket.deliver({ jsonrpc: '2.0', id: second.id, error: { code: -32000, message: 'Operation rejected', data: { kind: 'observation_unavailable', diagnostic } } }));
+  expect(ui.getByText('Retained child answer')).toBeTruthy(); expect(input.value).toBe('Retained child draft');
+  const notice = ui.container.querySelector('[data-child-observation-status]')!;
+  expect(notice.querySelector('details')?.open).toBe(false); expect(notice.querySelector('pre')?.textContent).toContain(diagnostic);
+  expect(ui.container.querySelector('[data-composer-seat]')?.contains(notice)).toBe(true);
+  expect((ui.getByRole('button', { name: 'Stop' }) as HTMLButtonElement).disabled).toBe(false);
+  expect((ui.getByRole('button', { name: 'Steer' }) as HTMLButtonElement).disabled).toBe(false);
+  expect(server.requests.filter(row => row.request.method === 'agent/observe')).toHaveLength(2);
+  const retry = ui.getByRole('button', { name: 'Child status unavailable. Click to retry' });
+  await act(async () => { fireEvent.click(retry); });
+  const repair = await server.waitFor('agent/observe', 3); expect(repair.params).toMatchObject({ after: null });
+  const pending = ui.getByRole('button', { name: 'Reconnecting to child…' }) as HTMLButtonElement;
+  expect(pending.disabled).toBe(true); fireEvent.click(pending);
+  expect(ui.getByText('Retained child answer')).toBeTruthy(); expect(input.value).toBe('Retained child draft');
+  await act(async () => server.socket.success(repair, receipt('Recovered canonical child answer', '11', false)));
+  expect(ui.getByText('Recovered canonical child answer')).toBeTruthy();
+  expect(ui.container.querySelector('[data-child-observation-status]')).toBeNull(); expect(input.value).toBe('Retained child draft');
+  expect(server.requests.filter(row => row.request.method === 'agent/observe')).toHaveLength(3);
+  expect(server.requests.some(row => ['agent/sendMessage', 'agent/interrupt', 'turn/start'].includes(row.request.method))).toBe(false);
+});
+
+it('a running child keeps independent Send and Stop, and double Escape targets its own activation', async () => {
+  const server = new Server(); servers.push(server); await server.attached('A'); server.held.add('agent/observe'); server.held.add('agent/interrupt');
+  const agent = agentFixture(), ui = render(<AgentCard agent={agent} client={server.client} sessionId="A"/>);
+  const input = ui.getByRole('textbox', { name: 'Message Agent Worker' }) as HTMLTextAreaElement;
+  expect((ui.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
+  expect((ui.getByRole('button', { name: 'Stop' }) as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.change(input, { target: { value: 'Keep this child draft' } }); act(() => input.focus());
+  expect((ui.getByRole('button', { name: 'Steer' }) as HTMLButtonElement).disabled).toBe(false);
+  for (let n = 0; n < 2; n++) { fireEvent.keyDown(input, { key: 'Escape' }); fireEvent.keyUp(input, { key: 'Escape' }); }
+  const request = await server.waitFor('agent/interrupt', 1); expect(request.params).toMatchObject({ agent_id: agent.agent_id });
+  expect(input.value).toBe('Keep this child draft'); expect(ui.container.querySelector('[data-agent-state="active"]')).toBeTruthy();
+  expect(server.requests.filter(row => row.request.method === 'agent/interrupt')).toHaveLength(1);
+  expect(server.requests.some(row => row.request.method === 'agent/sendMessage')).toBe(false);
 });

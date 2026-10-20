@@ -1352,7 +1352,7 @@ impl ClientInner {
         after: Option<AgentObservationCursor>,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         // One absolute budget covers Registry, IPC, initialization, checkpoint,
-        // event wait, and fallback. Nested steps never reset this deadline.
+        // event wait, and source transition. Nested steps never reset this deadline.
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
         self.agent_observe_with_deadline(id, after, deadline).await
     }
@@ -1432,25 +1432,54 @@ impl ClientInner {
             }
         }
         let observation = if durable {
-            AgentObservation::Checkpoint {
+            Ok(AgentObservation::Checkpoint {
                 agent_id: id.clone(),
                 conversation_id: conversation_id.clone(),
                 activation_id: activation_id.clone(),
                 source,
                 cursor: None,
                 checkpoint: Box::new(self.durable_agent_checkpoint(&agent, permit).await?),
-            }
+            })
         } else {
-            let path = registry
-                .agent_inspection_path(id)
-                .ok_or_else(|| failed("live inspection source unavailable"))?;
-            live_observation(id, &conversation_id, &activation_id, path, after, permit).await?
+            match registry.agent_inspection_path(id) {
+                Some(path) => {
+                    live_observation(id, &conversation_id, &activation_id, path, after, permit)
+                        .await
+                }
+                None => Err(failed("live inspection source unavailable")),
+            }
         };
         let current = self.agent_view(id)?;
         if current.activation_id != activation_id {
             return Ok(resync("activation changed during observation"));
         }
-        Ok(RuntimeClientResult::AgentObserve { observation })
+        // A child may seal and close its inspection socket during an admitted
+        // read. Only the Registry's actual terminal owner state authorizes the
+        // switch to retained history; a transport failure alone never does.
+        if !durable
+            && matches!(
+                current.state,
+                crate::runtime::subagent::AgentState::Inactive
+                    | crate::runtime::subagent::AgentState::Unavailable
+            )
+            && matches!(
+                &observation,
+                Ok(_) | Err(RuntimeClientError::ObservationUnavailable { .. })
+            )
+        {
+            return Ok(RuntimeClientResult::AgentObserve {
+                observation: AgentObservation::ResyncRequired {
+                    agent_id: id.clone(),
+                    conversation_id,
+                    activation_id,
+                    source: ObservationSource::DurableOnly,
+                    reason: "live source ended during observation".into(),
+                },
+            });
+        }
+        Ok(RuntimeClientResult::AgentObserve {
+            observation: observation?,
+        })
     }
 }
 #[cfg(test)]

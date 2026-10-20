@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Read-only child frame adapted from SubagentReadOnlyComposer.module.css; see PROVENANCE.md. */
 .agentConversation { display: flex; flex-direction: column; flex: 1 0 auto; min-height: auto; }
 .agentActions { display: flex; align-items: center; gap: 4px; }
 .agentActions button { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: var(--dsw-radius-sm); background: transparent; color: var(--dsw-alias-label-tertiary); cursor: pointer; }
@@ -14,4 +15,5 @@
 .headerStatus { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dsw-alias-label-tertiary); }
 @media (max-width: 600px) { .agentActions .headerStatus { display: none; } }
 
-.readOnly { display: flex; align-items: center; gap: 8px; padding: 20px; border: 1px solid var(--dsw-alias-border-l1); border-radius: var(--dsw-radius-xl); color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-layer-1); }
+.readOnly { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 8px; min-height: 54px; margin: 0 var(--dsh-composer-side-clearance) 20px; padding: 10px 16px; border: 0.5px solid var(--dsw-alias-border-l4); border-radius: var(--dsw-radius-lg); color: var(--dsw-alias-label-tertiary); background: var(--dsw-alias-bg-layer-1); font-size: 13px; line-height: 20px; }
+.readOnly strong { color: var(--dsw-alias-label-primary); font-weight: 510; }

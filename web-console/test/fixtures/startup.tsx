@@ -7,6 +7,7 @@ import { WorkspaceAuthority } from '../../src/workspaces/authority';
 import { WorkspaceSessionAdmission } from '../../src/workspaces/session-admission';
 import { ConnectionController } from '../../src/connection/controller';
 import { childNavigation } from './child-navigation';
+import { childObservationRecovery } from './child-observation-recovery';
 import { agentMetrics } from '../agent-statistics-fixture';
 import { createRoot } from 'react-dom/client';
 import { ComposerDraft } from '../../src/app/composer/draft';
@@ -166,6 +167,7 @@ if (new URL(location.href).searchParams.has('subagents')) {
     return childConversation({ entries: [{ cursor: '1', item: { type: 'message', message: { role: 'assistant', id: `${request.params.agent_id}-reply`, content: [{ type: 'text', text: `# Child research report\n\nSelected agent: ${request.params.agent_id}\n\nSources have been checked.\n\n` + 'Detailed findings and supporting evidence. '.repeat(120) }] } } }] }, request.params.agent_id, saved.agents!.find(agent => agent.agent_id === request.params.agent_id)!.activation_id, saved.agents!.find(agent => agent.agent_id === request.params.agent_id)!.child_conversation_id);
   });
 }
+const releaseChildObservation = new URL(location.href).searchParams.has('subagent-observation-failure') ? childObservationRecovery(server) : undefined;
 if (new URL(location.href).searchParams.has('child-turn-navigation')) childNavigation(server);
 let nativeDefault = 'fixture/native';
 server.handlers.set('session/create', request => {
@@ -189,6 +191,7 @@ const render = () => root.render(<AppSurface composerDraft={composerDraft} clien
 render();
 const handled = new Set<Request>(server.requests.filter(row => row.request.method === 'initialize' || row.request.method === 'session/list').map(row => row.request));
 (window as any).startupFixture = {
+  releaseChildObservation: () => releaseChildObservation?.(),
   advanceHistory: () => advanceHistory?.(),
   history: () => server.client.getSnapshot().views.A?.history,
   requests: () => server.requests.map(({ request }) => request),

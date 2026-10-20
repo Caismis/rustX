@@ -231,6 +231,16 @@ Starting projects the owner's Admitting and terminal-unproven projects Unavailab
 Wait and interrupt both return `agent_wait`: captured activation/outcome plus the
 latest Agent snapshot.
 
+A child inspection read can race with the child closing its live source. After
+the read, Runtime Client checks the same activation's registry state again. A
+proven transition to Inactive or Unavailable requires a new retained-history
+checkpoint; a transport error while still Active remains an observation failure,
+not an execution outcome. Web child views preserve the last coherent content and
+draft, offer explicit status-read recovery with diagnostic details, and never
+replay a message or control mutation to recover a read. Continuable children keep
+Send primary with a separate Stop button. Model and permission labels come from
+the exact child checkpoint and remain read-only under the current child API.
+
 The TUI command dispatcher owns one pending Agent message submission per
 attachment. Repeated Enter while its preserved draft awaits an outcome sends
 nothing. Classified failure retains the draft without replay; success clears only
