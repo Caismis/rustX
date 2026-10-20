@@ -780,7 +780,7 @@ pub(super) fn enrich_event_transcript(
         "attempt_terminal"
     };
     let header = optional_display_layout(transaction, || {
-        observation::index_native_event(transaction, kind, event, cursor)
+        observation::index::index_native_event(transaction, kind, event, cursor)
     })
     .is_some();
     coordinates && witness && header

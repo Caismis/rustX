@@ -231,7 +231,7 @@ impl CanonicalStore for SqliteConversationStore {
                     )
                     .map_err(|error| storage(error.to_string()))?;
                 let _ = optional_display_layout(&transaction, || {
-                    observation::index_message(&transaction, message, Some(position))?;
+                    observation::index::index_message(&transaction, message, Some(position))?;
                     observation_trace::index_proposals(
                         &transaction,
                         &self.conversation_id,
@@ -313,7 +313,7 @@ impl CanonicalStore for SqliteConversationStore {
                         load_transcript_reference(&transaction, "inherited_turn", &id)?
                     {
                         let _ = optional_display_layout(&transaction, || {
-                            observation::index_item(
+                            observation::index::index_item(
                                 &transaction,
                                 "inherited_turn",
                                 &id,

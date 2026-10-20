@@ -7,9 +7,7 @@ use crate::model::types::ModelRequest;
 use crate::runtime::identity::{AttemptId, MessageId, PublicationStreamId, RequestId};
 use chrono::{DateTime, Utc};
 
-use crate::durable::{
-    ConversationStore, ConversationStoreError, TranscriptCommitReceipt, TranscriptCursor,
-};
+use crate::durable::{ConversationStoreError, TranscriptCommitReceipt, TranscriptCursor};
 
 /// The durable receipt of one model-turn-start transition.
 ///
@@ -138,7 +136,7 @@ pub struct RequestSnapshotPage {
     pub next_sequence: Option<u64>,
 }
 
-impl<T: ConversationStore + ?Sized> ContributionEmissionLookup for T {
+impl<T: RequestStore + ?Sized> ContributionEmissionLookup for T {
     fn latest_contribution_emission(
         &self,
         producer: &crate::runtime::identity::ContextContributorIdentity,

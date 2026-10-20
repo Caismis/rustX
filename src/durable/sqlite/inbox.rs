@@ -545,9 +545,13 @@ pub(super) fn rewrite_pending_body(
             expected.sequence.get(),
             revision,
         )?;
-        observation::index_message(transaction, &MessageBlock::User(item.message.clone()), None)
+        observation::index::index_message(
+            transaction,
+            &MessageBlock::User(item.message.clone()),
+            None,
+        )
     });
-    let _ = observation::index_pending_header(
+    let _ = observation::index::index_pending_header(
         transaction,
         expected.sequence.get(),
         &item.message_id,
@@ -724,7 +728,7 @@ pub(super) fn accept_inbound_tx(
     }
     let _ = optional_display_layout(transaction, || {
         content::index_pending(transaction, &message, sequence, 0)?;
-        observation::index_message(transaction, &MessageBlock::User(message.clone()), None)
+        observation::index::index_message(transaction, &MessageBlock::User(message.clone()), None)
     });
     // Acceptance is the durable-before-display frontier for an ordinary
     // inbound user message. Context facts are durable model input but are not
@@ -740,7 +744,7 @@ pub(super) fn accept_inbound_tx(
             message_id.as_str(),
         )?)
     };
-    let _ = observation::index_pending_header(
+    let _ = observation::index::index_pending_header(
         transaction,
         sequence,
         &message_id,

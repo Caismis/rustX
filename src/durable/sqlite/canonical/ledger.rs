@@ -341,7 +341,7 @@ pub(in crate::durable::sqlite) fn append_message_ledger(
         .map_err(|error| map_insert_error(&error, &id))?;
     let _ = optional_display_layout(transaction, || {
         content::index_message(transaction, message)?;
-        observation::index_message(
+        observation::index::index_message(
             transaction,
             message,
             Some(nonnegative(position, "header ledger position")?),

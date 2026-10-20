@@ -536,7 +536,7 @@ pub(super) fn rebind_canonical_display(
         )
         .map_err(|error| storage(error.to_string()))?;
     let _ = optional_display_layout(transaction, || {
-        observation::index_message(
+        observation::index::index_message(
             transaction,
             message,
             Some(nonnegative(position, "header ledger position")?),
@@ -554,7 +554,7 @@ pub(super) fn audit_observation_receipt(
     let read_cut = observation::cut(connection, conversation)?;
     let summary = observation::audit_summary(audit);
     let _ = optional_display_layout(connection, || {
-        observation::index_audit(connection, audit, cursor)?;
+        observation::index::index_audit(connection, audit, cursor)?;
         connection.execute("UPDATE observation_headers SET journal_position=?1 WHERE reference_kind='publication_audit' AND reference_id=?2",params![read_cut.read.journal,audit.stream_id.as_str()]).map_err(|error|storage(error.to_string()))?;
         Ok(())
     });
