@@ -269,6 +269,12 @@ fn equivalent_error(draft: PublicationDraft) -> RuntimeClientError {
 fn normal_encoding_preserves_wire_metadata_trace_cursors_and_event_order() {
     let draft = traced_draft();
     let next = draft.seed.cursor.get() + 1;
+    let RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } = &draft.events[1] else {
+        panic!("fixture contains a nested checkpoint");
+    };
+    // Nested Trace stamping precedes the legacy checkpoint cursor rewrite.
+    let nested_trace_cut = checkpoint.read_cut.clone();
+    assert_ne!(nested_trace_cut.revision, next);
     let (output, path) = equivalent_success(draft);
     assert!(!path.captured_eviction && !path.fitted && !path.forced && !path.budget_fallback);
     let RuntimeClientEvent::ProjectionTransition { events, metadata } = &output.event else {
@@ -288,7 +294,7 @@ fn normal_encoding_preserves_wire_metadata_trace_cursors_and_event_order() {
     assert!(!checkpoint.snapshot.trace.records.is_empty());
     assert_eq!(
         checkpoint.snapshot.trace.read_cut.as_ref(),
-        Some(&metadata.read_cut)
+        Some(&nested_trace_cut)
     );
     assert_eq!(
         output.seed.snapshot.trace.read_cut.as_ref(),
