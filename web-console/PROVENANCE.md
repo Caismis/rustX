@@ -3043,3 +3043,36 @@ native model DTO in their checkpoint fixture. Production build, final Web
 TypeScript check, i18n ownership, all 303 source records and notices for 264
 production packages passed. The nine browser scenarios above passed with the
 same production implementation. No native protocol, runtime or TUI source changed.
+
+### Plain source preview uses the full sidebar reading area (2026-10-20)
+
+Reference: Harness `ui-sidebar-documentpreview/src/client/TextPreview.module.css`
+and `text/TextBody.tsx` at `687f282e8625c6b8d11ff58211a90524be2e4317`.
+Harness gives the pane body the remaining height and scrolling responsibility;
+plain source pages flow inside it. The local plain-text `pre` inherited the
+global 360px cap and `overflow: auto`, so the actual text scroller occupied only
+the top of the pane. A real-file browser reproduction measured a 924px body
+containing a 360px inner scroller for 3,097px of source. The component now removes
+that cap and inner overflow and resets unwrapped source breaking. The same
+3,097px document flows through the full 924px/768px desktop/narrow scrollport.
+The existing text inset, font, toolbar and tab state remain component-owned.
+
+The Browser plugin/skill is unavailable in this session; QA used the repository's
+pinned Playwright 1.63 Linux Chromium container against the local workspace Host
+fixture at `http://127.0.0.1:5274/test/fixtures/workbench.html` (production preview
+at port 5273). An external temporary script first reproduced the old geometry,
+then passed the fixed flow at 1440x1000 and 390x844: open a real Markdown file,
+choose Text, read long lines and the final line, restore both scroll coordinates
+after switching tabs, toggle wrapping, and resize the viewport. Page identity,
+meaningful source content, console/error-overlay health, panel bounds and no
+page-level horizontal overflow passed. Evidence:
+`/tmp/rustx-plain-text-before-1440.png`,
+`/tmp/rustx-plain-text-after-{1440,390}.png`, and
+`/tmp/rustx-plain-text-wrap-{1440,390}.png`.
+
+All three existing browser regressions for source toolbar/tab state, Markdown
+viewer selection and conversation file-link/source-line navigation also passed.
+The focused document/view-lifetime/workspace-Host suite passed all 45 tests;
+TypeScript, production build, all 303 provenance records and 264 package notices
+passed. No screenshot reference/tolerance or native/TUI source changed. Other
+browser engines were not exercised; the existing large-chunk build warning remains.

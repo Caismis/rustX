@@ -4337,9 +4337,15 @@
           "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
           "upstream_sha256": "cc8959182293fb47bab6006a24c0d12e5981667343859937ba0310d5ad6418cc",
           "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime."
+        },
+        {
+          "upstream": "packages/client/ui-sidebar-documentpreview/src/client/TextPreview.module.css",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "807a437e79912284c87b36c4f2556d9c155a966f04b4e034f951e705cf1029ee",
+          "treatment": "Plain source uses the full pane as its sole scrollport, retaining the shared text inset and wrap preference; remove the inherited global pre height limit and inner scrolling."
         }
       ],
-      "local_sha256": "4a16a6a1a6a9e399f5f38ec1862cdabdedc694eead55498da6c0d94859837f02"
+      "local_sha256": "245cc04f89cee425cea64fb9928b5031c2b5cdf1296961a61b6137fe7e9e3255"
     },
     {
       "upstream": "packages/client/ui-primitives/src/CodeToolbar.tsx",
