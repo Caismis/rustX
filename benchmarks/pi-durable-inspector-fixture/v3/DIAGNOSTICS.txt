@@ -1,0 +1,44 @@
+Diagnostic-only observation proposal; review before any browser product run.
+
+The original workload, provider, input, production code, action/RPC deadlines,
+fixed browser image and two original completion measurements are unchanged.
+This revision adds observers and therefore is not eligible for formal timing
+acceptance. It has not been run against a real browser in this change.
+
+diagnostics.json records four proxy callback boundaries, browser WebSocket
+send/receive-dispatch/close-request/close/error metadata, composer disabled and
+readOnly changes, bounded browser console, child exit code/signal, one-second
+process counters, and the fixture Node event-loop delay histogram. WorkspaceHost
+shares fixture-node. The host PID of the Playwright server Node is discovered
+once through docker top; its CPU is sampled, not its internal event-loop delay.
+Raw bodies, transport subprotocols and credentials are not added to this log.
+The original producer data and failure files are retained independently.
+
+Browser and Node clocks retain monotonic time plus UTC alignment. Proxy times
+include the remote Playwright bridge and cannot alone isolate Native service
+time. Process counters are cumulative /proc values; use PID and stat starttime,
+deduplicate identities, and do not invent final CPU after an unobserved exit.
+Profiler, driver and observation overhead remain diagnostic costs.
+
+Both buffers are capped at 50,000 events with explicit dropped counts. Browser
+buffer collection and final child-exit observation each have a separate one
+second diagnostic-only bound after measurement/failure; these do not extend or
+replace any original workload deadline. A missing buffer, discovery failure or
+collection timeout is reported, not substituted with a healthy state or zero.
+
+Review focus: distinguish a client-initiated close after its existing RPC
+deadline from peer close/error, proxy scheduling delay, browser CPU/GC/layout
+work, and child exit. Browser receive-dispatched is not paint completion and
+wire-drain retains its original limited definition. Do not use this proposal
+to erase or replace the earlier interrupted geometry product.
+
+Unit checks only:
+node --test benchmarks/pi-durable-inspector-fixture/v3/diagnostics.test.mjs
+node --check benchmarks/pi-durable-inspector-fixture/v3/run.mjs
+
+Before a later diagnostic product, preserve all earlier files/binaries, verify
+the exact reviewed fixture and binary SHA, check strictly more than 5 GiB usable
+on benchmark and Docker backing storage (count shared storage once), and keep
+all builds, compression, profiling and other products stopped. Use a fresh
+output directory and the existing full case; do not shorten warm-up, inflate
+timeouts or treat a diagnostic replay as a replacement formal pair.

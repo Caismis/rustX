@@ -8,6 +8,8 @@ import {pathToFileURL} from 'node:url';
 import {createHash} from 'node:crypto';
 import {performance} from 'node:perf_hooks';
 import {DrainTracker} from './drain.mjs';
+import {Diagnostics,installBrowserDiagnostics} from './diagnostics.mjs';
+const diagnostics=new Diagnostics();
 const [checkoutArg,binaryArg,caseName,outputArg]=process.argv.slice(2);
 assert(['short-small','short-large','details-resync'].includes(caseName));
 const checkout=resolve(checkoutArg),binary=resolve(binaryArg),output=resolve(outputArg);
@@ -34,7 +36,7 @@ const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 const fixture_source={};const sourceCopy=join(output,'fixture-source');await mkdir(sourceCopy);
 for(const name of (await readdir(code)).filter(n=>/\.(mjs|py|rs|json|txt)$/.test(n))){const bytes=await readFile(join(code,name));fixture_source[name]=hash(bytes);await writeFile(join(sourceCopy,name),bytes);}
 const timer=promise=>Promise.race([promise,new Promise((_,reject)=>{const h=setTimeout(()=>reject(Error('fixture rendezvous deadline exhausted')),120000);h.unref();})]);
-function child(argv,cwd=checkout){const p=spawn(argv[0],argv.slice(1),{cwd,env,stdio:['pipe','pipe','pipe']});p.lines=[];p.errors='';p.stderr.on('data',s=>{p.errors=(p.errors+String(s)).slice(-65536);});const rl=createInterface({input:p.stdout});rl.on('line',line=>{p.lines.push(line);for(const w of [...(p.waiters??[])])if(w.test(line)){p.waiters.splice(p.waiters.indexOf(w),1);w.resolve(line);}});p.waiters=[];p.closed=new Promise(resolve=>p.once('exit',(code,signal)=>resolve({code,signal})));return p;}
+function child(argv,cwd=checkout,role='child'){const p=spawn(argv[0],argv.slice(1),{cwd,env,stdio:['pipe','pipe','pipe']});diagnostics.child(role,p);p.lines=[];p.errors='';p.stderr.on('data',s=>{p.errors=(p.errors+String(s)).slice(-65536);});const rl=createInterface({input:p.stdout});rl.on('line',line=>{p.lines.push(line);for(const w of [...(p.waiters??[])])if(w.test(line)){p.waiters.splice(p.waiters.indexOf(w),1);w.resolve(line);}});p.waiters=[];p.closed=new Promise(resolve=>p.once('exit',(code,signal)=>resolve({code,signal})));return p;}
 async function line(p,test){const found=p.lines.find(test);if(found)return found;return timer(new Promise((resolve,reject)=>{p.waiters.push({test,resolve});p.once('exit',code=>reject(Error(`fixture exited before rendezvous:${code}\n${p.errors}`)));}));}
 async function control(path,method='GET'){const r=await fetch(`http://${ready.host}:${ready.port}/__control/${path}`,{method});assert(r.ok,await r.clone().text());return r.json();}
 async function counters(pid){const result={pid};for(const name of ['stat','io','smaps_rollup'])result[name]=await readFile(`/proc/${pid}/${name}`,'utf8').catch(()=>null);return result;}
@@ -111,38 +113,43 @@ class Rpc{
 }
 const rpc=new Rpc();let cdp;
 try{
-  native=child([binary,fixture,hostCase]);
+  native=child([binary,fixture,hostCase],checkout,'native');
   const needs=JSON.parse(await line(native,s=>{try{return JSON.parse(s).kind==='provider_needed';}catch{return false;}}));
   const providerArgs=caseName==='details-resync'
     ?['uv','run','--project',join(checkout,'test-support/fake-provider'),'--frozen','python',join(code,'provider.py')]
     :['uv','run','--project',join(checkout,'test-support/fake-provider'),'--frozen','fake-provider'];
-  provider=child([...providerArgs,'--scenario',needs.scenario,'--workspace',needs.workspace,'--port','0']);
+  provider=child([...providerArgs,'--scenario',needs.scenario,'--workspace',needs.workspace,'--port','0'],checkout,'provider-command');
   ready=JSON.parse(await line(provider,s=>{try{return JSON.parse(s).ready===true;}catch{return false;}}));native.stdin.write(JSON.stringify(ready)+'\n');
   const info=JSON.parse(await line(native,s=>{try{return JSON.parse(s).kind==='ready';}catch{return false;}}));
   workspaceHost=await startWorkspaceHost({endpoint:info.endpoint,transportToken:info.token,picker:true,metadataFile:join(fixture,'workspaces.json'),roots:[{id:'inspector-workspace',cwd:info.workspace,displayName:'Inspector Workspace'}]});
-  preview=child(['node',join(checkout,'web-console/node_modules/vite/bin/vite.js'),'preview','--host','127.0.0.1','--port','0','--strictPort'],join(checkout,'web-console'));
+  preview=child(['node',join(checkout,'web-console/node_modules/vite/bin/vite.js'),'preview','--host','127.0.0.1','--port','0','--strictPort'],join(checkout,'web-console'),'preview-node');
   const previewLine=await line(preview,s=>/http:\/\/127\.0\.0\.1:[0-9]+/.test(s));const url=/http:\/\/127\.0\.0\.1:[0-9]+/.exec(previewLine)[0];
   const image='mcr.microsoft.com/playwright:v1.63.0-noble@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7';
   container=`pr485-inspector-${process.pid}-${Date.now()}`;
   execFileSync('docker',['run','--detach','--name',container,'--init','--network','host','--ipc','host','--platform','linux/amd64','--security-opt','label=disable','--mount',`type=bind,source=${checkout}/web-console/node_modules,target=/opt/rustx-node_modules,readonly`,image,'sh','-ec','test "$(fc-match --format="%{family}" Helvetica)" = "Liberation Sans"; exec node /opt/rustx-node_modules/@playwright/test/cli.js run-server --host 127.0.0.1 --port 0']);
   let endpoint;
   for(let n=0;n<100&&!endpoint;n++){const log=execFileSync('docker',['logs',container],{encoding:'utf8'});endpoint=/Listening on (ws:\/\/\S+)/.exec(log)?.[1];if(!endpoint)await new Promise(resolve=>setTimeout(resolve,100));}
-  assert(endpoint,'pinned browser server ready');browser=await chromium.connect(endpoint);browserCdp=await browser.newBrowserCDPSession();
+  assert(endpoint,'pinned browser server ready');await diagnostics.container(container);browser=await chromium.connect(endpoint);browserCdp=await browser.newBrowserCDPSession();
   context=await browser.newContext({viewport:{width:1440,height:1000},locale:'en-US',reducedMotion:'reduce'});page=await context.newPage();
+  await page.addInitScript(installBrowserDiagnostics);
+  page.on('console',m=>diagnostics.event('browser-console',{type:m.type(),text:m.text().slice(0,512)}));
+  page.on('crash',()=>diagnostics.event('browser-crash'));
+  page.on('close',()=>diagnostics.event('page-close'));
   await page.addInitScript(()=>localStorage.setItem('rustx-locale-v1','en'));
   page.on('pageerror',e=>errors.push(String(e)));
   await routeWorkspaceHost(page,{workspaceHostUrl:workspaceHost.url});
   await page.routeWebSocket(info.endpoint,route=>{
     const transport=drain.open();
     const upstream=route.connectToServer();browserUpstream=upstream;
-    route.onMessage(raw=>{try{observe(JSON.parse(String(raw)),'out',transport);}catch(e){failures.push(String(e));}upstream.send(raw);});
+    route.onMessage(raw=>{diagnostics.frame('proxy-from-browser',raw,transport);try{observe(JSON.parse(String(raw)),'out',transport);}catch(e){failures.push(String(e));}diagnostics.frame('proxy-to-native',raw,transport);upstream.send(raw);});
     upstream.onMessage(raw=>{
+      diagnostics.frame('proxy-from-native',raw,transport);
       const message=JSON.parse(String(raw));try{observe(message,'in',transport);}catch(e){failures.push(String(e));}
       const fixtureReply=fixturePending.get(message.id);
       if(fixtureReply){fixturePending.delete(message.id);message.error?fixtureReply.reject(Error(JSON.stringify(message.error))):fixtureReply.resolve(message.result);return;}
       const request=requests.get(message.id);
-      if(holdDetail&&request?.method==='session/traceDetail'&&message.result){holdDetail=false;held={request,message,release:()=>route.send(raw)};return;}
-      route.send(raw);
+      if(holdDetail&&request?.method==='session/traceDetail'&&message.result){holdDetail=false;held={request,message,release:()=>{diagnostics.frame('proxy-held-to-browser',raw,transport);route.send(raw);}};return;}
+      diagnostics.frame('proxy-to-browser',raw,transport);route.send(raw);
     });
   });
   await page.goto(url);await connectRemote(page,info.endpoint,info.token);
@@ -249,7 +256,7 @@ try{
   const observed=(await control('requests')).requests;const expectedCount=caseName==='details-resync'?2:turns;assert.equal(observed.length,expectedCount);
   for(let index=0;index<observed.length;index++)assert.deepEqual(normalized(observed[index].body,info.workspace,true),expected(hostCase,index,normativeTools));
   native.stdin.write(JSON.stringify({op:'verify',requests:observed})+'\n');await line(native,s=>{try{return JSON.parse(s).kind==='verified';}catch{return false;}});
-  phase='retirement';await page.close();page=undefined;await context.close();context=undefined;await browser.close();browser=undefined;await rpc.close();await workspaceHost.stop();workspaceHost=undefined;
+  phase='retirement';await diagnostics.captureBrowser(page);await page.close();page=undefined;await context.close();context=undefined;await browser.close();browser=undefined;await rpc.close();await workspaceHost.stop();workspaceHost=undefined;
   native.stdin.write('{"op":"stop"}\n');native.stdin.end();complete=JSON.parse(await line(native,s=>{try{return JSON.parse(s).kind==='complete';}catch{return false;}}));assert.equal((await native.closed).code,0);
   const canonicalText=complete.canonical.filter(m=>m.role==='assistant').flatMap(m=>m.content.filter(b=>b.type==='text').map(b=>b.text));
   assert.deepEqual(canonicalText,caseName==='details-resync'?[stream]:Array.from({length:turns},(_,i)=>reply(i)),'complete canonical output differs from the independent fixture');
@@ -259,9 +266,10 @@ try{
   provider.stdin.end();const reportLine=await line(provider,s=>{try{return !!JSON.parse(s).report;}catch{return false;}});report=JSON.parse(reportLine).report;assert.equal((await provider.closed).code,0);assert(report.ok);assert.deepEqual(report.requests,observed);
   assert.deepEqual(errors,[]);assert.deepEqual(failures,[]);
   await writeFile(join(output,'sample.json'),JSON.stringify({inspector_workload_version:3,drain_observations:drain.events,repair_drain_criterion:"all-loaded-latest-cut/no-pending-RPC/two-browser-paints",ui_metric:"current-row completion; does not alone establish repair drain",fixture_source,performance_eligible:false,case:caseName,oracle:'passed',source:JSON.parse(await readFile(join(checkout,'source-identity.json'),'utf8')).head,private_proposal:JSON.parse(await readFile(join(checkout,'source-identity.json'),'utf8')).proposal??null,native_binary_sha256:hash(await readFile(binary)),model_time:MODEL_TIME,samples,memory,pressure,complete,provider_report:report,records,errors,failures},null,2));
-}catch(error){failures.push(String(error));const body=page?await page.locator('body').innerText().catch(()=>null):null;await writeFile(join(output,'failure.json'),JSON.stringify({error:String(error),stack:error.stack,body,phase,samples,memory,records,errors,failures,native_errors:native?.errors,provider_errors:provider?.errors},null,2));process.exitCode=1;}
+}catch(error){diagnostics.event('fixture-failure',{error:String(error)});await diagnostics.captureBrowser(page);failures.push(String(error));const body=page?await page.locator('body').innerText().catch(()=>null):null;await writeFile(join(output,'failure.json'),JSON.stringify({error:String(error),stack:error.stack,body,phase,samples,memory,records,errors,failures,native_errors:native?.errors,provider_errors:provider?.errors},null,2));process.exitCode=1;}
 finally{
   if(page)await page.close().catch(()=>{});if(context)await context.close().catch(()=>{});if(browser)await browser.close().catch(()=>{});await rpc.close().catch(()=>{});if(workspaceHost)await workspaceHost.stop().catch(()=>{});
   if(native&&native.exitCode===null)native.kill('SIGTERM');if(provider&&provider.exitCode===null)provider.stdin.end();if(preview&&preview.exitCode===null)preview.kill('SIGTERM');if(container)try{execFileSync('docker',['rm','-f',container],{stdio:'ignore'});}catch{}
   for(const [name,p] of [['native',native],['provider',provider],['preview',preview]])if(p)await writeFile(join(output,name+'.stderr'),p.errors);
+  await diagnostics.finish(join(output,'diagnostics.json'));
 }
