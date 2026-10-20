@@ -29,7 +29,10 @@
 
 use chrono::{DateTime, TimeZone, Utc};
 use rustx::context::ContextGeneration;
-use rustx::durable::{ConversationStore, ConversationStoreError, SqliteConversationStore};
+use rustx::durable::{
+    CanonicalStore, JournalStore, ObservationStore, ProjectionStore, PublicationStore, RequestStore,
+};
+use rustx::durable::{ConversationStoreError, SqliteConversationStore};
 use rustx::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
 use rustx::message::content::TextBlock;
 use rustx::message::types::{
@@ -3095,7 +3098,7 @@ fn t19_parsed_only_tool_value_never_invents_canonical_raw_json() {
 
 #[test]
 fn t08_t09_t19_lineage_keeps_original_raw_bytes_after_parent_removal() {
-    use rustx::durable::inbox::LineageSeed;
+    use rustx::durable::LineageSeed;
     use rustx::message::types::{InboundKind, UserContentBlock, UserMessageBlock, UserSource};
     use rustx::observation::content::{
         CanonicalContentComponent as Component, ContentRepresentation as Rep, ContentSource,

@@ -1354,7 +1354,7 @@ pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationS
         ("content_segments", "segment"),
         ("content_frontiers", "revision"),
     ] {
-        super::verify_unique_columns(
+        super::schema::shape::verify_unique_columns(
             connection,
             table,
             &[
@@ -1391,7 +1391,7 @@ pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationS
 pub(super) fn canonical_raw_arguments(
     connection: &Connection,
     messages: &[MessageBlock],
-) -> Result<Vec<crate::durable::inbox::CanonicalRawToolArguments>, ConversationStoreError> {
+) -> Result<Vec<crate::durable::CanonicalRawToolArguments>, ConversationStoreError> {
     let mut result = Vec::new();
     for message in messages {
         let MessageBlock::Assistant(assistant) = message else {
@@ -1420,7 +1420,7 @@ pub(super) fn canonical_raw_arguments(
                 )?);
                 offset = next;
             }
-            result.push(crate::durable::inbox::CanonicalRawToolArguments {
+            result.push(crate::durable::CanonicalRawToolArguments {
                 message_id: assistant.id.clone(),
                 block_index: crate::message::types::ContentBlockIndex::new(block_index),
                 bytes,
@@ -1431,7 +1431,7 @@ pub(super) fn canonical_raw_arguments(
 }
 pub(super) fn index_raw_arguments(
     connection: &Connection,
-    item: &crate::durable::inbox::CanonicalRawToolArguments,
+    item: &crate::durable::CanonicalRawToolArguments,
 ) -> Result<(), ConversationStoreError> {
     let key = canonical_key(connection, item.message_id.as_str())?;
     put(

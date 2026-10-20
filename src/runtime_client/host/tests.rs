@@ -1,3 +1,6 @@
+use crate::durable::CanonicalStore;
+use crate::durable::JournalStore;
+use crate::durable::ObservationStore;
 mod compaction_head_tests;
 mod delivery_tests;
 mod initial_cut_tests;

@@ -3,6 +3,7 @@
 //! the Session root on cold branch loads.
 #![allow(clippy::large_futures)] // bounded fixture futures; no recursive or unbounded stack growth
 use super::*;
+use crate::durable::CanonicalStore;
 
 // Wait on the catalog's native publication signal, not on elapsed time or retries.
 async fn activity_published(f: &Fixture, id: &crate::local_runtime::session::SessionId) {
@@ -299,7 +300,6 @@ async fn an_agent_sourced_boundary_never_repaints_the_settled_projection() {
 #[tokio::test]
 async fn a_failed_projection_commit_preserves_history_and_repairs_exactly_once() {
     bounded(async {
-        use crate::durable::ConversationStore as _;
         let f = Fixture::with_session_count(None, 1).await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
@@ -630,7 +630,6 @@ async fn a_parked_publication_serves_a_null_summary_then_invalidates_it() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cold_loading_a_branch_repairs_the_projection_from_the_session_root() {
     bounded(async {
-        use crate::durable::ConversationStore as _;
         let f = Fixture::with_session_count(None, 1).await;
         let sessions = &f.manager.sessions;
         let session = f.sessions[0].clone();

@@ -1,4 +1,5 @@
 use super::*;
+use crate::durable::JournalStore;
 
 use crate::durable::ConversationStore;
 

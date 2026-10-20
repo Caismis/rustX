@@ -1,6 +1,6 @@
 //! Public delivery discovery remains bounded independently of original Tool C.
 use super::*;
-use crate::durable::{ConversationStore, SqliteConversationStore};
+use crate::durable::SqliteConversationStore;
 use crate::message::types::{
     AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, InboundKind, MessageBlock,
     ToolCallOccurrenceRef, ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
@@ -8,6 +8,7 @@ use crate::message::types::{
 use crate::observation::content::CanonicalContentLocator;
 use crate::runtime::identity::{MessageId, ToolCallId, ToolId};
 use base64::Engine as _;
+use rustx::durable::{CanonicalStore, JournalStore, ObservationStore};
 
 const DELIVERY_SECRET: &str = "bounded-delivery-secret-00000000000000000000000000000";
 

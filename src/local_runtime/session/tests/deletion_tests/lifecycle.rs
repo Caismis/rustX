@@ -1,4 +1,5 @@
 use super::*;
+use crate::durable::{CanonicalStore, JournalStore};
 use crate::local_runtime::session::LineageSeed;
 use crate::local_runtime::session::deletion::*;
 use crate::runtime::local_storage::{ConversationAccess, ProductController, ProductRoot};

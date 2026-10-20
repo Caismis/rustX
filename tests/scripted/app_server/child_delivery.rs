@@ -3,7 +3,9 @@ use super::delivery::{
     DELIVERED, FILE_HOST_TOKEN, TrustedFileHost, cancel_delivery, delivered_bytes, failed_with,
 };
 use super::*;
+use crate::durable::CanonicalStore;
 use crate::durable::ConversationStore;
+use crate::durable::JournalStore;
 use crate::message::types::{
     AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, MessageBlock,
     ToolCallOccurrenceRef, ToolMessageBlock,

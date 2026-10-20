@@ -608,7 +608,7 @@ impl RuntimeClientProjection {
                     }
                     _ => None,
                 },
-                receipt: crate::durable::inbox::TranscriptCommitReceipt {
+                receipt: crate::durable::TranscriptCommitReceipt {
                     transcript_cursor: canonical.last_transcript,
                     ledger_position: canonical.last_position,
                     ordinal: canonical.count.saturating_sub(1),

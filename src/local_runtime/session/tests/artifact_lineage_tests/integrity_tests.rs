@@ -1,6 +1,7 @@
 //! Actual catalog preparations must preserve the source artifact's frozen bytes.
 use super::super::super::LineageSide;
 use super::*;
+use crate::durable::{CanonicalStore, JournalStore, ObservationStore};
 use crate::message::types::ContentBlockIndex;
 use crate::observation::content::{
     CanonicalContentComponent, CanonicalContentLocator, ContentRef, ContentRepresentation,

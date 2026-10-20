@@ -2,6 +2,7 @@
 //! linearization point against cancellation and drain, capacity, and ordinals.
 
 use super::*;
+use crate::durable::JournalStore;
 use crate::runtime::subagent::MAX_CONTEXT_PACKAGE_BYTES;
 use crate::runtime::subagent::MAX_TASK_BYTES;
 use crate::runtime::subagent::process::StagedChild;

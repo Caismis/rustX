@@ -5,6 +5,7 @@ use nix::{
     sys::signal::{Signal, kill},
     unistd::Pid,
 };
+use rustx::durable::{CanonicalStore, JournalStore};
 use rustx::local_runtime::configuration::observation::SourceFieldName;
 use rustx::{
     app_server::transport::MAX_MESSAGE_BYTES,
@@ -1952,7 +1953,7 @@ async fn await_original_stdio_completion(
     store: &rustx::durable::SqliteConversationStore,
     attempt: &rustx::runtime::identity::AttemptId,
 ) -> rustx::runtime::identity::MessageId {
-    use rustx::{durable::ConversationStore, events::types::RuntimeEvent};
+    use rustx::events::types::RuntimeEvent;
     let mut after = 0;
     let mut canonical = None;
     loop {
@@ -1989,7 +1990,7 @@ async fn await_original_stdio_completion(
 async fn t10_stdio_cli_eof_preserves_gated_attempt_and_original_canonical_commit() {
     bounded(Box::pin(async {
         use rustx::{
-            durable::{ConversationStore, SqliteConversationStore},
+            durable::SqliteConversationStore,
             events::types::RuntimeEvent,
             message::types::{AssistantContentBlock, MessageBlock},
             runtime::identity::AttemptId,

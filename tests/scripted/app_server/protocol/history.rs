@@ -3,6 +3,11 @@
 //! branch and fork.
 #![allow(clippy::large_futures)] // bounded fixture futures; no recursive or unbounded stack growth
 use super::*;
+use crate::durable::CanonicalStore;
+use crate::durable::JournalStore;
+use crate::durable::ObservationStore;
+use crate::durable::ProjectionStore;
+use crate::durable::inbox::ConversationInboundCapability;
 
 fn trace_content_references(
     value: &serde_json::Value,
@@ -642,7 +647,7 @@ async fn trace_reads_are_read_only_and_reconnect_repairs_the_same_native_facts()
 #[allow(clippy::too_many_lines)] // One native source proves both lineage destinations and Retry through the public protocol.
 async fn completed_response_cut_is_shared_by_branch_and_fork_and_distinct_from_retry() {
     Box::pin(bounded(async {
-        use crate::durable::{ConversationStore, SqliteConversationStore};
+        use crate::durable::{SqliteConversationStore};
         use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
         use crate::local_runtime::session::LineageSide;
         use crate::message::types::{AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, UserContentBlock, UserSource};
@@ -825,7 +830,7 @@ async fn durable_history_is_readable_before_and_during_runtime_preparation() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn t08_t13_t15_editor_and_origin_history_use_finite_native_ledger_identity() {
     bounded(async {
-        use crate::durable::{ConversationStore, SqliteConversationStore};
+        use crate::durable::SqliteConversationStore;
         use crate::local_runtime::session::LineageSide;
         use crate::message::types::{InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource};
         use crate::runtime::identity::MessageId;
@@ -874,7 +879,7 @@ async fn projection_history_and_activation_fork_cross_native_app_server_boundary
     bounded(async {
         use crate::context::checkpoint::ProjectionActivationId;
         use crate::context::resources::LedgerFrontier;
-        use crate::durable::{ConversationStore, SqliteConversationStore};
+        use crate::durable::SqliteConversationStore;
         use crate::message::types::{InboundKind, MessageBlock, UserMessageBlock, UserSource};
         use crate::runtime::identity::MessageId;
         let f = Fixture::with_session_count(None, 1).await;

@@ -4,7 +4,7 @@ use crate::agent::execution::AgentExecutionRequest;
 use crate::agent::observer::AgentExecutionObserver;
 use crate::context::ContextRuntime;
 use crate::conversation::ConversationState;
-use crate::durable::inbox::ConversationStore;
+use crate::durable::ConversationStore;
 use crate::events::types::RuntimeEvent;
 use crate::message::types::{ContentBlockIndex, MessageBlock};
 use crate::model::adapter::{ModelAdapter, ModelStream, ModelStreamItem};
@@ -144,7 +144,7 @@ impl AgentExecutionObserver for RecordingObserver {
         &self,
         _attempt_id: &AttemptId,
         block: &MessageBlock,
-        _receipt: &crate::durable::inbox::TranscriptCommitReceipt,
+        _receipt: &crate::durable::TranscriptCommitReceipt,
     ) {
         self.committed
             .lock()
@@ -155,7 +155,7 @@ impl AgentExecutionObserver for RecordingObserver {
     fn observe_status(
         &self,
         observation: &crate::agent::AgentStatusObservation,
-        _source: Option<&crate::durable::inbox::StatusObservationSource>,
+        _source: Option<&crate::durable::StatusObservationSource>,
     ) {
         self.statuses
             .lock()
@@ -182,7 +182,7 @@ impl AgentExecutionObserver for RecordingObserver {
         &self,
         _attempt_id: &AttemptId,
         audit: &crate::publication::PublicationAudit,
-        _receipt: &crate::durable::inbox::PublicationAuditReceipt,
+        _receipt: &crate::durable::PublicationAuditReceipt,
     ) {
         self.audits
             .lock()

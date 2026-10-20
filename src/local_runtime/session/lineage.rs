@@ -630,7 +630,7 @@ pub(crate) fn remap_seed(
     surface_history: &[SurfaceOp],
     completed_responses: &[crate::durable::response::CompletedResponseProvenance],
     turns: &[crate::durable::reading::TurnReadingProvenance],
-    raw_tool_arguments: &[crate::durable::inbox::CanonicalRawToolArguments],
+    raw_tool_arguments: &[crate::durable::CanonicalRawToolArguments],
 ) -> Result<LineageSeed, SessionError> {
     let messages = canonical;
     let mut message_ids = BTreeMap::new();
@@ -718,19 +718,19 @@ pub(crate) fn remap_seed(
 }
 
 fn remap_raw_tool_arguments(
-    raw_tool_arguments: &[crate::durable::inbox::CanonicalRawToolArguments],
+    raw_tool_arguments: &[crate::durable::CanonicalRawToolArguments],
     message_ids: &BTreeMap<MessageId, MessageId>,
-) -> Vec<crate::durable::inbox::CanonicalRawToolArguments> {
+) -> Vec<crate::durable::CanonicalRawToolArguments> {
     raw_tool_arguments
         .iter()
         .filter_map(|item| {
-            message_ids.get(&item.message_id).map(|id| {
-                crate::durable::inbox::CanonicalRawToolArguments {
+            message_ids
+                .get(&item.message_id)
+                .map(|id| crate::durable::CanonicalRawToolArguments {
                     message_id: id.clone(),
                     block_index: item.block_index,
                     bytes: item.bytes.clone(),
-                }
-            })
+                })
         })
         .collect()
 }

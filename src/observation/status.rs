@@ -197,7 +197,7 @@ pub(crate) fn status_view(observation: &AgentStatusObservation) -> AgentStatusVi
 /// Prepare finite display metadata before entering the projection synchronization boundary.
 pub(crate) fn prepared_status_view(
     observation: &AgentStatusObservation,
-    source: Option<&crate::durable::inbox::StatusObservationSource>,
+    source: Option<&crate::durable::StatusObservationSource>,
 ) -> AgentStatusView {
     prepared_status(
         &observation.attempt_id,
@@ -216,7 +216,7 @@ pub(crate) fn prepared_status(
     opportunities: &crate::context::ContributionOpportunities,
     post_tool_batch_anchor: Option<crate::durable::TranscriptCursor>,
     status: &crate::context::AgentStatus,
-    source: Option<&crate::durable::inbox::StatusObservationSource>,
+    source: Option<&crate::durable::StatusObservationSource>,
 ) -> AgentStatusView {
     let sections = status
         .sections

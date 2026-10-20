@@ -1,5 +1,6 @@
 // Explicit checkpoint repair stays on the existing cancellable Source worker.
 use super::*;
+use crate::durable::{JournalStore, ObservationStore};
 
 pub(super) struct OccupancySourceFault {
     connection: rusqlite::Connection,

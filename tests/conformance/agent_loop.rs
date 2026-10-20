@@ -27,6 +27,7 @@
 //! rejects a runtime state it did not expect.
 
 use crate::launch_fixture::LaunchFixture;
+use rustx::durable::{CanonicalStore, JournalStore, ObservationStore, ProjectionStore};
 use std::path::PathBuf;
 use std::sync::Arc;
 

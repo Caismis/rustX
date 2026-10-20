@@ -2,6 +2,7 @@
 //! durable store, scripted staged children, and observers. Each child module
 //! holds the regressions of one registry responsibility.
 
+use crate::durable::JournalStore;
 mod agent_bootstrap;
 mod agent_duration;
 mod agent_recovery;

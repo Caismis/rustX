@@ -11,7 +11,7 @@ impl RuntimeClientProjection {
     pub(super) fn fold_canonical_receipt(
         &mut self,
         attempt_id: Option<&AttemptId>,
-        receipt: crate::durable::inbox::TranscriptCommitReceipt,
+        receipt: crate::durable::TranscriptCommitReceipt,
     ) -> Vec<RuntimeClientEvent> {
         if receipt.ordinal.checked_add(1) != Some(receipt.observation.count) {
             return Vec::new();
@@ -316,7 +316,7 @@ impl RuntimeClientProjection {
 
     pub(super) fn observe_audit_dependencies(
         &mut self,
-        receipt: &crate::durable::inbox::PublicationAuditReceipt,
+        receipt: &crate::durable::PublicationAuditReceipt,
     ) {
         self.observe_released_journal_prefix(receipt.ready_through);
         self.observe_released_transcript_prefix(receipt.ready_t_through, &receipt.read_cut);
@@ -331,7 +331,7 @@ impl RuntimeClientProjection {
     pub(super) fn fold_audit_receipt(
         &mut self,
         attempt_id: AttemptId,
-        receipt: crate::durable::inbox::PublicationAuditReceipt,
+        receipt: crate::durable::PublicationAuditReceipt,
     ) -> Vec<RuntimeClientEvent> {
         // Only the captured audit T is this owner's new fact. An unrelated
         // concurrent C/J/Pending transaction must retain its publication owner.

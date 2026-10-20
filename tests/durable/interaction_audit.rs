@@ -31,6 +31,7 @@
 
 use chrono::{DateTime, TimeZone, Utc};
 use rustx::context::ContextGeneration;
+use rustx::durable::{CanonicalStore, JournalStore, PublicationStore, RequestStore};
 use rustx::durable::{
     ConversationStore, ConversationStoreError, SqliteConversationStore,
     interaction_audit_capability,

@@ -1,5 +1,6 @@
 // Inspection consumes finite native heads; originals are read only by selected bounded gestures.
 use super::*;
+use crate::durable::{CanonicalStore, InboxStore, JournalStore, ObservationStore};
 use crate::observation::bounded::decode_domain_value;
 use crate::observation::cut::CheckpointReadCut;
 use crate::runtime_client::host::RuntimeClientHost;

@@ -1,5 +1,6 @@
 // Current-attempt controls select native execution authority, never a display alias.
 use super::*;
+use crate::durable::JournalStore;
 use crate::runtime::conversation_runtime::{
     CancelAttemptError, NativeAttemptOutcome, NativeAttemptSettlement,
 };

@@ -1,7 +1,10 @@
 //! One transaction owns outline identity, location and bounded transcript selection.
+
+#[cfg(test)]
+mod tests;
 use super::{
-    Connection, ConversationStoreError, OptionalExtension, load_transcript_page, nonnegative,
-    params, seq_to_i64, storage,
+    Connection, ConversationStoreError, OptionalExtension,
+    canonical::transcript::load_transcript_page, nonnegative, params, seq_to_i64, storage,
 };
 use crate::durable::reading::{
     ConversationReadCut, ConversationTurn, ConversationTurnId, ConversationTurnPage,
@@ -760,7 +763,7 @@ fn turn_execution(
     if let Some((request, Some(usage))) = boundary {
         execution.occupancy = crate::context::occupancy::measure(
             &usage,
-            &super::load_request_snapshot(connection, conversation, &request)?,
+            &super::request::snapshot::load_request_snapshot(connection, conversation, &request)?,
         )?;
     }
     Ok(execution)

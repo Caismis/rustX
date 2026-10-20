@@ -626,6 +626,7 @@ impl GoalRoundDriver {
 mod tests {
     use super::*;
     use crate::durable::SqliteConversationStore;
+    use crate::durable::{InboxStore, JournalStore};
     use crate::message::{InboundKind, UserSource};
     use crate::runtime::identity::ConversationId;
 

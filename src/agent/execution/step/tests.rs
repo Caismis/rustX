@@ -3,7 +3,7 @@ use crate::agent::execution::test_fixtures::*;
 use crate::agent::execution::test_sync::{ContinuationBoundaryPause, StartBoundaryPause};
 use crate::agent::execution::{AgentExecution, AgentExecutionResult};
 use crate::conversation::ConversationState;
-use crate::durable::inbox::ConversationStore;
+use crate::durable::CanonicalStore;
 use crate::events::types::{AttemptOutcome, RuntimeEvent};
 use crate::message::types::{
     ContentBlockIndex, ContextKind, InboundKind, MessageBlock, UserSource,

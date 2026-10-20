@@ -6,6 +6,7 @@ use super::super::{
     SESSION_TREE_PAGE_LIMIT, SessionError, SessionNodeOrigin, preview_of,
 };
 use super::*;
+use crate::durable::CanonicalStore;
 
 #[test]
 fn new_and_name_publish_metadata_without_mutating_old_history() {

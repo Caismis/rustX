@@ -1,5 +1,6 @@
 // Actual Native C/J receipts and finite Host checkpoints share one member owner.
 use super::*;
+use crate::durable::{CanonicalStore, JournalStore};
 use crate::observation::content::CanonicalContentLocator;
 use crate::observation::transcript::RuntimeClientMessageDescriptor;
 use crate::runtime_client::checkpoint::RuntimeClientCheckpoint;
@@ -178,7 +179,7 @@ fn copied_member_host(
     let cut = store
         .read_lineage_cut(source_cut.read.surface_revision)
         .unwrap();
-    let seed = crate::durable::inbox::LineageSeed::replayed(cut.canonical, cut.surface_history)
+    let seed = crate::durable::LineageSeed::replayed(cut.canonical, cut.surface_history)
         .unwrap()
         .with_projections(cut.projections)
         .unwrap()

@@ -12,6 +12,7 @@
 //! a batch that never becomes canonical leaves the list exactly as it was.
 
 use super::super::{common, support};
+use rustx::durable::{CanonicalStore, ProjectionStore};
 
 use std::sync::Arc;
 
@@ -731,7 +732,7 @@ async fn every_committed_list_survives_the_restart_that_reads_it_back() {
         )
         .expect("durable store"),
     );
-    rustx::durable::ConversationStore::initialize(store.as_ref(), audit.messages())
+    rustx::durable::CanonicalStore::initialize(store.as_ref(), audit.messages())
         .expect("seed the lineage");
     let restarted = rustx::tools::runtime::ConversationToolRuntime::from_config(
         conversation_id,

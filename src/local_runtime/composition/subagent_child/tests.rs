@@ -1,6 +1,9 @@
 //! Subagent child composition regressions: frozen resource replay, selected
 //! capability materialization, preparation cancellation and parent loss.
 
+use crate::durable::CanonicalStore;
+use crate::durable::JournalStore;
+use crate::durable::inbox::ConversationInboundCapability;
 use std::sync::Arc;
 
 use super::super::{ChildPreparation, LocalConversationCore, LocalRuntimeDependencies};
@@ -210,7 +213,6 @@ fn spec_with_extensions(
 /// is durable pending input, but no Delegate has released a turn permit.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn child_binding_gates_historical_guidance_before_activation() {
-    use crate::durable::ConversationStore;
     use crate::message::{content::TextBlock, types::UserContentBlock};
 
     let dir = lab();

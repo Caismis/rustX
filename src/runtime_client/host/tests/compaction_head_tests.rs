@@ -1,5 +1,6 @@
 // A committed compaction owns its head before asynchronous domain refinement.
 use super::*;
+use crate::durable::{JournalStore, ObservationStore, ProjectionStore};
 use crate::runtime_client::types::RequestId;
 
 struct ParkedProjection<'a>(&'a super::super::ClientInner);

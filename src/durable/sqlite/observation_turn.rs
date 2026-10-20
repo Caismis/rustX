@@ -276,7 +276,7 @@ pub(super) fn preview(
 }
 pub(super) fn seed(
     connection: &Connection,
-    seed: &crate::durable::inbox::LineageSeed,
+    seed: &crate::durable::LineageSeed,
 ) -> Result<(), ConversationStoreError> {
     for (ordinal, turn) in seed.turns().iter().enumerate() {
         let ordinal = u64::try_from(ordinal).map_err(|_| storage("turn ordinal exhausted"))?;

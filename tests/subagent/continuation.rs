@@ -1,6 +1,7 @@
 //! A real process/store continuation proof. Provider gates are explicit
 //! activation frontiers; no elapsed delay establishes lifecycle order.
 use super::*;
+use rustx::durable::JournalStore;
 use rustx::runtime::subagent::{AgentState, SubagentState};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -493,7 +494,6 @@ async fn recovered_resume_diagnostic(
     root: &std::path::Path,
     agent_id: &rustx::runtime::identity::AgentId,
 ) -> String {
-    use rustx::durable::ConversationStore;
     let target = process.target();
     let session = process.session_id.clone();
     let result = process

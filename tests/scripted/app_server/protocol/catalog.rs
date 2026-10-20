@@ -3,10 +3,12 @@
 //! reads.
 #![allow(clippy::large_futures)] // bounded fixture futures; no recursive or unbounded stack growth
 use super::*;
+use crate::durable::CanonicalStore;
+use crate::durable::JournalStore;
 
 #[tokio::test]
 async fn archive_preflight_failures_reach_the_protocol_without_private_diagnostics() {
-    use crate::durable::{ConversationStore, SqliteConversationStore};
+    use crate::durable::SqliteConversationStore;
     use crate::runtime::identity::{AgentId, ConversationId, SubagentId, ToolCallId};
     use crate::session_archive::SessionArchivePrepareError;
     bounded(async {
@@ -328,7 +330,7 @@ async fn human_message_activity_reorders_live_catalog_without_focus_or_rename_ac
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn explicit_node_switch_commits_aba_ownership_and_coalesces_exact_retirements() {
     bounded(async {
-        use crate::durable::{ConversationStore, SqliteConversationStore};
+        use crate::durable::SqliteConversationStore;
         use crate::local_runtime::session::LineageSide;
         use crate::message::TextBlock;
         use crate::message::types::{
@@ -461,7 +463,7 @@ async fn switch_fixture(
     AttachmentTarget,
     crate::local_runtime::session::SessionSnapshot,
 ) {
-    use crate::durable::{ConversationStore, SqliteConversationStore};
+    use crate::durable::SqliteConversationStore;
     use crate::local_runtime::session::LineageSide;
     use crate::message::TextBlock;
     use crate::message::types::{

@@ -3,7 +3,8 @@ use crate::agent::execution::AgentExecution;
 use crate::agent::execution::test_fixtures::*;
 use crate::context::ContextRuntime;
 use crate::conversation::ConversationState;
-use crate::durable::inbox::ConversationStore;
+use crate::durable::JournalStore;
+use crate::durable::RequestStore;
 use crate::events::types::AttemptOutcome;
 use crate::message::types::{MessageBlock, UserContentBlock, UserSource};
 use crate::model::event::ModelEvent;
@@ -149,6 +150,8 @@ async fn cancellation_during_awaited_context_assembly_commits_nothing() {
 /// `::scale::` and FULL runs it (tests/README.md, "Capacity tests").
 mod scale {
     use super::*;
+    use crate::durable::CanonicalStore;
+    use crate::durable::sqlite::request::snapshot::take_request_input_reconstructions;
 
     /// Exercise real preparation, native start, publication and provider dispatch after
     /// a warmed historical request. Only the explicit final oracle discloses history.
@@ -213,7 +216,7 @@ mod scale {
             crate::model::selected_input::take_preparation_visits();
             crate::model::selected_input::take_materialized_items();
             crate::model::selected_input::take_hash_work();
-            crate::durable::sqlite::take_request_input_reconstructions();
+            take_request_input_reconstructions();
             let execution = AgentExecution::new(
                 second,
                 lease,
@@ -228,7 +231,7 @@ mod scale {
             let visits = crate::model::selected_input::take_preparation_visits();
             let materialized = crate::model::selected_input::take_materialized_items();
             let hashes = crate::model::selected_input::take_hash_work();
-            let reconstruction = crate::durable::sqlite::take_request_input_reconstructions();
+            let reconstruction = take_request_input_reconstructions();
             assert!(
                 matches!(result.outcome, AttemptOutcome::Completed { .. }),
                 "{count}: {:?}",

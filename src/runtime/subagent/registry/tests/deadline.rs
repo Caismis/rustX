@@ -2,6 +2,7 @@
 //! deterministic terminal winners, and frozen prepared deadlines.
 
 use super::*;
+use crate::durable::inbox::ConversationInboundCapability;
 
 /// Issue #191/#192 — ordinary explicit cancellation and deadline
 /// cancellation are the same `Running -> Cancelling -> Cancelled`

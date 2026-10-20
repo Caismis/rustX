@@ -210,7 +210,7 @@ pub(super) fn member_event(
 }
 pub(super) fn seed_members(
     connection: &Connection,
-    seed: &crate::durable::inbox::LineageSeed,
+    seed: &crate::durable::LineageSeed,
 ) -> Result<(), ConversationStoreError> {
     for (ordinal, turn) in seed.turns().iter().enumerate() {
         let mut counts = crate::durable::observation::AttemptMemberCounts {

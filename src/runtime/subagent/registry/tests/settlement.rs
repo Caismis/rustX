@@ -2,6 +2,7 @@
 //! ordering, shared-workspace effects, and bounded terminal publication retry.
 
 use super::*;
+use crate::durable::inbox::ConversationInboundCapability;
 use crate::runtime::subagent::process::PhysicalOutcome;
 use crate::runtime::subagent::process::PhysicalSettlement;
 

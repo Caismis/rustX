@@ -107,7 +107,7 @@ impl AgentExecution<'_> {
             .map(|block| {
                 Self::canonical_event(block).ok_or_else(|| {
                     CanonicalCommitError::Durable(
-                        crate::durable::inbox::ConversationStoreError::InvalidReference(
+                        crate::durable::ConversationStoreError::InvalidReference(
                             "a ToolResult batch contains a non-tool message".to_owned(),
                         ),
                     )

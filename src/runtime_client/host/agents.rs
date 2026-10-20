@@ -2,7 +2,9 @@
 use super::control::agent_control_error;
 use super::history::read_conversation_window;
 use super::history::validate_transcript_page_limit;
-use super::{Arc, ClientInner, ConversationStore, RuntimeClientError, RuntimeClientResult};
+use super::{Arc, ClientInner, RuntimeClientError, RuntimeClientResult};
+use crate::durable::JournalStore;
+use crate::durable::ObservationStore;
 
 impl ClientInner {
     pub(in crate::runtime_client) fn agent_registry(

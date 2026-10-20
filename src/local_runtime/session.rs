@@ -30,6 +30,7 @@
 //! remains a monotonic usage classifier; unused Sessions are still listed and
 //! are never implicitly reused. See docs/durable-sessions.md for ownership.
 
+use crate::durable::JournalStore;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self};
 
@@ -42,9 +43,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::conversation::SurfaceRevision;
-use crate::durable::{
-    ConversationStore, ConversationStoreError, LineageSeed, SqliteConversationStore,
-};
+use crate::durable::{ConversationStoreError, LineageSeed, SqliteConversationStore};
 use crate::message::types::{MessageBlock, UserContentBlock, UserMessageBlock};
 use crate::model::session::SessionModelConfig;
 use crate::runtime::identity::{ConversationId, MessageId};

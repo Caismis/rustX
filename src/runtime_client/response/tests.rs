@@ -1,6 +1,7 @@
 use super::*;
 use crate::context::assembly::ContextGeneration;
 use crate::durable::SqliteConversationStore;
+use crate::durable::{CanonicalStore, JournalStore, ObservationStore, ProjectionStore};
 use crate::events::types::RuntimeEventEnvelope;
 use crate::message::TextBlock;
 use crate::message::types::InboundKind;
@@ -1201,7 +1202,8 @@ fn exact_window_decoration_keeps_attempt_tool_occurrences_and_response_identity(
             )
         })
         .collect::<Vec<_>>();
-    crate::durable::sqlite::append_assistant_history_fixture(&store, &unrelated).unwrap();
+    crate::durable::sqlite::canonical::append_assistant_history_fixture(&store, &unrelated)
+        .unwrap();
     let old = store
         .read_window_headers(
             &crate::durable::reading::ConversationWindowAt::Older {
@@ -1570,6 +1572,7 @@ fn occupancy_reopens_and_inherits_without_local_requests_or_events() {
 /// `::scale::` and FULL runs it (tests/README.md, "Capacity tests").
 mod scale {
     use super::*;
+    use crate::durable::JournalStore;
 
     #[test]
     fn occupancy_thousands_of_unmeasured_terminal_requests_do_not_invent_a_reading() {

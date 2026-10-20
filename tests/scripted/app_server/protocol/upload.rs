@@ -2,6 +2,7 @@
 //! replies, drain ownership and supervisor capacity.
 #![allow(clippy::large_futures)] // bounded fixture futures; no recursive or unbounded stack growth
 use super::*;
+use crate::durable::CanonicalStore;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn workspace_upload_receipt_admission_and_model_projection_use_one_owner() {
@@ -143,7 +144,7 @@ async fn lost_upload_waiter_does_not_cancel_or_replay_the_owned_commit() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn restored_destination_receipts_admit_a_turn_after_source_deletion() {
     bounded(async {
-        use crate::durable::{ConversationStore, SqliteConversationStore};
+        use crate::durable::SqliteConversationStore;
         use crate::local_runtime::session::uploads::UploadFile;
         use crate::message::types::{
             InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,

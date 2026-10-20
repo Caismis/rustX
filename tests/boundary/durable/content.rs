@@ -1,11 +1,14 @@
 //! T08/T20: physical work is counted at the actual SQLite BLOB row handoff.
-use crate::durable::{ConversationStore, SqliteConversationStore};
+use crate::durable::SqliteConversationStore;
 use crate::message::content::TextBlock;
 use crate::message::types::{
     AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, MessageBlock,
 };
 use crate::observation::content::{ContentRepresentation, ContentSource};
 use crate::runtime::identity::{ConversationId, MessageId};
+use rustx::durable::{
+    CanonicalStore, InboxStore, JournalStore, ObservationStore, ProjectionStore, RequestStore,
+};
 #[test]
 fn t08_t15_native_schema_initializes_all_bounded_read_indexes_before_reopen() {
     let directory = tempfile::tempdir().unwrap();
@@ -2472,7 +2475,7 @@ fn t08_t19_t20_canonical_json_orders_unbounded_keys_by_original_utf8() {
 
 #[test]
 fn t08_t14_t19_tool_headers_keep_exact_raw_arguments_and_giant_identity_sources() {
-    use crate::durable::inbox::CanonicalRawToolArguments;
+    use crate::durable::CanonicalRawToolArguments;
     use crate::observation::content::CanonicalContentLocator;
     let raw = " {\"n\":1.0,\"escaped\":\"\\u6c34\"} \n";
     let mut messages = todo_source_messages("unused");
@@ -2648,7 +2651,7 @@ fn assert_canonical_cut_dimensions(
 
 #[test]
 fn t08_t15_t20_missing_middle_descriptor_never_skips_native_history() {
-    use crate::durable::inbox::ConversationStoreError;
+    use crate::durable::ConversationStoreError;
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("middle-descriptor.sqlite");
     let conversation = ConversationId::new("conv_601cccec-75c7-703d-af18-cdf2cb42a8ca");
@@ -2810,7 +2813,7 @@ fn t14_t19_complete_canonical_replacement_carries_earlier_native_effects() {
 fn assert_scalar_source_reads_ignore_original_bodies(
     store: &SqliteConversationStore,
     connection: &rusqlite::Connection,
-    expected: &crate::durable::inbox::CanonicalObservationBatch,
+    expected: &crate::durable::CanonicalObservationBatch,
 ) {
     connection.execute_batch(
         "CREATE TEMP TABLE native_body_backup AS SELECT position,message_json FROM message_ledger WHERE position IN(1,3); UPDATE message_ledger SET message_json='invalid JSON' WHERE position IN(1,3)",
@@ -2878,9 +2881,9 @@ fn assert_complete_canonical_index_plans(connection: &rusqlite::Connection) {
 }
 
 fn assert_global_canonical_scalars(
-    complete: &crate::durable::inbox::CanonicalObservationBatch,
-    first: &crate::durable::inbox::CanonicalObservationBatch,
-    todo: &crate::durable::inbox::NativeTodoObservation,
+    complete: &crate::durable::CanonicalObservationBatch,
+    first: &crate::durable::CanonicalObservationBatch,
+    todo: &crate::durable::NativeTodoObservation,
     time: chrono::DateTime<chrono::Utc>,
 ) {
     assert_eq!(complete.opening_preview, first.opening_preview);

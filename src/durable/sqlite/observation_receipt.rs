@@ -1,7 +1,7 @@
 //! Finite immutable evidence prepared by the existing native write transaction.
 //! A derived-read failure leaves the semantic commit intact and its receipt absent.
 use super::{Arc, Connection, ConversationId};
-use crate::durable::inbox::CanonicalObservationBatch;
+use crate::durable::CanonicalObservationBatch;
 use crate::durable::observation::{
     NativeObservationBatch, NativeObservationTransition, NativeToolResultCommit,
     ObservationEventWitness,
@@ -143,7 +143,7 @@ pub(super) fn request_start(
     emissions: &[RuntimeEventEnvelope],
     canonical: Option<Arc<CanonicalObservationBatch>>,
     snapshot: &crate::model::snapshot::RequestSnapshot,
-    sources: &[crate::durable::inbox::StatusObservationSource],
+    sources: &[crate::durable::StatusObservationSource],
 ) -> Option<Arc<NativeObservationBatch>> {
     let contributions = emissions
         .iter()
@@ -378,7 +378,7 @@ pub(super) fn status_sources(
     connection: &Connection,
     conversation: &ConversationId,
     snapshot: &crate::model::snapshot::RequestSnapshot,
-) -> Vec<crate::durable::inbox::StatusObservationSource> {
+) -> Vec<crate::durable::StatusObservationSource> {
     use crate::observation::content::{
         CanonicalContentComponent as Component, CanonicalContentLocator as Locator,
         ContentRepresentation as Rep, ContentSource,
@@ -391,7 +391,7 @@ pub(super) fn status_sources(
         let reference = |locator: &Locator, component: Component, representation: Rep| super::content::descriptor(connection,conversation,&ContentSource::CanonicalMessageBlock {component,locator:locator.clone(),block_index:crate::message::types::ContentBlockIndex::new(0)},representation).ok().flatten();
         let target = contribution.opportunities.fresh_inbound.as_ref().and_then(|fresh| connection.query_row("SELECT m.position,t.position FROM message_ledger m LEFT JOIN transcript_order t ON t.reference_kind='message' AND t.reference_id=m.message_id WHERE m.message_id=?1",[fresh.target_message_id.as_str()],|row|Ok((row.get::<_,u64>(0)?,row.get::<_,Option<u64>>(1)?))).ok());
         let target_locator=target.map(|(position,_)|Locator::ByLedgerPosition {position});
-        Some(crate::durable::inbox::StatusObservationSource {
+        Some(crate::durable::StatusObservationSource {
             contribution_ordinal:ordinal as u64,
             request_id:snapshot.request_id.clone(),
             rendered_ref:reference(&locator,Component::Payload,Rep::Utf8Text),

@@ -1,3 +1,8 @@
+use crate::durable::CanonicalStore;
+use crate::durable::JournalStore;
+use crate::durable::ProjectionStore;
+use crate::durable::RequestStore;
+use crate::durable::inbox::InboxStore;
 use crate::runtime::conversation_runtime::test_support::*;
 
 /// The runtime rejects a `SubagentRegistry` that belongs to another

@@ -1,7 +1,7 @@
 use crate::agent::cancellation::AgentCancellation;
 use crate::agent::execution::AgentExecution;
 use crate::agent::execution::test_fixtures::*;
-use crate::durable::inbox::ConversationStore;
+use crate::durable::ConversationStore;
 use crate::events::types::{AttemptOutcome, RuntimeEvent};
 use crate::message::types::ContentBlockIndex;
 use crate::model::adapter::{ModelAdapter, ModelStream, ModelStreamItem};

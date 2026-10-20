@@ -720,10 +720,7 @@ impl RuntimeClientProjection {
         }
     }
 
-    pub(super) fn install_todo_head(
-        &mut self,
-        todos: &crate::durable::inbox::NativeTodoObservation,
-    ) {
+    pub(super) fn install_todo_head(&mut self, todos: &crate::durable::NativeTodoObservation) {
         self.snapshot.todos = Some(todos.snapshot.clone());
         self.source_frontiers.insert(
             "todos.tasks".into(),

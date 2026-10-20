@@ -3,10 +3,10 @@
 //! stale attachments that never own residency.
 #![allow(clippy::too_many_lines)]
 use super::*;
+use crate::durable::CanonicalStore;
 
 // Uses the durable graph owner to create two valid lineages before residency.
 async fn second_node(f: &Fixture) -> SessionSnapshot {
-    use crate::durable::ConversationStore;
     use crate::message::types::{InboundKind, MessageBlock, UserMessageBlock, UserSource};
     let a = &f.sessions[0];
     let access = f
@@ -100,7 +100,6 @@ async fn cold_node_routes_compose_the_routed_lineage_without_publishing_focus() 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cold_loads_never_manufacture_a_projection_for_an_unrenderable_root_subject() {
     bounded(async {
-        use crate::durable::ConversationStore as _;
         use crate::message::types::{
             InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
         };

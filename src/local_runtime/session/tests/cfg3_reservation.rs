@@ -13,6 +13,7 @@
 
 use super::super::creation::conversation_database_path;
 use super::*;
+use crate::durable::CanonicalStore;
 use crate::durable::conversation_store_opens_on_this_thread;
 use crate::local_runtime::session::LineageSide;
 use crate::runtime::local_storage::{ProductController, ProductRoot};

@@ -9,6 +9,9 @@
 #![allow(clippy::too_many_lines)]
 
 use crate::launch_fixture::LaunchFixture;
+use rustx::durable::{
+    CanonicalStore, InboxStore, JournalStore, ProjectionStore, PublicationStore, RequestStore,
+};
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;

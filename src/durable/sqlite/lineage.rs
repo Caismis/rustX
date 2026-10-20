@@ -30,19 +30,20 @@ pub(super) fn read_at(
     // owns structure, not execution time; the same R at a newer C may observe
     // newer outcomes. Later commits cannot alter this captured (R, C).
     let read_cut = super::reading::cut(connection, conversation)?;
-    let (ids, surface_history) = super::replay_surface_history(connection, revision)?;
+    let (ids, surface_history) =
+        super::canonical::ledger::replay_surface_history(connection, revision)?;
     let referenced: BTreeSet<_> = surface_history
         .iter()
         .flat_map(SurfaceOp::message_ids)
         .cloned()
         .collect();
-    let canonical: Vec<_> = super::load_canonical_rows(connection)?
+    let canonical: Vec<_> = super::canonical::transcript::load_canonical_rows(connection)?
         .into_iter()
         .filter(|message| referenced.contains(&crate::conversation::message_id_of(message)))
         .collect();
     let messages = ids
         .iter()
-        .map(|id| super::load_message(connection, id))
+        .map(|id| super::canonical::ledger::load_message(connection, id))
         .collect::<Result<Vec<_>, _>>()?;
     let mut turns = super::reading::lineage_turns(connection, conversation, read_cut.journal)?;
     // Member presence selects message-backed history. A terminal-only predecessor

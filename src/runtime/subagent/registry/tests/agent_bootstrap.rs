@@ -1,4 +1,5 @@
 use super::*;
+use crate::durable::JournalStore;
 
 #[tokio::test]
 async fn agent_bootstrap_ignores_activation_record_iteration_order() {

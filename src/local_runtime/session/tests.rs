@@ -2,6 +2,8 @@
 //! canonical history builders, and lineage helpers. Each child module holds the
 //! regressions of one Catalog responsibility.
 
+use crate::durable::CanonicalStore;
+use crate::durable::ProjectionStore;
 mod catalog_document;
 mod cfg3_identity;
 mod cfg3_reservation;

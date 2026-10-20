@@ -3,6 +3,8 @@
 //! failures that never touch another runtime.
 #![allow(clippy::too_many_lines)]
 use super::*;
+use crate::durable::CanonicalStore;
+use crate::durable::JournalStore;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn same_id_single_flight_and_cancelled_claimant() {
@@ -307,7 +309,7 @@ async fn native_composition_failure_does_not_touch_running_b() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cold_load_preserves_unknown_external_tool_outcome_without_replay() {
     bounded(async {
-        use crate::durable::{ConversationStore, SqliteConversationStore};
+        use crate::durable::{SqliteConversationStore};
         use crate::events::types::{RuntimeEventEnvelope, EVENT_SCHEMA_VERSION};
         use crate::runtime::identity::{AttemptId, EventId, MessageId, ToolCallId, ToolId, TurnId};
         use crate::message::types::{MessageBlock, AssistantMessageBlock, AssistantContentBlock};

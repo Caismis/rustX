@@ -21,6 +21,7 @@
 //! [`Durable`] is the post-mortem view: it reopens the same database the dead
 //! child owned and exposes the durable authority plus real recovery.
 
+use rustx::durable::{CanonicalStore, JournalStore, PublicationStore, RequestStore};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::CommandExt;

@@ -2,6 +2,7 @@
 //! branch cuts, including source deletion and mapping loss.
 
 use super::*;
+use crate::durable::CanonicalStore;
 
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // One real read/copy/publication/deletion transaction across all lineage cuts.

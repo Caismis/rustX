@@ -2,6 +2,10 @@
 //! and branch where their source branches.
 
 use super::*;
+use crate::durable::CanonicalStore;
+use crate::durable::JournalStore;
+use crate::durable::ProjectionStore;
+use crate::durable::RequestStore;
 
 /// A `todo` result committed by the source, exactly as the native tool
 /// publishes one: the complete post-mutation list as the result's

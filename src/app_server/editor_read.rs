@@ -4,7 +4,7 @@ use super::{
     protocol::{ErrorData, MethodResult, RpcError},
     rpc_error::{client_error, domain},
 };
-use crate::durable::ConversationStore;
+use crate::durable::ObservationStore;
 use crate::local_runtime::session::{LineageSide, SessionId, SessionNodeId};
 use crate::local_runtime::session_controller::SessionController;
 use crate::observation::content::{ContentChunk, ContentRepresentation, ContentSource};

@@ -1,8 +1,8 @@
 //! Immutable bootstrap records and exact canonical Assistant membership.
 use super::{
     Connection, ConversationStoreError, Digest, LineageSeed, MessageBlock, MessageId,
-    OptionalExtension, Sha256, decode, encode, params, read_inherited_occupancy, seq_to_i64,
-    storage,
+    OptionalExtension, Sha256, canonical::read_inherited_occupancy, decode, encode, params,
+    seq_to_i64, storage,
 };
 use crate::durable::reading::TurnReadingProvenance;
 use crate::durable::response::CompletedResponseProvenance;

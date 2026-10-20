@@ -3,6 +3,12 @@
 
 use super::super::{LineageSide, lineage_cut};
 use super::*;
+use crate::durable::CanonicalStore;
+use crate::durable::JournalStore;
+use crate::durable::ObservationStore;
+use crate::durable::ProjectionStore;
+use crate::durable::RequestStore;
+use crate::durable::inbox::ConversationInboundCapability;
 
 #[test]
 fn historical_fork_excludes_checkpoint_activated_after_selected_ledger() {

@@ -1,5 +1,6 @@
 // Captured native C/J cuts retain distinct positive canonical and execution evidence.
 use super::*;
+use crate::durable::{CanonicalStore, ObservationStore};
 
 fn running_trace_snapshot(
     store: &dyn ConversationStore,

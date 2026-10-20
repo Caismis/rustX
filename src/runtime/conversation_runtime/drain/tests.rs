@@ -1,3 +1,4 @@
+use crate::durable::JournalStore;
 use crate::runtime::conversation_runtime::test_support::*;
 
 #[cfg(feature = "mcp-fixture")]

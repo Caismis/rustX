@@ -510,7 +510,7 @@ impl crate::runtime::observation::PublicationProjectionCommit for NativePublicat
     fn native_audit(
         &self,
         attempt: &crate::runtime::identity::AttemptId,
-        receipt: &crate::durable::inbox::PublicationAuditReceipt,
+        receipt: &crate::durable::PublicationAuditReceipt,
     ) {
         let Some(inner) = self.inner.upgrade() else {
             return;

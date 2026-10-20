@@ -244,7 +244,7 @@ impl AgentExecutionObserver for RuntimeObserver {
         &self,
         attempt_id: &AttemptId,
         _block: &MessageBlock,
-        receipt: &crate::durable::inbox::TranscriptCommitReceipt,
+        receipt: &crate::durable::TranscriptCommitReceipt,
     ) {
         self.push(ConversationObservation::CanonicalCommitted {
             attempt_id: Some(attempt_id.clone()),
@@ -255,7 +255,7 @@ impl AgentExecutionObserver for RuntimeObserver {
     fn observe_status(
         &self,
         observation: &AgentStatusObservation,
-        source: Option<&crate::durable::inbox::StatusObservationSource>,
+        source: Option<&crate::durable::StatusObservationSource>,
     ) {
         self.push(ConversationObservation::Status(
             crate::observation::status::prepared_status_view(observation, source),
@@ -267,7 +267,7 @@ impl AgentExecutionObserver for RuntimeObserver {
         contribution: &crate::context::contribution::ContributionStart,
         _attempt: &AttemptId,
         _turn: u32,
-        source: Option<&crate::durable::inbox::StatusObservationSource>,
+        source: Option<&crate::durable::StatusObservationSource>,
     ) {
         if contribution.presentation.is_none() {
             return;
@@ -307,7 +307,7 @@ impl AgentExecutionObserver for RuntimeObserver {
         &self,
         attempt_id: &AttemptId,
         _audit: &PublicationAudit,
-        receipt: &crate::durable::inbox::PublicationAuditReceipt,
+        receipt: &crate::durable::PublicationAuditReceipt,
     ) {
         if let Some(inner) = self.inner.upgrade()
             && let Some(fanout) = inner.pending.get()

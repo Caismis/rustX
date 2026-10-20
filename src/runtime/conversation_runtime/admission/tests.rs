@@ -1,3 +1,6 @@
+use crate::durable::CanonicalStore;
+use crate::durable::JournalStore;
+use crate::durable::inbox::ConversationInboundCapability;
 use crate::runtime::conversation_runtime::test_support::*;
 
 /// The headless full turn: a conversation runtime with zero Runtime

@@ -1,5 +1,6 @@
 // Real canonical delivery selection does not hydrate surrounding Tool bodies.
 use super::*;
+use crate::durable::{CanonicalStore, JournalStore, ObservationStore};
 use crate::message::types::ToolCallOccurrenceRef;
 use crate::observation::content::CanonicalContentLocator;
 use crate::tools::session_files::{SessionFileReadFailure, SessionFileReference};

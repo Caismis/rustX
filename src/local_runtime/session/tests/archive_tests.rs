@@ -1,5 +1,8 @@
 //! Real durable fixtures; gates are completion/queue boundaries, never sleeps.
 use super::*;
+use crate::durable::{
+    CanonicalStore, JournalStore, ObservationStore, ProjectionStore, RequestStore,
+};
 use crate::session_archive::{SessionArchiveCut, SessionArchiveProducer};
 use crate::tools::artifacts::ArtifactStore;
 use std::collections::BTreeMap;

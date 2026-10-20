@@ -10,6 +10,7 @@
 //! typed refusal — never by a sleep.
 
 use crate::launch_fixture::LaunchFixture;
+use rustx::durable::{CanonicalStore, JournalStore};
 use std::sync::Arc;
 
 use rustx::capabilities::{CapabilitySourceState, ToolSourceId};
@@ -769,7 +770,7 @@ fn invalid_agent_names_are_rejected_deterministically() {
 /// through the real durable authority unchanged.
 #[test]
 fn the_committed_identity_survives_a_durable_round_trip() {
-    use rustx::durable::{ConversationStore, SqliteConversationStore};
+    use rustx::durable::SqliteConversationStore;
     use rustx::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
     use rustx::runtime::identity::{AgentId, ConversationId, EventId, SubagentId, ToolCallId};
 

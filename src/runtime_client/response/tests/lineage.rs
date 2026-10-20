@@ -1,6 +1,7 @@
 use super::*;
 use crate::conversation::{SurfaceOp, message_id_of};
 use crate::durable::LineageSeed;
+use crate::durable::{CanonicalStore, JournalStore, ObservationStore, ProjectionStore};
 use crate::local_runtime::session::remap_seed;
 
 #[test]
@@ -485,7 +486,7 @@ fn lineage_preserves_success_failed_and_terminal_only_turns_in_native_order() {
         assert_eq!(child.read_events(None, 64).unwrap().events, []);
         let bootstrap = child.load_transcript_page(None, 64).unwrap();
         let snapshot = child
-            .load_transcript_snapshot(&crate::durable::inbox::TranscriptSnapshotCut {
+            .load_transcript_snapshot(&crate::durable::TranscriptSnapshotCut {
                 bootstrap_through: bootstrap.entries.last().unwrap().cursor.get(),
                 journal_through: 0,
                 messages: Vec::new(),

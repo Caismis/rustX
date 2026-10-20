@@ -9,6 +9,7 @@ use super::record::bound_record;
 use super::*;
 use crate::context::assembly::ContextGeneration;
 use crate::durable::SqliteConversationStore;
+use crate::durable::{CanonicalStore, InboxStore, JournalStore, ObservationStore, RequestStore};
 use crate::events::types::RuntimeEvent as E;
 use crate::message::content::TextBlock;
 use crate::message::types::{

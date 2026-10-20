@@ -4,6 +4,7 @@
 //! commits. Origin references and model-visible history are never traversed.
 //! The Session execution workspace is never a deletion resource: children and
 //! Workflows share it, so deletion neither inspects nor removes it.
+use crate::durable::JournalStore;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 

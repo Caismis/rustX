@@ -2,6 +2,9 @@
 //! fencing, plus subscription registration across attach receipts.
 #![allow(clippy::large_futures)] // bounded fixture futures; no recursive or unbounded stack growth
 use super::*;
+use crate::durable::CanonicalStore;
+use crate::durable::JournalStore;
+use crate::durable::ObservationStore;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn detach_during_unloading_needs_no_operation_lease() {
@@ -1102,7 +1105,7 @@ async fn another_connection_deletes_an_attached_idle_session_and_closes_its_rout
 }
 
 async fn retained_huge_root(fixture: &Fixture) -> Vec<(crate::runtime::identity::MessageId, u64)> {
-    use crate::durable::{ConversationStore, SqliteConversationStore};
+    use crate::durable::SqliteConversationStore;
     use crate::message::types::{
         InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
     };
@@ -1253,7 +1256,6 @@ async fn t13_lost_huge_root_attach_receipt_is_reconciled_without_second_admissio
 async fn t07_t13_source_failure_fences_registration_without_replay_loss_or_cursor_consumption() {
     bounded(async {
         use futures_util::FutureExt;
-        use crate::durable::ConversationStore as _;
         struct SourceFault { connection: rusqlite::Connection, original: Vec<u8> }
         impl SourceFault {
             fn restore(&self) {

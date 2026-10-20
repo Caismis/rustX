@@ -3,6 +3,7 @@
 
 use super::super::SESSION_CATALOG_SCHEMA_VERSION;
 use super::*;
+use crate::durable::CanonicalStore;
 
 // P15
 #[test]

@@ -11,7 +11,7 @@ use super::catalog_commit::normalize_name;
 use super::invalidations::SessionSummaryInvalidations;
 use super::projection::activity_at;
 use super::projection::preview_of;
-use crate::durable::inbox::ConversationStore;
+use crate::durable::CanonicalStore;
 use crate::runtime::identity::SessionId;
 use crate::runtime::identity::SessionNodeId;
 use chrono::DateTime;

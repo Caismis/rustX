@@ -1,5 +1,6 @@
 //! WF-05: fixed bodies, exact admission gates, native settlement and typed exits.
 use super::*;
+use crate::durable::CanonicalStore;
 
 fn distinct_outcomes(mut definition: WorkflowDefinition) -> WorkflowDefinition {
     let successor = definition.block.nodes.remove("done").unwrap();

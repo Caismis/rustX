@@ -6,6 +6,10 @@ use super::compaction_lineage::todo_call;
 use super::compaction_lineage::todo_list_of;
 use super::compaction_lineage::todo_result;
 use super::*;
+use crate::durable::CanonicalStore;
+use crate::durable::JournalStore;
+use crate::durable::ProjectionStore;
+use crate::durable::RequestStore;
 
 /// Provenance is user work even when the destination conversation is
 /// legitimately empty. A fork at the very first user message cuts to the

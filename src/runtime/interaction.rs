@@ -2515,6 +2515,7 @@ fn validate_response_for(
 mod tests {
     use super::*;
     use crate::agent::cancellation::AgentCancellation;
+    use crate::durable::{JournalStore, ObservationStore};
     use crate::events::interaction::{MAX_APPROVAL_REQUEST_REASON_CHARS, MAX_QUESTION_TEXT_CHARS};
     use crate::runtime::identity::ConversationId;
     use crate::runtime::types::ConversationLifecycleState;

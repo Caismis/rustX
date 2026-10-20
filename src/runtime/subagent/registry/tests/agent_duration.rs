@@ -1,6 +1,7 @@
 /// Real driver frames and native registry transitions fence the numerical Fold;
 /// no lifecycle label or elapsed sleep stands in for execution evidence.
 use super::*;
+use crate::durable::JournalStore;
 
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // Keep the gated execution and durable settlement sequence together.

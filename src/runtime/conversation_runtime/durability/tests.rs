@@ -1,3 +1,6 @@
+use crate::durable::CanonicalStore;
+use crate::durable::JournalStore;
+use crate::durable::inbox::ConversationInboundCapability;
 use crate::runtime::conversation_runtime::test_support::*;
 
 /// Issue #63 (Finding 5 / Important 5): a transient select storage

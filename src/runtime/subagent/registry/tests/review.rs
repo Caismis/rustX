@@ -1,5 +1,6 @@
 //! Review regressions use registry mutex boundaries, control frames and first-poll gates.
 use super::*;
+use crate::durable::inbox::ConversationInboundCapability;
 use crate::runtime::ToolCallId;
 
 #[tokio::test]

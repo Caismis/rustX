@@ -1,6 +1,9 @@
 //! Shared fixtures of the `ConversationRuntime` domain tests: headless runtime
 //! construction over scripted models, durable seeds, and observation waits.
 
+use crate::durable::CanonicalStore;
+use crate::durable::JournalStore;
+use crate::durable::ProjectionStore;
 pub(super) use std::sync::Arc;
 
 pub(super) fn fixture_activation(
@@ -49,7 +52,7 @@ pub(super) use crate::context::{
     AgentStatusEngine, ClosureTokenEstimator, ContextError, ContextErrorKind,
     DefaultTokenEstimator, TokenEstimator,
 };
-pub(super) use crate::durable::inbox::ConversationStore;
+pub(super) use crate::durable::ConversationStore;
 pub(super) use crate::events::types::RuntimeEvent;
 pub(super) use crate::message::content::TextBlock;
 pub(super) use crate::message::types::{InboundKind, MessageBlock, UserContentBlock, UserSource};

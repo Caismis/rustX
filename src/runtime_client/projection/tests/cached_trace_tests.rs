@@ -82,6 +82,7 @@ fn assert_frozen_tool_result_absent(
 /// `::scale::` and FULL runs it (tests/README.md, "Capacity tests").
 mod scale {
     use super::*;
+    use crate::durable::ObservationStore;
 
     #[test]
     fn t08_t14_t19_cached_trace_cut_survives_c_without_j_and_4097_unrelated_publications() {

@@ -55,7 +55,7 @@ impl Terminal {
 #[derive(Debug)]
 pub(super) enum CanonicalCommitError {
     Conversation(ConversationError),
-    Durable(crate::durable::inbox::ConversationStoreError),
+    Durable(crate::durable::ConversationStoreError),
     Interaction(InteractionFailure),
 }
 
@@ -113,9 +113,7 @@ impl AgentExecution<'_> {
     /// persisted.
     pub(super) fn durable_failure_commit_error(&self) -> Option<CanonicalCommitError> {
         self.durable_failure.clone().map(|message| {
-            CanonicalCommitError::Durable(crate::durable::inbox::ConversationStoreError::Storage(
-                message,
-            ))
+            CanonicalCommitError::Durable(crate::durable::ConversationStoreError::Storage(message))
         })
     }
 

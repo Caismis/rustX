@@ -1,4 +1,5 @@
 use super::*;
+use crate::durable::{CanonicalStore, JournalStore, ProjectionStore};
 use crate::observation::bounded::decode_domain_value;
 use crate::observation::cut::CheckpointReadCut;
 use crate::observation::trace::{TraceKind, TraceState};

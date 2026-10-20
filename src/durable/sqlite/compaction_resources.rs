@@ -417,6 +417,7 @@ pub(super) fn dependency(
 mod tests {
     use super::*;
     use crate::context::resources::CompactionResources;
+    use crate::durable::{CanonicalStore, JournalStore};
     use crate::durable::{ConversationStore, SqliteConversationStore};
     use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
     use crate::message::types::{

@@ -1,3 +1,5 @@
+use crate::durable::CanonicalStore;
+use crate::durable::JournalStore;
 use crate::runtime::conversation_runtime::test_support::*;
 
 /// Manual compaction is a first-class idle maintenance operation: it

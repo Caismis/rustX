@@ -1,6 +1,9 @@
 //! A tiny Child delivery has no dependency on a complete historical Host.
 use super::super::delivery::DELIVERED;
 use super::*;
+use crate::durable::CanonicalStore;
+use crate::durable::JournalStore;
+use crate::durable::ObservationStore;
 use crate::observation::content::CanonicalContentLocator;
 
 fn giant_selected_delivery(
