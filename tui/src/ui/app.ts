@@ -1,5 +1,3 @@
-import {validateInteractionBody} from '../../../protocol/app-server/interaction.ts';
-import { displayInteraction, hasInteractionBody, type DisplayInteraction } from '../presentation/interaction-display.ts';
 /**
  * The rustX terminal application.
  *
@@ -71,15 +69,9 @@ import {
   type PreferenceChange,
 } from "../commands/dispatcher.ts";
 import { sessionLabel } from "../presentation/selectors.ts";
-import {
-  findPendingInteraction,
-  reconcileInteractionFocus,
-  sameInteractionRef,
-} from "../presentation/interaction-focus.ts";
 import { correlateTools } from "../presentation/tools.ts";
 import { selectTodos } from "../presentation/todos.ts";
 import type { PresentationState } from "../presentation/state.ts";
-import type { CheckpointPage } from '../../../protocol/app-server/v50.ts';
 import { AppServerRequestError, isDeliveryCancelled } from "../app-server/client.ts";
 import type { AppServerHost } from "../app-server/host.ts";
 import type { AppServerSession } from "../app-server/session.ts";
@@ -92,7 +84,6 @@ import type {
   SessionView,
   ToolCallId,
   InteractionRef,
-  RoutedInteraction,
   UserInputBlock,
 } from "../protocol/app-server.ts";
 import {
@@ -151,7 +142,6 @@ import { renderTodoPanel, deferredTodoRecords } from "./components/todos.ts";
 import {
   type PresentationPreferences,
   defaultPreferences,
-  interactionKey,
   withAllCollapsed,
   withExpandedBackgroundExecutions,
   withExpandedInteractions,
@@ -165,8 +155,9 @@ import { style } from "./theme.ts";
 import { banded } from "./components/transcript-block.ts";
 import { SubagentTranscript } from "../app-server/subagent-transcript.ts";
 import { SubagentTranscriptView } from "./components/subagent-transcript-view.ts";
-import { HumanInteractionOverlay } from "./components/hitl.ts";
-import type { InteractionResponse, SourceTarget } from "../protocol/app-server.ts";
+import { HumanInputController } from "./human-input.ts";
+import type { PresentationLease } from "./presentation-lease.ts";
+import type { SourceTarget } from "../protocol/app-server.ts";
 
 export interface RustxTuiAppOptions {
   /** The App Server connection, its Session catalog, and who owns its process. */
@@ -190,19 +181,6 @@ export interface RustxTuiAppOptions {
   cwd?: string;
   /** The system opener `/files` Open asks; this platform's by default. */
   opener?: { command: string | undefined; launch: Opener };
-}
-
-/**
- * A lease for one asynchronous client-side presentation continuation.
- *
- * The epoch is advanced whenever authoritative runtime ownership changes. The
- * attachment identity is checked as well, so a late continuation cannot
- * repaint a new attachment that happens to have the same projection shape.
- */
-interface PresentationLease {
-  epoch: number;
-  sessionListGeneration: number;
-  session: AppServerSession | undefined;
 }
 
 export class RustxTuiApp {
@@ -254,32 +232,19 @@ export class RustxTuiApp {
   #overlay: OverlayHandle | undefined;
   /** Retires the work the current overlay owns when it closes or is replaced. */
   #overlayRetire: (() => void) | undefined;
-  #hitlOverlay: HumanInteractionOverlay | undefined;
-  /**
-   * Presentation-only focus over `pendingInteractions`, reconciled against
-   * the authoritative projection on every render. Never a semantic fact: it
-   * picks which interaction the human-input surface shows, nothing else.
-   */
-  #interactionFocus: InteractionRef | undefined;
-  #interactionPage: { session: AppServerSession; stamp: string; offset: number; page: CheckpointPage; items: DisplayInteraction[] } | undefined;
-  #interactionRead = 0;
-  #interactionBody?: {session:AppServerSession;stamp:string;interaction:InteractionRef;body:RoutedInteraction};
-  #interactionBodyRead = 0;
-  #interactionArgumentRange?: {session:AppServerSession;stamp:string;interaction:InteractionRef;text:string;offset:number;next:number|null;end:number;field:"arguments"|"reason"|"tool_name";decoder:InstanceType<typeof TextDecoder>};
-  /**
-   * The interaction the user dismissed the human-input surface on (approval
-   * Esc), plus the pending queue exactly as it stood at dismissal.
-   *
-   * Presentation-only: the dismissed interaction stays pending and
-   * unanswered, and the surface reopens on Ctrl+G. The dismissal is scoped
-   * to that exact interaction and that exact queue: the moment a *distinct*
-   * interaction arrives, the dismissal is superseded — a previously
-   * dismissed approval must never silently hide newly required human input.
-   * Settlement or removal of the dismissed interaction retires the marker.
-   */
-  #hitlDismissed:
-    | { interaction: InteractionRef; known: ReadonlySet<string> }
-    | undefined;
+  readonly #humanInput = new HumanInputController({
+    session: () => this.#session,
+    lease: () => this.#presentationLease(),
+    isCurrent: lease => this.#isCurrentPresentationLease(lease),
+    render: state => this.#renderState(state),
+    requestRender: () => this.#tui.requestRender(),
+    showTransient: (level, text) => this.#showTransient(level, text),
+    showPopup: (content, options) => { this.#showPopup(content, options); },
+    closeOverlay: () => this.#closeOverlay(),
+    interrupt: () => void this.#onInterrupt(),
+    applyPreference: change => this.#applyPreference(change),
+    preferences: () => this.#preferences,
+  });
   #quitting = false;
   #exitCode = 0;
   #finished = false;
@@ -850,8 +815,7 @@ export class RustxTuiApp {
         // dismissed it. Presentation-only: it settles nothing and never
         // targets a read-only inspection.
         if (matchesKey(data, "ctrl+g")) {
-          if (this.#hitlOverlay === undefined) {
-            this.#hitlDismissed = undefined;
+          if (this.#humanInput.reopen()) {
             const state = this.#session?.state;
             if (state.pendingInteractions.length > 0) {
               this.#renderState(state);
@@ -867,7 +831,7 @@ export class RustxTuiApp {
         }
         if (matchesKey(data, "escape")) {
           // Focused popup components own cancellation and nested presentation state.
-          if (this.#overlay !== undefined && this.#hitlOverlay === undefined) return undefined;
+          if (this.#overlay !== undefined && this.#humanInput.overlay === undefined) return undefined;
           const state = this.#session?.state;
           const attempt = state?.attempt;
           const acted = this.#overlay !== undefined || (
@@ -1152,14 +1116,14 @@ export class RustxTuiApp {
     this.#acknowledgeTransient();
     // A stale interaction cannot consume the gesture as an interaction response.
     // Cancellation still selects its owner through the live native attachment.
-    if (this.#hitlOverlay !== undefined && this.#session?.observationPhase === 'following') {
+    if (this.#humanInput.overlay !== undefined && this.#session?.observationPhase === 'following') {
       // Escape behavior is defined per interaction kind by the surface
       // itself: a questionnaire gets its explicit typed decline; an approval
       // is dismissed without any answer. The app never answers here.
-      this.#hitlOverlay.escape();
+      this.#humanInput.overlay.escape();
       return;
     }
-    if (this.#overlay !== undefined && this.#hitlOverlay === undefined) {
+    if (this.#overlay !== undefined && this.#humanInput.overlay === undefined) {
       this.#closeOverlay();
       return;
     }
@@ -1374,7 +1338,7 @@ export class RustxTuiApp {
     lease: PresentationLease,
   ): void {
     if (!this.#isCurrentPresentationLease(lease)) return;
-    if (this.#hitlOverlay !== undefined) return;
+    if (this.#humanInput.overlay !== undefined) return;
     const workflow = this.#deletion;
     // Initial /resume command responses obey the same mutation boundary as pages.
     if (lease.sessionListGeneration !== workflow.generation) return;
@@ -1715,7 +1679,7 @@ export class RustxTuiApp {
     this.#resumePresentation = undefined;
     handle.hide();
     this.#overlay = undefined;
-    this.#hitlOverlay = undefined;
+    this.#humanInput.overlayClosed();
     this.#tui.setFocus(this.#editor);
     if (!replacing) this.#syncDeletionPresentation();
     this.#tui.requestRender();
@@ -1876,8 +1840,7 @@ export class RustxTuiApp {
     // An authoritative replacement re-derives presentation focus from the
     // new projection: no stale overlay or dismissed marker may submit
     // against, or hide, an interaction the runtime owns now.
-    this.#interactionFocus = undefined;
-    this.#hitlDismissed = undefined;
+    this.#humanInput.reset();
     this.#transient.clear();
     if (this.#started) {
       this.#tui.requestRender();
@@ -1916,30 +1879,11 @@ export class RustxTuiApp {
    */
   #renderState(state: PresentationState): void {
     if (this.#connecting) { this.#renderConnecting(); return; }
-    const source = this.#session;
-    const stamp = this.#interactionStamp();
-    if (this.#interactionPage && (this.#interactionPage.session !== source || this.#interactionPage.stamp !== stamp)) {
-      this.#interactionPage = undefined;
-      this.#interactionRead += 1;
-    }
-    // The viewport is presentation-only. It never replaces a native snapshot,
-    // moves Applied Cursor, or infers settlement from an omitted identity.
-    if (this.#interactionPage) state = { ...state, pendingInteractions: this.#interactionPage.items };
-    const body=this.#interactionBody;
-    if(body && body.session===source && body.stamp===stamp) state={...state,pendingInteractions:state.pendingInteractions.map(item=>sameInteractionRef(item.interaction,body.interaction)?body.body:item)};
-    else if(body) {this.#interactionBody=undefined;this.#interactionBodyRead++;}
+    state = this.#humanInput.project(state);
     if (!hasSubagentSelection(state.agents, this.#selectedAgentId)) {
       this.#selectedAgentId = undefined;
       this.#subagentListFocused = false;
     }
-    // Reconcile the presentation-only interaction focus with the
-    // authoritative pending set before anything renders it: settling the
-    // focused interaction advances focus deterministically, and an empty
-    // queue drops it.
-    this.#interactionFocus = reconcileInteractionFocus(
-      state.pendingInteractions,
-      this.#interactionFocus,
-    );
     // Correlated once per render and shared: the transcript and the activity
     // area must agree on which calls have a transcript anchor.
     const correlation = correlateTools(state);
@@ -1991,7 +1935,7 @@ export class RustxTuiApp {
         new Date(),
         this.#subagentListFocused ? this.#selectedAgentId : undefined,
       ),
-      renderInteractionSection(state, this.#preferences, this.#interactionFocus),
+      renderInteractionSection(state, this.#preferences, this.#humanInput.focus),
     ]) {
       if (section.length > 0) {
         this.#activity.addChild(new Text(section, 1, 0));
@@ -2018,253 +1962,9 @@ export class RustxTuiApp {
       this.#activity.addChild(this.#loader);
     }
 
-    this.#syncHitlOverlay(state);
+    this.#humanInput.sync(state);
     this.#syncDeletionPresentation();
     this.#tui.requestRender();
-  }
-
-  #interactionStamp(): string {
-    const cut = this.#session?.checkpoint?.read_cut;
-    return cut?.domain_revisions['pending_interactions'] ?? cut?.revision ?? '';
-  }
-
-  #interactionTotal(): bigint {
-    const frontier = this.#session?.checkpoint?.collections.find(value => value.domain === 'pending_interactions');
-    return BigInt(this.#interactionPage?.page.total ?? frontier?.total ?? this.#session?.state.pendingInteractions.length ?? 0);
-  }
-
-  #interactionPartial(): boolean {
-    return Boolean(this.#interactionPage?.offset) || this.#interactionTotal() > BigInt(this.#interactionPage?.items.length ?? this.#session?.state.pendingInteractions.length ?? 0);
-  }
-
-  #interactionPageLabel(): string | undefined {
-    if (!this.#interactionPartial()) return undefined;
-    const offset = this.#interactionPage?.offset ?? 0;
-    const total = this.#interactionTotal();
-    const end = BigInt(offset + (this.#interactionPage?.items.length ?? this.#session?.state.pendingInteractions.length ?? 0));
-    return `Pending ${offset + 1}–${end < total ? end : total} of ${total} · Ctrl+PgUp/PgDn pages`;
-  }
-
-  async #pageInteractions(direction: -1 | 1): Promise<void> {
-    const session = this.#session;
-    if (!session || typeof session.checkpointPage !== 'function') return;
-    const previous = this.#interactionPage;
-    if(direction<0 && (previous?.offset ?? 0)===0) return;
-    const offset = direction < 0 ? Math.max(0, (previous?.offset ?? 0) - 32)
-      : Number(previous?.page.next_offset ?? (previous ? previous.offset + previous.items.length : session.state.pendingInteractions.length));
-    if (!Number.isSafeInteger(offset) || offset < 0 || BigInt(offset) >= this.#interactionTotal()) return;
-    const lease = this.#presentationLease(), overlay = this.#hitlOverlay, stamp = this.#interactionStamp(), read = ++this.#interactionRead;
-    try {
-      const { page, items } = await session.checkpointPage('pending_interactions', offset, previous?.page);
-      if (!overlay || this.#hitlOverlay !== overlay || !this.#isCurrentPresentationLease(lease) || read !== this.#interactionRead || stamp !== this.#interactionStamp()) return;
-      if (page.items.length > 32) throw new Error('Pending interaction page exceeded its item bound.');
-      this.#interactionPage = { session, stamp, offset, page, items: (items as import('../../../protocol/app-server/v50.ts').RuntimeClientInteractionHeader[]).map(displayInteraction) };
-      this.#interactionFocus = this.#interactionPage.items[0]?.interaction;
-      this.#hitlDismissed = undefined;
-      this.#renderState(session.state);
-    } catch (error) {
-      if (overlay && this.#hitlOverlay === overlay && this.#isCurrentPresentationLease(lease) && read === this.#interactionRead) {
-        this.#showTransient('error', `Pending interactions unavailable: ${compactDiagnostic(error)}`);
-      }
-    }
-  }
-
-  async #readInteractionArguments(interaction: InteractionRef, next: boolean, selectedField: "arguments"|"reason"|"tool_name" = "arguments"): Promise<void> {
-    const session=this.#session, overlay=this.#hitlOverlay;
-    if(!session || !overlay) return;
-    const rows=this.#interactionPage?.items ?? session.state.pendingInteractions;
-    const index=rows.findIndex(item=>sameInteractionRef(item.interaction,interaction));
-    if(index<0) return;
-    const item=rows[index]!;
-    if(hasInteractionBody(item) || item.kind!=='approval') return;
-    const stamp=this.#interactionStamp(), old=this.#interactionArgumentRange;
-    const previous=old?.session===session && old.stamp===stamp && sameInteractionRef(old.interaction,interaction) ? old : undefined;
-    const offset=next ? previous?.next : 0;
-    const field=next ? previous?.field ?? selectedField : selectedField;
-    if(offset==null) return;
-    const lease=this.#presentationLease(), generation=++this.#interactionBodyRead;
-    const current=()=>this.#hitlOverlay===overlay && this.#isCurrentPresentationLease(lease) && generation===this.#interactionBodyRead && stamp===this.#interactionStamp() && sameInteractionRef(this.#interactionFocus ?? interaction,interaction);
-    try {
-      const chunk=await session.interactionValue(interaction,Number(this.#interactionPage?.page.items[index]?.offset ?? item.source_offset),this.#interactionPage?.page,offset,['request','kind',field]);
-      if(!current()) return;
-      if(chunk.bytes_base64.length>87_384 || chunk.bytes_base64.length%4!==0 || chunk.bytes_base64.length/4*3-(chunk.bytes_base64.endsWith('==')?2:chunk.bytes_base64.endsWith('=')?1:0)>65_536)throw new Error('Encoded native range exceeds the decoded byte bound.');
-      const bytes=Uint8Array.from(atob(chunk.bytes_base64),character=>character.charCodeAt(0));
-      if(bytes.length>65536 || !Number.isSafeInteger(chunk.readable_end) || offset+bytes.length>chunk.readable_end || (offset<chunk.readable_end && !bytes.length) || (chunk.next_offset ?? null)!==(offset+bytes.length<chunk.readable_end?offset+bytes.length:null) || (previous && next && previous.end!==chunk.readable_end)) throw new Error('Argument range frontier changed.');
-      const decoder=previous && next ? previous.decoder : new TextDecoder('utf-8',{fatal:true,ignoreBOM:true});
-      this.#interactionArgumentRange={session,stamp,interaction,text:decoder.decode(bytes,{stream:chunk.next_offset!=null}),offset,field,next:chunk.next_offset??null,end:chunk.readable_end,decoder};
-      this.#tui.requestRender();
-    } catch(error){if(current())this.#showTransient('error',`Arguments unavailable: ${compactDiagnostic(error)}`);}
-  }
-
-  async #loadInteractionBody(interaction: InteractionRef): Promise<void> {
-    const session=this.#session, overlay=this.#hitlOverlay;
-    if(!session || !overlay) return;
-    const rows=this.#interactionPage?.items ?? session.state.pendingInteractions;
-    const index=rows.findIndex(item=>sameInteractionRef(item.interaction,interaction));
-    if(index<0 || hasInteractionBody(rows[index]!)) return;
-    const selected=rows[index]!;
-    if(hasInteractionBody(selected))return;
-    const ordinal=Number(this.#interactionPage?.page.items[index]?.offset ?? selected.source_offset);
-    const lease=this.#presentationLease(), stamp=this.#interactionStamp(), generation=++this.#interactionBodyRead;
-    const current=()=>this.#hitlOverlay===overlay && this.#isCurrentPresentationLease(lease) && generation===this.#interactionBodyRead && stamp===this.#interactionStamp() && sameInteractionRef(this.#interactionFocus ?? interaction,interaction);
-    try {
-      let offset=0, total:number|undefined; const bytes:Uint8Array[]=[];
-      do {
-        const chunk=await session.interactionValue(interaction,ordinal,this.#interactionPage?.page,offset);
-        if(!current()) return;
-        if(!Number.isSafeInteger(chunk.readable_end) || chunk.readable_end>16*1024*1024 || (total!==undefined && total!==chunk.readable_end)) throw new Error('This body exceeds the selected-body cache; inspect bounded argument ranges.');
-        total=chunk.readable_end;
-        if(chunk.bytes_base64.length>87_384 || chunk.bytes_base64.length%4!==0 || chunk.bytes_base64.length/4*3-(chunk.bytes_base64.endsWith('==')?2:chunk.bytes_base64.endsWith('=')?1:0)>65_536)throw new Error('Encoded native range exceeds the decoded byte bound.');
-        const value=Uint8Array.from(atob(chunk.bytes_base64),character=>character.charCodeAt(0));
-        if(value.length>65536 || (offset<total && !value.length) || offset+value.length>total || (chunk.next_offset ?? null)!==(offset+value.length<total?offset+value.length:null)) throw new Error('Interaction range did not advance exactly.');
-        bytes.push(value);offset+=value.length;
-      } while(offset<total);
-      const data=new Uint8Array(total);let at=0;for(const value of bytes){data.set(value,at);at+=value.length;}
-      const body=JSON.parse(new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(data)) as RoutedInteraction;
-      const header=rows[index]!;
-      if(hasInteractionBody(header)) return;
-      validateInteractionBody(header,body);
-      this.#interactionBody={session,stamp,interaction,body};this.#renderState(session.state);
-    } catch(error) {if(current())this.#showTransient('error',`Interaction body unavailable: ${compactDiagnostic(error)}`);}
-  }
-
-  /**
-   * Presents the unified human-input surface from authoritative state.
-   *
-   * One surface serves every pending routed interaction — approvals and
-   * questionnaires, primary and subagent. It opens when the projection holds
-   * a focused interaction the user has not dismissed, updates in place while
-   * the projection evolves, and disappears when the interaction set empties
-   * or the surface is dismissed. The runtime remains the only owner: closing
-   * or dismissing this surface settles nothing, and a response always names
-   * the exact `InteractionRef` it was collected for.
-   */
-  #syncHitlOverlay(state: PresentationState): void {
-    // A dismissal is scoped to the exact dismissed interaction and to the
-    // queue as it stood then. A distinct arrival supersedes the dismissal:
-    // the newly required human input takes the focus (the surface was
-    // dismissed, so no in-progress panel is interrupted) and the surface
-    // reopens, while the dismissed interaction stays pending and unanswered.
-    // The move itself is presentation-only — it emits no response.
-    const dismissed = this.#hitlDismissed;
-    if (dismissed !== undefined) {
-      if (
-        !this.#interactionPartial() && findPendingInteraction(state.pendingInteractions, dismissed.interaction) === undefined
-      ) {
-        this.#hitlDismissed = undefined;
-      } else {
-        const arrival = state.pendingInteractions.find(
-          (entry) => !dismissed.known.has(interactionKey(entry.interaction)),
-        );
-        if (arrival !== undefined) {
-          this.#hitlDismissed = undefined;
-          this.#interactionFocus = arrival.interaction;
-        }
-      }
-    }
-    const focused = this.#interactionFocus;
-    if (focused === undefined) {
-      if (this.#hitlOverlay !== undefined) this.#closeOverlay();
-      return;
-    }
-    const existing = this.#hitlOverlay;
-    if (existing !== undefined) {
-      existing.update(state.pendingInteractions, focused, this.#preferences, !this.#interactionPartial());
-      this.#tui.requestRender();
-      return;
-    }
-    if (
-      this.#hitlDismissed !== undefined &&
-      sameInteractionRef(this.#hitlDismissed.interaction, focused)
-    ) {
-      return;
-    }
-    const lease = this.#presentationLease();
-    const overlay = new HumanInteractionOverlay({
-      onReview: (interaction, response) => this.#respondToInteraction(lease, overlay, interaction, { type: "review", response }),
-      onDecision: (interaction, decision) =>
-        this.#respondToInteraction(lease, overlay, interaction, {
-          type: "approval",
-          decision,
-        }),
-      onQuestionnaireSubmit: (interaction, response) =>
-        this.#respondToInteraction(lease, overlay, interaction, {
-          type: "questionnaire",
-          response,
-        }),
-      onQuestionnaireDecline: (interaction) =>
-        this.#respondToInteraction(lease, overlay, interaction, {
-          type: "questionnaire",
-          response: { type: "declined" },
-        }),
-      onDismiss: (interaction) => {
-        // Scope the dismissal to this exact interaction and to the queue as
-        // it stands now, so a later distinct arrival supersedes it.
-        this.#hitlDismissed = {
-          interaction,
-          known: new Set(
-            (this.#session?.state?.pendingInteractions ?? []).map((entry) =>
-              interactionKey(entry.interaction),
-            ),
-          ),
-        };
-        if (this.#hitlOverlay === overlay) {
-          this.#closeOverlay();
-        }
-      },
-      onInterrupt: () => void this.#onInterrupt(),
-      onNavigate: (interaction) => {
-        // Navigation is presentation-only: it moves the focus and redraws.
-        this.#interactionFocus = interaction;
-        const current = this.#session?.state;
-        if (current !== undefined) this.#renderState(current);
-      },
-      onToggleExpand: (interaction) => {
-        // Disclosure only: the same preference domain `/expand interaction`
-        // uses, never a second approval gate.
-        this.#applyPreference({ type: "expand_interaction", interaction });
-      },
-      onChange: () => this.#tui.requestRender(),
-      onPage: (direction) => { void this.#pageInteractions(direction); },
-      pageLabel: () => this.#interactionPageLabel(),
-      onLoadBody: (interaction) => { void this.#loadInteractionBody(interaction); },
-      onArguments: (interaction,next,field) => {void this.#readInteractionArguments(interaction,next,field);},
-      argumentRange: (interaction) => {const range=this.#interactionArgumentRange;return range && range.session===this.#session && range.stamp===this.#interactionStamp() && sameInteractionRef(range.interaction,interaction) ? {label:`${range.field} bytes ${range.offset}–${range.next ?? range.end} of ${range.end}`,text:range.text}:undefined;},
-    });
-    overlay.update(state.pendingInteractions, focused, this.#preferences, !this.#interactionPartial());
-    this.#showPopup(overlay, { width: "94%", minWidth: 44, heightPercent: 90 });
-    this.#hitlOverlay = overlay;
-  }
-
-  /**
-   * The one typed response path for every interaction kind.
-   *
-   * Approval decisions and questionnaire responses both go through
-   * `interaction_respond` with the exact routed identity the surface
-   * collected them for. A rejection re-enables the panel that sent it —
-   * routed by that same identity — so a failed response never double-sends
-   * and never disturbs an unrelated pending interaction.
-   */
-  #respondToInteraction(
-    lease: PresentationLease,
-    overlay: HumanInteractionOverlay,
-    interaction: InteractionRef,
-    response: InteractionResponse,
-  ): void {
-    const attachedSession = lease.session;
-    if (attachedSession === undefined) return;
-    void attachedSession
-      .respondInteraction(interaction, response)
-      .then(() => {
-        if (this.#isCurrentPresentationLease(lease) && this.#interactionPartial()) {void attachedSession.resync().catch(error=>{if(this.#isCurrentPresentationLease(lease))this.#showTransient('error',`Interaction observation requires recovery: ${compactDiagnostic(error)}`);});}
-      })
-      .catch((error: unknown) => {
-        if (!this.#isCurrentPresentationLease(lease)) return;
-        if (this.#hitlOverlay === overlay) {
-          overlay.submissionFailed(interaction);
-        }
-        this.#showTransient("error", `interaction response failed: ${compactDiagnostic(error)}`);
-      });
   }
 
   #connectionLabel(): string {
