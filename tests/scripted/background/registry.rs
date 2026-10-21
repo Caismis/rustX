@@ -1490,13 +1490,13 @@ async fn assert_terminal_inbound_status(concurrency: ToolConcurrencyPolicy, reve
         assert_eq!(jobs.len(), 2);
         let completed_job = jobs
             .iter()
-            .find(|job| job.tool_name.as_ref() == "b1")
+            .find(|job| job.tool_id.as_ref() == &ToolId::new("tool-b1"))
             .expect("b1 owns a background execution")
             .execution_id
             .clone();
         let active_job = jobs
             .iter()
-            .find(|job| job.tool_name.as_ref() == "b2")
+            .find(|job| job.tool_id.as_ref() == &ToolId::new("tool-b2"))
             .expect("b2 owns a background execution")
             .execution_id
             .clone();

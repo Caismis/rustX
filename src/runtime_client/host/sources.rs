@@ -1,7 +1,9 @@
-//! Preparation of display domain sources from native observations, outside the
-//! projection synchronization boundary.
+//! Display domain sources from native observations. Owner sources are prepared
+//! outside projection synchronization; disposable activity merges with the
+//! current owner at its publication boundary without storage reads or encoding.
 use super::{
-    Arc, ClientState, ConversationObservation, ConversationStore, MessageId, Mutex, background_view,
+    Arc, ConversationObservation, ConversationStore, MessageId, RuntimeClientProjection,
+    background_view,
 };
 
 /// No Store operation occurs under the native Projection synchronization
@@ -200,7 +202,7 @@ pub(super) fn observation_domain_sources(
     }
 }
 pub(super) fn activity_domain_sources(
-    state: &Mutex<ClientState>,
+    projection: &RuntimeClientProjection,
     observation: &ConversationObservation,
     prepared: &[(String, Arc<super::super::domain::DomainSource>)],
 ) -> Vec<(String, Arc<super::super::domain::DomainSource>)> {
@@ -208,12 +210,12 @@ pub(super) fn activity_domain_sources(
         ConversationObservation::Published { observation, .. }
         | ConversationObservation::CollectionProof { observation, .. }
         | ConversationObservation::ToolOccurrenceProof { observation, .. } => {
-            activity_domain_sources(state, observation, prepared)
+            activity_domain_sources(projection, observation, prepared)
         }
         ConversationObservation::ObservationBatch(observations)
         | ConversationObservation::JournalBatch { observations, .. } => observations
             .iter()
-            .flat_map(|observation| activity_domain_sources(state, observation, prepared))
+            .flat_map(|observation| activity_domain_sources(projection, observation, prepared))
             .collect(),
         ConversationObservation::SubagentActivity(snapshot) => {
             let key = format!("agents.{}", snapshot.child_agent_id);
@@ -222,29 +224,18 @@ pub(super) fn activity_domain_sources(
                 .rev()
                 .find(|(candidate, _)| candidate == &key)
                 .map(|(_, source)| source.clone())
-                .or_else(|| {
-                    state
-                        .lock()
-                        .expect("native projection lock")
-                        .projection
-                        .domain_source(&key, 0)
-                });
+                .or_else(|| projection.domain_source(&key, 0));
             let Some(existing) = existing else {
                 return Vec::new();
             };
             let super::super::domain::DomainSource::Agent(agent) = existing.as_ref() else {
                 return Vec::new();
             };
-            let agent = agent.value();
-            if agent.activation_id != snapshot.subagent_id {
+            let Some(view) =
+                super::super::projection::views::activity_view(agent.value(), snapshot)
+            else {
                 return Vec::new();
-            }
-            let view = super::super::projection::views::activation_view(
-                snapshot,
-                agent.state,
-                agent.current_activation.clone(),
-                &agent.title,
-            );
+            };
             vec![(
                 key,
                 Arc::new(super::super::domain::DomainSource::Agent(source_value(

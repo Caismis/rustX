@@ -328,12 +328,15 @@ pub(super) fn apply_prepared_observations(
         let terminals = observation_terminal_positions(store, &observation, None);
         let journal = journal_preparation(store, &observation);
         let mut sources = observation_domain_sources(&observation);
-        sources.extend(activity_domain_sources(state, &observation, &sources));
-        let sources = weighted_sources(sources);
         super::super::checkpoint::bound_publication_payload(&mut observation);
         #[cfg(test)]
         publication_gate.preparation_stage("publish");
         commit_display(state, publication_gate, |projection| {
+            // Activity has no lifecycle authority. Merge its finite header with
+            // the current owner only after the publication gate excludes a
+            // newer native terminal receipt. This does no Store read or encoding.
+            sources.extend(activity_domain_sources(projection, &observation, &sources));
+            let sources = weighted_sources(sources);
             projection.prepare_publication_content(publication_content);
             projection.install_content_metadata(references);
             projection.prepare_message_headers(headers);
