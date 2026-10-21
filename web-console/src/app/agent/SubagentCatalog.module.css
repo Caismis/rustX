@@ -133,6 +133,7 @@
   position: relative;
   min-width: 0;
 }
+.notice { margin: 4px 8px; color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }
 .menuBody > .node {
   margin-left: -2px;
 }

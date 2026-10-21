@@ -35,6 +35,20 @@ from the list. Publication abandonment projects inspection as unavailable for
 live work and uses retained history; it does not claim successful settlement or
 clear the native durability/physical-containment obligations.
 
+The WebUI header lists these finite Workflow children alongside ordinary Agent
+entries, without inserting them into the durable Agent roster. Membership comes
+from retained native Agent-node activation identities, never from the cache of
+opened inspection views. The header and Workflow panel share one hydration of
+the root Workflow cut, including nodes beyond its finite display header. Opening,
+closing or reopening an inspector does not add or remove catalog members.
+Repeated loop nodes count distinct child activations; duplicate references count
+once. Waiting, failure and cancellation use the native node state. Each catalog
+row names its Workflow and explicitly identifies its read-only record. A partial
+or retired native cut produces a lower-bound count with an explanatory notice;
+an empty retained set is not presented as proof that no children ran. Selecting
+a row resolves its exact native child header on demand. It does not prefetch all
+child conversations, create durable Agent owners or admit follow-up controls.
+
 Execution completed is not a business acceptance. Structured check `passed`
 facts, Review decisions and Loop satisfied/exhausted exits are shown separately.
 Full Workflow-local values and arguments are not copied into the read model.

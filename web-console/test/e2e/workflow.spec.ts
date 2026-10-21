@@ -30,6 +30,12 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     const childId = await child.getAttribute('data-workflow-activation-id');
     const runId = await run.getAttribute('data-workflow-run-id');
     await expect(run).toContainText('review_pr');
+    const catalog = page.getByRole('button', { name: 'Subagents', exact: true });
+    await expect(catalog).toHaveText('1 subagents');
+    await catalog.click();
+    await expect(page.getByRole('treeitem', { name: /review/ })).toHaveCount(1);
+    await expect(page.getByText('Workflow · review_pr · Read-only')).toBeVisible();
+    await page.getByRole('treeitem', { name: /review/ }).press('Escape');
     const parentTitle = await page.locator('#session-title').innerText();
     await run.getByRole('button', { name: 'View review', exact: true }).click();
     const childView = page.locator('[data-agent-id][data-view="chat"]:visible');
@@ -45,6 +51,7 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     await page.screenshot({ path: '/tmp/rustx-workflow-child-trace.png' });
     await page.getByRole('button', { name: parentTitle, exact: true }).click();
     await page.getByRole('tab', { name: 'Chat', exact: true }).click();
+    await expect(catalog).toHaveText('1 subagents');
     await expect(run.getByRole('button', { name: 'View review', exact: true })).toBeVisible();
     await page.screenshot({ path: test.info().outputPath('native-workflow-subagent.png') });
     await page.reload(); await connect();
@@ -81,6 +88,7 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     await closeSettings(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();
     await expect(page.getByText('workflow conformance complete', { exact: true })).toBeVisible();
     await expect(run).toContainText('completed');
+    await expect(catalog).toHaveText('1 subagents');
     await run.getByRole('button').first().click();
     await run.getByRole('button', { name: 'View review', exact: true }).click();
     await expect(childView).toContainText('One-shot subagent record');

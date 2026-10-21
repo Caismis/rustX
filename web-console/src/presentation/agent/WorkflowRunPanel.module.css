@@ -22,4 +22,9 @@
 .kind, .budget, .empty { color: var(--dsw-alias-label-tertiary); font-size: var(--dsh-content-font-size-secondary, 13px); line-height: calc(20px + var(--dsh-content-font-delta-secondary, 0px)); overflow-wrap: anywhere; }
 .budget { padding: 4px 0; }
 .memberStatus { flex: none; max-width: 42%; overflow: hidden; font-size: var(--dsh-content-font-size-secondary, 13px); text-align: right; text-overflow: ellipsis; white-space: nowrap; }
-@media (max-width: 560px) { .nodes { padding-left: 12px; } .member { gap: 6px; } }
+@media (max-width: 560px) {
+  .nodes { padding-left: 12px; }
+  .member { gap: 6px; }
+  .title { max-width: 34%; }
+  .withChildren .nodeCount { display: none; }
+}

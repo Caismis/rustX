@@ -10,7 +10,7 @@ import { AgentTranscript } from './AgentTranscript';
 import { ContextSeat } from './ContextSeat';
 import { CompactionCheckpoint } from './CompactionCheckpoint';
 import { useCompactionHistory } from './useCompactionHistory';
-import { useWorkflowContent } from './useWorkflowContent';
+import { sameWorkflowView, useWorkflowContent } from './useWorkflowContent';
 import { ConversationStats } from './UsageStats';
 import { TodoDock } from '../composer/TodoDock';
 import { GoalDock } from '../composer/GoalDock';
@@ -61,8 +61,9 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
       safe: !retrying && lineageSwitchSafe(view), disabled: retrying || disabled || !client.isAttachmentControlCurrent(view.id, view.attachmentObservation)
         || !!view.modelMutation || !!view.snapshot?.shutting_down || !!view.snapshot?.durability_failure };
   }, shallowEqual);
-  const workflowView = useClientSelector(client, state => sessionId ? state.views[sessionId] : undefined, (a, b) => a === b || !!a && !!b && a.id === b.id && a.target === b.target && a.attachmentObservation === b.attachmentObservation && a.snapshot?.workflows === b.snapshot?.workflows);
-  const workflows = useWorkflowContent(client, workflowView, mode === 'chat' && !scope?.selected && !view?.retrying && !view?.readingPreview && !view?.history?.window);
+  const workflowView = useClientSelector(client, state => sessionId ? state.views[sessionId] : undefined, sameWorkflowView);
+  const standaloneWorkflows = useWorkflowContent(client, workflowView, !scope && mode === 'chat' && !view?.retrying && !view?.readingPreview && !view?.history?.window);
+  const workflows = scope?.workflows ?? standaloneWorkflows;
   const contentView = useMemo(() => Symbol('root content view'), [view?.observation, sessionId, mode, scope?.selected]);
   const currentContentView = useRef(contentView); currentContentView.current = contentView;
   const ownsContent = useMemo(() => () => currentContentView.current === contentView && mode === 'chat' && !scope?.selected && !!view?.observation && !!sessionId && client.isAttachmentObservationCurrent(sessionId, view.observation), [contentView, mode, scope?.selected, client, sessionId, view?.observation]);

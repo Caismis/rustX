@@ -3485,7 +3485,7 @@
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
       "upstream_sha256": "664def8bce9e753c3a670f9e9f01fe2280227a0921021e3a08b496f8c5d6effe",
-      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v27 imports; upstream reference unchanged. Connection UX: allow local submission during attachment and show generic connecting status; native readiness and admission remain authoritative. Issue #467: bounded native observation, deferred source reads and exact view ownership; original presentation and license attribution retained. Issue #467: deferred Goal content and finite ToolGroup progress copy; native status and execution authority unchanged. Issue #467: translated deferred-content, bounded catalog choices, model availability and canonical result status copy; native facts remain independent of execution settlement. Background task header, grouping, clearing and native-duration copy in English and Chinese. Background task alignment: native dispatch acceptance, task settlement and historical observations retain independent ownership; header grouping, native timing and output formatting are presentation only. DSH task menu UI/UX parity: compact native task rows, translucent material, command-copy output, exclusive expansion and two-press stopping replace generic task controls; native observation ownership is retained. Native Tool detail alignment: shared compact result presentation and one Inspect path; duplicate execution JSON disclosures removed; native lifecycle and original Trace Result remain authoritative. Workflow alignment: compact native node activity in Chat, readable review decisions and receipts, explicit execution budget labels; upstream authority remains excluded. Session-list alignment: DSH row/menu/rename geometry and interaction patterns; browser-scoped pin preference, native completed-response Fork and permanent deletion retain rustX ownership. Archive is excluded. Workflow execution path: obsolete unvisited-node and main-block labels removed.",
+      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v27 imports; upstream reference unchanged. Connection UX: allow local submission during attachment and show generic connecting status; native readiness and admission remain authoritative. Issue #467: bounded native observation, deferred source reads and exact view ownership; original presentation and license attribution retained. Issue #467: deferred Goal content and finite ToolGroup progress copy; native status and execution authority unchanged. Issue #467: translated deferred-content, bounded catalog choices, model availability and canonical result status copy; native facts remain independent of execution settlement. Background task header, grouping, clearing and native-duration copy in English and Chinese. Background task alignment: native dispatch acceptance, task settlement and historical observations retain independent ownership; header grouping, native timing and output formatting are presentation only. DSH task menu UI/UX parity: compact native task rows, translucent material, command-copy output, exclusive expansion and two-press stopping replace generic task controls; native observation ownership is retained. Native Tool detail alignment: shared compact result presentation and one Inspect path; duplicate execution JSON disclosures removed; native lifecycle and original Trace Result remain authoritative. Workflow alignment: compact native node activity in Chat, readable review decisions and receipts, explicit execution budget labels; upstream authority remains excluded. Session-list alignment: DSH row/menu/rename geometry and interaction patterns; browser-scoped pin preference, native completed-response Fork and permanent deletion retain rustX ownership. Archive is excluded. Workflow execution path: obsolete unvisited-node and main-block labels removed. Workflow child catalog: localized read-only source labels, retry feedback and honest partial-membership counts.",
       "destination": "web-console/src/locale/dictionaries/common.ts",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -3509,7 +3509,7 @@
           "treatment": "Task count, stop confirmation, duration and output disclosure wording follows the Harness job menu."
         }
       ],
-      "local_sha256": "f0dcea9399a2dd605aa26ea55f61275e2814c076332f39cae591f200272fd591"
+      "local_sha256": "37abff2b68e5d502a9cb7b195098d74fd3eea3bbe87ae5ca5cbec83380924dc3"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -5917,11 +5917,12 @@
       "upstream": "packages/client/ui-subagent/src/client/SubagentHeaderLineage.tsx",
       "destination": "web-console/src/app/agent/Subagents.tsx",
       "classification": "B",
-      "treatment": "Subagent header, exact sibling-switcher SVG, hover preview and current-item presentation adapted to native rustX agent identities, parent lineage and scoped child menus. Visited child conversations remain mounted to retain drafts and reading position. Child capabilities: one shared input component, native scoped upload receipts and task titles; native child cursor cuts and preview ownership replace committed-only child input paths. Native Tool Trace location: App Server v44 imports and exact occurrence navigation; existing upstream baseline unchanged. Main integration #456: general Model Profiles and JSON-object request parameter authoring; existing upstream baseline unchanged. Issue #467: bounded native observation, deferred source reads and exact view ownership; original presentation and license attribution retained. Issue #467: bounded resident Child views, original Agent header refresh by exact native revision, and hide cancellation; source failures remain separate from execution status. Issue #467: exact target, activation, native revision and view leases fence late off-head Agent reads; physical pending reads retain their owner until termination. #464: App Server v47 generated-protocol import path. #467: App Server v48 current generated-protocol import path. PR #477 final contract repair: mandatory App Server v49 import for nullable native-covered Tool wire correlation; upstream reference unchanged. PR #478: reconciled bounded observation with immutable model-context projections under App Server v50. App Server v51: mandatory current generated-protocol import; upstream presentation and native ownership remain unchanged. Workflow one-shot observability: running member links and read-only record presentation adapt the same inspected Harness sources to exact native child/activation inspection. Native ownership and control admission remain separate from presentation.",
+      "treatment": "Subagent header, exact sibling-switcher SVG, hover preview and current-item presentation adapted to native rustX agent identities, parent lineage and scoped child menus. Visited child conversations remain mounted to retain drafts and reading position. Child capabilities: one shared input component, native scoped upload receipts and task titles; native child cursor cuts and preview ownership replace committed-only child input paths. Native Tool Trace location: App Server v44 imports and exact occurrence navigation; existing upstream baseline unchanged. Main integration #456: general Model Profiles and JSON-object request parameter authoring; existing upstream baseline unchanged. Issue #467: bounded native observation, deferred source reads and exact view ownership; original presentation and license attribution retained. Issue #467: bounded resident Child views, original Agent header refresh by exact native revision, and hide cancellation; source failures remain separate from execution status. Issue #467: exact target, activation, native revision and view leases fence late off-head Agent reads; physical pending reads retain their owner until termination. #464: App Server v47 generated-protocol import path. #467: App Server v48 current generated-protocol import path. PR #477 final contract repair: mandatory App Server v49 import for nullable native-covered Tool wire correlation; upstream reference unchanged. PR #478: reconciled bounded observation with immutable model-context projections under App Server v50. App Server v51: mandatory current generated-protocol import; upstream presentation and native ownership remain unchanged. Workflow one-shot observability: running member links and read-only record presentation adapt the same inspected Harness sources to exact native child/activation inspection. Native ownership and control admission remain separate from presentation. Workflow child catalog: derive membership from retained native Workflow activation references independently of opened inspection views; share bounded root Workflow reads and retain read-only navigation, status and loading feedback.",
       "upstream_sha256": "a071eba1e77ee78bc4d7d90e0fd774f7242c200b4b39aa88f7424df41a95db4b",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../../../protocol/app-server/v51",
+        "../../bindings/workflow-children",
         "../../client/agent-meters",
         "../../client/app-server",
         "../../client/selectors",
@@ -5931,10 +5932,11 @@
         "./SubagentCatalog",
         "./Subagents.module.css",
         "./subagent-context",
+        "./useWorkflowContent",
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "681117e755504fdd120e82056c72316c403a8c1545ef70ea1fc54564323928fd"
+      "local_sha256": "d2a337f31ee775c4e2e13e4d79ffa02804c706582829279a6ddf8fc61cc82d7e"
     },
     {
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
@@ -6056,10 +6058,11 @@
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "upstream": "packages/client/ui-subagent/src/client/SubagentHeaderLineage.tsx",
       "destination": "web-console/src/app/agent/SubagentCatalog.tsx",
-      "treatment": "Source-derived native inventory tree, hover pinning, keyboard navigation, hierarchy, metrics and sidebar-chat entry; no upstream runtime retained. Native Tool Trace location: App Server v44 imports and exact occurrence navigation; existing upstream baseline unchanged. #464: App Server v47 generated-protocol import path. #467: App Server v48 current generated-protocol import path. PR #477 final contract repair: mandatory App Server v49 import for nullable native-covered Tool wire correlation; upstream reference unchanged. PR #478: reconciled bounded observation with immutable model-context projections under App Server v50. App Server v51: mandatory current generated-protocol import; upstream presentation and native ownership remain unchanged.",
+      "treatment": "Source-derived native inventory tree, hover pinning, keyboard navigation, hierarchy, metrics and sidebar-chat entry; no upstream runtime retained. Native Tool Trace location: App Server v44 imports and exact occurrence navigation; existing upstream baseline unchanged. #464: App Server v47 generated-protocol import path. #467: App Server v48 current generated-protocol import path. PR #477 final contract repair: mandatory App Server v49 import for nullable native-covered Tool wire correlation; upstream reference unchanged. PR #478: reconciled bounded observation with immutable model-context projections under App Server v50. App Server v51: mandatory current generated-protocol import; upstream presentation and native ownership remain unchanged. Workflow child catalog: derive membership from retained native Workflow activation references independently of opened inspection views; share bounded root Workflow reads and retain read-only navigation, status and loading feedback.",
       "upstream_sha256": "f9ae4d3ed5ec8d5bde052316e7ccb85ec7fdb88af77e03d03527004e1b0b2ccf",
       "retained_dependencies": [
         "../../../../protocol/app-server/v51",
+        "../../bindings/workflow-children",
         "../../locale/react",
         "../../presentation/primitives/StateDot",
         "../../presentation/primitives/Tooltip",
@@ -6068,24 +6071,25 @@
         "./subagent-context",
         "./subagent-state",
         "./token-format",
+        "./workflow-state",
         "@floating-ui/react-dom",
         "react",
         "react-dom"
       ],
       "excluded_dependencies": [],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "local_sha256": "1dc3795d1d254f1ec383f392c9e517fd9c3d33d78796ca35759c57f13e19c671"
+      "local_sha256": "a4994288637e6136f9acc91350b27ba497d771ff34af7e0d9a66a37d94657115"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "upstream": "packages/client/ui-subagent/src/client/SubagentHeaderLineage.module.css",
       "destination": "web-console/src/app/agent/SubagentCatalog.module.css",
-      "treatment": "Source-derived native inventory tree, hover pinning, keyboard navigation, hierarchy, metrics and sidebar-chat entry; no upstream runtime retained.",
+      "treatment": "Source-derived native inventory tree, hover pinning, keyboard navigation, hierarchy, metrics and sidebar-chat entry; no upstream runtime retained. Workflow child catalog: derive membership from retained native Workflow activation references independently of opened inspection views; share bounded root Workflow reads and retain read-only navigation, status and loading feedback.",
       "upstream_sha256": "1ab6fd03a72dc32b05a6832ceca512e6000f1fd7c61016d4ef1a98529897dc32",
       "retained_dependencies": [],
       "excluded_dependencies": [],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "local_sha256": "0a5e95b9753d239e2c46e4906e2e1302ce37a60377dbb98b43c702b709bbc5cc"
+      "local_sha256": "bea48bcb577da465ad98e8ec666f7dfd8912c3cdae433afe08bb440857b07ad2"
     },
     {
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
@@ -6297,16 +6301,18 @@
       "destination": "web-console/src/app/agent/WorkflowRunPanel.tsx",
       "upstream_sha256": "7d51903eb8b76579565fdb858271bbd6443e5db49c6c4d92d0b0c337fde78439",
       "classification": "B",
-      "treatment": "Workflow alignment: DSH compact run/block disclosure and QuestionComposer takeover adapted to native rustX block/node identities, states, budget counters and in-workflow Review decisions. No DSH session/controller/runtime semantics retained. Workflow alignment: compact native node activity in Chat, readable review decisions and receipts, explicit execution budget labels; upstream authority remains excluded. App Server v51: mandatory current generated-protocol import; upstream presentation and native ownership remain unchanged. Workflow one-shot observability: running member links and read-only record presentation adapt the same inspected Harness sources to exact native child/activation inspection. Native ownership and control admission remain separate from presentation. Workflow execution path: display only native admitted nodes, in their immutable start order across blocks and loop iterations; remove definition-block grouping and unvisited-node presentation. Native budgets, reviews and one-shot inspection remain authoritative. Retained admitted child identities stay navigable after every terminal outcome, with read-only inspection authority.",
+      "treatment": "Workflow alignment: DSH compact run/block disclosure and QuestionComposer takeover adapted to native rustX block/node identities, states, budget counters and in-workflow Review decisions. No DSH session/controller/runtime semantics retained. Workflow alignment: compact native node activity in Chat, readable review decisions and receipts, explicit execution budget labels; upstream authority remains excluded. App Server v51: mandatory current generated-protocol import; upstream presentation and native ownership remain unchanged. Workflow one-shot observability: running member links and read-only record presentation adapt the same inspected Harness sources to exact native child/activation inspection. Native ownership and control admission remain separate from presentation. Workflow execution path: display only native admitted nodes, in their immutable start order across blocks and loop iterations; remove definition-block grouping and unvisited-node presentation. Native budgets, reviews and one-shot inspection remain authoritative. Retained admitted child identities stay navigable after every terminal outcome, with read-only inspection authority. Workflow child catalog: derive membership from retained native Workflow activation references independently of opened inspection views; share bounded root Workflow reads and retain read-only navigation, status and loading feedback.",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../../../protocol/app-server/v51",
+        "../../bindings/workflow-children",
         "../../locale/react",
         "../../presentation/agent/WorkflowRunPanel.module.css",
         "../../presentation/primitives/DisclosureRow",
         "../../presentation/primitives/StateDot",
         "../../presentation/primitives/icons",
         "./subagent-context",
+        "./workflow-state",
         "react"
       ],
       "excluded_dependencies": [
@@ -6314,7 +6320,7 @@
         "DSH child Session navigation and controller",
         "DSH Remote interaction settlement"
       ],
-      "local_sha256": "4c51b32ce8dfb27845454c1ae3a91ebd26f0037c5b89c4f885e8cb0250b93371"
+      "local_sha256": "8c69f393bb578aaccad5a372a2cd1e8fa05bc6cecec55580e40762ac6aea6b02"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
@@ -6322,7 +6328,7 @@
       "destination": "web-console/src/presentation/agent/WorkflowRunPanel.module.css",
       "upstream_sha256": "aa60a5b61a67cca064ec18cc7a9414816308546ad4b74d10630a8a4c8baf949c",
       "classification": "B",
-      "treatment": "Workflow alignment: DSH compact run/block disclosure and QuestionComposer takeover adapted to native rustX block/node identities, states, budget counters and in-workflow Review decisions. No DSH session/controller/runtime semantics retained. Workflow alignment: compact native node activity in Chat, readable review decisions and receipts, explicit execution budget labels; upstream authority remains excluded. Workflow execution path: one chronological member list replaces block grouping; retain compact DSH run disclosure, status and focus presentation.",
+      "treatment": "Workflow alignment: DSH compact run/block disclosure and QuestionComposer takeover adapted to native rustX block/node identities, states, budget counters and in-workflow Review decisions. No DSH session/controller/runtime semantics retained. Workflow alignment: compact native node activity in Chat, readable review decisions and receipts, explicit execution budget labels; upstream authority remains excluded. Workflow execution path: one chronological member list replaces block grouping; retain compact DSH run disclosure, status and focus presentation. Workflow child catalog: retain readable child counts and native status in narrow Workflow summaries.",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -6330,7 +6336,7 @@
         "DSH child Session navigation and controller",
         "DSH Remote interaction settlement"
       ],
-      "local_sha256": "4252852d180f02817aefb4b45d2cd9386a995747c04cf26ce7274dac007f7ca8"
+      "local_sha256": "b35e8e7724311cc73cbccab51ea704ef1ebceebe5b6d49c98bc68935f3017ae9"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",

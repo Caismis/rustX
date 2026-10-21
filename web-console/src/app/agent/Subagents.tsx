@@ -11,6 +11,8 @@ import conversationCss from '../../presentation/agent/Conversation.module.css';
 
 import { SubagentContext as Context, useSubagents } from './subagent-context';
 import { meterDemand, type MeterScope } from '../../client/agent-meters';
+import { workflowChildren } from '../../bindings/workflow-children';
+import { sameWorkflowView, useWorkflowContent } from './useWorkflowContent';
 
 const NO_AGENTS: RuntimeClientAgent[] = [];
 export function SubagentScope({ client, sessionId, children, openAside, onMode }: { client: AppServerClient; sessionId?: string; children: ReactNode; onMode?: (mode: 'chat' | 'trajectory') => void; openAside?: (agent: RuntimeClientAgent) => void }) {
@@ -18,6 +20,9 @@ export function SubagentScope({ client, sessionId, children, openAside, onMode }
   const agents = useClientSelector(client, state => sessionId ? state.views[sessionId]?.snapshot?.agents : undefined) ?? NO_AGENTS;
   const agentRevision = useClientSelector(client, state => sessionId ? state.views[sessionId]?.checkpoint?.read_cut.domain_revisions.agents : undefined);
   const workflowRevision = useClientSelector(client, state => sessionId ? state.views[sessionId]?.snapshot?.workflows.revision : undefined);
+  const workflowView = useClientSelector(client, state => sessionId ? state.views[sessionId] : undefined, sameWorkflowView);
+  const workflows = useWorkflowContent(client, workflowView, true);
+  const workflowCatalog = useMemo(() => workflowChildren(workflows.snapshot?.runs, workflowView?.target?.conversation_id), [workflows.snapshot, workflowView?.target?.conversation_id]);
   const generation = useClientSelector(client, state => state.generation);
   const target = useClientSelector(client, state => sessionId ? state.views[sessionId]?.target : undefined);
   const intent = useClientSelector(client, state => sessionId ? state.views[sessionId]?.attachmentIntent : undefined);
@@ -101,24 +106,31 @@ export function SubagentScope({ client, sessionId, children, openAside, onMode }
       if (reading.error) metricErrors[agent.agent_id] = reading.error;
     } else if (readings.blocked) metricErrors[agent.agent_id] = tx('agent:usage.reads-unresolved');
   }
-  return <Context value={{ client, sessionId, onMode, agents: inventory, metrics, metricErrors, full: selection?.owner === owner && selection.full, headerError: headerError?.owner===owner&&selection?.leases?.get(headerError.id)===headerError.lease?headerError.message:undefined, oneShot: selection?.owner === owner ? selection.oneShot : undefined, openWorkflow, close, selected: inventory.find(agent => agent.agent_id === id), openAside: openAside ? (id: string) => { const agent = inventory.find(agent => agent.agent_id === id); if (agent) openAside(agent); } : undefined, opened: residents.map(value => agents.find(agent => agent.agent_id === value.agent_id) ?? value), open }}>{children}</Context>;
+  return <Context value={{ client, sessionId, onMode, agents: inventory, workflows, workflowChildren: workflowCatalog, metrics, metricErrors, full: selection?.owner === owner && selection.full, headerError: headerError?.owner===owner&&selection?.leases?.get(headerError.id)===headerError.lease?headerError.message:undefined, oneShot: selection?.owner === owner ? selection.oneShot : undefined, openWorkflow, close, selected: inventory.find(agent => agent.agent_id === id), openAside: openAside ? (id: string) => { const agent = inventory.find(agent => agent.agent_id === id); if (agent) openAside(agent); } : undefined, opened: residents.map(value => agents.find(agent => agent.agent_id === value.agent_id) ?? value), open }}>{children}</Context>;
 }
 export function SubagentHeader({ title }: { title: string }) {
   const tx = useTranslation(), scope = useSubagents();
   if (!scope) return <span id="session-title">{title}</span>;
-  const { selected, agents, open } = scope;
+  const { selected, open } = scope;
+  const agents = scope.agents.filter(agent => !scope.oneShot?.has(agent.agent_id));
+  const workflowEntries = scope.workflowChildren ?? [];
+  const workflowSelection = selected && workflowEntries.find(child => child.agentId === selected.agent_id && child.activationId === selected.activation_id);
+  const workflowSiblings = workflowSelection ? workflowEntries.filter(child => child.runKey === workflowSelection.runKey) : [];
+  const limited = scope.workflows?.loading || !!scope.workflows?.error || !!scope.workflows?.snapshot?.omitted_runs || scope.workflows?.snapshot?.runs.some(run => run.omitted_instances > 0);
   const ancestors: RuntimeClientAgent[] = [];
   let parent = selected && agents.find(agent => agent.agent_id === selected.parent_agent_id);
   while (parent && !ancestors.includes(parent)) { ancestors.unshift(parent); parent = agents.find(agent => agent.agent_id === parent!.parent_agent_id); }
   const siblings = selected ? agents.filter(agent => agent.parent_agent_id === selected.parent_agent_id) : agents.filter(agent => !agents.some(parent => parent.agent_id === agent.parent_agent_id));
   const children = selected ? agents.filter(agent => agent.parent_agent_id === selected.agent_id) : [];
+  const count = siblings.length + workflowEntries.length;
+  const countLabel = limited && count === 0 ? tx('common:subagents.records') : tx(limited ? 'common:subagents.count-at-least' : 'common:subagents.count', { count });
   return <div className={css.lineage}>
     {selected ? <><button className={css.parent} onClick={() => open()}>{title}</button><span className={css.separator}>/</span>
       {ancestors.map(agent => <span key={agent.agent_id} className={css.ancestor}><SubagentMenu agents={agents.filter(sibling => sibling.parent_agent_id === agent.parent_agent_id)} selected={agent.agent_id} label={agent.title} openTitle={() => open(agent.agent_id)} openChild={open}/><span className={css.separator}>/</span></span>)}
-      <SubagentMenu agents={siblings} selected={selected.agent_id} label={selected.title} openChild={open}/>
+      <SubagentMenu agents={scope.oneShot?.has(selected.agent_id) ? [] : siblings} workflowChildren={workflowSiblings} selected={selected.agent_id} label={selected.title} openChild={open}/>
       {!!children.length && <SubagentMenu agents={children} label={tx('common:subagents.count', { count: children.length })} openChild={open}/>}</>
       : <><span id="session-title" aria-label={tx(scope.sessionId ? 'agent:conversation-header.session-title' : 'agent:conversation-header.product-title')} className={css.title}>{title}</span>
-        {!!siblings.length && <SubagentMenu agents={siblings} label={tx('common:subagents.count', { count: siblings.length })} openChild={open}/>}</>}
+        {(count > 0 || limited) && <SubagentMenu agents={siblings} workflowChildren={workflowEntries} limited={limited} label={countLabel} openChild={open}/>}</>}
   </div>;
 }
 /** Eight resident Child views retain drafts until explicitly closed. */
