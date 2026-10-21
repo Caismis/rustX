@@ -36,8 +36,9 @@ The installed DeepSeek Harness Windows desktop UI was visually inspected on
 2026-10-04. The existing attributed presentation components remain the source
 baseline; no brand assets, runtime code or new dependencies are imported.
 
-- The application frame uses the reference's muted sidebar surface and rounded
-  conversation panel. Browser chrome remains browser-owned.
+- The application frame uses the reference's muted sidebar surface. Browser
+  chrome remains browser-owned. The Web frame separator update below supersedes
+  the rounded conversation panel from this desktop inspection.
 - On narrow screens the expanded sidebar overlays the conversation, preserving
   the reading width; Escape or the backdrop dismisses it. Covered content is inert.
 - Conversation title weight, default reading width and composer-context alignment
@@ -82,6 +83,19 @@ The narrow running-draft Composer references have newly measured rounded-shadow
 noise at 15 light and 16 dark pixel sites. Each site has its own measured channel
 bound; adjacent pixels, dimensions and all other references remain exact. The
 manifest records independent runs, the pinned browser and decoded-image hashes.
+
+## Web frame separators
+
+Reference inspected read-only: local `../deepseek-harness` at immutable commit
+`687f282e8625c6b8d11ff58211a90524be2e4317`,
+`packages/client/ui-layout/src/client/AppFrame.module.css` and its package README.
+The ordinary Web frame now reaches the viewport top with square conversation
+corners and the reference's `0.5px` sidebar separator using the existing
+`--dsw-alias-border-l3` token. The narrow overlay starts at that same top edge.
+Only the explicit Windows native-titlebar selector retains its caption inset
+and rounded content corner, as upstream defines. Native platform integration,
+column widths, resize ownership and conversation behavior are unchanged.
+
 ## Shared model selection surfaces
 
 Behavioral reference: Harness `5badb15009ae1756c3afe0ae0cef1faafc290ccc`,

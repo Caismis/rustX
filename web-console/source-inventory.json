@@ -1526,7 +1526,15 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "1c568efe993dbd10cd58f6834a17a8534614da9220548667a831d9e2848a652e",
+      "local_sha256": "16b5664f9f44205b370f645e53f4f1d786e21af45e7534fe7d5299f8dff299ea",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-layout/src/client/AppFrame.module.css",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "f0bce7eb34595a249c7865b5e0542cfae175a50804060af46344aba906e6789c",
+          "treatment": "Align the ordinary Web frame with the viewport top, square conversation corner and half-pixel sidebar separator; retain the native Windows caption exception and the local narrow-overlay owner."
+        }
+      ],
       "classification": "A"
     },
     {

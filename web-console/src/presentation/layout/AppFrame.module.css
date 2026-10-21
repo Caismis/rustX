@@ -4,10 +4,9 @@
   display: grid;
   height: 100%;
   overflow: hidden;
-  padding-top: 12px;
   box-sizing: border-box;
   grid-template-rows: minmax(0, 1fr);
-  background: var(--dsw-specific-sidebar-fill);
+  background: var(--dsw-alias-bg-base);
   /* Collapse/expand animates the tracks on the deepsuite sider curve
      (--ds-ease-in-out / --ds-transition-duration-slow, ui-theme base.css). */
   transition: grid-template-columns var(--ds-transition-duration-slow) var(--ds-ease-in-out);
@@ -63,12 +62,12 @@
   min-width: 0;
   overflow: hidden;
   background: var(--dsw-specific-sidebar-fill);
-  border-right: none;
+  border-right: 0.5px solid var(--dsw-alias-border-l3);
 }
 
 .frame[data-sidebar-overlay] .sidebarCol {
   position: absolute;
-  inset: 12px auto 0 0;
+  inset: 0 auto 0 0;
   z-index: 15;
   box-shadow: var(--dsw-elevation-prominent);
 }
@@ -84,7 +83,6 @@
 
 .centerCol {
   grid-column: 2;
-  border-radius: 16px 0 0 0;
   background: var(--dsw-alias-bg-base);
   min-width: 0;
   display: flex;
