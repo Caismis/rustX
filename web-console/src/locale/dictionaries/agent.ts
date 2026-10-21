@@ -1,5 +1,13 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
+  "system.catalog-changed": "Tool catalog changed.",
+  "system.read-error": "System request details could not be read.",
+  "system.added-count": "Added {count}",
+  "system.removed-count": "Removed {count}",
+  "system.updated-count": "Updated {count}",
+  "system.added": "Added: {names}",
+  "system.removed": "Removed: {names}",
+  "system.updated": "Updated: {names}",
   "history.title": "Conversation history",
   "history.read-only": "Read-only history · execution remains in the original conversation",
   "history.return": "Return to conversation",
@@ -374,6 +382,14 @@ export const en = {
 } as const;
 export type AgentKey = keyof typeof en;
 export const zh = {
+  "system.catalog-changed": "工具目录已变化。",
+  "system.read-error": "无法读取系统请求详情。",
+  "system.added-count": "新增 {count} 个",
+  "system.removed-count": "移除 {count} 个",
+  "system.updated-count": "修改 {count} 个",
+  "system.added": "新增：{names}",
+  "system.removed": "移除：{names}",
+  "system.updated": "修改：{names}",
   "history.title": "对话历史",
   "history.read-only": "只读历史 · 执行仍在原对话中",
   "history.return": "返回对话",

@@ -18,6 +18,10 @@ it.each(['live', 'child', 'history', 'evicted-inline'] as const)('%s reply survi
       final_message_id: message.id, final_message_locator: { type: 'by_message_id', message_id: message.id }, final_message_id_deferred: false, final_message_id_source: null,
       outcome: 'completed', control_cursor: '17', message_count: 1, tool_call_count: 0 };
     const historyCut = { read: readCut(), ledger_through: '17', transcript_total: '17', surface_revision: '0', inherited_through: '0' };
+    server.handlers.set('session/tracePage', request => {
+      if (request.method !== 'session/tracePage' || request.params.domain !== 'trace.records') throw Error('Expected historical Trace headers');
+      return { type: 'checkpoint_page', page: { read_cut: request.params.cut, cursor: request.params.cut.revision, domain: 'trace.records', total: '0', items: [], next_offset: null, collections: [] } };
+    });
     const refs: ContentRef[] = values.map((text, block_index) => ({ conversation_id: 'conversation-A', source: { type: 'canonical_message_block', component: 'payload',
       locator: mode === 'history' ? { type: 'by_ledger_position', position: 17 } : { type: 'by_message_id', message_id: message.id }, block_index },
       representation: 'utf8_text', version: 1, content_revision: 1, readable_end: new TextEncoder().encode(text).length }));

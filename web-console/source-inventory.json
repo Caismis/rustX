@@ -3,6 +3,57 @@
   "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
   "files": [
     {
+      "upstream": "packages/client/ui-chat/src/client/chat/ContextInjectionRow.module.css",
+      "destination": "web-console/src/app/agent/SystemChanges.module.css",
+      "treatment": "141px opaque scrollport and compact summary adapted to existing theme tokens.",
+      "upstream_sha256": "1877c8962bf9462e9763517873e13660e9e8ef3d3e385853b388a377cdd3c808",
+      "retained_dependencies": [
+        "CSS modules",
+        "existing theme tokens"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness request assembly, event history and runtime authority"
+      ],
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "local_sha256": "553e5ca31d1da02c4e7390fdff1c0f296567ee7a93930cdba805c04764981449"
+    },
+    {
+      "upstream": "packages/client/ui-chat/src/client/chat/SystemPromptRow.tsx",
+      "destination": "web-console/src/app/agent/SystemChanges.tsx",
+      "treatment": "Compact prompt and Tool-change disclosures using existing native request states, exact immutable source reads, bounded opaque body and explicit definition edits.",
+      "upstream_sha256": "25172bf4a68dcb6cdaa5164c1b54afe0f1202bc1e7860d835bc84017d3a651fb",
+      "retained_dependencies": [
+        "../../../../protocol/app-server/attempt-identity",
+        "../../../../protocol/app-server/trace-identity",
+        "../../../../protocol/app-server/v51",
+        "../../client/request-system",
+        "../../client/trace",
+        "../../client/trace-content",
+        "../../locale/react",
+        "../../presentation/primitives/DisclosureRow",
+        "../../presentation/primitives/icons",
+        "./AgentTranscript",
+        "./ObservationSource",
+        "./SystemChanges.module.css",
+        "react"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness request assembly, event history and runtime authority"
+      ],
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "local_sha256": "268ee462e0384e36c5a6d522f12df8036e600cba630a1e9ce4fbacc5cb13a524",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-chat/src/client/chat/ContextInjectionRow.tsx",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "0cb1121df57c18d158ab077ebf3ad69675b97d78137b7d53699db3dfa22f6eb1",
+          "treatment": "Tool-change summary and expandable added/removed names; native catalog definition edits additionally identified."
+        }
+      ]
+    },
+    {
       "upstream": "LICENSE",
       "destination": "web-console/public/LICENSE-DeepSeek-Harness.txt",
       "treatment": "retained mostly intact",
@@ -694,6 +745,7 @@
         "../../bindings/jobs",
         "../../bindings/recorded-tool-details",
         "../../bindings/status-labels",
+        "../../client/request-system",
         "../../client/trace",
         "../../client/trace-content",
         "../../locale/react",
@@ -755,7 +807,7 @@
           "treatment": "Share semantic between-Turn classification across ledger, Inspector and bilingual search. Preserve compaction/reused-history labels without treating unowned native Agent/Background/Workflow activities as between-Turn material or inventing nearby execution ownership."
         }
       ],
-      "local_sha256": "5f54a1468890715b616e3551f88a883f7b4eb12ce831267bd156a1993ee68f32"
+      "local_sha256": "1334acef51d73e64beb88bc24e0f64212b2cea114b5def39170701fc46d4e0e4"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.module.css",
@@ -846,7 +898,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "daf49f7eb9ea9ec1eabed454b282f758f0df1b669d3df79fcb14f46232b290ca",
+      "local_sha256": "2b86c2293a32fb49f08d1ce91de0f9c42e55a2f553fbd7a4652096a14db0f7f4",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-trajectory/src/client/layout.ts",
@@ -2897,7 +2949,7 @@
           "upstream_sha256": "8b0a7e2827df55d62aa456570d5fdc012964f94953edf1fbaa95c20b1842f225"
         }
       ],
-      "local_sha256": "dc6381353eaff1f62c3b3d017ebb0604f3f29ac36032267291f077b5e00048f6"
+      "local_sha256": "e7730228949002a55434ea3084fd2bd91543a35e903f017f382fb21530fd7194"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.tsx",
@@ -3536,7 +3588,7 @@
           "treatment": "Compaction checkpoint disclosure and bilingual summary wording adapted to native Ledger messages; no Harness runtime or command authority."
         }
       ],
-      "local_sha256": "aff3bdcbb6c2a518734be42885956d893afd14debc33d78022eea949acde9804"
+      "local_sha256": "6c8cfd26d75c79eb64406ca7ea7060c8d9e432f6c8160c5a8d3f1a7afe4a2b55"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",

@@ -1,6 +1,7 @@
 import {traceInspectionHead} from '../../client/trace';
 import {traceRequestAccepts,sameTraceStep,traceOccurrenceKey,traceFieldKey} from '../../../../protocol/app-server/trace-identity';
 import type { TraceDisplayBlock } from '../../client/trace-content';
+import { completeTools } from '../../client/request-system';
 import { useTraceContent, type ToolContent } from './useTraceContent';
 import { Button } from '../../presentation/primitives/Button';
 import { parseJson, isJsonNumber } from '../../presentation/primitives/json';
@@ -69,7 +70,7 @@ const TAB_LABEL = {
 
 /** The Harness tab set for one selected item. */
 export function inspectorTabs(item: InspectableDisplayItem): TrajectoryFacet[] {
-  if (item.type === 'SystemPromptCell') return item.record.request?.system_prompt.state === 'changed' ? ['diff', 'system-prompt', 'tools'] : ['system-prompt', 'tools'];
+  if (item.type === 'SystemPromptCell') return item.record.request?.system_prompt.state === 'changed' || item.record.request?.tool_catalog === 'changed' ? ['diff', 'system-prompt', 'tools'] : ['system-prompt', 'tools'];
   if (item.type === 'RequestBoundary') return ['overview', 'options', 'usage', 'timing'];
   if (item.type === 'ContextRow') return ['overview', 'rendered', 'raw', 'source'];
   switch (item.record.kind) {
@@ -467,25 +468,31 @@ function promptDiffLines(before: string, after: string) {
 
 const DIFF_LINE = { meta: css.promptDiffLinemeta, context: css.promptDiffLinecontext, added: css.promptDiffLineadded, removed: css.promptDiffLineremoved };
 
-/** A diff needs both complete frozen prompts; anything less is named, never diffed. */
-function SystemPromptDiff({ detail }: { detail: Pick<NonNullable<TraceDetail['request']>, 'predecessor' | 'previous_system_prompt' | 'effective_system_prompt'> }) {
-  const tx = useTranslation();
-  const previous = detail.previous_system_prompt;
-  const current = detail.effective_system_prompt;
+function PromptDiffSection({ title, before, after }: { title: string; before: string; after: string }) {
+  const lines = promptDiffLines(before, after);
+  return lines.length > 0 && <section className={css.promptDiffSection}>
+    <h3 className={css.promptDiffTitle}>{title}</h3>
+    <pre className={css.promptDiff}>{lines.map((line, index) => <span className={DIFF_LINE[line.kind]} key={index}>{line.text || ' '}{'\n'}</span>)}</pre>
+  </section>;
+}
+
+/** Each changed dimension needs complete frozen values from the native predecessor. */
+function SystemPromptDiff({ detail, promptChanged, toolsChanged, tools, previousTools }: {
+  detail: Pick<NonNullable<TraceDetail['request']>, 'predecessor' | 'previous_system_prompt' | 'effective_system_prompt'>;
+  promptChanged: boolean; toolsChanged: boolean; tools?: TraceToolDefinition[]; previousTools?: TraceToolDefinition[];
+}) {
+  const tx = useTranslation(), previous = detail.previous_system_prompt, current = detail.effective_system_prompt;
   if (detail.predecessor.availability === 'not_applicable') return <NoPayload>{tx('trajectory:trajectory-inspector.no-predecessor-initial-prompt')}</NoPayload>;
-  if (!previous) return <NoPayload>{tx('trajectory:trajectory-inspector.previous-prompt-unavailable-a-complete-diff-cannot-be-produced')}</NoPayload>;
-  if (previous.truncated || current.truncated) {
-    return <NoPayload>{tx('trajectory:trajectory-inspector.a-complete-diff-cannot-be-produced')} {[
-      current.truncated ? tx('trajectory:trajectory-inspector.current-prompt-truncated') : undefined,
-      previous.truncated ? tx('trajectory:trajectory-inspector.previous-prompt-truncated') : undefined,
-    ].filter(Boolean).join('; ')}</NoPayload>;
-  }
-  const lines = promptDiffLines(previous.text, current.text);
   return <div className={css.promptDiffSections}>
-    {lines.length > 0 && <section className={css.promptDiffSection}>
-      <h3 className={css.promptDiffTitle}>{tx('trajectory:record.system-prompt')}</h3>
-      <pre className={css.promptDiff}>{lines.map((line, index) => <span className={DIFF_LINE[line.kind]} key={index}>{line.text || ' '}{'\n'}</span>)}</pre>
-    </section>}
+    {promptChanged && (!previous ? <NoPayload>{tx('trajectory:trajectory-inspector.previous-prompt-unavailable-a-complete-diff-cannot-be-produced')}</NoPayload>
+      : previous.truncated || current.truncated ? <NoPayload>{tx('trajectory:trajectory-inspector.a-complete-diff-cannot-be-produced')} {[
+        current.truncated ? tx('trajectory:trajectory-inspector.current-prompt-truncated') : undefined,
+        previous.truncated ? tx('trajectory:trajectory-inspector.previous-prompt-truncated') : undefined,
+      ].filter(Boolean).join('; ')}</NoPayload>
+        : <PromptDiffSection title={tx('trajectory:record.system-prompt')} before={previous.text} after={current.text}/>)}
+    {toolsChanged && (!tools || !previousTools || !completeTools(tools) || !completeTools(previousTools)
+      ? <NoPayload>{tx('trajectory:copy.previous-tool-catalog-unavailable')}</NoPayload>
+      : <PromptDiffSection title={tx('trajectory:tab.tools')} before={JSON.stringify(previousTools, null, 2)} after={JSON.stringify(tools, null, 2)}/>)}
   </div>;
 }
 
@@ -740,9 +747,9 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
         return tools ? <ToolCatalog tools={tools} /> : <DetailPending error={detailError} />;
       }
       case 'diff': {
-        if (!requestDetail && predecessor?.availability === 'available' && !previousDomain) return <p role="status" className={css.noPayload}>{tx('trajectory:field.previous-not-loaded')}{onLoadEarlier && <Button onClick={onLoadEarlier}>{tx('trajectory:history.load-earlier')}</Button>}</p>;
+        if (!detailReader && !requestDetail && predecessor?.availability === 'available' && !previousDomain) return <p role="status" className={css.noPayload}>{tx('trajectory:field.previous-not-loaded')}{onLoadEarlier && <Button onClick={onLoadEarlier}>{tx('trajectory:history.load-earlier')}</Button>}</p>;
         const current = resolved?.request?.effective_system_prompt ?? requestDetail?.effective_system_prompt;
-        return current ? <SystemPromptDiff detail={{ predecessor: requestDetail?.predecessor ?? record.request?.predecessor ?? { availability: 'not_applicable' }, effective_system_prompt: current, previous_system_prompt: resolved?.request?.previous_system_prompt ?? requestDetail?.previous_system_prompt }} />
+        return current ? <SystemPromptDiff promptChanged={record.request?.system_prompt.state === 'changed'} toolsChanged={record.request?.tool_catalog === 'changed'} tools={resolved?.request?.tools ?? requestDetail?.tools} previousTools={resolved?.request?.previous_tools} detail={{ predecessor: requestDetail?.predecessor ?? record.request?.predecessor ?? { availability: 'not_applicable' }, effective_system_prompt: current, previous_system_prompt: resolved?.request?.previous_system_prompt ?? requestDetail?.previous_system_prompt }} />
           : <DetailPending error={detailError} />;
       }
       case 'rendered': return content(true);

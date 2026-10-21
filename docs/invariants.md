@@ -5111,6 +5111,17 @@ message role, history shape, or timestamps:
   exist. The rendered string is frozen by value in RequestSnapshot; native
   sections cannot be shadowed and an extension cannot replace the entire
   prompt.
+- Chat and Trajectory project System changes from native request summaries,
+  including the independent prompt and complete Tool-catalog states. They do
+  not compare current settings or infer a predecessor from adjacent loaded rows.
+  Chat disclosures belong to the exact native Attempt/publication; the first
+  request's prompt precedes its native first input when that input is retained. Tool changes name
+  additions, removals and definition edits. Expanded prompts and catalog diffs
+  read complete immutable fields at the selected source's read cut, preserving
+  Root, child activation and historical Conversation ownership. A predecessor
+  outside the reading window is resolved by its native recorded identity through
+  bounded Trace pages. Missing or partial evidence never produces a fabricated
+  initial prompt, empty catalog or complete diff.
 - The Skill catalog is never a canonical User message, `UserSource::Runtime`,
   `ContextKind`, Ledger fact, or Surface identity. It contains routing
   metadata only; full `SKILL.md` content enters the conversation only as the

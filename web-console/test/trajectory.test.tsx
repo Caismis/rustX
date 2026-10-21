@@ -100,7 +100,7 @@ function pressSpan(id: string) {
 // including combinations today's all-or-nothing snapshot producer cannot emit.
 const inputMatrix = [
   ['initial', 'initial', 'Initial System Prompt', 'System Prompt'],
-  ['initial', 'changed', 'Initial System Prompt · Tools Updated', 'System Prompt'],
+  ['initial', 'changed', 'Initial System Prompt · Tools Updated', 'Diff'],
   ['initial', 'unchanged', 'Initial System Prompt', 'System Prompt'],
   ['initial', 'previous_unavailable', 'Initial System Prompt · Previous Tool catalog unavailable', 'System Prompt'],
   ['changed', 'initial', 'System Prompt Updated · Initial Tools', 'Diff'],
@@ -108,11 +108,11 @@ const inputMatrix = [
   ['changed', 'unchanged', 'System Prompt Updated', 'Diff'],
   ['changed', 'previous_unavailable', 'System Prompt Updated · Previous Tool catalog unavailable', 'Diff'],
   ['unchanged', 'initial', 'Initial Tools', 'Tools'],
-  ['unchanged', 'changed', 'Tools Updated', 'Tools'],
+  ['unchanged', 'changed', 'Tools Updated', 'Diff'],
   ['unchanged', 'unchanged', undefined, 'Summary'],
   ['unchanged', 'previous_unavailable', 'Previous Tool catalog unavailable', 'System Prompt'],
   ['previous_unavailable', 'initial', 'Previous System Prompt unavailable · Initial Tools', 'Tools'],
-  ['previous_unavailable', 'changed', 'Previous System Prompt unavailable · Tools Updated', 'Tools'],
+  ['previous_unavailable', 'changed', 'Previous System Prompt unavailable · Tools Updated', 'Diff'],
   ['previous_unavailable', 'unchanged', 'Previous System Prompt unavailable', 'System Prompt'],
   ['previous_unavailable', 'previous_unavailable', 'Previous System Prompt unavailable · Previous Tool catalog unavailable', 'System Prompt'],
 ] as const;
@@ -135,7 +135,7 @@ it.each(inputMatrix)('T1-01 preserves native %s + %s without classification read
   }
   fireEvent.click(row(label ? 'SystemPromptCell' : 'RequestBoundary'));
   expect(screen.getByRole('tab', { name: facet }).getAttribute('aria-selected')).toBe('true');
-  expect(screen.queryByRole('tab', { name: 'Diff' }) !== null).toBe(prompt === 'changed');
+  expect(screen.queryByRole('tab', { name: 'Diff' }) !== null).toBe(prompt === 'changed' || tools === 'changed');
   expect(Boolean(screen.queryByRole('tab', { name: 'Tools' }))).toBe(Boolean(label));
   expect(load.mock.calls).toEqual([[record.id]]); // only the selected immutable owner
   fireEvent.click(row('RequestBoundary'));
@@ -144,7 +144,7 @@ it.each(inputMatrix)('T1-01 preserves native %s + %s without classification read
 
 it.each([
   ['changed', 'previous_unavailable', 'Diff'],
-  ['previous_unavailable', 'changed', 'Tools'],
+  ['previous_unavailable', 'changed', 'Diff'],
 ] as const)('mixed %s + %s retains exact detail and independent facets', (prompt, tools, facet) => {
   const record = richRequest();
   record.request!.system_prompt.state = prompt;
@@ -162,7 +162,7 @@ it.each([
     expect(screen.getByRole('tabpanel').textContent).toContain('-Previous prompt.');
     expect(screen.getByRole('tabpanel').textContent).toContain('+You are the historical agent.');
   } else {
-    expect(screen.queryByRole('tab', { name: 'Diff' })).toBeNull();
+    expect(Boolean(screen.queryByRole('tab', { name: 'Diff' }))).toBe(tools === 'changed');
   }
   fireEvent.click(screen.getByRole('tab', { name: 'Tools' }));
   expect(screen.getByRole('tabpanel').textContent).toContain('Run one command.');
@@ -1451,6 +1451,17 @@ it('424: wire-null User survives folds and search, is keyboard reachable and sel
   expect(load.mock.calls).toEqual([[records[0]!.id]]);
   expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual(['Summary', 'Preview', 'Raw', 'Source']);
   expect(row('RecordRow', records[0]!.id).getAttribute('aria-selected')).toBe('true');
+});
+
+it('first-request System updates precede their native Turn input only when the Attempt start is retained', () => {
+  const tx = translator('en'), start = traceRecord(0, { kind: 'attempt', request: null });
+  const input = traceRecord(1, { kind: 'user', request: null, location: { attempt_id: 'attempt-a' } });
+  const request = traceRecord(2); request.request!.retry_number = 0; request.request!.system_prompt.state = 'changed';
+  const ordered = (records: TraceRecord[]) => ledgerRows(tx, projectTrajectory(tx, records), trajectoryItems(records), new Set(), false).filter(row => row.kind === 'semantic').map(row => row.item!.type);
+  expect(ordered([start, input, request])).toEqual(['SystemPromptCell', 'RecordRow']);
+  expect(ordered([input, request])).toEqual(['RecordRow', 'SystemPromptCell']);
+  request.request!.retry_number = 1;
+  expect(ordered([start, input, request])).toEqual(['RecordRow', 'SystemPromptCell']);
 });
 
 it('retained idle inputs move into their native answering turns, below the initial prompt, when refreshed outside the latest page', () => {

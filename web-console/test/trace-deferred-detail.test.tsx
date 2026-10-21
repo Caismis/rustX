@@ -1,4 +1,4 @@
-import {act,cleanup,fireEvent,render,screen,waitFor,within} from '@testing-library/react';
+import {act,cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
 import type {CheckpointPage,CheckpointReadCut,MethodResult,Request} from '../../protocol/app-server/v51';
 import {Server,checkpoint,snapshot} from './fixture';
@@ -92,13 +92,37 @@ it('Diff selects the exact native predecessor prompt at the current retained det
  expect(read.params).toMatchObject({cut,domain:'trace.records.2.detail.request.effective_system_prompt',item_offset:0,path:[],offset:0,max_bytes:65536});
  expect(server.requests.filter(row=>row.request.method==='session/traceDetail')).toHaveLength(1);
 });
-it('a missing loaded predecessor offers the existing earlier-history gesture without claiming source absence',async()=>{
- const {server}=await root(),cache=server.client.getSnapshot().views.A.trace!,row=cache.page.records[0];row.request!.system_prompt.state='changed';cache.selection=row;cache.page.next_cursor='trace:4';const earlier=vi.fn();
+it('Diff resolves a predecessor outside the loaded window through native immutable Trace pages',async()=>{
+ const {server,cut}=await root(),cache=server.client.getSnapshot().views.A.trace!,row=cache.page.records[0];row.request!.system_prompt.state='changed';cache.selection=row;cache.page.next_cursor='trace:4';const earlier=vi.fn();
+ const previous=traceRecord(2);previous.request!.request_id='previous-request';
+ const priorDetail=requestDetail(2);priorDetail.request!.effective_system_prompt.text='OUTSIDE_WINDOW_PRIOR';
+ const prior=nativeTraceFixture(previous,priorDetail,cut),pageHandler=server.handlers.get('conversation/checkpointPage')!,valueHandler=server.handlers.get('conversation/checkpointValueRead')!;
+ server.handlers.set('conversation/checkpointPage',request=>{
+  if(request.method!=='conversation/checkpointPage')throw Error('page');
+  const p=request.params;
+  if(p.domain==='trace.records')return {type:'checkpoint_page',page:{read_cut:p.cut,cursor:p.cut.revision,domain:p.domain,total:'2',next_offset:p.offset===0?'3':null,collections:[],items:p.offset===0?[{offset:'4',identity:row.id,value:row,deferred:false,content:[]}]:[{offset:'2',identity:previous.id,value:previous,deferred:false,content:[]}]}};
+  return p.domain.startsWith('trace.records.2.')?{type:'checkpoint_page',page:prior.original.page(p.cut,p.domain,p.offset,()=>true)}:pageHandler(request);
+ });
+ server.handlers.set('conversation/checkpointValueRead',request=>request.method==='conversation/checkpointValueRead'&&request.params.domain.startsWith('trace.records.2.')?{type:'checkpoint_value_chunk',chunk:prior.original.value(request.params.cut,request.params,request.params.offset,()=>true)}:valueHandler(request));
  render(<Trajectory cache={cache} loadEarlier={earlier} onSelect={()=>{}} onLoadDetail={()=>{}}/>);
  fireEvent.click(document.querySelector('[data-display-type="SystemPromptCell"][data-owner="trace:4"]')!);fireEvent.click(screen.getByRole('tab',{name:'Diff'}));
- expect(screen.getByText('Previous request is not loaded; load earlier Trace history.')).toBeTruthy();
- fireEvent.click(within(screen.getByRole('status')).getByRole('button',{name:'Load earlier history'}));expect(earlier).toHaveBeenCalledTimes(1);
- expect(screen.queryByRole('alert')).toBeNull();expect(server.requests.filter(row=>row.request.method==='conversation/checkpointValueRead')).toHaveLength(0);
+ await screen.findByText('-OUTSIDE_WINDOW_PRIOR');
+ expect(earlier).not.toHaveBeenCalled();expect(screen.queryByRole('alert')).toBeNull();
+ expect(server.requests.filter(row=>row.request.method==='conversation/checkpointPage'&&row.request.params.domain==='trace.records').map(row=>row.request.params)).toEqual([expect.objectContaining({cut,offset:0}),expect.objectContaining({cut,offset:3})]);
+});
+it('Tool-only changes open Diff and include full uncalled description and schema changes',async()=>{
+ const {server,cut}=await root(),earlier=traceRecord(2),current=record();current.request!.predecessor={availability:'available',request_id:earlier.request!.request_id};current.request!.tool_catalog='changed';current.request!.system_prompt.state='unchanged';
+ const cache=server.client.getSnapshot().views.A.trace!;cache.page.records=[earlier,current];cache.selection=current;
+ const before=requestDetail(2),after=requestDetail(4);after.request!.tools[0].description.text='UPDATED_UNUSED_TOOL';after.request!.tools[0].input_schema.value={type:'object',required:['command']};
+ const oldSource=nativeTraceFixture(earlier,before,cut),newSource=nativeTraceFixture(current,after,cut);
+ server.handlers.set('conversation/checkpointPage',request=>{if(request.method!=='conversation/checkpointPage')throw Error('page');const source=request.params.domain.startsWith('trace.records.2.')?oldSource:newSource;return {type:'checkpoint_page',page:source.original.page(cut,request.params.domain,request.params.offset,()=>true)};});
+ server.handlers.set('conversation/checkpointValueRead',request=>{if(request.method!=='conversation/checkpointValueRead')throw Error('value');const source=request.params.domain.startsWith('trace.records.2.')?oldSource:newSource;return {type:'checkpoint_value_chunk',chunk:source.original.value(cut,request.params,request.params.offset,()=>true)};});
+ render(<Trajectory cache={cache} loadEarlier={()=>{}} onSelect={()=>{}} onLoadDetail={()=>{}}/>);
+ fireEvent.click(document.querySelector('[data-display-type="SystemPromptCell"][data-owner="trace:4"]')!);
+ expect(screen.getByRole('tab',{name:'Diff'}).getAttribute('aria-selected')).toBe('true');
+ await screen.findByText(/\+.*UPDATED_UNUSED_TOOL/);await screen.findByText(/\+.*"required"/);
+ expect(screen.queryByRole('heading',{name:'System Prompt'})).toBeNull();
+ expect(server.requests.filter(row=>row.request.method==='conversation/checkpointValueRead'&&row.request.params.domain==='trace.records.2.detail.request.effective_system_prompt')).toHaveLength(0);
 });
 it('detail descriptor replacement invalidates the reader while the existing finite cache retains headers within its count bound',async()=>{
  const {server,cut}=await root(),entry=server.client.getSnapshot().views.A.trace!.details['trace:4'];

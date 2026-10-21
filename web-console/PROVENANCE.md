@@ -3963,3 +3963,15 @@ addresses. No Session-event accumulator, inferred Turn boundary, Host service,
 Cordis slot or runtime code is imported. The Turn-tail stack gap and action
 spacing adapt `TurnTailNodeView.module.css` at the same immutable reference;
 the source inventory records that additional source and updated local hashes.
+
+
+## System changes in Chat and Trajectory
+
+The System disclosures follow Harness `687f282e8625c6b8d11ff58211a90524be2e4317`:
+`ui-chat/src/client/chat/SystemPromptRow.tsx`, `ContextInjectionRow.tsx` and its
+module CSS provide the compact disclosure and 141px opaque scrollport.
+`ui-trajectory/src/client/TrajectoryTable.tsx` supplies separate prompt and Tool
+JSON diff sections. The local implementation uses native request states and
+immutable checkpoint fields; it imports no Harness request assembly or history
+runtime. Root, child and cold-history sources retain their native read scopes.
+Tool definition edits are named explicitly alongside additions and removals.
