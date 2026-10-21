@@ -15,7 +15,7 @@ export function childMessageContinuation(server: Server) {
   });
   server.handlers.set('conversation/checkpointPage', request => {
     if (request.method !== 'conversation/checkpointPage' || request.params.agent_id !== 'child-1' || request.params.offset !== 32) throw Error('Expected original Child continuation');
-    return { type: 'checkpoint_page', page: { read_cut: request.params.cut, cursor: request.params.cut.revision, domain: request.params.domain,
+    return { type: 'checkpoint_page', page: { read_cut: { canonical_foreground: null, live_publication: null, source_cut: null, ...request.params.cut }, cursor: request.params.cut.revision, domain: request.params.domain,
       total: '33', next_offset: null, collections: [], items: [{ offset: '32', identity: 'text', value: { type: 'text', text: 'Use all attached sources for the child task.' }, content: [], deferred: false }] } };
   });
 }

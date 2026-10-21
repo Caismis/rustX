@@ -1,4 +1,5 @@
 import type { CheckpointPage, CheckpointPageItem, CheckpointReadCut, CollectionFrontier, CanonicalContentLocator, ContentBinding, TraceContentBlock, TraceFieldSource, TraceInspectionMessage, TraceInspectionMessages, TraceToolSource, RuntimeClientToolOccurrence } from '../../../protocol/app-server/v51';
+import { checkpointReadCutKey } from '../../../protocol/app-server/content-identity';
 import { ContentCache } from '../../../protocol/app-server/content-cache';
 import { readTraceFieldWindow, readTraceSelectedWindow, type TraceValueField, type TraceValueSelector } from '../../../protocol/app-server/trace-field';
 import { validateCanonicalInspectionPage, traceInspectionMessage } from '../../../protocol/app-server/trace-inspection';
@@ -42,7 +43,7 @@ export type TraceDisplayBlock = TraceContentBlock & { nativeOccurrence?: Runtime
 const object = (value: unknown): Record<string, unknown> => value != null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const text = (value: string) => ({ text: value, truncated: false });
 function checkPage(page: CheckpointPage, cut: CheckpointReadCut, domain: string) {
-  if (page.domain !== domain || page.cursor !== cut.revision || JSON.stringify(page.read_cut) !== JSON.stringify(cut)
+  if (page.domain !== domain || page.cursor !== cut.revision || checkpointReadCutKey(page.read_cut) !== checkpointReadCutKey(cut)
     || !Array.isArray(page.items) || page.items.length > 32 || new TextEncoder().encode(JSON.stringify(page)).length > 786432) throw Error('Original Trace content page changed.');
 }
 export async function readTraceCollection(reader: Pick<TraceFieldReader, 'page'>, cut: CheckpointReadCut, frontier: Pick<CollectionFrontier, 'domain' | 'total'>, current: () => boolean, first?: CheckpointPage, start = 0) {

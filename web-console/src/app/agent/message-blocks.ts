@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { AssistantContentBlock, CanonicalContentLocator, CheckpointReadCut, ContentBinding, MessageBlock, RuntimeClientMessageDescriptor, RuntimeClientTranscriptPage, UserContentBlock } from '../../../../protocol/app-server/v51';
-import { canonicalLocatorKey } from '../../../../protocol/app-server/content-identity';
+import { canonicalLocatorKey, checkpointReadCutKey, observationReadCutKey } from '../../../../protocol/app-server/content-identity';
 import { readBinding, readTraceCollection } from '../../client/trace-content';
 import { childHistoryReadCut, observationSourceIdentity, useObservationSource } from './ObservationSource';
 
@@ -26,7 +26,7 @@ export async function readMessageBlocks(source: Source, request: Request, curren
       : 'target' in source
         ? await source.client.request({ method: 'conversation/checkpointPage', params: { target: source.target, agent_id: source.agentId ?? null, cut: cut!, domain, offset, limit: 32 } }, 'checkpoint_page', undefined, owns)
         : await source.client.request({ method: 'session/tracePage', params: { session_id: source.sessionId, node_id: source.nodeId ?? null, cut: cut!, domain, offset, limit: 32 } }, 'checkpoint_page', undefined, owns);
-    if (historical ? JSON.stringify(result.page.read_cut.source_cut) !== JSON.stringify(history) : JSON.stringify(result.page.read_cut) !== JSON.stringify(captured)) throw Error('Original message cut changed.');
+    if (historical ? (!result.page.read_cut.source_cut || observationReadCutKey(result.page.read_cut.source_cut) !== observationReadCutKey(history)) : checkpointReadCutKey(result.page.read_cut) !== checkpointReadCutKey(captured!)) throw Error('Original message cut changed.');
     return result.page;
   };
   const first = await page(captured, request.offset, current), cut = first.read_cut;

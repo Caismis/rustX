@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { CanonicalContentLocator, ContentBinding, ForegroundToolExecution } from '../../../../protocol/app-server/v51';
 import { ContentCache } from '../../../../protocol/app-server/content-cache';
-import { canonicalLocatorKey } from '../../../../protocol/app-server/content-identity';
+import { canonicalLocatorKey, checkpointReadCutKey, observationReadCutKey } from '../../../../protocol/app-server/content-identity';
 import { readContentText } from '../../client/content-text';
 import { childHistoryReadCut, observationSourceIdentity, useContentSource, useObservationSource } from './ObservationSource';
 
@@ -25,7 +25,7 @@ export async function readToolOccurrence(source: Source, locator: CanonicalConte
   if (!current()) throw Error('Tool view changed.');
   const page = result?.page, item = page?.items[0];
   if (!page || page.domain !== domain || page.items.length !== 1 || item?.offset !== String(blockIndex)
-    || (history && !childHistory ? JSON.stringify(page.read_cut.source_cut) !== JSON.stringify(history) : JSON.stringify(page.read_cut) !== JSON.stringify(cut))) throw Error('Original Tool occurrence is unavailable.');
+    || (history && !childHistory ? (!page.read_cut.source_cut || observationReadCutKey(page.read_cut.source_cut) !== observationReadCutKey(history)) : checkpointReadCutKey(page.read_cut) !== checkpointReadCutKey(cut!))) throw Error('Original Tool occurrence is unavailable.');
   const tool = item.value as ForegroundToolExecution | undefined;
   if (!tool || tool.block_index !== blockIndex || tool.occurrence?.block_index !== blockIndex || typeof tool.name !== 'string'
     || !['assembled', 'running', 'settled'].includes(tool.state?.type) || typeof tool.state.arguments !== 'string') throw Error('Original Tool descriptor is unavailable.');

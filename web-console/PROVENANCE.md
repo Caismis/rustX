@@ -3923,3 +3923,9 @@ No Harness state owner, protocol, loading surface or visual styling is added.
 QA uses the production transcript/provider/client with controlled native reads,
 a real Registry/Child boundary test and the existing pinned Playwright browser
 for Chat/Trace switching at desktop and narrow widths. Browser plugin not available.
+
+Read-cut identity includes every native owner, source frontier, publication and
+collection generation. Comparisons use closed field identities rather than JSON
+property order, and normalize omitted/`null` optional native selectors. Regression
+responses include the native serialized selector fields instead of echoing only
+the client request shape.

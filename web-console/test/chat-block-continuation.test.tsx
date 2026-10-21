@@ -108,7 +108,7 @@ it.each([false,true])('frozen child continuation keeps C0 when the independent l
  server.handlers.set('conversation/checkpointPage',request=>{
   if(request.method!=='conversation/checkpointPage')throw Error('page');
   expect(request.params).toMatchObject({agent_id:'worker',cut:{conversation_id:history.read.conversation_id,activation_id:'worker-activation',revision:'0',through:history.read.journal,source_cut:history,domain_revisions:{},collection_cuts:{}},offset:32});
-  return {type:'checkpoint_page',page:{read_cut:request.params.cut,cursor:'0',domain:request.params.domain,total:'33',next_offset:null,collections:[],items:[{offset:'32',identity:'text',value:{type:'text',text:'Original C0 historical suffix'},content:[],deferred:false}]}};
+  return {type:'checkpoint_page',page:{read_cut:{canonical_foreground:null,live_publication:null,...request.params.cut},cursor:'0',domain:request.params.domain,total:'33',next_offset:null,collections:[],items:[{offset:'32',identity:'text',value:{type:'text',text:'Original C0 historical suffix'},content:[],deferred:false}]}};
  });
  const ui=render(<JournalSourceProvider historical source={{client:server.client,target:server.target('A'),agentId:'worker',cut:()=>live,owned:()=>true}} messages={[message]} transcript={page} history={page}><AgentTranscript snapshot={{...base,messages:[message],transcript:page}} history={{epoch:1,page}}/></JournalSourceProvider>);
  await ui.findByText('Original C0 historical suffix');
