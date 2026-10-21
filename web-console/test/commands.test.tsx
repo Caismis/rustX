@@ -182,12 +182,45 @@ describe('successful command draft consumption', () => {
       expect(document.querySelector('[data-chat-running]')?.textContent).toContain('Deep diving');
     } else {
       expect(screen.getByRole('button', { name })).toHaveProperty('disabled', true);
+      expect(screen.getByRole('button', { name }).getAttribute('aria-busy')).toBe('true');
+      expect(screen.getByLabelText('Session status').textContent).toContain('Forking conversation…');
       fireEvent.click(screen.getByRole('button', { name }));
     }
     await act(async () => server.reply(request));
     // Regenerate leaves for the new branch, where this response no longer exists.
     await waitFor(() => expect((screen.queryByRole('button', { name }) as HTMLButtonElement | null)?.disabled ?? false).toBe(false));
     expect(methods().filter(item => item === method)).toHaveLength(1);
+  });
+  it('Retry shows progress throughout its intentional detach, attach and replay handoff', async () => {
+    const { scope } = await subject();
+    localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
+    render(<App client={server.client} workspaceHost={server.workspaceHost}/>);
+    for (const method of ['session/branch', 'session/switchNode', 'session/attach', 'turn/start'] as const) server.held.add(method);
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Regenerate' })));
+    for (const [method, count] of [['session/branch', 1], ['session/switchNode', 1], ['session/attach', 3], ['turn/start', 1]] as const) {
+      const request = await server.waitFor(method, count);
+      if (method === 'session/switchNode') await act(async () => server.socket.deliver({ jsonrpc: '2.0', method: 'session/closed', params: { target: scope.target } }));
+      expect(screen.getByLabelText('Session status').textContent).toContain('Preparing a new response…');
+      expect(screen.queryByText('Connection interrupted')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Open Session' })).toBeNull();
+      expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', true);
+      await act(async () => server.reply(request));
+    }
+    expect(methods().filter(method => method === 'session/branch')).toHaveLength(1);
+    expect(methods().filter(method => method === 'turn/start')).toHaveLength(1);
+  });
+  it('repeated Fork gestures share the in-flight native transition', async () => {
+    const { fixture, navigation } = await subject();
+    server.held.add('session/fork');
+    const response = fixture.original.transcript.entries![0].completed_response!;
+    const destination = { kind: 'transition' as const, sessionId: 'A', action: 'fork' as const, response };
+    navigation.actor.send({ type: 'OPEN', destination });
+    const request = await server.waitFor('session/fork', 1), pending = navigation.actor.getSnapshot().context.pending;
+    navigation.actor.send({ type: 'OPEN', destination: { ...destination, response: structuredClone(response) } });
+    expect(navigation.actor.getSnapshot().context.pending).toBe(pending);
+    server.reply(request);
+    await waitFor(() => expect(navigation.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'child' }));
+    expect(methods().filter(method => method === 'session/fork')).toHaveLength(1);
   });
   it.each(['/model', '/mdl', '/', '/模型'])('%s is consumed only after successful selection', async draft => {
     const input = await open(draft);
@@ -586,6 +619,24 @@ describe('typed native operations and continuation fencing', () => {
     expect(result?.content[1]).toMatchObject({ type: 'upload', session_id: 'child', token: 'native-destination-receipt' });
     expect(fixture.original).toEqual(fixture.originals); expect(methods()).not.toContain('session/uploadPrepare');
     expect(methods()).not.toContain('turn/start');
+  });
+  it('Fork publishes only after native checkpoint and subscription, without waiting for settings details', async () => {
+    const { navigation, fixture } = await subject();
+    server.held.add('session/settings'); server.held.add('session/checkpoint'); server.held.add('session/subscribe');
+    const checkpoints = methods().filter(method => method === 'session/checkpoint').length;
+    const subscriptions = methods().filter(method => method === 'session/subscribe').length;
+    navigation.actor.send({ type: 'OPEN', destination: { kind: 'transition', sessionId: 'A', action: 'fork', response: fixture.original.transcript.entries![0].completed_response! } });
+    const checkpoint = await server.waitFor('session/checkpoint', checkpoints + 1);
+    expect(navigation.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'A' });
+    server.reply(checkpoint);
+    const subscription = await server.waitFor('session/subscribe', subscriptions + 1);
+    expect(navigation.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'A' });
+    server.reply(subscription);
+    await waitFor(() => expect(navigation.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'child' }));
+    expect(server.client.isAttachmentControlCurrent('child', server.client.getSnapshot().views.child.attachmentObservation)).toBe(true);
+    expect(methods()).not.toContain('turn/start');
+    server.held.delete('session/settings');
+    for (const row of server.requests) if (row.request.method === 'session/settings' && row.request.params.session_id === 'child') server.reply(row.request);
   });
   it.each(['branch', 'retry'] as const)('%s creates a native node, unloads then attaches exactly; only retry executes returned input once', async action => {
     const { scope, selection, fixture } = await subject();

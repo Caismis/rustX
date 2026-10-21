@@ -8,6 +8,7 @@ import type { SettingsNavigationActor, SettingsNavigationEvent } from '../settin
 import { firstSubmissions } from '../new-conversation/first-submit';
 import { responseRetry, responseRetryReady, type ResponseRetry } from '../agent/response-retry';
 import { forkLatestSession } from '../commands/fork-session';
+import { attemptOwnerKey } from '../../../../protocol/app-server/attempt-identity';
 
 class RetiredPreparation extends Error {}
 export type ConversationRoute = { kind: 'new-conversation'; workspaceId?: string } | { kind: 'session'; sessionId: string } | { kind: 'session-draft'; sessionId: string };
@@ -131,6 +132,14 @@ export const shellNavigationMachine = setup({
     const release = input.client.subscribe(observe); observe(); return release;
   }), prepare: fromPromise<Prepared, { client: AppServerClient; pending: Pending; parent: { send(event: ShellNavigationEvent): void } }>(({ input, signal }) => prepare(input, signal)) },
   guards: {
+    sameTransition: ({ context, event }) => {
+      if (event.type !== 'OPEN') return false;
+      const pending = context.pending?.destination, next = event.destination;
+      if (pending?.kind === 'fork-session' && next.kind === 'fork-session') return pending.sessionId === next.sessionId;
+      return pending?.kind === 'transition' && next.kind === 'transition'
+        && pending.sessionId === next.sessionId && pending.action === next.action
+        && (pending.response && next.response ? attemptOwnerKey(pending.response.origin) === attemptOwnerKey(next.response.origin) : pending.selection === next.selection);
+    },
     prepared: ({ context, event }) => {
       const output = (event as unknown as { output: Prepared }).output;
       return output.pending === context.pending && authorityCurrent(context.client, output.pending)
@@ -219,7 +228,7 @@ export const shellNavigationMachine = setup({
   on: {
     'RETRY.OBSERVED': { guard: ({ context, event }) => context.retry === event.retry && responseRetryReady(event.retry, context.client.getSnapshot().views[event.retry.view.id]), actions: assign({ retry: () => undefined }) },
     'CREATION.KNOWN': { guard: 'createdOwner', actions: 'creationKnown' },
-    OPEN: [{ guard: 'attached', target: '.idle', reenter: true, actions: 'attached' }, { target: '.preparing', reenter: true, actions: 'start' }],
+    OPEN: [{ guard: 'sameTransition' }, { guard: 'attached', target: '.idle', reenter: true, actions: 'attached' }, { target: '.preparing', reenter: true, actions: 'start' }],
     DRAFT: { target: '.idle', actions: 'draft' }, 'DRAFT.WORKSPACE': { guard: 'drafting', target: '.idle', actions: 'draft' },
     CREATE: { guard: 'creating', target: '.preparing', reenter: true, actions: 'create' },
     CREATED: { guard: 'createdAttached', target: '.idle', actions: 'created' },

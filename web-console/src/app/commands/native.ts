@@ -87,7 +87,9 @@ export class CommandSession {
     if (action !== 'fork') await this.client.switchNode(this.sessionId, session.active_node, () => this.navigationCurrent() && this.client.getSnapshot().generation === this.generation);
     const continuing = () => this.navigationCurrent() && this.client.getSnapshot().generation === this.generation;
     if (!continuing()) return;
-    await this.client.attach(session.id, session.active_node, continuing);
+    await new Promise<void>((resolve, reject) => {
+      void this.client.attach(session.id, session.active_node, continuing, () => resolve()).then(resolve, reject);
+    });
     if (!continuing()) return;
     const target = this.client.target(session.id);
     if (target.conversation_id !== session.active_conversation_id) throw new Error('Transition attached a different Conversation; execution refused.');

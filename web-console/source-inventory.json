@@ -2725,7 +2725,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "f59062b98e12dc16302109c85f464d32a8e186fc081d5375c18dbd558107e74f",
+      "local_sha256": "f63cfaa300814e301b00a40aedbef458cde10045f8d14faac4e47e96585f5fef",
       "classification": "B",
       "additional_sources": [
         {
@@ -2874,7 +2874,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "31e72197045360e4eeea6ca8ee592669bcf463a4a4a92d160a69fbfbf562424b"
+      "local_sha256": "99e5a26d7cc7df53e307e6397e65ebab19cc9aa10dc84306baceabc9cf36ea98"
     },
     {
       "upstream": "packages/client/ui-primitives/tests/markdown-incremental.client.spec.tsx",
@@ -2975,6 +2975,7 @@
         "../../../../protocol/app-server/v51",
         "../../client/transcript",
         "../../locale/react",
+        "../../presentation/primitives/StateDot",
         "../../presentation/primitives/Tooltip",
         "../../presentation/primitives/clipboard",
         "../../presentation/primitives/icons",
@@ -2992,7 +2993,7 @@
         "Cordis/plugin slots"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "167c1e1babfa6472b1c2e14d95a50df8cb4d1bc0a35fb878d729ae63a2fd037a"
+      "local_sha256": "bb22586759bbc1b3157fbf8645fa51d48a9f8bb59b4f012be2eb37e5ac50e2d9"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.module.css",
@@ -3026,7 +3027,7 @@
         "Cordis/plugin slots"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "c70424c41226edc769fe099d7fd3be7fe521f46c436f1fdfb7bb257952dd3589"
+      "local_sha256": "f466769cacf7b4bc0bf28210af7fa8ba86146ec5f1e1d496de53148af8321fcd"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
@@ -3564,7 +3565,7 @@
           "treatment": "Task count, stop confirmation, duration and output disclosure wording follows the Harness job menu."
         }
       ],
-      "local_sha256": "37abff2b68e5d502a9cb7b195098d74fd3eea3bbe87ae5ca5cbec83380924dc3"
+      "local_sha256": "ba9329ee5dfd7e61aaa3e23c475331effd7f18f156a727bc5e567c13bb556e9e"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",

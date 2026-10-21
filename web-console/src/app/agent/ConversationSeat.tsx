@@ -10,7 +10,7 @@ import type { WorkspaceAssociations } from '../../workspaces/associations';
 import type { UserInputBlock } from '../../../../protocol/app-server/v51';
 import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
 import { goalDock } from '../../bindings/composer-context';
-import { deriveSessionProductState, type SessionRecovery } from '../../bindings/session-product';
+import { deriveSessionProductState, type SessionRecovery, type SessionTransition } from '../../bindings/session-product';
 import { SessionStatus } from '../SessionStatus';
 import { ConversationComposer } from '../new-conversation/ConversationComposer';
 import { ConversationDocks, ConversationTotals } from './ConversationLive';
@@ -19,9 +19,9 @@ import type { CommandId } from '../commands/registry';
 import type { ComposerDraft } from '../composer/draft';
 import { ComposerSeat } from './ComposerSeat';
 
-export function ConversationStatus({ client, sessionId, recover }: { client: AppServerClient; sessionId: string; recover: (action: SessionRecovery) => void }) {
+export function ConversationStatus({ client, sessionId, recover, transition }: { client: AppServerClient; sessionId: string; recover: (action: SessionRecovery) => void; transition?: SessionTransition }) {
   const tx = useTranslation();
-  const product = useClientSelector(client, state => deriveSessionProductState(tx, state, state.views[sessionId]), sameValue);
+  const product = useClientSelector(client, state => deriveSessionProductState(tx, state, state.views[sessionId], sessionId, transition), sameValue);
   return <SessionStatus product={product} recover={recover}/>;
 }
 

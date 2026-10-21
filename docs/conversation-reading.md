@@ -445,6 +445,15 @@ matching Harness. It adds no fork-source notice or dedicated source-history
 route. The bounded Message window selector remains available to native readers;
 immutable origin metadata and the fork seed boundary remain native facts.
 
+Fork and Retry publish progress immediately from the existing navigation intent.
+Repeated clicks on the same pending transition share that intent. Fork keeps the
+source readable until the child's native checkpoint and subscription are ready;
+supplementary settings reads do not delay opening it. Retry preserves its reading
+prefix and presents the intentional detach/attach as preparation while replay is
+pending. Actual transport loss, uncertain outcomes and storage or observation
+failures retain their recovery presentation. These UI states grant no execution
+authority and never replay a native mutation.
+
 The immutable inherited transcript boundary was introduced in SQLite schema 58 and remains part of the current schema 74 lineage bootstrap. Initialization records the final native transcript watermark in the same transaction as the seed, including terminal-only inherited Turns and excluding invisible Context messages. Repeated bounded transcript and checkpoint reads resolve this boundary through a single bootstrap primary-key lookup. Older development stores are rejected without migration.
 
 ## Request field metadata

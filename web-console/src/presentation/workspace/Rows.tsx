@@ -224,7 +224,7 @@ interface SessionStatus {
  * outranks completion reminders.
  */
 function sessionStatuses(
-  node: Pick<SessionNode, 'pendingInteraction' | 'running' | 'runningSubagentCount'>,
+  node: Pick<SessionNode, 'pendingInteraction' | 'running' | 'runningSubagentCount' | 'forking'>,
   t: RowTranslate,
 ): readonly [SessionStatus, ...SessionStatus[]] {
   const subagents: SessionStatus | undefined = node.runningSubagentCount === 0
@@ -254,6 +254,7 @@ function sessionStatuses(
     default: return assertNever(node.pendingInteraction)
   }
   if (pending !== undefined) return subagents === undefined ? [pending] : [pending, subagents]
+  if (node.forking) return [{ state: 'ongoing', label: t('common:session-product.forking') }, ...(subagents ? [subagents] : [])]
   if (node.running) {
     const primary: SessionStatus = { state: 'ongoing', label: t('workspace:status.running') }
     return subagents === undefined ? [primary] : [primary, subagents]
@@ -404,7 +405,7 @@ export function SessionNodeItem({
   const sessionMenuItems = [
     ...(onPin ? [{ id: 'pin', label: pinLabel, icon: pinIcon }] : []),
     { id: 'rename', label: t('workspace:rename'), icon: <IconEditOutline16 /> },
-    { id: 'fork', label: t('workspace:menu.fork'), icon: <IconBranchOutline16 /> },
+    { id: 'fork', label: t('workspace:menu.fork'), icon: <IconBranchOutline16 />, disabled: node.forking },
     // 20-native glyph in the menu's 16px icon slot (Menu.module.css .itemIcon).
     { id: 'delete', label: t('workspace:menu.deleteSession'), icon: <IconTrashOutline16 />, danger: true },
     ...(onCopyId ? [{ id: 'copy-id', label: t('workspace:menu.sessionId'), icon: <IconCopyOutline16/> }] : []),
@@ -417,6 +418,7 @@ export function SessionNodeItem({
         flat && !showStatus && css.flatSessionRowWithoutStatus,
       )}
       role="treeitem"
+      aria-busy={node.forking || undefined}
       aria-selected={selected}
       onClick={() => { onOpen(node.id) }}
       onPointerEnter={() => { revealClippedTitle(titleRef.current, true) }}

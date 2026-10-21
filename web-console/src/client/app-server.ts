@@ -213,7 +213,7 @@ export class AppServerClient {
       delete: async (expected_target_revision, admission) => (await native({ method: 'session/delete', params: { session_id: id, expected_target_revision } }, 'deletion', admission)).result,
       recover: async admission => (await native({ method: 'session/recoverDeletion', params: { session_id: id } }, 'deletion', admission)).result,
       inspectDeletion: async current => (await this.request({ method: 'session/deletePreview', params: { session_id: id } }, 'deletion', undefined, current)).result,
-      observeAttached: async (result, current) => {
+      observeAttached: async (result, current, ready) => {
         if (!current()) return;
         const previous=this.resumeSeeds.get(id);
         this.resumeSeeds.delete(id);
@@ -254,6 +254,9 @@ export class AppServerClient {
         }
         this.setSession(id, { observationState: chain.phase });
         this.reconcile(id); this.settleSubmissions(id);
+        // A checkpoint and acknowledged subscription admit navigation. Settings
+        // details still settle under this claim, without delaying its reader.
+        ready();
         const settings=await this.reads.readSettings(id,current);
         if(!current())return;
         this.setSession(id,{settings:settings.settings});

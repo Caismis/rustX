@@ -40,7 +40,9 @@ export interface SessionLifecyclePort {
   delete(revision: string, admission: Admission): Promise<RuntimeClientSessionDeletionResult>;
   recover(admission: Admission): Promise<RuntimeClientSessionDeletionResult>;
   inspectDeletion(current: () => boolean): Promise<RuntimeClientSessionDeletionResult>;
-  observeAttached(result: Attached, current: () => boolean): Promise<void>;
+  /** Announce ready after native checkpoint/subscription; remaining metadata
+   * settlement still belongs to this attachment's operation. */
+  observeAttached(result: Attached, current: () => boolean, ready: () => void): Promise<void>;
   refresh(target: AttachmentTarget): Promise<void>;
   cold(current: () => boolean): void;
   classify(error: unknown): FailureKind;

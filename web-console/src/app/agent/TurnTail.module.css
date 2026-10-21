@@ -5,6 +5,7 @@
 .action:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-secondary); }
 .action:focus-visible { outline: 2px solid var(--dsw-alias-button-info-fill); outline-offset: 2px; }
 .action:disabled { opacity: .4; cursor: default; }
+.action[aria-busy=true] { opacity: 1; color: var(--dsw-alias-button-info-fill); }
 @media (hover: hover) and (pointer: fine) {
   [data-response-reveal='hover'] .actions, .actions[data-response-reveal='hover'] { opacity: 0; transition: opacity 80ms ease; }
   [data-response-reveal='hover']:hover .actions, [data-response-reveal='hover']:focus-within .actions, .actions[data-response-reveal='hover']:hover, .actions[data-response-reveal='hover']:focus-within { opacity: 1; }

@@ -13,6 +13,18 @@ const base = (): SessionView => ({ id: 'A', attachment: 'attached', attachmentIn
 const running = () => ({ attempt_id: 'private-attempt', phase: { type: 'running' as const }, turn: 1 });
 const uncertain = { id: 'lost-request', method: 'turn/cancel' as const, sessionId: 'A', generation: 7 };
 
+it.each(['fork', 'retry'] as const)('%s presents a deliberate handoff as progress while retaining real failures', transition => {
+  const tx = translator('en'), view: SessionView = { ...base(), target: undefined, attachment: 'detached', attachmentIntent: 'released' };
+  const project = (state: Pick<ClientView, 'connection' | 'uncertain'> = connected, source = view) => deriveSessionProductState(tx, state, source, 'A', transition);
+  expect(project()).toMatchObject({ status: 'connecting', severity: 'quiet' });
+  expect(project().recovery).toBeUndefined();
+  expect(project({ ...connected, connection: 'stale' })).toMatchObject({ status: 'reconnect', recovery: { action: 'connect' } });
+  expect(project({ ...connected, uncertain: [uncertain] }).status).toBe('uncertain');
+  expect(project(connected, { ...view, snapshot: { ...snapshot(), durability_failure: { operation: 'commit', diagnostic: 'storage-failure' } } }).status).toBe('failure');
+  expect(project(connected, { ...base(), attachment: 'error', error: 'Read failed' }).status).toBe('unavailable');
+  expect(deriveSessionProductState(tx, connected, view).status).toBe('reconnect');
+});
+
 it.each([
   ['idle', {}, {}, 'idle', undefined],
   ['working', { snapshot: { ...snapshot(), attempt: running() } }, {}, 'working', undefined],

@@ -85,6 +85,16 @@ def web_response_retry() -> Scenario:
 SCENARIOS["web_response_retry"] = web_response_retry
 
 
+def web_fork_feedback() -> Scenario:
+    """One completed native turn, followed by browser-owned lineage navigation."""
+    return Scenario("web_fork_feedback",
+                    Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=("Fork source",)),
+                         Stream(Text("Completed fork answer."), Finish())))
+
+
+SCENARIOS["web_fork_feedback"] = web_fork_feedback
+
+
 def web_sidebar_actions() -> Scenario:
     """Sidebar fork retains a native completion while its source keeps running."""
     def expected(prompt: str, **kwargs) -> Expect:

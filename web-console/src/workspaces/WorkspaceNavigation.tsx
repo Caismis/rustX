@@ -7,7 +7,7 @@ import type { ClientView } from '../client/contracts';
 import { useClientSelector, sameValue, type ShellView } from '../client/selectors';
 import { sessionDisplayTitle } from '../bindings/session-title';
 import { activeAttempt } from '../bindings/projection';
-import { deriveSessionProductState } from '../bindings/session-product';
+import { deriveSessionProductState, type SessionTransition } from '../bindings/session-product';
 import { Button } from '../presentation/primitives/Button';
 import { Input } from '../presentation/primitives/Input';
 import { Modal } from '../presentation/primitives/Modal';
@@ -24,15 +24,15 @@ import type { WorkspaceAssociations, WorkspaceMutation } from './associations';
 
 
 /** Activity requires a current attachment; cached snapshots cannot claim execution. */
-export function sessionObservation(tx: Translate, state: ClientView, id: string) {
+export function sessionObservation(tx: Translate, state: ClientView, id: string, transition?: SessionTransition) {
   const view = state.views[id];
-  const product = deriveSessionProductState(tx, state, view, id);
+  const product = deriveSessionProductState(tx, state, view, id, transition);
   if (product.status === 'uncertain') return product.label;
-  if (state.connection === 'connected' && (!view || view.attachmentIntent === 'released')) return '';
+  if (!transition && state.connection === 'connected' && (!view || view.attachmentIntent === 'released')) return '';
   return product.label ?? '';
 }
-export function WorkspaceNavigation({ associations, host, client, state, endpoint, workspace, selected, draft, selectWorkspace, openSession, openViews, closeView, closeAllViews, createSession, forkSession, deleteSession, metadataChanged, wide, expand, workspaceSettings }: {
-  associations: WorkspaceAssociations;
+export function WorkspaceNavigation({ associations, host, client, state, transition, endpoint, workspace, selected, draft, selectWorkspace, openSession, openViews, closeView, closeAllViews, createSession, forkSession, deleteSession, metadataChanged, wide, expand, workspaceSettings }: {
+  associations: WorkspaceAssociations; transition?: { sessionId: string; action: SessionTransition };
   workspaceSettings?: (id: string, label: string) => void;
   host: ProductHostWorkspaces; client: AppServerClient; state: ShellView; endpoint: string;
   wide: boolean; expand: () => void;
@@ -99,7 +99,7 @@ export function WorkspaceNavigation({ associations, host, client, state, endpoin
 
   const toNode = (session: typeof state.sessions[number]): SessionNode => {
     return { id: session.id, title: sessionDisplayTitle(tx, session), viewOpen: openViews.includes(session.id), pinned: pinned.includes(session.id),
-      running: false, runningSubagentCount: 0, updatedAt: Date.parse(session.updated_at) || 0 };
+      running: false, runningSubagentCount: 0, forking: transition?.sessionId === session.id && transition.action === 'fork', updatedAt: Date.parse(session.updated_at) || 0 };
 
   };
   const groupNodes: GroupNode[] = (bound ? catalog?.workspaces ?? [] : []).map(row => ({ key: row.id, workspaceId: row.id,
@@ -107,7 +107,7 @@ export function WorkspaceNavigation({ associations, host, client, state, endpoin
     containsCurrent: row.id === workspace,
     sessionCount: rows.filter(item => item.group === row.id).length, sessions: rows.filter(item => item.group === row.id).map(item => toNode(item.session)) }));
   return <>
-    <WorkspaceBrowser draft={bound && !selected && catalog?.workspaces.some(row => row.id === draft?.workspaceId) ? draft : undefined} renderSession={(node, render) => <LiveSessionNode key={node.id} client={client} node={node}>{render}</LiveSessionNode>} wide={wide} expand={expand} groups={groupNodes} sessions={sessions.map(toNode)} selected={selected} closeView={closeView} closeAllViews={openViews.length ? closeAllViews : undefined}
+    <WorkspaceBrowser draft={bound && !selected && catalog?.workspaces.some(row => row.id === draft?.workspaceId) ? draft : undefined} renderSession={(node, render) => <LiveSessionNode key={node.id} client={client} node={node} transition={transition?.sessionId === node.id ? transition.action : undefined}>{render}</LiveSessionNode>} wide={wide} expand={expand} groups={groupNodes} sessions={sessions.map(toNode)} selected={selected} closeView={closeView} closeAllViews={openViews.length ? closeAllViews : undefined}
       unclassified={state.sessions.filter(session => { const entry = associationState.entries.get(session.id); return !entry || entry.cwd !== session.cwd || (!entry.confirmed && entry.status !== 'revoked'); }).map(session => session.id)} query={query} search={text => connected && search(text)} open={id => connected && openSession(id)} rename={id => edit('session', id, state.sessions.find(session => session.id === id)?.name ?? state.sessions.find(session => session.id === id)?.preview ?? '')} pin={id => pins.toggle(id)} copyId={id => { const generation = client.getSnapshot().generation; void writeClipboard(id).then(copied => { if (generation === client.getSnapshot().generation) setToast(previous => ({ sequence: (previous?.sequence ?? 0) + 1, copied })); }); }} fork={forkSession} remove={deleteSession}
       workspaceSettings={workspaceSettings} selectWorkspace={selectWorkspace} create={id => connected && createSession(id)} renameWorkspace={(id, title) => edit('workspace', id, title)} removeWorkspace={(id, title) => edit('remove', id, title)}
       addWorkspace={catalog?.picker.kind === 'configured' && bound ? () => edit('add', '', '') : undefined}
@@ -128,7 +128,7 @@ export function WorkspaceNavigation({ associations, host, client, state, endpoin
 }
 
 /** Only the individual activity row observes execution; the browser stays catalog-owned. */
-function LiveSessionNode({ client, node, children }: { client: AppServerClient; node: SessionNode; children: (node: SessionNode) => ReactNode }) {
+function LiveSessionNode({ client, node, children, transition }: { client: AppServerClient; node: SessionNode; transition?: SessionTransition; children: (node: SessionNode) => ReactNode }) {
   const tx = useTranslation();
   const activity = useClientSelector(client, state => {
     const view = state.views[node.id];
@@ -136,7 +136,7 @@ function LiveSessionNode({ client, node, children }: { client: AppServerClient; 
     const pending = current ? view.snapshot?.pending_interactions?.[0] : undefined;
     return { running: !!current && activeAttempt(view.snapshot),
       pendingInteraction: pending ? pending.kind === 'approval' ? 'approval' as const : pending.kind === 'review' ? 'plan-review' as const : 'question' as const : undefined,
-      observation: sessionObservation(tx, state, node.id) };
+      observation: sessionObservation(tx, state, node.id, transition) };
   }, sameValue);
   return children({ ...node, ...activity });
 }
