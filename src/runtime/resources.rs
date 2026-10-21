@@ -373,12 +373,7 @@ impl RuntimeResourceSnapshot {
             .binding;
         let sections = self
             .context_assembly
-            .system_sections(&crate::context::NativeContextInput {
-                workspace_instructions: self.project_instructions().map(str::to_owned),
-                skill_guidance: self.skill_catalog().map(str::to_owned),
-                agent_profile: self.agent_profile().map(str::to_owned),
-                ..crate::context::NativeContextInput::default()
-            })
+            .system_sections(&self.native_system_input())
             .map_err(|e| e.to_string())?;
         let tools = self
             .capability
@@ -744,6 +739,21 @@ impl RuntimeResourceSnapshot {
     #[must_use]
     pub fn agent_profile(&self) -> Option<&str> {
         self.agent_profile.as_deref()
+    }
+
+    /// One static System input for execution, compaction budgeting and
+    /// configuration comparison, derived from this admitted generation.
+    pub(crate) fn native_system_input(&self) -> crate::context::NativeContextInput {
+        crate::context::NativeContextInput {
+            core_runtime_identity: Some(format!(
+                "{}\n\nCurrent working directory: {}",
+                crate::context::DEFAULT_SYSTEM_PROMPT,
+                self.capability.workspace_root().display()
+            )),
+            agent_profile: self.agent_profile().map(str::to_owned),
+            workspace_instructions: self.project_instructions().map(str::to_owned),
+            skill_guidance: self.skill_catalog().map(str::to_owned),
+        }
     }
 
     /// The certified-extension registry frozen with this generation.

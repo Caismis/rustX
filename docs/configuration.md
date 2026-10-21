@@ -270,6 +270,15 @@ affect only later admissions.
 `agent` supports `description`, `instructions`, `model`, `tools`, `skills`,
 `plugins`, `agents`, `workflows`, and `agents_md`.
 
+Every primary Agent request includes rustX's built-in coding-assistant guidance
+and execution working directory, even when `instructions` is omitted.
+Agent instructions extend that baseline; they do not replace it.
+The effective System Prompt is ordered as built-in
+guidance, Agent instructions, project instructions selected by `agents_md`,
+certified-extension sections, and visible Skill guidance. Root and named Agents
+use the same baseline with their own admitted instructions and capabilities.
+Auxiliary summary requests retain their separate task-specific input.
+
 ```toml
 [agent]
 skills = ["review"]

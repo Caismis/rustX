@@ -158,6 +158,7 @@ impl ObservedEvents {
 struct Setup {
     /// The model the session selects.
     model: String,
+    instructions: Option<String>,
     images: bool,
     /// The declared context window of every catalog model.
     context_window: u64,
@@ -175,6 +176,7 @@ impl Setup {
     fn new(model: &str) -> Self {
         Self {
             model: model.to_owned(),
+            instructions: None,
             images: false,
             context_window: 128_000,
             reserve_tokens: 1_024,
@@ -836,15 +838,18 @@ fn session_json(setup: &Setup) -> String {
     if let Some(summary) = &setup.summary_model {
         model["summary_model"] = serde_json::json!({"mode": "explicit", "model": summary});
     }
-    toml::to_string_pretty(&serde_json::json!({
+    let mut document = serde_json::json!({
         "agent_id": "agent-issue47",
         "agent": {"model": model, "skills": "all", "workflows": if setup.images { vec!["image_review"] } else { vec![] }, "tools": {"builtin": if setup.images { vec!["read", "write", "edit", "glob", "grep", "bash", "read_image"] } else { vec!["read", "write", "edit", "glob", "grep", "bash"] }}, "plugins": {"agent_status": {"enabled": true}, "todo": {"enabled": true}}},
         "context": {
             "reserve_tokens": setup.reserve_tokens,
             "keep_recent_tokens": setup.keep_recent_tokens,
         },
-    }))
-    .unwrap()
+    });
+    if let Some(instructions) = &setup.instructions {
+        document["agent"]["instructions"] = serde_json::json!(instructions);
+    }
+    toml::to_string_pretty(&document).unwrap()
 }
 
 /// The provider-request bodies the emulator recorded, as raw JSON text.
@@ -933,6 +938,11 @@ async fn a_normal_streamed_turn_settles_once_on_every_protocol() {
             "{scenario}: exactly one provider request"
         );
         assert_eq!(requests[0]["model"], serde_json::json!(model_id(&model)));
+        assert!(
+            system_text(&requests[0])
+                .starts_with("You are an expert coding assistant operating inside rustX."),
+            "{scenario}: the default System Prompt needs no authored instructions"
+        );
         assert_eq!(
             requests[0]["credentialHeaders"]
                 .as_array()
@@ -950,6 +960,84 @@ async fn a_normal_streamed_turn_settles_once_on_every_protocol() {
             "{scenario}: Agent Status reached the provider as canonical context"
         );
         emulator.finish().await;
+    }
+}
+
+/// Built-in guidance, authored Agent instructions and a real AGENTS.md cross
+/// every provider boundary in the same order and survive frozen reconstruction.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn default_system_prompt_layers_agent_and_project_instructions_on_every_protocol() {
+    for (scenario, model) in [
+        (
+            "openai_chat_streamed_turn",
+            format!("emulator/{CHAT_MODEL}"),
+        ),
+        (
+            "openai_responses_streamed_turn",
+            format!("emulator/{RESPONSES_MODEL}"),
+        ),
+        (
+            "anthropic_streamed_turn",
+            format!("emulator-anthropic/{ANTHROPIC_MODEL}"),
+        ),
+    ] {
+        let Some(emulator) = ProviderEmulator::start(scenario).await else {
+            return;
+        };
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let project = "Project guidance: preserve the public API.";
+        std::fs::write(workspace.join("AGENTS.md"), project).unwrap();
+        let instructions = "Agent guidance: explain the evidence for changes.";
+        let setup = Setup {
+            instructions: Some(instructions.to_owned()),
+            ..Setup::new(&model)
+        };
+        let driver = Driver::start_in(root, &emulator, &setup).await;
+        driver.submit(TURN_ONE);
+        let (_, outcome) = driver.settle().await;
+        assert!(matches!(outcome, RuntimeClientOutcome::Completed { .. }));
+
+        let requests = emulator.requests().await;
+        assert_eq!(requests.len(), 1);
+        let prompt = system_text(&requests[0]);
+        assert!(prompt.starts_with("You are an expert coding assistant operating inside rustX."));
+        assert!(prompt.contains(&format!(
+            "Current working directory: {}",
+            workspace.canonicalize().unwrap().display()
+        )));
+        assert!(prompt.ends_with(&format!("\n\n{instructions}\n\n{project}")));
+        let snapshots = driver.request_history().page(None, 32).unwrap().snapshots;
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].effective_system_prompt, prompt);
+        let reconstructed = driver.reconstruct_request(&snapshots[0].identity).unwrap();
+        assert_eq!(reconstructed.effective_system_prompt, prompt);
+        assert!(driver.canonical_history().iter().all(|message| {
+            let json = serde_json::to_string(message).unwrap();
+            !json.contains(instructions) && !json.contains(project)
+        }));
+        emulator.finish().await;
+    }
+}
+
+fn system_text(request: &serde_json::Value) -> String {
+    let body = &request["body"];
+    if let Some(instructions) = body["instructions"].as_str() {
+        instructions.to_owned()
+    } else if let Some(system) = body["system"].as_array() {
+        system
+            .iter()
+            .map(|block| block["text"].as_str().unwrap())
+            .collect()
+    } else {
+        body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|message| message["role"] == "system")
+            .map(|message| message["content"].as_str().unwrap())
+            .collect()
     }
 }
 

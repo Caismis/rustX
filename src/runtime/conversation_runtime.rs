@@ -299,7 +299,7 @@ use crate::context::compaction::{
 use crate::context::tokens::TokenEstimator;
 use crate::context::{
     AgentStatusEngine, CompactionConstraints, ContextError, ContextErrorKind, ContextRuntime,
-    NativeContextInput, SessionContextPolicy, render_effective_system_prompt,
+    SessionContextPolicy, render_effective_system_prompt,
 };
 use crate::conversation::ConversationState;
 use crate::conversation::SurfaceRevision;
@@ -5437,12 +5437,7 @@ impl ConversationRuntime {
             let tools = resources.capability().tool_registry().model_definitions();
             let system_sections = resources
                 .context_assembly()
-                .system_sections(&NativeContextInput {
-                    workspace_instructions: resources.project_instructions().map(str::to_owned),
-                    skill_guidance: resources.skill_catalog().map(str::to_owned),
-                    agent_profile: resources.agent_profile().map(str::to_owned),
-                    ..NativeContextInput::default()
-                })
+                .system_sections(&resources.native_system_input())
                 .map_err(|error| {
                     ManualCompactionError::Context(ContextError::new(
                         ContextErrorKind::Internal,
@@ -10054,13 +10049,13 @@ mod tests {
         runtime.shutdown().await.unwrap();
     }
 
-    /// Manual admission freezes capability-derived Skill guidance as
-    /// non-retirable request input. The same history can retire one message
-    /// without that guidance, but must retire two when the frozen catalog
-    /// makes the one-message candidate exceed the exact soft limit.
+    /// Manual admission accounts for the built-in System Prompt and frozen
+    /// Skill guidance as non-retirable input. The same history can retire
+    /// one message with only the baseline, but must retire two when the
+    /// frozen catalog makes that candidate exceed the exact soft limit.
     #[allow(clippy::too_many_lines)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn manual_compaction_exact_fit_includes_frozen_skill_guidance() {
+    async fn manual_compaction_exact_fit_includes_default_and_frozen_skill_guidance() {
         fn estimator() -> Arc<dyn TokenEstimator> {
             Arc::new(ClosureTokenEstimator::new(
                 |messages, effective_system_prompt, _tools| {
@@ -10079,11 +10074,10 @@ mod tests {
                         })
                         .sum::<u64>();
                     conversation
-                        + if effective_system_prompt.is_empty() {
-                            0
-                        } else {
-                            400_000
-                        }
+                        + u64::from(
+                            effective_system_prompt.contains(crate::context::DEFAULT_SYSTEM_PROMPT),
+                        ) * 50_000
+                        + u64::from(effective_system_prompt.contains("## Skills")) * 400_000
                 },
             ))
         }
@@ -10119,8 +10113,8 @@ mod tests {
             .compact_context(None)
             .await
             .expect("one-message retirement fits without Skill guidance");
-        assert_eq!(without_outcome.tokens_before.input_tokens, 1_050_000);
-        assert_eq!(without_outcome.estimated_tokens_after, 710_000);
+        assert_eq!(without_outcome.tokens_before.input_tokens, 1_100_000);
+        assert_eq!(without_outcome.estimated_tokens_after, 760_000);
         assert_eq!(
             runtime_without_skill
                 .coordinator_active_ids()
@@ -10167,8 +10161,8 @@ mod tests {
             .compact_context(None)
             .await
             .expect("a larger retirement span fits with frozen Skill guidance");
-        assert_eq!(with_outcome.tokens_before.input_tokens, 1_450_000);
-        assert_eq!(with_outcome.estimated_tokens_after, 760_000);
+        assert_eq!(with_outcome.tokens_before.input_tokens, 1_500_000);
+        assert_eq!(with_outcome.estimated_tokens_after, 810_000);
         assert_eq!(
             runtime_with_skill
                 .coordinator_active_ids()
@@ -11424,9 +11418,52 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn agent_profile_is_snapshot_system_authority_not_bootstrap_history() {
+    async fn default_system_prompt_is_frozen_without_optional_instructions() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (runtime, model) =
+            headless_runtime(&dir, vec![one_turn_script(), one_turn_script()], None, None).await;
+        assert!(runtime.coordinator_ledger().unwrap().is_empty());
+        runtime.activate();
+        for attempt in 0..2 {
+            runtime.submit_inbound(text_content("hello")).unwrap();
+            let _ = await_settled_ledger(&runtime, attempt).await;
+        }
+
+        let requests = model.requests();
+        assert_eq!(requests.len(), 2);
+        let snapshots = request_snapshots(&runtime.request_history());
+        assert_eq!(snapshots.len(), 2);
+        let expected = format!(
+            "{}\n\nCurrent working directory: {}",
+            crate::context::DEFAULT_SYSTEM_PROMPT,
+            runtime.tool_runtime().workspace().root().display()
+        );
+        for (request, snapshot) in requests.iter().zip(&snapshots) {
+            assert_eq!(request.effective_system_prompt, expected);
+            assert_eq!(
+                snapshot.effective_system_prompt,
+                request.effective_system_prompt
+            );
+            assert_eq!(snapshot.system_sections.len(), 1);
+            assert_eq!(
+                snapshot.system_sections[0].lane,
+                crate::context::SystemSectionLane::CoreRuntimeIdentity
+            );
+        }
+        let ledger = runtime.coordinator_ledger().unwrap();
+        assert!(
+            !serde_json::to_string(&ledger)
+                .unwrap()
+                .contains("You are an expert coding assistant")
+        );
+        runtime.shutdown().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn agent_and_project_instructions_extend_default_system_authority() {
         let dir = tempfile::tempdir().expect("temp dir");
         let persona = "immutable child exploration persona";
+        let project = "Follow this project's coding conventions.";
         let (runtime, model) = headless_runtime_with_options(
             &dir,
             vec![one_turn_script()],
@@ -11434,6 +11471,10 @@ mod tests {
             None,
             HeadlessRuntimeOptions {
                 agent_profile: Some(persona.to_owned()),
+                project_context_files: vec![project_file(
+                    &dir.path().join("workspace/AGENTS.md"),
+                    project,
+                )],
                 ..HeadlessRuntimeOptions::default()
             },
         )
@@ -11450,18 +11491,31 @@ mod tests {
             .submit_inbound(text_content("delegated task"))
             .expect("delegated inbound");
         let _ = await_settled_ledger(&runtime, 0).await;
-        assert!(
-            model.requests()[0]
-                .effective_system_prompt
-                .contains(persona)
+        let expected = format!(
+            "{}\n\nCurrent working directory: {}\n\n{persona}\n\n{project}",
+            crate::context::DEFAULT_SYSTEM_PROMPT,
+            runtime.tool_runtime().workspace().root().display()
         );
+        assert_eq!(model.requests()[0].effective_system_prompt, expected);
         let snapshots = request_snapshots(&runtime.request_history());
         assert_eq!(snapshots.len(), 1);
-        assert!(snapshots[0].effective_system_prompt.contains(persona));
-        assert!(snapshots[0].system_sections.iter().any(|section| {
-            section.lane == crate::context::SystemSectionLane::AgentProfile
-                && section.content == persona
-        }));
+        assert_eq!(snapshots[0].effective_system_prompt, expected);
+        assert_eq!(
+            snapshots[0]
+                .system_sections
+                .iter()
+                .map(|section| section.lane)
+                .collect::<Vec<_>>(),
+            vec![
+                crate::context::SystemSectionLane::CoreRuntimeIdentity,
+                crate::context::SystemSectionLane::AgentProfile,
+                crate::context::SystemSectionLane::WorkspaceInstructions,
+            ]
+        );
+        let ledger = serde_json::to_string(&runtime.coordinator_ledger().unwrap()).unwrap();
+        assert!(!ledger.contains(persona));
+        assert!(!ledger.contains(project));
+        runtime.shutdown().await.unwrap();
     }
 
     /// Whether an internal runtime event is one of the terminal settlement

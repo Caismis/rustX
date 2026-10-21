@@ -5097,7 +5097,13 @@ message role, history shape, or timestamps:
   the current generated protocol version is supported.
 - `ModelRequest.effective_system_prompt` is the sole System authority. It is
   rustX-rendered from ordered native/extension sections; canonical history
-  has no System role. Frozen project instructions occupy the
+  has no System role. Every primary Root and child Agent request starts with
+  the built-in rustX coding-assistant guidance in `CoreRuntimeIdentity`.
+  Agent and project instructions extend that baseline in their own lanes;
+  omitting either cannot remove it. Execution, manual compaction budgeting
+  and configuration comparison use the same static System input. Auxiliary
+  summary requests remain isolated from primary System guidance.
+  Frozen project instructions occupy the
   `WorkspaceInstructions` lane and the active Skill catalog is one
   request-time `NativeCapabilityGuidance` section rendered from the attempt's
   immutable `CapabilitySnapshot`; it is absent when no model-visible Skills
