@@ -1,4 +1,5 @@
-import type { AppServerClient, OperationAdmission } from '../client/app-server';
+import type { AppServerClient } from '../client/app-server';
+import type { OperationAdmission } from '../client/contracts';
 import { sameEndpoint } from './endpoint';
 import { WorkspaceAuthority } from './authority';
 /** Fresh operation admission. Display evidence is neither input nor prerequisite.

@@ -1,13 +1,14 @@
 //! Public delivery discovery remains bounded independently of original Tool C.
 use super::*;
-use crate::durable::{ConversationStore, SqliteConversationStore};
+use crate::durable::SqliteConversationStore;
 use crate::message::types::{
     AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, InboundKind, MessageBlock,
     ToolCallOccurrenceRef, ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
+use crate::observation::content::CanonicalContentLocator;
 use crate::runtime::identity::{MessageId, ToolCallId, ToolId};
-use crate::runtime_client::content::CanonicalContentLocator;
 use base64::Engine as _;
+use rustx::durable::{CanonicalStore, JournalStore, ObservationStore};
 
 const DELIVERY_SECRET: &str = "bounded-delivery-secret-00000000000000000000000000000";
 
@@ -56,7 +57,7 @@ async fn granted_connection(
 async fn t08_t11_t12_t14_t19_numeric_delivery_carrier_keeps_real_stdio_and_websocket_bounded() {
     Box::pin(bounded(async {
         for ws in [false, true] {
-            let fixture = Fixture::new().await;
+            let fixture = Fixture::with_session_count(None, 1).await;
             let session = &fixture.sessions[0];
             let file_path = fixture.workspaces[0].join("原始 report.md");
             let original_bytes = b"# Original protected bytes\r\n";
@@ -117,7 +118,7 @@ async fn t08_t11_t12_t14_t19_numeric_delivery_carrier_keeps_real_stdio_and_webso
             let checkpoint = loop {
                 let MethodResult::Checkpoint { checkpoint } = call(&client, 46_790, Method::SessionCheckpoint { target: target.clone(), trace_records: vec![] }).await else { panic!("checkpoint"); };
                 if checkpoint.snapshot.configuration_adoption_eligibility
-                    == crate::local_runtime::configuration::application::AdoptionEligibility::Eligible
+                    == crate::runtime::adoption::AdoptionEligibility::Eligible
                 {
                     break checkpoint;
                 }
@@ -133,7 +134,7 @@ async fn t08_t11_t12_t14_t19_numeric_delivery_carrier_keeps_real_stdio_and_webso
             let MethodResult::CheckpointPage { page: last } = call(&client, 46_792, Method::ConversationCheckpointPage { target: target.clone(), agent_id: None, cut: checkpoint.read_cut.clone(), domain: head.domain.clone(), offset: page.next_offset.unwrap(), limit: 8 }).await else { panic!("advancing delivery page"); };
             assert_eq!(last.read_cut, checkpoint.read_cut);
             assert_eq!((last.total, last.items.len(), last.next_offset), (9, 1, None));
-            let item: crate::runtime_client::delivery::RuntimeClientDeliveryItem = crate::runtime_client::checkpoint::decode_domain_value(last.items[0].value.clone().unwrap()).unwrap();
+            let item: crate::observation::delivery::RuntimeClientDeliveryItem = crate::observation::bounded::decode_domain_value(last.items[0].value.clone().unwrap()).unwrap();
             assert_eq!(item.index, 8);
             assert_eq!(item.locator, locator);
             let mut metadata = Vec::new();

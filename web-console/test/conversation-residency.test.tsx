@@ -15,6 +15,7 @@ import { inputTrigger } from '../src/app/composer/input-trigger';
 import { cfg3Source, cfg3Effective } from './cfg3-data';
 import { Server, snapshot, endpoint } from './fixture';
 import type { CatalogModelView, RuntimeClientEvent, RuntimeClientSnapshot, SessionModelConfig, SourceSettings } from '../../protocol/app-server/v51';
+import { firstSubmissions } from '../src/app/new-conversation/first-submit';
 
 // These spies execute the actual functions, including their hooks. Calls count
 // render invocations, not merely DOM mutation or wrapper/parent renders.
@@ -372,7 +373,7 @@ it('a cold connection failure keeps the unsent prompt recoverable without dispat
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
   await act(async () => server.socket.deliver({ jsonrpc: '2.0', id: opening.id, error: { code: -32000, message: 'Runtime initialization failed' } }));
   expect(input().value).toBe('retain on connection failure');
-  expect(server.client.firstSubmissions.session('A')?.phase).toBe('failed');
+  expect(firstSubmissions(server.client).session('A')?.phase).toBe('failed');
   expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(0);
 });
 

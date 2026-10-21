@@ -77,7 +77,9 @@ replacement process, or another server, retires the previous line — a warning
 never carries into a process that does not hold it — and its sequences start a
 new ordering domain; its receipts are its own, even with equal ids.
 
-One retention policy bounds every per-source repair map (`retainSource`: at
+One retention policy, shared with the Web client, bounds every per-source repair map
+(`retainSourceRepair` in `protocol/app-server/source-repair.ts`, which also holds the
+apply/ignore/recover ordering decision: at
 most 64 Workspaces, the ledger's own bound, whether or not the User has an
 entry, plus the User in its own slot; the least recently observed Workspace is
 forgotten first, the User never, and re-observing a Workspace makes it the most

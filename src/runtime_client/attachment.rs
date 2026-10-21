@@ -98,7 +98,7 @@ impl RuntimeAttachment {
         id: &crate::runtime::identity::AgentId,
         offset: Option<usize>,
         limit: usize,
-    ) -> Result<crate::runtime_client::turn::ObservedTurnPage, RuntimeClientError> {
+    ) -> Result<crate::observation::turn::ObservedTurnPage, RuntimeClientError> {
         self.access(false)?.agent_turns(id, offset, limit)
     }
     /// Locate one child Turn or page around its captured native cut.
@@ -188,8 +188,8 @@ impl RuntimeAttachment {
         self.access(true)?.model_set(config)
     }
     native_control!(goal_control, true, control: crate::goal::GoalControl);
-    native_control!(trace_page, false, before: Option<super::trace::TraceCursor>, limit: usize, records: Vec<super::trace::TraceCursor>);
-    native_control!(transcript_page, false, before: Option<super::snapshot::RuntimeClientTranscriptCursor>, limit: usize);
+    native_control!(trace_page, false, before: Option<crate::observation::trace::TraceCursor>, limit: usize, records: Vec<crate::observation::trace::TraceCursor>);
+    native_control!(transcript_page, false, before: Option<crate::observation::transcript::RuntimeClientTranscriptCursor>, limit: usize);
 
     /// Await the native maintenance operation.
     /// # Errors

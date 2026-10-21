@@ -1,10 +1,9 @@
 import { attemptOwnerKey } from '../../../protocol/app-server/attempt-identity.ts';
 import { messageDescriptors } from './message-descriptors.ts';
 import { contentRefKey } from '../../../protocol/app-server/content-identity.ts';
-import { refineToolSlots } from '../../../protocol/app-server/projection.ts';
-import { displayInteraction, type DisplayInteraction } from './interaction-display.ts';
+import { displayInteraction } from './interaction-display.ts';
 import type { ContentBinding } from '../../../protocol/app-server/v51.ts';
-import { foldRuntimeEvent, checkpointSnapshot, contentBindings, observationCheckpoint, statusIdentity } from '../../../protocol/app-server/projection.ts';
+import { foldRuntimeEvent, checkpointSnapshot, contentBindings, observationCheckpoint, refineToolSlots, statusIdentity, transitionFacts } from '../../../protocol/app-server/projection.ts';
 /**
  * The presentation reducer.
  *
@@ -35,8 +34,6 @@ import { foldRuntimeEvent, checkpointSnapshot, contentBindings, observationCheck
 
 import type {
   AgentStatusView,
-  AttemptModelView,
-  RoutedInteraction,
   RuntimeClientCursor,
   RuntimeClientEvent,
   RuntimeClientSnapshot,
@@ -63,7 +60,6 @@ export interface ProjectedEvent {
 }
 import { parseSnapshot } from "./todos.ts";
 import type {
-  AttemptPresentation,
   PresentationState,
   StreamingBlock,
   StreamingMessage,
@@ -163,125 +159,300 @@ export function deferredContent(state: PresentationState) {
   }
   return [...bindings.values()].filter(binding=>binding.deferred);
 }
-const TOOL_EVENT_TYPES=['tool_call_started','tool_call_assembled','tool_call_rebound','tool_execution_rebound','tool_occurrence_rebound','tool_execution_started','tool_execution_progress','tool_result_committed','tool_execution_settled'] as const;
-type NativeToolEvent=Extract<RuntimeClientEvent,{type:typeof TOOL_EVENT_TYPES[number]}>;
-function isNativeToolEvent(event:RuntimeClientEvent): event is NativeToolEvent {
-  return (TOOL_EVENT_TYPES as readonly string[]).includes(event.type);
+/**
+ * Folds one routed observation into the next state.
+ *
+ * The shared native fold (`protocol/app-server/projection.ts`) is the single
+ * authority for every fact it owns, and it evaluates each event — a whole
+ * `projection_transition` batch included — exactly once. Everything the
+ * terminal shows of those facts is read back from the folded native snapshot
+ * by {@link nativeFields}; nothing here re-derives or overwrites them.
+ *
+ * What remains local is the terminal's display adaptation of the transcript
+ * ({@link adaptTranscript}): the loaded history window joined with durable
+ * pages read earlier, rows appended at their durable cursors, and the one
+ * streaming row. It reads the folded snapshot where the runtime owns the
+ * answer and never feeds anything back into it.
+ *
+ * Pure: the input state is never mutated, so a caller may keep the previous
+ * value (for a diff, a test assertion, or an undo of a render).
+ */
+export function reduce(state: PresentationState, protocolEvent: ProjectedEvent): PresentationState {
+  const { cursor, event } = protocolEvent;
+  if (event.type === 'checkpoint_advanced') return replaceFromSnapshot(checkpointSnapshot(event.checkpoint), cursor);
+  const native = nativeSnapshots.get(state);
+  if (!native) throw new Error('No authoritative checkpoint for Runtime Client observation.');
+  const projected = foldRuntimeEvent(native, event);
+  const adaptation: Adaptation = { projected, displayedInbound: new Map((native.inbound.pending ?? []).map(item => [item.message.id, item.sequence])) };
+  let view: TranscriptView = transcriptView(state);
+  for (const fact of transitionFacts(event)) view = adaptTranscript(view, fact, adaptation);
+  const next: PresentationState = { ...view, ...nativeFields(projected), cursor };
+  nativeSnapshots.set(next, projected);
+  preserveHistoryBindings(state, next);
+  return next;
 }
 
-export function reduce(state: PresentationState, protocolEvent: ProjectedEvent): PresentationState {
-  const native = nativeSnapshots.get(state), event = protocolEvent.event;
-  if (event.type === 'projection_transition') {
-    let next = state;
-    for (const item of event.events) next = reduce(next, { cursor: protocolEvent.cursor, event: item });
-    if (native) nativeSnapshots.set(next, foldRuntimeEvent(native, event));
-    preserveHistoryBindings(state,next);
-    return next;
-  }
-  if (event.type === 'checkpoint_advanced') return replaceFromSnapshot(checkpointSnapshot(event.checkpoint), protocolEvent.cursor);
-  if (event.type === 'block_content_advanced') {
-    if (!native) throw new Error('No checkpoint for content advancement.');
-    const next=mergeNativeTranscript(state,replaceFromSnapshot(foldRuntimeEvent(native,event),protocolEvent.cursor));
-    nativeSnapshots.set(next,foldRuntimeEvent(native,event));preserveHistoryBindings(state,next);return next;
-  }
-  if (event.type === 'assistant_publication_deferred_settled') {
-    if (!native) throw new Error('No authoritative checkpoint for publication settlement.');
-    const projected = foldRuntimeEvent(native, event);
-    const next = mergeNativeTranscript(state, replaceFromSnapshot(projected, protocolEvent.cursor));
-    nativeSnapshots.set(next, projected);
-    preserveHistoryBindings(state, next);
-    return next;
-  }
-  if (isNativeToolEvent(event)) {
-    if(!native)throw new Error('No authoritative checkpoint for Tool observation.');
-    const projected=foldRuntimeEvent(native,event);
-    const head=presentSnapshot(projected,protocolEvent.cursor);
-    const next={...state,cursor:protocolEvent.cursor,attempt:head.attempt,messageDescriptors:[...projected.message_descriptors],
-      transcript:state.transcript.map(row=>row.kind==='committed' && row.toolCalls && ['tool_execution_started','tool_execution_progress','tool_execution_settled','tool_result_committed','tool_occurrence_rebound'].includes(event.type)
-        ?{...row,toolCalls:refineToolSlots(row.toolCalls??[],event as Parameters<typeof refineToolSlots>[1])}:row)};
-    if(['tool_call_started','tool_call_assembled','tool_call_rebound'].includes(event.type)) {
-      next.transcript=[...state.transcript.filter(row=>row.kind!=='streaming'),...head.transcript.filter(row=>row.kind==='streaming')];
+/** The terminal-owned transcript display state, beside the native facts. */
+type TranscriptView = Pick<PresentationState, 'transcript' | 'transcriptNextCursor' | 'statistics' | 'deferredTranscriptEntries'>;
+
+function transcriptView(state: TranscriptView): TranscriptView {
+  return {
+    transcript: state.transcript,
+    transcriptNextCursor: state.transcriptNextCursor,
+    statistics: state.statistics,
+    deferredTranscriptEntries: state.deferredTranscriptEntries,
+  };
+}
+
+/** The transcript view one native snapshot alone describes. */
+function snapshotTranscript(snapshot: RuntimeClientSnapshot): TranscriptView {
+  return {
+    transcript: orderTranscript([...(snapshot.transcript.entries ?? []).map(transcriptEntryFromWire), ...streamingRows(snapshot)]),
+    statistics: snapshot.transcript.statistics,
+    transcriptNextCursor: snapshot.transcript.next_cursor ?? undefined,
+    deferredTranscriptEntries: boundedDeferred(snapshot.transcript.deferred_entries ?? []),
+  };
+}
+
+/** Rebuild only the finite native streaming head: provider block indexes are
+ * identities, while the native projection owns ordinal insertion/eviction. */
+function withNativeStreaming(view: TranscriptView, projected: RuntimeClientSnapshot): TranscriptView {
+  return { ...view, transcript: [...view.transcript.filter(isDurableTranscriptEntry), ...streamingRows(projected)] };
+}
+
+/**
+ * What transcript adaptation reads while it walks one observation's facts.
+ *
+ * `projected` is the native snapshot after the complete observation, so a
+ * fact inside a batch reads the batch's settled native head. The native fold
+ * owns the pending inbound queue; `displayedInbound` is only the display
+ * bookkeeping of which committed user rows currently show a pending inbound
+ * message (by message id, with its native sequence), seeded from the native
+ * queue before the observation and advanced fact by fact, so an edit or
+ * removal inside a batch rewrites exactly the row it displayed.
+ */
+interface Adaptation {
+  readonly projected: RuntimeClientSnapshot;
+  readonly displayedInbound: Map<string, string>;
+}
+
+/** Adapts the terminal transcript to one native fact. */
+function adaptTranscript(view: TranscriptView, event: RuntimeClientEvent, adaptation: Adaptation): TranscriptView {
+  const { projected, displayedInbound } = adaptation;
+  switch (event.type) {
+    case 'checkpoint_advanced':
+      displayedInbound.clear();
+      for (const item of event.checkpoint.snapshot.inbound.pending ?? []) displayedInbound.set(item.message.id, item.sequence);
+      return snapshotTranscript(event.checkpoint.snapshot);
+    case 'projection_transition':
+      return event.events.reduce((current, item) => adaptTranscript(current, item, adaptation), view);
+    case 'read_domains_updated':
+      return mergeNativeTranscript(view, {
+        ...view,
+        transcript: orderTranscript([...(event.transcript.entries ?? []).map(transcriptEntryFromWire), ...view.transcript.filter(entry => entry.kind === 'streaming')]),
+        transcriptNextCursor: event.transcript.next_cursor ?? undefined,
+        statistics: event.transcript.statistics,
+      });
+    // Native content and deferred publication settlement change the loaded
+    // window itself; the terminal joins the fresh native window to its pages.
+    case 'block_content_advanced':
+    case 'assistant_publication_deferred_settled':
+      return mergeNativeTranscript(view, snapshotTranscript(projected));
+    case 'assistant_message_started':
+    case 'tool_call_started':
+    case 'tool_call_assembled':
+      return withNativeStreaming(view, projected);
+    // Loaded committed rows carry their own bounded occurrence slots.
+    case 'tool_execution_started':
+    case 'tool_execution_progress':
+    case 'tool_execution_settled':
+    case 'tool_result_committed':
+    case 'tool_occurrence_rebound':
+      return { ...view, transcript: view.transcript.map(row => row.kind === 'committed' && row.toolCalls ? { ...row, toolCalls: refineToolSlots(row.toolCalls, event) } : row) };
+    case 'attempt_settled':
+      // An unsettled streaming message belongs to an attempt that ended
+      // without committing; drop the partial render, keep committed history.
+      return { ...view, transcript: dropStreaming(view.transcript, event.attempt_id) };
+    case 'interaction_audit_requested':
+      return { ...view, transcript: appendTranscriptEntry(view.transcript, {
+        kind: 'interaction_requested',
+        key: `interaction-requested:${event.audit.event_id}`,
+        cursor: event.transcript_cursor,
+        eventId: event.audit.event_id,
+        timestamp: event.audit.timestamp,
+        attemptId: event.audit.attempt_id,
+        turnId: event.audit.turn_id,
+        interactionId: event.audit.interaction_id,
+        subject: event.audit.subject,
+      }) };
+    case 'interaction_audit_settled':
+      return { ...view, transcript: appendTranscriptEntry(view.transcript, {
+        kind: 'interaction_settled',
+        key: `interaction-settled:${event.audit.event_id}`,
+        cursor: event.transcript_cursor,
+        eventId: event.audit.event_id,
+        timestamp: event.audit.timestamp,
+        attemptId: event.audit.attempt_id,
+        turnId: event.audit.turn_id,
+        interactionId: event.audit.interaction_id,
+        settlement: event.audit.settlement,
+      }) };
+    case 'assistant_publication_settled':
+      // The stream settled without ever becoming a canonical Assistant
+      // message, so the in-flight card is dropped exactly as the Rust
+      // projection drops it. The audit is committed-for-release output, not
+      // canonical conversation history, so it enters the transcript only as
+      // a typed non-canonical audit and its proposed tool calls never create
+      // a foreground execution slot.
+      return { ...view, transcript: appendTranscriptEntry(dropStreaming(view.transcript, event.attempt_id), {
+        kind: 'publication_audit',
+        key: `publication:${event.audit.stream_id}`,
+        cursor: event.transcript_cursor,
+        audit: event.audit,
+      }) };
+    case 'message_committed': {
+      const transcriptCursor = validateTranscriptCursorContract(event.message, event.transcript_cursor);
+      if (isHiddenContextMessage(event.message)) return view;
+      if (transcriptCursor === undefined) throw new Error('visible message_committed event is missing its durable transcript cursor');
+      const messageId = messageIdOf(event.message);
+      // The wire spells "no committing attempt" as `null`; the projection
+      // spells it as absent, once, here.
+      const committingAttempt = event.attempt_id ?? undefined;
+      const transcript = event.message.role === 'assistant' && committingAttempt !== undefined
+        ? dropStreaming(view.transcript, committingAttempt) : view.transcript;
+      // Canonical content and execution-terminal Journal facts are independent:
+      // ToolResultCommitted carries C evidence; only ToolExecutionSettled
+      // changes the foreground execution phase.
+      return { ...view, transcript: appendTranscriptEntry(transcript, {
+        kind: 'committed',
+        key: `committed:${messageId}`,
+        messageId,
+        cursor: transcriptCursor,
+        attemptId: committingAttempt,
+        message: event.message,
+        nativeFactsPending: event.message.role === 'assistant',
+      }) };
     }
-    nativeSnapshots.set(next,projected);
-    preserveHistoryBindings(state,next);
-    return next;
-  }
-  const next = reduceOrdinaryState(state, { ...protocolEvent, event });
-  if (native) {
-    const projected=foldRuntimeEvent(native,event);
-    nativeSnapshots.set(next,projected);
-    // Native display transitions define the head positions and evictions.
-    // The terminal renderer never grows a second Agent/Job collection.
-    next.jobs=[...(projected.jobs ?? [])];
-    next.agents=[...(projected.agents ?? [])];
-    next.statuses=[...(projected.statuses ?? [])];
-    next.pendingInteractions=(projected.pending_interactions??[]).map(displayInteraction);
-    next.todos=projected.todos==null?undefined:parseSnapshot(projected.todos);
-    next.messageDescriptors=[...projected.message_descriptors];
-    next.publicationSettlements=[...projected.publication_settlements ?? []];
-    // Rebuild only the finite native streaming head: provider block indexes
-    // are identities, while the projection owns ordinal insertion/eviction.
-    if (["tool_call_started", "tool_call_assembled", "tool_call_rebound", "tool_execution_rebound", "assistant_message_started"].includes(event.type)) {
-      const streaming = presentSnapshot(projected, protocolEvent.cursor).transcript.filter(row=>row.kind==="streaming");
-      next.transcript = [...next.transcript.filter(row=>row.kind!=="streaming"), ...streaming];
+    case 'inbound_enqueued': {
+      // Durable acceptance is the display frontier. Context facts remain
+      // model-visible runtime input but are hidden from ordinary chat.
+      const transcriptCursor = validateTranscriptCursorContract(event.message, event.transcript_cursor);
+      if (isHiddenContextMessage(event.message)) return view;
+      if (transcriptCursor === undefined) throw new Error('visible inbound_enqueued event is missing its durable transcript cursor');
+      displayedInbound.set(event.message.id, event.sequence);
+      return { ...view, transcript: appendTranscriptEntry(view.transcript, {
+        kind: 'committed',
+        key: `committed:${event.message.id}`,
+        messageId: event.message.id,
+        cursor: transcriptCursor,
+        message: { role: 'user', ...event.message },
+      }) };
     }
-    if(next.attempt && projected.attempt && attemptOwnerKey({conversation_id:projected.conversation_id,...projected.attempt})===attemptOwnerKey({conversation_id:next.conversationId,attempt_id:next.attempt.attemptId,attempt_id_source:next.attempt.attemptSource}))next.attempt={...next.attempt,foreground:[...(projected.attempt.foreground??[])]};
+    case 'pending_inbound_changed': {
+      // An edited pending message replaces its row; a removed one leaves it.
+      const previous = new Set(displayedInbound.keys());
+      const pending = new Map(event.pending.map(item => [item.message.id, item.message]));
+      displayedInbound.clear();
+      for (const item of event.pending) displayedInbound.set(item.message.id, item.sequence);
+      return { ...view, transcript: view.transcript.flatMap(entry => {
+        if (entry.kind !== 'committed' || !previous.has(entry.messageId)) return [entry];
+        const message = pending.get(entry.messageId);
+        return message ? [{ ...entry, message: { role: 'user' as const, ...message } }] : [];
+      }) };
+    }
+    case 'inbound_drained':
+      // Drained messages are ordinary history now; their rows stay as shown.
+      for (const [id, sequence] of displayedInbound) if (BigInt(sequence) <= BigInt(event.watermark)) displayedInbound.delete(id);
+      return view;
+    case 'trace_changed': // Trace is a read capability; this client has no Trajectory UI.
+    case 'goal_changed':
+    case 'workflows_updated':
+    case 'attempt_started':
+    case 'attempt_turn_updated':
+    case 'attempt_usage_updated':
+    case 'message_descriptor_committed':
+    case 'pending_head_changed':
+    case 'interaction_pending':
+    case 'interaction_settled':
+    case 'interaction_removed':
+    case 'context_compaction_started':
+    case 'context_compaction_failed':
+    case 'context_compacted':
+    case 'agent_status_composed':
+    case 'job_updated':
+    case 'agent_updated':
+    case 'collection_changed':
+    case 'capability_updated':
+    case 'resource_generation_updated':
+    case 'session_model_changed':
+    case 'runtime_shutdown':
+    case 'runtime_durability_failed':
+    case 'configuration_adoption_eligibility_changed':
+      return view;
+    default: {
+      // The generated event vocabulary is closed and this switch is
+      // exhaustive over it. An unhandled variant is a compile error, not a
+      // silently ignored runtime fact.
+      const exhaustiveEvent: never = event;
+      throw new Error(`unreachable Runtime Client event: ${String(exhaustiveEvent)}`);
+    }
   }
-  preserveHistoryBindings(state,next);
-  return next;
 }
 
 function presentSnapshot(
   snapshot: RuntimeClientSnapshot,
   cursor: RuntimeClientCursor,
 ): PresentationState {
-  const transcript: TranscriptEntry[] = orderTranscript(
-    (snapshot.transcript.entries ?? []).map(transcriptEntryFromWire),
-  );
+  return { ...snapshotTranscript(snapshot), ...nativeFields(snapshot), cursor };
+}
 
-  // Every section below is normalized exactly once, here. The wire omits an
-  // empty collection and spells "absent" as `null`; the projection carries one
-  // shape so no renderer has to ask the same question twice.
+/** The one streaming row a native snapshot's in-flight Assistant message is. */
+function streamingRows(snapshot: RuntimeClientSnapshot): StreamingMessage[] {
   const attempt = snapshot.attempt ?? undefined;
   const inFlight = attempt?.in_flight ?? undefined;
-  if (attempt !== undefined && inFlight !== undefined) {
-    // A snapshot taken mid-stream carries every accumulated delta through its
-    // cursor, so the streaming message is rebuilt exactly as it would have
-    // been observed incrementally.
-    transcript.push({
-      kind: "streaming",
-      key: `streaming:${attemptOwnerKey({conversation_id:snapshot.conversation_id,...attempt})}:${inFlight.message_id}`,
-      attemptId: attempt.attempt_id ?? undefined,
-            attemptSource: attempt.attempt_id_source ?? undefined,
-      messageId: inFlight.message_id,
-      blocks: (inFlight.blocks ?? []).map(
-        (block): StreamingBlock =>
-          block.type === "tool_call"
-            ? {
-                kind: "tool_call",
-                blockIndex: block.block_index,
-                callId: block.call_id ?? undefined,
-                toolId: block.tool_id ?? undefined,
-                name: block.name,
-                argumentsText: block.arguments,
-              }
-            : {
-                kind: block.type,
-                blockIndex: block.block_index,
-                text: block.text,
-              },
-      ),
-    });
-  }
+  if (attempt === undefined || inFlight === undefined) return [];
+  // A snapshot taken mid-stream carries every accumulated delta through its
+  // cursor, so the streaming message is rebuilt exactly as it would have
+  // been observed incrementally.
+  return [{
+    kind: "streaming",
+    key: `streaming:${attemptOwnerKey({conversation_id:snapshot.conversation_id,...attempt})}:${inFlight.message_id}`,
+    attemptId: attempt.attempt_id ?? undefined,
+    attemptSource: attempt.attempt_id_source ?? undefined,
+    messageId: inFlight.message_id,
+    blocks: (inFlight.blocks ?? []).map(
+      (block): StreamingBlock =>
+        block.type === "tool_call"
+          ? {
+              kind: "tool_call",
+              blockIndex: block.block_index,
+              callId: block.call_id ?? undefined,
+              toolId: block.tool_id ?? undefined,
+              name: block.name,
+              argumentsText: block.arguments,
+            }
+          : {
+              kind: block.type,
+              blockIndex: block.block_index,
+              text: block.text,
+            },
+    ),
+  }];
+}
 
+/**
+ * Every fact the shared native fold owns, read from its snapshot.
+ *
+ * Each section is normalized exactly once, here. The wire omits an empty
+ * collection and spells "absent" as `null`; the projection carries one shape
+ * so no renderer has to ask the same question twice.
+ */
+function nativeFields(snapshot: RuntimeClientSnapshot): Omit<PresentationState, keyof TranscriptView | 'cursor'> {
+  const attempt = snapshot.attempt ?? undefined;
   return {
     conversationId: snapshot.conversation_id,
     goal: snapshot.goal ?? null,
     workflows: snapshot.workflows,
-    cursor,
-    transcript: orderTranscript(transcript),
-    statistics: snapshot.transcript.statistics,
-    transcriptNextCursor: snapshot.transcript.next_cursor ?? undefined,
     attempt:
       attempt === undefined
         ? undefined
@@ -301,8 +472,9 @@ function presentSnapshot(
     },
     pendingInteractions: (snapshot.pending_interactions ?? []).map(displayInteraction),
     messageDescriptors: [...snapshot.message_descriptors],
-    deferredTranscriptEntries: boundedDeferred(snapshot.transcript.deferred_entries??[]),
     publicationSettlements: [...snapshot.publication_settlements ?? []],
+    // Native display transitions define the head positions and evictions.
+    // The terminal renderer never grows a second Agent/Job collection.
     jobs: [...(snapshot.jobs ?? [])],
     agents: [...(snapshot.agents ?? [])],
     // The runtime's bounded composition window, verbatim. Every annotation
@@ -343,7 +515,7 @@ function presentSnapshot(
  * Fresh facts win by exact durable identity AND cursor. Only immutable entries
  * strictly before the new window can survive outside it; gaps require replacement.
  */
-function mergeNativeTranscript(state: PresentationState, fresh: PresentationState): PresentationState {
+function mergeNativeTranscript(state: TranscriptView, fresh: TranscriptView): TranscriptView {
   const incoming = fresh.transcript.filter(isDurableTranscriptEntry);
   const previous = state.transcript.filter(isDurableTranscriptEntry);
   if (!incoming.some(entry => previous.some(old => old.key === entry.key && old.cursor === entry.cursor))) return fresh;
@@ -404,331 +576,6 @@ export function mergeTranscriptPage(
   const next={ ...state,deferredTranscriptEntries:boundedDeferred([...state.deferredTranscriptEntries,...page.deferred_entries??[]]),transcript:boundedHistory(orderTranscript(merged),true),transcriptNextCursor:page.next_cursor??undefined };
   const native=nativeSnapshots.get(state);if(native)nativeSnapshots.set(next,native);preserveHistoryBindings(state,next,[...page.content??[],...(page.deferred_entries??[]).flatMap(row=>row.content)]);
   return next;
-}
-
-/**
- * Folds one protocol event into the next state.
- *
- * Pure: the input state is never mutated, so a caller may keep the previous
- * value (for a diff, a test assertion, or an undo of a render).
- */
-function reduceOrdinaryState(
-    state: PresentationState,
-    protocolEvent: ProjectedEvent & { event: Exclude<ProjectedEvent['event'], NativeToolEvent | { type: 'projection_transition' | 'checkpoint_advanced' | 'block_content_advanced' }> },
-): PresentationState {
-  const event = protocolEvent.event;
-  const transcriptCursor =
-    event.type === "message_committed" || event.type === "inbound_enqueued"
-      ? validateTranscriptCursorContract(
-          event.message,
-          event.transcript_cursor,
-        )
-      : undefined;
-  const next = { ...state, cursor: protocolEvent.cursor };
-
-  switch (event.type) {
-    case "read_domains_updated": {
-      const fresh = mergeNativeTranscript(state, { ...next,
-        transcript: orderTranscript([...(event.transcript.entries ?? []).map(transcriptEntryFromWire), ...state.transcript.filter(entry => entry.kind === 'streaming')]),
-        transcriptNextCursor: event.transcript.next_cursor ?? undefined,
-        statistics: event.transcript.statistics,
-      });
-      return { ...fresh, context: { ...state.context, occupancy: event.occupancy, projection_head: event.projection_head },
-        todos: event.todos == null ? undefined : parseSnapshot(event.todos) };
-    }
-    case "goal_changed":
-      return { ...next, goal: event.view };
-    case "workflows_updated":
-      return { ...state, cursor: protocolEvent.cursor, workflows: event.workflows };
-    case "attempt_started":
-      // The frozen model travels with the event, so the active attempt's
-      // model is known without a snapshot round trip and without inference.
-      //
-      // Composed Agent Statuses are deliberately untouched. They are
-      // historical facts of the conversation, not attempt-scoped live state,
-      // and the runtime's own window keeps them across attempts too — so
-      // clearing them here would make this client disagree with the snapshot
-      // it would repair from.
-      next.attempt = startAttempt(event.attempt_id, event.model, event.execution_settings);
-      return next;
-
-    case "attempt_settled":
-      if (state.attempt?.attemptId === event.attempt_id) {
-        next.attempt = {
-          ...state.attempt,
-          phase: { type: "settled", outcome: event.outcome },
-        };
-      }
-      // An unsettled streaming message belongs to an attempt that ended
-      // without committing; drop the partial render, keep committed history.
-      next.transcript = state.transcript.filter(
-        (entry) =>
-          entry.kind !== "streaming" || entry.attemptId !== event.attempt_id,
-      );
-      next.context = { ...state.context, compaction_in_progress: false };
-      return next;
-
-    case "attempt_turn_updated":
-      if (state.attempt?.attemptId === event.attempt_id) {
-        next.attempt = { ...state.attempt, turn: event.turn };
-      }
-      return next;
-
-    case "pending_head_changed":
-    case "message_descriptor_committed":
-      return next;
-    case "trace_changed":
-      return next; // Trace is a read capability; this client has no Trajectory UI.
-
-    case "attempt_usage_updated":
-      if (state.attempt?.attemptId === event.attempt_id) {
-        next.attempt = { ...state.attempt, lastUsage: event.usage };
-      }
-      return next;
-
-    case "interaction_pending":
-      next.pendingInteractions = upsertInteraction(
-        state.pendingInteractions,
-        displayInteraction(event.interaction),
-      );
-      return next;
-
-    case "interaction_settled":
-      next.pendingInteractions = state.pendingInteractions.filter(
-        (interaction) => !sameInteraction(interaction.interaction, event.interaction),
-      );
-      return next;
-
-    case "interaction_removed":
-      next.pendingInteractions = state.pendingInteractions.filter(
-        (interaction) => !sameInteraction(interaction.interaction, event.interaction),
-      );
-      return next;
-
-    case "interaction_audit_requested":
-      next.transcript = appendTranscriptEntry(state.transcript, {
-        kind: "interaction_requested",
-        key: `interaction-requested:${event.audit.event_id}`,
-        cursor: event.transcript_cursor,
-        eventId: event.audit.event_id,
-        timestamp: event.audit.timestamp,
-        attemptId: event.audit.attempt_id,
-        turnId: event.audit.turn_id,
-        interactionId: event.audit.interaction_id,
-        subject: event.audit.subject,
-      });
-      return next;
-
-    case "interaction_audit_settled":
-      next.transcript = appendTranscriptEntry(state.transcript, {
-        kind: "interaction_settled",
-        key: `interaction-settled:${event.audit.event_id}`,
-        cursor: event.transcript_cursor,
-        eventId: event.audit.event_id,
-        timestamp: event.audit.timestamp,
-        attemptId: event.audit.attempt_id,
-        turnId: event.audit.turn_id,
-        interactionId: event.audit.interaction_id,
-        settlement: event.audit.settlement,
-      });
-      return next;
-
-    case "context_compaction_started":
-      next.context = { ...state.context, compaction_in_progress: true };
-      return next;
-
-    case "context_compaction_failed":
-      next.context = { ...state.context, compaction_in_progress: false };
-      return next;
-
-    case "context_compacted":
-      next.context = event.context;
-      return next;
-
-    case "assistant_message_started":
-      next.transcript = [
-        ...dropStreaming(state.transcript, event.attempt_id),
-        {
-          kind: "streaming",
-          key: `streaming:${event.attempt_id}:${event.message_id}`,
-          attemptId: event.attempt_id,
-          messageId: event.message_id,
-          blocks: [],
-        },
-      ];
-      return next;
-
-    case "assistant_publication_deferred_settled":
-      return next; // Complete deferred source fold is owned by the shared reducer above.
-    case "assistant_publication_settled":
-      // The stream settled without ever becoming a canonical Assistant
-      // message, so the in-flight card is dropped exactly as the Rust
-      // projection drops it. The audit is committed-for-release output, not
-      // canonical conversation history, so it enters the transcript only as
-      // a typed non-canonical audit and its proposed tool calls never create
-      // a foreground execution slot.
-      next.transcript = appendTranscriptEntry(
-        dropStreaming(state.transcript, event.attempt_id),
-        {
-          kind: "publication_audit",
-          key: `publication:${event.audit.stream_id}`,
-          cursor: event.transcript_cursor,
-          audit: event.audit,
-        },
-      );
-      return next;
-
-    case "message_committed": {
-      if (isHiddenContextMessage(event.message)) {
-        return next;
-      }
-      if (transcriptCursor === undefined) {
-        throw new Error(
-          "visible message_committed event is missing its durable transcript cursor",
-        );
-      }
-      const messageId = messageIdOf(event.message);
-      // The wire spells "no committing attempt" as `null`; the projection
-      // spells it as absent, once, here.
-      const committingAttempt = event.attempt_id ?? undefined;
-      const transcript =
-        event.message.role === "assistant" && committingAttempt !== undefined
-          ? dropStreaming(state.transcript, committingAttempt)
-          : state.transcript;
-      next.transcript = appendTranscriptEntry(transcript, {
-        kind: "committed",
-        key: `committed:${messageId}`,
-        messageId,
-        cursor: transcriptCursor,
-        attemptId: committingAttempt,
-        message: event.message,
-        nativeFactsPending: event.message.role === "assistant",
-      });
-      // Canonical Tool content is independently displayable. The native Todo
-      // observation owner alone replaces the current task projection.
-      // Canonical content and execution-terminal Journal facts are independent.
-      // ToolResultCommitted carries C evidence; only ToolExecutionSettled changes
-      // the foreground execution phase.
-      return next;
-    }
-
-    case "agent_status_composed":
-      // The shared native fold installs exactly the published head/eviction.
-      return next;
-
-    case "inbound_enqueued":
-      next.inbound = {
-        ...state.inbound,
-        pending: [
-          ...(state.inbound.pending ?? []),
-          { sequence: event.sequence, revision: "0", message: event.message },
-        ],
-      };
-      // Durable acceptance is the display frontier. Context facts remain
-      // model-visible runtime input but are hidden from ordinary chat.
-      if (!isHiddenContextMessage(event.message)) {
-        if (transcriptCursor === undefined) {
-          throw new Error(
-            "visible inbound_enqueued event is missing its durable transcript cursor",
-          );
-        }
-        next.transcript = appendTranscriptEntry(state.transcript, {
-          kind: "committed",
-          key: `committed:${event.message.id}`,
-          messageId: event.message.id,
-          cursor: transcriptCursor,
-          message: { role: "user", ...event.message },
-        });
-      }
-      return next;
-
-    case "pending_inbound_changed": {
-      const previous = new Set((state.inbound.pending ?? []).map(item => item.message.id));
-      const pending = new Map(event.pending.map(item => [item.message.id, item.message]));
-      next.inbound = { ...state.inbound, pending: event.pending };
-      next.transcript = state.transcript.flatMap(entry => {
-        if (entry.kind !== "committed" || !previous.has(entry.messageId)) return [entry];
-        const message = pending.get(entry.messageId);
-        return message ? [{ ...entry, message: { role: "user" as const, ...message } }] : [];
-      });
-      return next;
-    }
-    case "inbound_drained":
-      next.inbound = {
-        pending: (state.inbound.pending ?? []).filter(
-          (item) => BigInt(item.sequence) > BigInt(event.watermark),
-        ),
-        last_drain: { watermark: event.watermark, count: event.count },
-      };
-      return next;
-
-    case "collection_changed":
-      return next;
-
-    case "job_updated":
-      next.jobs = upsertBackground(state.jobs, event.job);
-      return next;
-
-    case "agent_updated":
-      next.agents = upsertSubagent(state.agents, event.agent);
-      return next;
-
-    case "capability_updated":
-      next.capabilities = event.capabilities;
-      return next;
-
-    case "resource_generation_updated":
-      // A reload commits the resource generation and the capability
-      // generation it was composed against as one fact, and publishes them
-      // as one event at one cursor. Both halves are folded here, together:
-      // there is no cut of this reducer at which the client holds the new
-      // capability generation beside the resource generation the same
-      // reload retired.
-      next.capabilities = event.capabilities;
-      next.resources = event.resources;
-      next.effectivePlugins = event.plugins ?? null;
-      next.sessionModel = event.model ?? null;
-      next.modelStatus = event.model_status;
-      next.effectiveApprovalMode = event.approval_mode;
-      return next;
-
-    case "session_model_changed":
-      // The session's desired model only. A running attempt keeps the model
-      // it froze; nothing about `state.attempt` changes here.
-      next.sessionModel = event.model ?? null;
-      next.modelStatus = event.model_status;
-      return next;
-
-    case "runtime_shutdown":
-      next.runtimeShutdown = true;
-      return next;
-
-    case "runtime_durability_failed":
-      // The runtime entered its explicit degraded state: no new durable
-      // admission may begin. This is a runtime-published fact like any other
-      // and is carried, not interpreted — the client never decides that a
-      // runtime is degraded, and never decides that it has recovered.
-      next.durabilityFailure = {
-        operation: event.operation,
-        diagnostic: event.diagnostic,
-      };
-      return next;
-
-    case "configuration_adoption_eligibility_changed":
-      // Runtime-domain advisory state, carried as published; `/session adopt`
-      // still submits the inspected candidate to the native gate.
-      next.adoptionEligibility = event.eligibility.status;
-      return next;
-
-    default:
-      // The generated event vocabulary is closed and this switch is
-      // exhaustive over it. An unhandled variant is a compile error, not a
-      // silently ignored runtime fact.
-      const exhaustiveEvent: never = event;
-      throw new Error(
-        `unreachable Runtime Client event: ${String(exhaustiveEvent)}`,
-      );
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -883,24 +730,6 @@ function dedupeStatuses(statuses: AgentStatusView[]): AgentStatusView[] {
   return kept;
 }
 
-function startAttempt(
-  attemptId: string,
-  model: AttemptModelView | null | undefined,
-  executionSettings:
-    | import("../protocol/app-server.ts").AdmittedSettings
-    | null
-    | undefined,
-): AttemptPresentation {
-  return {
-    attemptId,
-    phase: { type: "running" },
-    turn: 0,
-    model: model ?? undefined,
-    executionSettings: executionSettings ?? undefined,
-    foreground: [],
-  };
-}
-
 function messageIdOf(message: {
   id?: string;
   role?: string;
@@ -914,61 +743,6 @@ function dropStreaming(
 ): TranscriptEntry[] {
   return transcript.filter(
     (entry) => entry.kind !== "streaming" || entry.attemptId !== attemptId,
-  );
-}
-
-function upsertBackground(
-  background: PresentationState["jobs"],
-  execution: PresentationState["jobs"][number],
-): PresentationState["jobs"] {
-  const index = background.findIndex(
-    (entry) => entry.job_id === execution.job_id,
-  );
-  if (index === -1) {
-    return [...background, execution];
-  }
-  const updated = [...background];
-  updated[index] = execution;
-  return updated;
-}
-
-function upsertSubagent(
-  agents: PresentationState["agents"],
-  subagent: PresentationState["agents"][number],
-): PresentationState["agents"] {
-  const index = agents.findIndex(
-    (entry) => entry.agent_id === subagent.agent_id,
-  );
-  if (index === -1) {
-    return [...agents, subagent];
-  }
-  const updated = [...agents];
-  updated[index] = subagent;
-  return updated;
-}
-
-function upsertInteraction(
-  interactions: DisplayInteraction[],
-  interaction: DisplayInteraction,
-): DisplayInteraction[] {
-  const index = interactions.findIndex((entry) =>
-    sameInteraction(entry.interaction, interaction.interaction)
-  );
-  if (index === -1) {
-    return [...interactions, interaction];
-  }
-  const updated = [...interactions];
-  updated[index] = interaction;
-  return updated;
-}
-
-function sameInteraction(
-  left: RoutedInteraction["interaction"],
-  right: RoutedInteraction["interaction"],
-): boolean {
-  return (
-    left.conversation_id === right.conversation_id &&
-    left.interaction_id === right.interaction_id
   );
 }
 

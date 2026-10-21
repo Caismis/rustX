@@ -556,7 +556,7 @@ async fn original_child_request_messages(
         assert!(page.items.len() <= 32);
         assert!(
             serde_json::to_vec(&page).unwrap().len()
-                <= rustx::runtime_client::checkpoint::CHECKPOINT_TARGET_BYTES
+                <= rustx::observation::bounded::CHECKPOINT_TARGET_BYTES
         );
         let end = offset + u64::try_from(page.items.len()).unwrap();
         for item in &page.items {
@@ -752,7 +752,7 @@ async fn subagent_process_stack(alias_root: bool) {
         panic!("agent/status must succeed: {response:?}");
     };
     let status: rustx::runtime_client::RuntimeClientAgent =
-        rustx::runtime_client::checkpoint::decode_domain_value(
+        rustx::observation::bounded::decode_domain_value(
             page.items[0]
                 .value
                 .clone()
@@ -865,7 +865,15 @@ async fn subagent_process_stack(alias_root: bool) {
                         return None;
                     };
                     Some(rustx::runtime_client::trace::TraceToolLocator {
-                        occurrence: rustx::runtime_client::snapshot::RuntimeClientToolOccurrence {locator:rustx::runtime_client::content::CanonicalContentLocator::ByMessageId {message_id:assistant.id.clone()},block_index:rustx::message::types::ContentBlockIndex::new(u32::try_from(index).unwrap())},
+                        occurrence: rustx::observation::tool::RuntimeClientToolOccurrence {
+                            locator:
+                                rustx::observation::content::CanonicalContentLocator::ByMessageId {
+                                    message_id: assistant.id.clone(),
+                                },
+                            block_index: rustx::message::types::ContentBlockIndex::new(
+                                u32::try_from(index).unwrap(),
+                            ),
+                        },
                         call_id: Some(call.id.clone()),
                         tool_id: Some(call.tool_id.clone()),
                     })
@@ -916,7 +924,7 @@ async fn subagent_process_stack(alias_root: bool) {
         trace
             .records
             .iter()
-            .any(|record| record.kind == rustx::runtime_client::trace::TraceKind::Request)
+            .any(|record| record.kind == rustx::observation::trace::TraceKind::Request)
     );
     let request = trace
         .records
@@ -925,15 +933,15 @@ async fn subagent_process_stack(alias_root: bool) {
         .unwrap();
     assert_eq!(
         request.state,
-        rustx::runtime_client::trace::TraceState::Completed
+        rustx::observation::trace::TraceState::Completed
     );
     let no_child_call = reopened
         .call(Method::AgentTraceLocateTool {
             target: reopened.target(),
             agent_id: agent_id.clone(),
             locator: rustx::runtime_client::trace::TraceToolLocator {
-                occurrence: rustx::runtime_client::snapshot::RuntimeClientToolOccurrence {
-                    locator: rustx::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                occurrence: rustx::observation::tool::RuntimeClientToolOccurrence {
+                    locator: rustx::observation::content::CanonicalContentLocator::ByMessageId {
                         message_id: request
                             .request
                             .as_ref()
@@ -990,30 +998,30 @@ async fn subagent_process_stack(alias_root: bool) {
     assert!(!messages.is_empty());
     let mut task_in_original_messages = false;
     for message in &messages {
-        let role: rustx::runtime_client::trace::TraceMessageRole =
+        let role: rustx::observation::trace::TraceMessageRole =
             serde_json::from_value(message["role"].clone()).expect("exact native message role");
         let identity: Option<rustx::runtime::identity::MessageId> =
             serde_json::from_value(message["message_id"].clone())
                 .expect("exact native message identity");
         let _: Option<String> = serde_json::from_value(message["source"].clone())
             .expect("exact native user provenance");
-        let blocks: Vec<rustx::runtime_client::trace::TraceContentBlock> =
-            rustx::runtime_client::checkpoint::decode_domain_value(message["blocks"].clone())
+        let blocks: Vec<rustx::observation::trace::TraceContentBlock> =
+            rustx::observation::bounded::decode_domain_value(message["blocks"].clone())
                 .expect("typed native message previews");
         task_in_original_messages |= blocks.iter().any(|block| {
-            matches!(block, rustx::runtime_client::trace::TraceContentBlock::Text { text }
+            matches!(block, rustx::observation::trace::TraceContentBlock::Text { text }
                 if text.text.contains("count the workspace files") && !text.truncated)
         });
-        if role == rustx::runtime_client::trace::TraceMessageRole::RequestOnly {
+        if role == rustx::observation::trace::TraceMessageRole::RequestOnly {
             assert!(identity.is_none());
             continue;
         }
         assert!(identity.is_some(), "this fixture has finite canonical IDs");
-        let content: Vec<rustx::runtime_client::checkpoint::ContentBinding> =
-            rustx::runtime_client::checkpoint::decode_domain_value(message["content"].clone())
+        let content: Vec<rustx::observation::cut::ContentBinding> =
+            rustx::observation::bounded::decode_domain_value(message["content"].clone())
                 .expect("original canonical content sources");
-        let collections: Vec<rustx::runtime_client::checkpoint::CollectionFrontier> =
-            rustx::runtime_client::checkpoint::decode_domain_value(message["collections"].clone())
+        let collections: Vec<rustx::observation::cut::CollectionFrontier> =
+            rustx::observation::bounded::decode_domain_value(message["collections"].clone())
                 .expect("original canonical collection frontiers");
         // Small original text is complete inline. Content bindings identify
         // deferred fields; an empty binding list does not erase provenance.
@@ -1296,12 +1304,12 @@ async fn running_child_inspection_is_execution_independent() {
             let requests: Vec<_> = trace
                 .records
                 .iter()
-                .filter(|record| record.kind == rustx::runtime_client::trace::TraceKind::Request)
+                .filter(|record| record.kind == rustx::observation::trace::TraceKind::Request)
                 .collect();
             assert!(!requests.is_empty());
             assert_eq!(
                 requests.last().unwrap().state,
-                rustx::runtime_client::trace::TraceState::Running
+                rustx::observation::trace::TraceState::Running
             );
             assert_eq!(
                 requests.last().unwrap().location.attempt_id,

@@ -1,8 +1,8 @@
 //! Same-C selected delivery spans within the existing native byte layout.
 use super::{Connection, ConversationStoreError, OptionalExtension, params, storage};
 use crate::message::types::MessageBlock;
+use crate::observation::content::CanonicalContentLocator;
 use crate::runtime::identity::ConversationId;
-use crate::runtime_client::content::CanonicalContentLocator;
 
 pub(super) fn index(
     connection: &Connection,
@@ -31,7 +31,7 @@ pub(super) fn index(
                     "canonical_file_delivery",
                     &key,
                     ordinal,
-                    crate::runtime_client::content::ContentRepresentation::CanonicalJsonV1,
+                    crate::observation::content::ContentRepresentation::CanonicalJsonV1,
                 ),
                 1,
                 file,
@@ -141,9 +141,8 @@ pub(super) fn head(
     position: u64,
     offset: u64,
     limit: usize,
-) -> Result<crate::runtime_client::delivery::RuntimeClientDeliveryHead, ConversationStoreError> {
-    if limit == 0 || limit > 32 || offset > crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX
-    {
+) -> Result<crate::observation::delivery::RuntimeClientDeliveryHead, ConversationStoreError> {
+    if limit == 0 || limit > 32 || offset > crate::observation::content::CONTENT_SAFE_INTEGER_MAX {
         return Err(ConversationStoreError::InvalidContentRange);
     }
     let total = total(connection, position)?;
@@ -166,7 +165,7 @@ pub(super) fn head(
         } else {
             None
         };
-        items.push(crate::runtime_client::delivery::RuntimeClientDeliveryItem {
+        items.push(crate::observation::delivery::RuntimeClientDeliveryItem {
             index,
             locator: CanonicalContentLocator::ByLedgerPosition { position },
             metadata_deferred: file.is_none(),
@@ -175,7 +174,7 @@ pub(super) fn head(
             metadata_domain: format!("messages.ledger:{position}.deliveries.{index}.metadata"),
         });
     }
-    Ok(crate::runtime_client::delivery::RuntimeClientDeliveryHead {
+    Ok(crate::observation::delivery::RuntimeClientDeliveryHead {
         domain: format!("messages.ledger:{position}.deliveries"),
         total,
         items,

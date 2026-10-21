@@ -1283,7 +1283,8 @@ must still be refused.
   every value the domain can hold, so an answer or a bound can always be read
   back from the Event Journal or by a reconnecting client;
   `FiniteNumber::from_wire` is the one authoritative parse, and
-  `tui/src/protocol/number.ts` is the client's one conversion seam. `-0.0` is
+  `protocol/app-server/number.ts` is the clients' one shared conversion seam
+  (Web and TUI). `-0.0` is
   **canonicalized to `+0.0`** at construction, so one semantic value has one
   bit pattern and one spelling, and `"8000000000000000"` is refused as
   non-canonical the way `ExactInteger` refuses `"-0"`. The client's own

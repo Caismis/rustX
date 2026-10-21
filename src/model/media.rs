@@ -656,12 +656,13 @@ fn count_item_copy(message: &ModelInputMessage) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::durable::{CanonicalStore, ProjectionStore};
     mod selected_tests {
         use super::*;
         include!("media/selected_tests.rs");
     }
     use crate::context::{ContextConfig, ContextEngine, DefaultTokenEstimator, TokenEstimator};
-    use crate::durable::{ConversationStore, SqliteConversationStore};
+    use crate::durable::SqliteConversationStore;
     use crate::message::{
         content::{ImageReference, TextBlock, UploadedFileRef},
         types::{InboundKind, UserMessageBlock, UserSource},

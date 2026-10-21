@@ -4,7 +4,7 @@ import { useTranslation } from '../../locale/react';
 import { DisclosureRow } from '../../presentation/primitives/DisclosureRow';
 import { IconQuestionOutline14 } from '../../presentation/primitives/icons';
 import { ReviewContent, ReviewValue } from '../../presentation/agent/ReviewContent';
-import { displayNumber } from '../../bindings/questionnaire';
+import { finiteNumberFromWire } from '../../../../protocol/app-server/number';
 
 type Item = RuntimeClientTranscriptEntry['item'];
 type Requested = Extract<Item, { type: 'interaction_requested' }>;
@@ -30,7 +30,7 @@ export function InteractionAudit({ item, settlement }: { item: Requested | Settl
       const options = question.answer.type === 'single_choice' || question.answer.type === 'multi_choice' ? question.answer.options : undefined;
       const value = answer?.type === 'option' ? options?.[answer.value.option_index]?.label ?? answer.value
         : answer?.type === 'options' ? answer.value.option_indices.map(index => options?.[index]?.label ?? index)
-          : answer?.type === 'custom' ? answer.value.answer : answer?.type === 'number' ? displayNumber(answer.value.value) : answer?.value.value;
+          : answer?.type === 'custom' ? answer.value.answer : answer?.type === 'number' ? finiteNumberFromWire(answer.value.value) : answer?.value.value;
       return <div key={index}><p>{question.question}</p>{answer && <ReviewValue value={value}/>}</div>;
     })}
     {!subject && outcome?.type === 'questionnaire_submitted' && <ReviewValue value={outcome.submission.answers}/>}

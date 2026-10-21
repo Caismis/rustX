@@ -64,7 +64,7 @@ import {
 } from "../preferences.ts";
 import { role, style } from "../theme.ts";
 import { renderToolCard, describeProgress, statusLabel } from "./tool-card.ts";
-import { requesterLines, selectionBoundsLabel } from "./questionnaire.ts";
+import { requesterLines, selectionBoundsLabel } from "./questionnaire-answers.ts";
 import {
   type ToolRenderContext,
   clipText,

@@ -1,4 +1,5 @@
 use super::*;
+use crate::durable::JournalStore;
 use crate::durable::response::CompletedResponseTiming;
 use crate::model::generation_evidence::GenerationEvidence;
 use crate::runtime::identity::RequestId;

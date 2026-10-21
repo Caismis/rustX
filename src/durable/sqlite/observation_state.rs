@@ -73,7 +73,7 @@ pub(super) fn message(
         .map_err(|error| storage(error.to_string()))?;
     let id = format!("todos/{ledger}");
     let summary = todo_summary(value, ledger)?;
-    let header = crate::runtime_client::checkpoint::bounded_bytes(&summary, 16_384)
+    let header = crate::observation::bounded::bounded_bytes(&summary, 16_384)
         .ok_or_else(|| storage("native Todo header exceeds bound"))?;
     connection.execute("INSERT INTO state_observation_sources(domain,source_id,ledger_position,todo_header) VALUES('todos',?1,?2,?3)",params![id,ledger,header]).map_err(|error|storage(error.to_string()))?;
     super::observation_request::index_state(
@@ -119,7 +119,7 @@ pub(super) fn todo_value(
 fn todo_summary(
     value: &serde_json::Value,
     ledger: u64,
-) -> Result<crate::durable::inbox::NativeTodoObservation, ConversationStoreError> {
+) -> Result<crate::durable::NativeTodoObservation, ConversationStoreError> {
     let tasks = value
         .get("tasks")
         .and_then(serde_json::Value::as_array)
@@ -135,7 +135,7 @@ fn todo_summary(
     };
     let mut remaining = 15_360;
     for task in tasks.iter().take(32) {
-        let Some(bytes) = crate::runtime_client::checkpoint::bounded_bytes(task, remaining) else {
+        let Some(bytes) = crate::observation::bounded::bounded_bytes(task, remaining) else {
             break;
         };
         let parsed = serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string()))?;
@@ -144,7 +144,7 @@ fn todo_summary(
     }
     let total = tasks.len() as u64;
     let loaded = snapshot.tasks.len() as u64;
-    Ok(crate::durable::inbox::NativeTodoObservation {
+    Ok(crate::durable::NativeTodoObservation {
         source_ledger_position: ledger,
         snapshot,
         total,
@@ -156,7 +156,7 @@ pub(super) fn todo_head(
     connection: &Connection,
     first: u64,
     last: u64,
-) -> Result<Option<crate::durable::inbox::NativeTodoObservation>, ConversationStoreError> {
+) -> Result<Option<crate::durable::NativeTodoObservation>, ConversationStoreError> {
     let bytes: Option<Option<Vec<u8>>> = connection.query_row(
         "SELECT s.todo_header FROM message_ledger m INDEXED BY message_ledger_todo_idx LEFT JOIN state_observation_sources s ON s.domain='todos' AND s.ledger_position=m.position WHERE m.native_todo=1 AND m.position>=?1 AND m.position<=?2 ORDER BY m.position DESC LIMIT 1",
         params![first,last], |row| row.get(0),
@@ -220,7 +220,7 @@ pub(super) fn event(
         RuntimeEvent::CompactionCompleted { occupancy, .. } => {
             #[derive(serde::Serialize, schemars::JsonSchema)]
             struct Diagnostic<'a> {
-                latest_compaction: crate::runtime_client::snapshot::RuntimeClientCompactionView,
+                latest_compaction: crate::observation::head::RuntimeClientCompactionView,
                 occupancy: &'a Option<crate::context::occupancy::ContextOccupancy>,
             }
             let value = Diagnostic {

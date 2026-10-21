@@ -69,7 +69,7 @@ test("pending edit/remove use exact observed CAS once, including stale results",
       const item = pending("9007199254740994", "9007199254740995", "original");
       const h = await harness(snapshot({ inbound: { pending: [item] } }));
       const view = new PendingInputView(terminal(), h.session, () => {}, () => {});
-      h.session.updateState(state => ({ ...state, inbound: { pending: [{ ...item, revision: "9007199254740996" }] } }));
+      h.session.applyNotification({ jsonrpc: "2.0", method: "session/event", params: { registration_id: registrationId(h.target), target: h.target, cursor: "1", event: { type: "pending_inbound_changed", pending: [{ ...item, revision: "9007199254740996" }] } } });
       const work = view.mutate(method === "inbound/edit" ? "edited" : undefined);
       const request = await nextRequest(h, method, 0);
       assert.deepEqual((request.params as MethodParams<typeof method>).expected, { sequence: item.sequence, revision: item.revision });

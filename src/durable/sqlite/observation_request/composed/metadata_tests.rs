@@ -24,7 +24,7 @@ fn legacy_capture(
                     return Err(storage("composed field preview unavailable"));
                 };
                 max_path = max_path.max(super::super::super::encoded_path(path)?.len() as u64);
-                let header = crate::runtime_client::checkpoint::bounded_bytes(value, 16384)
+                let header = crate::observation::bounded::bounded_bytes(value, 16384)
                     .unwrap_or_else(|| b"null".to_vec());
                 let span = field_end - field_start;
                 let first = source_bytes(reader, field_start, field_start + u64::from(span > 0))?;

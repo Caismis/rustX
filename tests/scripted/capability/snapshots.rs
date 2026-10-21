@@ -250,7 +250,7 @@ async fn hidden_skills_keep_attempt_provenance_but_not_model_visibility() {
         .collect::<Vec<_>>();
     assert_eq!(manifest_names, vec!["runtime-only", "visible"]);
 
-    let client_view = crate::runtime_client::projection::capability_view(
+    let client_view = crate::runtime_client::projection::views::capability_view(
         &snapshot,
         &crate::capabilities::CapabilityAvailability::new(),
         None,
@@ -324,7 +324,7 @@ async fn selected_skills_remain_visible_independently_of_native_read() {
         assert_eq!(snapshot.skills().catalog_entries().len(), 1);
         assert_eq!(snapshot.skills().catalog_entries()[0].location, location);
         assert!(snapshot.skill_catalog().is_some());
-        let view = crate::runtime_client::projection::capability_view(
+        let view = crate::runtime_client::projection::views::capability_view(
             &snapshot,
             &crate::capabilities::CapabilityAvailability::new(),
             None,
@@ -702,7 +702,7 @@ async fn cfg280_generation_scoped_skill_facts_are_published_not_collapsed() {
         let rendered = second.skill_catalog().expect("catalog");
         assert!(!rendered.contains("<name>broken</name>"), "{change}");
         assert!(!rendered.contains("<name>shadow</name>"), "{change}");
-        let view = crate::runtime_client::projection::capability_view(
+        let view = crate::runtime_client::projection::views::capability_view(
             &second,
             &crate::capabilities::CapabilityAvailability::new(),
             None,

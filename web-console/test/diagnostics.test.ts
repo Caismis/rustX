@@ -1,9 +1,11 @@
 import { translator } from '../src/locale/translation';
 import { expect, it } from 'vitest';
-import { displayNumber, emptyDraft, finiteNumber, submission } from '../src/bindings/questionnaire';
+import { emptyDraft, submission } from '../src/bindings/questionnaire';
 it('encodes native Questionnaire scalar, choice, custom, boolean and partial answers exactly', () => {
-  expect(finiteNumber(translator('en'), '1.25')).toBe('3ff4000000000000'); expect(displayNumber(finiteNumber(translator('en'), '1.25'))).toBe(1.25);
-  expect(finiteNumber(translator('en'), '-0')).toBe('0000000000000000'); expect(() => finiteNumber(translator('en'), 'Infinity')).toThrow('finite');
+  const number = (text: string) => submission(translator('en'), [{ header: 'N', question: 'N?', answer: { type: 'number' } }], [{ ...emptyDraft(), text }]).answers[0]?.answer;
+  expect(number('1.25')).toEqual({ type: 'number', value: { value: '3ff4000000000000' } });
+  expect(number('-0')).toEqual({ type: 'number', value: { value: '0000000000000000' } });
+  expect(() => number('Infinity')).toThrow('Enter a number.'); expect(() => number('1e400')).toThrow('finite');
   const response = submission(translator('en'), [
     { header: 'Integer', question: 'Integer?', answer: { type: 'integer' } },
     { header: 'Number', question: 'Number?', answer: { type: 'number' } },
@@ -20,4 +22,15 @@ it('encodes native Questionnaire scalar, choice, custom, boolean and partial ans
     { type: 'options', value: { option_indices: [0, 1] } }, { type: 'custom', value: { answer: 'Custom' } },
   ]);
   expect(() => submission(translator('en'), [{ header: 'i', question: 'i', answer: { type: 'integer' } }], [{ ...emptyDraft(), text: '9223372036854775808' }])).toThrow('bounds');
+});
+it('shares the exact native numeric contract with the terminal client', () => {
+  const number = (text: string) => submission(translator('en'), [{ header: 'N', question: 'N?', answer: { type: 'number' } }], [{ ...emptyDraft(), text }]).answers[0]?.answer;
+  // Inexact whole numbers are refused however they are spelled, never rounded.
+  for (const text of ['9007199254740993', '9007199254740993.0', '9.007199254740993e15']) expect(() => number(text)).toThrow('represent exactly');
+  // 2^63 is exactly representable, so the blanket safe-integer rule is not the contract.
+  expect(number('9223372036854775808')).toEqual({ type: 'number', value: { value: '43e0000000000000' } });
+  expect(number('1.25')).toEqual({ type: 'number', value: { value: '3ff4000000000000' } });
+  const integer = (text: string) => submission(translator('en'), [{ header: 'I', question: 'I?', answer: { type: 'integer' } }], [{ ...emptyDraft(), text }]).answers[0]?.answer;
+  expect(integer(' 42 ')).toEqual({ type: 'integer', value: { value: '42' } });
+  for (const text of ['007', '-0', '1e3']) expect(() => integer(text)).toThrow('canonical whole number');
 });

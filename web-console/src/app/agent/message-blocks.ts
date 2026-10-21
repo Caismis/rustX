@@ -48,7 +48,7 @@ export async function readMessageBlocks(source: Source, request: Request, curren
   const reader = {
     page: (at: CheckpointReadCut, _domain: string, offset: number, owns: () => boolean) => page(at, offset, owns),
     content: async (_cut: CheckpointReadCut, reference: ContentBinding['content_ref'], offset: number, owns: () => boolean) => {
-      if ('target' in source && !historical) return source.client.readContent(source.target, source.agentId, reference, offset, owns);
+      if ('target' in source && !historical) return source.client.reads.readContent(source.target, source.agentId, reference, offset, owns);
       const result = historical
         ? await source.client.request({ method: 'session/historyContentRead', params: { session_id: 'target' in source ? source.target.session_id : source.sessionId, node_id: 'nodeId' in source ? source.nodeId : null, cut: history, content_ref: reference, offset, max_bytes: 65536 } }, 'content_chunk', undefined, owns)
         : await source.client.request({ method: 'session/traceContentRead', params: { session_id: 'sessionId' in source ? source.sessionId : source.target.session_id, node_id: 'nodeId' in source ? source.nodeId : null, cut, content_ref: reference, offset, max_bytes: 65536 } }, 'content_chunk', undefined, owns);

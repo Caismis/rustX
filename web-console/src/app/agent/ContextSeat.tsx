@@ -1,5 +1,6 @@
 import type { RuntimeClientContextView } from '../../../../protocol/app-server/v51';
-import type { AppServerClient, CompactionRequestEvidence } from '../../client/app-server';
+import type { AppServerClient } from '../../client/app-server';
+import type { CompactionRequestEvidence } from '../../client/contracts';
 import { useClientSelector, sameValue } from '../../client/selectors';
 import { useTranslation } from '../../locale/react';
 import { CompactionMessage } from '../../presentation/agent/Message';

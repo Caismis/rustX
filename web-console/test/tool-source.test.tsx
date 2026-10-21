@@ -21,7 +21,7 @@ async function fixture() {
   const cut = { ...checkpoint(snapshot()).read_cut, source_cut: { read: readCut(), ledger_through: '0', transcript_total: '0', surface_revision: '0', inherited_through: '0' } };
   const page = (domain: string) => ({ type: 'checkpoint_page' as const, page: { read_cut: cut, cursor: cut.revision, domain, total: '1', items: [{ offset: '0', identity: 'native-write:0', value: deferred as never, deferred: true, content: [{ path: ['state', 'arguments'], content_ref: reference, deferred: true }] }], collections: [], next_offset: null } });
   server.handlers.set('conversation/checkpointPage', request => { if (request.method !== 'conversation/checkpointPage') throw Error(); return page(request.params.domain); });
-  const read = vi.spyOn(server.client, 'readContent').mockImplementation(async (_target, _agent, _ref, offset) => chunk(offset));
+  const read = vi.spyOn(server.client.reads, 'readContent').mockImplementation(async (_target, _agent, _ref, offset) => chunk(offset));
   const source = { client: server.client, target: server.target('A'), cut: () => cut, owned: () => true };
   return { server, source, read, cut, page };
 }

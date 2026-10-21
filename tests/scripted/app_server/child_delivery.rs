@@ -1,5 +1,11 @@
-// Exact native child ownership and physical-root admission, with existing fences.
+//! Exact native child ownership and physical-root admission, with existing fences.
+use super::delivery::{
+    DELIVERED, FILE_HOST_TOKEN, TrustedFileHost, cancel_delivery, delivered_bytes, failed_with,
+};
+use super::*;
+use crate::durable::CanonicalStore;
 use crate::durable::ConversationStore;
+use crate::durable::JournalStore;
 use crate::message::types::{
     AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, MessageBlock,
     ToolCallOccurrenceRef, ToolMessageBlock,
@@ -18,10 +24,8 @@ struct ChildDelivery {
     store: crate::durable::SqliteConversationStore,
     message: MessageId,
 }
-mod selected_source {
-    use super::*;
-    include!("child_selected_delivery.rs");
-}
+#[path = "child_selected_delivery.rs"]
+mod selected_source;
 impl ChildDelivery {
     async fn new() -> Self {
         Self::with_delivery(true).await
@@ -116,7 +120,7 @@ impl ChildDelivery {
             target: self.target.clone(),
             source: crate::app_server::product_host::ReadSource::SessionFile {
                 agent_id: Some(self.agent.clone()),
-                locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
                     message_id: self.message.clone(),
                 },
                 delivery_index: 0,
@@ -131,7 +135,7 @@ impl ChildDelivery {
             call: Method::AgentDeliveryRead {
                 target: self.target.clone(),
                 agent_id: self.agent.clone(),
-                locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
                     message_id: self.message.clone(),
                 },
                 delivery_index: 0,
@@ -285,7 +289,7 @@ async fn child_delivery_shared_owner_and_product_host_registration_are_exact() {
         if let crate::app_server::product_host::ReadSource::SessionFile { locator, .. } =
             &mut wrong_message.source
         {
-            *locator = crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+            *locator = crate::observation::content::CanonicalContentLocator::ByMessageId {
                 message_id: MessageId::new("parent-or-other-child"),
             };
         }
@@ -309,7 +313,7 @@ async fn child_delivery_shared_owner_and_product_host_registration_are_exact() {
         if let crate::app_server::product_host::ReadSource::SessionFile { locator, .. } =
             &mut read.source
         {
-            *locator = crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+            *locator = crate::observation::content::CanonicalContentLocator::ByMessageId {
                 message_id: wrong_scope,
             };
         }

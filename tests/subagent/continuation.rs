@@ -1,6 +1,7 @@
 //! A real process/store continuation proof. Provider gates are explicit
 //! activation frontiers; no elapsed delay establishes lifecycle order.
 use super::*;
+use rustx::durable::JournalStore;
 use rustx::runtime::subagent::{AgentState, SubagentState};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -493,7 +494,6 @@ async fn recovered_resume_diagnostic(
     root: &std::path::Path,
     agent_id: &rustx::runtime::identity::AgentId,
 ) -> String {
-    use rustx::durable::ConversationStore;
     let target = process.target();
     let session = process.session_id.clone();
     let result = process
@@ -616,7 +616,7 @@ async fn child_turn_window(
 }
 
 struct ColdTraceEvidence {
-    cut: rustx::runtime_client::checkpoint::CheckpointReadCut,
+    cut: rustx::observation::cut::CheckpointReadCut,
     domain: String,
     item_offset: u64,
     path: Vec<String>,
@@ -627,7 +627,7 @@ async fn cold_trace_evidence(
     process: &mut Parent,
     agent: &rustx::runtime_client::snapshot::RuntimeClientAgent,
 ) -> ColdTraceEvidence {
-    use rustx::runtime_client::trace::{TraceFieldKind, TraceFieldSource, TraceKind, TraceState};
+    use rustx::observation::trace::{TraceFieldKind, TraceFieldSource, TraceKind, TraceState};
     let trace = process
         .call(Method::AgentTrace {
             target: process.target(),
@@ -727,7 +727,7 @@ async fn assert_trace_cut_rejected(
     process: &mut Parent,
     agent: &rustx::runtime_client::snapshot::RuntimeClientAgent,
     evidence: &ColdTraceEvidence,
-    cut: &rustx::runtime_client::checkpoint::CheckpointReadCut,
+    cut: &rustx::observation::cut::CheckpointReadCut,
 ) {
     let result = process
         .call(Method::ConversationCheckpointValueRead {

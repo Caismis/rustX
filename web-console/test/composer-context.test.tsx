@@ -10,7 +10,8 @@ import { GoalDock } from '../src/app/composer/GoalDock';
 import { QueueDock } from '../src/app/composer/QueueDock';
 import { TodoDock } from '../src/app/composer/TodoDock';
 import { goalDock, queueRows, todoDock, type TodoDockState } from '../src/bindings/composer-context';
-import { AppServerClient, type GoalControlOutcome } from '../src/client/app-server';
+import { AppServerClient } from '../src/client/app-server';
+import type { GoalControlOutcome } from '../src/client/contracts';
 import { Server, snapshot } from './fixture';
 
 const task = (id: string, status: TodoTask['status'], extra: Partial<TodoTask> = {}): TodoTask => ({ id, subject: `Task ${id}`, status, ...extra });
@@ -716,8 +717,8 @@ describe('exact pending QueueDock mutations', () => {
 
   const row = () => inbound('7', 'before');
   it('edits an authoritative occurrence with its original revision and waits for readback', async () => {
-    let finish!: (value: import('../src/client/app-server').InboundControlOutcome) => void;
-    const edit = vi.fn(() => new Promise<import('../src/client/app-server').InboundControlOutcome>(resolve => { finish = resolve; }));
+    let finish!: (value: import('../src/client/contracts').InboundControlOutcome) => void;
+    const edit = vi.fn(() => new Promise<import('../src/client/contracts').InboundControlOutcome>(resolve => { finish = resolve; }));
     const ui = render(<QueueDock rows={[row()]} submissions={[]} running edit={edit} remove={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Edit queued message' }), { target: { value: 'after' } });

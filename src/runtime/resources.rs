@@ -1,8 +1,10 @@
 //! Immutable process-local runtime resources (Issue #106).
 //!
-//! Resource discovery belongs to runtime creation and native configuration preparation. An
-//! admitted attempt receives one [`RuntimeResourceSnapshot`] by `Arc` and
-//! never consults the loader or filesystem again. Historical request values
+//! Resource discovery belongs to runtime composition and to the application
+//! configuration owner's off-side preparation, which hands the runtime a
+//! complete [`PreparedRuntimeResources`] candidate. An admitted attempt
+//! receives one [`RuntimeResourceSnapshot`] by `Arc` and never consults a
+//! loader or the filesystem again. Historical request values
 //! remain frozen by [`crate::model::RequestSnapshot`]; this process-local
 //! snapshot is never persisted as a second history plane.
 
@@ -10,10 +12,8 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use futures_util::future::BoxFuture;
-
 use crate::capabilities::{
-    CapabilityAvailability, CapabilityCoordinator, CapabilitySnapshot, PreparedCapabilityCandidate,
+    CapabilityAvailability, CapabilitySnapshot, PreparedCapabilityCandidate,
 };
 use crate::context::ContextAssembly;
 use crate::runtime::identity::{CapabilityRevision, RuntimeResourceRevision};
@@ -29,13 +29,24 @@ const PROJECT_CONTEXT_FILENAMES: [&str; 5] = [
 ];
 const MAX_RESOURCE_DIAGNOSTIC_BYTES: usize = 4096;
 
+// The authoring scope a resource identity was discovered in. (A plain
+// comment: this wire type's schema carries no description.)
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceScope {
+    User,
+    Workspace,
+}
+
 /// Frozen authored ownership of a complete resource identity. Discovery records
 /// the losing location without parsing or borrowing any of its fields.
 #[derive(
     Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
 )]
 pub struct ResourceLocation {
-    pub scope: crate::local_runtime::configuration::settings::SourceScope,
+    pub scope: SourceScope,
     pub path: PathBuf,
     pub shadowed: Option<PathBuf>,
 }
@@ -92,21 +103,32 @@ impl ManagedPythonCatalog {
     }
 }
 
-/// Configuration authority carried by the same immutable generation as resources.
-/// Authored source capture is process-local and never persisted as Session intent.
+/// Configuration carried by the same immutable generation as resources.
+///
+/// `config` and `models` are the execution bindings native owners consume.
+/// `authored` is the application-composed source/provenance/redacted record of
+/// where that configuration came from; the runtime carries it inert so a
+/// reader always observes a configuration together with its own provenance.
+/// Authored source capture is process-local and never persisted as Session
+/// intent.
 #[derive(Clone)]
 pub struct RuntimeConfiguration {
-    pub(crate) component_revisions: std::collections::BTreeMap<
-        crate::local_runtime::configuration::application::ApplyUnit,
-        String,
-    >,
-    pub resource_definitions: Vec<crate::runtime::capability_inspection::ResourceDefinition>,
-    pub resource_diagnostics: Vec<crate::runtime::capability_inspection::ResourceDiagnostic>,
-    pub source_revisions: std::collections::BTreeMap<PathBuf, String>,
-    pub effective: crate::local_runtime::configuration::settings::SourceDocumentView,
+    /// The resolved configuration document this generation executes.
     pub config: Arc<crate::local_runtime::config::CurrentRuntimeConfig>,
     pub models: crate::model::invocation::ModelBindingRegistry,
-    pub provenance: std::collections::BTreeMap<String, crate::local_runtime::configuration::Origin>,
+    pub resource_definitions: Vec<crate::runtime::capability_inspection::ResourceDefinition>,
+    pub resource_diagnostics: Vec<crate::runtime::capability_inspection::ResourceDiagnostic>,
+    pub authored: crate::local_runtime::configuration::generation::AuthoredConfiguration,
+}
+
+/// The context binding of a configuration candidate: the complete
+/// configuration the candidate generation carries and the project instruction
+/// sources resolved with it. Composition of that configuration is the
+/// application configuration owner's concern.
+pub(crate) struct ContextBinding {
+    pub(crate) configuration: RuntimeConfiguration,
+    pub(crate) project_context_files: Vec<ProjectContextFile>,
+    pub(crate) root_agent_project_files: Vec<ProjectContextFile>,
 }
 
 /// The complete immutable resource generation observed by an attempt.
@@ -163,200 +185,55 @@ impl core::fmt::Debug for RuntimeResourceSnapshot {
 }
 
 impl RuntimeResourceSnapshot {
-    pub(crate) fn with_context_binding(
-        &self,
-        capture: &crate::local_runtime::configuration::ProspectiveSessionConfig,
-        models: crate::model::invocation::ModelBindingRegistry,
-    ) -> Result<Self, String> {
+    /// Rebinds this generation's context: its configuration is replaced by
+    /// the binding's complete configuration and the root profile, project
+    /// instructions and agent profile are re-derived from it. Capability,
+    /// catalogs and provider resources are shared unchanged.
+    pub(crate) fn with_context_binding(&self, binding: &ContextBinding) -> Result<Self, String> {
+        self.configuration.as_ref().ok_or("missing configuration")?;
         let mut snapshot = self.clone();
-        let mut configuration = self
-            .configuration
-            .as_deref()
-            .ok_or("missing configuration")?
-            .clone();
-        let config = Arc::make_mut(&mut configuration.config);
-        config
-            .agent
-            .instructions
-            .clone_from(&capture.config.agent.instructions);
-        config
-            .agent
-            .agents_md
-            .clone_from(&capture.config.agent.agents_md);
-        config.context = capture.config.context;
-        config.agent.model.clone_from(&capture.config.agent.model);
-        configuration.models = models;
-        for unit in [
-            crate::local_runtime::configuration::application::ApplyUnit::Instructions,
-            crate::local_runtime::configuration::application::ApplyUnit::Provider,
-        ] {
-            configuration
-                .component_revisions
-                .insert(unit, capture.component_revisions[&unit].clone());
-            crate::local_runtime::configuration::copy_unit_provenance(
-                &mut configuration.provenance,
-                &capture.provenance,
-                unit,
-            );
-        }
-        let context = configuration
-            .effective
-            .agent
-            .get_or_insert_with(Default::default);
-        context.instructions = capture
-            .effective
-            .agent
-            .as_ref()
-            .and_then(|agent| agent.instructions.clone());
-        context.agents_md = capture
-            .effective
-            .agent
-            .as_ref()
-            .and_then(|agent| agent.agents_md.clone());
-        context.model = capture
-            .effective
-            .agent
-            .as_ref()
-            .and_then(|agent| agent.model.clone());
-        configuration
-            .effective
-            .context
-            .clone_from(&capture.effective.context);
-        configuration
-            .effective
-            .models
-            .clone_from(&capture.effective.models);
-        configuration.effective.providers =
-            crate::local_runtime::configuration::settings::redact(capture.effective.clone())
-                .providers;
-        // The capture may itself be composed (C1+I2); carry its diagnostic
-        // baseline, never substitute the newest authored source manifest.
-        configuration
-            .source_revisions
-            .clone_from(&capture.source_revisions);
-        snapshot.configuration = Some(Arc::new(configuration));
+        let agent = &binding.configuration.config.agent;
         let mut profile = self.root_profile().ok_or("missing root profile")?.clone();
-        profile
-            .instructions
-            .clone_from(&capture.config.agent.instructions);
-        profile.project_instructions.inherit = capture.config.agent.agents_md.inherit;
+        profile.instructions.clone_from(&agent.instructions);
+        profile.project_instructions.inherit = agent.agents_md.inherit;
         profile
             .project_instructions
             .files
-            .clone_from(&capture.root_agent_project_files);
+            .clone_from(&binding.root_agent_project_files);
         snapshot.capability = Arc::new(
             self.capability
                 .as_ref()
                 .clone()
                 .with_resolved_profile(Some(Arc::new(profile))),
         );
-        snapshot.project_context_files = capture.project_context_files.clone().into();
-        let mut files = if capture.config.agent.agents_md.inherit {
-            capture.project_context_files.clone()
+        snapshot.project_context_files = binding.project_context_files.clone().into();
+        let mut files = if agent.agents_md.inherit {
+            binding.project_context_files.clone()
         } else {
             Vec::new()
         };
-        files.extend(capture.root_agent_project_files.clone());
+        files.extend(binding.root_agent_project_files.clone());
         snapshot.project_instructions = concatenate_project_instructions(&files).map(Arc::from);
-        snapshot.agent_profile = (!capture.config.agent.instructions.is_empty())
-            .then(|| Arc::from(capture.config.agent.instructions.as_str()));
+        snapshot.agent_profile =
+            (!agent.instructions.is_empty()).then(|| Arc::from(agent.instructions.as_str()));
+        snapshot.configuration = Some(Arc::new(binding.configuration.clone()));
         snapshot.refresh_inspection();
         Ok(snapshot)
     }
 
-    /// Carry a newly published Model Catalog — the whole Provider unit — in
-    /// this exact adopted generation, the way independent policy units are
-    /// composed: the unit's values, provenance and component revision move,
-    /// while `source_revisions` stays the baseline the adopted context was
-    /// resolved from. Capability, context and provider resources are shared
-    /// unchanged; the revision advances so observers reread the catalog.
-    pub(crate) fn with_model_catalog(
-        &self,
-        capture: &crate::local_runtime::configuration::ProspectiveSessionConfig,
-        models: crate::model::invocation::ModelBindingRegistry,
-    ) -> Option<Self> {
-        use crate::local_runtime::configuration::application::ApplyUnit;
-        let mut configuration = self.configuration.as_deref()?.clone();
-        configuration.models = models;
-        Arc::make_mut(&mut configuration.config)
-            .agent
-            .model
-            .clone_from(&capture.config.agent.model);
-        let effective =
-            crate::local_runtime::configuration::settings::redact(capture.effective.clone());
-        configuration.effective.models = effective.models;
-        configuration.effective.providers = effective.providers;
-        configuration
-            .effective
-            .agent
-            .get_or_insert_with(Default::default)
-            .model = effective.agent.and_then(|agent| agent.model);
-        crate::local_runtime::configuration::copy_unit_provenance(
-            &mut configuration.provenance,
-            &capture.provenance,
-            ApplyUnit::Provider,
-        );
-        configuration.component_revisions.insert(
-            ApplyUnit::Provider,
-            capture.component_revisions[&ApplyUnit::Provider].clone(),
-        );
+    /// The same generation carrying `configuration`, an independently
+    /// composed unit (shared capacity, execution policy, Model Catalog). The
+    /// old snapshot and all of its physical resources remain immutable; the
+    /// caller decides whether the change advances the revision.
+    pub(crate) fn with_configuration(&self, configuration: RuntimeConfiguration) -> Self {
         let mut snapshot = self.clone();
         snapshot.configuration = Some(Arc::new(configuration));
-        snapshot.revision = self.revision.next();
-        Some(snapshot)
+        snapshot
     }
 
     pub(crate) fn with_revision(mut self, revision: RuntimeResourceRevision) -> Self {
         self.revision = revision;
         self
-    }
-    /// Compose independent execution policy with this exact adopted context.
-    /// The old snapshot and all of its physical resources remain immutable.
-    pub(crate) fn with_shared_capacity(
-        &self,
-        desired: &crate::local_runtime::configuration::IndependentPolicy,
-    ) -> Option<Self> {
-        let old = self.configuration.as_ref()?;
-        let mut configuration = old.as_ref().clone();
-        desired.compose_shared_capacity(
-            Arc::make_mut(&mut configuration.config),
-            &mut configuration.effective,
-            &mut configuration.provenance,
-            &mut configuration.component_revisions,
-        );
-        if configuration.config == old.config
-            && configuration.effective == old.effective
-            && configuration.provenance == old.provenance
-        {
-            return None;
-        }
-        let mut snapshot = self.clone();
-        snapshot.configuration = Some(Arc::new(configuration));
-        Some(snapshot)
-    }
-
-    pub(crate) fn with_execution_policy(
-        &self,
-        desired: &crate::local_runtime::configuration::IndependentPolicy,
-    ) -> Option<Self> {
-        let old = self.configuration.as_ref()?;
-        let mut configuration = (**old).clone();
-        desired.compose_execution_policy(
-            Arc::make_mut(&mut configuration.config),
-            &mut configuration.effective,
-            &mut configuration.provenance,
-            &mut configuration.component_revisions,
-        );
-        if configuration.config == old.config
-            && configuration.effective == old.effective
-            && configuration.provenance == old.provenance
-        {
-            return None;
-        }
-        let mut snapshot = self.clone();
-        snapshot.configuration = Some(Arc::new(configuration));
-        snapshot.revision = self.revision.next();
-        Some(snapshot)
     }
 
     pub(crate) fn request_shape(
@@ -839,27 +716,14 @@ pub(crate) struct PreparedRuntimeResourceData {
 }
 
 impl PreparedRuntimeResourceData {
-    pub(crate) fn set_context_binding(
-        &mut self,
-        capture: &crate::local_runtime::configuration::ProspectiveSessionConfig,
-        models: crate::model::invocation::ModelBindingRegistry,
-    ) {
+    /// Replaces the candidate's context with `binding`'s complete
+    /// configuration and project instruction sources.
+    pub(crate) fn set_context_binding(&mut self, binding: &ContextBinding) {
         if let Some(configuration) = &mut self.configuration {
-            let configuration = Arc::make_mut(configuration);
-            configuration.config = capture.config.clone();
-            configuration.models = models;
-            configuration
-                .component_revisions
-                .clone_from(&capture.component_revisions);
-            configuration.effective =
-                crate::local_runtime::configuration::settings::redact(capture.effective.clone());
-            configuration.provenance.clone_from(&capture.provenance);
-            configuration
-                .source_revisions
-                .clone_from(&capture.source_revisions);
+            *configuration = Arc::new(binding.configuration.clone());
         }
         self.project_context_files
-            .clone_from(&capture.project_context_files);
+            .clone_from(&binding.project_context_files);
     }
 }
 
@@ -1006,102 +870,6 @@ impl PreparedRuntimeResources {
                 capability_availability,
             },
         )
-    }
-}
-
-/// Off-side resource preparation, invoked by native configuration coordination.
-/// Local application consumes one complete immutable configuration input capture.
-pub trait RuntimeResourceLoader: Send + Sync {
-    /// Builds a complete candidate off-side.
-    fn prepare<'a>(
-        &'a self,
-        capability: &'a CapabilityCoordinator,
-        capture: Option<crate::local_runtime::configuration::ProspectiveSessionConfig>,
-        _preparation_cancellation: &'a crate::runtime::cancellation::CancellationSignal,
-    ) -> BoxFuture<'a, Result<PreparedRuntimeResources, RuntimeResourceLoadError>>;
-}
-
-/// The built-in filesystem loader for a fixed runtime composition.
-///
-/// It reuses the coordinator's explicit current capability inputs and owns
-/// only filesystem discovery timing. Local product composition may use a
-/// richer loader that consumes an immutable captured configuration.
-#[derive(Clone)]
-pub struct FilesystemRuntimeResourceLoader {
-    workspace: PathBuf,
-    agent_profile: Option<String>,
-    context_assembly: ContextAssembly,
-    base_only: bool,
-}
-
-impl FilesystemRuntimeResourceLoader {
-    /// Creates the normal runtime loader.
-    #[must_use]
-    pub fn new(workspace: impl Into<PathBuf>) -> Self {
-        Self {
-            workspace: workspace.into(),
-            agent_profile: None,
-            context_assembly: ContextAssembly::new(),
-            base_only: false,
-        }
-    }
-
-    /// Creates a base-capability-only loader, used by deny-by-construction
-    /// subagent child profiles.
-    #[must_use]
-    pub fn base_only(workspace: impl Into<PathBuf>) -> Self {
-        Self {
-            workspace: workspace.into(),
-            agent_profile: None,
-            context_assembly: ContextAssembly::new(),
-            base_only: true,
-        }
-    }
-
-    /// Freezes the runtime agent profile into each generation.
-    #[must_use]
-    pub fn with_agent_profile(mut self, profile: impl Into<String>) -> Self {
-        self.agent_profile = Some(profile.into());
-        self
-    }
-
-    /// Freezes the certified-extension registry into each generation.
-    #[must_use]
-    pub fn with_context_assembly(mut self, assembly: ContextAssembly) -> Self {
-        self.context_assembly = assembly;
-        self
-    }
-}
-
-impl RuntimeResourceLoader for FilesystemRuntimeResourceLoader {
-    fn prepare<'a>(
-        &'a self,
-        capability: &'a CapabilityCoordinator,
-        _capture: Option<crate::local_runtime::configuration::ProspectiveSessionConfig>,
-        _preparation_cancellation: &'a crate::runtime::cancellation::CancellationSignal,
-    ) -> BoxFuture<'a, Result<PreparedRuntimeResources, RuntimeResourceLoadError>> {
-        Box::pin(async move {
-            let project_context_files = load_project_context_files(&self.workspace)?;
-            let candidate = if self.base_only {
-                capability.prepare_base_only_candidate().map_err(|error| {
-                    RuntimeResourceLoadError::new(format!(
-                        "cannot prepare base capability resources: {error}"
-                    ))
-                })?
-            } else {
-                capability.prepare_candidate().await.map_err(|error| {
-                    RuntimeResourceLoadError::new(format!(
-                        "cannot prepare capability resources: {error}"
-                    ))
-                })?
-            };
-            Ok(PreparedRuntimeResources::new(
-                project_context_files,
-                self.agent_profile.clone(),
-                self.context_assembly.clone(),
-                candidate,
-            ))
-        })
     }
 }
 

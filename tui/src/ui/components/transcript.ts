@@ -90,7 +90,7 @@ import {
   type PresentationPreferences,
   isToolCallExpanded,
 } from "../preferences.ts";
-import { requesterLines } from "./questionnaire.ts";
+import { requesterLines } from "./questionnaire-answers.ts";
 import { type BackgroundRole, role, style } from "../theme.ts";
 import {
   type ToolCardPart,

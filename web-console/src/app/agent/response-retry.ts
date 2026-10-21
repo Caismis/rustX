@@ -1,7 +1,8 @@
 import type { AttachmentTarget, CompletedResponseView, RuntimeClientMessageDescriptor, RuntimeClientTranscriptPage } from '../../../../protocol/app-server/v51';
 import { attemptOwnerKey } from '../../../../protocol/app-server/attempt-identity';
 import { canonicalLocatorKey } from '../../../../protocol/app-server/content-identity';
-import { sameTarget, type SessionView } from '../../client/app-server';
+import { sameTarget } from '../../../../protocol/app-server/attachment-identity';
+import type { SessionView } from '../../client/contracts';
 import { messageDescriptor } from '../../../../protocol/app-server/message-descriptor';
 import { transcriptPresentation } from '../../client/transcript';
 

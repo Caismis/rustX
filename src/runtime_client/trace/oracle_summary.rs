@@ -23,12 +23,12 @@
 //! infer it from timing.
 
 use super::TraceProjection;
-use super::bounds::{TracePreview, identity_fits};
-use super::types::{TraceSystemPromptPresentation, TraceSystemPromptState};
 use crate::durable::ConversationStoreError;
 use crate::durable::presentation::{FactQuery, FactScope};
 use crate::events::types::RuntimeEvent as E;
 use crate::model::snapshot::RequestSnapshot;
+use crate::observation::trace::bounds::{TracePreview, identity_fits};
+use crate::observation::trace::types::{TraceSystemPromptPresentation, TraceSystemPromptState};
 
 impl TraceProjection<'_> {
     /// One indexed predecessor seek shared by BOTH immutable comparisons.
@@ -77,8 +77,8 @@ pub(super) enum OriginalPreviousRequest {
 }
 
 impl OriginalPreviousRequest {
-    pub(super) fn identity(&self) -> super::types::TraceRequestPredecessor {
-        use super::types::TraceRequestPredecessor as P;
+    pub(super) fn identity(&self) -> crate::observation::trace::types::TraceRequestPredecessor {
+        use crate::observation::trace::types::TraceRequestPredecessor as P;
         match self {
             Self::None => P::NotApplicable,
             Self::Unavailable(id) => P::Unavailable {
@@ -96,9 +96,9 @@ impl OriginalPreviousRequest {
         }
     }
 
-    pub(super) fn prompt(&self) -> Option<super::bounds::TraceText> {
+    pub(super) fn prompt(&self) -> Option<crate::observation::trace::bounds::TraceText> {
         match self {
-            Self::Frozen(snapshot) => Some(super::bounds::TraceText::detail(
+            Self::Frozen(snapshot) => Some(crate::observation::trace::bounds::TraceText::detail(
                 &snapshot.effective_system_prompt,
             )),
             _ => None,
@@ -110,9 +110,9 @@ impl OriginalPreviousRequest {
         current: &RequestSnapshot,
     ) -> (
         TraceSystemPromptPresentation,
-        super::types::TraceToolCatalogState,
+        crate::observation::trace::types::TraceToolCatalogState,
     ) {
-        use super::types::TraceToolCatalogState as T;
+        use crate::observation::trace::types::TraceToolCatalogState as T;
         use TraceSystemPromptState as S;
         #[cfg(test)]
         super::summary::probe::record(&super::summary::probe::TOOL_RELATIONSHIP);

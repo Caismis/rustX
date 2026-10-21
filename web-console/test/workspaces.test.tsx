@@ -748,7 +748,7 @@ it('UX-04 native authority replacement at the same endpoint retires presentation
 
 it('UX-04 replacement of the Product Host admission owner fences an older successful admission', async () => {
   await server.connect();
-  const old = deferred<false | import('../src/client/app-server').OperationAdmission>();
+  const old = deferred<false | import('../src/client/contracts').OperationAdmission>();
   server.client.setSessionAdmission(() => old.promise);
   const pending = server.client.admitSessionOperation('A');
   server.client.setSessionAdmission(async () => false);

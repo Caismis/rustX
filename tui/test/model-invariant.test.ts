@@ -55,7 +55,7 @@ import {
 } from "./support/fixtures.ts";
 import { FakeTransport, paramsOf, tick } from "./support/app-server-peer.ts";
 import { harness, nextRequest } from "./support/app-server-harness.ts";
-import { renderModel } from "../src/commands/dispatcher.ts";
+import { renderModel } from "../src/commands/presentation.ts";
 import { TransientFeedbackSurface } from "../src/ui/components/transient-feedback.ts";
 import { UncertainOutcomeError } from "../src/app-server/client.ts";
 

@@ -1,5 +1,6 @@
 //! WF-01 regressions: every interleaving is driven by a native frame or gate.
 use super::*;
+use crate::durable::JournalStore;
 
 fn literal(value: Value) -> WorkflowValue {
     WorkflowValue::Literal { value }

@@ -1,6 +1,10 @@
 //! Real durable fixtures; gates are completion/queue boundaries, never sleeps.
 use super::*;
+use crate::durable::AuxiliaryStore;
 use crate::durable::{AuxiliarySettlementCommit, ConversationStore};
+use crate::durable::{
+    CanonicalStore, JournalStore, ObservationStore, ProjectionStore, RequestStore,
+};
 use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
 use crate::model::auxiliary::{
     AuxiliaryAttribution, AuxiliaryCallStart, AuxiliaryFingerprint, AuxiliaryRequestStart,

@@ -386,7 +386,11 @@ are rejected; there is no downgrade or compatibility path.
 The App Server protocol is rustX's public client boundary for the TUI,
 Developer Web Console, future Web UI, and SDKs. Rust DTOs in
 `src/app_server/protocol.rs` are authoritative. `AppServerConnection` in
-`src/app_server/connection.rs` is the transport-neutral semantic endpoint.
+`src/app_server/connection.rs` is the transport-neutral semantic endpoint: it alone
+admits requests, reserves and registers attachments and accepts final replies, then
+routes each admitted request by an exhaustive request-family classification to the
+catalog, history, configuration and runtime handlers under `src/app_server/connection/`.
+`src/app_server/rpc_error.rs` is the one native-failure to JSON-RPC error mapping.
 
 ```text
 one client connection → AppServerConnection (initialize once)
@@ -972,7 +976,7 @@ products or policies is implemented by this semantic endpoint.
 
 `tests/support/app_server_conformance.rs` defines one small semantic parity scenario
 and a test-only `AppServerConformanceDriver`: concurrent typed `request` and
-`next_notification` calls. `tests/scripted/app_server/protocol.rs` runs it through
+`next_notification` calls. `tests/scripted/app_server/protocol/admission.rs` runs it through
 the direct `AppServerConnection` adapter now. #36 can include the same support
 module via `#[path = "..."]`, supply a fresh connection and two idle Policy-mode
 Sessions, and implement drivers that exchange the same DTOs over stdio or WebSocket.

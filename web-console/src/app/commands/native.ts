@@ -3,7 +3,8 @@ import { readTraceCollection, readTraceValue } from '../../client/trace-content'
 import type { TraceFieldReader } from '../../client/trace';
 import { readEditor } from '../../../../protocol/app-server/editor';
 import type { CompletedResponseView, AttachmentTarget, SessionUserMessageBoundaryObservation, CanonicalContentLocator } from '../../../../protocol/app-server/v51';
-import { AppServerClient, sameTarget } from '../../client/app-server';
+import { AppServerClient } from '../../client/app-server';
+import { sameTarget } from '../../../../protocol/app-server/attachment-identity';
 import { selectSessionModel } from '../model-preference';
 import { lineageSwitchSafe } from '../../bindings/projection';
 
@@ -33,8 +34,8 @@ export class CommandSession {
   async models() {
     this.requireCurrent();
     const [current, catalog] = await Promise.all([
-      this.client.modelRead(this.target,this.current),
-      this.client.modelCatalogRead(this.target,this.current),
+      this.client.reads.modelRead(this.target,this.current),
+      this.client.reads.modelCatalogRead(this.target,this.current),
     ]);
     this.requireCurrent();
     if (this.client.getSnapshot().views[this.sessionId]?.modelMutation) await this.client.repairAgentModel(this.sessionId);
@@ -116,7 +117,7 @@ export class CommandSession {
     const reader: TraceFieldReader = {
       page: async (cut, domain, offset, current) => (await this.client.request({ method: 'conversation/checkpointPage', params: { target: this.target, cut, domain, offset, limit: 32 } }, 'checkpoint_page', undefined, current)).page,
       value: async (cut, field, offset, current) => (await this.client.request({ method: 'conversation/checkpointValueRead', params: { target: this.target, cut, ...field, offset, max_bytes: 65536 } }, 'checkpoint_value_chunk', undefined, current)).chunk,
-      content: async (_cut, ref, offset, current) => this.client.readContent(this.target, undefined, ref, offset, current),
+      content: async (_cut, ref, offset, current) => this.client.reads.readContent(this.target, undefined, ref, offset, current),
     };
     const value: Record<string, unknown> = { ...(item.value as Record<string, unknown> | null) };
     if (item.value == null || item.deferred) {

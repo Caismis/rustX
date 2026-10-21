@@ -38,9 +38,9 @@
 //! where the gate registration exposes the exact cancellation signal the
 //! gated step runs under.
 
+use crate::durable::JournalStore;
 use std::sync::Arc;
 
-use crate::durable::ConversationStore;
 use crate::events::types::RuntimeEvent;
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::{AgentId, ConversationId};

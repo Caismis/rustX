@@ -8,7 +8,7 @@ import { useTranslation, useNotice } from '../../locale/react';
 // per-row delivery class exists in the native queue.
 import { useEffect, useId, useRef, useState } from 'react';
 import { contentPreview, inboundOrigin, type InboundRow } from '../../bindings/composer-context';
-import type { InboundControlOutcome, Submission } from '../../client/app-server';
+import type { InboundControlOutcome, Submission } from '../../client/contracts';
 import { IconChevronDownOutline14, IconQueueOutline14 } from '../../presentation/primitives/icons';
 import type { PendingInboundRef } from '../../../../protocol/app-server/v51';
 import css from './QueueDock.module.css';

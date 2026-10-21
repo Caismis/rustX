@@ -1,7 +1,7 @@
 //! Historical model projections, separate from the native execution Trace.
-use super::snapshot::RuntimeClientProjectionHeadView;
-use super::trace::TraceRequestMessage;
 use crate::context::checkpoint::ProjectionActivationId;
+use crate::observation::head::RuntimeClientProjectionHeadView;
+use crate::observation::trace::TraceRequestMessage;
 use crate::runtime::identity::CheckpointId;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -15,7 +15,7 @@ pub struct ProjectionPage {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectionDetail {
-    pub read_cut: super::checkpoint::CheckpointReadCut,
+    pub read_cut: crate::observation::cut::CheckpointReadCut,
     pub checkpoint: RuntimeClientProjectionHeadView,
     pub items: Vec<ProjectionItemDetail>,
     pub next_item: Option<u32>,
@@ -38,14 +38,14 @@ pub(crate) fn page(
         records: page
             .records
             .into_iter()
-            .map(|checkpoint| super::projection::checkpoint_view(store, &checkpoint))
+            .map(|checkpoint| super::projection::views::checkpoint_view(store, &checkpoint))
             .collect::<Result<_, _>>()?,
         next_activation: page.next_activation,
     })
 }
 pub(crate) fn detail(
     store: &dyn crate::durable::ConversationStore,
-    cut: &super::checkpoint::CheckpointReadCut,
+    cut: &crate::observation::cut::CheckpointReadCut,
     id: &CheckpointId,
     offset: u32,
     limit: usize,
@@ -111,7 +111,7 @@ pub(crate) fn detail(
             CheckpointMessage::Original(reference) => Some(reference),
             CheckpointMessage::Derived(_) => None,
         };
-        let mut content = super::trace::request::request_message_with_original(
+        let mut content = crate::observation::trace::request::request_message_with_original(
             &input,
             store.conversation_id(),
             original,
@@ -145,7 +145,7 @@ pub(crate) fn detail(
         read_cut: cut.clone(),
         next_item: (end < checkpoint.candidate.items.len())
             .then_some(u32::try_from(end).expect("bounded checkpoint coordinate")),
-        checkpoint: super::projection::checkpoint_view(store, &checkpoint)?,
+        checkpoint: super::projection::views::checkpoint_view(store, &checkpoint)?,
         items,
     })
 }
@@ -166,7 +166,7 @@ fn bind_canonical_source(
                 "original checkpoint message header unavailable".into(),
             )
         })?;
-    super::trace::request::bind_original_provenance(content, &header)?;
+    crate::observation::trace::request::bind_original_provenance(content, &header)?;
     Ok(())
 }
 
@@ -174,9 +174,9 @@ pub(crate) fn provenance_field(
     activation: u64,
     item: u64,
     encoded_bytes: u64,
-) -> super::trace::TraceFieldSource {
-    super::trace::TraceFieldSource::Value {
-        field: super::trace::TraceFieldKind::Provenance,
+) -> crate::observation::trace::TraceFieldSource {
+    crate::observation::trace::TraceFieldSource::Value {
+        field: crate::observation::trace::TraceFieldKind::Provenance,
         domain: format!("context.projections.{activation}.items.{item}.provenance"),
         item_offset: 0,
         path: Vec::new(),
@@ -190,13 +190,13 @@ pub(crate) fn selection(domain: &str) -> Option<(u64, u64)> {
     let item = source.strip_suffix(".provenance")?;
     let activation: u64 = activation.parse().ok()?;
     let item: u64 = item.parse().ok()?;
-    (activation > 0 && item <= super::content::CONTENT_SAFE_INTEGER_MAX)
+    (activation > 0 && item <= crate::observation::content::CONTENT_SAFE_INTEGER_MAX)
         .then_some((activation, item))
 }
 
 pub(crate) fn value_read(
     store: &dyn crate::durable::ConversationStore,
-    cut: &super::checkpoint::CheckpointReadCut,
+    cut: &crate::observation::cut::CheckpointReadCut,
     domain: &str,
     item_offset: u64,
     path: &[String],
@@ -212,7 +212,7 @@ pub(crate) fn value_read(
     }
     if item_offset != 0
         || !path.is_empty()
-        || offset > super::content::CONTENT_SAFE_INTEGER_MAX
+        || offset > crate::observation::content::CONTENT_SAFE_INTEGER_MAX
         || max_bytes == 0
         || max_bytes > 65_536
     {

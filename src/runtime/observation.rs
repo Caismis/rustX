@@ -110,11 +110,11 @@ pub(crate) enum ConversationObservation {
         observation: Box<ConversationObservation>,
     },
     /// A native Workflow cut published after its corresponding durable receipt.
-    Workflow(Vec<crate::runtime_client::workflow_source::WorkflowReadSource>),
+    Workflow(Vec<crate::observation::workflow_source::WorkflowReadSource>),
     /// Bounded authoritative durable replacement, ordered under the Goal
     /// publication boundary. Every Goal change is a durable phase/revision
     /// change; there is no activation-only Goal observation.
-    GoalChanged(crate::runtime_client::goal::RuntimeClientGoalView),
+    GoalChanged(crate::observation::goal::RuntimeClientGoalView),
     /// One finite witness from the native Journal publication-ready prefix.
     JournalFact(crate::durable::observation::ObservationEventWitness),
     /// Scalar native publication release; body remains solely in the Journal source.
@@ -146,12 +146,12 @@ pub(crate) enum ConversationObservation {
     /// Finite native C evidence; canonical body bytes remain at their source.
     CanonicalCommitted {
         attempt_id: Option<AttemptId>,
-        receipt: crate::durable::inbox::TranscriptCommitReceipt,
+        receipt: crate::durable::TranscriptCommitReceipt,
     },
     /// Finite audit settlement captured in the native publication transaction.
     AuditSettled {
         attempt_id: AttemptId,
-        receipt: crate::durable::inbox::PublicationAuditReceipt,
+        receipt: crate::durable::PublicationAuditReceipt,
     },
     /// One canonical message commit (the loop's commit observation seam;
     /// the internal committed-message events reference identity only).
@@ -165,7 +165,7 @@ pub(crate) enum ConversationObservation {
         transcript_cursor: Option<TranscriptCursor>,
     },
     /// One composed Agent Status observation.
-    Status(crate::runtime_client::snapshot::AgentStatusView),
+    Status(crate::observation::status::AgentStatusView),
     /// One publication stream opened (Issue #108). The frozen identity pins
     /// the stream to the exact request generation that started it.
     PublicationOpened {
@@ -242,7 +242,7 @@ pub(crate) enum ConversationObservation {
     /// no consumer can fold half a generation.
     Capability {
         /// The activated immutable capability snapshot.
-        source: crate::runtime_client::capability_source::CapabilityReadSource,
+        source: crate::observation::capability_source::CapabilityReadSource,
     },
     /// One published immutable runtime resource generation, **including the
     /// capability generation it was built against**.
@@ -270,8 +270,8 @@ pub(crate) enum ConversationObservation {
         snapshot: Arc<crate::runtime::resources::RuntimeResourceSnapshot>,
         /// The authoritative availability of every evaluated optional
         /// capability source at that same commit.
-        capability: crate::runtime_client::capability_source::CapabilityReadSource,
-        display: crate::runtime_client::resource_source::ResourceReadSource,
+        capability: crate::observation::capability_source::CapabilityReadSource,
+        display: crate::observation::resource_source::ResourceReadSource,
     },
 
     /// One complete frozen admission fact, under the coordinator lock.
@@ -286,7 +286,7 @@ pub(crate) enum ConversationObservation {
     SessionModelChanged {
         /// The redacted session model state after the update.
         model: crate::model::session::SessionModelReadSource,
-        capability: Option<crate::runtime_client::capability_source::CapabilityReadSource>,
+        capability: Option<crate::observation::capability_source::CapabilityReadSource>,
     },
     /// Runtime drain began and new semantic admission closed.
     Shutdown,
@@ -294,13 +294,13 @@ pub(crate) enum ConversationObservation {
     PendingHead {
         owner: &'static str,
         cut: crate::runtime::identity::ObservationCollectionCut,
-        head: Vec<crate::runtime_client::snapshot::RuntimeClientInteractionHeader>,
+        head: Vec<crate::observation::interaction::RuntimeClientInteractionHeader>,
     },
     /// One native interaction became pending.
     InteractionPending {
         /// The root-facing routed request. The originating coordinator still
         /// owns the pending waiter and settlement.
-        interaction: crate::runtime_client::snapshot::RuntimeClientInteractionHeader,
+        interaction: crate::observation::interaction::RuntimeClientInteractionHeader,
         /// The originating conversation's requested audit and cursor, when
         /// this is the primary conversation. Child audits stay child-local.
         audit: Option<(RuntimeEventEnvelope, TranscriptCursor)>,
@@ -360,7 +360,7 @@ pub(crate) enum ConversationObservation {
     /// differs from its previous publication, so ordinary streaming never
     /// emits it. `session/adoptConfiguration` still revalidates the real gate
     /// at its commit boundary.
-    AdoptionEligibility(crate::local_runtime::configuration::application::AdoptionEligibility),
+    AdoptionEligibility(crate::runtime::adoption::AdoptionEligibility),
 }
 
 /// Streaming traversal of the complete native transition. No payload or
@@ -590,11 +590,7 @@ pub(crate) trait PublicationProjectionCommit: Send + Sync {
         &self,
         receipt: &crate::durable::inbox::GoalObservationReceipt,
     ) -> NativeReceiptInstallation;
-    fn native_audit(
-        &self,
-        attempt: &AttemptId,
-        receipt: &crate::durable::inbox::PublicationAuditReceipt,
-    );
+    fn native_audit(&self, attempt: &AttemptId, receipt: &crate::durable::PublicationAuditReceipt);
     fn native_pending(
         &self,
         receipt: Option<&crate::durable::inbox::PendingObservationReceipt>,
@@ -628,7 +624,7 @@ pub(crate) struct SessionObservationMetadata {
     pub(crate) closed: bool,
 }
 impl SessionObservationMetadata {
-    fn fold_canonical(&mut self, batch: &crate::durable::inbox::CanonicalObservationBatch) {
+    fn fold_canonical(&mut self, batch: &crate::durable::CanonicalObservationBatch) {
         self.fold(
             batch.human_activity_at,
             batch.has_opening_user,
@@ -696,7 +692,7 @@ impl ObservationFanout {
         self.session_metadata.subscribe()
     }
 
-    fn canonical_metadata(&self, batch: &crate::durable::inbox::CanonicalObservationBatch) {
+    fn canonical_metadata(&self, batch: &crate::durable::CanonicalObservationBatch) {
         self.session_metadata.send_if_modified(|metadata| {
             let previous = metadata.clone();
             metadata.fold_canonical(batch);
@@ -844,7 +840,7 @@ impl ObservationFanout {
     pub(crate) fn native_audit(
         &self,
         attempt: &AttemptId,
-        receipt: &crate::durable::inbox::PublicationAuditReceipt,
+        receipt: &crate::durable::PublicationAuditReceipt,
     ) {
         if let Some(projection) = self.publication_projection.get() {
             projection.native_audit(attempt, receipt);
@@ -2323,7 +2319,7 @@ mod tests {
                     panic!("finite source witness");
                 };
                 assert_eq!(witness.sequence, sequence);
-                assert!(crate::runtime_client::checkpoint::bounded_bytes(witness, 16384).is_some());
+                assert!(crate::observation::bounded::bounded_bytes(witness, 16384).is_some());
                 sequences.push(sequence);
             }
         }

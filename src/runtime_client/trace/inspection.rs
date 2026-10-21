@@ -1,9 +1,11 @@
 //! Finite inspection heads. Original bodies remain behind their advertised readers.
-use super::{TraceArtifact, TraceFieldSource, TraceKind, TracePreview, TraceRecord};
 use crate::durable::ConversationStoreError;
 use crate::durable::observation::{TraceFactData, TraceFactHeader, TraceFactQuery, TraceFactScope};
-use crate::runtime_client::checkpoint::CollectionFrontier;
-use crate::runtime_client::content::CanonicalContentLocator;
+use crate::observation::content::CanonicalContentLocator;
+use crate::observation::cut::CollectionFrontier;
+use crate::observation::trace::{
+    TraceArtifact, TraceFieldSource, TraceKind, TracePreview, TraceRecord,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -59,7 +61,7 @@ pub struct TraceInspectionMessage {
     pub preview: Option<TracePreview>,
     pub source: Option<crate::message::types::UserSource>,
     pub ordinary_input: bool,
-    pub context_kind: Option<super::TraceContextKind>,
+    pub context_kind: Option<crate::observation::trace::TraceContextKind>,
     pub attachments: Vec<TraceArtifact>,
     pub fields: Vec<TraceFieldSource>,
     pub collections: Vec<CollectionFrontier>,

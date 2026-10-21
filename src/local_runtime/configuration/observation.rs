@@ -151,7 +151,7 @@ impl io::Write for Range {
         let end = self
             .total
             .checked_add(length)
-            .filter(|end| *end <= crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX)
+            .filter(|end| *end <= crate::observation::content::CONTENT_SAFE_INTEGER_MAX)
             .ok_or_else(|| io::Error::other("source value exceeds safe byte range"))?;
         if end > self.offset && self.bytes.len() < self.limit {
             let start = usize::try_from(self.offset.saturating_sub(self.total))
@@ -182,7 +182,7 @@ pub(crate) fn encode(
     // encoding. Batch tiny escaped-string writes with the same finite scratch
     // bound used by revision hashing; do not allocate the full field.
     let mut writer = io::BufWriter::with_capacity(8_192, &mut range);
-    crate::runtime_client::structural_json::to_writer(&mut writer, value)
+    crate::observation::structural_json::to_writer(&mut writer, value)
         .map_err(|e| e.to_string())?;
     writer.into_inner().map_err(|e| e.to_string())?;
     Ok((range.bytes, range.total))
@@ -270,17 +270,17 @@ pub(crate) fn read(
 ) -> Result<SourceValueChunk, String> {
     if max_bytes == 0
         || max_bytes > READ_BYTES
-        || offset > crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX
+        || offset > crate::observation::content::CONTENT_SAFE_INTEGER_MAX
         || offset
             .checked_add(u64::from(max_bytes))
-            .is_none_or(|end| end > crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX)
+            .is_none_or(|end| end > crate::observation::content::CONTENT_SAFE_INTEGER_MAX)
     {
         return Err("invalid source byte range".into());
     }
-    if reference.byte_length > crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX
+    if reference.byte_length > crate::observation::content::CONTENT_SAFE_INTEGER_MAX
         || reference
             .item_index
-            .is_some_and(|index| index > crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX)
+            .is_some_and(|index| index > crate::observation::content::CONTENT_SAFE_INTEGER_MAX)
     {
         return Err("invalid source read evidence".into());
     }
@@ -484,8 +484,7 @@ pub(crate) fn page(
     offset: u64,
     limit: usize,
 ) -> Result<SourceFieldPage, String> {
-    if limit == 0 || limit > 32 || offset > crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX
-    {
+    if limit == 0 || limit > 32 || offset > crate::observation::content::CONTENT_SAFE_INTEGER_MAX {
         return Err("invalid source page bounds".into());
     }
     let revision = revision(source)?;
@@ -610,11 +609,11 @@ pub(crate) fn session_settings_read(
     }
     if max_bytes == 0
         || max_bytes > READ_BYTES
-        || offset > crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX
+        || offset > crate::observation::content::CONTENT_SAFE_INTEGER_MAX
         || offset
             .checked_add(u64::from(max_bytes))
-            .is_none_or(|end| end > crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX)
-        || reference.byte_length > crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX
+            .is_none_or(|end| end > crate::observation::content::CONTENT_SAFE_INTEGER_MAX)
+        || reference.byte_length > crate::observation::content::CONTENT_SAFE_INTEGER_MAX
     {
         return Err("invalid settings byte range".into());
     }
@@ -711,7 +710,7 @@ pub(crate) fn session_application_read(
         || max_bytes > READ_BYTES
         || offset
             .checked_add(u64::from(max_bytes))
-            .is_none_or(|end| end > crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX)
+            .is_none_or(|end| end > crate::observation::content::CONTENT_SAFE_INTEGER_MAX)
     {
         return Err("invalid source read bounds".into());
     }
@@ -764,7 +763,7 @@ mod application_tests {
     fn configuration_ranges_preserve_exact_structural_bytes_across_buffer_boundaries() {
         let source = serde_json::json!({"escaped": "é\n\"\\".repeat(30_000), "native": u64::MAX});
         let mut original = Vec::new();
-        crate::runtime_client::structural_json::to_writer(&mut original, &source).unwrap();
+        crate::observation::structural_json::to_writer(&mut original, &source).unwrap();
         for offset in [0, 8_191, 8_192, 8_193, original.len() - 1, original.len()] {
             for limit in [1, 17, 65_536] {
                 let (bytes, total) = encode(&source, offset as u64, limit).unwrap();
@@ -821,7 +820,7 @@ mod application_tests {
         assert_eq!(value["version"], u64::MAX.to_string());
         assert_eq!(value["desired"]["attempt"], "9007199254740993");
         let restored: ConfigurationApplication =
-            crate::runtime_client::structural_json::decode(value).unwrap();
+            crate::observation::structural_json::decode(value).unwrap();
         assert_eq!(restored, source);
         let mut modified = reference.clone();
         modified.byte_length += 1;

@@ -1,13 +1,13 @@
 //! Finite own lifecycle evidence from original native J and captured C headers.
 use super::TraceProjection;
-use super::bounds::TracePreview;
-use super::types::{
-    TraceArtifact, TraceCursor, TraceFieldSource, TraceGeneration, TraceKind, TraceLocation,
-    TraceState, TraceTiming, TraceToolCall, TraceToolSummary,
-};
 use crate::durable::ConversationStoreError;
 use crate::durable::observation::{
     TraceFactData as D, TraceFactHeader, TraceFactKind as K, TraceTerminalClass,
+};
+use crate::observation::trace::bounds::TracePreview;
+use crate::observation::trace::types::{
+    TraceArtifact, TraceCursor, TraceFieldSource, TraceGeneration, TraceKind, TraceLocation,
+    TraceState, TraceTiming, TraceToolCall, TraceToolSummary,
 };
 
 pub(super) struct AnchorFacts {
@@ -31,7 +31,7 @@ pub(super) struct AnchorFacts {
     pub has_detail: bool,
     pub truncated: bool,
     pub fields: Vec<TraceFieldSource>,
-    pub collections: Vec<crate::runtime_client::checkpoint::CollectionFrontier>,
+    pub collections: Vec<crate::observation::cut::CollectionFrontier>,
 }
 pub(super) struct AnchorRequest {
     pub start_sequence: u64,
@@ -115,7 +115,10 @@ impl AnchorFacts {
         if let Some(request) = &mut self.request {
             request.failure_kind = terminal.failure_kind;
             request.generation = terminal.generation.map(|evidence| {
-                super::record::generation_metrics(evidence, terminal.usage.as_ref())
+                crate::observation::trace::generation::generation_metrics(
+                    evidence,
+                    terminal.usage.as_ref(),
+                )
             });
             request.usage = terminal.usage;
         }
@@ -341,9 +344,9 @@ fn subagent_start(facts: &mut AnchorFacts, data: &D) -> Vec<K> {
 
 pub(super) fn public_occurrence(
     occurrence: &crate::events::types::ToolObservationOccurrence,
-) -> crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
-    crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
-        locator: crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition {
+) -> crate::observation::tool::RuntimeClientToolOccurrence {
+    crate::observation::tool::RuntimeClientToolOccurrence {
+        locator: crate::observation::content::CanonicalContentLocator::ByLedgerPosition {
             position: occurrence.ledger_position,
         },
         block_index: occurrence.block_index,

@@ -3,8 +3,8 @@
 //! native. A batch owns provisional evidence; only successful COMMIT seats it.
 use super::{
     Arc, AtomicU64, Connection, ConversationStoreError, MessageBlock, MessageId, Mutex, Ordering,
-    SurfaceRevision, Transaction, TranscriptCursor, head_frontier, materialize_head, nonnegative,
-    storage,
+    SurfaceRevision, Transaction, TranscriptCursor, canonical::ledger::head_frontier,
+    canonical::ledger::materialize_head, nonnegative, storage,
 };
 use rusqlite::hooks::PreUpdateCase;
 
@@ -191,7 +191,7 @@ impl<'a> Batch<'a> {
                     .active_message_ids
                     .len()
             } else {
-                super::validate_append_identities(transaction, ledger)?
+                super::canonical::ledger::validate_append_identities(transaction, ledger)?
             }
         };
         self.proof = reusable.then_some(Certificate {
@@ -210,7 +210,12 @@ impl<'a> Batch<'a> {
         allowed_pending: Option<&MessageId>,
     ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
         let head = self.head(transaction)?;
-        let cursor = super::append_message_with_head(transaction, message, allowed_pending, head)?;
+        let cursor = super::canonical::ledger::append_message_with_head(
+            transaction,
+            message,
+            allowed_pending,
+            head,
+        )?;
         let epoch = self.owner.epoch.load(Ordering::Acquire);
         // The shared native writer inserts exactly one Ledger identity and
         // updates one Surface head. Other relevant writes (including triggers)

@@ -1,5 +1,5 @@
 import { ComposerDraft, type ComposerSubmission, type ComposerConversation, type InputAcceptance } from '../composer/draft';
-import { isOutcomeUncertain, RpcFailure } from '../../client/app-server';
+import { isOutcomeUncertain, RpcFailure } from '../../client/errors';
 import type { FirstSubmission } from '../new-conversation/first-submit';
 import { message } from '../../locale/translation';
 import { useTranslation, useNotice } from '../../locale/react';

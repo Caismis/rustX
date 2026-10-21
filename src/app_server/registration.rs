@@ -147,9 +147,9 @@ impl Slot {
 }
 impl Registration {
     pub(crate) fn receipt(self, id: &RequestId) -> io::Result<Publication> {
-        let superseded = super::transport::serialize_record(&super::connection::failure(
+        let superseded = super::transport::serialize_record(&super::rpc_error::failure(
             Some(id.clone()),
-            super::connection::domain(super::protocol::ErrorData::SubscriptionSuperseded),
+            super::rpc_error::domain(super::protocol::ErrorData::SubscriptionSuperseded),
         ))?;
         Ok(Publication {
             registration: self,

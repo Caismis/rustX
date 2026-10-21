@@ -1,5 +1,6 @@
 //! Native human waits: channel publication, manual deadlines, exact typed responses.
 use super::*;
+use crate::durable::JournalStore;
 use crate::events::review::{ReviewDecision, ReviewResponse};
 use crate::runtime::interaction::*;
 

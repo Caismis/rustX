@@ -20,7 +20,7 @@ pub fn generate() -> BTreeMap<&'static str, Value> {
         ),
         (
             "rustx.schema.json",
-            super::configuration::authoring_schema(),
+            super::configuration::semantics::authoring_schema(),
         ),
         (
             "mcp.schema.json",

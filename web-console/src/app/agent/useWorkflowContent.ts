@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import type { RuntimeClientCheckpoint, RuntimeClientSnapshot, WorkflowRunView, WorkflowSnapshot } from '../../../../protocol/app-server/v51';
 import { parseObservedValue } from '../../../../protocol/app-server/domain-observation';
-import type { AppServerClient, SessionView } from '../../client/app-server';
+import type { AppServerClient } from '../../client/app-server';
+import type { SessionView } from '../../client/contracts';
 import type { TraceFieldReader } from '../../client/trace';
 import { readTraceCollection, readTraceValue } from '../../client/trace-content';
 
@@ -33,7 +34,7 @@ export function useWorkflowContent(client: AppServerClient | undefined, view: Wo
     const reader: TraceFieldReader = {
       page: async (cut, domain, offset, current) => (await client.request({ method: 'conversation/checkpointPage', params: { target, agent_id: agentId ?? null, cut, domain, offset, limit: 32 } }, 'checkpoint_page', undefined, current)).page,
       value: async (cut, field, offset, current) => (await client.request({ method: 'conversation/checkpointValueRead', params: { target, agent_id: agentId ?? null, cut, ...field, offset, max_bytes: 65536 } }, 'checkpoint_value_chunk', undefined, current)).chunk,
-      content: async (_cut, ref, offset, current) => client.readContent(target, agentId, ref, offset, current),
+      content: async (_cut, ref, offset, current) => client.reads.readContent(target, agentId, ref, offset, current),
     };
     void (async () => {
       const items = await readTraceCollection(reader, cut, frontier, current), runs: WorkflowRunView[] = [];

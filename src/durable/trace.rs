@@ -1,6 +1,6 @@
 //! Finite read evidence captured at original native J/C/request boundaries.
 //! These headers are neither event authority nor execution input.
-use crate::runtime_client::trace::{
+use crate::observation::trace::{
     TraceArtifact, TraceFieldSource, TraceLocation, TracePreview, TraceToolCall, TraceToolOutcome,
 };
 use serde::{Deserialize, Serialize};
@@ -196,8 +196,8 @@ pub struct TraceRequestPredecessorHeader {
 pub struct TraceCanonicalSummary {
     pub source: Option<crate::message::types::UserSource>,
     pub ordinary_input: bool,
-    pub context_kind: Option<crate::runtime_client::trace::TraceContextKind>,
-    pub locator: crate::runtime_client::content::CanonicalContentLocator,
+    pub context_kind: Option<crate::observation::trace::TraceContextKind>,
+    pub locator: crate::observation::content::CanonicalContentLocator,
     pub identity: Option<crate::runtime::identity::MessageId>,
     pub preview: Option<TracePreview>,
     pub calls: Vec<TraceToolCall>,
@@ -206,7 +206,7 @@ pub struct TraceCanonicalSummary {
     pub tool_detail: Option<TracePreview>,
     pub truncated: bool,
     pub fields: Vec<TraceFieldSource>,
-    pub collections: Vec<crate::runtime_client::checkpoint::CollectionFrontier>,
+    pub collections: Vec<crate::observation::cut::CollectionFrontier>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TraceToolProposalSummary {
@@ -220,7 +220,7 @@ pub struct TraceToolProposalSummary {
 #[derive(Debug, Clone)]
 pub struct TraceRequestContextPage {
     pub total: u64,
-    pub items: Vec<crate::runtime_client::trace::TraceContextPresentation>,
+    pub items: Vec<crate::observation::trace::TraceContextPresentation>,
     pub next_offset: Option<u64>,
     pub domain: String,
 }

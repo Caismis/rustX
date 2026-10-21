@@ -295,7 +295,7 @@ impl RuntimeClientFixtureBuilder {
                 &artifacts.join("conversation.sqlite"),
             )
             .expect("durable lineage");
-            rustx::durable::ConversationStore::initialize(&store, &self.durable_history)
+            rustx::durable::CanonicalStore::initialize(&store, &self.durable_history)
                 .expect("seed the durable lineage");
         }
         // One frozen composition for this fixture's runtime (Issue #259). The
@@ -423,9 +423,6 @@ impl RuntimeClientFixtureBuilder {
                 None,
                 rustx::context::ContextAssembly::new(),
                 coordinator.current_snapshot(),
-            )),
-            resource_loader: Arc::new(rustx::runtime::FilesystemRuntimeResourceLoader::new(
-                coordinator.current_snapshot().workspace_root(),
             )),
             capability: coordinator,
             clock: None,

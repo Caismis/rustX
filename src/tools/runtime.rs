@@ -875,6 +875,7 @@ fn validate_managed_output_root(
 #[cfg(test)]
 mod tests {
     use super::{ConversationRuntimeConfig, ConversationRuntimeError, ConversationToolRuntime};
+    use crate::durable::InboxStore;
     use crate::runtime::identity::ConversationId;
     use std::fs;
 
