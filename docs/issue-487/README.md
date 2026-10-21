@@ -172,32 +172,51 @@ here apart from imports, each one cohesive owner: `runtime/workflow.rs`
 
 ## Verification
 
-Run locally on `74f17445` (the final code; later commits change documentation
-only) with the CI commands of the FULL lanes and the client packages:
+Run locally on `4cf10216` (merge of main `7cf6b2da` plus documentation) with
+the CI commands of the FULL lanes and the client packages. Results from the
+earlier head (`74f17445`) are superseded.
 
 | Check | Result |
 | --- | --- |
 | `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D warnings` | pass |
 | planner and benchmark-controller Python tests; provider emulator `uv sync --frozen` + `pytest` | pass |
-| `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::` | 4,144 passed, 1 failed (see below) |
-| `cargo test --test contracts --test provider --all-features` | pass (contracts rerun on the final docs: 31 passed) |
-| `cargo test --lib --all-features -- boundary_suites::` (emulator required) | pass |
+| `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::` | 4,150 passed, 1 failed (see below) |
+| `cargo test --test contracts --test provider --all-features` | pass |
+| `cargo test --lib --all-features -- boundary_suites::` (emulator required) | first run under machine load: 7 failed (6 at their 30 s liveness guard, one `native canonical cut provenance unavailable` read that passes alone in 5.6 s on both branch and main); rerun: 247 passed |
 | external targets `durable process subagent tools conformance cfg3_catalog cfg3_managed_output` | pass |
 | `check_test_lanes` for rust-fast, rust-contracts, rust-boundaries, documentation-contracts | pass |
 | `generate_schemas` + `git diff --exit-code -- schemas`; `pnpm --dir protocol/app-server check` and `typecheck` | pass (no drift) |
-| `pnpm --dir tui typecheck` / `test` (real binary, emulator required) | pass |
+| `pnpm --dir tui typecheck` / `test` (real binary, emulator required) | pass (1,186 passed, 1 skipped) |
 | `pnpm --dir web-console typecheck` / `test` / `check:i18n` / `check:provenance` / `build` | pass |
 | `pnpm --dir dev typecheck` / `test` | pass |
-| Playwright browser acceptance | not run locally (pinned browser image); runs in CI |
+| Playwright browser acceptance | not run locally (the pinned browser container image is not present); runs in CI |
 
-The one failure is
+Focused regressions for the #488 integration (all pass): the Web history,
+continuation, Trace and upload suites (`transcript-refresh`,
+`transcript-deferred-history`, `history-policy`, `agent-reading`,
+`chat-block-continuation`, `transcript-continuation`, `trace-live-inspector`,
+`trace-cache`, `trace-deferred-detail`, `upload-carrier`, `upload-dispatch`);
+native `compaction_marker_keeps_its_original_transcript_boundary_as_history_grows`,
+`inherited_compaction_marker_uses_the_destination_transcript_boundary`,
+`workflow_child_inspection_does_not_grant_durable_agent_controls`,
+`abandoned_workflow_publication_keeps_inspection_on_retained_history`,
+`native_view_contains_only_the_selected_path_in_start_order` and the
+`runtime::workflow::tests` order/cancellation/loop suites, the three
+`input_admission` tests (32 attachments, oversized text rejected without
+effects), and `protocol::{upload, delivery}` (40 tests).
+
+The one `--skip boundary_suites::` failure is
 `scripted_suites::agent::tool_progress::parallel_calls_bound_progress_per_call_and_keep_canonical_order`
-hitting its 10 s wall-clock liveness guard when it shares the machine with
-the rest of the suite (execution stalls ~9–11 s after the tool batch; alone it
-takes 0.85 s on both builds, and ~1.3 s on both under 40 busy cores). It is
-pre-existing: `cargo test --lib --all-features -- scripted_suites::` on the
-integrated main `0f3d978e` failed it in 1 of 2 runs with the same stall, and
-the branch passed the same command in its next run.
+hitting its 10 s wall-clock guard while sharing the machine with the rest of
+the suite. Comparable baseline, `cargo test --lib --all-features --
+scripted_suites::` on main `7cf6b2da` versus the branch, same machine: main
+failed in 3 of 3 runs (once with this test alongside
+`stream_progress::large_write_progress_crosses_idle_timeout_without_retry_or_duplicate_execution`
+and `tool_deadlines::issue206_executor_panic_cannot_orphan_parallel_siblings`);
+the branch passed 2 of 2. The upstream test
+`protocol::upload::native_user_input_receipts_allow_large_collections_and_preserve_authority`
+likewise varies alone from 3 s to 12 s on the branch and from 13 s to a 30 s
+liveness failure on main. These are load-sensitive wall-clock guards present
+on main; no assertion was weakened.
 
-No runtime speed change is claimed; isolated and loaded timings of the paths
-exercised above are equal between the branch and main.
+No runtime speed change is claimed.
