@@ -1,5 +1,5 @@
 import '@xyflow/react/dist/base.css';
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
 import { useSelector } from '@xstate/react';
 import clsx from 'clsx';
@@ -97,13 +97,21 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
   const fileState = !base?.source.present ? tx('workflows:editor.file-state-missing') : dirty ? tx('workflows:editor.file-state-unsaved') : tx('workflows:editor.file-state-saved');
   const workspaces = catalog?.workspaces ?? [];
 
-  const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
-    const mod = event.metaKey || event.ctrlKey;
-    if (mod && event.key.toLowerCase() === 's') { event.preventDefault(); save(); return; }
-    if (editableTarget(event.target)) return;
-    if (mod && event.key.toLowerCase() === 'z') { event.preventDefault(); editor.send({ type: event.shiftKey ? 'REDO' : 'UNDO' }); }
-    else if (mod && event.key.toLowerCase() === 'y') { event.preventDefault(); editor.send({ type: 'REDO' }); }
-  };
+  // Editor shortcuts apply while the editor is shown, wherever focus rests
+  // outside text fields and other dialogs.
+  useEffect(() => {
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      const mod = event.metaKey || event.ctrlKey;
+      if (!mod || (event.target as Element | null)?.closest?.('[role="dialog"], [role="alertdialog"]')) return;
+      const key = event.key.toLowerCase();
+      if (key === 's') { event.preventDefault(); save(); return; }
+      if (editableTarget(event.target)) return;
+      if (key === 'z') { event.preventDefault(); editor.send({ type: event.shiftKey ? 'REDO' : 'UNDO' }); }
+      else if (key === 'y') { event.preventDefault(); editor.send({ type: 'REDO' }); }
+    };
+    window.document.addEventListener('keydown', onKeyDown);
+    return () => window.document.removeEventListener('keydown', onKeyDown);
+  }, [editor, save]);
 
   let content: ReactNode;
   if (snapshot.matches('loading')) content = <p className={css.state} role="status">{tx('workflows:editor.loading')}</p>;
@@ -138,7 +146,7 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
       checks={<CheckResults check={check} generation={generation} global={target.scope.kind === 'user'} workspaces={workspaces} context={dependencyContext} setContext={setDependencyContext} run={() => runCheck()} go={go} />} />}
   </div>;
 
-  return <section className={css.editor} aria-labelledby="workflow-editor-title" onKeyDown={onKeyDown}>
+  return <section className={css.editor} aria-labelledby="workflow-editor-title">
     <header className={css.head}>
       <div className={css.headMain}>
         <div className={css.crumbLine}>

@@ -86,7 +86,7 @@ export function NodeForm({ document, block, id, tab, vocabulary, derived, edit, 
         <button type="button" className={css.pathRemove} aria-label={tx('workflows:inspector.parallel-remove', { p0: key })} disabled={Object.keys(node.branches).length === 1}
           onClick={() => edit(current => removeBranch(current, block, id, key))}>×</button>
       </div>)}
-      <AddKey existing={Object.keys(node.branches)} label={tx('workflows:inspector.parallel-new-key')} onAdd={key => edit(current => addBranch(current, block, id, key))} />
+      <AddKey existing={Object.keys(node.branches)} label={tx('workflows:inspector.parallel-new-key')} action={tx('workflows:inspector.parallel-add')} onAdd={key => edit(current => addBranch(current, block, id, key))} />
       <p className={css.note}>{tx('workflows:inspector.parallel-note')}</p>
     </Section>}
     {node.type === 'review' && <>

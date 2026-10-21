@@ -1,0 +1,217 @@
+/** Issue #491 acceptance: the scoped Workflow file library and the React
+ * Flow editor over the real native App Server and Product Host, with
+ * isolated User and Workspace roots. No model request is ever made. */
+import AxeBuilder from '@axe-core/playwright';
+import { expect, test, type Page } from '@playwright/test';
+import { existsSync, mkdirSync, readFileSync, readdirSync, utimesSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { startDogfood } from './dogfood-server';
+import { expectStableScreenshot } from './screenshot';
+import { connectRemote } from './shell-actions';
+import { routeWorkspaceHost } from './workspace-host';
+
+const examples = fileURLToPath(new URL('../../../examples/local-runtime/', import.meta.url));
+const example = (path: string) => readFileSync(resolve(examples, path));
+
+async function seed(fixture: Awaited<ReturnType<typeof startDogfood>>) {
+  const global = join(fixture.directory, 'home/rustx/.agents');
+  for (const directory of [join(global, 'workflows'), join(global, 'agents'), join(fixture.workspaceA, '.agents/workflows'), join(fixture.workspaceB, '.agents/workflows')]) mkdirSync(directory, { recursive: true });
+  writeFileSync(join(global, 'agents/reviewer.toml'), example('workflow-templates/.agents/agents/reviewer.toml'));
+  // The same identity in Global and both Workspaces stays three files.
+  for (const root of [join(global, 'workflows'), join(fixture.workspaceA, '.agents/workflows'), join(fixture.workspaceB, '.agents/workflows')]) {
+    writeFileSync(join(root, 'typed_agent.yaml'), example('workflow-templates/.agents/workflows/typed_agent.yaml'));
+  }
+  writeFileSync(join(fixture.workspaceA, '.agents/workflows/parallel_review.yaml'), example('.agents/workflows/parallel_review.yaml'));
+  writeFileSync(join(fixture.workspaceA, '.agents/workflows/implement_and_review.yaml'), example('.agents/workflows/implement_and_review.yaml'));
+  // Modification times are shown; references need one fixed instant.
+  const instant = new Date('2026-10-21T12:42:00Z');
+  for (const root of [join(global, 'workflows'), join(fixture.workspaceA, '.agents/workflows'), join(fixture.workspaceB, '.agents/workflows')]) {
+    for (const name of readdirSync(root)) utimesSync(join(root, name), instant, instant);
+  }
+}
+
+async function accessible(page: Page, scope: string) {
+  const results = await new AxeBuilder({ page }).include(scope).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze();
+  const serious = results.violations.filter(violation => violation.impact === 'serious' || violation.impact === 'critical');
+  expect(serious.map(violation => `${violation.id}: ${violation.nodes.map(node => node.target.join(' ')).join(' | ')}`)).toEqual([]);
+}
+
+const editor = (page: Page) => page.getByRole('region', { name: 'Workflow canvas' });
+const card = (page: Page, id: string) => page.getByRole('listitem').filter({ has: page.getByRole('button', { name: id, exact: true }) });
+
+test('library → new → nested editor → check → save → reopen → copy → delete', async ({ page }) => {
+  const fixture = await startDogfood('web_console_dogfood');
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  try {
+    await seed(fixture);
+    await routeWorkspaceHost(page, fixture);
+    await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token);
+    // One shell entry; conversation navigation is otherwise unchanged.
+    const nav = page.getByRole('navigation', { name: 'Global panels' });
+    await expect(nav.getByRole('button')).toHaveCount(1);
+    await nav.getByRole('button', { name: 'Workflows', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Workflows', exact: true })).toBeVisible();
+    await expect(page.getByRole('tab', { name: 'Workspace', exact: true })).toHaveAttribute('aria-selected', 'true');
+    await expect(card(page, 'parallel_review')).toContainText('.agents/workflows/parallel_review.yaml');
+    await expect(card(page, 'typed_agent')).toContainText('Overrides Global');
+    await expect(page.getByText('Workspace A · 3 Workflow files')).toBeVisible();
+    await expectStableScreenshot(page.locator('[data-workflows-level="library"]'), 'workflow-library.png');
+    await accessible(page, '[data-workflows-level="library"]');
+
+    // Exact-scope listing: Workspace B and Global each own one file.
+    await page.getByRole('button', { name: 'Choose workspace (current: Workspace A)' }).click();
+    await page.getByRole('option', { name: /Workspace B/ }).click();
+    await expect(page.getByText('Workspace B · 1 Workflow file')).toBeVisible();
+    await page.getByRole('tab', { name: 'Global', exact: true }).click();
+    await expect(page.getByText('Global Workflows · 1 Workflow file')).toBeVisible();
+    await expect(card(page, 'typed_agent')).not.toContainText('Overrides Global');
+    await page.getByRole('tab', { name: 'Workspace', exact: true }).click();
+    await expect(page.getByText('Workspace B · 1 Workflow file')).toBeVisible();
+    await page.getByRole('button', { name: 'Choose workspace (current: Workspace B)' }).click();
+    await page.getByRole('option', { name: /Workspace A/ }).click();
+
+    // New shows scope and target first; Cancel writes nothing.
+    await page.getByRole('button', { name: 'New Workflow', exact: true }).click();
+    let dialog = page.getByRole('dialog', { name: 'New Workflow' });
+    await dialog.getByLabel('Workflow ID').fill('triage');
+    await dialog.getByLabel('Description').fill('Triage one issue.');
+    await expect(dialog).toContainText('.agents/workflows/triage.yaml');
+    await expect(dialog).toContainText('Workspace A');
+    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+    expect(existsSync(join(fixture.workspaceA, '.agents/workflows/triage.yaml'))).toBe(false);
+    await page.getByRole('button', { name: 'New Workflow', exact: true }).click();
+    dialog = page.getByRole('dialog', { name: 'New Workflow' });
+    await dialog.getByLabel('Workflow ID').fill('parallel_review');
+    await expect(dialog).toContainText('A file with this ID already exists in this scope.');
+    await dialog.getByLabel('Workflow ID').fill('triage');
+    await dialog.getByLabel('Description').fill('Triage one issue.');
+    await dialog.getByRole('button', { name: 'Create', exact: true }).click();
+    // The exact new file opens in the editor.
+    await expect(page.getByRole('heading', { name: 'triage', exact: true })).toBeVisible();
+    await expect(editor(page).locator('.react-flow__node')).toHaveCount(1);
+    expect(readFileSync(join(fixture.workspaceA, '.agents/workflows/triage.yaml'), 'utf8')).toContain('Triage one issue.');
+
+    // Keyboard: the contextual palette adds a Parallel node.
+    await page.getByRole('button', { name: 'Add node', exact: true }).focus();
+    await page.keyboard.press('Enter');
+    await page.getByLabel('Search nodes').fill('par');
+    await page.keyboard.press('Enter');
+    await expect(editor(page).locator('.react-flow__node')).toHaveCount(2);
+    const inspector = page.getByRole('complementary', { name: 'Inspector' });
+    await expect(inspector).toContainText('parallel');
+    // Nested lexical block: edit one block at a time, keep the parent.
+    await inspector.getByRole('button', { name: /Edit subgraph/ }).click();
+    const crumbs = page.getByRole('navigation', { name: 'Block path' });
+    await expect(crumbs).toContainText('parallel / main');
+    await expect(editor(page).locator('.react-flow__node')).toHaveCount(1);
+    await crumbs.getByRole('button', { name: 'Root block', exact: true }).click();
+    await expect(editor(page).locator('.react-flow__node')).toHaveCount(2);
+
+    // Native check reports the unconnected node; nothing is rewired.
+    await page.getByRole('button', { name: 'Check', exact: true }).click();
+    await expect(inspector).toContainText('Structure check failed');
+    // Undo the addition, edit the description, check, save.
+    await page.locator('section[aria-labelledby="workflow-editor-title"] .react-flow__pane').click();
+    await page.keyboard.press('Control+z');
+    await expect(editor(page).locator('.react-flow__node')).toHaveCount(1);
+    await page.getByRole('button', { name: 'Block settings', exact: true }).click();
+    await page.getByRole('complementary', { name: 'Inspector' }).getByLabel('Description').fill('Triage one incoming issue.');
+    await expect(page.getByText('Unsaved changes', { exact: true }).first()).toBeVisible();
+    await page.getByRole('button', { name: 'Check', exact: true }).click();
+    await expect(page.getByRole('complementary', { name: 'Inspector' })).toContainText('Structure check passed');
+    await page.getByRole('button', { name: 'Save File', exact: true }).click();
+    await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
+    expect(readFileSync(join(fixture.workspaceA, '.agents/workflows/triage.yaml'), 'utf8')).toContain('Triage one incoming issue.');
+
+    // Reopen from the library reads the saved file.
+    await page.getByRole('button', { name: 'Back to Workflows', exact: true }).click();
+    await expect(card(page, 'triage')).toContainText('Triage one incoming issue.');
+    await card(page, 'triage').getByRole('button', { name: 'triage', exact: true }).click();
+    await page.getByRole('button', { name: 'Block settings', exact: true }).click();
+    await expect(page.getByRole('complementary', { name: 'Inspector' }).getByLabel('Description')).toHaveValue('Triage one incoming issue.');
+    await page.getByRole('button', { name: 'Back to Workflows', exact: true }).click();
+
+    // Copy File: same scope, new ID, source revision guarded.
+    await page.getByRole('button', { name: 'Actions for triage.yaml' }).click();
+    await page.getByRole('menuitem', { name: 'Copy File' }).click();
+    dialog = page.getByRole('dialog', { name: 'Copy Workflow file' });
+    await dialog.getByLabel('Workflow ID').fill('triage_copy');
+    await dialog.getByRole('button', { name: 'Copy', exact: true }).click();
+    await expect(card(page, 'triage_copy')).toBeVisible();
+    expect(readFileSync(join(fixture.workspaceA, '.agents/workflows/triage_copy.yaml'), 'utf8')).toContain('Triage one incoming issue.');
+
+    // Delete: exact file at its revision; the Workspace override warns.
+    await page.getByRole('button', { name: 'Actions for typed_agent.yaml' }).click();
+    await page.getByRole('menuitem', { name: 'Delete' }).click();
+    dialog = page.getByRole('dialog', { name: 'Delete Workflow file' });
+    await expect(dialog).toContainText('After deletion the Global Workflow applies in this Workspace');
+    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await page.getByRole('button', { name: 'Actions for triage_copy.yaml' }).click();
+    await page.getByRole('menuitem', { name: 'Delete' }).click();
+    await page.getByRole('dialog', { name: 'Delete Workflow file' }).getByRole('button', { name: 'Delete', exact: true }).click();
+    await expect(card(page, 'triage_copy')).toHaveCount(0);
+    expect(existsSync(join(fixture.workspaceA, '.agents/workflows/triage_copy.yaml'))).toBe(false);
+    expect(existsSync(join(fixture.directory, 'home/rustx/.agents/workflows/typed_agent.yaml'))).toBe(true);
+    expect(errors).toEqual([]);
+  } finally { await fixture.stop(false); }
+});
+
+test('conflicts keep edits, invalid files stay preserved, and leaving asks first', async ({ page }) => {
+  const fixture = await startDogfood('web_console_dogfood');
+  try {
+    await seed(fixture);
+    const broken = join(fixture.workspaceA, '.agents/workflows/broken.yaml');
+    writeFileSync(broken, 'description: [');
+    await routeWorkspaceHost(page, fixture);
+    await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token);
+    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    // An invalid file is listed with its native diagnostic and never replaced.
+    await expect(card(page, 'broken')).toContainText('Invalid file');
+    await card(page, 'broken').getByRole('button', { name: 'broken', exact: true }).click();
+    await expect(page.getByText('This file is preserved as is and cannot be edited here.')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Save File', exact: true })).toBeDisabled();
+    expect(readFileSync(broken, 'utf8')).toBe('description: [');
+    await page.getByRole('button', { name: 'Back to Workflows', exact: true }).click();
+
+    // The approved editor screen: parallel_review, Parallel node selected.
+    await card(page, 'parallel_review').getByRole('button', { name: 'parallel_review', exact: true }).click();
+    await editor(page).getByLabel('Parallel node reviews').click();
+    await expect(page.getByRole('complementary', { name: 'Inspector' })).toContainText('Parallel branches');
+    await expectStableScreenshot(page.locator('[data-workflows-level="editor"]'), 'workflow-editor.png');
+    await accessible(page, '[data-workflows-level="editor"] header');
+    await accessible(page, '[aria-label="Inspector"]');
+
+    // Branch rename rewrites the structured references into its output.
+    await page.getByLabel('Rename branch quality').fill('clarity');
+    await page.getByLabel('Rename branch quality').press('Enter');
+    await expect(editor(page).getByLabel('Branch node decision')).toContainText('reviews.clarity.acceptable');
+
+    // An external edit since opening is a conflict; local edits are kept.
+    const path = join(fixture.workspaceA, '.agents/workflows/parallel_review.yaml');
+    writeFileSync(path, `${readFileSync(path, 'utf8')}\n# external edit\n`);
+    await page.getByRole('button', { name: 'Save File', exact: true }).click();
+    await expect(page.getByRole('alert').filter({ hasText: 'The file changed on disk since it was opened' })).toBeVisible();
+    await expect(editor(page).getByLabel('Branch node decision')).toContainText('reviews.clarity.acceptable');
+    expect(readFileSync(path, 'utf8')).toContain('# external edit');
+
+    // Leaving with unsaved edits asks first; Keep editing stays on the file.
+    await page.getByRole('button', { name: 'New Conversation', exact: true }).first().click();
+    const leave = page.getByRole('dialog', { name: 'Discard unsaved changes?' });
+    await expect(leave).toBeVisible();
+    await leave.getByRole('button', { name: 'Keep editing', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'parallel_review', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'New Conversation', exact: true }).first().click();
+    await page.getByRole('dialog', { name: 'Discard unsaved changes?' }).getByRole('button', { name: 'Discard and leave', exact: true }).click();
+    await expect(page.getByLabel('Message', { exact: true })).toBeVisible();
+    expect(readFileSync(path, 'utf8')).toContain('# external edit');
+
+    // Narrow viewport: the inspector becomes a bottom sheet over the canvas.
+    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await card(page, 'parallel_review').getByRole('button', { name: 'parallel_review', exact: true }).click();
+    await editor(page).getByLabel('Branch node decision').click();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.getByRole('complementary', { name: 'Inspector' })).toBeVisible();
+    await expectStableScreenshot(page, 'workflow-editor-narrow.png');
+  } finally { await fixture.stop(false); }
+});

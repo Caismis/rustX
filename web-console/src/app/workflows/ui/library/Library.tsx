@@ -187,7 +187,8 @@ function WorkspaceChooser({ workspaces, selected, onSelect }: { workspaces: read
   const close = (focus = true) => { setOpen(false); setQuery(''); setActive(0); if (focus) trigger.current?.focus(); };
   const choose = (id: string) => { onSelect(id); close(); };
   return <div className={css.chooserWrap}>
-    <button ref={trigger} type="button" className={css.chooser} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen(value => !value)}>
+    <button ref={trigger} type="button" className={css.chooser} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen(value => !value)}
+      aria-label={tx('workflows:scope.chooser-label', { p0: current?.displayName ?? '' })}>
       <span className={css.chooserValue}><IconFolder size={15} />{current?.displayName ?? tx('workflows:scope.choose-workspace')}</span><IconChevronDownOutline14 />
     </button>
     {open && <div className={css.popover} onKeyDown={event => {

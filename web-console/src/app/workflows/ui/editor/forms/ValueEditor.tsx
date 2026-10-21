@@ -65,7 +65,7 @@ function PathEditor({ path, onChange }: { path: readonly string[]; onChange: (pa
   </div>;
 }
 
-export function AddKey({ existing, onAdd, label }: { existing: readonly string[]; onAdd: (key: string) => void; label?: string }) {
+export function AddKey({ existing, onAdd, label, action }: { existing: readonly string[]; onAdd: (key: string) => void; label?: string; action?: string }) {
   const tx = useTranslation();
   const [key, setKey] = useState('');
   const valid = key !== '' && !existing.includes(key);
@@ -73,7 +73,7 @@ export function AddKey({ existing, onAdd, label }: { existing: readonly string[]
   return <div className={css.inline}>
     <input className={clsx(css.input, css.mono)} value={key} placeholder={label ?? tx('workflows:inspector.field-key')} aria-label={label ?? tx('workflows:inspector.field-key')} spellCheck={false}
       onChange={event => setKey(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); add(); } }} />
-    <button type="button" className={css.smallButton} disabled={!valid} onClick={add}>{tx('workflows:inspector.add-field')}</button>
+    <button type="button" className={css.smallButton} disabled={!valid} onClick={add}>{action ?? tx('workflows:inspector.add-field')}</button>
   </div>;
 }
 
