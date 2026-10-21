@@ -705,6 +705,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
 /// The six native Workflow examples as exact scoped authoring messages
 /// (Issue #491): parsed, compiled and explained by the native owner, never
 /// by a client.
+#[allow(clippy::too_many_lines)] // Typed fixture constructors, not protocol logic.
 fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
     use crate::local_runtime::configuration::settings::{SourceMutation, SourceTarget};
     use crate::local_runtime::workflow_authoring::{
@@ -853,6 +854,9 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
             explain: true,
         },
     ));
+    // The wire omits the local report's runtime requirements.
+    let mut explanation = program.inspect();
+    explanation.runtime_requirements.clear();
     fixtures.push(success(
         "workflow-check",
         MethodResult::WorkflowCheck {
@@ -863,7 +867,7 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
                 dependencies: WorkflowDependencies::Admitted {
                     context: "/workspace/fixture".into(),
                 },
-                explanation: Some(Box::new(program.inspect())),
+                explanation: Some(Box::new(explanation)),
             }),
         },
     ));

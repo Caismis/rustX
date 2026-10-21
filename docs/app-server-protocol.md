@@ -2381,3 +2381,35 @@ Web and TUI negotiate only `rustx.app-server.v51`; v50 and older peers are
 rejected explicitly. Runtime Client v71, Session catalog schema 16 and SQLite
 schema 74 are unchanged. There are no old policy fields, alternate upload paths
 or compatibility handlers. See [Session-owned workspace uploads](session-uploads.md).
+
+## Workflow file authoring (Issue #491)
+
+Three read-only methods expose native Workflow files of one exact scope; the
+semantics are specified in [Workflow authoring](workflow-authoring.md#file-authoring-app-server-and-web).
+
+| Method | Params | Result |
+| --- | --- | --- |
+| `workflow/list` | `target` | `workflow_library`: `target`, `directory`, `absent_revision`, bounded `files[]` and an optional directory `diagnostic` |
+| `workflow/read` | `target`, `id` | `workflow_source`: `revision`, `present`, the strictly parsed `document` (absent for a malformed file), `diagnostic` and the editor `vocabulary` |
+| `workflow/check` | `target`, `id`, `document`, optional `context`, `explain` | `workflow_check`: separate `structure` and `dependencies` facts and an optional compiled `explanation` |
+
+Writes add no method: `configuration/sourceWrite` accepts the mutation
+`{kind: "workflow", id, edit}` with `edit.operation` one of `create`,
+`replace`, `copy` or `delete`, under the ordinary `expected_revision` fence. The
+acknowledgement is the existing `sources_written` receipt (file `revision` and
+`configuration_revision`). A rejected candidate returns the error data
+`{kind: "workflow_invalid", diagnostic}` and leaves the file unchanged; a
+changed revision is the ordinary revision conflict.
+
+All three reads are side-effect free (`may_commit` is false): they start no
+node, connect to no provider or MCP endpoint and read no credential. Numbers
+travel in the existing exact wire domains, so `u64` fields such as `timeout_ms`
+are decimal strings in TypeScript. Documents are bounded by the native 512 KiB
+Workflow limit and the 1 MiB message limit.
+
+Workspace targets reach the App Server through the Product Host, which maps a
+registration ID to its directory on its per-registration lane
+(`/product-host/workflow`); browsers never send Workspace paths. User-scope
+calls use the browser's App Server connection directly. A lost write
+acknowledgement on either path is reported as uncertain and reconciled by
+rereading, never by replaying the write.

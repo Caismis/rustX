@@ -63,6 +63,118 @@ values are omitted; schema constants, enum contents and annotations are redacted
 The report's 256 KiB bound explicitly marks omitted projections. Editor schemas
 continue to derive from the authoritative Rust authoring types.
 
+## File authoring (App Server and Web)
+
+The Web **Workflows** area (Issue #491) authors the same native YAML files that
+`check` and `explain` inspect. One Workflow is one file,
+`.agents/workflows/<id>.yaml`, in exactly one scope: **User** (shown as
+"Global", under the User configuration directory) or one registered
+**Workspace**. Rust owns the file's semantics, validation, serialization,
+revisions and commits; the browser owns canvas interaction only. There is no
+second runtime, no database program definition, no browser YAML compiler, no
+persisted React Flow JSON and no draft or publish lifecycle: the file is the only
+durable definition.
+
+### Scope and identity
+
+Every operation names an explicit `SourceTarget` (`user`, or `workspace` with its
+directory) and a Workflow ID. A listing is exact-scope, never a merged catalog:
+the Workspace listing shows only that Workspace's files and marks an ID that
+also exists globally as overriding it; the Global listing shows only User files.
+The same ID in both scopes is two independently addressable files. A target is
+never derived from the focused conversation; Workspace directories come from the
+Product Host's registration, and the browser never sends a Workspace path.
+
+IDs follow the native `WorkflowId` rule. Paths are resolved by native code
+relative to the scope's admitted directory handle: traversal, absolute paths,
+symlinked directories or files and a scope redirected after admission are
+rejected, and a Workflow directory holds at most 128 files.
+
+### Reading and invalid files
+
+`workflow/list` returns one bounded summary per file (ID, relative path, exact
+revision, byte length, modification time, a description bounded to 512 bytes,
+node count and an optional diagnostic). A malformed file is still listed with its
+bounded diagnostic and stays openable read-only; it is never hidden or repaired.
+`workflow/read` returns the strictly parsed document, its revision and the
+vocabulary the editor offers (named Agent profiles and selectable native Tools).
+Diagnostics carry the native authored path (`block.nodes.<id>.…`), a category,
+static reason and correction text, and parser coordinates; authored values and
+parser messages are not copied into them.
+
+Browsers represent JSON numbers as doubles. A file containing an integer whose
+magnitude exceeds 2^53−1 is reported with category `unsupported_number` and is
+read-only in the Web editor rather than silently rounded.
+
+### Checking
+
+`workflow/check` validates a candidate document without writing it. The report
+keeps two facts apart:
+
+- **Structure** — the result of `WorkflowProgram::compile` (graph, lexical scope,
+  schemas, bindings, bounds): `valid` with the root outputs, or `invalid` with
+  one bounded diagnostic at its authored path.
+- **Dependencies** — `not_checked`, `admitted`, `blocked` with typed diagnostics,
+  or `unavailable` with a reason, computed by the same metadata admission as
+  `rustx workflow check` (`MetadataAdmission::compose`).
+
+With `explain`, a structurally valid candidate also returns the compiled
+explanation described below. Checking executes no node, contacts no provider or
+MCP endpoint, reads no credential and writes nothing.
+
+### Writing, revisions and conflicts
+
+All writes use `configuration/sourceWrite` with the mutation
+`{kind: "workflow", id, edit}`, where `edit.operation` is `create` (a minimal
+valid program with a description), `replace` (a complete document), `copy`
+(from another file of the same scope at its exact `source_revision`) or
+`delete`. Each write carries `expected_revision`: the file's last observed
+revision (`sha256:<hex>`), or the listing's `absent_revision` for a file that
+must not exist yet. A changed revision is a conflict and nothing is written.
+
+Native code validates the candidate before writing; an invalid candidate leaves
+the file unchanged and returns `workflow_invalid` with its diagnostic. A valid
+candidate is serialized from the native types, reparsed and compared, and
+published by the same staged-file and rename path as every configuration
+source. Serialization is normalized: comments and anchors are not preserved,
+defaulted fields are written explicitly, and an ordinary control port is
+omitted rather than written as `null`. Unknown fields are rejected, so nothing
+is silently dropped.
+
+The response distinguishes three outcomes, and the Web editor reports each
+separately:
+
+1. **Commit** — the new bytes are durable at the returned revision.
+2. **Publication** — the configuration revision the commit produced, observed by
+   later Session configuration capture.
+3. **Adoption** — whether any Session uses it. Saving never changes a running
+   Workflow: each run retains its frozen admitted program, and only Sessions that
+   later capture configuration adopt the new file.
+
+A lost acknowledgement (for example a dropped connection after sending) is
+**uncertain**, not failed. The editor rereads the file and compares the revision
+with what it sent; it never replays the write blindly. A matching file is
+reconciled as saved, a different one is reported as changed elsewhere, and the
+local document is kept in either case.
+
+### Concurrency guarantee
+
+Writers inside rustX are serialized by the source's advisory writer lock, and the
+expected revision is checked under that lock immediately before the rename, so
+two rustX writers can never both commit against the same base. Writers outside
+rustX (an editor, `git checkout`) do not take the lock; their changes are
+detected by revision comparison on the next read or write, but a change that
+lands between the final check and the rename is not excluded. Writes are atomic
+renames, so a file is never observed half-written.
+
+### Editor-local state
+
+Node positions and the viewport are presentation only.
+They are kept in browser `localStorage`, keyed by server, scope, Workflow ID and
+block path, and are never written to the file; clearing them only resets the
+layout. Unsaved edits live in memory: leaving a dirty editor asks for
+confirmation, and there are no persisted drafts.
+
 ## Templates and execution invariants
 
 Start with [the three small templates](../examples/local-runtime/workflow-templates/README.md).

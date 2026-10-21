@@ -15,11 +15,11 @@ import type { ExtensionFamily } from './projection';
  * agent           one complete named Agent profile document, by identity
  * ```
  *
- * There is no Workflow-program, Skill-package or Managed Python source write on
- * the wire at all — not a restricted one, not a differently named one. Those
- * families are therefore inventory, diagnostics and root selection only, and
- * this module is what stops a card from rendering an Edit, Save or Delete that
- * no native operation could ever accept.
+ * There is no Skill-package or Managed Python source write on the wire at all —
+ * not a restricted one, not a differently named one. Workflow files are written
+ * only by the dedicated Workflows area, never from Settings. Those families are
+ * therefore inventory, diagnostics and root selection only here, and this
+ * module is what stops a card from rendering an Edit, Save or Delete.
  *
  * The resulting matrix, with the exact native operation behind each cell:
  *
@@ -72,7 +72,8 @@ const capabilities: Readonly<Record<ExtensionFamily, ResourceCapability>> = {
   // operation authors one; `skills` selects which are visible in the prompt.
   skill: { family: 'skill', inventory: 'native', authoring: 'none', selection: 'skills', preparation: false, diagnostics: true },
   // Workflow programs live in the native resource source. `WorkflowInspection`
-  // carries admission status and diagnostics; no operation authors a program.
+  // carries admission status and diagnostics; the Workflows area, not
+  // Settings, authors the files.
   workflow: { family: 'workflow', inventory: 'native', authoring: 'none', selection: 'workflows', preparation: true, diagnostics: true },
   // Managed Python sources are prepared natively and selected per source, on
   // the same `source_tools` terms as MCP. No operation authors a package.
