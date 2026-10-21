@@ -52,6 +52,11 @@ it('an independent message closes the open group', () => {
   expect(pieces.get('final')?.map(piece => piece.kind)).toEqual(['group', 'reply']);
 });
 
+it('empty inline text and reasoning without native content stay absent', () => {
+  const entries = [assistant('final', owner(), [{ type: 'reasoning', text: '' }, { type: 'text', text: '  \n' }])];
+  expect(stepGroups(entries, () => true).get('final')).toEqual([]);
+});
+
 it('an independently seated retry splits process groups without pulling later reasoning and tools before the retry', () => {
   const entries = turn();
   const pieces = stepGroups(entries, () => true, entry => entry.item.type === 'message' && entry.item.message.id === 'asking');

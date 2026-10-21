@@ -530,6 +530,9 @@ Turns, or at most 500 messages, from native pages. Loaded pages accumulate witho
 evicting previously read messages or imposing a total history cap. Pending native
 responses and Tools outside the latest head are reread automatically by identity.
 Scrolling back to the latest message retains the loaded history.
+Reply and reasoning grouping consult native content bindings before discarding
+empty inline text. Deferred or evicted content keeps its place and is read from
+its original live, Child or historical owner.
 A distant jump reads one native window at the selected Turn alongside the
 independently current live tail. Return to latest releases that historical
 window. Navigation intent retires obsolete reads. See

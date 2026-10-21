@@ -38,7 +38,7 @@ import type { ResponseAction } from '../commands/native';
 import { CopyMessage, MessageTime, TurnTail } from './TurnTail';
 import tailCss from './TurnTail.module.css';
 import css from '../../presentation/agent/Chat.module.css';
-import { useContentSource } from './ObservationSource';
+import { messageContentBinding, useContentSource } from './ObservationSource';
 import { SourceContent } from './SourceContent';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import type { PublicationHead } from '../../client/publication-heads';
@@ -147,7 +147,12 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
     return next ? [next.cursor] : [];
   }));
   const steps = stepGroups(entries, entry => hasBody(entry) && !toldByCall(entry),
-    entry => compactionBoundaries.has(entry.cursor) || entry.item.type === 'message' && !!requestFeedback?.messages.has(entry.item.message.id));
+    entry => compactionBoundaries.has(entry.cursor) || entry.item.type === 'message' && !!requestFeedback?.messages.has(entry.item.message.id),
+    (id, index, text) => {
+      const binding = messageContentBinding(source, id, index);
+      return !!binding && binding.content_ref.readable_end > 0
+        && (binding.deferred || new TextEncoder().encode(text).length !== binding.content_ref.readable_end);
+    });
   const toolsOf = (entry: RuntimeClientTranscriptEntry) => (entry.tool_calls ?? []).map(tool => history?.window || tool.state.type === 'settled' ? tool : snapshot.attempt?.foreground?.find(live => sameToolOccurrence(live, tool) && (tool.metadata_ref == null || live.metadata_ref == null || live.metadata_ref.conversation_id === tool.metadata_ref.conversation_id)) ?? tool);
   const liveGroup = (tools: readonly ForegroundToolExecution[], reasoning?: string) => {
     const active = tools.filter(tool => tool.state.type !== 'settled').at(-1);
