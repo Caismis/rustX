@@ -146,6 +146,13 @@ monolith was restored.
 | child input admission: text budget kept, attachment count limit removed | `registry/control.rs`, `registry/preparation.rs` (`valid_input`, error text) |
 | upstream tests added to files this branch had split or removed | `workflow_child_inspection_does_not_grant_durable_agent_controls` → `registry/tests/settlement.rs`; `abandoned_workflow_publication_keeps_inspection_on_retained_history` (from the removed `workflow_recovery_tests.rs`) → `conversation_runtime/bootstrap/tests.rs`; anchor tests → `sqlite/observation/tests/projection.rs`; protocol upload/delivery hunks → `tests/scripted/app_server/protocol/{upload,delivery}.rs` |
 
+Review follow-up: `observation_projection_activation` reads its one bounded
+SELECT on the locked connection, as on main. Wrapping it in `read_transaction`
+rolled back a read transaction, whose rollback hook retired the committed
+append certificate and forced the next append into cold validation.
+`activation_descriptor_read_keeps_the_append_validation_certificate` records
+`(cold, warm) = (1, 0)` with the transactional reader and `(0, 1)` after the fix.
+
 Upstream files written against the old monolithic client were adapted to the
 extracted API (`client.reads.readContent`, `client.reads.modelRead`,
 `client.reads.domainReader`, contract/error imports from `contracts.ts` /

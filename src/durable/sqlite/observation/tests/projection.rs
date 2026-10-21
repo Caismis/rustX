@@ -136,6 +136,35 @@ fn compaction_marker_keeps_its_original_transcript_boundary_as_history_grows() {
     );
 }
 #[test]
+fn activation_descriptor_read_keeps_the_append_validation_certificate() {
+    let store = store();
+    store
+        .initialize(&[user_message("descriptor-original", "original C")])
+        .unwrap();
+    let receipt = store
+        .commit_projection(observation_projection_input(&store, "descriptor-head"))
+        .unwrap();
+    let activation = receipt.checkpoint.activation.activation;
+    let expected = store.observation_projection_activation(activation).unwrap();
+    assert_eq!(expected.activation_id, activation);
+    let reader = store.presentation_reader();
+    // A commits the certificate B may reuse; the descriptor read is the only
+    // Store read between them.
+    store
+        .append_canonical(&user_message("descriptor-a", "A"))
+        .unwrap();
+    append_validation::take_work();
+    let head = reader
+        .observation_projection_activation(activation)
+        .unwrap();
+    assert_eq!(head.activation_id, activation);
+    assert_eq!(head, expected);
+    store
+        .append_canonical(&user_message("descriptor-b", "B"))
+        .unwrap();
+    assert_eq!(append_validation::take_work(), (0, 1));
+}
+#[test]
 fn inherited_compaction_marker_uses_the_destination_transcript_boundary() {
     let source = store();
     let original = user_message("inherited-anchor", "original C");

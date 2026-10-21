@@ -1265,9 +1265,10 @@ impl ObservationStore for SqliteConversationStore {
         activation: crate::context::checkpoint::ProjectionActivationId,
     ) -> Result<crate::observation::head::RuntimeClientProjectionHeadView, ConversationStoreError>
     {
-        self.read_transaction(|transaction| {
-            observation_projection::read_id(transaction, activation.0)
-        })
+        // One bounded SELECT validated in memory: no transaction whose
+        // rollback would retire the committed append certificate.
+        let connection = self.lock()?;
+        observation_projection::read_id(&connection, activation.0)
     }
     fn mark_observation_ready(&self, first: u64, last: u64) -> Result<(), ConversationStoreError> {
         if first == 0 || first > last {
