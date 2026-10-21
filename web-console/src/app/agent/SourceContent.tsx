@@ -41,7 +41,7 @@ export function SourceContent({ client, target, agentId, bindings, owned, read, 
     if (sealed && state?.read === read) return;
     let mounted = true;
     const current = () => mounted && latest.current === identity && latestOwned.current();
-    const cache = new ContentCache((ref, offset, _max, current) => read ? read(ref, offset, current) : client!.readContent(target!, agentId, ref, offset, current));
+    const cache = new ContentCache((ref, offset, _max, current) => read ? read(ref, offset, current) : client!.reads.readContent(target!, agentId, ref, offset, current));
     void (async () => {
       const text: string[] = [];
       for (const binding of selected) {

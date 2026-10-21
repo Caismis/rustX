@@ -162,7 +162,7 @@ impl Outbound {
                 } else {
                     super::protocol::ErrorData::ResponseSerializationFailed
                 };
-                let response = super::connection::failure(
+                let response = super::rpc_error::failure(
                     id,
                     super::protocol::RpcError {
                         code: -32000,

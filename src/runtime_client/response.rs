@@ -3,85 +3,29 @@
 //! No state is persisted here. Acceptance identifies content; Attempt completion
 //! identifies its closing response. Provider terminals alone never close a tail.
 #[cfg(test)]
+use crate::model::types::ModelUsage;
+use crate::observation::statistics::ConversationStatistics;
+#[cfg(test)]
+use crate::observation::turn::AttemptIdentitySource;
+use crate::observation::turn::{CompletedResponseView, ObservedResponseOrigin, TurnProcessView};
+#[cfg(test)]
+use crate::runtime::identity::{AttemptId, MessageId};
+#[cfg(test)]
 use std::collections::{BTreeMap, BTreeSet};
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
-use crate::conversation::SurfaceRevision;
+use crate::durable::reading::TurnProcessOutcome;
 use crate::durable::{ConversationStore, ConversationStoreError};
+#[cfg(test)]
 use crate::events::types::RuntimeEvent;
 #[cfg(test)]
 use crate::message::types::AssistantContentBlock;
 use crate::message::types::MessageBlock;
 use crate::model::finish::ModelFinishReason;
-use crate::model::types::ModelUsage;
-use crate::runtime::identity::{AttemptId, MessageId};
 
-use super::snapshot::{RuntimeClientTranscriptItem, RuntimeClientTranscriptPage};
-
-/// Derived response view over local execution or inherited lineage provenance.
-/// Canonical content remains in the Message Ledger.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct CompletedResponseView {
-    pub closing_message_id: Option<MessageId>,
-    pub closing_locator: super::content::CanonicalContentLocator,
-    pub retry_locator: Option<super::content::CanonicalContentLocator>,
-    pub deferred_fields: Vec<Vec<String>>,
-    /// Original execution owner, including for inherited historical responses.
-    pub origin: ObservedResponseOrigin,
-    /// Durable completion timestamp; never a browser receipt time.
-    pub completed_at: chrono::DateTime<chrono::Utc>,
-    /// Immutable first Surface revision containing the closing response.
-    pub surface_revision: SurfaceRevision,
-    /// Exact adopted ordinary input, when this Attempt has a replayable input.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub retry_message_id: Option<MessageId>,
-    /// All actual requests in the Attempt, only when every usage is known.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub usage: Option<ModelUsage>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub timing: Option<crate::durable::response::CompletedResponseTiming>,
-    /// Distinct provider-facing models of the Attempt's actual requests.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub models: Vec<String>,
-}
-
-/// Immutable original field selection; caller source cut supplies read authority.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub enum AttemptIdentitySource {
-    Journal {
-        field: super::snapshot::JournalFieldRef,
-        domain: String,
-    },
-    Inherited {
-        kind: InheritedAttemptIdentityKind,
-        #[schemars(range(max = 9_007_199_254_740_991_u64))]
-        ordinal: u64,
-        domain: String,
-        #[schemars(range(max = 9_007_199_254_740_991_u64))]
-        encoded_bytes: u64,
-    },
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum InheritedAttemptIdentityKind {
-    Turn,
-    Response,
-}
-
-/// Finite execution provenance. A deferred original identity remains available
-/// through the source-owned response metadata domain at its immutable cut.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ObservedResponseOrigin {
-    pub conversation_id: crate::runtime::identity::ConversationId,
-    pub attempt_id: Option<AttemptId>,
-    pub attempt_id_source: Option<AttemptIdentitySource>,
-    pub closing_message_id: Option<MessageId>,
-}
+use crate::observation::transcript::{RuntimeClientTranscriptItem, RuntimeClientTranscriptPage};
 
 #[cfg(test)]
 fn inline_attempt(attempt: &AttemptId) -> Option<AttemptId> {
@@ -110,7 +54,7 @@ fn attempt_source(
 fn response_locator(
     store: &dyn ConversationStore,
     id: &MessageId,
-) -> Result<super::content::CanonicalContentLocator, ConversationStoreError> {
+) -> Result<crate::observation::content::CanonicalContentLocator, ConversationStoreError> {
     store
         .message_header(id)?
         .and_then(|header| header.locator)
@@ -123,119 +67,6 @@ fn response_locator(
 #[cfg(test)]
 fn inline_response_id(id: &MessageId) -> Option<MessageId> {
     (id.as_str().len() <= 256).then(|| id.clone())
-}
-
-/// One native process owner shared by live, successful and unsuccessful Turns.
-/// Repeated on each exact member so bounded pages are independently resolvable.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct TurnProcessView {
-    pub conversation_id: crate::runtime::identity::ConversationId,
-    pub attempt_id: Option<AttemptId>,
-    pub attempt_id_source: Option<AttemptIdentitySource>,
-    /// Original terminal Journal identity, absent while running or inherited.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub event_id: Option<crate::runtime::identity::EventId>,
-    /// Control sorts immediately before this immutable native transcript position.
-    /// No-content terminal Attempts use their terminal event position.
-    pub control_cursor: super::snapshot::RuntimeClientTranscriptCursor,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub final_message_id: Option<MessageId>,
-    /// Exact final canonical identity, present only for a proven completed response.
-    pub final_message_locator: Option<super::content::CanonicalContentLocator>,
-    pub final_message_id_deferred: bool,
-    /// Original canonical metadata retains identities omitted from the inline view.
-    pub final_message_id_source: Option<super::content::ContentRef>,
-    pub message_count: u32,
-    pub tool_call_count: u32,
-    pub outcome: TurnProcessOutcome,
-    /// Normalized terminal failure, retained at its durable transcript position.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub failure: Option<super::event::RuntimeClientAttemptFailure>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub started_at: Option<chrono::DateTime<chrono::Utc>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ended_at: Option<chrono::DateTime<chrono::Utc>>,
-}
-
-pub use crate::durable::reading::TurnProcessOutcome;
-
-pub(crate) fn terminal_turn(
-    event: crate::events::types::RuntimeEventEnvelope,
-    cursor: super::snapshot::RuntimeClientTranscriptCursor,
-) -> Result<TurnProcessView, String> {
-    let failure = match &event.event {
-        RuntimeEvent::AttemptFailed { error, .. } => Some(super::projection::client_failure(error)),
-        _ => None,
-    };
-    let outcome = match event.event {
-        RuntimeEvent::AttemptCancelled { .. } => TurnProcessOutcome::Cancelled,
-        RuntimeEvent::AttemptFailed { .. } => TurnProcessOutcome::Failed,
-        RuntimeEvent::AttemptTimedOut { .. } => TurnProcessOutcome::TimedOut,
-        RuntimeEvent::AttemptLimitExceeded { .. } => TurnProcessOutcome::LimitExceeded,
-        _ => return Err("invalid terminal Attempt reference".into()),
-    };
-    Ok(TurnProcessView {
-        conversation_id: event.conversation_id,
-        attempt_id: event
-            .attempt_id
-            .as_ref()
-            .filter(|id| id.as_str().len() <= 512)
-            .cloned(),
-        attempt_id_source: event
-            .attempt_id
-            .as_ref()
-            .filter(|id| id.as_str().len() > 512)
-            .map(|id| crate::durable::sqlite::journal_attempt_source(event.sequence, id))
-            .transpose()
-            .map_err(|_| "terminal owner field unavailable")?,
-        event_id: Some(event.event_id),
-        control_cursor: cursor,
-        final_message_id: None,
-        final_message_locator: None,
-        final_message_id_deferred: false,
-        final_message_id_source: None,
-        message_count: 0,
-        tool_call_count: 0,
-        outcome,
-        failure,
-        started_at: None,
-        ended_at: Some(event.timestamp),
-    })
-}
-
-/// Whole-conversation execution totals, independent of any transcript window.
-/// A lineage child includes its inherited turns' recorded execution, as a
-/// `DeepSeek` Harness fork folds its copied prefix; it owns none of it.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ConversationStatistics {
-    /// Harness-style Turn and Step counts: native Attempt starts and Loop turns.
-    pub turns: u64,
-    pub steps: u64,
-    /// Latest native Turn clock; never a browser receipt timestamp.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub latest_turn: Option<ConversationTurnClock>,
-    /// Summed measured work time, separate from usage coverage.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub timing: Option<crate::durable::response::ConversationTiming>,
-    pub completed_responses: u64,
-    pub model_requests: u64,
-    /// Known reported usage. Coverage is explicit; missing reports are not zero.
-    pub requests_with_usage: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reported_usage: Option<ModelUsage>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ConversationTurnClock {
-    pub attempt_id: Option<AttemptId>,
-    pub attempt_id_deferred: bool,
-    pub attempt_id_source: Option<super::snapshot::JournalFieldRef>,
-    pub started_at: chrono::DateTime<chrono::Utc>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ended_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// Independent raw native-page oracle for fixture comparisons.
@@ -436,7 +267,7 @@ fn decorate_numeric(
                     ));
                 }
                 page.collections
-                    .push(super::checkpoint::CollectionFrontier {
+                    .push(crate::observation::cut::CollectionFrontier {
                         domain: format!(
                             "transcript.entries.{}.turn_process.failure",
                             entry.cursor.get()
@@ -471,7 +302,9 @@ fn decorate_numeric(
                 ConversationStoreError::Storage("native response locator unavailable".into())
             })?;
             if response.closing_locator
-                == (super::content::CanonicalContentLocator::ByLedgerPosition { position })
+                == (crate::observation::content::CanonicalContentLocator::ByLedgerPosition {
+                    position,
+                })
             {
                 page.collections.push(deferred_models_frontier(
                     store,
@@ -498,9 +331,9 @@ fn decorate_numeric(
 #[cfg(test)]
 fn failure_frontier(
     store: &dyn ConversationStore,
-    entry: &super::snapshot::RuntimeClientTranscriptEntry,
+    entry: &crate::observation::transcript::RuntimeClientTranscriptEntry,
     through: u64,
-) -> Result<Option<super::checkpoint::CollectionFrontier>, ConversationStoreError> {
+) -> Result<Option<crate::observation::cut::CollectionFrontier>, ConversationStoreError> {
     let Some(turn) = &entry.turn_process else {
         return Ok(None);
     };
@@ -515,7 +348,7 @@ fn failure_frontier(
     let summary = store.observation_attempt_summary(attempt, through)?;
     Ok(summary
         .failure_deferred
-        .then(|| super::checkpoint::CollectionFrontier {
+        .then(|| crate::observation::cut::CollectionFrontier {
             domain: format!(
                 "transcript.entries.{}.turn_process.failure",
                 entry.cursor.get()
@@ -534,10 +367,10 @@ fn response_frontiers(
     through: u64,
     response: &CompletedResponseView,
     model_counts: Option<&(u64, u64, Option<u64>)>,
-) -> Result<Vec<super::checkpoint::CollectionFrontier>, ConversationStoreError> {
+) -> Result<Vec<crate::observation::cut::CollectionFrontier>, ConversationStoreError> {
     let mut frontiers = Vec::new();
     if let Some((total, loaded, next_offset)) = model_counts {
-        frontiers.push(super::checkpoint::CollectionFrontier {
+        frontiers.push(crate::observation::cut::CollectionFrontier {
             domain: format!("transcript.entries.{cursor}.completed_response.models"),
             revision: through,
             total: *total,
@@ -549,7 +382,7 @@ fn response_frontiers(
         && let Some(cut) = cut
         && let Some(source) = store.response_identity_source(cut, cursor)?
     {
-        frontiers.push(super::checkpoint::CollectionFrontier {
+        frontiers.push(crate::observation::cut::CollectionFrontier {
             domain: format!("transcript.entries.{cursor}.completed_response.identities"),
             revision: through,
             total: store.response_identity_fields(cut, &source)?.len() as u64,
@@ -609,7 +442,7 @@ fn inherited_response_view(
     store: &dyn ConversationStore,
     response: crate::durable::observation::InheritedResponseSummary,
 ) -> Result<CompletedResponseView, ConversationStoreError> {
-    let closing_locator = super::content::CanonicalContentLocator::ByLedgerPosition {
+    let closing_locator = crate::observation::content::CanonicalContentLocator::ByLedgerPosition {
         position: response.closing_ledger_position,
     };
     let surface_revision = store
@@ -632,9 +465,9 @@ fn inherited_response_view(
     Ok(CompletedResponseView {
         closing_locator,
         surface_revision,
-        retry_locator: response
-            .retry_ledger_position
-            .map(|position| super::content::CanonicalContentLocator::ByLedgerPosition { position }),
+        retry_locator: response.retry_ledger_position.map(|position| {
+            crate::observation::content::CanonicalContentLocator::ByLedgerPosition { position }
+        }),
         closing_message_id: response.closing_message_id,
         retry_message_id: response.retry_message_id,
         deferred_fields,
@@ -892,7 +725,7 @@ pub(crate) fn observed_response(
                 return Ok(None);
             };
             let closing_locator =
-                super::content::CanonicalContentLocator::ByLedgerPosition { position };
+                crate::observation::content::CanonicalContentLocator::ByLedgerPosition { position };
             let Some(surface_revision) =
                 store.message_append_revision_by_locator(&closing_locator)?
             else {
@@ -997,7 +830,7 @@ fn decorate_deferred_responses(
             let fields = store.response_identity_fields(cut, &source)?;
             if fields.iter().any(|field| field.readable_end > 256) {
                 page.collections
-                    .push(super::checkpoint::CollectionFrontier {
+                    .push(crate::observation::cut::CollectionFrontier {
                         domain: format!(
                             "transcript.entries.{}.completed_response.identities",
                             row.offset
@@ -1014,17 +847,17 @@ fn decorate_deferred_responses(
 }
 
 fn merge_deferred_process(
-    row: &mut super::checkpoint::CheckpointPageItem,
+    row: &mut crate::observation::cut::CheckpointPageItem,
     process: Option<TurnProcessView>,
     response: Option<CompletedResponseView>,
-    frontiers: &mut [super::checkpoint::CollectionFrontier],
+    frontiers: &mut [crate::observation::cut::CollectionFrontier],
 ) -> Result<(), ConversationStoreError> {
     let mut facts = DeferredResponseFacts {
         turn_process: process,
         completed_response: response,
     };
     let facts = loop {
-        if let Some(value) = super::checkpoint::structural_value(&facts) {
+        if let Some(value) = crate::observation::bounded::structural_value(&facts) {
             break value;
         }
         let models = facts
@@ -1056,7 +889,7 @@ fn merge_deferred_process(
     );
     // Keep the original encoded descriptor. Its UInt64 fields are already in
     // wire form, so decoding it into a native DTO would lose that representation.
-    while super::checkpoint::bounded_bytes(value, 14_336).is_none() {
+    while crate::observation::bounded::bounded_bytes(value, 14_336).is_none() {
         if !trim_descriptor_call(value, frontiers)? {
             let models = value
                 .get_mut("completed_response")
@@ -1097,7 +930,7 @@ fn deferred_models_frontier(
     cut: &crate::durable::observation::ObservationReadCut,
     source: &crate::durable::observation::ResponseIdentitySource,
     cursor: u64,
-) -> Result<super::checkpoint::CollectionFrontier, ConversationStoreError> {
+) -> Result<crate::observation::cut::CollectionFrontier, ConversationStoreError> {
     use crate::durable::observation::ResponseIdentitySource;
     let (total, loaded, next_offset) = match source {
         ResponseIdentitySource::Attempt { sequence } => {
@@ -1121,7 +954,7 @@ fn deferred_models_frontier(
             )
         }
     };
-    Ok(super::checkpoint::CollectionFrontier {
+    Ok(crate::observation::cut::CollectionFrontier {
         domain: format!("transcript.entries.{cursor}.completed_response.models"),
         revision: cut.read.journal,
         total,
@@ -1131,12 +964,12 @@ fn deferred_models_frontier(
 }
 fn trim_descriptor_call(
     value: &mut serde_json::Map<String, serde_json::Value>,
-    frontiers: &mut [super::checkpoint::CollectionFrontier],
+    frontiers: &mut [crate::observation::cut::CollectionFrontier],
 ) -> Result<bool, ConversationStoreError> {
     let locator = value
         .get("locator")
         .cloned()
-        .map(serde_json::from_value::<super::content::CanonicalContentLocator>)
+        .map(serde_json::from_value::<crate::observation::content::CanonicalContentLocator>)
         .transpose()
         .map_err(|_| ConversationStoreError::Storage("native descriptor locator corrupt".into()))?;
     let calls = value
@@ -1253,7 +1086,7 @@ pub(crate) fn identity_selection(domain: &str) -> Option<u64> {
 }
 pub(crate) fn identity_page(
     store: &dyn ConversationStore,
-    cut: &super::checkpoint::CheckpointReadCut,
+    cut: &crate::observation::cut::CheckpointReadCut,
     domain: &str,
     cursor: u64,
     offset: u64,
@@ -1300,7 +1133,7 @@ pub(crate) fn identity_page(
         } else {
             None
         };
-        items.push(super::checkpoint::CheckpointPageItem {
+        items.push(crate::observation::cut::CheckpointPageItem {
             offset: offset + index as u64,
             identity: field.path.join("."),
             deferred: value.is_none(),
@@ -1322,7 +1155,7 @@ pub(crate) fn identity_page(
 }
 pub(crate) fn identity_read(
     store: &dyn ConversationStore,
-    cut: &super::checkpoint::CheckpointReadCut,
+    cut: &crate::observation::cut::CheckpointReadCut,
     domain: &str,
     cursor: u64,
     item_offset: u64,

@@ -1,6 +1,6 @@
 import { childConversation, checkpoint, type Server } from '../fixture';
 import { cfg3Effective } from '../cfg3-data';
-import { RpcFailure } from '../../src/client/app-server';
+import { RpcFailure } from '../../src/client/errors';
 import type { Request } from '../../../protocol/app-server/v51';
 
 /** Gate only native reads; all child navigation, cursor ownership and UI are real. */

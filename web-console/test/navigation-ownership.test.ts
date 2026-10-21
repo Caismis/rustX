@@ -4,6 +4,7 @@ import { Server, snapshot } from './fixture';
 import { routeFixture } from './shell-navigation-fixture';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import type { ShellNavigationActor } from '../src/app/navigation/machine';
+import { firstSubmissions } from '../src/app/new-conversation/first-submit';
 
 const cleanups: (() => void)[] = [];
 afterEach(() => { cleanups.splice(0).forEach(stop => stop()); });
@@ -99,7 +100,7 @@ it.each(['Settings', 'newer Session', 'newer cold Session'] as const)('native dr
     f.actor.send({ type: 'CREATE', control, binding }); const pending = f.actor.getSnapshot().context.pending;
     return sessionId => { f.actor.send({ type: 'CREATED', sessionId, control, generation, pending }); return f.capture(); };
   });
-  const work = f.server.client.firstSubmissions.submit(binding, { workspaceId: 'workspace-a', text: 'Native execution intent', files: [] }, port);
+  const work = firstSubmissions(f.server.client).submit(binding, { workspaceId: 'workspace-a', text: 'Native execution intent', files: [] }, port);
   const request = await f.server.waitFor('session/create', 1);
   if (destination === 'Settings') f.actor.send({ type: 'SETTINGS', destination: { type: 'OPEN', target: userSettingsTarget } });
   else {
@@ -117,7 +118,7 @@ it.each(['Settings', 'newer Session', 'newer cold Session'] as const)('native dr
   expect(f.server.requests.filter(row => row.request.method === 'session/create')).toHaveLength(1);
   expect(f.actor.getSnapshot().context.route).toEqual(destination === 'Settings' ? { kind: 'new-conversation', workspaceId: 'workspace-a' } : { kind: 'session', sessionId: destination === 'newer cold Session' ? 'C' : 'B' });
   expect(f.actor.getSnapshot().context.error).toBeUndefined(); expect(Object.keys(f.actor.getSnapshot().children)).toEqual(['nativeAuthority']);
-  expect(f.server.client.firstSubmissions.draft(binding)?.session?.id).toBe('A-created');
+  expect(firstSubmissions(f.server.client).draft(binding)?.session?.id).toBe('A-created');
   expect(f.server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(destination === 'Settings' ? 1 : 0);
 });
 

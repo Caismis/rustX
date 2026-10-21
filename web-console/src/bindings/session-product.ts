@@ -1,5 +1,5 @@
 import type { Translate } from '../locale/translation';
-import type { ClientView, SessionView } from '../client/app-server';
+import type { ClientView, SessionView } from '../client/contracts';
 
 export type SessionRecovery = 'connect' | 'connection-settings' | 'open' | 'refresh';
 export interface SessionProductState {

@@ -1,9 +1,8 @@
 //! Bounded immutable request inspection over native commit-owned field indexes.
-use super::checkpoint::{
-    CheckpointPage, CheckpointPageItem, CheckpointReadCut, CheckpointValueChunk,
-};
+use super::checkpoint::{CheckpointPage, CheckpointValueChunk};
 use super::types::{RuntimeClientCursor, RuntimeClientError};
 use crate::durable::ConversationStore;
+use crate::observation::cut::{CheckpointPageItem, CheckpointReadCut};
 use base64::Engine as _;
 mod inspection;
 pub(crate) use inspection::{canonical_selection, messages_page, messages_selection};
@@ -42,11 +41,13 @@ pub(crate) fn context_page(
                 key: None,
                 offset: offset + index as u64,
                 identity: format!("context:{}", offset + index as u64),
-                value: Some(super::checkpoint::structural_value(&value).ok_or_else(|| {
-                    RuntimeClientError::ObservationUnavailable {
-                        message: "native Context header exceeds bound".into(),
-                    }
-                })?),
+                value: Some(
+                    crate::observation::bounded::structural_value(&value).ok_or_else(|| {
+                        RuntimeClientError::ObservationUnavailable {
+                            message: "native Context header exceeds bound".into(),
+                        }
+                    })?,
+                ),
                 content: Vec::new(),
                 deferred: value.truncated,
             })
@@ -82,8 +83,8 @@ struct RequestView {
     value: serde_json::Value,
     dynamic: bool,
     deferred: bool,
-    content: Vec<super::checkpoint::ContentBinding>,
-    collections: Vec<super::checkpoint::CollectionFrontier>,
+    content: Vec<crate::observation::cut::ContentBinding>,
+    collections: Vec<crate::observation::cut::CollectionFrontier>,
 }
 fn request_view(
     store: &dyn ConversationStore,
@@ -118,22 +119,19 @@ fn request_view(
         .request_outcome_header_at(request, cut.through)
         .map_err(RuntimeClientError::observation_store_error)?;
     if let Some(outcome) = &outcome {
-        value["usage"] = super::checkpoint::structural_value(&outcome.usage).ok_or_else(|| {
-            RuntimeClientError::RuntimeFailure {
-                message: "native usage header exceeds its finite contract".into(),
-            }
-        })?;
-        value["failure"] =
-            super::checkpoint::structural_value(&outcome.failure).ok_or_else(|| {
+        value["usage"] =
+            crate::observation::bounded::structural_value(&outcome.usage).ok_or_else(|| {
                 RuntimeClientError::RuntimeFailure {
-                    message: "native failure header exceeds its finite contract".into(),
+                    message: "native usage header exceeds its finite contract".into(),
                 }
             })?;
-        value["generation"] =
-            super::checkpoint::structural_value(&outcome.generation).ok_or_else(|| {
-                RuntimeClientError::RuntimeFailure {
-                    message: "native generation header exceeds its finite contract".into(),
-                }
+        value["failure"] = crate::observation::bounded::structural_value(&outcome.failure)
+            .ok_or_else(|| RuntimeClientError::RuntimeFailure {
+                message: "native failure header exceeds its finite contract".into(),
+            })?;
+        value["generation"] = crate::observation::bounded::structural_value(&outcome.generation)
+            .ok_or_else(|| RuntimeClientError::RuntimeFailure {
+                message: "native generation header exceeds its finite contract".into(),
             })?;
         deferred |= outcome.failure_deferred;
     }
@@ -227,7 +225,7 @@ pub(crate) fn field_page(
             }));
             CheckpointPageItem {
                 body_complete: None,
-                key: field.key.map(|key| super::checkpoint::CheckpointKey {
+                key: field.key.map(|key| crate::observation::cut::CheckpointKey {
                     path: vec!["$key".into()],
                     preview: key.preview,
                     encoded_bytes: key.encoded_bytes,

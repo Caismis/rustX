@@ -192,7 +192,7 @@ it.each(['explicit refresh', 'resync'] as const)('snapshot Trace authority super
   s.held.add('session/trace'); s.held.add('session/checkpoint');
   emit(s, '1', { type: 'trace_changed' });
   const old = await s.waitFor('session/trace', 1);
-  const oldWork = s.client['traceReads'].get('A')!.work;
+  const oldWork = s.client['traces']['traceReads'].get('A')!.work;
   if (mode === 'resync') s.socket.deliver({ jsonrpc: '2.0', method: 'session/resyncRequired', params: { target, after_cursor: '1', earliest_serviceable: '7' } });
   const refreshed = mode === 'resync' ? s.client['refreshes'].get('A')! : s.client.refresh('A');
   const request = await s.waitFor('session/checkpoint', 1);
@@ -211,7 +211,7 @@ it.each(['explicit refresh', 'resync'] as const)('snapshot Trace authority super
 
   emit(s, '8', { type: 'trace_changed' });
   const fresh = await s.waitFor('session/trace', 2);
-  const freshWork = s.client['traceReads'].get('A')!.work;
+  const freshWork = s.client['traces']['traceReads'].get('A')!.work;
   s.socket.success(fresh, { type: 'trace', page: tracePage(fresh, [completed, traceRecord(2)], '8') });
   await freshWork;
   expect(s.client.getSnapshot().views.A.trace!.page.records).toEqual([completed, traceRecord(2)]);
@@ -223,7 +223,7 @@ it('same Session attachment replacement rejects a held Trace response', async ()
   const s = await create(); const target = s.target('A');
   s.held.add('session/trace'); emit(s, '1', { type: 'trace_changed' });
   const old = await s.waitFor('session/trace', 1);
-  const oldWork = s.client['traceReads'].get('A')!.work;
+  const oldWork = s.client['traces']['traceReads'].get('A')!.work;
   await s.client.release('A'); await s.client.attach('A');
   const replacement = s.client.getSnapshot().views.A;
   expect(replacement.target).not.toEqual(target);
@@ -236,7 +236,7 @@ it('snapshot supersession keeps a burst bounded to one active tail read and one 
   const s = await create(); s.held.add('session/trace');
   emit(s, '1', { type: 'trace_changed' });
   const old = await s.waitFor('session/trace', 1);
-  const work = s.client['traceReads'].get('A')!.work;
+  const work = s.client['traces']['traceReads'].get('A')!.work;
   s.cursor = 1n; await s.client.refresh('A');
   const trace = s.client.getSnapshot().views.A.trace;
   for (let cursor = 2; cursor <= 101; cursor++) emit(s, String(cursor), { type: 'trace_changed' });
@@ -258,14 +258,14 @@ it.each([
   const s = await create(); s.held.add('session/trace');
   emit(s, '1', { type: 'trace_changed' });
   const old = await s.waitFor('session/trace', 1);
-  const work = s.client['traceReads'].get('A')!.work;
-  const authority = s.client['traceAuthorities'].get('A');
+  const work = s.client['traces']['traceReads'].get('A')!.work;
+  const authority = s.client['traces']['traceAuthorities'].get('A');
   if (owner === 'snapshot') {
     s.cursor = 1n;
     s.snapshots.set('A', { ...s.snapshots.get('A')!, trace: { records: [traceRecord(1)] } });
     await s.client.refresh('A');
   }
-  if (owner !== 'existing authority') expect(s.client['traceAuthorities'].get('A')).not.toBe(authority);
+  if (owner !== 'existing authority') expect(s.client['traces']['traceAuthorities'].get('A')).not.toBe(authority);
   for (let cursor = 2; cursor <= invalidations + 1; cursor++) emit(s, String(cursor), { type: 'trace_changed' });
   const beforeFailure = s.client.getSnapshot().views.A;
   expect(s.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(1);
@@ -285,7 +285,7 @@ it.each([
   expect(view.trace!.page.records).toEqual([traceRecord(1), traceRecord(2)]);
   expect(view.trace!.error).toBeUndefined();
   expect(view).toMatchObject({ target: beforeFailure.target, cursor: beforeFailure.cursor, attachment: 'attached' });
-  expect(s.client['traceReads'].has('A')).toBe(false);
+  expect(s.client['traces']['traceReads'].has('A')).toBe(false);
   expect(s.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(2);
   expect(s.requests.filter(row => row.request.method === 'session/checkpoint')).toHaveLength(owner === 'snapshot' ? 1 : 0);
 });
@@ -294,11 +294,11 @@ it('failed Trace iteration without a newer obligation propagates the error and n
   const s = await create(); s.held.add('session/trace');
   emit(s, '1', { type: 'trace_changed' });
   const request = await s.waitFor('session/trace', 1);
-  const work = s.client['traceReads'].get('A')!.work;
+  const work = s.client['traces']['traceReads'].get('A')!.work;
   const rejected = expect(work).rejects.toThrow('current Trace read failed');
   s.socket.deliver({ jsonrpc: '2.0', id: request.id, error: { code: -32000, message: 'current Trace read failed', data: { kind: 'invalid_state' } } });
   await rejected;
-  expect(s.client['traceReads'].has('A')).toBe(false);
+  expect(s.client['traces']['traceReads'].has('A')).toBe(false);
   expect(s.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(1);
   expect(s.requests.filter(row => row.request.method === 'session/checkpoint')).toHaveLength(0);
 });
@@ -308,14 +308,14 @@ it('a failed owed follow-up stops without further invalidation and reports only 
   emit(s, '1', { type: 'trace_changed' });
   const old = await s.waitFor('session/trace', 1);
   emit(s, '2', { type: 'trace_changed' });
-  const work = s.client['traceReads'].get('A')!.work;
+  const work = s.client['traces']['traceReads'].get('A')!.work;
   const rejected = expect(work).rejects.toThrow('latest read failed');
   s.socket.deliver({ jsonrpc: '2.0', id: old.id, error: { code: -32000, message: 'superseded read failed' } });
   const fresh = await s.waitFor('session/trace', 2);
   expect(s.client.getSnapshot().views.A.trace!.error).toBeUndefined();
   s.socket.deliver({ jsonrpc: '2.0', id: fresh.id, error: { code: -32000, message: 'latest read failed' } });
   await rejected;
-  expect(s.client['traceReads'].has('A')).toBe(false);
+  expect(s.client['traces']['traceReads'].has('A')).toBe(false);
   expect(s.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(2);
 });
 
@@ -323,7 +323,7 @@ it.each(['attachment replacement', 'disconnect'] as const)('failed dirty Trace o
   const s = await create(); s.held.add('session/trace');
   emit(s, '1', { type: 'trace_changed' });
   const old = await s.waitFor('session/trace', 1);
-  const work = s.client['traceReads'].get('A')!.work;
+  const work = s.client['traces']['traceReads'].get('A')!.work;
   const rejected = expect(work).rejects.toThrow();
   emit(s, '2', { type: 'trace_changed' });
   if (retirement === 'disconnect') await s.client.disconnect();
@@ -332,7 +332,7 @@ it.each(['attachment replacement', 'disconnect'] as const)('failed dirty Trace o
   s.socket.deliver({ jsonrpc: '2.0', id: old.id, error: { code: -32000, message: 'retired read failed' } });
   await rejected;
   expect(s.client.getSnapshot().views.A).toBe(view);
-  expect(s.client['traceReads'].has('A')).toBe(false);
+  expect(s.client['traces']['traceReads'].has('A')).toBe(false);
   expect(s.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(1);
 });
 

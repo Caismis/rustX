@@ -146,7 +146,7 @@ it('obsolete queued meter reads fail the existing transport admission proof befo
 });
 
 it('a correlated native failure frees capacity, renders an error without zero usage and is not retried by rerenders', async () => {
-  const { RpcFailure } = await import('../src/client/app-server');
+  const { RpcFailure } = await import('../src/client/errors');
   const { useSubagents } = await import('../src/app/agent/subagent-context');
   const server = new Server(); servers.push(server); server.snapshots.get('A')!.agents = [agent]; await server.attached('A');
   server.handlers.set('agent/statistics', () => { throw new RpcFailure({ code: -32000, message: 'durable read unavailable' }); });

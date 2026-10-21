@@ -38,8 +38,9 @@
 
 use super::super::settings::SourceDirectory;
 use super::UserConfigManager;
-use super::settings::{SettingsError, SourceScope, SourceTarget};
+use super::settings::{SettingsError, SourceTarget};
 use crate::local_runtime::authoring::RuntimeLayer;
+use crate::runtime::resources::SourceScope;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -228,7 +229,7 @@ impl Uneditable {
 /// The generated source schema of [`RuntimeLayer`], computed once.
 fn source_schema() -> &'static Value {
     static SCHEMA: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
-    SCHEMA.get_or_init(super::authoring_schema)
+    SCHEMA.get_or_init(super::semantics::authoring_schema)
 }
 
 /// Plan every eligible deterministic edit of `bytes` in one finite pass.
@@ -1046,7 +1047,7 @@ impl UserConfigManager {
             return Ok(RepairScope::user());
         };
         scope.validate().map_err(refused)?;
-        super::storage_disjoint(self.runtime_root(), directory)?;
+        super::capture::storage_disjoint(self.runtime_root(), directory)?;
         let workspace = SourceDirectory::open(&self.config_path(scope))
             .map_err(refused)?
             .ok_or_else(|| refused(()))?;
@@ -1135,7 +1136,7 @@ impl UserConfigManager {
         }
         let layer = intrinsic_health(path, candidate, workspace)?;
         match self.composition(target, scope, layer) {
-            Some(merged) => super::composition_semantics(&merged)
+            Some(merged) => super::semantics::composition_semantics(&merged)
                 .map(drop)
                 .map_err(|failure| semantic_diagnostic(&failure)),
             None => Ok(()),
@@ -1396,13 +1397,13 @@ impl UserConfigManager {
 
 /// The source-intrinsic health contract, the one predicate for "healthy":
 /// the strict parser, the source restrictions and every native constraint a
-/// source decides on its own ([`super::source_semantics`]). Facts another
+/// source decides on its own ([`super::semantics::source_semantics`]). Facts another
 /// scope may supply — Model definitions, the default selection — are not
 /// part of it. Failures are safe diagnostics.
 fn intrinsic_health(path: &Path, bytes: &[u8], workspace: bool) -> Result<RuntimeLayer, String> {
-    let layer = super::parse_layer(path, bytes, workspace)
+    let layer = super::capture::parse_layer(path, bytes, workspace)
         .map_err(|failure| source_contract_diagnostic(&failure))?;
-    super::source_semantics(&layer).map_err(|failure| semantic_diagnostic(&failure))?;
+    super::semantics::source_semantics(&layer).map_err(|failure| semantic_diagnostic(&failure))?;
     Ok(layer)
 }
 
@@ -1424,7 +1425,7 @@ fn source_contract_diagnostic(failure: &super::super::diagnostics::LaunchFailure
 
 /// A candidate that parses but fails a native semantic constraint: the
 /// native category and schema location only, never the domain message.
-fn semantic_diagnostic(failure: &super::SemanticFailure) -> String {
+fn semantic_diagnostic(failure: &super::semantics::SemanticFailure) -> String {
     format!(
         "{}; automatic repair never corrects an invalid value, so the source is unchanged",
         failure.summary()

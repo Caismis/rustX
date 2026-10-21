@@ -1,7 +1,8 @@
 //! Bounded value reads over immutable native display-domain values.
 //! Selection and encoding happen after the Projection lock releases its Arc.
-use super::checkpoint::{CheckpointReadCut, CheckpointValueChunk};
+use super::checkpoint::CheckpointValueChunk;
 use super::types::RuntimeClientError;
+use crate::observation::cut::CheckpointReadCut;
 use base64::Engine as _;
 use serde::Serialize;
 use std::sync::Arc;
@@ -11,11 +12,11 @@ pub(crate) enum DomainSource {
     AttemptModel(Arc<SourceValue<crate::model::session::AttemptModelReadSource>>),
     Model(Arc<SourceValue<crate::model::session::SessionModelReadSource>>),
     Catalog(Arc<SourceValue<crate::model::session::ModelCatalogReadSource>>),
-    Capability(Arc<SourceValue<super::capability_source::CapabilityReadSource>>),
-    Resources(Arc<SourceValue<super::resource_source::ResourceReadSource>>),
-    Workflow(Arc<SourceValue<super::workflow_source::WorkflowReadSource>>),
+    Capability(Arc<SourceValue<crate::observation::capability_source::CapabilityReadSource>>),
+    Resources(Arc<SourceValue<crate::observation::resource_source::ResourceReadSource>>),
+    Workflow(Arc<SourceValue<crate::observation::workflow_source::WorkflowReadSource>>),
     Context(Arc<SourceValue<super::snapshot::RuntimeClientContextView>>),
-    Goal(Arc<SourceValue<crate::runtime_client::goal::RuntimeClientGoalView>>),
+    Goal(Arc<SourceValue<crate::observation::goal::RuntimeClientGoalView>>),
     Todo(Arc<SourceValue<crate::tools::todo::TodoSnapshot>>),
     Job(Arc<SourceValue<super::snapshot::RuntimeClientJob>>),
     Agent(Arc<SourceValue<super::snapshot::RuntimeClientAgent>>),
@@ -308,9 +309,8 @@ fn source_page<T: Serialize + schemars::JsonSchema>(
     limit: usize,
     singleton: bool,
 ) -> Result<super::checkpoint::CheckpointPage, RuntimeClientError> {
-    use super::checkpoint::{
-        CheckpointKey, CheckpointPage, CheckpointPageItem, CollectionFrontier,
-    };
+    use super::checkpoint::CheckpointPage;
+    use crate::observation::cut::{CheckpointKey, CheckpointPageItem, CollectionFrontier};
     if limit == 0 || limit > 32 || domain.len() > 256 {
         return Err(invalid());
     }
@@ -413,9 +413,9 @@ fn bounded_page(
     cut: &CheckpointReadCut,
     domain: &str,
     total: u64,
-    items: Vec<super::checkpoint::CheckpointPageItem>,
+    items: Vec<crate::observation::cut::CheckpointPageItem>,
     next_offset: Option<u64>,
-    collections: Vec<super::checkpoint::CollectionFrontier>,
+    collections: Vec<crate::observation::cut::CollectionFrontier>,
 ) -> super::checkpoint::CheckpointPage {
     super::checkpoint::CheckpointPage {
         cursor: super::types::RuntimeClientCursor::new(cut.revision),
@@ -431,9 +431,9 @@ fn row_item<T: Serialize + schemars::JsonSchema>(
     domain: &str,
     offset: u64,
     row: &T,
-) -> super::checkpoint::CheckpointPageItem {
-    let value = super::checkpoint::structural_value(row);
-    super::checkpoint::CheckpointPageItem {
+) -> crate::observation::cut::CheckpointPageItem {
+    let value = crate::observation::bounded::structural_value(row);
+    crate::observation::cut::CheckpointPageItem {
         body_complete: None,
         key: None,
         offset,
@@ -455,7 +455,7 @@ fn indexed_page(
     offset: u64,
     limit: usize,
 ) -> Result<super::checkpoint::CheckpointPage, RuntimeClientError> {
-    use super::checkpoint::{CheckpointKey, CheckpointPageItem, CollectionFrontier};
+    use crate::observation::cut::{CheckpointKey, CheckpointPageItem, CollectionFrontier};
     let page = layout.page(path, offset, limit).map_err(source_error)?;
     let mut collections = Vec::new();
     let items = page
@@ -540,7 +540,7 @@ fn catalog_page(
     offset: u64,
     limit: usize,
 ) -> Result<super::checkpoint::CheckpointPage, RuntimeClientError> {
-    use super::checkpoint::CollectionFrontier;
+    use crate::observation::cut::CollectionFrontier;
     if limit == 0 || limit > 32 || domain.len() > 256 {
         return Err(invalid());
     }
@@ -594,7 +594,7 @@ fn catalog_page(
     indexed_page(&row, cut, domain, path, offset, limit)
 }
 fn capability_row<'a>(
-    source: &SourceValue<super::capability_source::CapabilityReadSource>,
+    source: &SourceValue<crate::observation::capability_source::CapabilityReadSource>,
     path: &'a [String],
 ) -> Result<
     (
@@ -620,7 +620,7 @@ fn capability_row<'a>(
     ))
 }
 fn capability_page(
-    source: &SourceValue<super::capability_source::CapabilityReadSource>,
+    source: &SourceValue<crate::observation::capability_source::CapabilityReadSource>,
     cut: &CheckpointReadCut,
     domain: &str,
     path: &[String],
@@ -671,12 +671,12 @@ fn capability_page(
 }
 
 fn resource_frontiers(
-    source: &SourceValue<super::resource_source::ResourceReadSource>,
+    source: &SourceValue<crate::observation::resource_source::ResourceReadSource>,
     cut: &CheckpointReadCut,
     domain: &str,
-    node: &super::resource_source::ResourceNode<'_>,
-) -> Result<Vec<super::checkpoint::CollectionFrontier>, RuntimeClientError> {
-    use super::checkpoint::CollectionFrontier;
+    node: &crate::observation::resource_source::ResourceNode<'_>,
+) -> Result<Vec<crate::observation::cut::CollectionFrontier>, RuntimeClientError> {
+    use crate::observation::cut::CollectionFrontier;
     let mut collections = Vec::new();
     if let Some(count) = node.children() {
         for position in 0..count.min(32) {
@@ -699,7 +699,7 @@ fn resource_frontiers(
 }
 
 fn resource_page(
-    source: &SourceValue<super::resource_source::ResourceReadSource>,
+    source: &SourceValue<crate::observation::resource_source::ResourceReadSource>,
     cut: &CheckpointReadCut,
     domain: &str,
     path: &[String],
@@ -707,7 +707,7 @@ fn resource_page(
     limit: usize,
     singleton: bool,
 ) -> Result<super::checkpoint::CheckpointPage, RuntimeClientError> {
-    use super::checkpoint::{CheckpointPageItem, CollectionFrontier};
+    use crate::observation::cut::{CheckpointPageItem, CollectionFrontier};
     if limit == 0 || limit > 32 || domain.len() > 256 {
         return Err(invalid());
     }
@@ -796,7 +796,7 @@ fn resource_page(
     Ok(bounded_page(cut, domain, total, items, next, collections))
 }
 fn resource_read(
-    source: &SourceValue<super::resource_source::ResourceReadSource>,
+    source: &SourceValue<crate::observation::resource_source::ResourceReadSource>,
     cut: &CheckpointReadCut,
     domain: &str,
     item_offset: u64,
@@ -843,10 +843,10 @@ fn resource_read(
             }
             if matches!(
                 node,
-                super::resource_source::ResourceNode::Inspection(_)
-                    | super::resource_source::ResourceNode::Agents(_)
-                    | super::resource_source::ResourceNode::Workflows(_)
-                    | super::resource_source::ResourceNode::Sources(_)
+                crate::observation::resource_source::ResourceNode::Inspection(_)
+                    | crate::observation::resource_source::ResourceNode::Agents(_)
+                    | crate::observation::resource_source::ResourceNode::Workflows(_)
+                    | crate::observation::resource_source::ResourceNode::Sources(_)
             ) || node.children().is_some_and(|count| count > 32)
             {
                 return Err(RuntimeClientError::ObservationUnavailable{message:"growing native resource containers are read through their advancing field pages".into()});
@@ -872,9 +872,9 @@ fn resource_read(
 fn resource_item(
     domain: &str,
     position: u64,
-    node: &super::resource_source::ResourceNode<'_>,
-) -> super::checkpoint::CheckpointPageItem {
-    use super::resource_source::ResourceNode as Node;
+    node: &crate::observation::resource_source::ResourceNode<'_>,
+) -> crate::observation::cut::CheckpointPageItem {
+    use crate::observation::resource_source::ResourceNode as Node;
     let growing = matches!(
         node,
         Node::Inspection(_) | Node::Agents(_) | Node::Workflows(_) | Node::Sources(_)
@@ -882,7 +882,7 @@ fn resource_item(
     let long = node.text().is_some_and(|text| text.len() > 8192);
     let growing = growing || long;
     if growing {
-        super::checkpoint::CheckpointPageItem {
+        crate::observation::cut::CheckpointPageItem {
             body_complete: Some(false),
             key: None,
             offset: position,
@@ -897,7 +897,7 @@ fn resource_item(
 }
 
 fn resource_context_page(
-    source: &SourceValue<super::resource_source::ResourceReadSource>,
+    source: &SourceValue<crate::observation::resource_source::ResourceReadSource>,
     cut: &CheckpointReadCut,
     domain: &str,
     offset: u64,

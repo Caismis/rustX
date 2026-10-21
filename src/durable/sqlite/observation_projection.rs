@@ -2,7 +2,7 @@
 use super::{Connection, ConversationStoreError, OptionalExtension, Transaction, params, storage};
 use crate::context::checkpoint::{CheckpointCandidate, ProjectionActivation};
 use crate::durable::projection::ProjectionCheckpoint;
-use crate::runtime_client::snapshot::RuntimeClientProjectionHeadView;
+use crate::observation::head::RuntimeClientProjectionHeadView;
 use sha2::{Digest, Sha256};
 const MAX: usize = 16_384;
 #[cfg(test)]
@@ -46,7 +46,7 @@ fn view(
                 crate::model::projected::ProjectedMessage::User { content, .. } => {
                     content.iter().find_map(|block| match block {
                         crate::message::types::UserContentBlock::Text(text) => Some(
-                            crate::runtime_client::trace::TraceText::bounded(&text.text, 512),
+                            crate::observation::trace::TraceText::bounded(&text.text, 512),
                         ),
                         _ => None,
                     })
@@ -72,7 +72,7 @@ fn view(
     Ok(RuntimeClientProjectionHeadView {
         checkpoint_id: candidate.checkpoint_id.clone(),
         activation_id: activation.activation,
-        transcript_anchor: crate::runtime_client::snapshot::RuntimeClientTranscriptCursor::new(
+        transcript_anchor: crate::observation::transcript::RuntimeClientTranscriptCursor::new(
             transcript_anchor,
         ),
         base_frontier: candidate.base_frontier,
@@ -102,7 +102,7 @@ pub(super) fn index_activation(
 ) {
     let _ = super::optional_display_layout(transaction, || {
         let value = view(transaction, candidate, activation)?;
-        let bytes = crate::runtime_client::checkpoint::bounded_bytes(&value, MAX)
+        let bytes = crate::observation::bounded::bounded_bytes(&value, MAX)
             .ok_or_else(|| storage("projection display header exceeds bound"))?;
         let native:Option<String>=transaction.query_row("SELECT CASE WHEN typeof(activation_digest)='text' AND octet_length(activation_digest)=64 THEN activation_digest END FROM projection_activations WHERE activation=?1",[activation.activation.0],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
         let native =
@@ -181,7 +181,7 @@ fn provenance_key(activation: u64, item: u64) -> String {
 pub(super) fn index_provenance(transaction: &Transaction<'_>, checkpoint: &ProjectionCheckpoint) {
     let _ = super::optional_display_layout(transaction, || {
         use crate::context::checkpoint::CheckpointMessage;
-        use crate::runtime_client::trace::TraceInputProvenance;
+        use crate::observation::trace::TraceInputProvenance;
         for (ordinal, item) in checkpoint.candidate.items.iter().enumerate() {
             let key = provenance_key(checkpoint.activation.activation.0, ordinal as u64);
             match &item.message {
@@ -193,7 +193,7 @@ pub(super) fn index_provenance(transaction: &Transaction<'_>, checkpoint: &Proje
                             |row| row.get(0),
                         )
                         .map_err(|error| storage(error.to_string()))?;
-                    let view=TraceInputProvenance::Original {source:None,conversation_id:reference.conversation_id.clone(),content_digest:reference.content_digest.clone(),locator:Some(crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition{position}),message_id_source:None};
+                    let view=TraceInputProvenance::Original {source:None,conversation_id:reference.conversation_id.clone(),content_digest:reference.content_digest.clone(),locator:Some(crate::observation::content::CanonicalContentLocator::ByLedgerPosition{position}),message_id_source:None};
                     let original =
                         super::observation_request::provenance::Raw::Original(reference, &view);
                     super::observation_request::index_state(
@@ -228,7 +228,7 @@ pub(super) fn provenance_read(
     offset: u64,
     max_bytes: u32,
 ) -> Result<crate::durable::observation::ObservationValueChunk, ConversationStoreError> {
-    if activation == 0 || item > crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX {
+    if activation == 0 || item > crate::observation::content::CONTENT_SAFE_INTEGER_MAX {
         return Err(ConversationStoreError::InvalidReference(
             "invalid projection provenance coordinate".into(),
         ));

@@ -714,7 +714,7 @@ mod tests {
         let mut client = RuntimeClientProjection::new(
             prepared.runs[0].id.conversation_id.clone(),
             vec![],
-            crate::runtime_client::CapabilityView {
+            crate::observation::capability_source::CapabilityView {
                 configured_tools: Vec::new(),
                 revision: crate::runtime::identity::CapabilityRevision::new(1),
                 tools: vec![],

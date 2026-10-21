@@ -734,7 +734,11 @@ impl SubagentRegistry {
                     // In-memory reservation is the message/interruption arbitration boundary.
                     // Its owner task installs recoverable authority and commits Reserved off-lock.
                     if matches!(&decision, Decision::Resume(..)) {
-                        super::publish_snapshot(&mut state, &self.state_version, index);
+                        super::observation::publish_snapshot(
+                            &mut state,
+                            &self.state_version,
+                            index,
+                        );
                     }
                     Some(decision)
                 }
@@ -818,7 +822,7 @@ impl SubagentRegistry {
                         }
                         // The mutex reservation still owns this exact Agent/activation
                         // and frozen authority. Filesystem I/O stays off that mutex.
-                        super::validate_execution_workspace(&identity.workspace)?;
+                        super::preparation::validate_execution_workspace(&identity.workspace)?;
                         if cancellation.is_cancelled() {
                             return Err(SubagentStartError::Cancelled);
                         }
@@ -865,7 +869,11 @@ impl SubagentRegistry {
                             let index = state.index[&latest];
                             // This is the first public appearance of the reserved
                             // activation ID. Its consumed allocation is already durable.
-                            super::publish_snapshot(&mut state, &registry.state_version, index);
+                            super::observation::publish_snapshot(
+                                &mut state,
+                                &registry.state_version,
+                                index,
+                            );
                         }
                         if cancellation.is_cancelled() {
                             return Err(SubagentStartError::Cancelled);
@@ -909,7 +917,7 @@ impl SubagentRegistry {
                                         == identity.activation_id)
                             );
                             let index = state.index[&agent.latest_activation];
-                            super::publish_committed_snapshot(
+                            super::observation::publish_committed_snapshot(
                                 &mut state,
                                 &registry.state_version,
                                 index,
@@ -1015,14 +1023,18 @@ impl SubagentRegistry {
                         let index =
                             state.index[&state.agents[&identity.agent_id].latest_activation];
                         if let Some(sequence) = rollback_sequence {
-                            super::publish_committed_snapshot(
+                            super::observation::publish_committed_snapshot(
                                 &mut state,
                                 &registry.state_version,
                                 index,
                                 &sequence,
                             );
                         } else {
-                            super::publish_snapshot(&mut state, &registry.state_version, index);
+                            super::observation::publish_snapshot(
+                                &mut state,
+                                &registry.state_version,
+                                index,
+                            );
                         }
                     }
                     let had_physical_owner = identity.physical_owner.is_some();
@@ -1099,7 +1111,7 @@ impl SubagentRegistry {
     #[allow(clippy::too_many_lines)] // one ordered fold of durable ownership/resource facts
     pub(crate) fn restore_agents(
         &self,
-        store: &dyn crate::durable::ConversationStore,
+        store: &dyn crate::durable::JournalStore,
     ) -> Result<(), crate::durable::ConversationStoreError> {
         use crate::durable::ConversationStoreError;
         use crate::events::types::RuntimeEvent;

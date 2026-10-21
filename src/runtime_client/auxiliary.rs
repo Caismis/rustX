@@ -1,15 +1,14 @@
 //! Bounded auxiliary Call/request audit pages at one captured Journal cut.
 
-use super::checkpoint::{
-    CheckpointPage, CheckpointPageItem, CheckpointReadCut, CollectionFrontier, bounded_bytes,
-    structural_value,
-};
+use super::checkpoint::CheckpointPage;
 use super::types::{RuntimeClientCursor, RuntimeClientError};
 use crate::durable::ConversationStore;
 use crate::model::auxiliary::{
     AUXILIARY_AUDIT_PAGE_LIMIT_MAX, AUXILIARY_AUDIT_RECORD_ENCODED_MAX, AuxiliaryAuditCut,
     AuxiliaryAuditFact, AuxiliaryAuditRecord,
 };
+use crate::observation::bounded::{bounded_bytes, structural_value};
+use crate::observation::cut::{CheckpointPageItem, CheckpointReadCut, CollectionFrontier};
 
 pub(crate) const DOMAIN: &str = "auxiliary.audit";
 const PROTOCOL_INTEGER_MAX: u64 = 9_007_199_254_740_991;
@@ -191,6 +190,11 @@ pub(crate) fn page(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::durable::AuxiliaryStore;
+    use crate::durable::CanonicalStore;
+    use crate::durable::JournalStore;
+    use crate::durable::ObservationStore;
+    use crate::durable::ProjectionStore;
     use crate::durable::{ConversationStore, SqliteConversationStore};
     use crate::model::auxiliary::{
         AuxiliaryAttribution, AuxiliaryAuditFact, AuxiliaryAuditRecord, AuxiliaryBusinessSource,
@@ -317,7 +321,7 @@ mod tests {
     }
 
     fn decoded(item: &CheckpointPageItem) -> AuxiliaryAuditRecord {
-        crate::runtime_client::checkpoint::decode_domain_value(
+        crate::observation::bounded::decode_domain_value(
             item.value.clone().expect("complete typed audit item"),
         )
         .unwrap()
@@ -727,7 +731,7 @@ mod tests {
             ),
         };
         assert!(
-            crate::runtime_client::checkpoint::bounded_bytes(
+            crate::observation::bounded::bounded_bytes(
                 &record,
                 crate::model::auxiliary::AUXILIARY_AUDIT_RECORD_ENCODED_MAX,
             )
@@ -762,14 +766,14 @@ mod tests {
             ),
         };
         assert!(
-            crate::runtime_client::checkpoint::bounded_bytes(
+            crate::observation::bounded::bounded_bytes(
                 &record,
                 crate::model::auxiliary::AUXILIARY_AUDIT_RECORD_ENCODED_MAX,
             )
             .is_none()
         );
         assert!(
-            crate::runtime_client::checkpoint::bounded_bytes(
+            crate::observation::bounded::bounded_bytes(
                 &record,
                 crate::model::auxiliary::AUXILIARY_TERMINAL_ENVELOPE_ENCODED_MAX,
             )

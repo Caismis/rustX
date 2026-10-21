@@ -1,5 +1,6 @@
 //! Real streamed ZIP completion must authenticate each settled artifact buffer.
 use super::*;
+use crate::durable::CanonicalStore;
 use crate::session_archive::{ArtifactReadStage, CHUNK_BYTES};
 use std::io::{Seek as _, SeekFrom};
 use std::path::{Path, PathBuf};

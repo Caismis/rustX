@@ -24,6 +24,7 @@
 //! in `runtime_integration.rs`.
 
 use super::super::support;
+use rustx::durable::{CanonicalStore, JournalStore, ProjectionStore};
 
 use std::sync::Arc;
 

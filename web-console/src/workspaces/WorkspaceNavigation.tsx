@@ -2,7 +2,8 @@ import type { Translate } from '../locale/translation';
 import { useTranslation } from '../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from ui-workspace browser/rows/picker; see PROVENANCE.md. */
 import { useEffect, useMemo, useState, useRef, useSyncExternalStore, type ReactNode } from 'react';
-import type { AppServerClient, ClientView } from '../client/app-server';
+import type { AppServerClient } from '../client/app-server';
+import type { ClientView } from '../client/contracts';
 import { useClientSelector, sameValue, type ShellView } from '../client/selectors';
 import { sessionDisplayTitle } from '../bindings/session-title';
 import { activeAttempt } from '../bindings/projection';

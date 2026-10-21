@@ -11,7 +11,7 @@ import { ModelSelect } from '../src/presentation/agent/ModelSelect';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { Interactions } from '../src/app/agent/Interactions';
 import { Tool } from '../src/app/agent/Tool';
-import { RpcFailure } from '../src/client/app-server';
+import { RpcFailure } from '../src/client/errors';
 import { toolCard } from '../src/bindings/tools';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
 import { Server, snapshot, interaction } from './fixture';

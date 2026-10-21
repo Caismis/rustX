@@ -1,5 +1,6 @@
 //! WF-05: fixed bodies, exact admission gates, native settlement and typed exits.
 use super::*;
+use crate::durable::CanonicalStore;
 
 fn assert_native_path(run: &read_model::WorkflowRunView, events: &[RuntimeEvent]) {
     let displayed: Vec<_> = run

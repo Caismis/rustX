@@ -1,6 +1,7 @@
 use super::*;
 use crate::conversation::{SurfaceOp, message_id_of};
 use crate::durable::LineageSeed;
+use crate::durable::{CanonicalStore, JournalStore, ObservationStore, ProjectionStore};
 use crate::local_runtime::session::remap_seed;
 
 #[test]
@@ -176,7 +177,7 @@ fn deep_lineage_reopen_preserves_response_facts_without_execution_ownership() {
         tails(&current)[2].timing.as_ref().unwrap().generation_ms,
         Some(1280)
     );
-    let owned = crate::runtime_client::agent_statistics::StatisticsFold::default()
+    let owned = crate::observation::statistics::StatisticsFold::default()
         .read(&store, store.presentation_frontier().unwrap(), || None)
         .unwrap();
     assert_eq!(owned.statistics.turns, 1);
@@ -472,7 +473,7 @@ fn lineage_preserves_success_failed_and_terminal_only_turns_in_native_order() {
                 )
                 .unwrap();
             assert_eq!(read.page.headers[0].cursor, turn.cursor.unwrap());
-            let mut projected = crate::runtime_client::snapshot::transcript_header_view(read.page);
+            let mut projected = crate::observation::transcript::transcript_header_view(read.page);
             decorate_window(&child, &mut projected, read.cut.read.journal).unwrap();
             let owner = projected.entries[0].turn_process.as_ref().unwrap();
             assert_eq!(owner.conversation_id, turn.id.conversation_id);
@@ -485,7 +486,7 @@ fn lineage_preserves_success_failed_and_terminal_only_turns_in_native_order() {
         assert_eq!(child.read_events(None, 64).unwrap().events, []);
         let bootstrap = child.load_transcript_page(None, 64).unwrap();
         let snapshot = child
-            .load_transcript_snapshot(&crate::durable::inbox::TranscriptSnapshotCut {
+            .load_transcript_snapshot(&crate::durable::TranscriptSnapshotCut {
                 bootstrap_through: bootstrap.entries.last().unwrap().cursor.get(),
                 journal_through: 0,
                 messages: Vec::new(),

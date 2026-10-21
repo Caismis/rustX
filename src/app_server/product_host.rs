@@ -1,13 +1,13 @@
 //! Private Product Host file-read seam. Never an ordinary App Server Method.
 //! Transport authentication creates the read authority; JSON cannot create it.
 use super::{
-    connection::{client_error, domain, host_error, manager_error},
     delivery_access,
     host::AppServerHost,
     protocol::{
         AttachmentTarget, ErrorData, Failure, JsonRpcVersion, MethodResult, RequestId, Response,
         RpcError, Success,
     },
+    rpc_error::{client_error, domain, host_error, manager_error},
 };
 use crate::tools::session_files::SessionFileReadFailure as FileFailure;
 use serde::{Deserialize, Serialize};
@@ -253,7 +253,7 @@ pub(crate) enum ReadSource {
     SessionFile {
         #[serde(skip_serializing_if = "Option::is_none")]
         agent_id: Option<crate::runtime::identity::AgentId>,
-        locator: crate::runtime_client::content::CanonicalContentLocator,
+        locator: crate::observation::content::CanonicalContentLocator,
         #[schemars(range(max = 9_007_199_254_740_991_u64))]
         delivery_index: usize,
     },

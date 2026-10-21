@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { RequestNotDispatched } from '../src/client/app-server';
+import { RequestNotDispatched } from '../src/client/errors';
 import { AttachmentIntake, UploadFailure, type UploadPort } from '../src/client/uploads';
 import { Server, capabilities } from './fixture';
 

@@ -1,9 +1,9 @@
 //! Test-only native receipt notices; original events are read outside callbacks.
 use crate::durable::{
     ConversationStore,
-    inbox::{GoalObservationReceipt, PendingObservationReceipt, PublicationAuditReceipt},
     observation::NativeObservationBatch,
     reading::ConversationReadCut,
+    {GoalObservationReceipt, PendingObservationReceipt, PublicationAuditReceipt},
 };
 use crate::events::types::RuntimeEventEnvelope;
 use crate::runtime::{

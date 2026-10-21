@@ -227,7 +227,7 @@ async fn closing_inspection_case(settle: bool, following: bool, trace_detail: bo
         .trace
         .records
         .iter()
-        .find(|record| record.kind == crate::runtime_client::trace::TraceKind::Request)
+        .find(|record| record.kind == crate::observation::trace::TraceKind::Request)
         .expect("parked child has a native request record")
         .id
         .clone();
@@ -380,15 +380,15 @@ async fn live_inspection_close_while_active_does_not_invent_retained_source_or_e
 }
 
 struct RetainedTraceField {
-    cut: crate::runtime_client::checkpoint::CheckpointReadCut,
+    cut: crate::observation::cut::CheckpointReadCut,
     domain: String,
     item_offset: u64,
     path: Vec<String>,
     encoded_bytes: u64,
 }
 
-fn original_terminal_field(trace: &crate::runtime_client::trace::TracePage) -> RetainedTraceField {
-    use crate::runtime_client::trace::{TraceFieldKind, TraceFieldSource, TraceKind, TraceState};
+fn original_terminal_field(trace: &crate::observation::trace::TracePage) -> RetainedTraceField {
+    use crate::observation::trace::{TraceFieldKind, TraceFieldSource, TraceKind, TraceState};
     let terminal = trace
         .records
         .iter()
@@ -431,7 +431,7 @@ async fn assert_embedded_durable_trace(
     checkpoint: &crate::runtime_client::checkpoint::RuntimeClientCheckpoint,
     store: &dyn ConversationStore,
 ) -> RetainedTraceField {
-    use crate::runtime_client::trace::TraceKind;
+    use crate::observation::trace::TraceKind;
     use base64::Engine as _;
     let before = store.observation_read_cut().unwrap();
     let trace = &checkpoint.snapshot.trace;
@@ -1244,11 +1244,10 @@ async fn t20_real_unix_shutdown_joins_admitted_physical_source_worker() {
     let request = RuntimeClientRequest::TraceLocateTool {
         id: crate::runtime_client::RequestId::new(2),
         locator: crate::runtime_client::trace::TraceToolLocator {
-            occurrence: crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
-                locator:
-                    crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition {
-                        position: 1,
-                    },
+            occurrence: crate::observation::tool::RuntimeClientToolOccurrence {
+                locator: crate::observation::content::CanonicalContentLocator::ByLedgerPosition {
+                    position: 1,
+                },
                 block_index: crate::message::types::ContentBlockIndex::new(0),
             },
             call_id: None,
@@ -1586,8 +1585,8 @@ async fn t20_real_unix_shutdown_retires_the_exact_pending_observe_before_its_dea
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn frozen_child_message_continuation_survives_live_admission_and_binds_registry_owner() {
     use crate::durable::reading::ConversationWindowAt;
+    use crate::observation::cut::CheckpointReadCut;
     use crate::runtime_client::RuntimeClientError;
-    use crate::runtime_client::checkpoint::CheckpointReadCut;
     use base64::Engine as _;
 
     let directory = inspection_tempdir().unwrap();
@@ -1670,8 +1669,8 @@ async fn frozen_child_message_continuation_survives_live_admission_and_binds_reg
         .find(|binding| {
             matches!(
                 binding.content_ref.source,
-                crate::runtime_client::content::ContentSource::CanonicalMessageBlock {
-                    component: crate::runtime_client::content::CanonicalContentComponent::Payload,
+                crate::observation::content::ContentSource::CanonicalMessageBlock {
+                    component: crate::observation::content::CanonicalContentComponent::Payload,
                     ..
                 }
             )

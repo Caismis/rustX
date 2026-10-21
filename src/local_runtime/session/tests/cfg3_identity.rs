@@ -1,34 +1,7 @@
-use super::*;
-use crate::runtime::identity::UuidV7Generator;
-use std::collections::VecDeque;
-use std::sync::{Barrier, Mutex};
-
-#[derive(Debug)]
-struct Sequence(Mutex<VecDeque<uuid::Uuid>>);
-impl UuidV7Generator for Sequence {
-    fn next_uuid(&self) -> uuid::Uuid {
-        let mut values = self.0.lock().unwrap();
-        if values.len() > 1 {
-            values.pop_front().unwrap()
-        } else {
-            *values.front().unwrap()
-        }
-    }
-}
-fn uuid(value: u64) -> uuid::Uuid {
-    uuid::Uuid::parse_str(&format!("01900000-0000-7000-8000-{value:012}")).unwrap()
-}
-fn identities(values: &[u64]) -> Arc<dyn UuidV7Generator> {
-    Arc::new(Sequence(Mutex::new(
-        values.iter().map(|value| uuid(*value)).collect(),
-    )))
-}
-fn intent() -> SessionPersistentState {
-    SessionPersistentState {
-        cwd: PathBuf::from("/workspace"),
-        model: None,
-    }
-}
+use super::super::creation::conversation_database_path;
+use super::super::*;
+use super::{identities, uuid, workspace_state};
+use std::sync::Barrier;
 
 #[test]
 fn injected_collisions_retry_and_publication_order_does_not_follow_uuid_order() {
@@ -38,11 +11,11 @@ fn injected_collisions_retry_and_publication_order_does_not_follow_uuid_order() 
     let mut catalog = SessionCatalog::empty(&controller)
         .unwrap()
         .with_identity_generator(identities(&[900, 901, 902, 900, 901, 902, 100, 101, 102]));
-    let first = catalog.prepare_session(&intent(), &[]).unwrap();
+    let first = catalog.prepare_session(&workspace_state(), &[]).unwrap();
     catalog
         .publish_session(&first, SessionNodeOrigin::New)
         .unwrap();
-    let second = catalog.prepare_session(&intent(), &[]).unwrap();
+    let second = catalog.prepare_session(&workspace_state(), &[]).unwrap();
     catalog
         .publish_session(&second, SessionNodeOrigin::New)
         .unwrap();
@@ -68,7 +41,9 @@ fn injected_collisions_retry_and_publication_order_does_not_follow_uuid_order() 
         .unwrap()
         .with_identity_generator(identities(&[902]));
     assert!(
-        reconstructed.prepare_session(&intent(), &[]).is_err(),
+        reconstructed
+            .prepare_session(&workspace_state(), &[])
+            .is_err(),
         "collision budget is finite across reconstruction"
     );
     assert_eq!(fs::read(&first.database_path).unwrap(), retained);
@@ -161,7 +136,7 @@ fn first_session_collision_refuses_without_overwriting_an_unpublished_reservatio
         };
         let result = SessionCatalog::create_unpublished_with_identities(
             directory.path(),
-            &intent(),
+            &workspace_state(),
             identities(&allocation),
         );
         assert!(

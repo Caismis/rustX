@@ -1,11 +1,12 @@
 //! Real SQLite writer interleavings and lifetime ownership, with explicit gates.
-use crate::durable::{ConversationStore, SqliteConversationStore};
+use crate::durable::SqliteConversationStore;
 use crate::local_runtime::session::tests::{deletion_tests::child, open_catalog};
 use crate::message::content::TextBlock;
 use crate::message::types::{AssistantContentBlock, AssistantMessageBlock, MessageBlock};
 use crate::runtime::identity::{ConversationId, MessageId, SessionId};
 use crate::runtime::local_storage::{ConversationExclusion, ProductRoot};
 use crate::session_archive::{SessionArchivePrepareError, SessionArchiveProducer, capture_probe};
+use rustx::durable::{CanonicalStore, ProjectionStore};
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -209,10 +210,9 @@ fn wal_fork_installs_frozen_uncheckpointed_source_and_survives_source_removal() 
                 source_node: node.id,
                 source_surface_revision: revision,
                 source_message: response.id().clone(),
-                source_locator:
-                    crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
-                        message_id: response.id().clone(),
-                    },
+                source_locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
+                    message_id: response.id().clone(),
+                },
                 side: LineageSide::After,
             },
         )

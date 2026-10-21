@@ -3,7 +3,7 @@ import { WorkspaceAuthority } from '../src/workspaces/authority';
 import { HttpWorkspaceHost } from '../src/workspaces/http-host';
 import { WorkspaceSessionAdmission } from '../src/workspaces/session-admission';
 import type { SessionLocation, WorkspaceCatalog } from '../src/workspaces/host';
-import type { OperationAdmission } from '../src/client/app-server';
+import type { OperationAdmission } from '../src/client/contracts';
 import { Server, endpoint } from './fixture';
 
 function deferred<T>() {

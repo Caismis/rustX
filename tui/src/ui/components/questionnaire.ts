@@ -1,29 +1,8 @@
-import {
-  Input,
-  Key,
-  Markdown,
-  matchesKey,
-  truncateToWidth,
-  visibleWidth,
-  wrapTextWithAnsi,
-} from "@earendil-works/pi-tui";
+import { Input, Key, Markdown, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
-import type {
-  AnswerSpecification,
-  FiniteNumberWire,
-  InteractionRequester,
-  OptionSpecification,
-  QuestionSpecification,
-  QuestionnaireAnswer,
-  QuestionnaireAnswerEntry,
-  QuestionnaireResponse,
-  QuestionnaireSpecification,
-} from "../../protocol/app-server.ts";
-import {
-  finiteNumberDecimal,
-  finiteNumberFromWire,
-  finiteNumberToWire,
-} from "../../protocol/number.ts";
+import type { InteractionRequester, QuestionSpecification, QuestionnaireAnswer, QuestionnaireAnswerEntry, QuestionnaireResponse, QuestionnaireSpecification } from "../../protocol/app-server.ts";
+import { readScalarAnswer } from "../../../../protocol/app-server/number.ts";
+import { allowsCustom, boundsSentence, choiceOptions, numberBoundLabel, requesterLines, requesterTitle, rowsOf, scalarPrompt, scalarValidationError, selectionBoundsLabel, textGuidance } from "./questionnaire-answers.ts";
 import { markdownTheme, role } from "../theme.ts";
 import type { PopupContent } from "./popup-frame.ts";
 
@@ -31,16 +10,8 @@ const MAX_CUSTOM_ANSWER_CHARS = 4096;
 const MAX_TEXT_ANSWER_CHARS = 4096;
 const PREVIEW_CONTENT_LINES = 12;
 
-const NATIVE_POPUP_TITLE = "Ask user · questionnaire";
 const POPUP_FOOTER =
   "Tab/Shift+Tab tabs · arrows rows · Enter choose/submit · Space toggle · PageUp/PageDown preview · Esc decline · Ctrl+C cancel attempt";
-
-/** The typed rows one question's answer surface presents. */
-type RowKind =
-  | { kind: "option"; optionIndex: number }
-  | { kind: "boolean"; value: boolean }
-  | { kind: "scalar" }
-  | { kind: "custom" };
 
 export interface QuestionnaireOverlayOptions {
   interactionId: string;
@@ -69,337 +40,6 @@ type RenderedBody = {
   lines: string[];
   focusLine: number;
 };
-
-/** The declared options of a choice question, or an empty list. */
-export function choiceOptions(question: QuestionSpecification): OptionSpecification[] {
-  const answer = question.answer;
-  return answer.type === "single_choice" || answer.type === "multi_choice"
-    ? answer.options
-    : [];
-}
-
-/** Whether a question accepts a free-text answer outside its options. */
-function allowsCustom(answer: AnswerSpecification): boolean {
-  return (answer.type === "single_choice" || answer.type === "multi_choice") &&
-    answer.allow_custom;
-}
-
-/** The ordered rows one question's answer surface presents. */
-function rowsOf(question: QuestionSpecification): RowKind[] {
-  const answer = question.answer;
-  switch (answer.type) {
-    case "text":
-    case "number":
-    case "integer":
-      return [{ kind: "scalar" }];
-    case "boolean":
-      return [{ kind: "boolean", value: true }, { kind: "boolean", value: false }];
-    default: {
-      const rows: RowKind[] = answer.options.map((_, optionIndex) => ({
-        kind: "option" as const,
-        optionIndex,
-      }));
-      if (answer.allow_custom) rows.push({ kind: "custom" });
-      return rows;
-    }
-  }
-}
-
-/**
- * The human-readable statement of a multi-choice question's own bounds.
- *
- * The bounds come from the request; the client only explains and pre-checks
- * them. The runtime re-validates every submission against the same facts.
- */
-export function selectionBoundsLabel(min: number, max: number): string {
-  if (min === max) return `Select exactly ${min}`;
-  if (min === 0) return `Select up to ${max}`;
-  return `Select ${min}–${max}`;
-}
-
-/** The inclusive bounds of the runtime's canonical `Integer` domain. */
-const I64_MIN = -(2n ** 63n);
-const I64_MAX = 2n ** 63n - 1n;
-
-/**
- * One `Number` draft's decimal syntax, split into the parts its exact value is
- * built from: integer digits, fraction digits, and a signed exponent.
- *
- * The accepted spellings are `123`, `-123`, `1.5`, `.5`, `1.`, `1e3`, `1.5e3`,
- * `1E-2`, `-2.5e+4`. A leading `+`, a bare `.`, and a bare exponent are not
- * numbers; the digit check below refuses the two the pattern alone would let
- * through.
- */
-const NUMBER_DRAFT = /^-?(\d*)(?:\.(\d*))?(?:[eE]([+-]?)(\d+))?$/;
-
-/** `2^53`: the first magnitude at which binary64 stops holding every whole number. */
-const EXACT_WHOLE_FRONTIER = 2n ** 53n;
-
-/** What one `Number` draft denotes, or why it denotes nothing submittable. */
-export type NumberDraftReading =
-  /** The finite binary64 value the draft denotes exactly. */
-  | { readonly kind: "value"; readonly value: number }
-  /** Not the syntax of a number. */
-  | { readonly kind: "malformed" }
-  /** Beyond the finite binary64 range. */
-  | { readonly kind: "not-finite" }
-  /** A whole number binary64 cannot hold exactly. */
-  | { readonly kind: "inexact" };
-
-/**
- * Reads one `Number` draft as the value the runtime would receive.
- *
- * This is the single point where a human's decimal spelling becomes a
- * JavaScript `number`, and it is deliberately taken **on the original string**:
- * `Number(...)` rounds, and rounding is precisely the information this has to
- * inspect. Asking whether the draft is exact after `Number(...)` has already
- * run can only ever confirm that a rounded value is equal to itself.
- *
- * The runtime's `Number` domain is the finite binary64 (`FiniteNumber`), and a
- * fractional decimal *means* the nearest binary64 — that is what a JSON number
- * means everywhere, and where the MCP server's own parse lands. A **whole**
- * number is different: `9007199254740993` names one specific integer, and
- * binary64 cannot hold it, so `FiniteNumber` refuses it rather than rounding it
- * to `9007199254740992`. That rule is about the *value*, so it cannot be evaded
- * by respelling: `9007199254740993.0`, `9.007199254740993e15` and
- * `90071992547409930e-1` all denote the same refused integer, and this reads
- * every one of them out of the decimal itself rather than out of the rounded
- * `Number`.
- *
- * Nothing here widens the domain: no arbitrary-precision value crosses the
- * wire. The exact arithmetic exists only to decide whether one lossy
- * conversion is faithful, and the value submitted is the ordinary binary64.
- */
-export function readNumberDraft(draft: string): NumberDraftReading {
-  const spelling = draft.trim();
-  const match = NUMBER_DRAFT.exec(spelling);
-  if (match === null) return { kind: "malformed" };
-  const [, integerDigits = "", fractionDigits = "", exponentSign, exponentDigits] = match;
-  // `.` and `e3` match the pattern but spell no digits, so they are not numbers.
-  if (integerDigits.length + fractionDigits.length === 0) return { kind: "malformed" };
-
-  const value = Number(spelling);
-  if (!Number.isFinite(value)) return { kind: "not-finite" };
-
-  const magnitude = exponentDigits === undefined ? 0n : BigInt(exponentDigits);
-  const exponent = exponentSign === "-" ? -magnitude : magnitude;
-  const whole = decimalWholeValue(integerDigits, fractionDigits, exponent);
-  if (whole !== undefined && !isExactBinary64Whole(whole)) return { kind: "inexact" };
-  return { kind: "value", value };
-}
-
-/**
- * The exact integer a well-formed decimal spelling denotes, or `undefined`
- * when it denotes a fractional value.
- *
- * The digits are one integer scaled by a power of ten: `1.5e3` is `15` scaled
- * by `10^2`. A negative scale is cancelled one digit at a time, which both
- * decides wholeness and terminates immediately on the first non-zero digit
- * below the point — so an absurd exponent like `1e-999999999` costs one step
- * rather than a `10^999999999`.
- *
- * The sign is dropped: binary64 exactness is symmetric, so `-9007199254740993`
- * and `9007199254740993` are decided identically.
- *
- * The caller has already proven the draft finite. That bounds a non-zero
- * `scale` at 308, because the value is at least `10^scale` and a finite
- * binary64 is below `2^1024`; zero is returned before `scale` is used at all.
- */
-function decimalWholeValue(
-  integerDigits: string,
-  fractionDigits: string,
-  exponent: bigint,
-): bigint | undefined {
-  let significand = BigInt(`${integerDigits}${fractionDigits}`);
-  // Every spelling of zero is whole, and no exponent can change that — which
-  // is also what keeps `0e999999999` from reaching the exponentiation below.
-  if (significand === 0n) return 0n;
-  let scale = exponent - BigInt(fractionDigits.length);
-  while (scale < 0n) {
-    if (significand % 10n !== 0n) return undefined;
-    significand /= 10n;
-    scale += 1n;
-  }
-  return significand * 10n ** scale;
-}
-
-/**
- * Whether binary64 holds this whole number exactly.
- *
- * Every whole number is an odd number times a power of two, and binary64's
- * significand is 53 bits, so it is exact when that odd part fits in 53 bits.
- * This is the same rule the runtime applies in `is_exact_binary64_whole`,
- * stated over `BigInt` instead of `u64` — the client is therefore never looser
- * than the boundary it is about to submit to.
- */
-function isExactBinary64Whole(value: bigint): boolean {
-  let odd = value < 0n ? -value : value;
-  if (odd === 0n) return true;
-  while (odd % 2n === 0n) odd >>= 1n;
-  return odd < EXACT_WHOLE_FRONTIER;
-}
-
-/**
- * Validates one scalar draft against its declared answer shape.
- *
- * Returns `undefined` when the draft is acceptable. This is **UX only**: the
- * runtime validates the very same facts again and stays authoritative, and an
- * invalid draft keeps the user inside the interaction rather than failing the
- * tool invocation.
- */
-export function scalarValidationError(
-  answer: AnswerSpecification,
-  draft: string,
-): string | undefined {
-  const value = draft.trim();
-  switch (answer.type) {
-    case "text": {
-      const length = [...draft].length;
-      if (answer.min_length != null && length < answer.min_length) {
-        return `Enter at least ${answer.min_length} characters.`;
-      }
-      if (answer.max_length != null && length > answer.max_length) {
-        return `Enter at most ${answer.max_length} characters.`;
-      }
-      if (answer.format === "date" && !isCalendarDate(draft)) {
-        return "Enter a date as YYYY-MM-DD.";
-      }
-      if (answer.format === "date_time" && Number.isNaN(Date.parse(draft))) {
-        return "Enter an RFC 3339 date-time.";
-      }
-      if (answer.format === "uri" && !isAbsoluteUri(draft)) {
-        return "Enter an absolute URI.";
-      }
-      return undefined;
-    }
-    case "number": {
-      // Syntax, then finiteness, then admissibility to the canonical domain,
-      // and only then the declared bounds: a value is never compared against
-      // `minimum`/`maximum` before it is established that it is the value the
-      // user actually entered.
-      const reading = readNumberDraft(value);
-      if (reading.kind === "malformed") return "Enter a number.";
-      if (reading.kind === "not-finite") return "Enter a finite number.";
-      if (reading.kind === "inexact") {
-        return "Enter a number this runtime can represent exactly.";
-      }
-      const parsed = reading.value;
-      // The bounds are canonical binary64 text, so they are decoded through
-      // the one seam that reconstructs a `number` exactly and then compared in
-      // the domain both sides belong to. Comparing the wire spellings as
-      // strings would be a lexical comparison of bit patterns, which is not
-      // the numeric order.
-      const minimum = numberBound(answer.minimum ?? undefined);
-      const maximum = numberBound(answer.maximum ?? undefined);
-      if (minimum !== undefined && parsed < minimum) {
-        return `Enter a number at least ${minimum}.`;
-      }
-      if (maximum !== undefined && parsed > maximum) {
-        return `Enter a number at most ${maximum}.`;
-      }
-      return undefined;
-    }
-    case "integer": {
-      // Never `Number(...)`: the runtime's Integer domain is the exact i64,
-      // and a JavaScript number would silently round every value above 2^53 —
-      // the whole reason this field crosses the wire as decimal text. The
-      // draft is compared as a `BigInt` and submitted as the user's own
-      // digits; the runtime performs the one authoritative parse.
-      if (!/^-?\d+$/.test(value)) return "Enter a whole number.";
-      const parsed = BigInt(value);
-      if (parsed < I64_MIN || parsed > I64_MAX) {
-        return "Enter a whole number inside the 64-bit range.";
-      }
-      if (answer.minimum != null && parsed < BigInt(answer.minimum)) {
-        return `Enter a whole number at least ${answer.minimum}.`;
-      }
-      if (answer.maximum != null && parsed > BigInt(answer.maximum)) {
-        return `Enter a whole number at most ${answer.maximum}.`;
-      }
-      return undefined;
-    }
-    default:
-      return undefined;
-  }
-}
-
-/**
- * One declared `Number` bound as a JavaScript `number`.
- *
- * Every `Number` bound in this client is decoded here, so no second parser can
- * disagree with the one the answer is encoded through.
- */
-function numberBound(bound: FiniteNumberWire | undefined): number | undefined {
-  return bound === undefined ? undefined : finiteNumberFromWire(bound);
-}
-
-/**
- * One declared `Number` bound as the decimal a human reads — and can type
- * back, which `String(value)` would not guarantee for a large whole number.
- */
-function numberBoundLabel(bound: FiniteNumberWire | undefined): string | undefined {
-  const value = numberBound(bound);
-  return value === undefined ? undefined : finiteNumberDecimal(value);
-}
-
-function isCalendarDate(value: string): boolean {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-  if (match === null) return false;
-  const [, year, month, day] = match;
-  const date = new Date(`${year}-${month}-${day}T00:00:00Z`);
-  return !Number.isNaN(date.getTime()) &&
-    date.getUTCFullYear() === Number(year) &&
-    date.getUTCMonth() + 1 === Number(month) &&
-    date.getUTCDate() === Number(day);
-}
-
-function isAbsoluteUri(value: string): boolean {
-  try {
-    // eslint-disable-next-line no-new
-    new URL(value);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * The presentation label of an MCP or native requester.
- *
- * The words come from canonical facts, so a native `ask_user` prompt is never
- * described as MCP and an MCP prompt always names its server.
- */
-export function requesterLines(requester: InteractionRequester): string[] {
-  if (requester.origin === "builtin") {
-    return [`Requested by ${requester.tool_name}`];
-  }
-  if ("managed_python" in requester.origin) {
-    return [`Requested by Python source: ${requester.origin.managed_python.package}`, `Tool: ${requester.tool_name}`];
-  }
-  return [
-    `Requested by MCP server: ${requester.origin.mcp.server_id}`,
-    `Tool: ${requester.tool_name}`,
-  ];
-}
-
-/**
- * The compact requester name used by queue rows and activity lines.
- *
- * It is derived from canonical origin facts, so a native tool is never
- * presented as MCP and an MCP tool always carries its server identity.
- */
-export function requesterName(requester: InteractionRequester): string {
-  return requester.origin === "builtin"
-    ? requester.tool_name
-    : "mcp" in requester.origin ? `mcp:${requester.origin.mcp.server_id}/${requester.tool_name}` : `python:${requester.origin.managed_python.package}/${requester.tool_name}`;
-}
-
-/** The popup frame title for one requester. */
-export function requesterTitle(requester: InteractionRequester): string {
-  return requester.origin === "builtin"
-    ? NATIVE_POPUP_TITLE
-    : "mcp" in requester.origin ? `MCP elicitation · ${requester.origin.mcp.server_id}` : `Python source · ${requester.origin.managed_python.package}`;
-}
 
 /**
  * One ephemeral questionnaire surface.
@@ -1038,28 +678,18 @@ export class QuestionnaireOverlay implements PopupContent {
         return this.#committed[index]
           ? { type: "text", value: { value: draft ?? "" } }
           : undefined;
-      case "number": {
-        // The same reading that admitted the draft produces the value that
-        // crosses the wire, so the one lossy conversion is the one already
-        // proven faithful to the spelling the user typed. A draft that has no
-        // reading is left out rather than rounded into an answer — the submit
-        // gate refuses it first, and this cannot invent a value behind it.
+      case "number":
+      case "integer": {
+        // The same shared reading that admitted the draft produces the value
+        // that crosses the wire: the accepted binary64 encoded through the one
+        // seam that preserves it exactly, or the canonical digits the runtime
+        // parses. A draft that has no reading is left out rather than rounded
+        // into an answer — the submit gate refuses it first, and this cannot
+        // invent a value behind it.
         if (!filled) return undefined;
-        const reading = readNumberDraft(draft);
-        // The accepted binary64 — not the human's spelling — is what crosses
-        // the wire, encoded through the one seam that preserves it exactly.
-        // `JSON.stringify` of the same `number` would print the shortest
-        // decimal that round-trips it, which is a different integer for a
-        // value like `2^63` and is the failure this encoding exists to close.
-        return reading.kind === "value"
-          ? { type: "number", value: { value: finiteNumberToWire(reading.value) } }
-          : undefined;
+        const reading = readScalarAnswer(answer, draft);
+        return reading.kind === "answer" ? reading.answer : undefined;
       }
-      case "integer":
-        // The user's own digits cross the wire. Converting to a JavaScript
-        // number here would round every answer above 2^53 before the runtime
-        // ever performed its authoritative parse.
-        return filled ? { type: "integer", value: { value: draft.trim() } } : undefined;
       case "boolean": {
         const value = this.#boolean[index];
         return value === undefined ? undefined : { type: "boolean", value: { value } };
@@ -1178,55 +808,6 @@ export class QuestionnaireOverlay implements PopupContent {
   #changed(): void {
     this.#onChange?.();
   }
-}
-
-function scalarPrompt(answer: AnswerSpecification): string {
-  switch (answer.type) {
-    case "number":
-      return "Enter a number.";
-    case "integer":
-      return "Enter a whole number.";
-    default:
-      return "Type your answer.";
-  }
-}
-
-/**
- * The human-facing statement of a scalar question's declared bounds.
- *
- * Both scalar domains hand it decimal *text*: `Integer` bounds are already the
- * canonical decimal the runtime published, and `Number` bounds have been
- * decoded from their canonical binary64 spelling into the decimal a human
- * reads. Neither domain's wire form is ever shown.
- */
-function boundsSentence(
-  noun: string,
-  minimum: string | undefined,
-  maximum: string | undefined,
-): string | undefined {
-  if (minimum !== undefined && maximum !== undefined) {
-    return `${noun} between ${minimum} and ${maximum}`;
-  }
-  if (minimum !== undefined) return `${noun} at least ${minimum}`;
-  if (maximum !== undefined) return `${noun} at most ${maximum}`;
-  return undefined;
-}
-
-function textGuidance(
-  answer: Extract<AnswerSpecification, { type: "text" }>,
-): string | undefined {
-  const parts: string[] = [];
-  if (answer.min_length !== undefined && answer.max_length !== undefined) {
-    parts.push(`${answer.min_length}–${answer.max_length} characters`);
-  } else if (answer.min_length !== undefined) {
-    parts.push(`at least ${answer.min_length} characters`);
-  } else if (answer.max_length !== undefined) {
-    parts.push(`at most ${answer.max_length} characters`);
-  }
-  if (answer.format === "date") parts.push("as YYYY-MM-DD");
-  if (answer.format === "date_time") parts.push("as an RFC 3339 date-time");
-  if (answer.format === "uri") parts.push("as an absolute URI");
-  return parts.length === 0 ? undefined : `Text ${parts.join(", ")}`;
 }
 
 function scalarPrefix(value: string, maximum: number): string {

@@ -856,12 +856,13 @@ exponent-notation variation); and **closed over the domain** — the wire
 alphabet *is* the domain, so a decimal binary64 cannot hold, `9007199254740993`,
 has no wire representation at all rather than one the runtime must detect and
 refuse. `FiniteNumber::from_wire` is the one authoritative parse, and
-`tui/src/protocol/number.ts` is the client's single conversion seam; every
-bound and every answer on both sides goes through them.
+`protocol/app-server/number.ts` is the clients' single conversion and reading
+seam, shared by the TUI and the Web console; every bound and every answer on
+both sides goes through them.
 
 The representation is internal to the Runtime Client protocol and the durable
-audit. A human never sees it — the TUI reads a decimal draft, validates it with
-`readNumberDraft`, and renders bounds as ordinary decimals — and an MCP server
+audit. A human never sees it — each client reads a decimal draft, validates it with
+the shared `readNumberDraft`/`readScalarAnswer` (machine-readable reasons each UI words itself), and renders bounds as ordinary decimals — and an MCP server
 never sees it either: `accept.content` carries the ordinary JSON number built
 from the same bits.
 
@@ -1425,17 +1426,29 @@ runtime/inbound.rs         ConversationInboundMailbox (per-conversation
                            process-local coordination contract over the
                            durable Pending Inbound Inbox): InboundSequence,
                            InboundItem, InboundBatch, MailboxError
-durable/inbox.rs           ConversationStore trait + domain types (InboundDraft,
-                           AcceptedInbound, PendingInboundItem, PendingBatch):
-                           the backend-independent acceptance/selection/adoption
-                           operations, plus the fused `commit_model_turn_start`
-                           contract (canonical User context + RequestSnapshot
-                           with frozen Effective System Prompt +
-                           ModelRequestStarted in one transaction)
-durable/sqlite.rs          SqliteConversationStore: the M8 SQLite backend
-                           (one semantic authority over Pending Inbound,
-                           Message Ledger, Surface revisions, Request
-                           Snapshots, Event Journal, and checkpoint metadata)
+durable/store.rs           ConversationStore: the one durable authority of a
+                           conversation, the union of the domain Store
+                           contracts (InboxStore, CanonicalStore,
+                           RequestStore, JournalStore, PublicationStore,
+                           ProjectionStore, ObservationStore,
+                           AuxiliaryStore) declared in
+                           durable/inbox.rs and durable/store/*.rs beside
+                           their vocabulary; RequestStore owns the fused
+                           `commit_model_turn_start` contract (canonical User
+                           context + RequestSnapshot with frozen Effective
+                           System Prompt + ModelRequestStarted in one
+                           transaction)
+durable/inbox.rs           InboxStore + Pending Inbound/Goal types (InboundDraft,
+                           AcceptedInbound, PendingInboundItem, PendingBatch),
+                           ConversationStoreBinding and the narrow inbound and
+                           interaction-audit capabilities
+durable/sqlite.rs          SqliteConversationStore: the M8 SQLite backend and
+                           its single connection/transaction owner; each
+                           domain contract is implemented in durable/sqlite/
+                           (schema, inbox, canonical, request, journal,
+                           publication, projection, observation, auxiliary)
+                           by helpers
+                           that run inside the caller's transaction
 runtime/continuation.rs   ProviderContinuationState boundary (OpenAI Responses
                            stored/stateless, Anthropic opaque state)
 message/content.rs         TextBlock, ImageReference, FileReference
@@ -1533,7 +1546,18 @@ tools/mcp/                MCP adapter: protocol-revision negotiation,
                            configured server runtime, paginated discovery,
                            list-change invalidation, canonical calls,
                            progress, cancellation, stdio
-                           protocol-corruption observation (`framing.rs`)
+                           protocol-corruption observation (`framing.rs`).
+                           One owner (`McpServerRuntime`, `runtime.rs`)
+                           extended by focused modules: `connect.rs`
+                           (generation construction), `invalidation.rs`
+                           (the one tools/list_changed sink both revision
+                           entry points feed), `generation.rs` (resource
+                           generations, leases, retirement), `invocation.rs`
+                           (MRTR orchestration), `request.rs`
+                           (`dispatch_owned_request`), `outcome.rs`,
+                           `task_driver.rs` (SEP-2663), `progress.rs`
+                           (router, leases, subscriptions), `result.rs`
+                           (materialization), `executor.rs`
 tools/python.rs           managed FastMCP package discovery, fingerprint-keyed
                            uv environment preparation, and synthesis of the
                            generic MCP server bindings (`python:<folder>`)
@@ -4570,7 +4594,23 @@ conversation_runtime.rs       ConversationRuntime: the conversation
                               inactive/running/draining/quiescent lifecycle
                               boundary, and the adapter
                               bootstrap handshake; publishes semantic
-                              observations
+                              observations. One owner and one coordinator
+                              lock; its inherent impls live in child
+                              modules by responsibility: bootstrap,
+                              admission, attempt, child, compaction,
+                              drain, durability, configuration,
+                              model_selection, controls, history,
+                              observer and probe (test hooks), each with
+                              its domain tests (<domain>/tests.rs)
+runtime/adoption.rs           native configuration-adoption contracts:
+                              PreparedConfiguration, AdoptionEligibility,
+                              AdoptionError, the AdmittedConfiguration an
+                              Attempt freezes, ConfigurationCut, and the
+                              one cache-impact rule
+runtime/resources.rs          immutable RuntimeResourceSnapshot
+                              generations; RuntimeConfiguration (execution
+                              bindings plus an inert AuthoredConfiguration)
+                              and ContextBinding
 runtime/observation.rs        the runtime-owned semantic observation
                               contract (Issue #61): ConversationObservation
                               (semantic source types only), the primary
@@ -4591,17 +4631,29 @@ runtime_client/types.rs        protocol version, cursor, attachment/request
                                envelope, method results, typed errors
 runtime_client/event.rs        RuntimeClientEvent (external vocabulary)
 runtime_client/snapshot.rs     RuntimeClientSnapshot read model
+observation/                   native bounded observation contracts:
+                               bounded value encoding, content locators,
+                               read cuts/frontiers, descriptor capture,
+                               source-prepared descriptors (transcript,
+                               Tool, interaction, status, Trace values and
+                               request source encoding) and the
+                               capability/resource/workflow read sources;
+                               runtime and storage depend only on these
 runtime_client/projection.rs   RuntimeClientProjection: the client read
-                               model linearization owner (fold, cursor
-                               allocation, bounded replay, subscribers)
-                               and the translation of semantic
-                               observations into the client vocabulary
+  (+ projection/)              model linearization owner (fold, cursor
+                               allocation, bounded replay, subscribers);
+                               children: lifecycle, observe/fold/journal/
+                               canonical, publication, subscription,
+                               read/read_domains/checkpoint_seed, views
 runtime_client/host.rs         RuntimeClientHost: the projection + control
-                               + attachment adapter over ConversationRuntime
+  (+ host/)                    + attachment adapter over ConversationRuntime
                                — attachment admission, snapshot/cursor
                                reads, event subscriptions, protocol
                                adaptation; it owns no canonical
-                               conversation/session/admission state
+                               conversation/session/admission state;
+                               children: construction/bootstrap/worker,
+                               sources/publication, read/checkpoint/
+                               history/agents, subscription, control
 runtime_client/attachment.rs   RuntimeAttachment: one control attachment
                                plus read-only inspection attachments,
                                RAII/explicit detach, request dispatch,

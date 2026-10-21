@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { RuntimeClientSnapshot } from '../../protocol/app-server/v51';
 import { composerPreferences } from '../src/app/composer/preferences';
 import { App } from '../src/app/App';
-import { isOutcomeUncertain } from '../src/client/app-server';
+import { isOutcomeUncertain } from '../src/client/errors';
 import { Server, snapshot, endpoint, interaction } from './fixture';
 let server: Server;
 beforeEach(() => { localStorage.clear(); server = new Server(); server.handlers.set('turn/cancel', request => ({type:'cancellation_accepted',attempt_id:request.method==='turn/cancel' ? server.snapshots.get(request.params.target.session_id)?.attempt?.attempt_id ?? 'attempt-A' : 'attempt-A'})); });

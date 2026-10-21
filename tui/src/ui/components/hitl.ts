@@ -78,7 +78,8 @@ import {
 import { hardWrapLossless } from "../text-wrap.ts";
 import { role, style } from "../theme.ts";
 import { windowAroundSelected, type PopupContent } from "./popup-frame.ts";
-import { QuestionnaireOverlay, requesterName } from "./questionnaire.ts";
+import { QuestionnaireOverlay } from "./questionnaire.ts";
+import { requesterName } from "./questionnaire-answers.ts";
 import {
   clipText,
   formatJson,

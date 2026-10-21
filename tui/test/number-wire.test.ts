@@ -23,7 +23,7 @@ import {
   finiteNumberDecimal,
   finiteNumberFromWire,
   finiteNumberToWire,
-} from "../src/protocol/number.ts";
+} from "../../protocol/app-server/number.ts";
 
 /**
  * The representative values every stage of the pipeline is proven against:

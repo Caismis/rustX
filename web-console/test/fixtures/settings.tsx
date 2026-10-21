@@ -7,7 +7,7 @@ import { createRoot } from 'react-dom/client';
 import { App } from '../../src/app/App';
 import { Server, endpoint, snapshot } from '../fixture';
 import { cfg3Application, cfg3Effective, cfg3Source } from '../cfg3-data';
-import { RpcFailure } from '../../src/client/app-server';
+import { RpcFailure } from '../../src/client/errors';
 import type { ConfigurationApplication, RuntimeClientEvent, SourceMutation } from '../../../protocol/app-server/v51';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';

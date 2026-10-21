@@ -178,7 +178,7 @@ test("actual app uses Send/Steer/Queue and never clears a newly typed draft afte
   h.editor.setText("typed during transport");
   h.transport.respond(first.id, { type: "inbound_accepted", message_id: "m1", inbound_sequence: "1" });
   await continuation(); assert.equal(h.editor.getExpandedText(), "typed during transport");
-  h.session.updateState(state => ({ ...state, attempt: { attemptId: "a", phase: { type: "running" }, turn: 1, foreground: [] } }));
+  h.session.applyNotification({ jsonrpc: "2.0", method: "session/event", params: { registration_id: registrationId(h.target), target: h.target, cursor: "1", event: { type: "attempt_started", attempt_id: "a", model: null, execution_settings: null } } });
   h.input("\r"); const steer = await nextRequest(h, "turn/steer", 0);
   h.transport.respond(steer.id, { type: "inbound_accepted", message_id: "m2", inbound_sequence: "2" }); await continuation();
   h.editor.setText("queue"); h.input("\t"); const queue = await nextRequest(h, "turn/start", 1);

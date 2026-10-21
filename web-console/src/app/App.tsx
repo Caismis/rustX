@@ -56,6 +56,7 @@ import { inspectionAcknowledger, RepairAcknowledgements } from './repair-notices
 
 import type { ChatViewport } from '../presentation/layout/ChatViewport';
 import { ComposerDraft } from './composer/draft';
+import { firstSubmissions } from './new-conversation/first-submit';
 
 const PREFERENCES = 'rustx-console-view-v2';
 function readPreferences(): { endpoint?: string; openViews: string[] } {
@@ -177,7 +178,7 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
     if (center.kind !== 'session') return;
     const currentState = client.getSnapshot();
     const view = selected ? currentState.views[selected] : undefined;
-    if (view && client.firstSubmissions.session(view.id) && !['admitted', 'discarded'].includes(client.firstSubmissions.session(view.id)!.phase)) return;
+    if (view && firstSubmissions(client).session(view.id) && !['admitted', 'discarded'].includes(firstSubmissions(client).session(view.id)!.phase)) return;
     if (!view || currentState.connection !== 'connected' || view.attachment !== 'attached' || view.attachmentIntent !== 'wanted' || view.modelMutation || view.snapshot?.shutting_down || view.snapshot?.durability_failure) return;
     return view;
   };
@@ -219,7 +220,7 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
     setOpenViews(preferences.openViews);
     if (preferences.openViews[0]) shell.send({ type: 'OPEN', destination: { kind: 'restore-session', sessionId: preferences.openViews[0], sidebar: false } });
     if (client.getSnapshot().connection === 'connected') for (const id of preferences.openViews.filter(id => id !== preferences.openViews[0])) {
-      if (!client.getSnapshot().views[id]?.target && (!client.firstSubmissions.session(id) || ['admitted', 'discarded'].includes(client.firstSubmissions.session(id)!.phase))) void client.attach(id).catch(() => {});
+      if (!client.getSnapshot().views[id]?.target && (!firstSubmissions(client).session(id) || ['admitted', 'discarded'].includes(firstSubmissions(client).session(id)!.phase))) void client.attach(id).catch(() => {});
     }
   }, [client, shell, endpoint, preferences, state.connection, settingsOpen]);
   useEffect(() => {

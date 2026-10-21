@@ -43,18 +43,19 @@
 //!
 //! # Backend independence
 //!
-//! [`inbox::ConversationStore`] declares the backend-independent semantic
-//! transitions of all six durable domains. [`sqlite::SqliteConversationStore`]
+//! [`ConversationStore`] declares the backend-independent semantic
+//! transitions of all six durable domains as the union of the domain
+//! contracts in [`store`] and [`inbox`]. [`sqlite::SqliteConversationStore`]
 //! is the M8 concrete backend. A future M11 `PostgreSQL` backend must provide
 //! the same observable contract. The abstraction level is deliberately the
 //! rustX domain transitions — never a generic repository/queue/CRUD frame.
 //!
 //! # Pending inbound linearization points
 //!
-//! 1. **Acceptance**: [`ConversationStore::accept_inbound`] commits the sequence
+//! 1. **Acceptance**: [`InboxStore::accept_inbound`] commits the sequence
 //!    allocation, the pending record, and any correlation/idempotency state
 //!    in one transaction. Success is reported only after that commit.
-//! 2. **Adoption**: [`ConversationStore::adopt_pending_batch`] atomically
+//! 2. **Adoption**: [`InboxStore::adopt_pending_batch`] atomically
 //!    reads current rows through the watermark, appends them to the canonical
 //!    Ledger/Surface, constructs their exact answer obligation, and removes
 //!    pending records. Its committed receipt is the only post-claim payload.
@@ -64,8 +65,8 @@
 //!
 //! The publication plane adds its own three (Issue #108): the provider outcome
 //! **P**, the publication terminal **U**
-//! ([`ConversationStore::commit_publication_terminal`]), and canonical
-//! acceptance **C** ([`ConversationStore::commit_canonical_publication`]),
+//! ([`PublicationStore::commit_publication_terminal`]), and canonical
+//! acceptance **C** ([`PublicationStore::commit_canonical_publication`]),
 //! ordered `P < U < C` and enforced by the store as `C => U => P`.
 
 pub mod auxiliary;
@@ -75,6 +76,7 @@ pub mod presentation;
 pub mod projection;
 pub mod reading;
 pub mod sqlite;
+pub mod store;
 pub mod trace;
 
 pub use auxiliary::{
@@ -82,17 +84,30 @@ pub use auxiliary::{
     AuxiliaryWriteFailure,
 };
 pub use inbox::{
-    AcceptedInbound, CanonicalMessagePage, ContributionEmissionLookup, ContributionEmissionRecord,
-    ConversationInboundCapability, ConversationInteractionAudit, ConversationStore,
-    ConversationStoreBinding, ConversationStoreError, DurableConversationHead, EventPage,
-    InboundDraft, LineageSeed, ModelTurnStartCommit, ModelTurnStartCommitDisposition, PendingBatch,
-    PendingInboundItem, RequestSnapshotPage, SurfaceUserMessageBoundary,
-    SurfaceUserMessageBoundaryPage, TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT, TRANSCRIPT_PAGE_LIMIT_MAX,
-    TranscriptCursor, TranscriptEntry, TranscriptItem, TranscriptPage,
-    interaction_audit_capability,
+    AcceptedInbound, AdoptedBatch, ConversationInboundCapability, ConversationInteractionAudit,
+    ConversationStoreBinding, GoalObservationReceipt, InboundDraft, InboxStore, PendingBatch,
+    PendingInboundItem, PendingInboundRef, PendingMutationOutcome, PendingObservationReceipt,
+    canonical_block, interaction_audit_capability,
 };
 #[cfg(test)]
 pub(crate) use sqlite::conversation_store_opens_on_this_thread;
 pub use sqlite::{SqliteConversationStore, conversation_store_open_count};
+pub use store::auxiliary::AuxiliaryStore;
+pub use store::canonical::{
+    CanonicalMessagePage, CanonicalObservationBatch, CanonicalRawToolArguments, CanonicalStore,
+    DurableConversationHead, InspectionSeed, LineageSeed, NativeTodoObservation,
+    SurfaceUserMessageBoundary, SurfaceUserMessageBoundaryPage, TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT,
+    TRANSCRIPT_PAGE_LIMIT_MAX, TranscriptCommitReceipt, TranscriptCursor, TranscriptEntry,
+    TranscriptItem, TranscriptPage, TranscriptSnapshotCut, TranscriptTool,
+};
+pub use store::journal::{EventPage, JournalStore};
+pub use store::observation::ObservationStore;
+pub use store::projection::ProjectionStore;
+pub use store::publication::{PublicationAuditReceipt, PublicationAuditSummary, PublicationStore};
+pub use store::request::{
+    ContributionEmissionLookup, ContributionEmissionRecord, ModelTurnStartCommit,
+    ModelTurnStartCommitDisposition, RequestSnapshotPage, RequestStore, StatusObservationSource,
+};
+pub use store::{ConversationStore, ConversationStoreError};
 
 pub mod response;

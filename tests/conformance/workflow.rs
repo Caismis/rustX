@@ -7,10 +7,11 @@
 //! Private child transcripts remain outside the single parent `ToolResult`.
 
 use crate::launch_fixture::LaunchFixture;
+use rustx::durable::{CanonicalStore, JournalStore, ObservationStore};
 use std::sync::Arc;
 
 use crate::common::provider_emulator::ProviderEmulator;
-use rustx::durable::{ConversationStore, SqliteConversationStore};
+use rustx::durable::SqliteConversationStore;
 use rustx::local_runtime::composition::{
     LocalConversationCore, LocalConversationRuntime, LocalRuntimeDependencies,
 };
@@ -607,7 +608,7 @@ impl Driver {
 
     async fn workflow_run_at(
         &self,
-        cut: &rustx::runtime_client::checkpoint::CheckpointReadCut,
+        cut: &rustx::observation::cut::CheckpointReadCut,
         item_offset: u64,
     ) -> rustx::runtime::workflow::read_model::WorkflowRunView {
         use base64::Engine as _;
@@ -659,7 +660,7 @@ impl Driver {
                 assert!(next < chunk.readable_end);
             } else {
                 assert_eq!(offset, chunk.readable_end);
-                return rustx::runtime_client::checkpoint::decode_domain_value(
+                return rustx::observation::bounded::decode_domain_value(
                     serde_json::from_slice(&bytes).unwrap(),
                 )
                 .unwrap();
@@ -731,7 +732,7 @@ impl Driver {
 
     async fn interaction_body(
         &self,
-        header: &rustx::runtime_client::snapshot::RuntimeClientInteractionHeader,
+        header: &rustx::observation::interaction::RuntimeClientInteractionHeader,
     ) -> rustx::runtime::InteractionRequest {
         use base64::Engine as _;
         let mut bytes = Vec::new();
@@ -783,7 +784,7 @@ impl Driver {
             }
         }
         let request: rustx::runtime::InteractionRequest =
-            rustx::runtime_client::checkpoint::decode_domain_value(
+            rustx::observation::bounded::decode_domain_value(
                 serde_json::from_slice(&bytes).unwrap(),
             )
             .unwrap();
@@ -794,13 +795,13 @@ impl Driver {
         assert_eq!(request.turn, header.turn);
         let kind = match &request.kind {
             rustx::runtime::InteractionKind::Questionnaire { .. } => {
-                rustx::runtime_client::snapshot::RuntimeClientInteractionKind::Questionnaire
+                rustx::observation::interaction::RuntimeClientInteractionKind::Questionnaire
             }
             rustx::runtime::InteractionKind::Review { .. } => {
-                rustx::runtime_client::snapshot::RuntimeClientInteractionKind::Review
+                rustx::observation::interaction::RuntimeClientInteractionKind::Review
             }
             rustx::runtime::InteractionKind::Approval { .. } => {
-                rustx::runtime_client::snapshot::RuntimeClientInteractionKind::Approval
+                rustx::observation::interaction::RuntimeClientInteractionKind::Approval
             }
         };
         assert_eq!(kind, header.kind);
@@ -970,10 +971,10 @@ impl Driver {
 
 fn workflow_interactions(
     published: &rustx::runtime_client::RuntimeClientProtocolEvent,
-) -> Vec<rustx::runtime_client::snapshot::RuntimeClientInteractionHeader> {
+) -> Vec<rustx::observation::interaction::RuntimeClientInteractionHeader> {
     let mut pending = Vec::new();
     for fact in published.event.facts() {
-        let headers: &[rustx::runtime_client::snapshot::RuntimeClientInteractionHeader] = match fact
+        let headers: &[rustx::observation::interaction::RuntimeClientInteractionHeader] = match fact
         {
             RuntimeClientEvent::InteractionPending { interaction } => {
                 std::slice::from_ref(interaction)
@@ -985,7 +986,7 @@ fn workflow_interactions(
         };
         for header in headers {
             if !pending.iter().any(
-                |old: &rustx::runtime_client::snapshot::RuntimeClientInteractionHeader| {
+                |old: &rustx::observation::interaction::RuntimeClientInteractionHeader| {
                     old.interaction == header.interaction
                 },
             ) {
@@ -1067,11 +1068,11 @@ struct WorkflowChildEvidence {
 fn child_failure_fields(
     store: &SqliteConversationStore,
     agent: &WorkflowChildEvidence,
-    cut: &rustx::runtime_client::checkpoint::CheckpointReadCut,
-    record: &rustx::runtime_client::trace::TraceRecord,
+    cut: &rustx::observation::cut::CheckpointReadCut,
+    record: &rustx::observation::trace::TraceRecord,
     budget: &mut usize,
 ) {
-    use rustx::runtime_client::trace::{TraceFieldKind, TraceFieldSource, TraceKind};
+    use rustx::observation::trace::{TraceFieldKind, TraceFieldSource, TraceKind};
     if !matches!(record.kind, TraceKind::Request | TraceKind::Attempt) {
         return;
     }

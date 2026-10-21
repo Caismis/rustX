@@ -1,6 +1,6 @@
 //! Cut-bound auxiliary audit export. This is inspection, never recovery input.
 use super::{ConversationCut, Record};
-use crate::durable::ConversationStore;
+use crate::durable::AuxiliaryStore;
 use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
 use crate::model::ModelRequestOwner;
 use crate::model::auxiliary::{AuxiliaryAuditCut, AuxiliaryRequestTerminal};
@@ -147,8 +147,10 @@ impl ConversationCut {
 
 #[cfg(test)]
 mod tests {
+    use crate::durable::AuxiliaryStore;
+    use crate::durable::ProjectionStore;
+    use crate::durable::SqliteConversationStore;
     use crate::durable::auxiliary::auxiliary_settlement_envelope;
-    use crate::durable::{ConversationStore, SqliteConversationStore};
     use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
     use crate::local_runtime::session::tests::open_catalog;
     use crate::model::ModelRequestOwner;

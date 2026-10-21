@@ -20,7 +20,7 @@ import { inspectionAcknowledger, RepairAcknowledgements } from '../../src/app/re
 import { Server, snapshot, childConversation } from '../fixture';
 import { cfg3Source, cfg3Effective } from '../cfg3-data';
 import { traceRecord, traceTool, requestDetail, toolDetail } from '../trace-fixture';
-import { RpcFailure } from '../../src/client/app-server';
+import { RpcFailure } from '../../src/client/errors';
 import type { CheckpointReadCut, Request, MessageBlock, GoalSnapshot, RuntimeClientTranscriptEntry } from '../../../protocol/app-server/v51';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
@@ -28,6 +28,7 @@ import '../../src/presentation/theme/design-platform.css';
 import '../../src/presentation/theme/shiki.css';
 import '../../src/presentation/theme/reset.css';
 import '../../src/app/console.css';
+import { firstSubmissions } from '../../src/app/new-conversation/first-submit';
 
 // Only the transport is controlled. App, navigation, first-submit owner, client,
 // Product Host admission and all presentation are the production implementations.
@@ -224,7 +225,7 @@ const handled = new Set<Request>(server.requests.filter(row => row.request.metho
     const view = server.client.getSnapshot().views[id];
     return { target: view?.target, cursor: view?.checkpoint?.cursor, revision: view?.checkpoint?.read_cut.revision, state: view?.observationState };
   },
-  operation: () => server.client.firstSubmissions.session('created'),
+  operation: () => firstSubmissions(server.client).session('created'),
   async release(method: Request['method'], failure?: string) {
     const request = server.requests.find(row => row.request.method === method && !handled.has(row.request))?.request;
     if (!request) throw Error(`No pending ${method}`);

@@ -1,4 +1,5 @@
 use super::*;
+use crate::durable::{JournalStore, ObservationStore};
 
 #[test]
 fn t10_t14_failed_workflow_append_does_not_release_uncommitted_source_revisions() {

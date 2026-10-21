@@ -1,10 +1,10 @@
 //! Finite Job controls, synchronized with explicit executor gates.
 
+use rustx::durable::{InboxStore, JournalStore};
 use std::sync::Arc;
 
 use super::super::support::domain_controls::{background_invocation, json_content};
 use super::super::{common, support};
-use rustx::durable::ConversationStore;
 use rustx::runtime::CancellationSignal;
 use rustx::tools::background::BackgroundDispatchOutcome;
 use rustx::tools::executor::ToolExecutor;

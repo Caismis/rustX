@@ -1,8 +1,9 @@
 use super::*;
+use crate::durable::{CanonicalStore, InboxStore, JournalStore, ObservationStore, ProjectionStore};
 
 fn bounded_tail(store: &dyn ConversationStore) -> CompletedResponseView {
     let cut = store.observation_read_cut().unwrap();
-    let mut page = super::super::super::snapshot::transcript_header_view(
+    let mut page = crate::observation::transcript::transcript_header_view(
         store.transcript_header_page(&cut, None, 32).unwrap(),
     );
     decorate_window(store, &mut page, cut.read.journal).unwrap();
@@ -36,7 +37,7 @@ fn opening_adoption_retry_is_identical_in_live_wire_and_fork_lineage_after_steer
     assistant(&store, "original-attempt", "closing-response");
     finish(&store, "original-attempt");
     let live = bounded_tail(&store);
-    let wire = crate::runtime_client::checkpoint::structural_value(&live).unwrap();
+    let wire = crate::observation::bounded::structural_value(&live).unwrap();
     assert_eq!(wire["retry_message_id"], "opening-input");
     assert_eq!(
         wire["retry_locator"],
@@ -62,11 +63,11 @@ fn opening_adoption_retry_is_identical_in_live_wire_and_fork_lineage_after_steer
     let fork = SqliteConversationStore::in_memory(fork_id).unwrap();
     fork.initialize_lineage(&seed).unwrap();
     let inherited = bounded_tail(&fork);
-    let inherited_wire = crate::runtime_client::checkpoint::structural_value(&inherited).unwrap();
+    let inherited_wire = crate::observation::bounded::structural_value(&inherited).unwrap();
     assert_eq!(inherited_wire["retry_locator"], wire["retry_locator"]);
     assert_eq!(inherited.origin, live.origin);
     let locator = inherited.retry_locator.unwrap();
-    let crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { position } =
+    let crate::observation::content::CanonicalContentLocator::ByLedgerPosition { position } =
         locator
     else {
         panic!("original numeric boundary")

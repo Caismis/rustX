@@ -99,22 +99,17 @@
 //! settling anything.
 
 pub mod agent_observation;
-pub mod agent_statistics;
 mod agent_trace;
 pub mod attachment;
 pub(crate) mod auxiliary;
-pub(crate) mod capability_source;
 pub mod checkpoint;
-pub mod content;
 pub(crate) mod domain;
 pub mod endpoint;
 pub mod event;
-pub mod goal;
 pub mod host;
 pub mod occupancy;
 pub mod projection;
 pub mod projection_history;
-pub(crate) mod resource_source;
 pub mod response;
 pub mod settings;
 pub mod snapshot;
@@ -129,7 +124,7 @@ pub(crate) mod test_sync;
 
 pub use attachment::RuntimeAttachment;
 pub use endpoint::RuntimeClientEndpoint;
-pub use event::{RuntimeClientAttemptFailure, RuntimeClientEvent, RuntimeClientOutcome};
+pub use event::{RuntimeClientEvent, RuntimeClientOutcome};
 pub use host::{
     EventDelivery, EventSubscription, HostConstructionError, RuntimeClientHost,
     RuntimeClientHostConfig,
@@ -139,17 +134,9 @@ pub use host::{
 // the type never lives under the projection read model.
 pub use crate::runtime::request_history::{RequestHistory, RequestHistoryError};
 pub use snapshot::{
-    AgentStatusOpportunityView, AgentStatusView, CapabilitySourceDescriptor,
-    CapabilitySourceStateView, CapabilitySourceView, CapabilityView, ForegroundToolExecution,
-    ForegroundToolState, FreshInboundOpportunityView, InFlightAssistantMessage, InFlightBlock,
-    InboundDiagnostics, InboundDrainView, InboundItemView, PostToolBatchOpportunityView,
-    RuntimeClientAgent, RuntimeClientAttempt, RuntimeClientAttemptPhase,
-    RuntimeClientCompactionView, RuntimeClientContextFile, RuntimeClientContextView,
-    RuntimeClientJob, RuntimeClientModelName, RuntimeClientResourcesView, RuntimeClientSkill,
-    RuntimeClientSnapshot, RuntimeClientStatusSection, RuntimeClientTodoStatusTask,
-    RuntimeClientTool, RuntimeClientTranscriptCursor, RuntimeClientTranscriptEntry,
-    RuntimeClientTranscriptInteractionRequested, RuntimeClientTranscriptInteractionSettled,
-    RuntimeClientTranscriptItem, RuntimeClientTranscriptPage, RuntimeDurabilityFailure,
+    InFlightAssistantMessage, InFlightBlock, InboundDiagnostics, InboundDrainView, InboundItemView,
+    RuntimeClientAgent, RuntimeClientAttempt, RuntimeClientAttemptPhase, RuntimeClientContextView,
+    RuntimeClientJob, RuntimeClientModelName, RuntimeClientSnapshot, RuntimeDurabilityFailure,
 };
 pub use types::{
     AttachmentId, RUNTIME_CLIENT_PROTOCOL_VERSION, RequestId, RuntimeClientCursor,
@@ -157,13 +144,9 @@ pub use types::{
     RuntimeClientResult,
 };
 
-pub(crate) mod structural_json;
-
 pub(crate) mod state_observation;
 
 pub(crate) mod interaction_observation;
-
-mod preflight;
 
 mod pending_observation;
 
@@ -171,8 +154,5 @@ pub(crate) mod attempt_identity;
 pub mod delivery;
 pub(crate) mod history_observation;
 pub(crate) mod journal_observation;
-pub mod turn;
-
-pub(crate) mod workflow_source;
 
 pub(crate) mod audit_observation;

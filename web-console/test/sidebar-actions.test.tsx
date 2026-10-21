@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { App } from '../src/app/App';
 import { SessionPins } from '../src/workspaces/session-pins';
-import { RpcFailure } from '../src/client/app-server';
+import { RpcFailure } from '../src/client/errors';
 import { Server, endpoint } from './fixture';
 
 let server: Server | undefined;

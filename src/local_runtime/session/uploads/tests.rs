@@ -1,6 +1,7 @@
 #![allow(clippy::too_many_lines)] // Each test follows one durable lifecycle.
 use super::*;
-use crate::durable::{ConversationStore, SqliteConversationStore};
+use crate::durable::CanonicalStore;
+use crate::durable::SqliteConversationStore;
 use crate::local_runtime::session::{SessionPersistentState, deletion::SessionDeleteResult};
 use crate::local_runtime::session_controller::SessionController;
 use crate::message::types::{

@@ -16,11 +16,11 @@ import { CommandDispatcher } from "../src/commands/dispatcher.ts";
 import {
   SourceRepairAnnouncements,
   renderRepairInspection,
-  retainSource,
   repairNotice,
   type SourceRepairObservation,
 } from "../src/presentation/source-repairs.ts";
 import type { ConfigRepairReceipt, SourceTarget } from "../src/protocol/app-server.ts";
+import { retainSourceRepair, sourceRepairDecision } from "../../protocol/app-server/source-repair.ts";
 import type { AppServerSession } from "../src/app-server/session.ts";
 import { SourceRepairStatus } from "../src/ui/components/source-repair-status.ts";
 import { NO_DIAGNOSTICS, SERVER_CAPABILITIES, harness, nextRequest } from "./support/app-server-harness.ts";
@@ -760,9 +760,14 @@ it("EVICT-07 overlapping reads resolved in reverse order after eviction never ov
 });
 
 it("BOUND-05 65 Workspaces without the User keep exactly 64, the oldest forgotten", async () => {
-  const sources = new Map<string, number>();
-  for (let index = 0; index < 65; index++) retainSource(sources, `workspace:/work/w${index}`, index);
+  let sources = new Map<string, number>();
+  let forgotten: number | undefined;
+  for (let index = 0; index < 65; index++) {
+    const step = retainSourceRepair(sources, `workspace:/work/w${index}`, index);
+    sources = new Map(step.retained); forgotten = step.forgotten;
+  }
   assert.equal(sources.size, 64);
+  assert.equal(forgotten, 0);
   assert.ok(!sources.has("workspace:/work/w0"));
   const { transport, host } = await connect(AUTHORITY);
   churn(transport, 1, 65);
@@ -1189,4 +1194,15 @@ it("TUI-SEQ-04 a newer observation of the same receipt refreshes its retention",
   churn(transport, 71, 1);
   assert.equal(held(host, WORKSPACE)?.sequence, "70");
   assert.equal(held(host, { kind: "workspace", directory: "/work/churn2" }), undefined, "the least recently observed went");
+});
+
+it("SHARED one ordering rule decides apply, ignore and recover for every client", () => {
+  const level = (sequence: string, id?: string, target: SourceTarget = WORKSPACE) => ({ target, sequence, receipt: id === undefined ? undefined : receipt({ id }) });
+  assert.equal(sourceRepairDecision(level("2", "a"), level("3", "a"), undefined, "0"), "apply");
+  assert.equal(sourceRepairDecision(level("3", "a"), level("2", "b"), undefined, "0"), "ignore");
+  assert.equal(sourceRepairDecision(level("3", "a"), level("3", "a"), undefined, "0"), "ignore");
+  assert.equal(sourceRepairDecision(level("3", "a"), level("3", "b"), undefined, "0"), "recover");
+  assert.equal(sourceRepairDecision(level("3", "a"), level("3", "b"), "0", "0"), "ignore", "a read never recovers itself");
+  assert.equal(sourceRepairDecision(undefined, level("4"), undefined, "5"), "recover", "an absent source older than the frontier is ambiguous");
+  assert.equal(sourceRepairDecision(undefined, level("4", undefined, { kind: "user" }), undefined, "5"), "apply", "the User is never forgotten");
 });

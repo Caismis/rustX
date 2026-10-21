@@ -112,7 +112,7 @@ it('paging completion repairs newly loaded interests after a terminal notificati
   const old = entry(1, { state: 'running' });
   server.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: server.target('A'), cursor: '1', event: { type: 'trace_changed' } } });
   const live = await server.waitFor('session/trace', 2);
-  const liveWork = server.client['traceReads'].get('A')!.work;
+  const liveWork = server.client['traces']['traceReads'].get('A')!.work;
   server.socket.success(live, { type: 'trace', page: {read_cut:rootCut(), records: [entry(100), entry(101)], next_cursor: 'trace:100', updates: [{
     fields:old.fields,collections:old.collections,id: old.id, location: old.location, state: 'completed', timing: old.timing, attachments: [], truncated: false,
   }] } });

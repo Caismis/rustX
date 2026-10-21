@@ -27,7 +27,7 @@ export class AgentTraceReader {
     return this.fieldReader={
       value:async(cut,field,offset,owns)=>{valid(cut,owns);const result=await this.client.request({method:'conversation/checkpointValueRead',params:{target:this.proof.target,agent_id:this.agentId,cut,domain:field.domain,item_offset:field.item_offset,path:field.path,offset,max_bytes:65536}},'checkpoint_value_chunk',undefined,()=>this.current()&&owns());valid(cut,owns);return result.chunk;},
       page:async(cut,domain,offset,owns)=>{valid(cut,owns);const result=await this.client.request({method:'conversation/checkpointPage',params:{target:this.proof.target,agent_id:this.agentId,cut,domain,offset,limit:32}},'checkpoint_page',undefined,()=>this.current()&&owns());valid(cut,owns);return result.page;},
-      content:async(cut,reference,offset,owns)=>{valid(cut,owns);if(reference.conversation_id!==cut.conversation_id)throw new Error('Child Trace content source changed.');return this.client.readContent(this.proof.target,this.agentId,reference,offset,()=>this.current()&&owns());},
+      content:async(cut,reference,offset,owns)=>{valid(cut,owns);if(reference.conversation_id!==cut.conversation_id)throw new Error('Child Trace content source changed.');return this.client.reads.readContent(this.proof.target,this.agentId,reference,offset,()=>this.current()&&owns());},
     };
   }
   private pageCut(page:TraceCache['page']){const cut=standaloneTraceCut(page,this.scope.child_conversation_id,this.scope.activation_id);this.validateCut(cut);}
@@ -138,7 +138,7 @@ export class AgentTraceReader {
       const detail=inlineTraceDetail(result.page,id),page=retainedTraceDetailPage(result.page,id);
       if(page)this.validateCut(page.read_cut);
       const reader=page?bindTraceDetailReader(this.fields,page,()=>this.current()&&this.cache.epoch===epoch&&this.cache.details[id]?.page===page):undefined;
-      if (current()) this.publish(completeTraceDetail(this.cache,id,epoch,detail,undefined,result.page.items.flatMap(item=>item.content),(ref,offset,ownsView)=>this.client.readContent(this.proof.target,this.agentId,ref,offset,()=>ownsView()&&this.current()&&this.cache.epoch===epoch),page,reader));
+      if (current()) this.publish(completeTraceDetail(this.cache,id,epoch,detail,undefined,result.page.items.flatMap(item=>item.content),(ref,offset,ownsView)=>this.client.reads.readContent(this.proof.target,this.agentId,ref,offset,()=>ownsView()&&this.current()&&this.cache.epoch===epoch),page,reader));
     } catch (cause) { if (current()) this.publish(completeTraceDetail(this.cache, id, epoch, undefined, String(cause))); }
   };
 }

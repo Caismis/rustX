@@ -1310,9 +1310,17 @@ async fn a_rejected_model_update_changes_nothing() {
     )
     .await;
     let (attachment, subscription) = attach(&host);
-    receive_until(&host, &subscription, |event| event.event.facts().iter().any(|fact| {
-        matches!(fact, RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged { eligibility: rustx::local_runtime::configuration::application::AdoptionEligibility::Eligible })
-    })).await;
+    receive_until(&host, &subscription, |event| {
+        event.event.facts().iter().any(|fact| {
+            matches!(
+                fact,
+                RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged {
+                    eligibility: rustx::runtime::adoption::AdoptionEligibility::Eligible
+                }
+            )
+        })
+    })
+    .await;
     let (_, before) = host
         .checkpoint()
         .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
