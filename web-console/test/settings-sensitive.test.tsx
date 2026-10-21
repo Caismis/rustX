@@ -113,7 +113,7 @@ it('S1-15 a Provider credential is never read back from a shadowed definition', 
   const provider = screen.getByRole('form', { name: 'Provider transport' });
   const form = within(provider);
   expect(within(dialog).getByText(/Native effective Provider transport/).textContent).toContain('Literal secret (redacted)');
-  const endpoint = form.getByLabelText('Endpoint') as HTMLInputElement;
+  const endpoint = form.getByLabelText('Base URL') as HTMLInputElement;
   expect(endpoint.value).toBe('');
   expect((form.getByRole('button', { name: 'Save Provider transport' }) as HTMLButtonElement).disabled).toBe(true);
   const transactionsBefore = retained(s);
@@ -133,7 +133,7 @@ it('S1-15 a Provider credential is never read back from a shadowed definition', 
   expect(screen.queryByRole('listbox')).toBeNull();
   expect(screen.getByRole('dialog', { name: 'Settings' })).toBe(dialog);
   expect(screen.getByRole('form', { name: 'Provider transport' })).toBe(provider);
-  expect(form.getByLabelText('Endpoint')).toBe(endpoint);
+  expect(form.getByLabelText('Base URL')).toBe(endpoint);
   expect(endpoint.value).toBe('');
   expect((form.getByRole('button', { name: 'Save Provider transport' }) as HTMLButtonElement).disabled).toBe(true);
   expect(document.body.innerHTML).not.toContain(SENTINEL);
@@ -174,7 +174,7 @@ it('S2-12 the form library opens no devtools channel, so a typed secret is never
     await openResourceRow('transport');
     fireEvent.click(screen.getByRole('button', { name: /Credential source$/ }));
     fireEvent.click(await screen.findByRole('option', { name: 'Enter a literal secret' }));
-    fireEvent.change(screen.getByLabelText('New literal credential'), { target: { value: SENTINEL } });
+    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: SENTINEL } });
     // The draft legitimately holds the secret in the actor-owned transaction.
     await waitFor(() => expect(retained(s)).toContain(SENTINEL));
     expect(observed).toEqual([]);

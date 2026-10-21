@@ -84,7 +84,7 @@ export async function choose(scope: Locator, label: string, option: string) {
  * (Use global default) is an ordinary dialog; a real deletion is an alert
  * dialog. Both are titled by the question they ask. */
 export async function confirmSettingsAction(page: Page, label: string) {
-  await page.getByRole('dialog', { name: 'Settings', exact: true }).getByRole('button', { name: label, exact: true }).click();
+  await page.getByRole('button', { name: label, exact: true }).click();
   const dialog = page.getByRole(label.startsWith('Use global default') ? 'dialog' : 'alertdialog', { name: /\?$/ });
   await expect(dialog).toBeVisible();
   await dialog.getByRole('button', { name: label, exact: true }).click();
@@ -158,7 +158,7 @@ export async function openEmptySession(page: Page, fixture: { endpoint: string; 
 
 /** Reach advanced model authoring through the landing page disclosures. */
 export async function expandModelAuthoring(page: Page) {
-  for (const name of ['New Provider', 'Default model for new Sessions']) {
+  for (const name of ['Default model for new Sessions']) {
     const toggle = page.getByRole('button', { name, exact: true, expanded: false });
     if (await toggle.isVisible()) await toggle.click();
   }

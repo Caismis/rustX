@@ -1195,7 +1195,7 @@ imports and additional-source provenance are recorded in `source-inventory.json`
 | `packages/client/ui-primitives/src/RiskConfirmation.module.css` | `src/presentation/primitives/RiskConfirmation.module.css` |
 | `packages/client/ui-chat/src/client/chat/TurnProcessNodeView.tsx` | `src/presentation/agent/TurnProcess.tsx` |
 | `packages/client/ui-chat/src/client/chat/TurnProcessNodeView.module.css` | `src/presentation/agent/TurnProcess.module.css` |
-| `packages/client/ui-settings-models/src/client/ModelsSection.module.css` | `src/presentation/settings/ModelsCards.module.css` |
+| `packages/client/ui-settings-models/src/client/ModelsSection.module.css` | Historical card stylesheet removed by the 2026-10-22 native provider split-panel update below. |
 | `packages/client/ui-primitives/src/TerminalBlock.tsx` | `src/presentation/primitives/TerminalBlock.tsx` |
 | `packages/client/ui-primitives/src/TerminalBlock.module.css` | `src/presentation/primitives/TerminalBlock.module.css` |
 | `packages/client/ui-primitives/src/DiffBlock.tsx` | `src/presentation/primitives/DiffBlock.tsx` |
@@ -4053,3 +4053,49 @@ Session uncertainty and storage failures keep persistent expandable recovery,
 and native terminal model errors retain their transcript position. Structured
 wire diagnostics stay with their native owners instead of being JSON banners.
 No Harness connection, request, store or runtime implementation is imported.
+
+## Settings appearance and model-provider layout (2026-10-22)
+
+Inspected the sibling DeepSeek Harness checkout at
+`687f282e8625c6b8d11ff58211a90524be2e4317` (`ui-theme/AppearanceRow`), and
+ZCode at `29628c9acdb81b703bbd4080c207a0e7ce5e276e`:
+
+- `packages/ui/src/settings/model-provider-section/SectionLayout.tsx` and
+  `Navigation.tsx`: bordered provider navigation/detail split, compact selected
+  rows, contextual model list and resource actions.
+- `ProviderModelMetadataDialog.tsx`, `ModelEditorAdvanced.tsx` and
+  `ProviderModelMetadataDialogActions.tsx`: basic fields followed by advanced
+  disclosure, a scrolling body and a persistent title/action footer.
+- `ApiKeyInput.tsx` and `components/ui/dialog.tsx`: explicit secret visibility
+  and bounded dialog geometry.
+
+ZCode is an inspected design reference; no ZCode implementation, assets,
+framework components or runtime are copied. The implementation uses rustX's
+existing React Aria/Base UI primitives and Harness theme tokens. Existing
+source-derived native Model/Profile controls move to `ModelFields.tsx`; their
+MIT attribution and immutable source inventory remain. The obsolete
+`ModelsCards.module.css` and its source record are removed.
+
+The appearance choices use three equal grid columns even in the narrow Settings
+content area, as requested. Models gets a wider desktop panel for its second
+navigation column; mobile uses a horizontal provider list. The model editor
+keeps the native unit's complete value, including profiles, request parameters
+and compatibility, and closes its fields when native authority is unavailable.
+Scope ownership, exact revision writes, durable drafts and redacted credentials
+remain owned by the existing configuration actors.
+
+Intentional native differences: protocol/API format belongs to each Model,
+not a Provider; supported capabilities are text/image/file input and output,
+tool calls, reasoning, Model Profiles and native request parameters. Unsupported
+provider enablement, Smart configuration, ZCode service presets and capabilities
+are not presented. Add first chooses the stable configuration name, separately
+from the Model ID sent to a provider. Opening, filtering, inspecting, cancelling,
+resetting and revealing a newly entered API Key create no native configuration
+write.
+
+Validation covers single-row themes, both color schemes, desktop and 390px
+layouts, Chinese labels, model field focus, advanced capability chips, reset and
+retained drafts, footer visibility, provider creation/secret visibility,
+configuration authority loss, existing native CAS/secret/scope contracts and
+real App Server Provider/Model writes. Browser plugin not available; rendered
+checks use the repository's pinned Playwright Chromium container.

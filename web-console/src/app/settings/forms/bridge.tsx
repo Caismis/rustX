@@ -285,11 +285,18 @@ export function useUnitEditing<T>({ authored, authoredPresent = authored !== und
  *
  * The frame renders the actions; it never owns them. Every one of them is a
  * message to the unit's transaction actor. */
-function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice, children }: {
+function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice, children, presentation, onCancel }: {
   title: string; unit: UnitEditing<T>; redacted?: boolean; removable: boolean;
   removalNotice?: ReactNode; children: ReactNode;
+  presentation?: 'resource' | 'dialog'; onCancel?: () => void;
 }) {
   const tx = useTranslation();
+  // Portaled editors do not inherit the page fieldset's disabled state.
+  // Use the same authoritative readiness facts for their fields and actions.
+  const actor = useSettingsActor();
+  const availability = useSelector(actor, snapshot => snapshot.context.connection !== 'connected' ? 'offline'
+    : snapshot.context.readError ? 'failed' : !snapshot.context.observation ? 'loading' : undefined);
+  const unavailable = availability !== undefined;
   const workspace = unit.scope === 'workspace';
   /** The unit's own card: the region that owns its in-flight mutation and
    * presents the outcome. A confirmed removal submits, which closes every
@@ -306,10 +313,26 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
   // that shadows nothing is a real deletion and is named as one.
   const restoresInherited = workspace && (unit.definition === undefined || unit.shadowed !== undefined);
   const owner = workspace ? tx('settings:extension-detail.workspace') : tx('settings:extension-detail.user');
-  return <UnitReset.Provider value={unit.resets}><form ref={card} tabIndex={-1} aria-label={title} className={css.unit} data-definition={unit.definition} data-draft={unit.draft || undefined}
+  const removal = removable && unit.authoredPresent && (restoresInherited
+          // A Workspace removal is inheritance, not destruction: it removes the
+          // unit this Workspace authors, through exact CAS, and the native
+          // inherited value becomes effective again. The effective resource
+          // survives, so this is never presented as deleting it.
+          ? <span data-removal="override-removal"><ConfirmAction tone="restore" label={tx('settings:bridge.use-global-default-value', { p0: title })} triggerText={presentation ? tx('settings:models.restore') : undefined} disabled={!unit.admitted}
+            title={tx('settings:bridge.use-the-global-default-for-value', { p0: title })} confirm={tx('settings:bridge.use-global-default-value', { p0: title })}
+            description={<><p>{tx('settings:bridge.this-removes-the-semantic-unit-this-workspace-authors-through-ex')}</p><p>{tx('settings:bridge.nothing-is-removed-from-the-global-source-and-no-other-scope-is')}</p></>}
+            settle={card} onConfirm={() => unit.submit(true)} /></span>
+          // Otherwise the removal really removes this scope's authored unit.
+          : <span data-removal="authored-removal"><ConfirmAction tone="destructive" label={tx('settings:bridge.remove-value', { p0: title })} triggerText={presentation ? tx('settings:copy.delete') : undefined} disabled={!unit.admitted}
+            title={tx('settings:bridge.remove-value-from-value-configuration', { p0: title, p1: owner })} confirm={tx('settings:bridge.remove-value', { p0: title })}
+            description={<><p>{tx('settings:bridge.this-removes-the-value-this')}{' '}{owner} {tx('settings:bridge.source-authors-through-exact-cas-on-its-current-revision')}</p>{removalNotice ?? <p>{tx('settings:bridge.the-native-default-for-this-unit-applies-once-it-is-absent')}</p>}</>}
+            settle={card} onConfirm={() => unit.submit(true)} /></span>);
+  return <UnitReset.Provider value={unit.resets}><form ref={card} tabIndex={-1} aria-label={title} className={`${css.unit}${presentation ? ` ${presentation === 'dialog' ? css.unitDialog : css.unitResource}` : ''}`} data-definition={unit.definition} data-draft={unit.draft || undefined}
     data-authored-value={unit.definition === 'authored' ? unit.unparsed ? 'unparsed' : 'parsed' : undefined}
     onSubmit={event => { event.preventDefault(); unit.submit(); }}>
-    <fieldset disabled={unit.busy}><legend>{title}</legend>
+    <fieldset disabled={unit.busy || unavailable}><legend>{title}</legend>
+      <div className={presentation === 'dialog' ? css.unitBody : undefined}>
+      {presentation === 'dialog' && availability && <p role={availability === 'loading' ? 'status' : 'alert'} className={css.hint}>{tx(`settings:models.authority-${availability}`)}</p>}
       {unit.configUnit && unit.facts.authored.state !== 'unavailable' && <>
         {unit.facts.authored.state === 'invalid' && <p role="alert" className={css.error}>{tx('settings:bridge.authored-source-is-invalid')}{' '}{unit.facts.authored.diagnostic}</p>}
         {unit.facts.effective.state === 'invalid' && <p role="alert" className={css.error}>{tx('settings:bridge.native-effective-resolution-failed')}{' '}{unit.facts.effective.diagnostic}</p>}
@@ -339,8 +362,10 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
           above the actions, which close the card. */}
       {unit.committed && <p role="status">{tx('settings:bridge.saved-native-application-proceeds-automatically')}</p>}
       <UnitOutcomeNotice title={title} outcome={unit.outcome} />
+      {presentation === 'dialog' && removal && <div className={css.unitRemoval}>{removal}</div>}
+      </div>
       <div className={css.actions}>
-        <Button variant="primary" type="submit" disabled={!unit.draft || !unit.admitted}>{tx('settings:bridge.save')}{' '}{title}</Button>
+        <Button variant="primary" type="submit" aria-label={`${tx('settings:bridge.save')} ${title}`} disabled={!unit.draft || !unit.admitted}>{tx('settings:bridge.save')}{!presentation && <> {title}</>}</Button>
         {/* Authoring an absent unit is always an explicit gesture, never
             something rendering it does. For a Workspace it is an override of
             the inherited value; for User it starts this scope's own authored
@@ -349,25 +374,14 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
         {unit.override && <Button type="button" variant="primary"
           title={tx('settings:bridge.begin-a-workspace-definition-of-value-from-the-inherited-one-not', { p0: title })}
           disabled={unit.awaitingObservation} onClick={unit.override}>{tx('settings:bridge.override')}{' '}{title} {tx('settings:bridge.in-this-workspace')}</Button>}
-        {unit.configUnit && !unit.overriding && <Button type="button" disabled={unit.awaitingObservation}
+        {unit.configUnit && !unit.overriding && (!presentation || unit.inheritance) && <Button type="button" disabled={unit.awaitingObservation}
+          aria-label={`${workspace ? tx('settings:bridge.override') : tx('settings:bridge.author')} ${title}`}
           title={workspace ? tx('settings:bridge.author-this-unit-in-this-workspace-nothing-is-written-until-you') : tx('settings:bridge.author-this-unit-in-this-source-nothing-is-written-until-you-sav')}
-          onClick={() => unit.edit(unit.displayed)}>{workspace ? tx('settings:bridge.override') : tx('settings:bridge.author')} {title}</Button>}
-        {removable && unit.authoredPresent && (restoresInherited
-          // A Workspace removal is inheritance, not destruction: it removes the
-          // unit this Workspace authors, through exact CAS, and the native
-          // inherited value becomes effective again. The effective resource
-          // survives, so this is never presented as deleting it.
-          ? <span data-removal="override-removal"><ConfirmAction tone="restore" label={tx('settings:bridge.use-global-default-value', { p0: title })} disabled={!unit.admitted}
-            title={tx('settings:bridge.use-the-global-default-for-value', { p0: title })} confirm={tx('settings:bridge.use-global-default-value', { p0: title })}
-            description={<><p>{tx('settings:bridge.this-removes-the-semantic-unit-this-workspace-authors-through-ex')}</p><p>{tx('settings:bridge.nothing-is-removed-from-the-global-source-and-no-other-scope-is')}</p></>}
-            settle={card} onConfirm={() => unit.submit(true)} /></span>
-          // Otherwise the removal really removes this scope's authored unit.
-          : <span data-removal="authored-removal"><ConfirmAction tone="destructive" label={tx('settings:bridge.remove-value', { p0: title })} disabled={!unit.admitted}
-            title={tx('settings:bridge.remove-value-from-value-configuration', { p0: title, p1: owner })} confirm={tx('settings:bridge.remove-value', { p0: title })}
-            description={<><p>{tx('settings:bridge.this-removes-the-value-this')}{' '}{owner} {tx('settings:bridge.source-authors-through-exact-cas-on-its-current-revision')}</p>{removalNotice ?? <p>{tx('settings:bridge.the-native-default-for-this-unit-applies-once-it-is-absent')}</p>}</>}
-            settle={card} onConfirm={() => unit.submit(true)} /></span>)}
-        {unit.intent && <Button type="button" onClick={unit.discard}>{tx('settings:bridge.discard-draft')}</Button>}
+          onClick={() => unit.edit(unit.displayed)}>{workspace ? tx('settings:bridge.override') : tx('settings:bridge.author')}{!presentation && <> {title}</>}</Button>}
+        {presentation !== 'dialog' && removal}
+        {(unit.intent || presentation === 'dialog') && <Button type="button" disabled={!unit.intent} onClick={unit.discard}>{presentation === 'dialog' ? tx('settings:models.reset-form') : tx('settings:bridge.discard-draft')}</Button>}
         {unit.reviewNeeded && <Button type="button" onClick={unit.review}>{tx('settings:bridge.use-reviewed-revision')}</Button>}
+        {onCancel && <Button type="button" onClick={onCancel}>{tx('settings:aria.cancel')}</Button>}
       </div>
     </fieldset>
   </form></UnitReset.Provider>;
@@ -453,9 +467,10 @@ export function UnitForm<T>({ title, children, removable = true, removalNotice, 
  *    the transaction owns; this component never calls a native operation.
  *
  * There is therefore exactly one value called the draft, and the actor owns it. */
-export function TypedUnitForm<T>({ title, children, removable = true, removalNotice, ...options }: UnitOptions<T> & {
+export function TypedUnitForm<T>({ title, children, removable = true, removalNotice, presentation, onCancel, ...options }: UnitOptions<T> & {
   title: string; children: (form: TypedUnitForm<T>) => ReactNode;
   removable?: boolean; removalNotice?: ReactNode;
+  presentation?: 'resource' | 'dialog'; onCancel?: () => void;
 }) {
   const unit = useUnitEditing(options);
   // The value this form last pushed into the transaction actor. Comparing the
@@ -489,7 +504,7 @@ export function TypedUnitForm<T>({ title, children, removable = true, removalNot
     reflected.current = unit.displayed;
     form.reset(unit.displayed);
   }, [form, unit.displayed]);
-  return <UnitShell title={title} unit={unit} redacted={options.redacted} removable={removable} removalNotice={removalNotice}>
+  return <UnitShell title={title} unit={unit} redacted={options.redacted} removable={removable} removalNotice={removalNotice} presentation={presentation} onCancel={onCancel}>
     {children(form)}
   </UnitShell>;
 }

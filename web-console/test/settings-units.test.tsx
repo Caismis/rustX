@@ -37,7 +37,7 @@ function catalogSource(scope: SourceScope, document: Record<string, unknown>) {
 /** The Models page focused on one Model's detail, which is where a Model's
  * complete typed contract is authored. */
 const modelDetail = (source: SourceSettings, scope: SourceScope, revision: string, id: string) =>
-  <ModelsPage source={source} scope={scope} revision={revision} models={[]} profiles={{}} focus={{ kind: 'model', id }} onFocus={noop} />;
+  <ModelsPage source={source} scope={scope} revision={revision} models={[]} profiles={{}} focus={{ kind: 'model', id }} onFocus={noop} onRefresh={noop} />;
 /** The Tools & Permissions page, bound to one authored `rustx.toml`. */
 const toolsPage = (source: SourceSettings, document: RuntimeLayer, scope: SourceScope, revision: string) =>
   <ToolsPage source={source} document={document} scope={scope} revision={revision} />;
@@ -48,7 +48,7 @@ it('preserves complete Model replacement, profiles and all compatibility fields'
   const { writes: write } = await renderEditor(modelDetail(source, 'workspace', 'exact', 'main'), { source, context: source });
   // One unrelated field changes; everything else must survive the complete
   // object replacement untouched.
-  fireEvent.change(screen.getByLabelText('Wire model identity'), { target: { value: 'new-wire' } });
+  fireEvent.change(screen.getByLabelText('Model ID'), { target: { value: 'new-wire' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save Model main' }));
   await waitFor(() => expect(write).toHaveBeenCalledWith({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: { ...model, id: 'new-wire' } } }, 'exact'));
   await confirmAction('Use global default Model main');
@@ -185,7 +185,7 @@ it('replaces default model intent and project guidance as independent native uni
   // Agent page: two user tasks, and two independent native semantic units.
   const source = catalogSource('workspace', { agent: { model: { model: 'main', request_params: { temperature: .4 } } } });
   const { writes: write, rerender } = await renderEditor(
-    <ModelsPage source={source} scope="workspace" revision="root-r1" models={['main', 'summary']} profiles={{ main: ['deep', 'quick'] }} onFocus={noop} />,
+    <ModelsPage source={source} scope="workspace" revision="root-r1" models={['main', 'summary']} profiles={{ main: ['deep', 'quick'] }} onFocus={noop} onRefresh={noop} />,
     { source, context: source });
   fireEvent.click(screen.getByRole('button', { name: 'Default model for new Sessions' }));
   const model = within(screen.getByRole('form', { name: 'Default model' }));
@@ -219,7 +219,7 @@ it.each(['default', 'named Agent'] as const)('%s preserves and edits the complet
   let write!: Awaited<ReturnType<typeof renderEditor>>['writes'];
   if (owner === 'default') {
     const source = catalogSource('workspace', { agent: { model } });
-    ({ writes: write } = await renderEditor(<ModelsPage source={source} scope="workspace" revision="r1" models={models} profiles={profiles} onFocus={noop} />, { source, context: source }));
+    ({ writes: write } = await renderEditor(<ModelsPage source={source} scope="workspace" revision="r1" models={models} profiles={profiles} onFocus={noop} onRefresh={noop} />, { source, context: source }));
   } else {
     const source = cfg3Source();
     source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/agent.toml', revision: 'r1', authored: { model } } }];
@@ -261,7 +261,7 @@ it('the explicit Summary Model variant owns complete labels in each locale witho
   const summary = { mode: 'explicit' as const, model: 'summary-a', profile: 'deep', max_output_tokens: { mode: 'limit' as const, tokens: 2048 }, request_params: { temperature: .2 } };
   const model = { model: 'main', profile: 'main-profile', max_output_tokens: { mode: 'limit' as const, tokens: 4096 }, request_params: { temperature: .7 }, summary_model: summary };
   const source = catalogSource('workspace', { agent: { model } });
-  const { writes: write, context } = await renderEditor(<ModelsPage source={source} scope="workspace" revision="r1" models={['main', 'summary-a']} profiles={{ main: ['main-profile'], 'summary-a': ['deep', 'quick'] }} onFocus={noop} />, { source, context: source });
+  const { writes: write, context } = await renderEditor(<ModelsPage source={source} scope="workspace" revision="r1" models={['main', 'summary-a']} profiles={{ main: ['main-profile'], 'summary-a': ['deep', 'quick'] }} onFocus={noop} onRefresh={noop} />, { source, context: source });
   fireEvent.click(screen.getByRole('button', { name: 'Default model for new Sessions' }));
   const labels = (locale: 'en' | 'zh') => {
     const tx = translator(locale);
@@ -348,8 +348,8 @@ it('an actor-owned reset replaces a mounted JSON buffer, its error and its valid
   expect(input.validity.valid).toBe(false);
   // Discarding the draft is the transaction owner's reset; the same editor
   // stays mounted across it and follows the owner's value.
-  fireEvent.click(screen.getByRole('button', { name: 'Discard draft' }));
-  await waitFor(() => expect(screen.queryByRole('button', { name: 'Discard draft' })).toBeNull());
+  fireEvent.click(screen.getByRole('button', { name: 'Reset form' }));
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Reset form' }) as HTMLButtonElement).disabled).toBe(true));
   expect(screen.getByLabelText('Model request parameters')).toBe(input);
   expect(input.value).toBe('{\n  "temperature": 1,\n  "top_p": 0.5\n}');
   expect(screen.queryByText(invalidJson)).toBeNull();
@@ -420,7 +420,7 @@ function unparsed(input: HTMLTextAreaElement, text = '{"temperature": 2') {
   expect(input.validity.valid).toBe(false);
 }
 const contextWindow = () => screen.getByLabelText('Context window') as HTMLInputElement;
-const discardButton = () => screen.queryByRole('button', { name: 'Discard draft' });
+const discardButton = () => screen.queryAllByRole('button', { name: 'Reset form' }).find(button => !(button as HTMLButtonElement).disabled) ?? null;
 
 it('Discard resets unparsed JSON even when the discarded draft never changed request_params', async () => {
   const { writes: write, main, input } = await requestParameters();
@@ -537,7 +537,7 @@ it.each([
   expect(input.validity.valid).toBe(false);
   // No draft exists: the invalid text was never offered to the actor.
   expect(save().disabled).toBe(true);
-  expect(screen.queryByRole('button', { name: 'Discard draft' })).toBeNull();
+  expect((screen.getByRole('button', { name: 'Reset form' }) as HTMLButtonElement).disabled).toBe(true);
   // Correcting it is an ordinary edit; the buffer is not reset by its own echo.
   fireEvent.change(input, { target: { value: '{"budget": 32}' } });
   expect(input.value).toBe('{"budget": 32}');
@@ -554,7 +554,7 @@ it('whitespace and key order alone are not an edit and begin no draft', async ()
   expect(input.value).toBe('{ "top_p" : 0.5,\n\n   "temperature":1 }');
   expect(input.validity.valid).toBe(true);
   expect(save().disabled).toBe(true);
-  expect(screen.queryByRole('button', { name: 'Discard draft' })).toBeNull();
+  expect((screen.getByRole('button', { name: 'Reset form' }) as HTMLButtonElement).disabled).toBe(true);
   expect(write).not.toHaveBeenCalled();
 });
 
@@ -565,4 +565,17 @@ it.each([['  ', false], ['{}', true]] as const)('blank optional parameters are a
   fireEvent.click(save());
   await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
   expect(write.mock.calls[0][0]).toEqual({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: present ? { ...absent, request_params: {} } : absent } });
+});
+
+it('a portaled Model editor closes its native fields when transport is lost, while its close control remains available', async () => {
+  const source = catalogSource('user', { models: { main: cfg3Effective().document.models!.main } });
+  const { actor, writes: write } = await renderEditor(modelDetail(source,'user','r1','main'), {source,context:source});
+  const input = screen.getByLabelText('Model ID') as HTMLInputElement;
+  fireEvent.change(input,{target:{value:'preserved-wire-id'}});
+  await act(async () => actor.send({type:'TRANSPORT',connection:'disconnected',generation:1,publication:undefined}));
+  expect(input.matches(':disabled')).toBe(true);
+  expect(screen.getByText('Disconnected. Reconnect to edit or save.')).toBeTruthy();
+  expect((screen.getByRole('button',{name:'Close'}) as HTMLButtonElement).disabled).toBe(false);
+  expect(input.value).toBe('preserved-wire-id');
+  expect(write).not.toHaveBeenCalled();
 });

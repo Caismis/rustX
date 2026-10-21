@@ -72,7 +72,7 @@ export function SettingsPanel({ pages, activeId, onSelect, onClose, context, chi
   const active = pages.find(page => page.id === activeId)!;
   return (
     <DialogSurface open onClose={onClose} title={tx('settings:settings.settings')} overlayClassName={css.overlay}
-      panelClassName={css.panel} className={css.dialog} contentRef={attachDialog} initialFocus={() => { dialogRef.current?.focus({ preventScroll: true }); return false; }}>
+      panelClassName={clsx(css.panel, activeId === 'models' && css.modelsPanel)} className={css.dialog} contentRef={attachDialog} initialFocus={() => { dialogRef.current?.focus({ preventScroll: true }); return false; }}>
           {/* The header is deliberately outside <Tabs>: React Aria renders a
               Tabs subtree a second time into a detached collection document
               to discover its tabs, and the section menu measures real DOM. */}

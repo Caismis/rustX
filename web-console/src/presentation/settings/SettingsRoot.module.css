@@ -108,6 +108,10 @@
   --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
 }
 
+/* The provider navigation and connection editor sit side by side. Keep their
+ * fields usable without changing the compact frame of the preference pages. */
+.modelsPanel { width: min(1080px, 100vw - 48px); }
+
 /* A small viewport gives the panel almost all of itself; the panel then
    narrows as a container and its content follows. This is the modal shell's
    viewport bound, not a layout decision about its content. */

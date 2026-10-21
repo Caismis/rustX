@@ -179,10 +179,11 @@ it('Workspace Settings is bound to one exact target and never retargets on Sessi
 
 it('saves a whole Workspace Provider with explicit credentials without copying User members', async () => {
   const subject = cfg3Client(); await open(subject, 'Models');
+  fireEvent.click(screen.getByRole('button', { name: '+ Add Provider' }));
   fireEvent.change(screen.getByLabelText('New Provider identity'), { target: { value: 'transport' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Add Provider' }));
-  expect((screen.getByLabelText('Endpoint') as HTMLInputElement).value).toBe('');
-  fireEvent.change(screen.getByLabelText('Endpoint'), { target: { value: 'https://workspace.invalid' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+  expect((screen.getByLabelText('Base URL') as HTMLInputElement).value).toBe('');
+  fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'https://workspace.invalid' } });
   fireEvent.change(screen.getByLabelText('Environment variable'), { target: { value: 'WORKSPACE_KEY' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save Provider transport' }));
   await screen.findByText(/Provider transport saved/);
@@ -372,14 +373,15 @@ it('removes literal credentials from a successful Provider draft using the redac
     }
   });
   await open(subject, 'Models');
-  fireEvent.change(screen.getByLabelText('New Provider identity'), { target: { value: 'secret' } }); fireEvent.click(screen.getByRole('button', { name: 'Add Provider' }));
-  fireEvent.change(screen.getByLabelText('Endpoint'), { target: { value: 'https://native.invalid' } });
+  fireEvent.click(screen.getByRole('button', { name: '+ Add Provider' }));
+  fireEvent.change(screen.getByLabelText('New Provider identity'), { target: { value: 'secret' } }); fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+  fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'https://native.invalid' } });
   fireEvent.click(screen.getByRole('button', { name: /Credential source/ }));
   fireEvent.click(await screen.findByRole('option', { name: 'Enter a literal secret' }));
-  fireEvent.change(await screen.findByLabelText('New literal credential'), { target: { value: 'SECRET_SENTINEL' } });
+  fireEvent.change(await screen.findByLabelText('API Key'), { target: { value: 'SECRET_SENTINEL' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save Provider secret' }));
   await screen.findByText(/Provider secret saved/);
-  await waitFor(() => expect(screen.queryByLabelText('New literal credential')).toBeNull());
+  await waitFor(() => expect(screen.queryByLabelText('API Key')).toBeNull());
   expect(document.body.innerHTML).not.toContain('SECRET_SENTINEL');
   fireEvent.click(screen.getByRole('button', { name: '← Models' }));
   await openResourceRow('secret');
@@ -390,9 +392,11 @@ it('retains a Model draft when native validation rejects its semantic unit', asy
  const subject = cfg3Client(async op => { if (op.method === 'configuration/sourceWrite') throw new RpcFailure({ code: -32000, message: 'Native validation failed', data: { kind: 'configuration_adoption', rejection: { status: 'failed', diagnostic: 'Invalid provider reference' } } }); });
  await open(subject, 'Models');
  fireEvent.click(screen.getByRole('button', { name: /^All Models/ }));
+ fireEvent.click(screen.getByRole('button', { name: /^(?:\+ )?Add Model$/ }));
  fireEvent.change(await screen.findByLabelText('New Model identity'), { target: { value: 'draft-model' } });
- fireEvent.click(screen.getByRole('button', { name: 'Add Model' }));
- fireEvent.change(await screen.findByLabelText('Wire model identity'), { target: { value: 'wire' } });
+ fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+ fireEvent.change(await screen.findByLabelText('Model ID'), { target: { value: 'wire' } });
+ fireEvent.click(screen.getByRole('button', { name: 'Advanced configuration' }));
  fireEvent.change(screen.getByLabelText('Provider identity'), { target: { value: 'missing' } });
  fireEvent.click(screen.getByRole('button', { name: 'Save Model draft-model' }));
  expect((await screen.findByRole('alert')).textContent).toContain('Invalid provider reference');
@@ -530,17 +534,18 @@ it('retires a confirmed Provider save, including its literal credential, after t
   const host = cfg3Host(subject); subject.host = host;
   render(<SettingsSurface client={subject.client} target={workspaceSettingsTarget('A', 'A')} host={host} />);
   await settingsReady(); await openSettingsPage('Models');
+  fireEvent.click(screen.getByRole('button', { name: '+ Add Provider' }));
   fireEvent.change(screen.getByLabelText('New Provider identity'), { target: { value: 'secret' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Add Provider' }));
-  fireEvent.change(screen.getByLabelText('Endpoint'), { target: { value: 'https://native.invalid' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+  fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'https://native.invalid' } });
   fireEvent.click(screen.getByRole('button', { name: /Credential source/ }));
   fireEvent.click(await screen.findByRole('option', { name: 'Enter a literal secret' }));
-  fireEvent.change(await screen.findByLabelText('New literal credential'), { target: { value: 'SECRET_SENTINEL' } });
+  fireEvent.change(await screen.findByLabelText('API Key'), { target: { value: 'SECRET_SENTINEL' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save Provider secret' }));
   await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(1));
   // The editor unmounts while the native write is still in flight.
   await openSettingsPage('Agent');
-  expect(screen.queryByLabelText('New literal credential')).toBeNull();
+  expect(screen.queryByLabelText('API Key')).toBeNull();
   // Native commit and its authoritative reread both succeed after unmount.
   subject.source.workspace!.revision = 'saved-2';
   subject.source.workspace!.authored = { providers: { secret: { base_url: 'https://native.invalid', credential: { type: 'literal' } } } };

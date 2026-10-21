@@ -169,7 +169,7 @@ function SettingsDialog({ client, host, associations, theme = 'system', setTheme
   const structured = config.state === 'structured';
   const body = !source || !selected ? null : <fieldset disabled={!editable} className={css.editor}>
     {current === 'models' && (structured
-      ? <ModelsPage source={source} scope={scope} revision={config.revision} models={models} profiles={profiles} focus={focus.models} onFocus={onFocus} />
+      ? <ModelsPage source={source} scope={scope} revision={config.revision} models={models} profiles={profiles} focus={focus.models} onFocus={onFocus} onRefresh={() => actor.send({ type: 'REFRESH' })} />
       : <MalformedNotice config={config} />)}
     {current === 'agent' && (structured
       ? <AgentPage document={config.document} scope={scope} revision={config.revision} />

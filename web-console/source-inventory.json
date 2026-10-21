@@ -494,23 +494,24 @@
     {
       "upstream": "packages/client/ui-settings-models/src/client/ProviderEditor.tsx",
       "destination": "web-console/src/app/settings/models/ModelsPage.tsx",
-      "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: native Provider/Model complete-unit editors; Harness provider list/detail cards, no Host credentials or discovery. Dedicated Provider/Model drill-down with explicit return to the native catalog; unsaved units retained by app draft owner. Catalog identities are enumerated from the native effective projection, with this scope's authoring and native provenance kept separate; no browser inheritance engine. #392: moved into the Models product page as Provider list → Provider detail → Model detail; complete typed Provider/Model forms are TanStack Form field mechanics bridged to the XState unit transaction; interaction hierarchy follows ZCode public docs (inspected only, no source copied). #392 repair: Provider and Model focus are typed by the Models page from the navigation domain, so no other page's detail can reach it. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: current App Server v24 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. Session configuration observation (App Server v35 / Runtime Client v58): generated protocol import only; upstream reference unchanged. Trace input ownership repair: current App Server v39 imports and protocol display; upstream source unchanged. Native Tool Trace location: App Server v44 imports and exact occurrence navigation; existing upstream baseline unchanged. Main integration #456: general Model Profiles and JSON-object request parameter authoring; existing upstream baseline unchanged. #464: App Server v47 generated-protocol import path. #467: App Server v48 current generated-protocol import path. PR #477 final contract repair: mandatory App Server v49 import for nullable native-covered Tool wire correlation; upstream reference unchanged. PR #478: reconciled bounded observation with immutable model-context projections under App Server v50. App Server v51: mandatory current generated-protocol import; upstream presentation and native ownership remain unchanged.",
+      "treatment": "Native Provider/Model semantic-unit editing in a ZCode-inspired provider navigation/detail split and bounded Model dialog. Harness-derived controls retain native scope, catalog and exact-CAS authority. Existing Model/Profile fields are extracted into ModelFields.tsx; no ZCode implementation or runtime is copied. Configuration names and provider wire IDs remain separate; API format is a Model field.",
       "upstream_sha256": "46f98375c76035f50f80e70090a60396560318b54b3ec83d2d2a659489382e1c",
       "retained_dependencies": [
         "../../../../../protocol/app-server/v51",
         "../../../locale/react",
         "../../../locale/translation",
         "../../../presentation/primitives/Button",
-        "../../../presentation/settings/ModelsCards.module.css",
+        "../../../presentation/primitives/DialogSurface",
+        "../../../presentation/primitives/icons",
         "../../../presentation/settings/SettingsContent",
         "../../../presentation/settings/SettingsContent.module.css",
-        "../../../presentation/settings/SettingsWorkflow.module.css",
         "../forms/bridge",
-        "../forms/controls",
         "../forms/fields",
         "../machines/navigation",
         "../primitives/aria",
         "../projection",
+        "./ModelFields",
+        "./ModelsPage.module.css",
         "react",
         "react-aria-components"
       ],
@@ -540,7 +541,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "139c7602dc4433ac3edcd6368ec2173a09cfd71e0c7f5f14d8ae2fe727f76d1e"
+      "local_sha256": "e887b914d56eb8a725102f36d4abeea8c015ddac23c2c9fcf4e430cb282e7728"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
@@ -659,7 +660,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "1876e0cc9e1e149b35d055cdce6f6fb76ce53e311ca46ef0cc73be88b418559e"
+      "local_sha256": "56ccd26073a48407542ebf5f03349a11853212d276d5eb95914711a95f7b1682"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
@@ -2552,7 +2553,7 @@
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "treatment": "WEB-RESET-03: adapted provider outlined cards, filled editor modules, field rows, inventory badges, warnings and responsive details. Replaces obsolete app Settings CSS. rustX scope/revision presentation extensions; no business ownership. Compact model modality rows in the native profile editor. #392 repair: the inert field group of an inspected inherited resource definition has no frame of its own. #393: one page vocabulary scoped to the Settings section (page title/description, group headings, 16px-radius setting-row cards with a sticky draft action row, AA-contrast hints, badges and errors, designed pending state); narrow rules are container queries; unused rows/tabs/generation/content/model rules are deleted. Text fields follow DSH settings-form outline:none, while native checkboxes, selects and action keyboard indicators retain their existing styles.",
       "upstream_sha256": "e248958cfe8e5d4c36cb48f8438c4210837d440786c930147b70021c90ac40eb",
-      "local_sha256": "bc8715c2994d28c9f25b2e2566c1809ddce4857018e5b36a89b49485344c61ac",
+      "local_sha256": "62f4bb0e59d557e83b9e7f5d895c5650629e0d8f93985987348c26c1edef350d",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -2594,7 +2595,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "7ee12530c10ce9e12c0e17cf15437ecabbf29804459ab65a52273661be69de50",
+      "local_sha256": "c0970a7ba9da731902b2fc3b5c81098fc9589693bff50b9c3654a5c9f134a46c",
       "retained_dependencies": [],
       "classification": "B"
     },
@@ -2622,7 +2623,7 @@
         "react",
         "react-aria-components"
       ],
-      "local_sha256": "656c2108880e023798586359478fe70b6f2283b8bb78ed815fea665dd5f6957b",
+      "local_sha256": "629643e38a2ccff4345816ec796f79e9f6a151fa4950e76187abf472fe442fe9",
       "classification": "B"
     },
     {
@@ -3442,22 +3443,6 @@
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "upstream": "packages/client/ui-settings-models/src/client/ModelsSection.module.css",
-      "destination": "web-console/src/presentation/settings/ModelsCards.module.css",
-      "upstream_sha256": "e248958cfe8e5d4c36cb48f8438c4210837d440786c930147b70021c90ac40eb",
-      "classification": "B",
-      "treatment": "Issue #402: pinned presentation adapted to rustX native authority. No Harness runtime, stores, command writer, provider semantics or output-text inference. Native opaque Read/Search output carries no fabricated coordinates/counts; Terminal lifecycle is supplied explicitly; Diff shows requested changes.",
-      "license": "MIT — Copyright (c) 2026 DeepSeek",
-      "retained_dependencies": [],
-      "excluded_dependencies": [
-        "Cordis slots and runtime authority",
-        "Harness provider/permission semantics",
-        "ANSI interpreter (native bounded text remains verbatim)"
-      ],
-      "local_sha256": "268a604807b74692a6defe5e06ae954fa8626611f1b5915a6f019a232c6306e3"
-    },
-    {
-      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "upstream": "packages/client/ui-primitives/src/TerminalBlock.tsx",
       "destination": "web-console/src/presentation/primitives/TerminalBlock.tsx",
       "upstream_sha256": "8e24248d8f361fe538059abd0c733ac90465b73dd1048efb67ee679ebf3949de",
@@ -3863,7 +3848,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "818d2e1a82b3e492a0529b6e821209300f30f75bacd8bc56effa8c41038692c1"
+      "local_sha256": "7cdb99d3f205e457c57d906cf114e2fe321a19295bf7fb23407de1d3ee3ca517"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -6029,7 +6014,7 @@
     {
       "upstream": "packages/client/ui-theme/src/client/AppearanceRow.module.css",
       "destination": "web-console/src/presentation/settings/AppearanceRow.module.css",
-      "treatment": "Ported three preference cubes and selected appearance from Harness. Browser preference remains separate from resolved system color scheme. Resolves upstream radius-xl to its 20px value; decorative icon wrapper preserves the 16px icon box.",
+      "treatment": "Harness appearance tokens and selected cards in three equal grid columns, including narrow Settings panels. Explicit user-requested no-wrap layout; browser preference remains separate from the resolved system color scheme.",
       "upstream_sha256": "2e1f8f44ee41256aaf6af103d38edb7220a3e0a82099be8e9d3e0b75a5e4f6c4",
       "retained_dependencies": [],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -6037,7 +6022,7 @@
         "Harness Host preference storage and Cordis slots"
       ],
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
-      "local_sha256": "d94ebe864be9009234d11abc16e8ba41458219dc8516243b1c38190e7e6dbb9d",
+      "local_sha256": "f6c18460620ad8f34a2da1fc63513b066219092817254b0123747a052d652c89",
       "classification": "A"
     },
     {
@@ -7100,6 +7085,51 @@
         "Harness build configuration and worker-source loading"
       ],
       "local_sha256": "d958aead3259fded30c601e23cbf121dabe98ab49f4e6e4f7a13e3d039845272"
+    },
+    {
+      "upstream": "packages/client/ui-settings-models/src/client/ProviderEditor.tsx",
+      "destination": "web-console/src/app/settings/models/ModelFields.tsx",
+      "treatment": "Typed native Model and Profile fields extracted from ModelsPage, grouped into a basic form and progressive advanced configuration. No external runtime authority.",
+      "upstream_sha256": "46f98375c76035f50f80e70090a60396560318b54b3ec83d2d2a659489382e1c",
+      "retained_dependencies": [
+        "../../../../../protocol/app-server/v51",
+        "../../../locale/react",
+        "../../../presentation/primitives/Button",
+        "../../../presentation/settings/SettingsContent.module.css",
+        "../forms/bridge",
+        "../forms/controls",
+        "../forms/fields",
+        "../primitives/aria",
+        "./ModelsPage.module.css",
+        "react"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Host/Remote settings and credentials",
+        "Cordis plugin runtime",
+        "Harness source merge and model catalog authority"
+      ],
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-settings-models/src/client/EditorFooter.tsx",
+          "upstream_sha256": "20b6c0bfc6b4b387c4d4a98605007362077206867393eec1562a5af56e39e283",
+          "treatment": "adapted presentation only"
+        },
+        {
+          "upstream": "packages/client/ui-settings-models/src/client/ModelsSection.tsx",
+          "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+          "upstream_sha256": "2ec7f8ef098c41e0a094dd83d754502f136d762aa0d332853049acae9f4a1dfd",
+          "treatment": "Issue #402 presentation adaptation; native execution/configuration replaces upstream ownership."
+        },
+        {
+          "upstream": "packages/client/ui-settings-models/src/client/ProviderEditor.tsx",
+          "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+          "upstream_sha256": "4b8c47132e3cbb24339e2362d5ddb8e8b8fba302ca99b7926560381d0350a0a3",
+          "treatment": "Issue #402 presentation adaptation; native execution/configuration replaces upstream ownership."
+        }
+      ],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "57f066a1dc35d50eab1f80061f80929c5094ae46feb41ec101d4d978dfc639cb"
     }
   ],
   "inspected_only": [
