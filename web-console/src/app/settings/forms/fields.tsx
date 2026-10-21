@@ -194,12 +194,11 @@ export function RequestParameters<T>({ form, name, label, optional = true }: {
   form: TypedUnitForm<T>; name: FieldPath<T>; label: string; optional?: boolean;
 }) {
   return <Bound<T, RequestParams | null | undefined> form={form} name={name}>{(raw, change) =>
-    <RequestParamsEditor label={label} value={raw ?? undefined} optional={optional} change={change} />}</Bound>;
+    <JsonObjectEditor label={label} value={raw ?? undefined} optional={optional} change={change} />}</Bound>;
 }
 
-/** One provider-native request-parameter object, edited as a whole JSON
- * object: paste or type nested objects, arrays and `null` as the provider
- * expects them.
+/** One native configuration or request-parameter object, edited as whole JSON:
+ * paste or type nested objects, arrays and `null` without losing their shape.
  *
  * The parsed object belongs to the unit's transaction actor, through the
  * form. The text is a transient buffer for exactly what the actor cannot
@@ -217,8 +216,9 @@ export function RequestParameters<T>({ form, name, label, optional = true }: {
  * `optional` distinguishes an absent object (blank text) from an authored
  * `{}`. Native Rust remains the authority on protected keys, profile
  * ownership and every other semantic. */
-export function RequestParamsEditor({ label, value, change, optional = true }: {
+export function JsonObjectEditor({ label, value, change, optional = true, hint }: {
   label: string; value: RequestParams | undefined; change: (value: RequestParams | undefined) => void; optional?: boolean;
+  hint?: string;
 }) {
   const tx = useTranslation();
   const display = (current: RequestParams | undefined) => current === undefined ? '' : formatRequestParams(current);
@@ -263,6 +263,6 @@ export function RequestParamsEditor({ label, value, change, optional = true }: {
               { p0: failure.line, p1: failure.column }));
       }} /></label>
     {error && <span role="alert" className={css.error}>{error}</span>}
-    <p className={css.hint}>{tx('settings:fields.request-params-hint')}</p>
+    <p className={css.hint}>{hint ?? tx('settings:fields.request-params-hint')}</p>
   </div>;
 }

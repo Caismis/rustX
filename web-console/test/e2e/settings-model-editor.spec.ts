@@ -10,9 +10,14 @@ const settings = (page: Page) => page.getByRole('dialog', { name: 'Settings', ex
 const editor = (page: Page) => page.getByRole('dialog', { name: `Model ${model}`, exact: true });
 const writes = (page: Page) => page.evaluate(() => (window as unknown as {rustxNativeRequests: () => {method:string}[]}).rustxNativeRequests().filter(request => request.method === 'configuration/sourceWrite').length);
 
-async function start(page: Page, theme: 'Light' | 'Dark', width: number) {
+function runtimeErrors(page: Page) {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
+  page.on('console', event => { if (['error','warning'].includes(event.type())) errors.push(event.text()); });
+  return errors;
+}
+async function start(page: Page, theme: 'Light' | 'Dark', width: number) {
+  const errors = runtimeErrors(page);
   await page.clock.setFixedTime(new Date('2026-10-21T12:00:00Z'));
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 });
@@ -74,7 +79,7 @@ for (const theme of ['Light', 'Dark'] as const) for (const width of [1440,390]) 
     await expect(modal.getByRole('checkbox', {name:'Image',exact:true}).first()).toBeChecked();
     const addProfile = modal.getByRole('button', {name:'Add profile',exact:true});
     const identity = modal.getByRole('textbox', {name:'New profile identity',exact:true});
-    const params = modal.getByRole('textbox', {name:'Profile request parameters',exact:true});
+    const params = modal.getByRole('textbox', {name:'Profile parameters (JSON)',exact:true});
     await addProfile.click();
     await expect(identity).toBeFocused();
     await identity.fill('cancelled');
@@ -86,7 +91,8 @@ for (const theme of ['Light', 'Dark'] as const) for (const width of [1440,390]) 
     await identity.fill('low');
     await identity.press('Enter');
     await expect(modal.getByRole('button', {name:'Profile low',exact:true})).toHaveAttribute('aria-pressed','true');
-    await params.fill('{"temperature":0.2}');
+    const lowValue = {reasoning_enabled:true,request_params:{reasoning_effort:'low'}};
+    await params.fill(JSON.stringify(lowValue));
     await addProfile.click();
     await identity.fill('low');
     await identity.press('Enter');
@@ -96,18 +102,23 @@ for (const theme of ['Light', 'Dark'] as const) for (const width of [1440,390]) 
     const high = 'high-with-an-exceptionally-long-profile-identity';
     await identity.fill(high);
     await identity.press('Enter');
-    await expect(params).toHaveValue('{}');
-    await params.fill('{"temperature":');
+    await expect(params).toHaveValue(JSON.stringify({reasoning_enabled:true,request_params:{}},null,2));
+    await params.fill('{"reasoning_enabled":');
     await modal.getByRole('button', {name:'Profile low',exact:true}).click();
-    await expect(params).toHaveValue('{"temperature":');
+    await expect(params).toHaveValue('{"reasoning_enabled":');
     await expect(params).toBeFocused();
     await expect(modal.getByRole('button', {name:'Profile '+high,exact:true})).toHaveAttribute('aria-pressed','true');
-    await params.fill('{"temperature":0.8,"metadata":{"tier":null}}');
+    const highValue = {reasoning_enabled:true,max_output_tokens:16384,request_params:{reasoning_effort:'high'}};
+    await params.fill(JSON.stringify(highValue));
     await modal.getByRole('button', {name:'Profile low',exact:true}).click();
-    await expect(params).toHaveValue('{\n  "temperature": 0.2\n}');
+    await expect(params).toHaveValue(JSON.stringify(lowValue,null,2));
     await modal.getByRole('button', {name:'Profile '+high,exact:true}).click();
-    await expect(params).toHaveValue('{\n  "temperature": 0.8,\n  "metadata": {\n    "tier": null\n  }\n}');
-    await params.scrollIntoViewIfNeeded();
+    await expect(params).toHaveValue(JSON.stringify(highValue,null,2));
+    const profile = modal.getByRole('group',{name:'Profile '+high,exact:true});
+    await expect(profile.getByRole('textbox')).toHaveCount(1);
+    await expect(profile.getByRole('button')).toHaveCount(0);
+    await expect(profile.getByRole('spinbutton')).toHaveCount(0);
+    await modal.getByText('Default profile',{exact:true}).scrollIntoViewIfNeeded();
     await noOverflow(page); await accessible(page);
     await expectStableScreenshot(modal, `model-profiles-${theme.toLowerCase()}-${width}.png`);
     await modal.getByRole('button', {name:'Reset form',exact:true}).click();
@@ -150,6 +161,7 @@ test('provider creation validates the native name; API Key reveal is explicit an
 });
 
 test('Chinese settings use the same model dialog without Smart configuration', async ({page}) => {
+  const errors = runtimeErrors(page);
   await page.addInitScript(() => localStorage.setItem('rustx-locale-v1','zh'));
   await page.goto(fixture);
   await page.getByRole('button',{name:'设置',exact:true}).click();
@@ -174,11 +186,13 @@ test('Chinese settings use the same model dialog without Smart configuration', a
     await identity.fill(name);
     await identity.press('Enter');
   }
-  await modal.getByRole('textbox',{name:'预设请求参数',exact:true}).fill('{"reasoning_effort":"high"}');
+  await modal.getByRole('textbox',{name:'预设参数（JSON）',exact:true}).fill(JSON.stringify({reasoning_enabled:true,max_output_tokens:16384,request_params:{reasoning_effort:'high'}},null,2));
   const profile = modal.getByRole('group',{name:'预设 high',exact:true});
-  await profile.getByRole('button',{name:/推理$/}).click();
-  await page.getByRole('option',{name:'开启',exact:true}).click();
-  await modal.getByText('模型预设',{exact:true}).scrollIntoViewIfNeeded();
+  await expect(profile.getByRole('button')).toHaveCount(0);
+  await expect(profile.getByRole('spinbutton')).toHaveCount(0);
+  await modal.getByText('默认预设',{exact:true}).scrollIntoViewIfNeeded();
   await accessible(page);
   await expectStableScreenshot(modal,'model-profiles-zh-dark.png');
+  await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+  expect(errors).toEqual([]);
 });

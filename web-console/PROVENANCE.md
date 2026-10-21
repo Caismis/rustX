@@ -4093,10 +4093,16 @@ The native output declaration stays intact, with new Models declaring text
 output. Other controls expose tool calls, reasoning, Model Profiles and native
 request parameters.
 Profiles use selectable chips with inline add/delete and a JSON editor for the
-selected profile. Default profile, explicit reasoning state and output budget
-remain separate native fields. The native map has no reasoning-strength order
-or parameter-mapping language; selecting a chip edits that profile's complete
-request object. Switching/adding validates the current panel before replacing
+selected profile. That one editor authors the complete native Profile object:
+reasoning_enabled, optional max_output_tokens, and provider-native request_params.
+There are no separate profile reasoning or output-budget controls; the default
+profile remains a selector. New profiles explicitly seed their reasoning state
+from the Model's declared capability, independently of their names. Existing
+profiles are displayed and replaced whole without rewriting their declarations.
+The shared JsonObjectEditor retains exact JSON parsing and draft/reset ownership
+for both profiles and request-parameter objects. The native map has no
+reasoning-strength order or parameter-mapping language. Switching/adding validates
+the current panel before replacing
 it, so unfinished JSON cannot be lost or silently saved as its last valid value.
 Unsupported provider enablement, Smart configuration, ZCode service presets and capabilities
 are not presented. Add first chooses the stable configuration name, separately

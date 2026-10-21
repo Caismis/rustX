@@ -50,6 +50,7 @@
 .chip:has(:checked) { background: var(--dsw-alias-interactive-bg-hover); border-color: var(--dsw-alias-border-l4); color: var(--dsw-alias-label-primary); }
 .modelDialog .profiles { padding: 0; border: 0; margin: 16px 0; }
 .profiles p:not([role=alert]) { color: var(--dsw-alias-label-secondary); }
+.modelDialog .profiles textarea { height: auto; min-height: 160px; }
 .profileChips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .profileChip { display: inline-flex; align-items: center; min-width: 0; max-width: 100%; min-height: 32px; box-sizing: border-box; border: 1px solid var(--dsw-alias-border-l3); border-radius: 8px; }
 .profileChip[data-selected=true] { background: var(--dsw-alias-interactive-bg-hover); border-color: var(--dsw-alias-border-l4); }
@@ -58,8 +59,6 @@
 .profileChip > button:last-child { flex: none; width: 26px; padding: 0; font-size: 16px; }
 .modelDialog .profileName { width: 140px; height: 32px; }
 .profileAdd { width: 32px; height: 32px; padding: 0; border-radius: 8px; font-size: 20px; }
-.profileOptions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; gap: 12px; }
-@media (max-width: 480px) { .profileOptions { grid-template-columns: minmax(0, 1fr); gap: 0; } }
 @container (max-width: 440px) {
   .toolbar { flex-direction: column; }
   .headerActions { align-self: flex-end; }

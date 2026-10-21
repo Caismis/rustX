@@ -56,7 +56,8 @@ it('preserves complete Model replacement, profiles and all compatibility fields'
 });
 
 it('authors general Model Profiles as complete presets, moving model parameters into the first one', async () => {
-  const main = { ...cfg3Effective().document.models!.main, request_params: { temperature: 0.2 } };
+  const original = cfg3Effective().document.models!.main;
+  const main = { ...original, capabilities: { ...original.capabilities, reasoning: true }, request_params: { temperature: 0.2 } };
   const source = catalogSource('user', { models: { main } });
   const { writes: write } = await renderEditor(modelDetail(source, 'user', 'r1', 'main'), { source, context: source });
   fireEvent.click(screen.getByRole('button', { name: 'Add profile' }));
@@ -65,34 +66,36 @@ it('authors general Model Profiles as complete presets, moving model parameters 
   const precise = within(screen.getByRole('group', { name: 'Profile precise' }));
   // The Model's own parameters seed the first profile; the Model no longer
   // declares any, and the new profile is the default.
-  expect((precise.getByLabelText('Profile request parameters') as HTMLTextAreaElement).value).toBe('{\n  "temperature": 0.2\n}');
-  fireEvent.change(precise.getByLabelText('Profile request parameters'), { target: { value: '{"temperature": 0.1, "top_p": 0.5, "stop": ["\\n", null], "metadata": {"tier": null}}' } });
-  fireEvent.change(precise.getByLabelText('Default output tokens'), { target: { value: '1024' } });
+  expect(JSON.parse((precise.getByLabelText('Profile parameters (JSON)') as HTMLTextAreaElement).value)).toEqual({ reasoning_enabled: true, request_params: { temperature: 0.2 } });
+  expect(precise.queryAllByRole('button')).toHaveLength(0);
+  expect(precise.queryByLabelText('Default output tokens')).toBeNull();
+  const preciseValue = { reasoning_enabled: true, max_output_tokens: 1024, request_params: { temperature: 0.1, top_p: 0.5, stop: ['\n', null], metadata: { tier: null } } };
+  fireEvent.change(precise.getByLabelText('Profile parameters (JSON)'), { target: { value: JSON.stringify(preciseValue) } });
   fireEvent.click(screen.getByRole('button', { name: 'Add profile' }));
   fireEvent.change(screen.getByLabelText('New profile identity'), { target: { value: 'creative' } });
   fireEvent.keyDown(screen.getByLabelText('New profile identity'), { key: 'Enter' });
   const creative = within(screen.getByRole('group', { name: 'Profile creative' }));
   // A later profile starts empty: profiles never inherit from one another.
-  expect((creative.getByLabelText('Profile request parameters') as HTMLTextAreaElement).value).toBe('{}');
+  expect(JSON.parse((creative.getByLabelText('Profile parameters (JSON)') as HTMLTextAreaElement).value)).toEqual({ reasoning_enabled: true, request_params: {} });
   // Switching or adding a chip must not unmount an invalid JSON buffer and
   // silently restore the last valid parameters.
-  fireEvent.change(creative.getByLabelText('Profile request parameters'), { target: { value: '{"temperature":' } });
+  fireEvent.change(creative.getByLabelText('Profile parameters (JSON)'), { target: { value: '{"reasoning_enabled":' } });
   fireEvent.click(screen.getByRole('button', { name: 'Profile precise' }));
-  expect((screen.getByLabelText('Profile request parameters') as HTMLTextAreaElement).value).toBe('{"temperature":');
+  expect((screen.getByLabelText('Profile parameters (JSON)') as HTMLTextAreaElement).value).toBe('{"reasoning_enabled":');
   fireEvent.click(screen.getByRole('button', { name: 'Add profile' }));
   expect(screen.queryByLabelText('New profile identity')).toBeNull();
-  fireEvent.change(creative.getByLabelText('Profile request parameters'), { target: { value: '{"temperature": 1.3}' } });
-  await chooseOption('Reasoning', 'Off', creative);
+  const creativeValue = { reasoning_enabled: false, request_params: { temperature: 1.3 } };
+  fireEvent.change(creative.getByLabelText('Profile parameters (JSON)'), { target: { value: JSON.stringify(creativeValue) } });
   fireEvent.click(screen.getByRole('button', { name: 'Profile precise' }));
-  expect((screen.getByLabelText('Default output tokens') as HTMLInputElement).value).toBe('1024');
+  expect(JSON.parse((screen.getByLabelText('Profile parameters (JSON)') as HTMLTextAreaElement).value)).toEqual(preciseValue);
   fireEvent.click(screen.getByRole('button', { name: 'Profile creative' }));
-  expect((screen.getByLabelText('Profile request parameters') as HTMLTextAreaElement).value).toBe('{\n  "temperature": 1.3\n}');
+  expect(JSON.parse((screen.getByLabelText('Profile parameters (JSON)') as HTMLTextAreaElement).value)).toEqual(creativeValue);
   fireEvent.click(screen.getByRole('button', { name: 'Save Model main' }));
   await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
   const { request_params: _, ...rest } = main;
   expect(write.mock.calls[0][0]).toEqual({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: { ...rest, default_profile: 'precise', profiles: {
-    precise: { request_params: { temperature: 0.1, top_p: 0.5, stop: ['\n', null], metadata: { tier: null } }, max_output_tokens: 1024 },
-    creative: { request_params: { temperature: 1.3 }, reasoning_enabled: false },
+    precise: preciseValue,
+    creative: creativeValue,
   } } } });
   // Removing the default profile moves the default to a remaining one.
   fireEvent.click(screen.getByRole('button', { name: 'Delete profile precise' }));

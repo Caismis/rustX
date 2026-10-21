@@ -4,7 +4,7 @@ import type { Model, Modality } from '../../../../../protocol/app-server/v51';
 import { useTranslation } from '../../../locale/react';
 import { Button } from '../../../presentation/primitives/Button';
 import { UnitReset, type TypedUnitForm as TypedForm } from '../forms/bridge';
-import { Enum, Numeric, NumericText, RequestParameters, RequestParamsEditor, Text } from '../forms/fields';
+import { Enum, JsonObjectEditor, Numeric, NumericText, RequestParameters, Text } from '../forms/fields';
 import { Advanced, Choice } from '../primitives/aria';
 import css from '../../../presentation/settings/SettingsContent.module.css';
 import cards from './ModelsPage.module.css';
@@ -122,7 +122,7 @@ function Profiles({ form }: { form: TypedForm<Model> }) {
       // Model with profiles no longer declares.
       const seed = identities.length ? {} : (params.state.value as ProfileMap[string]['request_params'] | null | undefined) ?? {};
       if (!identities.length) { params.handleChange(undefined as never); fallback.handleChange(name as never); }
-      update(name, { request_params: seed });
+      update(name, { reasoning_enabled: form.state.values.capabilities.reasoning, request_params: seed });
       setSelected(name);
       setIdentity('');
       setAdding(false);
@@ -165,16 +165,9 @@ function Profiles({ form }: { form: TypedForm<Model> }) {
 
 function ProfileFields({ id, profile, change }: { id: string; profile: ProfileMap[string]; change: (next: ProfileMap[string]) => void }) {
   const tx = useTranslation();
-  const reasoning = profile.reasoning_enabled;
   return <div role="group" aria-label={tx('settings:models-page.profile-value', { p0: id })} data-profile={id}>
-    <RequestParamsEditor label={tx('settings:models-page.profile-request-parameters')} value={profile.request_params ?? {}} optional={false}
-      change={request_params => change({ ...profile, request_params: request_params ?? {} })} />
-    <div className={cards.profileOptions}>
-    <Choice label={tx('settings:models-page.profile-reasoning')} value={reasoning === undefined || reasoning === null ? '' : String(reasoning)}
-      options={[['', tx('settings:copy.unspecified')], ['true', tx('settings:copy.on')], ['false', tx('settings:copy.off')]]}
-      onChange={next => change({ ...profile, reasoning_enabled: next === '' ? undefined : next === 'true' })} />
-    <label>{tx('settings:models-page.profile-output-default')}<input type="number" min="1" value={profile.max_output_tokens ?? ''}
-      onChange={event => change({ ...profile, max_output_tokens: event.target.value ? Number(event.target.value) : undefined })} /></label>
-    </div>
+    <JsonObjectEditor label={tx('settings:models-page.profile-parameters')} value={{ ...profile }} optional={false}
+      hint={tx('settings:models-page.profile-parameters-hint')}
+      change={next => change((next ?? {}) as ProfileMap[string])} />
   </div>;
 }

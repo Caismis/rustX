@@ -9,7 +9,7 @@ import { Button } from '../../../presentation/primitives/Button';
 import { DialogSurface } from '../../../presentation/primitives/DialogSurface';
 import { IconApiOutline14, IconCloseOutline16, IconRefreshOutline16 } from '../../../presentation/primitives/icons';
 import { TypedUnitForm, UnitForm, type TypedUnitForm as TypedForm } from '../forms/bridge';
-import { Enum, RequestParamsEditor, Text } from '../forms/fields';
+import { Enum, JsonObjectEditor, Text } from '../forms/fields';
 import { Advanced, Choice, ResourceList, Search, type ResourceRow } from '../primitives/aria';
 import { catalogEntries, provenanceLabel, sourceView, type CatalogEntry, observedResult, observedResultLabel, unitApplication } from '../projection';
 import type { PageFocus } from '../machines/navigation';
@@ -247,6 +247,6 @@ function ModelRequestFields<T extends RequestFields>({ value, change, profiles, 
       onChange={profile => { const { profile: _, ...rest } = value; change((profile ? { ...rest, profile } : rest) as T); }} />}
     <label>{tx(labels.limit)}<input type="number" min="1" value={value.max_output_tokens?.mode === 'limit' ? value.max_output_tokens.tokens : ''}
       onChange={event => change({ ...value, max_output_tokens: event.target.value ? { mode: 'limit', tokens: Number(event.target.value) } : { mode: 'catalog_default' } })} /></label>
-    <RequestParamsEditor label={tx(labels.params)} value={value.request_params ?? undefined} change={request_params => change({ ...value, request_params })} />
+    <JsonObjectEditor label={tx(labels.params)} value={value.request_params ?? undefined} change={request_params => change({ ...value, request_params })} />
   </>;
 }
