@@ -440,11 +440,10 @@ windows; an absent cut captures current native facts. A message outside the cut
 or no longer readable fails explicitly. The result carries target_cursor while
 target remains absent: a message identity does not invent Turn ownership.
 
-The Web source action validates the exact message at target_cursor, attachment
-authority and navigation intent before publishing or anchoring. A superseding
-read, reattachment, node switch or user cancellation retires the result. The
-retained presentation remains bounded and later source activity cannot rewrite
-the fork seed boundary.
+The WebUI renders inherited and new fork messages as one continuous stream,
+matching Harness. It adds no fork-source notice or dedicated source-history
+route. The bounded Message window selector remains available to native readers;
+immutable origin metadata and the fork seed boundary remain native facts.
 
 The immutable inherited transcript boundary was introduced in SQLite schema 58 and remains part of the current schema 74 lineage bootstrap. Initialization records the final native transcript watermark in the same transaction as the seed, including terminal-only inherited Turns and excluding invisible Context messages. Repeated bounded transcript and checkpoint reads resolve this boundary through a single bootstrap primary-key lookup. Older development stores are rejected without migration.
 

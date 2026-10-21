@@ -3588,7 +3588,7 @@
           "treatment": "Compaction checkpoint disclosure and bilingual summary wording adapted to native Ledger messages; no Harness runtime or command authority."
         }
       ],
-      "local_sha256": "6c8cfd26d75c79eb64406ca7ea7060c8d9e432f6c8160c5a8d3f1a7afe4a2b55"
+      "local_sha256": "4b9475158d44861b145bea54fc4d59371be7b91ab76ed7a24e27c1750599b10e"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",

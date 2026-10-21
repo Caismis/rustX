@@ -30,15 +30,13 @@ import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
 import { useTranslation } from '../../locale/react';
 import { TurnNavigator } from './TurnNavigator';
 import { transcriptContent, transcriptPresentation, turnAnchor } from '../../client/transcript';
-import { type ForkOrigin, useForkPoint } from './ForkPoint';
 import { firstSubmissions } from '../new-conversation/first-submit';
 
-export function ConversationLive({ client, sessionId, mode, disabled, historicalPending, retry, onHistorical, onOpenSource, previewCurrent, onMode }: {
+export function ConversationLive({ client, sessionId, mode, disabled, historicalPending, retry, onHistorical, previewCurrent, onMode }: {
   client: AppServerClient; sessionId?: string; mode: 'chat' | 'trajectory'; disabled: boolean; historicalPending?: boolean;
   onMode?: (mode: 'chat' | 'trajectory') => void;
   retry?: ResponseRetry;
   onHistorical: (id: ResponseAction, response: CompletedResponseView) => void;
-  onOpenSource?: (origin: ForkOrigin, beginViewport?: ChatViewport['beginNavigation']) => void;
   previewCurrent?: () => boolean;
 }) {
   const scope = useSubagents();
@@ -75,7 +73,6 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
     return state.generation===view.generation&&current?.nodeId===view.nodeId&&current.attachment==='attaching'
       &&current.preview?.history.page.source_cut===view.history.page.source_cut;
   };
-  const fork = useForkPoint(client, mode === 'chat' ? view?.target : undefined, view?.history?.page.inherited_through);
   const inspect = useToolTraceNavigation(locator => view ? client.locateToolTrace(view.id, locator) : Promise.resolve(false), onMode, !!view && !view.readingPreview && !scope?.selected, `root:${sessionId}:${view?.target?.attachment_id}`);
   const readingEntries = useMemo(() => view ? transcriptPresentation(view.history, view.transcript) : [], [view?.history, view?.transcript]);
   const requestFeedback = useModelRetryFeedback(client, sessionId ?? '', readingEntries,
@@ -106,12 +103,7 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
       }}/>}
       latestTurn={view.attempt && ['admitted','running'].includes(view.attempt.phase.type) ? turnAnchor({conversation_id:view.conversation_id,attempt_id:view.attempt.attempt_id,attempt_id_source:view.attempt.attempt_id_source}) : undefined}
       initialHistoryLoading={view.history?.initialLoading} historical={!!view.history?.window} onLatest={() => { client.returnToLatest(view.id); void client.loadInitialHistory(view.id); }} onActiveTurn={setActive}>
-      {fork.error && <div role="alert"><p>{fork.error}</p><button type="button" onClick={fork.retry}>{tx('agent:fork-point.reload')}</button></div>}
-      {(view.messages.length > 0 || !!view.transcript.entries?.length || !waiting) && <AgentTranscript publicationHeads={view.publicationHeads} retrying={view.retrying} compactions={checkpoints.map(({ head, command }) => ({ head, content: <CompactionCheckpoint head={head} client={client} sessionId={view.id} title={command ? tx('agent:context.command-title') : undefined}/> }))} contextActivity={!view.retrying && !view.readingPreview && <ContextSeat key={`${view.id}:${view.target?.attachment_id}`} client={client} sessionId={view.id}/>} requestFeedback={requestFeedback} snapshot={view} workflows={!view.retrying && !view.readingPreview && !view.history?.window ? workflows.snapshot : undefined} history={view.history} loadLater={() => client.loadLater(view.id)} loadEarlier={() => { viewport.current?.beginNavigation(); void (view.readingPreview ? client.loadEarlierPreview(view.id) : client.loadEarlier(view.id)).catch(() => {}); }} lineageSwitchSafe={view.safe} historicalDisabled={view.disabled || historicalPending} onHistorical={onHistorical} forkPoint={fork.point} onOpenSource={onOpenSource ? origin => {
-        // The gesture publishes its exact Shell intent and installs viewport
-        // cancellation in this same stack, before any browser scroll can interleave.
-        onOpenSource(origin, viewport.current?.beginNavigation);
-      } : undefined} sourceDisabled={!view.readable}/>}
+      {(view.messages.length > 0 || !!view.transcript.entries?.length || !waiting) && <AgentTranscript publicationHeads={view.publicationHeads} retrying={view.retrying} compactions={checkpoints.map(({ head, command }) => ({ head, content: <CompactionCheckpoint head={head} client={client} sessionId={view.id} title={command ? tx('agent:context.command-title') : undefined}/> }))} contextActivity={!view.retrying && !view.readingPreview && <ContextSeat key={`${view.id}:${view.target?.attachment_id}`} client={client} sessionId={view.id}/>} requestFeedback={requestFeedback} snapshot={view} workflows={!view.retrying && !view.readingPreview && !view.history?.window ? workflows.snapshot : undefined} history={view.history} loadLater={() => client.loadLater(view.id)} loadEarlier={() => { viewport.current?.beginNavigation(); void (view.readingPreview ? client.loadEarlierPreview(view.id) : client.loadEarlier(view.id)).catch(() => {}); }} lineageSwitchSafe={view.safe} historicalDisabled={view.disabled || historicalPending} onHistorical={onHistorical}/>}
       {view.configurationObservation?.error && <div className={pendingCss.root}><p role="alert">{view.configurationObservation.error}</p></div>}
       {workflows.error && <p role="alert">{workflows.error}</p>}
       <PendingMessage client={client} sessionId={view.id}/>

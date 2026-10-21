@@ -92,27 +92,6 @@ window.sessionFixture = {
     await server.client.request({ method: 'server/info', params: {} }, 'server_info');
     await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
   },
-  holdHistory: () => { server.held.add('session/history'); },
-  settleHistory: async (success: boolean) => {
-    const row = server.requests.filter(row => row.request.method === 'session/history' && row.request.params.session_id === 'C').at(-1)!;
-    server.held.delete('session/history');
-    if (success) server.reply(row.request, row.socket);
-    else row.socket.deliver({ jsonrpc: '2.0', id: row.request.id, error: { code: -32000, message: 'Navigation fixture rejected', data: { kind: 'operation_failed' } } });
-    await server.client.request({ method: 'server/info', params: {} }, 'server_info');
-    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
-  },
-  allowNodeReads: () => { server.held.delete('session/node'); },
-  holdNode: () => { server.held.add('session/node'); },
-  settleNode: async (success: boolean) => {
-    const row = server.requests.filter(row => row.request.method === 'session/node' && row.request.params.session_id === 'C' && row.request.params.node_id === 'source-node-C').at(-1)!;
-    server.held.delete('session/node');
-    if (success) server.reply(row.request, row.socket);
-    else row.socket.deliver({ jsonrpc: '2.0', id: row.request.id, error: { code: -32000, message: 'Unknown Node', data: { kind: 'unknown_node', session_id: 'C', node_id: 'source-node-C' } } });
-    // An ordered wire barrier after delivery, followed by React's presentation
-    // frame. No elapsed-time assumption establishes the response ordering.
-    await server.client.request({ method: 'server/info', params: {} }, 'server_info');
-    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
-  },
   uncertainUpload: () => { server.handlers.set('session/uploadStatus', () => ({ type: 'upload_status', outcome: { state: 'unresolved' } })); },
   resolveUpload: () => { server.handlers.delete('session/uploadStatus'); },
   wireBarrier: () => server.client.request({ method: 'server/info', params: {} }, 'server_info').then(() => {}),
@@ -199,4 +178,4 @@ window.sessionFixture = {
 if (new URL(location.href).searchParams.get('initial') === 'other-uncertain') await window.sessionFixture.presentation('other-uncertain');
 createRoot(document.getElementById('root')!).render(<App client={server.client} workspaceHost={server.workspaceHost} />);
 
-declare global { interface Window { sessionFixture: { holdInput(): void; settleInput(): Promise<void>; wireBarrier(): Promise<void>; holdHistory(): void; settleHistory(success: boolean): Promise<void>; holdSearch(): void; settleSearch(query: string): Promise<void>; allowNodeReads(): void; holdNode(): void; settleNode(success: boolean): Promise<void>; uncertainUpload(): void; resolveUpload(): void; settingsTargets(): string[]; waitForNavigation(): Promise<void>; captureNavigation(): void; navigationCurrent(): boolean; navigationFacts(): { generation: number; claims: import('../../../protocol/app-server/v51').AttachmentTarget[]; views: Record<string, { attachment: string; nodeId?: string; intent: string; target?: import('../../../protocol/app-server/v51').AttachmentTarget; authoritative: boolean }> }; holdBackgroundCheckpoint(): Promise<void>; holdSnapshot(): Promise<void>; settleSnapshot(): Promise<void>; staleDestination(): Promise<void>; replaceConnection(): Promise<void>; readyNavigation(): Promise<void>; holdAttach(): void; settleAttach(success: boolean, sessionId?: string): void; requests(): import("../../../protocol/app-server/v51").Request[]; releaseCold(): Promise<number>; activity(id: string, timestamp: string): Promise<void>; releaseAssociations(): void; stream(text: string): Promise<void>; state(mode: 'idle' | 'queued' | 'stopping' | 'reconnect' | 'uncertain'): Promise<void>; presentation(mode: 'empty' | 'preview' | 'named' | 'delete' | 'other-uncertain' | 'many'): Promise<void> } } }
+declare global { interface Window { sessionFixture: { holdInput(): void; settleInput(): Promise<void>; wireBarrier(): Promise<void>; holdSearch(): void; settleSearch(query: string): Promise<void>; uncertainUpload(): void; resolveUpload(): void; settingsTargets(): string[]; waitForNavigation(): Promise<void>; captureNavigation(): void; navigationCurrent(): boolean; navigationFacts(): { generation: number; claims: import('../../../protocol/app-server/v51').AttachmentTarget[]; views: Record<string, { attachment: string; nodeId?: string; intent: string; target?: import('../../../protocol/app-server/v51').AttachmentTarget; authoritative: boolean }> }; holdBackgroundCheckpoint(): Promise<void>; holdSnapshot(): Promise<void>; settleSnapshot(): Promise<void>; staleDestination(): Promise<void>; replaceConnection(): Promise<void>; readyNavigation(): Promise<void>; holdAttach(): void; settleAttach(success: boolean, sessionId?: string): void; requests(): import("../../../protocol/app-server/v51").Request[]; releaseCold(): Promise<number>; activity(id: string, timestamp: string): Promise<void>; releaseAssociations(): void; stream(text: string): Promise<void>; state(mode: 'idle' | 'queued' | 'stopping' | 'reconnect' | 'uncertain'): Promise<void>; presentation(mode: 'empty' | 'preview' | 'named' | 'delete' | 'other-uncertain' | 'many'): Promise<void> } } }

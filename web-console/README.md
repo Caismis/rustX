@@ -265,7 +265,7 @@ releasing an attachment. Stale cleanup cannot retire a newer intent. Overlay
 user dismissal retires sidebar preparation; successful programmatic closure
 does not cancel the committed route. Settings, connection Settings and
 owning-Workspace Settings synchronously retire preparation from every
-conversation entry point (including Fork source) before dispatching to the
+conversation entry point before dispatching to the
 independent Settings machine. Idle Settings and overlay dismissal preserve
 committed controls and continuation fences. A current authoritative attachment permits
 immediate presentation navigation without an
@@ -277,18 +277,16 @@ overlay programmatically without revoking its own commit. Navigation from an exi
 Startup from an empty draft may project a non-executable Session draft for local
 input staging; it never grants runtime controls before attachment proof. Saved
 route restoration starts after connection setup and Settings handoff complete,
-only while the initial draft has not been replaced. Fork View Source uses exact,
-authorized `session/node` and cut-bound `session/history` reads to publish a
-read-only route. It has bounded paging, exact ChatViewport Message landing and a
-return action, without source attachment, Node switching or model execution.
+only while the initial draft has not been replaced. Forked Sessions display
+inherited and new messages in one continuous transcript, matching Harness.
+There is no fork-source notice or source-navigation screen; origin metadata
+remains a native Session tree fact.
 The browser-lifetime `ComposerDraft` owns editor incarnation, authored content
 revision, selection and revision-correlated submission tickets. React subscribes;
-it never mirrors stale component-local text back into that owner. Entering history
-and returning to its originating Session preserve the logical editor destination,
-including sidebar selection and cold attachment admission. Fast and prepared
-navigation use the same editor-destination comparison through history `returnTo`.
-Returning establishes fresh route controls even when the draft binding stays
-unchanged; selecting another Session or an explicit executable Node/Branch/Retry
+it never mirrors stale component-local text back into that owner. Refocusing
+the same Session preserves the logical editor destination, including sidebar
+selection and cold attachment admission. Fast and prepared navigation share that
+comparison. Selecting another Session or an explicit executable Node/Branch/Retry
 transition establishes a separate editor. Native receipt and Conversation checks
 remain independent of this local draft continuity.
 Known native `inbound_accepted` settlement consumes only the submitted revision

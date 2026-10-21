@@ -40,11 +40,10 @@ it('does not append out-of-window checkpoints or put gap markers beside unrelate
   before(ui.getByText('Live answer'), ui.container.querySelector('[data-compaction-checkpoint="4"]')!);
 });
 
-it('keeps inherited checkpoints before the fork boundary and orders checkpoints sharing a position', () => {
+it('keeps inherited checkpoints before new branch messages and orders checkpoints sharing a position', () => {
   const server = new Server();
-  const ui = render(<AgentTranscript snapshot={{ ...snapshot(), messages: [], transcript: { inherited_through: '10', entries: [entry('10', 'Inherited answer'), entry('20', 'Branch answer')] } }} forkPoint={{ through: '10', origin: { type: 'fork', side: 'after', source_session: 'B', source_node: 'node-B', source_surface_revision: '1', source_message: 'source' } }} compactions={[marker('2', '10', server), marker('1', '10', server)]}/>);
+  const ui = render(<AgentTranscript snapshot={{ ...snapshot(), messages: [], transcript: { inherited_through: '10', entries: [entry('10', 'Inherited answer'), entry('20', 'Branch answer')] } }} compactions={[marker('2', '10', server), marker('1', '10', server)]}/>);
   expect([...ui.container.querySelectorAll('[data-compaction-checkpoint]')].map(el => el.getAttribute('data-compaction-checkpoint'))).toEqual(['1', '2']);
-  before(ui.container.querySelector('[data-compaction-checkpoint="2"]')!, ui.container.querySelector('[data-chat-anchor-key="fork-point"]')!);
   before(ui.container.querySelector('[data-compaction-checkpoint="2"]')!, ui.getByText('Branch answer'));
 });
 
