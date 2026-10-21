@@ -286,7 +286,7 @@ pub(crate) fn page<T: Serialize + schemars::JsonSchema>(
 /// Fixed-size source metadata is fetched before the Projection lock is taken.
 /// Lookup reads indexes only; it never reads or serializes canonical bodies.
 pub(crate) fn message_metadata(
-    store: &dyn crate::durable::ConversationStore,
+    store: &dyn crate::durable::ObservationStore,
     message: &crate::message::types::MessageBlock,
 ) -> Vec<ContentRef> {
     use crate::message::types::{AssistantContentBlock, MessageBlock, UserContentBlock};
@@ -371,7 +371,7 @@ pub(crate) fn message_metadata(
         .collect()
 }
 pub(crate) fn observation_metadata(
-    store: &dyn crate::durable::ConversationStore,
+    store: &dyn crate::durable::ObservationStore,
     observation: &crate::runtime::observation::ConversationObservation,
 ) -> Vec<ContentRef> {
     use crate::runtime::observation::ConversationObservation as Observation;

@@ -1073,7 +1073,7 @@ impl SubagentRegistry {
     #[allow(clippy::too_many_lines)] // one ordered fold of durable ownership/resource facts
     pub(crate) fn restore_agents(
         &self,
-        store: &dyn crate::durable::ConversationStore,
+        store: &dyn crate::durable::JournalStore,
     ) -> Result<(), crate::durable::ConversationStoreError> {
         use crate::durable::ConversationStoreError;
         use crate::events::types::RuntimeEvent;

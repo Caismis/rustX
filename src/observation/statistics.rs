@@ -1,10 +1,10 @@
 //! Child-owned statistics, independent of transcript windows and live activation.
 //! Like Harness's session meters and subagent timing projection, durable facts
 //! supply all readings; clients only interpolate a currently running clock.
+use crate::durable::ConversationStoreError;
 #[cfg(test)]
 #[cfg(test)]
 use crate::durable::response::{add_usage, timing::ActivityFold};
-use crate::durable::{ConversationStore, ConversationStoreError};
 #[cfg(test)]
 use crate::events::types::RuntimeEvent;
 use crate::model::types::ModelUsage;
@@ -42,7 +42,7 @@ pub struct AgentActiveInterval {
 
 /// Reads one immutable native aggregate; no per-child read cache is retained.
 pub(crate) fn read(
-    store: &dyn ConversationStore,
+    store: &dyn crate::durable::ObservationStore,
     through: u64,
     running_since: impl FnOnce() -> Option<DateTime<Utc>>,
 ) -> Result<AgentStatistics, ConversationStoreError> {
@@ -69,7 +69,7 @@ impl StatisticsFold {
     /// reads at the same frontier do no event work; recovery simply replays.
     pub(crate) fn read(
         &mut self,
-        store: &dyn ConversationStore,
+        store: &dyn crate::durable::ObservationStore,
         through: u64,
         running_since: impl FnOnce() -> Option<DateTime<Utc>>,
     ) -> Result<AgentStatistics, ConversationStoreError> {

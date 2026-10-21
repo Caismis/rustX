@@ -2,7 +2,7 @@
 use crate::observation::tool::{collections, content, foreground};
 
 pub(crate) fn page(
-    store: &dyn crate::durable::ConversationStore,
+    store: &dyn crate::durable::CanonicalStore,
     cut: &crate::observation::cut::CheckpointReadCut,
     domain: &str,
     locator: &crate::observation::content::CanonicalContentLocator,

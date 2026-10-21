@@ -150,7 +150,7 @@ pub(super) async fn read(
 }
 
 fn next_block(
-    store: &dyn crate::durable::ConversationStore,
+    store: &dyn crate::durable::ObservationStore,
     locator: &crate::observation::content::CanonicalContentLocator,
     block_index: u32,
 ) -> Result<Option<u32>, crate::runtime_client::RuntimeClientError> {
@@ -178,7 +178,7 @@ fn next_block(
 }
 
 fn read_upload(
-    store: &dyn crate::durable::ConversationStore,
+    store: &dyn crate::durable::ObservationStore,
     content_source: &ContentSource,
 ) -> Result<crate::message::types::UserContentBlock, crate::runtime_client::types::RuntimeClientError>
 {

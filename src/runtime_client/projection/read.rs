@@ -142,7 +142,7 @@ impl RuntimeClientProjection {
     /// Called during construction, before the Projection synchronization boundary exists.
     pub(crate) fn initialize_descriptor_heads(
         &mut self,
-        store: &dyn crate::durable::ConversationStore,
+        store: &dyn crate::durable::ObservationStore,
         cut: crate::durable::observation::ObservationReadCut,
     ) -> Result<(), RuntimeClientError> {
         let messages = store

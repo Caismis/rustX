@@ -32,7 +32,7 @@ impl RuntimeClientContextOccupancy {
     }
 }
 pub(crate) fn read(
-    store: &dyn crate::durable::ConversationStore,
+    store: &dyn crate::durable::ObservationStore,
     through: u64,
 ) -> Result<Option<RuntimeClientContextOccupancy>, crate::durable::ConversationStoreError> {
     store.observation_occupancy(through)

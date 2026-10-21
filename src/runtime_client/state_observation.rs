@@ -1,7 +1,6 @@
 //! Range and field pages over the existing native Goal, Todo, and Compaction sources.
 use super::checkpoint::{CheckpointPage, CheckpointValueChunk};
 use super::types::{RuntimeClientCursor, RuntimeClientError};
-use crate::durable::ConversationStore;
 use crate::observation::cut::{CheckpointKey, CheckpointPageItem, CheckpointReadCut};
 use base64::Engine as _;
 
@@ -22,7 +21,7 @@ pub(crate) fn selection(domain: &str) -> Option<(&str, Vec<String>)> {
     ))
 }
 pub(crate) fn available(
-    store: &dyn ConversationStore,
+    store: &dyn crate::durable::ObservationStore,
     cut: &CheckpointReadCut,
     domain: &str,
 ) -> Result<bool, RuntimeClientError> {
@@ -37,7 +36,7 @@ pub(crate) fn available(
         .map_err(RuntimeClientError::observation_store_error)
 }
 fn source(
-    store: &dyn ConversationStore,
+    store: &dyn crate::durable::ObservationStore,
     cut: &CheckpointReadCut,
     owner: &str,
 ) -> Result<String, RuntimeClientError> {
@@ -51,7 +50,7 @@ fn source(
         .ok_or(RuntimeClientError::ReadCutExpired)
 }
 pub(crate) fn page(
-    store: &dyn ConversationStore,
+    store: &dyn crate::durable::ObservationStore,
     cut: &CheckpointReadCut,
     domain: &str,
     offset: u64,
@@ -130,7 +129,7 @@ pub(crate) fn page(
     })
 }
 pub(crate) fn read(
-    store: &dyn ConversationStore,
+    store: &dyn crate::durable::ObservationStore,
     cut: &CheckpointReadCut,
     domain: &str,
     item_offset: u64,
