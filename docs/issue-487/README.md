@@ -2,9 +2,9 @@
 
 Starting base: `origin/main` at `6771928953a9b2815a27fd784f6d39c5ccde8b56`
 (identical to the audit snapshot, so every audited finding applied).
-Integrated main: `0f3d978e43e2174d5b26feff6bccefc1bf25f71d` (adds auxiliary
-request ownership, PR #486; its new code was ported into the refactored
-layout, see "Integration with main" below).
+Integrated main: `7cf6b2da6b360bb759ba82de5367ea1bb5d310f4` (PR #488, on top
+of `0f3d978e43e2174d5b26feff6bccefc1bf25f71d`, PR #486). Both were ported into
+the refactored layout; see "Integration with main" below.
 
 Status: **done** = implemented with the evidence named; **resolved on base**
 = already true at the base. No requirement is deferred.
@@ -68,10 +68,10 @@ Sizes: [`measure.py`](measure.py) (method in its docstring) and the generated
 
 | Req | Base finding | Old owner → final owner | Change / removed path | Evidence | Status |
 | --- | --- | --- | --- | --- | --- |
-| F1 Web client split | `app-server.ts` 2,584 lines | root (891) keeps connection lifecycle, the one published state and Session lifecycle projection; collaborators with narrow interfaces: `contracts`, `errors`, `request-pipeline`, `source-repairs`, `session-catalog`, `session-reads` (`client.reads`), `configuration-observations`, `reading`, `cold-reads`, `trace-reads`, `session-controls`, `model-selection`, `interactions`, `session-uploads` | XState ownership unchanged | `web-console` typecheck/test/build | done |
+| F1 Web client split | `app-server.ts` 2,584 lines | root (890) keeps connection lifecycle, the one published state and Session lifecycle projection; collaborators with narrow interfaces: `contracts`, `errors`, `request-pipeline`, `source-repairs`, `session-catalog`, `session-reads` (`client.reads`), `configuration-observations`, `reading`, `cold-reads`, `trace-reads`, `session-controls`, `model-selection`, `interactions`, `session-uploads` | XState ownership unchanged | `web-console` typecheck/test/build | done |
 | F2 client ↔ first-submit cycle | client imported `first-submit.ts` | application layer owns `firstSubmissions(client)` over new `onAuthorityRetired`/`onDispose` hooks; shared errors in `client/errors.ts` | cycle removed | `check:provenance` | done |
 | F3 established seams, no forwarding context | — | collaborators receive only what they read/write | — | — | done |
-| F4 TUI app split | `ui/app.ts` 2,376 | root (1,517) keeps global focus/exit, Session binding, draft/submit, the presentation lease; `presentation-lease`, `human-input`, `selectors`, `conversation-view` | 1,517 is just over the ~1,500 guideline: further splitting would separate run-loop key routing from Session binding, which share the app state | `tui` tests | done |
+| F4 TUI app split | `ui/app.ts` 2,376 | root (1,509) keeps global focus/exit, Session binding, draft/submit, the presentation lease; `presentation-lease`, `human-input`, `selectors`, `conversation-view` | 1,509 is just over the ~1,500 guideline: further splitting would separate run-loop key routing from Session binding, which share the app state | `tui` tests | done |
 | F5 dispatcher helpers, Session readers | dispatcher 1,464; session 1,296 | `commands/outcome.ts`, `commands/presentation.ts`; `app-server/session-readers.ts` (epoch-fenced bounded reads); `questionnaire-answers.ts`; shared `diagnostic-text.ts` | entries 831 / 886 / 861 | `tui` tests | done |
 | F6 App Server handler families | `connection.rs` 3,240 | `connection.rs` (974) keeps decoding, admission, runtime-operation admission under the route lock, attach reservation/commit, release, close, delivery registration and `Reply::commit`; `connection/{family, catalog, history, configuration, runtime, notifications}`; one error mapping in `app_server/rpc_error.rs` | `Family::of` replaces `runtime_target` with an exhaustive match | 4,252 lib tests before and after | done |
 
@@ -108,7 +108,9 @@ Sizes: [`measure.py`](measure.py) (method in its docstring) and the generated
 | I5 docs | — | `docs/architecture.md` module maps (Store, SQLite, ConversationRuntime, Runtime Client, observation, MCP, App Server, Web/TUI), `docs/runtime-resources.md`, `docs/app-server-protocol.md`, `docs/invariants.md`, `tests/README.md` | stale paths removed | `cargo test --test contracts` | done |
 | I6 generated artifacts | — | wire type descriptions kept unchanged, so no regeneration was needed | — | `pnpm --dir protocol/app-server check` (no drift); `committed_rust_artifacts_are_current` | done |
 
-## Integration with main (`0f3d978e`)
+## Integration with main
+
+### `0f3d978e` (#486)
 
 Main added auxiliary request ownership (#486) while this branch was in
 progress. Its changes were ported hunk by hunk into the refactored layout:
@@ -122,6 +124,33 @@ progress. Its changes were ported hunk by hunk into the refactored layout:
   `sqlite/request/tests/owner.rs`, `sqlite/observation/tests/trace/auxiliary.rs`;
 - execution, projection, host, session, schema, journal and request hunks were
   applied at their moved locations.
+
+### `7cf6b2da` (#488)
+
+Merged with 63 conflicting paths. Each conflict was resolved by tracing main's
+diff against `0f3d978e` and applying it at the code's new owner; no old
+monolith was restored.
+
+| Main change | Final owner in this layout |
+| --- | --- |
+| App Server v51 handshake, generated `v51.*`, subprotocol | native unchanged from main; Web `client/app-server.ts`; every extracted Web/TUI module and test import (`contracts.ts`, `method-policy.ts`, `session-uploads.ts`, `session-reads.ts`, TUI `session-readers.ts`, …) moved to `v51` |
+| one file per `session/uploadPrepare`; `UploadPolicy` file/transfer limits removed | `client/session-uploads.ts` (exactly one file per operation, tuple request); multi-file selections stay per-file operations in `first-submit.ts` / `uploads.ts` with their own operation identity, receipt and uncertain-outcome repair; TUI `session.ts` already sent one file |
+| multi-page reading windows, initial-window policy, exact repair of rows that leave the live head, frozen vs live continuation | `client/reading.ts` (`readHistoryPage` keeps the first page's cut and strict cursor progress, `loadInitialHistory`, `refreshTranscriptDomain`, `returnToLatest`); triggered from the root observation path, attach and connection loss in `client/app-server.ts` |
+| Trace: newer-head guard, multi-page older reads, same-epoch detail retention, independent pending-read token | `client/trace-reads.ts` (`refreshDomain`, `loadInitialTrace`, `loadEarlierTrace`, `loadTraceDetail`); epoch-preserving refresh in the root observation path; shared state in `client/trace.ts` |
+| publication heads on the Session view | `client/contracts.ts` `SessionView.publicationHeads`, folded in the root observation path |
+| developer protocol log and Inspector removed | removed from `request-pipeline.ts` and the client root; its tests dropped with it |
+| `selectCatalogModel` removed from the Web client | removed from `client/model-selection.ts` |
+| source-prepared `transcript_anchor` per activation | `ObservationStore::observation_projection_activation`; SQLite reader in `sqlite/observation/store.rs` over `observation_projection::read_id`; field on `observation::head::RuntimeClientProjectionHeadView`; history checkpoint views (`projection/views.rs::checkpoint_view`) read the original activation descriptor |
+| Workflow child inspection without durable Agent authority | `runtime_client/host/agents.rs` (`child_view`, Workflow-child `agent_status`, inspection-only stores); App Server `connection/runtime.rs` reads `agent_status` natively; mutations still require the Registry's Agent record |
+| child live → retained handoff authorized by Registry terminal state, shared deadline, same activation | `runtime_client/agent_observation.rs`, `agent_trace.rs` (moved types stay under `crate::observation`) |
+| child input admission: text budget kept, attachment count limit removed | `registry/control.rs`, `registry/preparation.rs` (`valid_input`, error text) |
+| upstream tests added to files this branch had split or removed | `workflow_child_inspection_does_not_grant_durable_agent_controls` → `registry/tests/settlement.rs`; `abandoned_workflow_publication_keeps_inspection_on_retained_history` (from the removed `workflow_recovery_tests.rs`) → `conversation_runtime/bootstrap/tests.rs`; anchor tests → `sqlite/observation/tests/projection.rs`; protocol upload/delivery hunks → `tests/scripted/app_server/protocol/{upload,delivery}.rs` |
+
+Upstream files written against the old monolithic client were adapted to the
+extracted API (`client.reads.readContent`, `client.reads.modelRead`,
+`client.reads.domainReader`, contract/error imports from `contracts.ts` /
+`errors.ts`). Five tracked `*.orig` merge backups left by the first
+integration were removed.
 
 ## Production modules above 2,000 lines
 

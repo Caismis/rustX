@@ -10,7 +10,7 @@ Counting method (physical lines, comments and blanks included):
   to the item's closing brace or semicolon) is counted as test; all remaining
   lines are production.
 * TypeScript: files under `test/`, `tests/`, or named `*.test.ts(x)` /
-  `*.spec.ts(x)` are test; the protocol generator outputs (`v50.ts`,
+  `*.spec.ts(x)` are test; the protocol generator outputs (`v<N>.ts`,
   `fixtures.ts`), `*.generated.ts` and `generated/` are generated;
   everything else under `src/` is production.
 
@@ -202,13 +202,13 @@ def _rust_test_files():
 
 
 # Outputs of protocol/app-server/generate.mjs (checked by its `pnpm check`).
-GENERATED = ("protocol/app-server/v50.ts", "protocol/app-server/fixtures.ts")
+GENERATED = re.compile(r"protocol/app-server/(v\d+|fixtures)\.ts")
 
 
 def ts_kind(rel):
     parts = rel.split("/")
     base = parts[-1]
-    if rel in GENERATED or "generated" in parts or ".generated." in base:
+    if GENERATED.fullmatch(rel) or "generated" in parts or ".generated." in base:
         return "generated"
     if "test" in parts or "tests" in parts or re.search(r"\.(test|spec)\.tsx?$", base):
         return "test"

@@ -7,30 +7,30 @@ Rust `#[cfg(test)]` items and files reached only from test code (`mod`,
 `generated` paths/files are generated. Cells are `production / test`.
 
 Columns: **base** is the starting base `6771928`; **main** is the latest
-`origin/main` integrated into the branch (it adds auxiliary request ownership,
-PR #486, so area totals grow independently of this refactor); **after** is the
-final branch head.
+`origin/main` integrated into the branch, `7cf6b2da` (it adds PR #486 auxiliary
+request ownership and PR #488, so area totals grow independently of this
+refactor); **after** is the final branch head.
 
 ## Entry files
 
 | Entry file | base | main | after |
 | --- | ---: | ---: | ---: |
-| `src/durable/sqlite.rs` | 13,417 / 8,197 | 13,935 / 8,230 | 736 / 369 |
-| `src/durable/inbox.rs` | 3,469 / 7 | 3,679 / 7 | 1,177 / 0 |
+| `src/durable/sqlite.rs` | 13,417 / 8,197 | 13,945 / 8,230 | 736 / 369 |
+| `src/durable/inbox.rs` | 3,469 / 7 | 3,687 / 7 | 1,177 / 0 |
 | `src/runtime/conversation_runtime.rs` | 7,305 / 12,561 | 7,305 / 12,568 | 1,079 / 20 |
-| `src/runtime_client/projection.rs` | 6,833 / 7,414 | 6,926 / 7,833 | 368 / 171 |
-| `src/runtime_client/host.rs` | 5,529 / 8,874 | 5,598 / 9,108 | 753 / 287 |
+| `src/runtime_client/projection.rs` | 6,833 / 7,414 | 6,906 / 7,833 | 368 / 171 |
+| `src/runtime_client/host.rs` | 5,529 / 8,874 | 5,643 / 9,108 | 753 / 287 |
 | `src/agent/execution.rs` | 5,783 / 4,312 | 5,820 / 4,333 | 452 / 13 |
 | `src/tools/mcp/mod.rs` | 5,676 / 2,662 | 5,676 / 2,662 | 430 / 65 |
-| `src/runtime/subagent/registry.rs` | 4,522 / 5,378 | 4,522 / 5,378 | 686 / 236 |
+| `src/runtime/subagent/registry.rs` | 4,522 / 5,378 | 4,516 / 5,435 | 686 / 236 |
 | `src/local_runtime/session.rs` | 3,400 / 5,399 | 3,451 / 5,428 | 889 / 63 |
 | `src/local_runtime/composition.rs` | 2,113 / 2,472 | 2,113 / 2,472 | 911 / 4 |
 | `src/local_runtime/session_runtime_manager.rs` | 2,078 / 214 | 2,078 / 214 | 522 / 48 |
 | `src/local_runtime/configuration.rs` | 2,004 / 105 | 2,004 / 105 | 193 / 34 |
 | `src/runtime/resources.rs` | 1,241 / 156 | 1,241 / 156 | 1,009 / 156 |
-| `src/app_server/connection.rs` | 3,240 / 169 | 3,240 / 169 | 974 / 65 |
-| `web-console/src/client/app-server.ts` | 2,584 / 0 | 2,584 / 0 | 891 / 0 |
-| `tui/src/ui/app.ts` | 2,376 / 0 | 2,376 / 0 | 1,517 / 0 |
+| `src/app_server/connection.rs` | 3,240 / 169 | 3,242 / 169 | 974 / 65 |
+| `web-console/src/client/app-server.ts` | 2,584 / 0 | 2,646 / 0 | 890 / 0 |
+| `tui/src/ui/app.ts` | 2,376 / 0 | 2,368 / 0 | 1,509 / 0 |
 | `tui/src/app-server/session.ts` | 1,296 / 0 | 1,296 / 0 | 886 / 0 |
 | `tui/src/commands/dispatcher.ts` | 1,464 / 0 | 1,464 / 0 | 831 / 0 |
 | `tui/src/ui/components/questionnaire.ts` | 1,280 / 0 | 1,280 / 0 | 861 / 0 |
@@ -40,22 +40,22 @@ final branch head.
 
 | Area (entry + its child modules) | main prod / test | after prod / test | largest production module after |
 | --- | ---: | ---: | --- |
-| `src/durable/sqlite.rs` | 44,323 / 37,227 | 42,169 / 40,548 | `src/durable/sqlite/projection.rs` (1,852) |
-| `src/durable/inbox.rs` | 3,679 / 7 | 3,769 / 7 | `src/durable/inbox.rs` (1,177) |
-| `src/runtime/conversation_runtime.rs` | 7,305 / 13,101 | 7,303 / 12,963 | `src/runtime/conversation_runtime/bootstrap.rs` (1,190) |
-| `src/runtime_client/projection.rs` | 6,926 / 8,323 | 6,994 / 8,368 | `src/runtime_client/projection/checkpoint_seed.rs` (1,011) |
-| `src/runtime_client/host.rs` | 5,871 / 11,976 | 6,039 / 12,084 | `src/runtime_client/host/read.rs` (1,211) |
+| `src/durable/sqlite.rs` | 44,350 / 37,323 | 42,195 / 40,651 | `src/durable/sqlite/projection.rs` (1,852) |
+| `src/durable/inbox.rs` | 3,687 / 7 | 3,774 / 7 | `src/durable/inbox.rs` (1,177) |
+| `src/runtime/conversation_runtime.rs` | 7,305 / 13,202 | 7,303 / 13,063 | `src/runtime/conversation_runtime/bootstrap.rs` (1,190) |
+| `src/runtime_client/projection.rs` | 6,906 / 8,323 | 6,976 / 8,368 | `src/runtime_client/projection/checkpoint_seed.rs` (1,011) |
+| `src/runtime_client/host.rs` | 5,916 / 11,976 | 6,084 / 12,084 | `src/runtime_client/host/read.rs` (1,211) |
 | `src/agent/execution.rs` | 5,820 / 4,587 | 6,037 / 5,166 | `src/agent/execution/tools.rs` (1,122) |
 | `src/tools/mcp/mod.rs` | 13,236 / 5,828 | 13,590 / 5,942 | `src/tools/mcp/fixture.rs` (1,616) |
-| `src/runtime/subagent/registry.rs` | 7,871 / 8,751 | 6,345 / 10,581 | `src/runtime/subagent/registry/agents.rs` (1,317) |
-| `src/local_runtime/session.rs` | 11,864 / 8,465 | 5,722 / 14,833 | `src/local_runtime/session/uploads.rs` (1,048) |
+| `src/runtime/subagent/registry.rs` | 7,902 / 8,808 | 6,377 / 10,638 | `src/runtime/subagent/registry/agents.rs` (1,355) |
+| `src/local_runtime/session.rs` | 11,871 / 8,430 | 5,729 / 14,798 | `src/local_runtime/session/uploads.rs` (1,055) |
 | `src/local_runtime/composition.rs` | 2,113 / 2,472 | 2,137 / 2,470 | `src/local_runtime/composition.rs` (911) |
 | `src/local_runtime/session_runtime_manager.rs` | 2,078 / 214 | 2,232 / 228 | `src/local_runtime/session_runtime_manager/lifecycle.rs` (591) |
 | `src/local_runtime/configuration.rs` | 7,511 / 5,438 | 7,816 / 5,441 | `src/local_runtime/configuration/repair.rs` (1,460) |
 | `src/runtime/resources.rs` | 1,241 / 156 | 1,147 / 158 | `src/runtime/resources.rs` (1,009) |
-| `src/app_server/connection.rs` | 3,240 / 169 | 3,439 / 173 | `src/app_server/connection.rs` (974) |
-| `web-console/src/client/app-server.ts` | 4,696 / 0 | 5,201 / 0 | `web-console/src/client/app-server.ts` (891) |
-| `tui/src/ui/app.ts` | 12,098 / 0 | 12,092 / 0 | `tui/src/ui/app.ts` (1,517) |
+| `src/app_server/connection.rs` | 3,242 / 169 | 3,441 / 173 | `src/app_server/connection.rs` (974) |
+| `web-console/src/client/app-server.ts` | 5,078 / 0 | 5,584 / 0 | `web-console/src/client/app-server.ts` (890) |
+| `tui/src/ui/app.ts` | 12,090 / 0 | 12,084 / 0 | `tui/src/ui/app.ts` (1,509) |
 | `tui/src/app-server/session.ts` | 4,579 / 0 | 4,521 / 0 | `tui/src/app-server/session.ts` (886) |
 | `tui/src/commands/dispatcher.ts` | 1,738 / 0 | 1,716 / 0 | `tui/src/commands/dispatcher.ts` (831) |
 | `tui/src/ui/components/questionnaire.ts` | 1,280 / 0 | 1,111 / 0 | `tui/src/ui/components/questionnaire.ts` (861) |
@@ -73,7 +73,7 @@ final branch head.
 
 | Module | production |
 | --- | ---: |
-| `src/runtime/workflow.rs` | 2,975 |
+| `src/runtime/workflow.rs` | 2,976 |
 | `src/tools/background.rs` | 2,803 |
 | `src/capabilities/coordinator.rs` | 2,373 |
 | `src/runtime/recovery.rs` | 2,277 |
