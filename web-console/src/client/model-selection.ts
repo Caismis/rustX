@@ -1,6 +1,6 @@
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
-import { RequestNotDispatched, isOutcomeUncertain } from './errors';
-import type { AttachmentTarget, CatalogModelSelection, SessionModelConfig } from '../../../protocol/app-server/v50';
+import { isOutcomeUncertain } from './errors';
+import type { AttachmentTarget, SessionModelConfig } from '../../../protocol/app-server/v51';
 import type { SessionLifecycles } from './session-lifecycle/system';
 import type { ClientView, ConnectionRequest, SessionView } from './contracts';
 
@@ -61,22 +61,6 @@ export class ModelSelection {
     void work.finally(() => { if (this.modelPreparations.get(id)?.work === work) this.modelPreparations.delete(id); }).catch(() => {});
     return work;
   }
-  /** Native catalog defaults at the exact generation whose ordinals were read. */
-  async selectCatalogModel(id:string,choice:CatalogModelSelection,owned:()=>boolean=()=>true) {
-    const target=this.port.target(id),generation=this.port.state().generation;
-    if(this.port.state().views[id].modelMutation)throw new Error('Reread native model state before another mutation.');
-    const current=()=>owned()&&this.port.current(generation)&&sameTarget(this.port.state().views[id]?.target,target);
-    if(!current())return;
-    const operation={generation,status:'in-flight' as const};this.port.setSession(id,{modelMutation:operation});
-    try {
-      await this.port.request({method:'session/selectModel',params:{target,choice}},'model_set',undefined,current);
-      if(this.port.current(generation)&&sameTarget(this.port.state().views[id]?.target,target))this.port.setSession(id,{modelMutation:{generation,status:'acknowledged'}});
-    }catch(error){
-      if(this.port.state().views[id]?.modelMutation===operation)this.port.setSession(id,{modelMutation:error instanceof RequestNotDispatched?undefined:{generation,status:isOutcomeUncertain(error)?'uncertain':'acknowledged'}});
-      throw error;
-    }
-  }
-
   /** Transport continuation guard, not Session model authority. A successful
    * mutation response alone cannot enable a dependent Send. */
   async setAgentModel(id: string, config: SessionModelConfig) {

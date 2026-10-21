@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from 'vitest';
-import type { RuntimeClientTranscriptEntry } from '../../protocol/app-server/v50';
+import type { RuntimeClientTranscriptEntry } from '../../protocol/app-server/v51';
 import { Server, snapshot, readingWindow } from './fixture';
-import { prependTranscript, refreshTranscript, replaceTranscript } from '../src/client/transcript';
+import { prependTranscript, refreshTranscript, replaceTranscript, transcriptRepairs } from '../src/client/transcript';
 const entry = (n: number): RuntimeClientTranscriptEntry => ({ cursor: String(n), item: { type: 'message', message: { id: `m${n}`, role: 'assistant', content: [{ type: 'text', text: `Message ${n}` }] } } });
 let server: Server;
 afterEach(() => server?.client.disconnect());
@@ -66,14 +66,15 @@ it('reattachment in the same connection rejects the old page and duplicate load 
   expect(server.requests.filter(item => item.request.method === 'session/transcript')).toHaveLength(1);
 });
 
-it('fresh native Tool projections replace overlaps; unresolved old projections force an authoritative window rebase', () => {
+it('fresh native Tool projections replace overlaps while unresolved old rows remain available for silent rereading', () => {
   const call = entry(8);
   call.tool_calls = [{committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'m8'},block_index:0},assembly_complete:true, message_id: 'm8', block_index: 0, call_id: 'native-call', tool_id: 'tool-bash', name: 'bash', state: { type: 'assembled', arguments: '{}' } }];
   const first = replaceTranscript({ entries: [call, entry(9)], next_cursor: '8' });
   const rebased = refreshTranscript(first, { entries: [entry(9), entry(10)], next_cursor: '9' });
-  expect(rebased.page.entries).toEqual([entry(9), entry(10)]);
-  expect(rebased.epoch).toBeGreaterThan(first.epoch);
-  expect(rebased.error).toContain('reread unresolved native responses or Tools');
+  expect(rebased.page.entries).toEqual([call, entry(9), entry(10)]);
+  expect(rebased.epoch).toBe(first.epoch);
+  expect(rebased.error).toBeUndefined();
+  expect(transcriptRepairs(rebased, { entries: [entry(9), entry(10)] })).toEqual([call]);
   const settled = structuredClone(call);
   settled.tool_calls![0].state = { type: 'settled', arguments: '{}', result: { status: { type: 'success' }, duration_ms: "1" } };
   const repaired = refreshTranscript(first, { entries: [settled, entry(9)], next_cursor: '8' });

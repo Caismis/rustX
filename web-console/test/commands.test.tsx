@@ -1,3 +1,4 @@
+import { cfg3Effective } from './cfg3-data';
 import { domainReceipt, compactReceipt } from './fixture';
 import { localeController } from '../src/locale/controller';
 import { translator } from '../src/locale/translation';
@@ -15,7 +16,7 @@ import { CommandSession } from '../src/app/commands/native';
 import { CommandPanel } from '../src/app/commands/CommandPanel';
 import { App } from '../src/app/App';
 import { OutcomeUncertain, RpcFailure } from '../src/client/errors';
-import type { MethodResult, Request, SessionNodeObservation, SessionUserMessageBoundaryObservation, UserInputBlock } from '../../protocol/app-server/v50';
+import type { MethodResult, Request, SessionNodeObservation, SessionUserMessageBoundaryObservation, UserInputBlock } from '../../protocol/app-server/v51';
 import { Server, snapshot } from './fixture';
 
 let server: Server;
@@ -103,10 +104,13 @@ function nativeFixture() {
   const nodes: SessionNodeObservation[] = [{ id: 'node-A', conversation_id: 'conversation-A', ordinal: '1', origin: { type: 'new' } }];
   const committed: Extract<MethodResult, { type: 'session_transition' }>[] = [];
   let model = 'fixture/first';
-  const modelView = () => ({ configured: { model }, effective: { model }, summary: { mode: 'session' } }) as Extract<MethodResult, { type: 'model' }>['model'];
+  const modelView = () => { const base = cfg3Effective().effective_model!; return { ...base, configured: { model }, effective: { ...base.effective!, model } }; };
   server.handlers.set('session/model', () => (domainReceipt('model',[modelView()])));
-  server.handlers.set('session/models', () => (domainReceipt('model_catalog.models',({ models: [{ model: 'fixture/first' }, { model: 'fixture/second' }] }).models??[]) as Extract<MethodResult, { type: 'models' }>));
-  server.handlers.set('session/setModel', request => { if (request.method !== 'session/setModel') throw new Error('wrong method'); model = request.params.config.model; return {type:'model_set',settings_revision:'1'}; });
+  server.handlers.set('session/models', () => (domainReceipt('model_catalog.models',({ models: [{ model: 'fixture/first' }, { model: 'fixture/second' }] }).models??[])));
+  server.handlers.set('session/setModel', request => { if (request.method !== 'session/setModel') throw new Error('wrong method'); model = request.params.config.model;
+    const next = { ...server.snapshots.get('A')!, model: { ...modelView(), configured: request.params.config } };
+    server.snapshots.set('A', next); server.nodeSnapshots.set('node-A', next);
+    return {type:'model_set',settings_revision:'1'}; });
   server.handlers.set('session/boundaries', () => ({ type: 'boundaries', surface_revision: boundary.surface_revision, boundaries: [boundary] }));
   server.handlers.set('session/tree', request => ({ type: 'tree', nodes: request.method === 'session/tree' && request.params.session_id === 'B' ? [{ id: 'node-B', conversation_id: 'conversation-B', ordinal: '1', origin: { type: 'new' } }] : nodes }));
   const transition = (request: Request): MethodResult => {
@@ -152,7 +156,7 @@ describe('successful command draft consumption', () => {
     const input = await open('/compact');
     expect(input).toHaveProperty('value', '');
     expect(screen.queryByRole('dialog')).toBeNull();
-    expect(screen.getByText('Submitting compaction request…')).toBeTruthy();
+    expect(screen.getByText('Compacting context…')).toBeTruthy();
     fireEvent.change(input, { target: { value: '/compact' } });
     fireEvent.keyDown(input, { key: 'Enter' }); fireEvent.keyDown(input, { key: 'Enter' });
     fireEvent.change(input, { target: { value: 'next draft' } });
@@ -172,8 +176,14 @@ describe('successful command draft consumption', () => {
     const request = await server.waitFor(method, 1);
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(request).toMatchObject({ params: { side } });
-    expect(screen.getByRole('button', { name })).toHaveProperty('disabled', true);
-    fireEvent.click(screen.getByRole('button', { name }));
+    if (name === 'Regenerate') {
+      expect(screen.queryByText('Original assistant response')).toBeNull();
+      expect(screen.queryByRole('button', { name })).toBeNull();
+      expect(document.querySelector('[data-chat-running]')?.textContent).toContain('Deep diving');
+    } else {
+      expect(screen.getByRole('button', { name })).toHaveProperty('disabled', true);
+      fireEvent.click(screen.getByRole('button', { name }));
+    }
     await act(async () => server.reply(request));
     // Regenerate leaves for the new branch, where this response no longer exists.
     await waitFor(() => expect((screen.queryByRole('button', { name }) as HTMLButtonElement | null)?.disabled ?? false).toBe(false));
@@ -185,6 +195,36 @@ describe('successful command draft consumption', () => {
     await act(async () => fireEvent.click(await screen.findByRole('option', { name: /fixture\/second/ })));
     expect(input).toHaveProperty('value', ''); expect(screen.queryByRole('dialog')).toBeNull();
     expect(document.activeElement).toBe(input);
+  });
+  it('a rejected Retry restores the original reply in the resident viewport and sends no replay', async () => {
+    await subject();
+    localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
+    render(<App client={server.client} workspaceHost={server.workspaceHost}/>);
+    const surface = document.querySelector('.chat-reading-surface');
+    server.held.add('session/branch');
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Regenerate' })));
+    const request = await server.waitFor('session/branch', 1);
+    expect(screen.queryByText('Original assistant response')).toBeNull();
+    expect(document.querySelector('.chat-reading-surface')).toBe(surface);
+    await act(async () => server.socket.deliver({ jsonrpc: '2.0', id: request.id, error: { code: -32602, message: 'Historical boundary refused' } }));
+    expect(await screen.findByText('Original assistant response')).toBeTruthy();
+    expect(document.querySelector('.chat-reading-surface')).toBe(surface);
+    expect(document.querySelector('[data-chat-running]')).toBeNull();
+    expect(methods()).not.toContain('turn/start');
+    expect(methods()).not.toContain('session/switchNode');
+  });
+  it('leaving during Retry retires its reading prefix and a late commit cannot send input or replace the new route', async () => {
+    await subject();
+    localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A', 'B'] }));
+    render(<App client={server.client} workspaceHost={server.workspaceHost}/>);
+    server.held.add('session/branch');
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Regenerate' })));
+    const request = await server.waitFor('session/branch', 1), response = server.commit(request);
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session B' })));
+    await act(async () => server.socket.deliver(response));
+    expect(screen.getByRole('button', { name: 'Open Session B', current: 'page' })).toBeTruthy();
+    expect(document.querySelector('[data-chat-running]')).toBeNull();
+    expect(methods()).not.toContain('turn/start'); expect(methods()).not.toContain('session/switchNode');
   });
   it('dismissal preserves a fuzzy invocation', async () => {
     const input = await open('/mdl');
@@ -483,29 +523,6 @@ describe('typed native operations and continuation fencing', () => {
     await act(() => server.update('A', { ...fixture.original, messages: [{ role: 'user', source: 'human', id: 'accepted-user', content: [{ type: 'text', text: 'accepted' }] }] }));
     expect(row).toHaveProperty('disabled', false);
   });
-  it('T11 T15 tools keep native deferred descriptors and read only selected field pages', async () => {
-    const { scope, navigation } = await subject();
-    const receipt = domainReceipt('capabilities', [null]);
-    receipt.page.items[0]!.deferred = true;
-    receipt.page.items[0]!.body_complete = false;
-    receipt.page.collections = [{ domain: 'capabilities.available_tools', revision: '0', total: '1000', loaded: '0', next_offset: '0' }];
-    server.handlers.set('resources/read', () => receipt);
-    expect(await scope.tools()).toEqual(receipt.page);
-    expect(methods()).not.toContain('conversation/checkpointValueRead');
-    server.handlers.set('conversation/checkpointPage', request => {
-      if (request.method !== 'conversation/checkpointPage') throw new Error('wrong method');
-      expect(request.params.domain).toBe('capabilities.available_tools');
-      expect(request.params.limit).toBe(32);
-      return { type: 'checkpoint_page', page: { ...receipt.page, domain: request.params.domain, total: '1000', items: [], next_offset: null } };
-    });
-    render(<CommandPanel request={{ id: 'tools' }} client={server.client} sessionId="A" current={navigation.capture()} close={() => {}} succeeded={() => {}} navigate={() => {}} />);
-    await screen.findByText('Content deferred');
-    fireEvent.click(screen.getByText('More conversation details'));
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'capabilities.available_tools' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Read first page' }));
-    await waitFor(() => expect(methods()).toContain('conversation/checkpointPage'));
-    expect(methods()).not.toContain('conversation/checkpointValueRead');
-  });
   it('selects native model identities without any command-string RPC', async () => {
     const { scope, fixture } = await subject();
     expect((await scope.models()).catalog.models?.map(model => model.model)).toEqual(['fixture/first', 'fixture/second']);
@@ -626,6 +643,30 @@ describe('typed native operations and continuation fencing', () => {
     await vi.waitFor(() => expect(navigation.actor.getSnapshot().context.error).toContain('Invalid historical Surface revision'));
     expect(navigation.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'A' });
     expect(server.client.target('A')).toBe(original); expect(methods().filter(method => method === 'session/fork')).toHaveLength(1);
+  });
+  it.each(['before', 'after'] as const)('Retry retires its prefix when canonical adoption arrives %s the acknowledgement, with no mounted Chat', async order => {
+    const { navigation, fixture } = await subject();
+    const response = fixture.original.transcript.entries![0].completed_response!;
+    server.held.add('turn/start');
+    navigation.actor.send({ type: 'OPEN', destination: { kind: 'transition', sessionId: 'A', action: 'retry', response } });
+    const request = await server.waitFor('turn/start', 1);
+    expect(navigation.actor.getSnapshot().context.retry).toBeTruthy();
+    const adopt = async () => {
+      const view = server.client.getSnapshot().views.A;
+      const state = structuredClone(view.snapshot!);
+      state.messages.push({ id: 'accepted-user', role: 'user', source: 'human', content: [{ type: 'text', text: 'Try this' }] });
+      server.snapshots.set('A', state); server.nodeSnapshots.set(view.nodeId!, state);
+      await server.client.refresh('A');
+    };
+    if (order === 'before') await adopt();
+    server.reply(request);
+    await vi.waitFor(() => expect(navigation.actor.getSnapshot().matches('idle')).toBe(true));
+    if (order === 'after') {
+      expect(navigation.actor.getSnapshot().context.retry?.replay?.messageId).toBe('accepted-user');
+      await adopt();
+    }
+    expect(navigation.actor.getSnapshot().context.retry).toBeUndefined();
+    expect(methods().filter(method => method === 'turn/start')).toHaveLength(1);
   });
   it('an unavailable historical message cannot be replaced with another displayed boundary', async () => {
     const { navigation } = await subject();

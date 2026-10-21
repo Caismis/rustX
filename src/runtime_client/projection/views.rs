@@ -407,20 +407,12 @@ pub(super) fn admit_status(
 }
 
 pub(crate) fn checkpoint_view(
-    checkpoint: crate::durable::projection::ProjectionCheckpoint,
-) -> crate::observation::head::RuntimeClientProjectionHeadView {
-    let original_items = checkpoint
-        .candidate
-        .items
-        .iter()
-        .filter(|item| {
-            matches!(
-                item.message,
-                crate::context::checkpoint::CheckpointMessage::Original(_)
-            )
-        })
-        .count();
-    let original_items = u32::try_from(original_items).expect("bounded checkpoint item count");
+    store: &dyn crate::durable::ObservationStore,
+    checkpoint: &crate::durable::projection::ProjectionCheckpoint,
+) -> Result<
+    crate::observation::head::RuntimeClientProjectionHeadView,
+    crate::durable::ConversationStoreError,
+> {
     let summary_preview = checkpoint
         .candidate
         .items
@@ -445,17 +437,7 @@ pub(crate) fn checkpoint_view(
             }
             _ => None,
         });
-    crate::observation::head::RuntimeClientProjectionHeadView {
-        checkpoint_id: checkpoint.candidate.checkpoint_id,
-        activation_id: checkpoint.activation.activation,
-        base_frontier: checkpoint.candidate.base_frontier,
-        activation_ledger: checkpoint.activation.ledger,
-        origin: checkpoint.activation.origin,
-        destination_installation: checkpoint.activation.destination_installation,
-        original_items,
-        derived_items: u32::try_from(checkpoint.candidate.items.len())
-            .expect("bounded checkpoint item count")
-            - original_items,
-        summary_preview,
-    }
+    let mut head = store.observation_projection_activation(checkpoint.activation.activation)?;
+    head.summary_preview = summary_preview;
+    Ok(head)
 }

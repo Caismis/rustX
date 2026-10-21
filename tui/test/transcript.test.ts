@@ -364,7 +364,7 @@ describe("inbound provenance", () => {
   });
 
   for (const inherited of [false,true]) it(`presents ${inherited ? "inherited" : "local"} projection provenance separately from canonical facts`, () => {
-    const state=stateOf({messages:[userMessage("real","canonical fact")],context:{compaction_count:0,compaction_in_progress:false,projection_head:{checkpoint_id:"checkpoint",activation_id:"2",base_frontier:"100",activation_ledger:"101",origin:{conversation_id:"source",activation:"7",completed_journal:"200"},destination_installation:inherited ? "installation" : null,original_items:1,derived_items:1,summary_preview:{text:"summary body",truncated:false}}}});
+    const state=stateOf({messages:[userMessage("real","canonical fact")],context:{compaction_count:0,compaction_in_progress:false,projection_head:{checkpoint_id:"checkpoint",activation_id:"2",base_frontier:"100",activation_ledger:"101",transcript_anchor:"1",origin:{conversation_id:"source",activation:"7",completed_journal:"200"},destination_installation:inherited ? "installation" : null,original_items:1,derived_items:1,summary_preview:{text:"summary body",truncated:false}}}});
     const blocks=renderTranscript(state,prefs());
     assert.match(transcriptString(state),inherited ? /Inherited model projection/ : /Local model projection/);
     assert.match(transcriptString(state),/summary body/);
@@ -434,7 +434,7 @@ describe("durable transcript audits", () => {
   });
 
   it("T14 T19 displays retained deferred publication facts without inventing execution settlement", () => {
-    const readCut: import('../../protocol/app-server/v50.ts').ObservationReadCut = {
+    const readCut: import('../../protocol/app-server/v51.ts').ObservationReadCut = {
       read:{conversation_id:"conv_fa9ad201-0211-7faa-814a-edfd1f23f3e2",journal:"0",transcript:"7",mutation_revision:"0",ledger_through:"0",surface_revision:"0",transcript_total:"1",pending_through:"0",pending_total:"0"},
       ledger_through:"0",transcript_total:"1",surface_revision:"0",inherited_through:"0",
     };

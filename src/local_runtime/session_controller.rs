@@ -224,7 +224,7 @@ impl SessionController {
                 .iter()
                 .map(|f| UploadMetadata {
                     name: f.name.clone(),
-                    size: f.bytes.len(),
+                    size: f.data.size(),
                 })
                 .collect::<Vec<_>>(),
         )

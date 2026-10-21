@@ -31,9 +31,11 @@
 }
 
 .controlAnchor { display: flex; }
-.zoomButton { width: 28px; padding: 0; flex: none; }
-.percent { display: inline-flex; align-items: center; justify-content: center; gap: 2px; min-width: 58px; padding-inline: 6px; font-variant-numeric: tabular-nums; }
-.zoomMenu { min-width: 112px; }
+/* Keep the source toolbar geometry when the shared Button stylesheet loads
+   after this lazy viewer; its size padding must not enlarge these controls. */
+.panel .zoomButton { box-sizing: border-box; width: 28px; padding: 0; flex: none; }
+.panel .percent { box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; gap: 2px; min-width: 58px; padding-inline: 6px; font-variant-numeric: tabular-nums; }
+.zoomMenu[role='menu'] { --menu-min-width: 112px; }
 
 @media (hover: none), (pointer: coarse) {
   .panel {

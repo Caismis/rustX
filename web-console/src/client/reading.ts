@@ -1,5 +1,6 @@
-import { HISTORY_PAGE_SIZE, TURN_PAGE_SIZE, sameReadCut, extendTranscriptWindow, installTranscriptWindow, replaceTranscript, turnKey, turnPageCount, type TurnSelection } from './transcript';
-import type { ConversationWindowAt, ObservedTurn, ObservedTurnPage } from '../../../protocol/app-server/v50';
+import { HISTORY_PAGE_SIZE, TURN_PAGE_SIZE, sameReadCut, extendTranscriptWindow, installTranscriptWindow, refreshTranscript, replaceTranscript, transcriptRepairs, repairTranscript, turnKey, turnPageCount, type TurnSelection } from './transcript';
+import { transcriptWindowReady } from './history-policy';
+import type { ConversationWindowAt, ObservedTurn, ObservedTurnPage, RuntimeClientTranscriptEntry } from '../../../protocol/app-server/v51';
 import type { SessionLifecycles } from './session-lifecycle/system';
 import type { ClientView, ConnectionRequest, OutlinePagingIntent, SessionView } from './contracts';
 
@@ -30,7 +31,8 @@ export interface ReadingPort {
 }
 
 /** Reading navigation of attached Sessions: the bounded native Turn outline
- * pipeline, exact Turn/message jumps, and finite transcript window paging.
+ * pipeline, exact Turn/message jumps, finite transcript window paging, and
+ * exact repair of loaded rows that left the live head.
  * Every read is fenced by the Session's observation, its reading authority
  * and the latest navigation intent; a superseded gesture never lands. */
 export class ReadingNavigation {
@@ -224,41 +226,97 @@ export class ReadingNavigation {
     if (!this.port.observe(id)) return;
     this.invalidateReading(id);
     const view = this.port.state().views[id];
-    if (view?.snapshot) this.port.setSession(id, { history: replaceTranscript(view.snapshot.transcript, view.history) });
+    if (view?.snapshot && view.history?.window) this.port.setSession(id, { history: replaceTranscript(view.snapshot.transcript, view.history) });
+    void this.refreshTranscriptDomain(id);
+  }
+  private transcriptReads = new Map<string, { current: () => boolean; dirty: boolean; work: Promise<void> }>();
+  /** Native completion can update a row after it leaves the live head. Reread
+   * that exact message without clearing history, detaching scrolling or asking
+   * the reader to load it again. One later observation coalesces one fresh pass. */
+  refreshTranscriptDomain(id: string): Promise<void> {
+    const existing = this.transcriptReads.get(id);
+    if (existing?.current()) { existing.dirty = true; return existing.work; }
+    const observation = this.port.observe(id), history = this.port.state().views[id]?.history;
+    if (!observation || !history || history.window) return Promise.resolve();
+    const authority = this.readingAuthority(id), intent = this.readingIntents.get(id);
+    const current = () => authority() && this.readingIntents.get(id) === intent
+      && this.port.state().views[id]?.history?.epoch === history.epoch && !this.port.state().views[id]?.history?.window;
+    const read = { current, dirty: true, work: Promise.resolve() };
+    this.transcriptReads.set(id, read);
+    read.work = (async () => {
+      try {
+        while (read.dirty && current()) {
+          read.dirty = false;
+          const view = this.port.state().views[id];
+          for (const entry of transcriptRepairs(view.history, view.snapshot!.transcript)) {
+            if (!current() || entry.item.type !== 'message') return;
+            const result = await this.port.request({ method: 'session/transcript', params: { target: observation.target, at: { type: 'message', id: entry.item.message.id, cut: null }, limit: 1 } }, 'transcript_window', undefined, current);
+            if (!current()) return;
+            if (result.window.cut.conversation_id !== observation.target.conversation_id) throw new Error('Native transcript refresh changed Conversation.');
+            const latest = this.port.state().views[id];
+            this.port.setSession(id, { history: refreshTranscript(repairTranscript(latest.history!, result.window, entry), latest.snapshot!.transcript) });
+          }
+        }
+      } catch (error) {
+        if (current()) this.port.setSession(id, { history: { ...this.port.state().views[id].history!, error: String(error) } });
+      } finally { if (this.transcriptReads.get(id) === read) this.transcriptReads.delete(id); }
+    })();
+    return read.work;
+  }
+  loadInitialHistory(id: string) {
+    const history = this.port.state().views[id]?.history;
+    if (!history || history.window || history.loading || history.error || history.page.next_cursor == null || transcriptWindowReady(history.page.entries ?? [])) return Promise.resolve();
+    return this.readHistoryPage(id, { type: 'older', before: history.page.next_cursor, cut: null }, true);
   }
   async loadLater(id: string) {
     const history = this.port.state().views[id]?.history, window = history?.window;
     if (!window?.newer_cursor || history?.loading) return;
     await this.readHistoryPage(id, { type: 'newer', after: window.newer_cursor, cut: window.cut });
   }
-  /** One older page, as Harness's loadOlder. */
+  /** One Turn-aligned reading window, assembled from bounded native pages. */
   loadEarlier(id: string): Promise<void> {
     const history = this.port.state().views[id]?.history;
     if (!history || history.page.next_cursor == null || history.loading) return Promise.resolve();
     return this.readHistoryPage(id, { type: 'older', before: history.page.next_cursor, cut: history.window?.cut ?? null });
   }
-  /** One gesture, one read. Navigation intent fences both page and anchor reads. */
-  private async readHistoryPage(id: string, at: ConversationWindowAt) {
+  /** Navigation intent fences the whole reading window, including every wire page. */
+  private async readHistoryPage(id: string, at: ConversationWindowAt, initial = false) {
     const history = this.port.state().views[id]?.history;
     const observation = this.port.observe(id);
     if (!history || !observation) return;
     const target = observation.target, authority = this.readingAuthority(id), intent = this.invalidateReading(id);
     const current = () => authority() && this.readingIntents.get(id) === intent && this.port.state().views[id]?.history?.epoch === history.epoch;
-    this.port.setSession(id, { history: { ...history, loading: true, error: undefined } });
+    this.port.setSession(id, { history: { ...history, loading: true, initialLoading: initial, error: undefined } });
     try {
-      const result = await this.port.request({ method: 'session/transcript', params: { target, at, limit: HISTORY_PAGE_SIZE } }, 'transcript_window', undefined, current);
+      let pageAt = at, next = history;
+      const added: RuntimeClientTranscriptEntry[] = [];
+      do {
+        const result = await this.port.request({ method: 'session/transcript', params: { target, at: pageAt, limit: HISTORY_PAGE_SIZE } }, 'transcript_window', undefined, current);
+        if (!current()) return;
+        if (result.window.cut.conversation_id !== target.conversation_id || ('cut' in pageAt && pageAt.cut && !sameReadCut(result.window.cut, pageAt.cut))) throw new Error('Invalid native history cut.');
+        if (pageAt.type === 'older' && result.window.page.next_cursor != null && BigInt(result.window.page.next_cursor) >= BigInt(pageAt.before)) throw new Error('Invalid native history page.');
+        added.push(...result.window.page.entries ?? []);
+        next = extendTranscriptWindow(result.window, next, at.type === 'older');
+        if (at.type !== 'older' || next.page.next_cursor == null || transcriptWindowReady(initial ? next.page.entries! : added)) break;
+        pageAt = { type: 'older', before: next.page.next_cursor, cut: result.window.cut };
+      } while (current());
       if (!current()) return;
-      if (result.window.cut.conversation_id !== target.conversation_id || ('cut' in at && at.cut && !sameReadCut(result.window.cut, at.cut))) throw new Error('Invalid native history cut.');
-      // Extend only the finite presentation window, trimming its opposite end.
-      if (at.type === 'older' && result.window.page.next_cursor != null && BigInt(result.window.page.next_cursor) >= BigInt(at.before)) throw new Error('Invalid native history page.');
-      const next = extendTranscriptWindow(result.window, this.port.state().views[id].history!, at.type === 'older');
-      this.port.setSession(id, { history: next });
+      // Ordinary pagination remains a live conversation. Only an explicit Turn
+      // or message jump owns a frozen historical window and its continuation.
+      if (!history.window && at.type === 'older' && next.window?.newer_cursor == null) {
+        const { window: _, ...following } = next;
+        next = refreshTranscript(following, this.port.state().views[id].snapshot!.transcript);
+      }
+      this.port.setSession(id, { history: { ...next, loading: false, initialLoading: false } });
+      void this.refreshTranscriptDomain(id);
     } catch (error) {
-      if (current()) this.port.setSession(id, { history: { ...this.port.state().views[id].history!, loading: false, error: String(error) } });
+      if (current()) this.port.setSession(id, { history: { ...this.port.state().views[id].history!, loading: false, initialLoading: false, error: String(error) } });
     }
   }
   /** Retired observation work keeps no reading intent or outline. */
-  retire(id: string) { this.readingIntents.delete(id); this.retireOutline(id); this.readingAuthorities.delete(id); }
+  retire(id: string) { this.readingIntents.delete(id); this.retireOutline(id); this.readingAuthorities.delete(id); this.transcriptReads.delete(id); }
   /** A replaced App Server authority keeps no reading state. */
   retireAuthority() { this.readingAuthorities.clear(); for (const id of this.outlineReads.keys()) this.retireOutline(id); this.readingIntents.clear(); }
+  /** A lost connection ends every transcript repair. */
+  disconnect() { this.transcriptReads.clear(); }
 }

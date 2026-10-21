@@ -1,7 +1,7 @@
 import { useTranslation } from '../locale/react';
 import { useSelector } from '@xstate/react';
 import { useClientSelector } from '../client/selectors';
-import type { AdoptionEligibility, SourceTarget } from '../../../protocol/app-server/v50';
+import type { AdoptionEligibility, SourceTarget } from '../../../protocol/app-server/v51';
 import type { AppServerClient } from '../client/app-server';
 import type { SessionView, ConnectionState } from '../client/contracts';
 import type { ReactNode } from 'react';

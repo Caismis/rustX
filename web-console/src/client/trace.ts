@@ -1,12 +1,8 @@
 export {traceInspectionHead} from '../../../protocol/app-server/trace-inspection';
 import {traceInspectionHead} from '../../../protocol/app-server/trace-inspection';
 import type {TraceValueSelector} from '../../../protocol/app-server/trace-field';
-import type { TraceDetail, TracePage, TraceRecord, TraceLifecycle,CheckpointReadCut,CheckpointPage,CheckpointValueChunk,ContentRef,ContentChunk, Request1 } from '../../../protocol/app-server/v50';
+import type { TraceDetail, TracePage, TraceRecord, TraceLifecycle,CheckpointReadCut,CheckpointPage,CheckpointValueChunk,ContentRef,ContentChunk, Request1 } from '../../../protocol/app-server/v51';
 
-/** Most summary records the browser retains for one Trace interval. */
-export const TRACE_LIMIT = 512;
-/** Estimated encoded UTF-16 ceiling of the retained summary window. */
-export const TRACE_MAX_BYTES = 4 * 1024 * 1024;
 /** Records requested per older page. */
 export const TRACE_PAGE_SIZE = 32;
 /** Most record details retained at once; selection is one, neighbours warm. */
@@ -31,8 +27,11 @@ function detailWeight(entry: TraceDetailEntry) {
  */
 export interface TraceDetailEntry {
   readonly epoch: number;
-  readonly content?:import('../../../protocol/app-server/v50').ContentBinding[];
-  readonly readContent?:(ref:import('../../../protocol/app-server/v50').ContentRef,offset:number,current:()=>boolean)=>Promise<import('../../../protocol/app-server/v50').ContentChunk>;
+  /** One in-flight read; lifecycle refreshes may mark its result stale without cancelling it. */
+  readonly read?: object;
+  readonly stale?: boolean;
+  readonly content?:import('../../../protocol/app-server/v51').ContentBinding[];
+  readonly readContent?:(ref:import('../../../protocol/app-server/v51').ContentRef,offset:number,current:()=>boolean)=>Promise<import('../../../protocol/app-server/v51').ContentChunk>;
   /** A positive finite descriptor is not a complete TraceDetail. */
   readonly page?: CheckpointPage;
   readonly reader?: TraceFieldReader;
@@ -100,15 +99,6 @@ function merge(older: TraceRecord[], newer: TraceRecord[]) {
   return [...merged, ...older.slice(offset), ...pending];
 }
 
-function bounded(records: TraceRecord[],cuts:Readonly<Record<string,CheckpointReadCut>>={},selection?:TraceRecord) {
-  const retained=retainedCuts(cuts,records,selection);
-  const uniqueCuts=new Set(Object.values(retained));
-  const selected=selection&&!records.some(record=>record.id===selection.id)?JSON.stringify(selection).length*2:0;
-  const bytes=JSON.stringify(records).length*2+selected+Object.keys(retained).reduce((size,key)=>size+key.length*2,0)
-    +[...uniqueCuts].reduce((size,cut)=>size+JSON.stringify(cut).length*2,0);
-  return records.length <= TRACE_LIMIT && bytes <= TRACE_MAX_BYTES;
-}
-
 /** Standalone responses supply their own complete immutable reader scope. */
 export function standaloneTraceCut(page:TracePage,conversationId:string,activation?:CheckpointReadCut['activation_id']) {
   const cut=page.read_cut;
@@ -163,7 +153,7 @@ function interestBatch(values: readonly string[]): TraceInterests {
 /** Loaded identities the server should refresh at the next snapshot cut. */
 export function traceInterestBatches(cache?: TraceCache) {
   const records = cache ? [...(cache.selection ? [cache.selection] : []), ...cache.page.records] : [];
-  const interests=[...new Map(records.map(record => [record.id, record.position])).values()].slice(0, TRACE_LIMIT+1);
+  const interests=[...new Map(records.map(record => [record.id, record.position])).values()];
   return Array.from({length:Math.max(1,Math.ceil(interests.length/8))},(_,index)=>interestBatch(interests.slice(index*8,index*8+8)));
 }
 
@@ -203,7 +193,10 @@ function boundDetails(
 export function selectTrace(cache: TraceCache, id?: string): TraceCache {
   const selection = cache.page.records.find(record => record.id === id)
     ?? (cache.selection?.id === id ? cache.selection : undefined);
-  return { ...cache, selection, readCuts:retainedCuts(cache.readCuts??{},cache.page.records,selection),details: boundDetails(cache.details, id) };
+  const details = { ...cache.details };
+  // An explicit selection is a fresh read opportunity after a failed inspection.
+  if (id && details[id]?.error) details[id] = { ...details[id], error: undefined, stale: true };
+  return { ...cache, selection, readCuts:retainedCuts(cache.readCuts??{},cache.page.records,selection),details: boundDetails(details, id) };
 }
 
 /** Records a detail request so a late or superseded reply can be rejected. */
@@ -211,7 +204,7 @@ export function beginTraceDetail(cache: TraceCache, id: string): TraceCache {
   return {
     ...cache,
     details: boundDetails(
-      { ...cache.details, [id]: { epoch: cache.epoch, loading: true } },
+      { ...cache.details, [id]: { ...cache.details[id], epoch: cache.epoch, read: {}, stale: false, loading: true, error: undefined } },
       cache.selection?.id,
       id,
     ),
@@ -237,14 +230,29 @@ export function completeTraceDetail(
   reader?:TraceFieldReader,
 ): TraceCache {
   if (cache.epoch !== epoch) return cache;
+  const previous = cache.details[id];
+  const failure = !detail && !page ? error ?? 'Record detail is unavailable at this read cut.' : undefined;
   return {
     ...cache,
     details: boundDetails(
-      { ...cache.details, [id]: { epoch, content,readContent,page,reader,...(detail ? { detail } : {}), ...(!detail&&!page ? { error: error ?? 'Record detail is unavailable at this read cut.' } : {}) } },
+      { ...cache.details, [id]: failure
+        ? { ...previous, epoch, read: undefined, loading: false, stale: false, error: failure }
+        : { epoch, content, readContent, page, reader, detail, stale: previous?.stale } },
       cache.selection?.id,
       id,
     ),
   };
+}
+
+/** Only native content selectors change a detail's read source. Timing, usage,
+ * status and Turn placement belong to the outer live row, not its frozen body. */
+function contentIdentity(record: TraceRecord | undefined) {
+  if (!record) return undefined;
+  const request = record.request;
+  return JSON.stringify([record.kind, record.has_detail, record.fields, record.collections, record.calls,
+    record.message_id, record.attachments, record.tool, record.preview,
+    request && [request.request_id, request.request_id_source, request.context_domain, request.context_total,
+      request.context_next_offset, request.context_additions, request.system_prompt, request.tool_catalog]]);
 }
 
 export function refreshTrace(previous: TraceCache | undefined, page: TracePage, updates: TraceLifecycle[] = [],outerCut?:CheckpointReadCut,lifecycleOnly=false): TraceCache {
@@ -284,18 +292,18 @@ export function refreshTrace(previous: TraceCache | undefined, page: TracePage, 
   if (selection) latest.set(selection.id, selection);
   const old = new Map(previous.page.records.map(record => [record.id, record]));
   if (previous.selection) old.set(previous.selection.id, previous.selection);
-  // A repaired record needs detail from the new native read cut.
-  const details = Object.fromEntries(Object.entries(previous.details).filter(([id]) =>
-    JSON.stringify(old.get(id)) === JSON.stringify(latest.get(id)),
+  // Keep the original reader while the same native content remains represented.
+  // A changed body is refreshed in the background; it never blanks the inspector.
+  const unchanged = (id: string) => old.get(id) === latest.get(id) || contentIdentity(old.get(id)) === contentIdentity(latest.get(id));
+  for (const id of Object.keys(readCuts)) if (previous.readCuts?.[id] && unchanged(id)) readCuts[id] = previous.readCuts[id];
+  const details = Object.fromEntries(Object.entries(previous.details).map(([id, entry]) =>
+    [id, unchanged(id) && !(entry.error && old.get(id)?.state !== latest.get(id)?.state)
+      ? entry : { ...entry, stale: true, error: undefined }],
   ));
-  if (!bounded(records,readCuts,selection)) {
-    return { ...replaceTrace(page, previous,outerCut), selection,readCuts:retainedCuts(readCuts,page.records,selection), error: 'Trace window reached its bound; showing latest.' };
-  }
   return { ...previous, selection, details, readCuts:retainedCuts(readCuts,records,selection),page: { read_cut:null,records, next_cursor: previous.page.next_cursor } };
 }
 
 export function prependTrace(previous: TraceCache, page: TracePage): TraceCache {
   const records = merge(page.records, previous.page.records);
-  if (!bounded(records,{...pageCuts(page),...previous.readCuts},previous.selection)) throw new Error('Trace window is full. Return to latest first.');
   return { ...previous, loading: false, error: undefined,readCuts:retainedCuts({...pageCuts(page),...previous.readCuts},records,previous.selection),page: { read_cut:null,records, next_cursor: page.next_cursor } };
 }

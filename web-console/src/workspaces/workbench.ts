@@ -1,4 +1,6 @@
 import type { DesktopTarget } from './desktop.ts';
+/** Before first submission, tools belong to the selected Host registration. */
+export type WorkbenchTarget = DesktopTarget | { workspace_id: string };
 export type WorkbenchRequest =
   | { kind: 'files'; path: string }
   | { kind: 'resolve'; path: string }
@@ -21,7 +23,7 @@ export interface WorkbenchResult {
   entries?: { name: string; directory: boolean; link: boolean }[];
   text?: string;
   base64?: string;
-  /** Canonical directory resolved by the Host from the admitted native Session. */
+  /** Canonical directory resolved by the Host from the admitted target. */
   cwd?: string;
   terminals?: WorkbenchTerminal[];
   shells?: string[];
@@ -30,4 +32,4 @@ export interface WorkbenchResult {
   reset?: boolean;
   exited?: boolean;
 }
-export interface WorkbenchCall { target: DesktopTarget; request: WorkbenchRequest }
+export interface WorkbenchCall { target: WorkbenchTarget; request: WorkbenchRequest }

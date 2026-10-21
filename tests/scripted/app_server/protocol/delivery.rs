@@ -75,8 +75,8 @@ async fn artifact_carrier_is_native_scoped_bounded_and_cold_reopen_safe() {
                 target: target.clone(),
                 operation_id: "0".repeat(32),
                 files: vec![crate::local_runtime::session::uploads::UploadMetadata {
-                    name: "hello.txt".into(),
-                    size: crate::local_runtime::session::uploads::UPLOAD_POLICY.max_file_bytes + 1,
+                    name: "../unsafe.txt".into(),
+                    size: 0,
                 }],
             },
         )

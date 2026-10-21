@@ -1,6 +1,6 @@
 import { boundedSettings } from "./fixture";
 import { translator, displayText } from '../src/locale/translation';
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { OutcomeUncertain } from '../src/client/errors';
 import { App } from '../src/app/App';
@@ -10,7 +10,7 @@ import { sessionDeletionNotice } from '../src/bindings/session-deletion';
 import { deriveSessionProductState } from '../src/bindings/session-product';
 import { Server, endpoint, interaction, snapshot } from './fixture';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
-import type { RuntimeClientSnapshot, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v50';
+import type { RuntimeClientSnapshot, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v51';
 
 let server: Server;
 beforeEach(() => {
@@ -63,8 +63,9 @@ it('uses only the Sidebar for selection; switching preserves concurrent work and
   await select('A');
   expect(screen.getByLabelText('Session title').textContent).toBe('Session A');
   expect(methods().slice(before).filter(method => ['session/attach', 'session/detach', 'session/unload', 'turn/cancel'].includes(method))).toEqual([]);
-  fireEvent.click(screen.getByRole('button', { name: 'Session actions for Session A' }));
-  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Close Session A view' })));
+  fireEvent.click(screen.getByRole('button', { name: 'View options' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Close view' }));
+  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Session A' })));
   expect(server.client.getSnapshot().views.A.attachmentIntent).toBe('released');
   expect(server.snapshots.get('A')!.attempt?.phase.type).toBe('running');
   expect(server.loaded.has('A')).toBe(true);
@@ -252,8 +253,8 @@ it('manual naming immediately wins and survives later messages and catalog pagin
   });
   fireEvent.click(screen.getByRole('button', { name: 'Session actions for First native preview' }));
   fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }));
-  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'My explicit name' } });
-  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save name' })));
+  fireEvent.change(screen.getByLabelText('Session name'), { target: { value: 'My explicit name' } });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Rename' })));
   expect(screen.getByLabelText('Session title').textContent).toBe('My explicit name');
   await act(async () => server.update('A', canonicalUser('Later conversation')));
   await act(async () => server.client.listSessions(0, 'Session B'));
@@ -276,8 +277,8 @@ it.each([false, true])('rename establishes a post-commit exact read independentl
   });
   fireEvent.click(screen.getByRole('button', { name: 'Session actions for Old preview' }));
   fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }));
-  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'New name' } });
-  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save name' })));
+  fireEvent.change(screen.getByLabelText('Session name'), { target: { value: 'New name' } });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Rename' })));
   const freshRequest = await server.waitFor('session/summary', 3);
   expect(freshRequest.params).toEqual({ session_id: 'A' });
   expect(server.summaries.get('A')?.name).toBe('New name');
@@ -291,7 +292,7 @@ it.each([false, true])('rename establishes a post-commit exact read independentl
     expect(server.client.getSnapshot().views.A.summary).toBe(beforeRename);
   }
   await act(async () => { server.reply(freshRequest); await shared; });
-  const followupList = await server.waitFor('session/list', beforeLists + 1);
+  expect(methods().filter(method => method === 'session/list')).toHaveLength(beforeLists);
   // List remains held: exact summary alone updates all product labels.
   expect(server.client.getSnapshot().views.A.summary?.name).toBe('New name');
   expect(screen.getByLabelText('Session title').textContent).toBe('New name');
@@ -302,7 +303,7 @@ it.each([false, true])('rename establishes a post-commit exact read independentl
   expect(screen.getByLabelText('Session title').textContent).toBe('New name');
   expect(methods().filter(method => method === 'session/summary')).toHaveLength(3);
   expect(methods().filter(method => method === 'session/name')).toHaveLength(1);
-  await act(async () => server.reply(followupList));
+
 });
 
 it('a delayed older Sidebar page cannot overwrite a newer committed native preview', async () => {
@@ -347,21 +348,17 @@ it('A stays healthy while B uncertainty remains visible, scoped and never replay
   expect(screen.queryByLabelText('Session status')).toBeNull();
   expect(row('B').textContent).toContain('Needs verification');
   expect(row('A').textContent).not.toContain('Needs verification');
-  fireEvent.click(screen.getByRole('button', { name: 'Toggle Inspector' }));
-  const selected = () => screen.getByRole('region', { name: 'Selected Session diagnostics' });
-  expect(within(selected()).getByLabelText('Native diagnostic JSON').textContent).not.toContain(String(request.id));
-  expect(JSON.parse(within(selected()).getByLabelText('Native diagnostic JSON').textContent!).uncertain_operations).toEqual([]);
-  expect(screen.getByRole('region', { name: 'Global / other Session diagnostics' }).textContent).toContain(String(request.id));
+  expect(server.client.getSnapshot().uncertain).toMatchObject([{ id: request.id, sessionId: 'B' }]);
   const before = methods().length;
   await select('B');
   expect(screen.getByLabelText('Session status').textContent).toContain('Needs verification');
-  expect(JSON.parse(within(selected()).getByLabelText('Native diagnostic JSON').textContent!).uncertain_operations).toMatchObject([{ id: request.id, sessionId: 'B' }]);
+  expect(server.client.getSnapshot().uncertain).toMatchObject([{ id: request.id, sessionId: 'B' }]);
   await select('A');
   expect(methods().slice(before).filter(method => ['turn/start', 'turn/cancel', 'session/unload', 'session/detach', 'session/attach'].includes(method))).toEqual([]);
   expect(methods().filter(method => method === 'turn/start')).toHaveLength(1);
 });
 
-it('unscoped uncertainty is global, not assigned to every Session; reviewed diagnostics acknowledge locally outside Inspector', async () => {
+it('unscoped uncertainty is global, not assigned to every Session; reviewed diagnostics acknowledge locally in Connection Settings', async () => {
   await mount();
   server.held.add('session/create');
   const lost = server.client.request({ method: 'session/create', params: { settings: { cwd: '/workspace/A' } } }, 'session').catch(() => {});
@@ -371,8 +368,6 @@ it('unscoped uncertainty is global, not assigned to every Session; reviewed diag
   expect(state.uncertain[0].sessionId).toBeUndefined();
   for (const id of ['A', 'B']) expect(deriveSessionProductState(translator('en'), state, state.views[id]).status).toBe('idle');
   expect(screen.getByText(/A global operation needs verification/)).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: 'Toggle Inspector' }));
-  expect(JSON.parse(screen.getByLabelText('Native diagnostic JSON').textContent!).uncertain_operations).toEqual([]);
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Settings' })); });
   fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
   fireEvent.click(screen.getByRole('button', { name: 'Connection' }));
@@ -393,12 +388,9 @@ it('interaction operation evidence is scoped and cannot be dismissed as a non-in
   await server.waitFor('interaction/respond', 1);
   await act(async () => { server.socket.close(); await server.connect(); });
   await select('A');
-  fireEvent.click(screen.getByRole('button', { name: 'Toggle Inspector' }));
-  expect(JSON.parse(screen.getByLabelText('Native diagnostic JSON').textContent!).interactions).toEqual({});
-  expect(screen.getByRole('region', { name: 'Selected Session diagnostics' }).textContent).not.toContain('interaction-approval');
+  expect(screen.queryByLabelText('Session status')).toBeNull();
   await select('B');
-  const evidence = JSON.parse(screen.getByLabelText('Native diagnostic JSON').textContent!);
-  expect(Object.values(evidence.interactions)).toEqual([{ sessionId: 'B', status: 'uncertain' }]);
+  expect(Object.values(server.client.getSnapshot().interactionOperations)).toEqual([{ sessionId: 'B', status: 'uncertain' }]);
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Settings' })); });
   fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
   fireEvent.click(screen.getByRole('button', { name: 'Connection' }));
@@ -418,8 +410,9 @@ it('32-view capacity is actionable through Sidebar close, without eviction or st
   expect(server.claims()).toHaveLength(32);
   fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
   await act(async () => server.client.listSessions(0, ''));
-  fireEvent.click(screen.getByRole('button', { name: 'Session actions for Session session-0' }));
-  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Close Session session-0 view' })));
+  fireEvent.click(screen.getByRole('button', { name: 'View options' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Close view' }));
+  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Session session-0' })));
   fireEvent.click(screen.getByRole('button', { name: 'Search Sessions' }));
   await act(async () => fireEvent.change(screen.getByLabelText('Search Session metadata'), { target: { value: 'session-32' } }));
   await select('session-32');
@@ -436,14 +429,15 @@ it('deletion shows the catalog title and impact, never raw identity/CAS, while s
   await mount();
   fireEvent.click(screen.getByRole('button', { name: 'Session actions for My first prompt' }));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Delete Session' })));
-  const confirmation = screen.getByRole('dialog', { name: 'Confirm Session deletion' });
-  expect(confirmation.textContent).toContain('Delete My first prompt?');
-  expect(confirmation.textContent).toContain('Saved conversations: 3 · History nodes: 3 · Child conversations: 1');
+  const confirmation = screen.getByRole('dialog', { name: 'Delete this session?' });
+  expect(confirmation.textContent).toContain('“My first prompt”');
+  expect(confirmation.textContent).toContain('permanently deleted');
+  expect(confirmation.textContent).toContain('Any active work will be stopped first.');
   expect(confirmation.textContent).not.toMatch(/session_id|target_revision|9007199254740999/);
   expect(confirmation.querySelector('pre')).toBeNull();
-  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Confirm delete' })));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Delete' })));
   expect(server.requests.find(({ request }) => request.method === 'session/delete')?.request.params).toEqual({ session_id: 'A', expected_target_revision: '9007199254740999' });
-  expect(screen.queryByRole('dialog', { name: 'Confirm Session deletion' })).toBeNull();
+  expect(screen.queryByRole('dialog', { name: 'Delete this session?' })).toBeNull();
   expect(screen.queryByText('Session deleted.')).toBeNull();
   expect(screen.queryByText('This Session no longer exists.')).toBeNull();
 });
@@ -516,7 +510,7 @@ it.each([true, false])('focused deletion fences controls and selects an existing
   server.held.add('session/delete');
   fireEvent.click(screen.getByRole('button', { name: 'Session actions for Session A' }));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Delete Session' })));
-  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Confirm delete' })));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Delete' })));
   expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).disabled).toBe(true);
   const request = await server.waitFor('session/delete', 1);
   await act(async () => server.reply(request));
@@ -699,7 +693,7 @@ const reads = (id?: string) => server.requests.filter(({ request }) => request.m
   && (!id || ('session_id' in request.params && request.params.session_id === id))).length;
 /** Freeze a held response against native state now, so releasing it later
  * cannot recompute a newer one. */
-function freeze(request: import('../../protocol/app-server/v50').Request) { server.commit(request); return request; }
+function freeze(request: import('../../protocol/app-server/v51').Request) { server.commit(request); return request; }
 /** Let every automatic follow-up the client decided to issue run to completion. */
 async function settle() { for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve(); }); }
 
@@ -795,7 +789,7 @@ it('deletion presentation follows actor admission while Switch and queued Releas
   server.handlers.set('session/deletePreview', () => ({ type: 'deletion', result: { status: 'preview', preview: { session_id: 'A', target_revision: '1', owned_node_count: 2, owned_conversation_count: 2, owned_child_count: 0 } } }));
   await server.attached('A');
   await act(async () => { render(<SessionDeletion client={server.client} sessionId="A" title="A" close={() => {}} deleted={() => {}} />); });
-  const confirm = screen.getByRole('button', { name: 'Confirm delete' });
+  const confirm = screen.getByRole('button', { name: 'Delete' });
   expect(confirm.hasAttribute('disabled')).toBe(false);
   server.held.add('session/switchNode');
   let switching!: Promise<void>, release!: Promise<void>;

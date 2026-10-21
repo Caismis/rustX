@@ -132,7 +132,7 @@ timezone = "UTC"
 ` : '';
     const writeSettings = (model = primaryModel, modelFields = '') => writeFileSync(settings, (scenario === 'web_compaction' ? '[context]\nreserve_tokens = 0\nkeep_recent_tokens = 0\n' : '') + catalog + `[model_timeout_policy]\nresponse_start_timeout_ms = 600000\nstream_idle_timeout_ms = 600000\n[native_tools.bash]\napproval = "always"\n[agent.tools]\nbuiltin = ["read", "write", "edit", "glob", "grep", "bash", "present", "ask_user", "job_list", "job_status", "job_wait", "job_cancel"]\n[agent.model]\nmodel = "fixture/${model}"\n${modelFields}` + imageSource);
     writeSettings();
-    if (scenario === 'web_child_capabilities') writeFileSync(settings, readFileSync(settings, 'utf8') + '\n[native_tools.write]\napproval = "never"\n');
+    if (['web_child_capabilities', 'web_large_write'].includes(scenario)) writeFileSync(settings, readFileSync(settings, 'utf8') + '\n[native_tools.write]\napproval = "never"\n');
     // Automatically repairable sources (#464): the App Server repairs the User
     // document at startup and Workspace A before its first Session resolves.
     if (scenario === 'web_config_repair') {
@@ -144,12 +144,12 @@ timezone = "UTC"
       writeFileSync(join(workspaceA, '.agents/agents/reviewer.toml'), 'description = "Continuable reviewer"\ninstructions = "Review requests carefully."\n' + (scenario === 'web_child_capabilities' ? '[tools]\nbuiltin = ["read", "write", "present"]\n[tools.sources]\nimage_fixture = ["render_image"]\n' : ''));
       writeFileSync(join(workspaceA, 'rustx.toml'), '[agent]\nagents = ["reviewer"]\n');
     }
-    if (scenario === 'web_workflow_conformance') {
+    if (['web_workflow_conformance', 'web_workflow_observation', 'web_workflow_review'].includes(scenario)) {
       mkdirSync(join(workspaceA, '.agents/agents'), { recursive: true });
       mkdirSync(join(workspaceA, '.agents/workflows'), { recursive: true });
       mkdirSync(join(workspaceA, '.agents/skills/acceptance'), { recursive: true });
-      writeFileSync(join(workspaceA, '.agents/agents/reviewer.toml'), 'description = "Workflow-only reviewer"\ninstructions = "Review requests carefully."\n');
-      writeFileSync(join(workspaceA, '.agents/workflows/review_pr.yaml'), readFileSync(resolve(root, 'web-console/test/e2e/review_pr.yaml')));
+      writeFileSync(join(workspaceA, '.agents/agents/reviewer.toml'), 'description = "Workflow-only reviewer"\ninstructions = "Review requests carefully."\n' + (scenario === 'web_workflow_observation' ? '[tools]\nbuiltin = ["read"]\n' : ''));
+      writeFileSync(join(workspaceA, '.agents/workflows/review_pr.yaml'), readFileSync(resolve(root, scenario === 'web_workflow_review' ? 'web-console/test/e2e/workflow_review.yaml' : 'web-console/test/e2e/review_pr.yaml')));
       writeFileSync(join(workspaceA, '.agents/skills/acceptance/SKILL.md'), '---\nname: acceptance\ndescription: Inspect the native acceptance fixture.\n---\nUse native authority.\n');
       writeFileSync(join(workspaceA, 'rustx.toml'), '[agent]\nworkflows = ["review_pr"]\n');
     }

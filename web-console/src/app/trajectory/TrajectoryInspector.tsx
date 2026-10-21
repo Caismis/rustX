@@ -1,13 +1,15 @@
 import {traceInspectionHead} from '../../client/trace';
-import {TraceToolFields} from './TraceToolFields';
-import {TraceMessages} from './TraceMessages';
-import {TraceRequestFields,REQUEST_OPTION_FIELDS} from './TraceRequestFields';
-import {TraceContexts} from './TraceContexts';
-import {TraceFields} from './TraceFields';
-import {traceRequestAccepts,sameTraceStep,traceOccurrenceKey,traceFieldKey,traceFields} from '../../../../protocol/app-server/trace-identity';
-import {DeferredContent} from '../agent/DeferredContent';
+import {traceRequestAccepts,sameTraceStep,traceOccurrenceKey,traceFieldKey} from '../../../../protocol/app-server/trace-identity';
+import type { TraceDisplayBlock } from '../../client/trace-content';
+import { useTraceContent, type ToolContent } from './useTraceContent';
+import { Button } from '../../presentation/primitives/Button';
+import { parseJson, isJsonNumber } from '../../presentation/primitives/json';
 import type { Translate } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
+import { backgroundLaunch } from '../../bindings/jobs';
+import { traceStateLabel } from '../../bindings/status-labels';
+import { ToolDetails } from '../../presentation/agent/ToolDetails';
+import { recordedToolDetails } from '../../bindings/recorded-tool-details';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/TrajectoryTable.tsx inspector; see PROVENANCE.md. */
 /**
  * The record inspector, ported from the Harness details panel.
@@ -20,7 +22,7 @@ import { useTranslation } from '../../locale/react';
  */
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { structuredPatch } from 'diff';
-import type { TraceArtifact, TraceContentBlock, TraceDetail, TraceJson, TraceRecord, TraceToolDefinition } from '../../../../protocol/app-server/v50';
+import type { TraceArtifact, TraceContentBlock, TraceDetail, TraceJson, TraceRecord, TraceToolDefinition } from '../../../../protocol/app-server/v51';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { JsonTree, type JsonTreeLabels } from '../../presentation/primitives/JsonTree';
 import { IconCheckOutline16, IconChevronRightOutline14, IconCopyOutline16, IconWrapLinesOutline16 } from '../../presentation/primitives/icons';
@@ -28,7 +30,7 @@ import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import { CodeBlock } from '../../presentation/markdown/CodeBlock';
 import { Artifact } from '../components/Artifact';
 import { cellKind, cellLabel, isErrorRecord } from './TrajectoryCell';
-import type { InspectableDisplayItem, TrajectoryFacet } from './layout';
+import { isBetweenTurnsItem, type InspectableDisplayItem, type TrajectoryFacet } from './layout';
 import { formatDurationMillis, formatDurationMs, formatStartedAt, instantMillis, wireCount } from './timeline';
 import css from './Trajectory.module.css';
 
@@ -84,10 +86,10 @@ function stateOf(record: TraceRecord): RecordState {
   return record.state === 'completed' ? 'complete' : record.state === 'running' || record.state === 'pending' || record.state === 'waiting' ? 'running' : 'complete';
 }
 
-function StatusValue({ state }: { state: RecordState }) {
+function StatusValue({ state, nativeState }: { state: RecordState; nativeState?: TraceRecord['state'] }) {
   const tx = useTranslation();
   return <dd className={state === 'error' ? css.error : undefined}>
-    {tx(state === 'error' ? 'trajectory:status.failed' : state === 'running' ? 'trajectory:status.pending' : 'trajectory:status.completed')}
+    {nativeState ? traceStateLabel(tx, nativeState) : tx(state === 'error' ? 'trajectory:status.failed' : state === 'running' ? 'trajectory:status.pending' : 'trajectory:status.completed')}
   </dd>;
 }
 
@@ -118,19 +120,19 @@ function DetailPending({ error, deferred }: { error: string | undefined; deferre
   const tx = useTranslation();
   return error
     ? <p role="alert" className={`${css.noPayload} ${css.error}`}>{error}</p>
-    : <p role="status" className={css.noPayload}>{tx(deferred?'common:activity.content-deferred':'trajectory:details.loading')}</p>;
+    : <p role="status" className={css.noPayload}>{tx(deferred?'common:activity.loading':'trajectory:details.loading')}</p>;
 }
 
 function Json({ value, label, preview = false, error = false }: { value: unknown; label: string; preview?: boolean; error?: boolean }) {
   const tx = useTranslation();
   const className = [preview ? css.jsonPreview : css.jsonPayload, error ? css.errorPayload : undefined].filter(Boolean).join(' ');
-  if (value === null || typeof value !== 'object') return <pre className={[css.payload, preview ? css.payloadPreview : undefined, error ? css.errorPayload : undefined].filter(Boolean).join(' ')}>{JSON.stringify(value)}</pre>;
+  if (value === null || typeof value !== 'object' || isJsonNumber(value)) return <pre className={[css.payload, preview ? css.payloadPreview : undefined, error ? css.errorPayload : undefined].filter(Boolean).join(' ')}>{JSON.stringify(value)}</pre>;
   return <JsonTree data={value} label={label} labels={jsonLabels(tx)} collapsedStringLines={preview ? 3 : 12} className={className} />;
 }
 
 function parseJsonContainer(value: string): object | undefined {
   try {
-    const parsed: unknown = JSON.parse(value);
+    const parsed = parseJson(value);
     return typeof parsed === 'object' && parsed !== null ? parsed : undefined;
   } catch {
     return undefined;
@@ -283,13 +285,13 @@ function Attachments({ artifacts, preview }: { artifacts: readonly TraceArtifact
   </ul>;
 }
 
-function ToolCalls({ blocks, preview, onOpenCall }: { blocks: readonly TraceContentBlock[]; preview: boolean; onOpenCall: ((callId: string) => void) | undefined }) {
+function ToolCalls({ blocks, preview, onOpenCall }: { blocks: readonly TraceContentBlock[]; preview: boolean; onOpenCall: ((call: Extract<TraceContentBlock, {type:'tool_call'}>) => void) | undefined }) {
   const tx = useTranslation();
   const calls = blocks.flatMap(block => block.type === 'tool_call' ? [block] : []);
   if (!calls.length) return null;
   return <ul className={preview ? `${css.assistantToolCalls} ${css.assistantToolCallsPreview}` : css.assistantToolCalls}>
     {calls.map(call => <li key={call.call_id}>
-      <button type="button" className={css.assistantToolCallButton} title={tx('trajectory:block.open-summary-title')} disabled={!onOpenCall} onClick={() => onOpenCall?.(call.call_id)}>
+      <button type="button" className={css.assistantToolCallButton} title={tx('trajectory:block.open-summary-title')} disabled={!onOpenCall} onClick={() => onOpenCall?.(call)}>
         <svg className={css.assistantToolCallIcon} width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
@@ -302,14 +304,14 @@ function ToolCalls({ blocks, preview, onOpenCall }: { blocks: readonly TraceCont
   </ul>;
 }
 
-function SourceBlocks({ blocks, onOpenCall }: { blocks: readonly TraceContentBlock[]; onOpenCall: ((callId: string) => void) | undefined }) {
+function SourceBlocks({ blocks, onOpenCall }: { blocks: readonly TraceContentBlock[]; onOpenCall: ((call: Extract<TraceContentBlock, {type:'tool_call'}>) => void) | undefined }) {
   const tx = useTranslation();
   return <div className={css.sourceBlocks}>
     {blocks.map((block, index) => {
       const label = <span className={css.sourceBlockLabel}>{tx('trajectory:block.label', { index: index + 1, type: block.type })}</span>;
       return <section className={css.sourceBlock} key={index}>
         {block.type === 'tool_call' && onOpenCall
-          ? <button type="button" className={css.sourceBlockJumpTarget} aria-label={tx('trajectory:block.open-summary', { index: index + 1 })} title={tx('trajectory:block.open-summary-title')} onClick={() => onOpenCall(block.call_id)}>
+          ? <button type="button" className={css.sourceBlockJumpTarget} aria-label={tx('trajectory:block.open-summary', { index: index + 1 })} title={tx('trajectory:block.open-summary-title')} onClick={() => onOpenCall(block)}>
             {label}<IconChevronRightOutline14 className={css.sourceBlockJumpIcon} size={12} />
           </button>
           : <div className={css.sourceBlockHeader}>{label}</div>}
@@ -328,7 +330,7 @@ function MessageContent({ blocks, fallback, artifacts, rendered, preview = false
   preview?: boolean;
   thinkingExpanded: boolean;
   onThinkingExpanded: (expanded: boolean) => void;
-  onOpenCall: ((callId: string) => void) | undefined;
+  onOpenCall: ((call: Extract<TraceContentBlock, {type:'tool_call'}>) => void) | undefined;
 }) {
   const tx = useTranslation();
   if (!rendered && blocks?.length) return <SourceBlocks blocks={blocks} onOpenCall={onOpenCall} />;
@@ -353,14 +355,27 @@ function MessageContent({ blocks, fallback, artifacts, rendered, preview = false
 }
 
 /** A Tool result's blocks, as Harness shows its output blocks. */
-function ToolResult({ record, detail, preview = false }: { record: TraceRecord; detail: TraceDetail['tool']; preview?: boolean }) {
+function ToolResult({ record, detail, preview = false }: { record: TraceRecord; detail: Pick<ToolContent, 'result'> | null | undefined; preview?: boolean }) {
   const tx = useTranslation();
   const result = detail?.result;
   if (!result) return <><NoPayload>{tx(stateOf(record) === 'running' ? 'trajectory:code.running' : 'trajectory:record.no-result')}</NoPayload><Attachments artifacts={record.attachments} preview={preview} /></>;
   const error = result.outcome !== 'success';
+  const artifacts = [...new Map([...record.attachments, ...result.attachments, ...blockArtifacts(result.blocks)].map(artifact => [artifact.artifact_id, artifact])).values()];
+  const block = result.blocks.length === 1 ? result.blocks[0] : undefined;
+  const value = block?.type === 'json' && !block.value.truncated ? block.value.value : undefined;
+  const launch = !error ? backgroundLaunch(value, record.tool?.name ?? '') : undefined;
+  if (launch) return <div><p>{tx('common:activity.background-started')}</p><p>{tx('common:activity.job-title', { id: launch.jobId })}</p><pre className={css.payload}>{launch.outputPath}</pre><Attachments artifacts={artifacts} preview={preview}/></div>;
+  // The overview shares Chat's recorded details. Result keeps the original
+  // content blocks in its existing JSON/text view, without a second disclosure.
+  if (preview && !error) {
+    const content = result.blocks.flatMap((block): NonNullable<Parameters<typeof recordedToolDetails>[1]> =>
+      block.type === 'json' && !block.value.truncated ? [{ type: 'json', value: block.value.value }]
+        : block.type === 'text' && !block.text.truncated ? [{ type: 'text', text: block.text.text }] : []);
+    const model = content.length === result.blocks.length ? recordedToolDetails(record.tool?.tool_id, content, tx) : undefined;
+    if (model) return <><ToolDetails model={model}/><Attachments artifacts={artifacts} preview/></>;
+  }
   const text = result.blocks.length === 1 && result.blocks[0]!.type === 'text' ? result.blocks[0]!.text.text : undefined;
   const json = text === undefined ? undefined : parseJsonContainer(text);
-  const artifacts = [...new Map([...record.attachments, ...result.attachments].map(artifact => [artifact.artifact_id, artifact])).values()];
   if (json !== undefined && !error) return <><Json value={json} label={tx('trajectory:record.result-json')} preview={preview} /><Attachments artifacts={artifacts} preview={preview} /></>;
   return <div className={[css.resultBlocks, preview ? css.resultBlocksPreview : undefined, error ? css.errorPayload : undefined].filter(Boolean).join(' ')}>
     {error && result.detail?.text && <pre className={css.resultBlockText}>{result.detail.text}</pre>}
@@ -453,7 +468,7 @@ function promptDiffLines(before: string, after: string) {
 const DIFF_LINE = { meta: css.promptDiffLinemeta, context: css.promptDiffLinecontext, added: css.promptDiffLineadded, removed: css.promptDiffLineremoved };
 
 /** A diff needs both complete frozen prompts; anything less is named, never diffed. */
-function SystemPromptDiff({ detail }: { detail: NonNullable<TraceDetail['request']> }) {
+function SystemPromptDiff({ detail }: { detail: Pick<NonNullable<TraceDetail['request']>, 'predecessor' | 'previous_system_prompt' | 'effective_system_prompt'> }) {
   const tx = useTranslation();
   const previous = detail.previous_system_prompt;
   const current = detail.effective_system_prompt;
@@ -520,14 +535,10 @@ export interface TrajectoryInspectorProps {
   facet: TrajectoryFacet;
   onFacet: (facet: TrajectoryFacet) => void;
   detail?: TraceDetail | undefined;
-  detailPage?:import('../../../../protocol/app-server/v50').CheckpointPage;
+  detailPage?:import('../../../../protocol/app-server/v51').CheckpointPage;
   detailReader?:import('../../client/trace').TraceFieldReader;
-  deferredContent?:import('../../../../protocol/app-server/v50').ContentBinding[]|undefined;
-  readContent?:import('../../client/trace').TraceDetailEntry['readContent'];
-  fieldSources?:import('../../../../protocol/app-server/v50').TraceFieldSource[];
-  fieldCut?:import('../../../../protocol/app-server/v50').CheckpointReadCut;
-  fieldReader?:import('../../client/trace').TraceFieldReader;
   loading?: boolean | undefined;
+  stale?: boolean;
   error?: string | undefined;
   /** Request the heavy detail of this record; the owner fences the reply. */
   onLoadDetail: (id: string) => void;
@@ -551,29 +562,35 @@ export interface TrajectoryInspectorProps {
  * @param props - the selected item, its fetched detail and navigation.
  * @returns the details panel contents.
  */
-export function TrajectoryInspector({ detailPage,detailReader,fieldSources,fieldCut,fieldReader,item, facet, onFacet, detail, deferredContent,readContent,loading,error,onLoadDetail,onLoadEarlier, onClose, location, records, executions, requestNumbers, completeHistory, onOpen }: TrajectoryInspectorProps) {
+export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFacet, detail, loading,stale,error,onLoadDetail,onLoadEarlier, onClose, location, records, executions, requestNumbers, completeHistory, onOpen }: TrajectoryInspectorProps) {
   const tx = useTranslation();
   const inspection=detailPage?traceInspectionHead(detailPage,item.record.id):undefined;
-  const toolHead=inspection?.kind==='tool'&&inspection.content.type==='tool'?inspection:undefined;
   const messagesHead=inspection?.content.type==='messages'?inspection.content.page:undefined;
   const record = item.record;
   // The selected durable content head never replaces the outer live lifecycle.
   const sourceRecord=inspection?.record??record;
-  const metadataFields=messagesHead?[]:toolHead?traceFields(sourceRecord).filter(field=>!['arguments','result','failure','definition'].includes(field.field)):fieldSources??[];
   useEffect(() => {
-    if (record.has_detail && !detail && !detailPage && !loading && !error) onLoadDetail(record.id);
-  }, [record.id, record.has_detail, detail, detailPage,loading, error, onLoadDetail]);
+    if (record.has_detail && (stale || !detail && !detailPage) && !loading && !error) onLoadDetail(record.id);
+  }, [record.id, record.has_detail, detail, detailPage,loading, stale, error, onLoadDetail]);
   const tabs = inspectorTabs(item);
   const active = tabs.includes(facet) ? facet : tabs[0]!;
+  const predecessor=record.request?.predecessor;
+  const previous=predecessor?.availability==='available'?records.find(row=>row.request&&(predecessor.request_id!=null?row.request.request_id===predecessor.request_id:predecessor.request_id_source!=null&&row.request.request_id_source!=null&&traceFieldKey(predecessor.request_id_source)===traceFieldKey(row.request.request_id_source))):undefined;
+  const previousSequence=previous&&/^trace:(0|[1-9][0-9]*)$/.exec(previous.id)?.[1];
+  const previousDomain=previousSequence?`trace.records.${previousSequence}.detail.request.effective_system_prompt`:undefined;
+  const native = useTraceContent(detailPage, detailReader, inspection, item, active, previousDomain);
+  const resolved = native?.content;
   // An Assistant record's own request is the one that accepted its message.
   const ownRequest = record.kind === 'assistant' ? records.find(candidate => traceRequestAccepts(candidate,record)) : undefined;
   const assistantOf = (id: string) => [...executions].find(([, tools]) => tools.some(tool => tool.id === id))?.[0];
   const parentAssistant = record.kind === 'tool' ? assistantOf(record.id) : undefined;
+  const launchCalls = record.kind === 'background' && record.originating_tool_call_id ? records.filter(candidate => candidate.kind === 'tool' && candidate.tool?.call_id === record.originating_tool_call_id && sameTraceStep(candidate.location, record.location)) : [];
+  const launchCall = launchCalls.length === 1 ? launchCalls[0] : undefined;
   const requestAssistant = item.type === 'RequestBoundary' ? records.find(candidate => traceRequestAccepts(record,candidate)) : undefined;
-  const openCall = (callId: string) => {
-    const proposal=record.calls.find(call=>call.call_id!=null&&call.call_id===callId);
-    if(!proposal)return;
-    const occurrence=traceOccurrenceKey(proposal.occurrence);
+  const openCall = (call: Extract<TraceContentBlock, {type:'tool_call'}>) => {
+    const proposal = (call as TraceDisplayBlock).nativeOccurrence ?? record.calls.find(proposal => proposal.call_id != null && proposal.call_id === call.call_id)?.occurrence;
+    if (!proposal) return;
+    const occurrence=traceOccurrenceKey(proposal);
     const tool = records.find(candidate => candidate.kind === 'tool' && candidate.tool?.occurrence!=null && traceOccurrenceKey(candidate.tool.occurrence)===occurrence && sameTraceStep(candidate.location,record.location));
     if (tool) onOpen(tool.id);
   };
@@ -581,16 +598,15 @@ export function TrajectoryInspector({ detailPage,detailReader,fieldSources,field
   const messages = item.type === 'ContextRow'
     ? item.context_message_id!=null ? detail?.request?.messages.filter(message => message.message_id === item.context_message_id) : undefined
     : record.kind === 'compaction' ? detail?.projected_messages : detail?.messages;
-  const provenanceFields = (item.type === 'RequestBoundary' ? detail?.request?.messages : messages)?.flatMap(message => 'provenance_source' in message && message.provenance_source ? [message.provenance_source] : []) ?? [];
   // A detail with no canonical message leaves the record's own preview as the content.
-  const blocks = messages?.length ? messages.flatMap(message => message.blocks) : undefined;
-  const fallback = item.type === 'ContextRow' ? item.context.preview?.text : record.preview?.text;
-  const artifacts = item.type === 'ContextRow' ? item.context.attachments : record.attachments;
-  const source = item.type === 'ContextRow' ? item.context.source : messages?.[0]?.source ?? undefined;
+  const blocks = (resolved?.blocks?.length ? resolved.blocks : undefined) ?? (messages?.length ? messages.flatMap(message => message.blocks) : undefined);
+  const fallback = item.type === 'ContextRow' ? item.context.preview?.text : messagesHead?.items.map(message => message.preview?.text ?? '').filter(Boolean).join('\n\n') || record.preview?.text;
+  const artifacts = [...(resolved?.attachments ?? []), ...(item.type === 'ContextRow' ? item.context.attachments : record.attachments)];
+  const source = item.type === 'ContextRow' ? item.context.source : resolved?.source ?? messagesHead?.items[0]?.source ?? messages?.[0]?.source ?? undefined;
   const kind = cellKind(item);
   // Admitted input cells are complete facts, whatever their Request later did.
   const state = item.type === 'ContextRow' || item.type === 'SystemPromptCell' ? 'complete' : stateOf(record);
-  const toolDetail = detail?.tool ?? undefined;
+  const toolDetail = resolved?.tool ?? detail?.tool ?? undefined;
   const program = toolDetail?.source ?? undefined;
   const usage = usageOf(item.type === 'RequestBoundary' ? record : ownRequest);
   const cumulative = (() => {
@@ -603,7 +619,7 @@ export function TrajectoryInspector({ detailPage,detailReader,fieldSources,field
     }, undefined);
   })();
   const requestDetail = detail?.request ?? undefined;
-  const options = requestDetail ? {
+  const options = resolved?.request?.options ?? (requestDetail ? {
     model: requestDetail.model,
     protocol: requestDetail.protocol,
     thinking: requestDetail.reasoning_enabled ? 'enabled' : 'disabled',
@@ -611,38 +627,33 @@ export function TrajectoryInspector({ detailPage,detailReader,fieldSources,field
     maxTokens: requestDetail.max_output_tokens,
     contextWindowTokens: requestDetail.context_window_tokens,
     ...Object.fromEntries(requestDetail.options.map(option => [option.name, option.value.value])),
-  } : undefined;
-  const pending = record.has_detail && !detail;
-  const deferredRequest=record.kind==='request'&&detailPage!=null;
-  const toolFields=(facet:'input'|'output'|'schema',preview=false)=>toolHead&&detailPage?<TraceToolFields head={toolHead} page={detailPage} reader={detailReader} facet={facet} preview={preview}/>:null;
-  const toolResult = (preview = false) => toolHead
-    ? <>{toolFields('output',preview)}<Attachments artifacts={sourceRecord.attachments} preview={preview}/></>
-    : pending
-    ? <><DetailPending error={error} deferred={!!detailPage} /><Attachments artifacts={record.attachments} preview={preview} /></>
+  } : undefined);
+  const pending = record.has_detail && !detail && !resolved;
+  const detailError = native?.error ?? error;
+  const toolResult = (preview = false) => pending
+    ? <><DetailPending error={detailError} /><Attachments artifacts={record.attachments} preview={preview} /></>
     : <ToolResult record={record} detail={toolDetail} preview={preview} />;
-  const predecessor=record.request?.predecessor;
-  const previous=predecessor?.availability==='available'?records.find(row=>row.request&&(predecessor.request_id!=null?row.request.request_id===predecessor.request_id:predecessor.request_id_source!=null&&row.request.request_id_source!=null&&traceFieldKey(predecessor.request_id_source)===traceFieldKey(row.request.request_id_source))):undefined;
-  const previousSequence=previous&&/^trace:(0|[1-9][0-9]*)$/.exec(previous.id)?.[1];
-  const previousDomain=previousSequence?`trace.records.${previousSequence}.detail.request.effective_system_prompt`:undefined;
-  const knownOptions=record.request?.model!=null?{model:record.request.model}:undefined;
+  const schema = (preview = false) => inspection?.content.type === 'tool' && inspection.content.definition.type !== 'available'
+    ? <NoPayload>{tx(inspection.content.definition.type === 'absent' ? 'trajectory:record.schema-absent' : 'trajectory:record.schema-unavailable')}</NoPayload>
+    : pending ? <DetailPending error={detailError} /> : <Schema definition={toolDetail?.definition} preview={preview} />;
   const requestNumber = requestNumbers.get(record.id);
-  const messageFields=(sourceOnly=false)=>messagesHead&&detailPage?<TraceMessages messages={messagesHead} page={detailPage} reader={detailReader} fields={traceFields(sourceRecord)} sourceOnly={sourceOnly} owned={()=>true} artifacts={items=><Attachments artifacts={items} preview={false}/>}/>:null;
-  const content = (rendered: boolean, preview = false) => messagesHead?messageFields():pending && !fallback
-    ? <DetailPending error={error} deferred={!!detailPage} />
-    : <><MessageContent blocks={blocks} fallback={fallback} artifacts={artifacts} rendered={rendered} preview={preview} thinkingExpanded={thinkingExpanded} onThinkingExpanded={setThinkingExpanded} onOpenCall={record.kind === 'compaction' || item.type === 'ContextRow' || item.type === 'RequestBoundary' ? undefined : openCall} />
-      {record.kind === 'compaction' && !blocks && record.preview?.truncated && <p role="status">{tx('common:activity.content-deferred')}</p>}</>;
+  const content = (rendered: boolean, preview = false) => pending && (!fallback || !!detailError) && !blocks
+    ? <DetailPending error={detailError} />
+    : <>{record.kind === 'compaction' && !blocks && record.preview?.truncated && <p>{tx('agent:context.summary-truncated')}</p>}<MessageContent blocks={blocks} fallback={fallback} artifacts={artifacts} rendered={rendered} preview={preview} thinkingExpanded={thinkingExpanded} onThinkingExpanded={setThinkingExpanded} onOpenCall={record.kind === 'compaction' || item.type === 'ContextRow' || item.type === 'RequestBoundary' ? undefined : openCall} /></>;
   const tabLabel = (tab: TrajectoryFacet) => tab === 'input' && program ? tx('trajectory:code.source') : tab === 'raw' && record.kind === 'compaction' ? tx('trajectory:tab.raw-output') : tx(TAB_LABEL[tab]);
+  const sectionLabel = isBetweenTurnsItem(item) ? tx('trajectory:section.between-turns') : location?.turn;
+  const detailLocation = item.type === 'SystemPromptCell' ? item.label
+    : [sectionLabel, record.kind === 'compaction' ? undefined : location?.group].filter(Boolean).join(' · ');
   const title = item.type === 'RequestBoundary'
     ? <>
       <span className={css.requestDetailsDot} aria-hidden="true" />
       <span className={css.requestDetailsName}>{tx('trajectory:request.label', { request: requestNumber ?? '—' })}</span>
-      <span className={css.detailsLocation}>{location?.turn ?? tx('trajectory:section.between-turns')}</span>
+      {sectionLabel && <span className={css.detailsLocation}>{sectionLabel}</span>}
     </>
     : <>
       <span className={css.kindTag} data-role-kind={kind}>{cellLabel(tx, kind)}</span>
-      {record.kind === 'tool' && sourceRecord.tool?.name != null && <span className={css.detailsLocation} title={sourceRecord.tool.name}>{sourceRecord.tool.name}</span>}
-      <span className={css.detailsLocation}>{item.type === 'SystemPromptCell' ? item.label
-        : [location?.turn ?? tx('trajectory:section.between-turns'), record.kind === 'compaction' ? undefined : location?.group].filter(Boolean).join(' · ')}</span>
+      {record.kind === 'tool' && (toolDetail?.name ?? sourceRecord.tool?.name) != null && <span className={css.detailsLocation} title={toolDetail?.name ?? sourceRecord.tool?.name ?? undefined}>{toolDetail?.name ?? sourceRecord.tool?.name}</span>}
+      {detailLocation && <span className={css.detailsLocation}>{detailLocation}</span>}
     </>;
   const panelClass = active === 'overview' ? `${css.detailBody} ${css.detailBodySummary}` : program && active === 'input' ? `${css.detailBody} ${css.detailBodyProgram}` : css.detailBody;
 
@@ -652,14 +663,14 @@ export function TrajectoryInspector({ detailPage,detailReader,fieldSources,field
       return <>
         <dl className={`${css.overview} ${css.summaryScrollRegion}`} data-summary-scroll-region="">
           <div><dt>{tx('trajectory:details.status')}</dt><StatusValue state={state} /></div>
-          {record.request && <div><dt>{tx('trajectory:details.model')}</dt><dd>{record.request.model??tx('common:activity.content-deferred')}</dd></div>}
+          {record.request && <div><dt>{tx('trajectory:details.model')}</dt><dd>{record.request.model??tx('common:activity.loading')}</dd></div>}
           <div><dt>{tx('trajectory:details.tool-calls')}</dt><dd>{records.filter(candidate => candidate.kind === 'tool' && sameTraceStep(candidate.location,record.location)).length}</dd></div>
           {failure && <div><dt>{tx('trajectory:details.error')}</dt><dd className={css.error}>{failure}</dd></div>}
           {requestAssistant && <div><dt>{tx('trajectory:details.result')}</dt><dd className={css.overviewParentLinks}><NavLink label={tx('trajectory:details.assistant-message')} onClick={() => onOpen(requestAssistant.id)} /></dd></div>}
         </dl>
         <div className={css.overviewSections}>
           <OverviewSection label={tx('trajectory:tab.options')} onOpen={() => onFacet('options')}>
-            {options??knownOptions ? <Json value={options??knownOptions} label={tx('trajectory:options.json')} preview /> : pending ? <DetailPending error={error} deferred={!!detailPage} /> : <NoPayload>{tx('trajectory:options.not-recorded')}</NoPayload>}
+            {options ? <Json value={options} label={tx('trajectory:options.json')} preview /> : pending ? <DetailPending error={detailError} /> : <NoPayload>{tx('trajectory:options.not-recorded')}</NoPayload>}
           </OverviewSection>
           <OverviewSection label={tx('trajectory:tab.usage')} onOpen={() => onFacet('usage')}><UsageRows usage={usage} /></OverviewSection>
           <OverviewSection label={tx('trajectory:tab.timing')} onOpen={() => onFacet('timing')}><RequestTiming request={record} /></OverviewSection>
@@ -691,7 +702,9 @@ export function TrajectoryInspector({ detailPage,detailReader,fieldSources,field
           <dt>{tx('trajectory:details.hierarchy')}</dt>
           <dd className={css.overviewParentLinks}><NavLink label={tx('trajectory:details.assistant-message')} onClick={() => onOpen(parentAssistant)} /></dd>
         </div>}
-        <div><dt>{tx('trajectory:details.status')}</dt><StatusValue state={state} /></div>
+        <div><dt>{tx('trajectory:details.status')}</dt><StatusValue state={state} nativeState={record.kind === 'background' ? record.state : undefined}/></div>
+        {record.kind === 'background' && record.native_id && <div><dt>{tx('common:activity.background-jobs')}</dt><dd>{record.native_id}</dd></div>}
+        {launchCall && <div><dt>{tx('common:activity.background-launch-call')}</dt><dd><NavLink label={launchCall.tool?.name ?? launchCall.tool?.tool_id ?? launchCall.id} onClick={() => onOpen(launchCall.id)}/></dd></div>}
         {record.kind === 'assistant' && <TokenRows usage={usage} />}
         {(item.type === 'ContextRow' || record.kind === 'user') && <div><dt>{tx('trajectory:timing.duration')}</dt><dd>{formatDurationMillis(tx, wireCount(record.timing.duration_ms) ?? 0)}</dd></div>}
       </dl>
@@ -702,9 +715,9 @@ export function TrajectoryInspector({ detailPage,detailReader,fieldSources,field
             ? <>
               {program
                 ? <ProgramInput source={program.text.text} language={program.language ?? undefined} args={toolDetail?.arguments} onOpen={() => onFacet('input')} />
-                : <OverviewSection label={tx('trajectory:tab.payload')} onOpen={() => onFacet('input')}>{toolHead?toolFields('input',true):pending ? <DetailPending error={error} deferred={!!detailPage} /> : <ToolPayload value={toolDetail?.arguments} preview />}</OverviewSection>}
+                : <OverviewSection label={tx('trajectory:tab.payload')} onOpen={() => onFacet('input')}>{pending ? <DetailPending error={detailError} /> : <ToolPayload value={toolDetail?.arguments} preview />}</OverviewSection>}
               <OverviewSection label={tx('trajectory:tab.result')} onOpen={() => onFacet('output')}>{toolResult(true)}</OverviewSection>
-              <OverviewSection label={tx('trajectory:tab.schema')} onOpen={() => onFacet('schema')}>{toolHead?toolFields('schema',true):pending ? <DetailPending error={error} deferred={!!detailPage} /> : <Schema definition={toolDetail?.definition} preview />}</OverviewSection>
+              <OverviewSection label={tx('trajectory:tab.schema')} onOpen={() => onFacet('schema')}>{schema(true)}</OverviewSection>
             </>
             : null}
         {ownRequest && <OverviewSection label={tx('trajectory:timing.request')} onOpen={() => onOpen(ownRequest.id, 'timing')}><RequestTiming request={ownRequest} /></OverviewSection>}
@@ -717,26 +730,30 @@ export function TrajectoryInspector({ detailPage,detailReader,fieldSources,field
     switch (active) {
       case 'overview': return overview();
       case 'system-prompt': {
-        if (!requestDetail) return deferredRequest?<TraceRequestFields page={detailPage} reader={detailReader} fields={['effective_system_prompt']}/>:<DetailPending error={error} deferred={!!detailPage} />;
-        const prompt = requestDetail.effective_system_prompt.text;
-        return prompt === ''
-          ? <NoPayload>{tx('trajectory:record.system-prompt-missing')}</NoPayload>
-          : <div className={`${css.markdownPayload} ${css.systemPrompt}`}><MarkdownText text={prompt} /></div>;
+        const prompt = resolved?.request?.effective_system_prompt ?? requestDetail?.effective_system_prompt;
+        if (!prompt) return <DetailPending error={detailError} />;
+        return prompt.text === '' ? <NoPayload>{tx('trajectory:record.system-prompt-missing')}</NoPayload>
+          : <div className={`${css.markdownPayload} ${css.systemPrompt}`}><MarkdownText text={prompt.text} /></div>;
       }
-      case 'tools': return requestDetail ? <ToolCatalog tools={requestDetail.tools} /> : deferredRequest?<TraceRequestFields page={detailPage} reader={detailReader} fields={['tools']}/>:  <DetailPending error={error} deferred={!!detailPage} />;
-      case 'diff': return requestDetail
-        ? <SystemPromptDiff detail={requestDetail} />
-        : deferredRequest?<TraceRequestFields page={detailPage} reader={detailReader} fields={['previous_system_prompt','effective_system_prompt']} previousDomain={previousDomain} onEarlier={!completeHistory?onLoadEarlier:undefined}/>:  <DetailPending error={error} deferred={!!detailPage} />;
+      case 'tools': {
+        const tools = resolved?.request?.tools ?? requestDetail?.tools;
+        return tools ? <ToolCatalog tools={tools} /> : <DetailPending error={detailError} />;
+      }
+      case 'diff': {
+        if (!requestDetail && predecessor?.availability === 'available' && !previousDomain) return <p role="status" className={css.noPayload}>{tx('trajectory:field.previous-not-loaded')}{onLoadEarlier && <Button onClick={onLoadEarlier}>{tx('trajectory:history.load-earlier')}</Button>}</p>;
+        const current = resolved?.request?.effective_system_prompt ?? requestDetail?.effective_system_prompt;
+        return current ? <SystemPromptDiff detail={{ predecessor: requestDetail?.predecessor ?? record.request?.predecessor ?? { availability: 'not_applicable' }, effective_system_prompt: current, previous_system_prompt: resolved?.request?.previous_system_prompt ?? requestDetail?.previous_system_prompt }} />
+          : <DetailPending error={detailError} />;
+      }
       case 'rendered': return content(true);
       case 'raw': return content(false);
-      case 'source': return messagesHead?messageFields(true):pending && item.type !== 'ContextRow' ? <DetailPending error={error} deferred={!!detailPage} /> : <MessageSource source={source} />;
+      case 'source': return <MessageSource source={source} />;
       case 'input':
-        if(toolHead)return toolFields('input');
-        if (pending) return <DetailPending error={error} deferred={!!detailPage} />;
+        if (pending) return <DetailPending error={detailError} />;
         return program ? <ProgramInput source={program.text.text} language={program.language ?? undefined} args={toolDetail?.arguments} /> : <ToolPayload value={toolDetail?.arguments} />;
       case 'output': return toolResult();
-      case 'schema': return toolHead?toolFields('schema'):pending ? <DetailPending error={error} deferred={!!detailPage} /> : <Schema definition={toolDetail?.definition} />;
-      case 'options': return options ? <Json value={options} label={tx('trajectory:options.json')} /> : deferredRequest ? <>{knownOptions&&<Json value={knownOptions} label={tx('trajectory:options.json')}/>}<TraceRequestFields page={detailPage} reader={detailReader} fields={REQUEST_OPTION_FIELDS}/></> : pending ? <DetailPending error={error} deferred={!!detailPage} /> : <NoPayload>{tx('trajectory:options.not-recorded')}</NoPayload>;
+      case 'schema': return schema();
+      case 'options': return options ? <Json value={options} label={tx('trajectory:options.json')} /> : pending ? <DetailPending error={detailError} /> : <NoPayload>{tx('trajectory:options.not-recorded')}</NoPayload>;
       case 'usage': return <div className={css.usagePanel}>
         <section className={css.usageGroup}><h4 className={css.usageHeading}>{tx('trajectory:usage.this-request')}</h4><UsageRows usage={usage} /></section>
         <section className={css.usageGroup}><h4 className={css.usageHeading}>{tx('trajectory:usage.session-cumulative')}</h4><UsageRows usage={cumulative} /></section>
@@ -746,11 +763,6 @@ export function TrajectoryInspector({ detailPage,detailReader,fieldSources,field
   };
 
   return <>
-    {item.type==='RequestBoundary'&&record.request&&<TraceContexts request={record.request} cut={fieldCut} reader={fieldReader} owned={()=>true}/>}
-    {record.calls.some(call=>call.call_id==null||call.name==null)&&<ul>{record.calls.map(call=>{const tool=records.find(candidate=>candidate.kind==='tool'&&candidate.tool?.occurrence!=null&&traceOccurrenceKey(candidate.tool.occurrence)===traceOccurrenceKey(call.occurrence)&&sameTraceStep(candidate.location,record.location));return <li key={traceOccurrenceKey(call.occurrence)}><button type="button" disabled={!tool} onClick={()=>tool&&onOpen(tool.id)}>{call.name??tx('common:activity.content-deferred')}</button></li>;})}</ul>}
-    {provenanceFields.length ? <TraceFields fields={provenanceFields} cut={detailPage?.read_cut??fieldCut} reader={detailPage?detailReader:fieldReader} owned={()=>true}/> : null}
-    {metadataFields.length?<TraceFields fields={metadataFields} cut={toolHead?detailPage?.read_cut:fieldCut} reader={toolHead?detailReader:fieldReader} owned={()=>true}/>:null}
-    {deferredContent?.length&&readContent?<DeferredContent bindings={deferredContent} read={readContent} owned={()=>true}/>:null}
     <div className={css.detailsHeader}>
       <div className={css.detailsTitle}>{title}</div>
       <button type="button" className={css.close} aria-label={tx('trajectory:details.close')} onClick={onClose}><span aria-hidden="true">×</span></button>
@@ -762,6 +774,7 @@ export function TrajectoryInspector({ detailPage,detailReader,fieldSources,field
       </button>)}
     </div>
     <div id="trajectory-detail-panel" className={panelClass} role="tabpanel" aria-labelledby={`trajectory-detail-${active}`}>
+      {detailError && !pending && <DetailPending error={detailError}/>}
       {body()}
     </div>
   </>;

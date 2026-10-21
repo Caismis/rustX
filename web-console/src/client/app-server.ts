@@ -3,6 +3,7 @@ import { SessionLifecycles } from './session-lifecycle/system';
 import { emptyFacts, type Observation, type LifecycleFacts, type SessionLifecyclePort } from './session-lifecycle/port';
 import { lifecycleAvailability, type LifecycleContext } from './session-lifecycle/machine';
 import { AgentMeters } from './agent-meters';
+import { publicationHeads } from './publication-heads';
 import { AttachmentIntakes } from './uploads';
 import { checkpointSnapshot, foldRuntimeEvent, observationCheckpoint, transitionFacts } from '../../../protocol/app-server/projection';
 import { SourceRepairObserver } from './source-repairs';
@@ -22,11 +23,10 @@ import { refreshTrace, replaceTrace, traceInterestBatches, traceInterests } from
 import type {
   TraceToolLocator, PendingInboundRef, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request1, Response, RuntimeClientSnapshot, RuntimeClientEvent,
-  UserInputBlock, UploadReceipt, UploadedFile, SessionModelConfig, CatalogModelSelection, RuntimeClientInteractionHeader,
-} from '../../../protocol/app-server/v50';
+  UserInputBlock, UploadReceipt, UploadedFile, SessionModelConfig, RuntimeClientInteractionHeader,
+} from '../../../protocol/app-server/v51';
 import { transferUpload } from '../../../protocol/app-server/upload';
 import { refreshTranscript, replaceTranscript, type TurnSelection } from './transcript';
-import { ProtocolLog } from './protocol-log';
 import { RequestPipeline } from './request-pipeline';
 import { RequestAdmissionDeferred, RequestNotDispatched, RpcFailure, isOutcomeUncertain } from './errors';
 import { interactionKey, type CancellationTarget, type ClientView, type ConnectionState, type OperationAdmission, type SessionView, type Socket, type SocketFactory, type Submission } from './contracts';
@@ -53,7 +53,6 @@ export class AppServerClient {
     }
   });
   readonly attachmentIntakes = new AttachmentIntakes();
-  readonly log = new ProtocolLog();
   /** Final client lifetime ends only explicitly, never on a component unmount. */
   dispose() { this.attachmentIntakes.dispose(); for (const listener of [...this.disposeListeners]) listener(); this.disposeListeners.clear(); return this.disconnect(); }
   private disposeListeners = new Set<() => void>();
@@ -74,7 +73,6 @@ export class AppServerClient {
   private listeners = new Set<() => void>();
   private readonly pipeline = new RequestPipeline({
     timeoutMs: () => this.timeoutMs,
-    log: this.log,
     socket: () => this.socket,
     initialized: () => this.initialized,
     state: () => this.state,
@@ -97,7 +95,7 @@ export class AppServerClient {
   private acquiring = new Set<string>();
   private resubscribe = new Set<string>();
   private observationChains = new Map<string, ObservationChain<RuntimeClientEvent>>();
-  private resumeSeeds = new Map<string,{target:AttachmentTarget;snapshot:RuntimeClientSnapshot;checkpoint:import('../../../protocol/app-server/v50').RuntimeClientCheckpoint;cursor:string;bytes:number}>();
+  private resumeSeeds = new Map<string,{target:AttachmentTarget;snapshot:RuntimeClientSnapshot;checkpoint:import('../../../protocol/app-server/v51').RuntimeClientCheckpoint;cursor:string;bytes:number}>();
   private retainAppliedObservations() {
     for(const [id,chain] of this.observationChains) {
       const view=this.state.views[id];
@@ -156,10 +154,10 @@ export class AppServerClient {
         turnOutline: view.turnOutline && { ...view.turnOutline, loading: false },
         turnNavigation: view.turnNavigation && { intent: view.turnNavigation.intent },
       } : {}),
-      ...(changedNode ? { snapshot: undefined, cursor: undefined, history: undefined, trace: undefined, preview: undefined, statisticsPreview: undefined, tracePreview: undefined } : {}),
+      ...(changedNode ? { snapshot: undefined, publicationHeads: undefined, cursor: undefined, history: undefined, trace: undefined, preview: undefined, statisticsPreview: undefined, tracePreview: undefined } : {}),
       ...(opening ? { modelIntent: undefined, cancellation: undefined, preview: undefined, statisticsPreview: undefined, tracePreview: undefined } : {}),
       ...(facts.attachmentIntent === 'released' ? { modelIntent: undefined, cancellation: undefined } : {}),
-      ...(attached && result ? { snapshot: undefined, cursor: undefined, observationState: 'attached' as const, preview: undefined, statisticsPreview: undefined, tracePreview: undefined,
+      ...(attached && result ? { snapshot: undefined, publicationHeads: undefined, cursor: undefined, observationState: 'attached' as const, preview: undefined, statisticsPreview: undefined, tracePreview: undefined,
         turnOutline: undefined, turnNavigation: undefined } : {}),
     };
     if (context.deleted) {
@@ -221,7 +219,7 @@ export class AppServerClient {
         this.resumeSeeds.delete(id);
         const resumable=previous&&previous.target.conversation_id===result.target.conversation_id
           &&previous.target.runtime_incarnation===result.target.runtime_incarnation;
-        let checkpoint:import('../../../protocol/app-server/v50').RuntimeClientCheckpoint;
+        let checkpoint:import('../../../protocol/app-server/v51').RuntimeClientCheckpoint;
         let observed:RuntimeClientSnapshot;
         if(resumable){checkpoint={...previous.checkpoint,cursor:previous.cursor};observed=previous.snapshot;}
         else {
@@ -309,7 +307,6 @@ export class AppServerClient {
     const detached = [...(this.state.detached ?? [])];
     if (this.state.uncertain.length || sessions.length) detached.push({ authority: this.state.endpoint!, authorityId: this.state.authorityId, operations: this.state.uncertain, sessions });
     this.lifecycles.replaceAuthority(); this.reading.retireAuthority(); this.catalog.retireAuthority();
-    this.log.clear();
     this.publish({ authorityId: undefined, views: {}, sessions: [], nextOffset: undefined, uncertain: [], interactionOperations: {}, detached,
       authorityRevision: (this.state.authorityRevision ?? 0) + 1 });
   }
@@ -339,7 +336,7 @@ export class AppServerClient {
     // Ownership commits after close/retirement, before attempting the new transport.
     committed?.();
     try {
-      const socket = this.socketFactory(url.href, ['rustx.app-server.v50', `rustx-token.${token}`]);
+      const socket = this.socketFactory(url.href, ['rustx.app-server.v51', `rustx-token.${token}`]);
       this.socket = socket;
       await new Promise<void>((resolve, reject) => {
         const fail = (message: string) => {
@@ -357,12 +354,12 @@ export class AppServerClient {
         socket.onerror = () => { clearTimeout(timer); fail('WebSocket failed. Check endpoint and transport token.'); };
       });
       const hello = await this.request({ method: 'initialize', params: {
-        protocol_version: 50, client: { name: 'rustx-web-console', version: '0.1.0' },
+        protocol_version: 51, client: { name: 'rustx-web-console', version: '0.1.0' },
         presentation: { images: true, questionnaires: true, reviews: true },
       } }, 'initialized');
       if (!this.current(generation)) return;
-      if (!hello.authority_id || hello.protocol_version !== 50 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
-        throw new Error('Incompatible App Server protocol or capabilities. Protocol v50 with native multi-Session, headless interactions, and single-controller admission is required.');
+      if (!hello.authority_id || hello.protocol_version !== 51 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
+        throw new Error('Incompatible App Server protocol or capabilities. Protocol v51 with native multi-Session, headless interactions, and single-controller admission is required.');
       }
       if (this.state.authorityId && this.state.authorityId !== hello.authority_id) {
         try { this.admitAuthorityReplacement(); }
@@ -434,7 +431,7 @@ export class AppServerClient {
     uncertain.push(...this.pipeline.disconnect(this.state.generation));
     this.models.disconnect();
     for (const chain of this.observationChains.values()) chain.retire(); this.observationChains.clear();
-    this.refreshes.clear(); this.traces.disconnect(); this.acquiring.clear(); this.dirty.clear(); this.resubscribe.clear();
+    this.refreshes.clear(); this.traces.disconnect(); this.reading.disconnect(); this.acquiring.clear(); this.dirty.clear(); this.resubscribe.clear();
     const operations = { ...this.state.interactionOperations };
     for (const [key, operation] of Object.entries(operations)) if (operation.status === 'in-flight') delete operations[key];
     for (const item of uncertain) if (item.interactionKey) operations[item.interactionKey] = { sessionId: item.sessionId!, status: 'uncertain' };
@@ -458,13 +455,12 @@ export class AppServerClient {
     if (typeof data !== 'string' || data.length > 1_048_576 || new TextEncoder().encode(data).length > 1_048_576) { this.lose(generation); return; }
     let parsed: unknown;
     try { parsed = JSON.parse(data); } catch {
-      this.log.observe('in', generation, data); this.lose(generation); return;
+      this.lose(generation); return;
     }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      this.log.observe('in', generation, data); this.lose(generation); return;
+      this.lose(generation); return;
     }
     const value = parsed as Response | Notification;
-    this.log.observe('in', generation, data, 'id' in value ? this.pipeline.context(value.id) : undefined);
     if (value.jsonrpc !== '2.0') { this.lose(generation); return; }
     if ('result' in value || 'error' in value || 'id' in value) { this.pipeline.response(value as Response, generation); return; }
     if (value.method === 'configuration/changed') { this.configurations.changed(value.params.application, generation); return; }
@@ -551,7 +547,8 @@ export class AppServerClient {
     const snapshot = foldRuntimeEvent(view.snapshot, event);
     const checkpointAdvanced = transitionFacts(event).some(fact => fact.type === 'checkpoint_advanced');
     const traceAdvanced = checkpointAdvanced || transitionFacts(event).some(fact => fact.type === 'read_domains_updated');
-    this.setSession(id, { snapshot, ...(traceAdvanced ? {trace:this.traces.supersede(id,refreshTrace(view.trace,snapshot.trace,snapshot.trace_updates,observationCheckpoint(snapshot,cursor)?.read_cut))} : {}), checkpoint: observationCheckpoint(snapshot, cursor) ?? view.checkpoint, cursor, observationState: 'following',
+    const trace = traceAdvanced ? refreshTrace(view.trace, snapshot.trace, snapshot.trace_updates, observationCheckpoint(snapshot, cursor)?.read_cut) : undefined;
+    this.setSession(id, { snapshot, publicationHeads: publicationHeads(view.publicationHeads, event, snapshot), ...(trace ? { trace: trace.epoch === view.trace?.epoch ? trace : this.traces.supersede(id, trace) } : {}), checkpoint: observationCheckpoint(snapshot, cursor) ?? view.checkpoint, cursor, observationState: 'following',
       history: snapshot.transcript === view.snapshot.transcript ? this.state.views[id].history : refreshTranscript(this.state.views[id].history, snapshot.transcript) });
     const settled=transitionFacts(event).filter(fact=>fact.type==='interaction_settled'||fact.type==='interaction_removed');
     if(settled.length){
@@ -559,6 +556,7 @@ export class AppServerClient {
       this.interactions.settled(keys);
     }
     this.reconcile(id); this.settleSubmissions(id);
+    if (snapshot.transcript !== view.snapshot.transcript) void this.reading.refreshTranscriptDomain(id);
     if (checkpointAdvanced) void this.catalog.refreshDisplaySummary(id);
     if (transitionFacts(event).some(fact=>fact.type==='trace_changed')) void this.traces.refreshDomain(id).catch(() => {});
   }
@@ -597,13 +595,14 @@ export class AppServerClient {
     readContent: (...args) => this.reads.readContent(...args),
   });
   loadEarlierTrace(id: string) { return this.traces.loadEarlierTrace(id); }
+  loadInitialTrace(id: string) { return this.traces.loadInitialTrace(id); }
   locateToolTrace(id: string, locator: TraceToolLocator) { return this.traces.locateToolTrace(id, locator); }
   returnToLatestTrace(id: string) { return this.traces.returnToLatestTrace(id); }
   selectTrace(id: string, record?: string) { this.traces.selectTrace(id, record); }
   loadTraceDetail(id: string, record: string) { return this.traces.loadTraceDetail(id, record); }
   projections(id: string, after?: string) { return this.traces.projections(id, after); }
   projectionDetail(id: string, checkpointId: string, offset?: number) { return this.traces.projectionDetail(id, checkpointId, offset); }
-  projectionDetailReader(detail: import('../../../protocol/app-server/v50').ProjectionDetail) { return this.traces.projectionDetailReader(detail); }
+  projectionDetailReader(detail: import('../../../protocol/app-server/v51').ProjectionDetail) { return this.traces.projectionDetailReader(detail); }
   private readonly controls = new SessionControls({
     request: (...args) => this.request(...args),
     state: () => this.state,
@@ -638,7 +637,6 @@ export class AppServerClient {
     refresh: id => this.refresh(id),
   });
   prepareAgentModel(id: string, config: SessionModelConfig) { return this.models.prepareAgentModel(id, config); }
-  selectCatalogModel(id: string, choice: CatalogModelSelection, owned?: () => boolean) { return this.models.selectCatalogModel(id, choice, owned); }
   setAgentModel(id: string, config: SessionModelConfig) { return this.models.setAgentModel(id, config); }
   repairAgentModel(id: string) { return this.models.repairAgentModel(id); }
   private readonly interactions = new Interactions({
@@ -679,6 +677,7 @@ export class AppServerClient {
   returnToLatest(id: string) { this.reading.returnToLatest(id); }
   loadLater(id: string) { return this.reading.loadLater(id); }
   loadEarlier(id: string) { return this.reading.loadEarlier(id); }
+  loadInitialHistory(id: string) { return this.reading.loadInitialHistory(id); }
   loadEarlierPreview(id: string) { return this.cold.loadEarlierPreview(id); }
   private readonly catalog = new SessionCatalog({
     request: (...args) => this.request(...args),
@@ -782,7 +781,7 @@ export class AppServerClient {
             this.resubscribe.add(id); this.dirty.add(id);
           } else throw error;
         }
-        if (current() && !this.dirty.has(id)) {this.lifecycles.event(id, { type: 'OBSERVATION', proof, status: 'attached' });void this.catalog.refreshDisplaySummary(id);
+        if (current() && !this.dirty.has(id)) {this.lifecycles.event(id, { type: 'OBSERVATION', proof, status: 'attached' });void this.catalog.refreshDisplaySummary(id);void this.reading.refreshTranscriptDomain(id);
           if(traceInterestBatches(this.state.views[id]?.trace).length>1)void this.traces.refreshDomain(id).catch(error=>{if(current()&&this.state.views[id]?.trace)this.setSession(id,{trace:{...this.state.views[id].trace!,error:String(error)}});});
         }
       }

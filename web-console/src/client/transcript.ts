@@ -1,5 +1,6 @@
 import { attemptOwnerKey } from '../../../protocol/app-server/attempt-identity';
-import type { ContentBinding, ConversationReadCut, ConversationWindow, ObservedTurn, ObservedTurnPage, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v50';
+import type { ContentBinding, ConversationReadCut, ConversationWindow, ObservedTurn, ObservedTurnPage, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v51';
+import { messageDescriptor } from '../../../protocol/app-server/message-descriptor';
 import { contentRefKey } from '../../../protocol/app-server/content-identity';
 
 export const HISTORY_PAGE_SIZE = 32;
@@ -14,14 +15,15 @@ export function turnPageCount(page: ObservedTurnPage): number {
   if (total < 0n || total > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error(`Native Turn directory is unavailable at its exact total ${page.total}.`);
   return Number(total);
 }
-export const HISTORY_LIMIT = 256;
-export const HISTORY_MAX_BYTES = 8 * 1024 * 1024;
-/** Finite presentation window. The runtime snapshot independently owns the live tail. */
+export const HISTORY_PAGE_MAX_BYTES = 8 * 1024 * 1024;
+/** Loaded reading history. Native requests, rather than the retained history, are bounded. */
 export interface TranscriptCache {
   page: RuntimeClientTranscriptPage;
   epoch: number;
   window?: ConversationWindow;
   loading?: boolean;
+  /** Passive initial hydration must preserve tail following, unlike a reader's prepend. */
+  initialLoading?: boolean;
   error?: string;
 }
 export function entryIdentity(entry: RuntimeClientTranscriptEntry): string {
@@ -35,6 +37,25 @@ function merge(older: RuntimeClientTranscriptEntry[], newer: RuntimeClientTransc
   for (const entry of newer) entries.set(entry.cursor, entry);
   // Transcript positions are specified numeric durable order, never opaque IDs.
   return [...entries.values()].sort((a, b) => BigInt(a.cursor) < BigInt(b.cursor) ? -1 : 1);
+}
+/** One native transcript position has exactly one inline or deferred representation. */
+function pageRows(page: RuntimeClientTranscriptPage) {
+  return new Map([
+    ...(page.deferred_entries ?? []).map(item => [item.offset, messageDescriptor(item.value)?.identity != null
+      ? `message:${messageDescriptor(item.value)!.identity}` : item.identity] as const),
+    ...(page.entries ?? []).map(entry => [entry.cursor, entryIdentity(entry)] as const),
+  ]);
+}
+function mergePages(older: RuntimeClientTranscriptPage, newer: RuntimeClientTranscriptPage): RuntimeClientTranscriptPage {
+  const fresh = pageRows(newer);
+  const entries = merge((older.entries ?? []).filter(entry => !fresh.has(entry.cursor)), newer.entries ?? []);
+  const deferred = new Map((older.deferred_entries ?? []).filter(item => !fresh.has(item.offset)).map(item => [item.offset, item]));
+  for (const item of newer.deferred_entries ?? []) deferred.set(item.offset, item);
+  for (const entry of entries) deferred.delete(entry.cursor);
+  const collections = new Map((older.collections ?? []).map(frontier => [frontier.domain, frontier]));
+  for (const frontier of newer.collections ?? []) collections.set(frontier.domain, frontier);
+  return { ...newer, entries, deferred_entries: [...deferred.values()].sort((a,b) => BigInt(a.offset) < BigInt(b.offset) ? -1 : 1),
+    collections: [...collections.values()], content: pageBindings(entries, [older, newer]) };
 }
 /** Preserve exact source references while remapping only local loaded row paths. */
 function pageBindings(entries: RuntimeClientTranscriptEntry[], pages: RuntimeClientTranscriptPage[]): ContentBinding[] {
@@ -62,59 +83,52 @@ export function transcriptContent(history: TranscriptCache|undefined, current: C
   const result=[...bindings.values()];byHistory.set(historical,result);return result;
 }
 export function replaceTranscript(page: RuntimeClientTranscriptPage, previous?: TranscriptCache): TranscriptCache {
-  const entries = bounded(page.entries ?? [], false);
-  return { page: { ...page, entries, content:pageBindings(entries,[page]), next_cursor: entries.length < (page.entries?.length ?? 0) ? entries[0]?.cursor : page.next_cursor }, epoch: (previous?.epoch ?? 0) + 1 };
+  return { page, epoch: (previous?.epoch ?? 0) + 1 };
 }
 export function refreshTranscript(previous: TranscriptCache | undefined, page: RuntimeClientTranscriptPage): TranscriptCache {
   if (!previous) return replaceTranscript(page);
   if (previous.window) return previous;
-  const overlap = (previous.page.entries ?? []).some(old => (page.entries ?? []).some(entry => entry.cursor === old.cursor && entryIdentity(entry) === entryIdentity(old)));
+  const fresh = pageRows(page);
+  const overlap = [...pageRows(previous.page)].some(([cursor, identity]) => fresh.get(cursor) === identity);
   if (!overlap) return replaceTranscript(page, previous);
-  // Mutable native Tool read projections cannot be retained indefinitely outside
-  // the fresh page. Rebase rather than freeze a formerly assembled/running call
-  // after its authoritative terminal record has moved beyond this window.
-  const fresh = new Set((page.entries ?? []).map(entryIdentity));
-  if ((previous.page.entries ?? []).some(entry => !fresh.has(entryIdentity(entry)) && (entry.response_pending || entry.tool_calls?.some(tool => tool.state.type !== 'settled')))) {
-    return { ...replaceTranscript(page, previous), error: 'History was refreshed to reread unresolved native responses or Tools. Load earlier for their current results.' };
-  }
-  const all = merge(previous.page.entries ?? [], page.entries ?? []);
-  const entries = bounded(all, false);
-  if (entries.length < all.length) return replaceTranscript({ ...page, entries, next_cursor: entries[0]?.cursor }, previous);
-  return { ...previous, page: { ...page, entries, content:pageBindings(entries,[previous.page,page]), next_cursor: previous.page.next_cursor } };
+  // Keep the reader's rows in place. Mutable projections outside this head are
+  // reread by identity in the background, never by discarding loaded history.
+  return { ...previous, page: { ...mergePages(previous.page, page), next_cursor: previous.page.next_cursor } };
+}
+export function transcriptRepairs(cache: TranscriptCache | undefined, live: RuntimeClientTranscriptPage) {
+  if (!cache || cache.window) return [];
+  const fresh = new Set((live.entries ?? []).map(entryIdentity));
+  return (cache.page.entries ?? []).filter(entry => entry.item.type === 'message' && !fresh.has(entryIdentity(entry))
+    && (entry.response_pending || entry.tool_calls?.some(tool => tool.state.type !== 'settled')));
+}
+/** Replace only the requested row, retaining native source bindings and viewport identity. */
+export function repairTranscript(cache: TranscriptCache, window: ConversationWindow, original: RuntimeClientTranscriptEntry): TranscriptCache {
+  installTranscriptWindow(window);
+  const entry = window.page.entries?.find(entry => entry.cursor === original.cursor && entryIdentity(entry) === entryIdentity(original));
+  if (!entry || window.target_cursor !== original.cursor) throw new Error('Native transcript refresh returned a different message.');
+  const entries = (cache.page.entries ?? []).map(row => entryIdentity(row) === entryIdentity(original) && row.cursor === original.cursor ? entry : row);
+  const patch = { ...window.page, entries: [entry], content: pageBindings([entry], [window.page]) };
+  return { ...cache, page: { ...cache.page, entries, content: pageBindings(entries, [cache.page, patch]) } };
 }
 export const turnKey = attemptOwnerKey;
 export const turnAnchor = (id: Parameters<typeof attemptOwnerKey>[0]) => `turn:${turnKey(id)}`;
 export function prependTranscript(cache: TranscriptCache, page: RuntimeClientTranscriptPage): TranscriptCache {
-  const entries = bounded(merge(page.entries ?? [], cache.page.entries ?? []), true);
-  return { ...cache, loading: false, error: undefined, page: { ...cache.page, entries, content:pageBindings(entries,[cache.page,page]), next_cursor: page.next_cursor } };
+  return { ...cache, loading: false, error: undefined, page: { ...mergePages(page, cache.page), next_cursor: page.next_cursor } };
 }
 
-/** Bound retained UTF-16 storage as well as entry count; never build a conversation-sized cache. */
-function bounded(entries: RuntimeClientTranscriptEntry[], oldest: boolean) {
-  let bytes = 0;
-  const kept: RuntimeClientTranscriptEntry[] = [];
-  for (let index = oldest ? 0 : entries.length - 1; index >= 0 && index < entries.length; index += oldest ? 1 : -1) {
-    const entry = entries[index], size = JSON.stringify(entry).length * 2;
-    if (kept.length === HISTORY_LIMIT || bytes + size > HISTORY_MAX_BYTES) break;
-    kept.push(entry); bytes += size;
-  }
-  return oldest ? kept : kept.reverse();
-}
 export function installTranscriptWindow(window: ConversationWindow, previous?: TranscriptCache): TranscriptCache {
   const entries = window.page.entries ?? [];
-  if (entries.length > HISTORY_PAGE_SIZE || JSON.stringify(entries).length * 2 > HISTORY_MAX_BYTES) throw new Error('Native history window exceeds the browser reading bound.');
+  if (entries.length > HISTORY_PAGE_SIZE || JSON.stringify(entries).length * 2 > HISTORY_PAGE_MAX_BYTES) throw new Error('Native history page exceeds the browser reading bound.');
   return { ...replaceTranscript(window.page, previous), window };
 }
 
 export function extendTranscriptWindow(window: ConversationWindow, previous: TranscriptCache, older: boolean): TranscriptCache {
   installTranscriptWindow(window); // Validate each native response before merging.
-  const existing = (previous.page.entries ?? []).filter(entry => BigInt(entry.cursor) <= BigInt(window.cut.transcript));
-  const all = merge(older ? window.page.entries ?? [] : existing, older ? existing : window.page.entries ?? []);
-  const entries = bounded(all, older);
-  const clipped = entries.length < all.length;
-  const page = { ...window.page, entries, content:pageBindings(entries,[previous.page,window.page]), next_cursor: older ? window.page.next_cursor : clipped ? entries[0]?.cursor : previous.page.next_cursor };
+  const existing = { ...previous.page, entries: (previous.page.entries ?? []).filter(entry => BigInt(entry.cursor) <= BigInt(window.cut.transcript)),
+    deferred_entries: (previous.page.deferred_entries ?? []).filter(item => BigInt(item.offset) <= BigInt(window.cut.transcript)) };
+  const page = { ...mergePages(existing, window.page), next_cursor: older ? window.page.next_cursor : previous.page.next_cursor };
   return { ...previous, page, loading: false, error: undefined, window: { ...window, page,
-    newer_cursor: older ? clipped ? entries.at(-1)?.cursor : previous.window?.newer_cursor ?? null : window.newer_cursor,
+    newer_cursor: older ? previous.window?.newer_cursor ?? null : window.newer_cursor,
   } };
 }
 

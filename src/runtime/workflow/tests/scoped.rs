@@ -479,6 +479,7 @@ async fn cancellation_committed_before_node_admission_frontier_starts_no_child()
     );
     let program = Arc::new(compile_block_fixture(branch.block).unwrap());
     let (signal, cancellation) = workflow_cancellation();
+    let read_model = runtime.read_model.clone();
     let task = tokio::spawn(async move {
         runtime
             .run_test_foreground(
@@ -491,9 +492,23 @@ async fn cancellation_committed_before_node_admission_frontier_starts_no_child()
             .await
     });
     entered_rx.await.unwrap();
+    assert!(
+        read_model.snapshot().runs[0]
+            .instances
+            .iter()
+            .all(|row| row.node.is_none()),
+        "nodes are not displayed before native admission"
+    );
     signal.cancel();
     release_tx.send(()).unwrap();
     assert!(task.await.unwrap().unwrap_err().is_cancelled());
+    assert!(
+        read_model.snapshot().runs[0]
+            .instances
+            .iter()
+            .all(|row| row.node.is_none()),
+        "cancellation before admission must not create path entries"
+    );
     assert!(
         plane.registry.all_snapshots().is_empty(),
         "zero child admissions, hence zero native model starts"

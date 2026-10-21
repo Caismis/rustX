@@ -127,6 +127,63 @@ async fn workflow_child_cancellation_ordering(late: bool) {
 }
 
 #[tokio::test]
+async fn workflow_child_inspection_does_not_grant_durable_agent_controls() {
+    let plane = plane(4);
+    let child = stage_exit0(&plane);
+    let accepted = start(
+        &plane,
+        &workflow_spec(&plane.conversation_id, "return a structured result"),
+    )
+    .await;
+    let inspection = plane
+        .registry
+        .workflow_inspection_snapshot(&accepted.child_agent_id)
+        .expect("finite child is inspectable");
+    assert_eq!(inspection.subagent_id, accepted.subagent_id);
+    assert!(
+        plane
+            .registry
+            .agent_snapshot(&accepted.child_agent_id)
+            .is_none()
+    );
+    assert!(
+        plane
+            .registry
+            .check_message_target(&accepted.child_agent_id)
+            .is_err()
+    );
+    assert!(
+        plane
+            .registry
+            .interrupt_agent_intent(&accepted.child_agent_id)
+            .is_err()
+    );
+    assert!(
+        plane
+            .registry
+            .agent_inspection_path(&accepted.child_agent_id)
+            .is_some()
+    );
+    assert!(
+        plane
+            .registry
+            .agent_workspace(&accepted.child_agent_id)
+            .is_some()
+    );
+    child
+        .complete(
+            ChildResultStatus::Succeeded,
+            Some(r#"{"summary":"answer"}"#),
+        )
+        .await;
+    plane
+        .registry
+        .wait_until_settled(&accepted.subagent_id)
+        .await
+        .expect("settled");
+}
+
+#[tokio::test]
 async fn a_workflow_child_closes_native_lifecycle_without_parent_inbound() {
     let plane = plane(4);
     let child = stage_exit0(&plane);

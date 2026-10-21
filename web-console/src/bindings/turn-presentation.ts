@@ -1,5 +1,5 @@
 import { attemptOwnerKey } from '../../../protocol/app-server/attempt-identity';
-import type { TurnProcessView, CompletedResponseView, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v50';
+import type { TurnProcessView, CompletedResponseView, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v51';
 
 export type TurnNode =
   | { kind: 'fork-point' }
@@ -10,7 +10,7 @@ export type TurnNode =
 /** Completion evidence, not Assistant placement, owns the tail. The native
  * closing cursor is its insertion boundary; origin identity survives paging
  * and lineage. No completion or usage is inferred from visible message rows. */
-export function turnPresentation(entries: readonly RuntimeClientTranscriptEntry[], forkPage?: RuntimeClientTranscriptPage): TurnNode[] {
+export function turnPresentation(entries: readonly RuntimeClientTranscriptEntry[], forkPage?: RuntimeClientTranscriptPage, conversationId?: string): TurnNode[] {
   const nodes: TurnNode[] = [];
   const emitted = new Set<string>();
   for (const entry of entries) {
@@ -32,7 +32,12 @@ export function turnPresentation(entries: readonly RuntimeClientTranscriptEntry[
     if (process && process.outcome !== 'completed') controls.set(attemptOwnerKey(process), process);
   }
   for (const [key, process] of [...controls].sort((a, b) => BigInt(a[1].control_cursor) < BigInt(b[1].control_cursor) ? -1 : 1)) {
-    const index = nodes.findIndex(node => node.kind === 'entry' && BigInt(node.entry.cursor) >= BigInt(process.control_cursor));
+    // A frozen publication is not a canonical Assistant message. Its explicit
+    // native Attempt identity still seats the process control above that output.
+    // Imported owners cannot borrow an audit from the current conversation.
+    const index = nodes.findIndex(node => node.kind === 'entry' && (BigInt(node.entry.cursor) >= BigInt(process.control_cursor)
+      || process.conversation_id === conversationId && process.attempt_id != null && node.entry.item.type === 'publication_audit'
+        && node.entry.item.audit.attempt_id === process.attempt_id));
     const control: TurnNode = { kind: 'process', key, process };
     nodes.splice(index < 0 ? nodes.length : index, 0, control);
   }

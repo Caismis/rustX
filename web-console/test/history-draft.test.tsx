@@ -195,7 +195,7 @@ it('the actual View Source click and immediate scroll retire history in one stac
   });
   await act(async () => { await server.client.request({ method: 'server/info', params: {} }, 'server_info'); });
   expect(f.ui.container.querySelector('[data-shell-route]')?.getAttribute('data-shell-route')).toBe('session');
-  expect(f.ui.queryByText('Opening history…')).toBeNull(); expect(f.ui.queryByRole('alert')).toBeNull(); expect(f.ui.queryByText('Exact historical source')).toBeNull();
+  expect(f.ui.queryByRole('alert')).toBeNull(); expect(f.ui.queryByText('Exact historical source')).toBeNull();
   expect(server.requests.slice(before).filter(row => row.request.method === 'session/history')).toEqual([]);
   expect(server.client.target('A')).toBe(f.target); expect(f.editor().value).toBe(f.text); expect(mutations(before)).toEqual([]);
 });

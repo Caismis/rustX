@@ -69,7 +69,7 @@ of duplicating it. Child settlement precedes scratch deletion. Only the derived
 browser proof may enter sessionStorage. Launch/native/provider/MCP credentials and
 bootstrap JSON never enter any browser storage; no proof enters localStorage or
 IndexedDB. Only the initial
-browser launch URL is printed, once; transport details belong in advanced Settings/Inspector.
+browser launch URL is printed, once; transport details belong in advanced Settings.
 
 ConnectionController owns source selection: **LocalManaged** fetches authenticated
 same-origin bootstrap, while **RemoteExplicit** requires a Settings gesture and

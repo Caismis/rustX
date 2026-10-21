@@ -498,9 +498,9 @@ fn durable_host(
     super::host::RuntimeClientHost::new_durable(std::sync::Arc::new(store), None).map_err(failed)
 }
 
-// Cold Trace owns an immutable historical cut, authenticated by the Registry
-// activation. It does not carry a durable Host's publication/cache cut.
-fn cold_trace_selection(cut: &crate::observation::cut::CheckpointReadCut, domain: &str) -> bool {
+// Historical inspection owns an immutable cut authenticated by the Registry
+// activation, independently of the live Host's publication/cache cut.
+fn historical_selection(cut: &crate::observation::cut::CheckpointReadCut, domain: &str) -> bool {
     cut.revision == 0
         && cut.canonical_foreground.is_none()
         && cut.live_publication.is_none()
@@ -526,7 +526,7 @@ fn cold_agent_value_read(
     path: &[String],
     range: (u64, u32),
 ) -> Result<super::checkpoint::CheckpointValueChunk, RuntimeClientError> {
-    if cold_trace_selection(cut, domain) {
+    if historical_selection(cut, domain) {
         let store = registry
             .transcript_store(activation)
             .map_err(|_| RuntimeClientError::ContentSourceUnavailable)?;
@@ -552,7 +552,7 @@ fn cold_agent_page(
     offset: u64,
     limit: usize,
 ) -> Result<super::checkpoint::CheckpointPage, RuntimeClientError> {
-    if cold_trace_selection(cut, domain) {
+    if historical_selection(cut, domain) {
         let store = registry
             .transcript_store(activation)
             .map_err(|_| RuntimeClientError::ContentSourceUnavailable)?;
@@ -730,7 +730,7 @@ impl ClientInner {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
         tokio::time::timeout_at(deadline, async {
             let permit = self.reserve_inspection()?;
-            let agent = self.agent_view(id)?;
+            let agent = self.child_view(id)?;
             let result = if matches!(
                 agent.state,
                 crate::runtime::subagent::AgentState::Inactive
@@ -770,7 +770,7 @@ impl ClientInner {
                 .await?;
                 peer.trace_page(before, limit, records).await?
             };
-            let current = self.agent_view(id)?;
+            let current = self.child_view(id)?;
             if current.activation_id != agent.activation_id
                 || current.child_conversation_id != agent.child_conversation_id
             {
@@ -790,7 +790,7 @@ impl ClientInner {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
         tokio::time::timeout_at(deadline, async {
             let permit = self.reserve_inspection()?;
-            let agent = self.agent_view(id)?;
+            let agent = self.child_view(id)?;
             let result = if matches!(
                 agent.state,
                 crate::runtime::subagent::AgentState::Inactive
@@ -825,7 +825,7 @@ impl ClientInner {
                 .await?;
                 peer.trace_locate_tool(&locator).await?
             };
-            let current = self.agent_view(id)?;
+            let current = self.child_view(id)?;
             if current.activation_id != agent.activation_id
                 || current.child_conversation_id != agent.child_conversation_id
             {
@@ -1103,7 +1103,7 @@ impl ClientInner {
             Ok(checkpoint)
         })
         .await?;
-        let current = self.agent_view(&agent.agent_id)?;
+        let current = self.child_view(&agent.agent_id)?;
         if current.activation_id != agent.activation_id
             || current.child_conversation_id != checkpoint.snapshot.conversation_id
         {
@@ -1121,11 +1121,17 @@ impl ClientInner {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
         tokio::time::timeout_at(deadline, async {
             let permit = self.reserve_inspection()?;
-            let agent = self.agent_view(id)?;
+            let agent = self.child_view(id)?;
             if reference.conversation_id != agent.child_conversation_id {
                 return Err(RuntimeClientError::ContentSourceUnavailable);
             }
+            // Canonical history is already durable, even while the Child runs.
+            // Its immutable reference is resolved by the same Registry store as
+            // historical pages, without borrowing the live publication source.
             if matches!(
+                reference.source,
+                crate::observation::content::ContentSource::CanonicalMessageBlock { .. }
+            ) || matches!(
                 agent.state,
                 crate::runtime::subagent::AgentState::Inactive
                     | crate::runtime::subagent::AgentState::Unavailable
@@ -1148,7 +1154,7 @@ impl ClientInner {
                         .map_err(RuntimeClientError::content_read_error)
                 })
                 .await?;
-                if self.agent_view(id)?.activation_id != agent.activation_id {
+                if self.child_view(id)?.activation_id != agent.activation_id {
                     return Err(RuntimeClientError::ReadCutExpired);
                 }
                 return Ok(chunk);
@@ -1173,7 +1179,7 @@ impl ClientInner {
                     max_bytes,
                 })
                 .await?;
-            if self.agent_view(id)?.activation_id != agent.activation_id {
+            if self.child_view(id)?.activation_id != agent.activation_id {
                 return Err(RuntimeClientError::ReadCutExpired);
             }
             match result {
@@ -1197,18 +1203,20 @@ impl ClientInner {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
         tokio::time::timeout_at(deadline, async {
             let permit = self.reserve_inspection()?;
-            let agent = self.agent_view(id)?;
+            let agent = self.child_view(id)?;
             if cut.conversation_id != agent.child_conversation_id
                 || cut.activation_id.as_ref() != Some(&agent.activation_id)
             {
                 return Err(RuntimeClientError::ReadCutExpired);
             }
             let mut native_cut = cut.clone();
-            if matches!(
-                agent.state,
-                crate::runtime::subagent::AgentState::Inactive
-                    | crate::runtime::subagent::AgentState::Unavailable
-            ) {
+            if historical_selection(&native_cut, domain)
+                || matches!(
+                    agent.state,
+                    crate::runtime::subagent::AgentState::Inactive
+                        | crate::runtime::subagent::AgentState::Unavailable
+                )
+            {
                 native_cut.activation_id = None;
                 let registry = self.agent_registry()?.clone();
                 let activation = agent.activation_id.clone();
@@ -1226,7 +1234,7 @@ impl ClientInner {
                     )
                 })
                 .await?;
-                let current = self.agent_view(id)?;
+                let current = self.child_view(id)?;
                 if current.activation_id != agent.activation_id
                     || current.child_conversation_id != agent.child_conversation_id
                 {
@@ -1258,7 +1266,7 @@ impl ClientInner {
                     max_bytes,
                 })
                 .await?;
-            if self.agent_view(id)?.activation_id != agent.activation_id {
+            if self.child_view(id)?.activation_id != agent.activation_id {
                 return Err(RuntimeClientError::ReadCutExpired);
             }
             match result {
@@ -1284,18 +1292,20 @@ impl ClientInner {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
         tokio::time::timeout_at(deadline, async {
             let permit = self.reserve_inspection()?;
-            let agent = self.agent_view(id)?;
+            let agent = self.child_view(id)?;
             if cut.conversation_id != agent.child_conversation_id
                 || cut.activation_id.as_ref() != Some(&agent.activation_id)
             {
                 return Err(RuntimeClientError::ReadCutExpired);
             }
             let mut native_cut = cut.clone();
-            if matches!(
-                agent.state,
-                crate::runtime::subagent::AgentState::Inactive
-                    | crate::runtime::subagent::AgentState::Unavailable
-            ) {
+            if historical_selection(&native_cut, domain)
+                || matches!(
+                    agent.state,
+                    crate::runtime::subagent::AgentState::Inactive
+                        | crate::runtime::subagent::AgentState::Unavailable
+                )
+            {
                 native_cut.activation_id = None;
                 let registry = self.agent_registry()?.clone();
                 let activation = agent.activation_id.clone();
@@ -1304,7 +1314,7 @@ impl ClientInner {
                     cold_agent_page(&registry, &activation, &native_cut, &domain, offset, limit)
                 })
                 .await?;
-                let current = self.agent_view(id)?;
+                let current = self.child_view(id)?;
                 if current.activation_id != agent.activation_id
                     || current.child_conversation_id != agent.child_conversation_id
                 {
@@ -1334,7 +1344,7 @@ impl ClientInner {
                     limit,
                 })
                 .await?;
-            if self.agent_view(id)?.activation_id != agent.activation_id {
+            if self.child_view(id)?.activation_id != agent.activation_id {
                 return Err(RuntimeClientError::ReadCutExpired);
             }
             match result {
@@ -1355,7 +1365,7 @@ impl ClientInner {
         after: Option<AgentObservationCursor>,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         // One absolute budget covers Registry, IPC, initialization, checkpoint,
-        // event wait, and fallback. Nested steps never reset this deadline.
+        // event wait, and source transition. Nested steps never reset this deadline.
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
         self.agent_observe_with_deadline(id, after, deadline).await
     }
@@ -1385,7 +1395,7 @@ impl ClientInner {
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         let permit = self.reserve_inspection()?;
         let registry = self.agent_registry()?;
-        let mut agent = self.agent_view(id)?;
+        let mut agent = self.child_view(id)?;
         if agent.state == crate::runtime::subagent::AgentState::Admitting {
             tokio::time::timeout_at(
                 deadline,
@@ -1398,7 +1408,7 @@ impl ClientInner {
             .ok_or_else(|| RuntimeClientError::UnknownAgent {
                 agent_id: id.clone(),
             })?;
-            agent = self.agent_view(id)?;
+            agent = self.child_view(id)?;
         }
         let activation_id = agent.activation_id.clone();
         let conversation_id = agent.child_conversation_id.clone();
@@ -1435,25 +1445,54 @@ impl ClientInner {
             }
         }
         let observation = if durable {
-            AgentObservation::Checkpoint {
+            Ok(AgentObservation::Checkpoint {
                 agent_id: id.clone(),
                 conversation_id: conversation_id.clone(),
                 activation_id: activation_id.clone(),
                 source,
                 cursor: None,
                 checkpoint: Box::new(self.durable_agent_checkpoint(&agent, permit).await?),
-            }
+            })
         } else {
-            let path = registry
-                .agent_inspection_path(id)
-                .ok_or_else(|| failed("live inspection source unavailable"))?;
-            live_observation(id, &conversation_id, &activation_id, path, after, permit).await?
+            match registry.agent_inspection_path(id) {
+                Some(path) => {
+                    live_observation(id, &conversation_id, &activation_id, path, after, permit)
+                        .await
+                }
+                None => Err(failed("live inspection source unavailable")),
+            }
         };
-        let current = self.agent_view(id)?;
+        let current = self.child_view(id)?;
         if current.activation_id != activation_id {
             return Ok(resync("activation changed during observation"));
         }
-        Ok(RuntimeClientResult::AgentObserve { observation })
+        // A child may seal and close its inspection socket during an admitted
+        // read. Only the Registry's actual terminal owner state authorizes the
+        // switch to retained history; a transport failure alone never does.
+        if !durable
+            && matches!(
+                current.state,
+                crate::runtime::subagent::AgentState::Inactive
+                    | crate::runtime::subagent::AgentState::Unavailable
+            )
+            && matches!(
+                &observation,
+                Ok(_) | Err(RuntimeClientError::ObservationUnavailable { .. })
+            )
+        {
+            return Ok(RuntimeClientResult::AgentObserve {
+                observation: AgentObservation::ResyncRequired {
+                    agent_id: id.clone(),
+                    conversation_id,
+                    activation_id,
+                    source: ObservationSource::DurableOnly,
+                    reason: "live source ended during observation".into(),
+                },
+            });
+        }
+        Ok(RuntimeClientResult::AgentObserve {
+            observation: observation?,
+        })
     }
 }
 #[cfg(test)]

@@ -1,7 +1,7 @@
 import { statusIdentity } from '../../../protocol/app-server/projection';
 import { jobStateLabel } from './status-labels';
 import type { Translate } from '../locale/translation';
-import type { AgentStatusView, MessageBlock, RuntimeClientSnapshot, RuntimeClientStatusSection, RuntimeClientTodoStatusTask } from '../../../protocol/app-server/v50';
+import type { AgentStatusView, RuntimeClientSnapshot, RuntimeClientStatusSection, RuntimeClientTodoStatusTask } from '../../../protocol/app-server/v51';
 
 /** Agent Status is historical, request-scoped model context. Nothing here is a
  * current-state authority: current Todo is `snapshot.todos`, current Goal is
@@ -46,7 +46,7 @@ export interface AgentStatusPlacement {
  * composition is one fact however many times a snapshot or a folded event
  * restates it, and a render key alone would not prevent a second annotation.
  * An unplaced composition enters no bucket, so it is never drawn in ordinary
- * transcript UI; the runtime still owns it and the Inspector still shows it. */
+ * transcript UI; the runtime still owns it. */
 export function agentStatusPlacement(statuses?: readonly AgentStatusView[]): AgentStatusPlacement {
   const placement: AgentStatusPlacement = { byMessageId: new Map(), byCursor: new Map() };
   const seen = new Set<string>();
@@ -78,15 +78,18 @@ export function statusesAt(placement: AgentStatusPlacement, entry: { messageId?:
   return [...attached, ...standalone].sort((a, b) => a.order - b.order).map(anchored => anchored.status);
 }
 
-/** The canonical Agent Status Context message, by typed kind — never by text.
+/** Native status Context messages, by typed kind — never by text.
+ * Goal observations belong to the Goal dock and trajectory diagnostics, while
+ * Agent Status has its anchored annotation. Neither is an ordinary chat message.
  * It is request-scoped model history with its own annotation presentation, so it
  * must not reappear through generic Context / "Current context" chrome as a second
  * ordinary-chat representation or as purported live state. */
-export function isAgentStatusContext(message: MessageBlock): boolean {
+export function isRuntimeStatusContext(message: { role: string; kind?: unknown }): boolean {
   if (message.role !== 'user') return false;
   const kind = message.kind;
+  if (typeof kind === 'string') return kind === 'context/goal_status' || kind === 'context/agent_status';
   return !!kind && typeof kind === 'object' && 'context' in kind
-    && typeof kind.context === 'object' && kind.context !== null && 'agent_status' in kind.context;
+    && typeof kind.context === 'object' && kind.context !== null && ('agent_status' in kind.context || 'goal_status' in kind.context);
 }
 
 /** One typed section reduced to presentation values. `kind` mirrors the runtime's

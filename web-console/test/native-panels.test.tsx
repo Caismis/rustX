@@ -6,7 +6,7 @@ import { RightPanel } from '../src/presentation/right-panel/RightPanel';
 import { ArtifactPreview } from '../src/presentation/right-panel/ArtifactPreview';
 import { readTheme, applyTheme } from '../src/app/appearance';
 import { goalActivityLabel } from '../src/app/agent/GoalActivity';
-import type { ForegroundToolExecution } from '../../protocol/app-server/v50';
+import type { ForegroundToolExecution } from '../../protocol/app-server/v51';
 import { useState } from 'react';
 import type { PreviewViewState } from '../src/presentation/right-panel/preview-view-state';
 afterEach(() => { cleanup(); localStorage.clear(); document.body.removeAttribute('data-ds-dark-theme'); });
@@ -33,11 +33,11 @@ it('Goal Tool labels describe native outcomes while preserving exact tool identi
  expect(goalActivityLabel(translator('en'), { ...tool, state: { type: 'settled', arguments: '{}', result: { status: { type: 'success' }, content: [], duration_ms: "1" } } })).toBe('Goal started');
 });
 
-it('a collapsed shell seat keeps floating content without exposing an empty Inspector landmark', () => {
- const props={close:vi.fn(),width:320,canShow:true,title:'Developer inspector',closeLabel:'Close Inspector'};
- const ui=render(<RightPanel {...props} open={false} headerless docked><button>Floating document</button></RightPanel>);
- expect(screen.queryByRole('complementary',{name:'Developer inspector'})).toBeNull();
+it('a collapsed shell seat keeps floating content without exposing an empty preview landmark', () => {
+ const props={width:320,canShow:true,title:'Previews'};
+ const ui=render(<RightPanel {...props} open={false} docked><button>Floating document</button></RightPanel>);
+ expect(screen.queryByRole('complementary',{name:'Previews'})).toBeNull();
  expect(screen.getByRole('button',{name:'Floating document'})).toBeTruthy();
- ui.rerender(<RightPanel {...props} open><p>Native facts</p></RightPanel>);
- expect(screen.getByRole('complementary',{name:'Developer inspector'})).toBeTruthy();
+ ui.rerender(<RightPanel {...props} open><p>Preview content</p></RightPanel>);
+ expect(screen.getByRole('complementary',{name:'Previews'})).toBeTruthy();
 });

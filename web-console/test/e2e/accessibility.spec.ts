@@ -74,7 +74,7 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     if (wasCollapsed) { await expect(expandSidebar).toBeFocused(); await page.keyboard.press('Enter'); }
     const rowActions = page.locator('button[data-session-actions]').first();
     await tabTo(rowActions); await page.keyboard.press('Enter'); await page.keyboard.press('ArrowDown');
-    await expect(page.getByRole('menuitem', { name: 'Close New session view', exact: true })).toBeFocused();
+    await expect(page.getByRole('menuitem', { name: 'Pin session', exact: true })).toBeFocused();
     await page.keyboard.press('Escape'); await expect(rowActions).toBeFocused();
     if (wasCollapsed) { await tabTo(page.getByRole('button', { name: 'Collapse Sidebar', exact: true })); await page.keyboard.press('Enter'); }
     await tabTo(message); await page.keyboard.type('/mdl');
@@ -82,12 +82,14 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     await page.keyboard.press('Enter');
     const dialog = page.getByRole('listbox', { name: 'Model', exact: true }); await expect(dialog).toBeVisible();
     await page.keyboard.press('Escape'); await expect(dialog).toHaveCount(0); await expect(message).toBeFocused();
-    // The composer paints keyboard focus on its rounded card, not a second
-    // rectangular outline around the native text scrollport.
+    // Harness keeps the rounded card neutral. Keyboard focus is retained on
+    // the editor with a visible insertion caret and no rectangular outline.
     expect(await message.evaluate(el => {
       const card = getComputedStyle(el.closest('[data-composer-card]')!);
-      return el.matches(':focus-visible') && card.boxShadow !== 'none'
-        && card.getPropertyValue('--dsw-elevation-stroke-color').trim() === card.getPropertyValue('--dsw-alias-state-business-primary').trim();
+      const input = getComputedStyle(el);
+      return el.matches(':focus-visible') && input.outlineStyle === 'none' && card.boxShadow !== 'none'
+        && input.caretColor !== 'transparent' && input.caretColor !== 'rgba(0, 0, 0, 0)'
+        && card.getPropertyValue('--dsw-elevation-stroke-color').trim() === card.getPropertyValue('--dsw-alias-border-l2').trim();
     })).toBe(true);
     await page.keyboard.press('ControlOrMeta+A'); await page.keyboard.press('Backspace');
     const chat = page.getByRole('tab', { name: 'Chat', exact: true }); await tabTo(chat);
@@ -135,9 +137,6 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     expect(await page.locator('main').evaluate(el => getComputedStyle(el.parentElement!).transitionDuration)).toBe('0s');
     await page.screenshot({ path: `test-results/acceptance-keyboard-${width}.png`, fullPage: true });
     await page.keyboard.press('Escape');
-    await tabTo(page.getByRole('button', { name: 'Toggle Inspector', exact: true })); await page.keyboard.press('Enter');
-    await expect(page.getByRole('complementary', { name: 'Developer inspector' })).toBeVisible();
-    await tabTo(page.getByRole('button', { name: 'Close Inspector', exact: true })); await page.keyboard.press('Enter');
     await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
   } finally { await page.close(); const report = await fixture.stop(false); expect(report.requestCount).toBe(0); }
 });

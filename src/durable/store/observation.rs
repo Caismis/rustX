@@ -628,6 +628,11 @@ pub trait ObservationStore: Send + Sync + 'static {
         Option<crate::observation::head::RuntimeClientProjectionHeadView>,
         ConversationStoreError,
     >;
+    /// Finite immutable display evidence for one exact activation.
+    fn observation_projection_activation(
+        &self,
+        activation: crate::context::checkpoint::ProjectionActivationId,
+    ) -> Result<crate::observation::head::RuntimeClientProjectionHeadView, ConversationStoreError>;
     /// Mark only an existing native owner's committed publication range ready.
     /// Readiness does not authorize model-output bytes or acknowledge a client.
     fn mark_observation_ready(&self, first: u64, last: u64) -> Result<(), ConversationStoreError>;

@@ -195,12 +195,18 @@ impl SubagentRegistry {
     }
 
     pub(crate) fn agent_artifact_root(&self, id: &AgentId) -> Option<std::path::PathBuf> {
-        let agent = self.agent_snapshot(id)?;
+        let conversation_id = self
+            .agent_snapshot(id)
+            .map(|agent| agent.conversation_id)
+            .or_else(|| {
+                self.workflow_inspection_snapshot(id)
+                    .map(|child| child.child_conversation_id)
+            })?;
         Some(
             super::super::child_conversation_store_path(
                 self.config.spawn.product_root.root(),
                 &self.config.spawn.session_id,
-                &agent.conversation_id,
+                &conversation_id,
             )
             .parent()?
             .to_path_buf(),
@@ -208,7 +214,20 @@ impl SubagentRegistry {
     }
     pub(crate) fn agent_workspace(&self, id: &AgentId) -> Option<std::path::PathBuf> {
         let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        Some(state.agents.get(id)?.workspace.clone())
+        state
+            .agents
+            .get(id)
+            .map(|agent| agent.workspace.clone())
+            .or_else(|| {
+                state
+                    .records
+                    .iter()
+                    .find(|record| {
+                        record.ownership == crate::events::types::SubagentOwnershipKind::Workflow
+                            && record.child_agent_id == *id
+                    })
+                    .map(|record| record.workspace.clone())
+            })
     }
     pub(crate) fn interaction_inspection_source(
         &self,
@@ -238,10 +257,16 @@ impl SubagentRegistry {
     }
 
     pub(crate) fn agent_inspection_path(&self, id: &AgentId) -> Option<std::path::PathBuf> {
-        let agent = self.agent_snapshot(id)?;
+        let conversation_id = self
+            .agent_snapshot(id)
+            .map(|agent| agent.conversation_id)
+            .or_else(|| {
+                self.workflow_inspection_snapshot(id)
+                    .map(|child| child.child_conversation_id)
+            })?;
         Some(super::super::child_conversation_inspection_socket_path(
             self.config.spawn.product_root.root(),
-            &agent.conversation_id,
+            &conversation_id,
         ))
     }
 
@@ -306,6 +331,19 @@ impl SubagentRegistry {
         let agent = Self::agent_snapshot_locked(&state, id)?;
         let activation = state.records[*state.index.get(&agent.latest_activation)?].snapshot();
         Some((agent, activation))
+    }
+
+    /// Read a Workflow execution without creating a durable Agent owner or control authority.
+    pub(crate) fn workflow_inspection_snapshot(&self, id: &AgentId) -> Option<SubagentSnapshot> {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state
+            .records
+            .iter()
+            .find(|record| {
+                record.ownership == crate::events::types::SubagentOwnershipKind::Workflow
+                    && record.child_agent_id == *id
+            })
+            .map(SubagentRecord::snapshot)
     }
 
     /// Fresh driver-owned execution evidence for this exact activation. Recovery

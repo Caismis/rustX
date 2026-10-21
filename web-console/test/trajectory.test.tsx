@@ -13,7 +13,7 @@ import { prependTrace, beginTraceDetail, completeTraceDetail, refreshTrace, repl
 import { ledgerFocusTargets, ledgerRows, matchedRecordIds, isInspectable, projectTrajectory, trajectoryItems as flattenTrajectory, visibleItems, matchingCalls, preferredItem, systemPresentation, type InspectableDisplayItem, type TurnStructure } from '../src/app/trajectory/layout';
 import { searchItems } from '../src/app/trajectory/search';
 import { stepLessRecords, manyStepRecords, orderedStepRecords, structuralSearchRecords, requestDetail, toolDetail, traceRecord, traceTool } from './trace-fixture';
-import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v50';
+import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v51';
 
 beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(360);
@@ -23,6 +23,29 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 const noop = () => {};
+it.each(['cancelling', 'settling', 'outcome_unknown', 'cancelled'] as const)('background Inspector preserves %s and links only its original launch Step', state => {
+  const source = traceTool(1), other = traceTool(2, { location: { attempt_id: 'other-attempt', step_id: '1' } });
+  other.tool!.call_id = source.tool!.call_id;
+  const record = traceRecord(3, { kind: 'background', request: null, native_id: 'job-background', originating_tool_call_id: source.tool!.call_id, state, preview: null });
+  show(cacheOf([source, other, record]));
+  fireEvent.click(row('RecordRow', record.id));
+  const summary = screen.getByRole('tabpanel');
+  expect(within(summary).getByText(traceStateLabel(translator('en'), state))).toBeTruthy();
+  expect(within(summary).getByText('job-background')).toBeTruthy();
+  expect(within(summary).getByRole('button', { name: 'bash' })).toBeTruthy();
+  expect(recordText(translator('en'), record)).toContain(traceStateLabel(translator('en'), state));
+});
+
+it('background launch Trace output describes acceptance without claiming the command finished', () => {
+  const record = traceTool(1), detail = toolDetail(1);
+  detail.tool!.result!.blocks = [{ type: 'json', value: { value: { job_id: 'job-background', state: 'starting', tool: 'bash', output_path: '/workspace/background.txt', note: 'Raw continuation guidance' }, truncated: false } }];
+  show(completeTraceDetail(cacheOf([record]), record.id, 1, detail));
+  fireEvent.click(row('RecordRow', record.id));
+  fireEvent.click(screen.getByRole('tab', { name: 'Result' }));
+  expect(screen.getByRole('tabpanel').textContent).toContain('Background task started');
+  expect(screen.getByRole('tabpanel').textContent).toContain('job-background');
+  expect(screen.getByRole('tabpanel').textContent).not.toContain('Raw continuation guidance');
+});
 const trajectoryItems = (records: readonly TraceRecord[]) => flattenTrajectory(translator('en'), projectTrajectory(translator('en'), records));
 const cacheOf = (records: TraceRecord[]) => replaceTrace({ records, next_cursor: null });
 function show(cache: TraceCache, load = vi.fn(), older = vi.fn()) {
@@ -299,7 +322,7 @@ it.each(['en', 'zh'] as const)('T1-08 Calls summary localizes in %s and leaves n
   // Harness names the folded calls by count and Tool name, never by lifecycle.
   expect(summary.summary).toBe(locale === 'en' ? '5 tool calls · same name' : '5 个工具调用 · same name');
   expect(executions.map(record => record.state)).toEqual(states);
-  for (const domain of domains) expect(visible.some(item => item.type === 'RecordRow' && item.record.id === domain.id)).toBe(true);
+  for (const domain of domains) expect(visible.some(item => item.type === 'RecordRow' && item.record.id === domain.id)).toBe(domain.kind !== 'subagent');
   expect(visible.find((item): item is InspectableDisplayItem => item.type === 'RecordRow' && item.record.id === 'trace:20')?.label).toBe(tx('trajectory:copy.compacting'));
   for (const state of ['incomplete', 'failed', 'completed'] as const) {
     const item = flattenTrajectory(tx, projectTrajectory(tx, [traceRecord(21, { kind: 'compaction', request: null, state })])).find(item => item.type === 'RecordRow')!;
@@ -1337,20 +1360,48 @@ it('424 compact: summary counts the folded Turn\'s Tool records, as Harness does
   expect(rows.some(row => row.item?.owner_record_id === 'trace:706')).toBe(false);
 });
 
-it('Agent activations retain separate trace records correlated to one durable Agent across replay', () => {
-  const records = ['activation-a', 'activation-b', 'activation-c'].map((activation_id, n) => traceRecord(n, {
-    kind: 'subagent', request: null, agent_id: 'durable-agent', activation_id, native_id: activation_id,
-    activation_origin: n === 0 ? { kind: 'creation_tool', tool_call_id: 'actual-create-call' } : n === 1 ? { kind: 'message_tool', tool_call_id: 'actual-message-call' } : { kind: 'client_control' },
-    originating_tool_call_id: n === 0 ? 'actual-create-call' : n === 1 ? 'actual-message-call' : null,
+it.each([false, true])('Agent interactions use Tool/Context rows without activation activity (scoped: %s)', scoped => {
+  const tx = translator('en');
+  const tool = traceTool(0, { tool: { ...traceTool(0).tool!, name: 'subagent', tool_id: 'tool-subagent' } });
+  const context = traceRecord(5, { kind: 'context', request: null, agent_id: 'durable-agent', preview: { text: 'Agent sent message: canonical child report', truncated: false } });
+  const audits = ['running', 'completed', 'failed', 'cancelled'].map((state, n) => traceRecord(n + 1, {
+    kind: 'subagent', request: null, agent_id: 'durable-agent', activation_id: `activation-${n}`, state: state as TraceRecord['state'],
+    location: scoped ? { attempt_id: 'lifecycle-only-turn', step_id: '1' } : {},
+    originating_tool_call_id: tool.tool!.call_id, preview: { text: 'internal-activation-audit', truncated: false },
   }));
-  const ui = show(cacheOf(records));
-  for (const record of records) {
-    fireEvent.click(row('RecordRow', record.id));
-    expect(row('RecordRow', record.id).getAttribute('aria-selected')).toBe('true');
-    expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual(['Summary', 'Preview', 'Timing']);
+  const records = [tool, ...audits, context], original = JSON.stringify(records);
+  const projection = projectTrajectory(tx, records);
+  expect(flattenTrajectory(tx, projection).filter(isInspectable).map(item => item.record.id)).toEqual([tool.id, context.id]);
+  expect(searchItems(projection, 'internal-activation-audit')?.size).toBe(0);
+  expect(searchItems(projection, 'subagent')?.size).toBe(1);
+  expect(searchItems(projection, 'canonical child report')?.size).toBe(1);
+  for (const mode of ['sequence', 'duration'] as const) {
+    expect(trajectoryTimeline(tx, projection, mode)?.spans.map(span => span.id)).toEqual([tool.id, context.id]);
+    expect(trajectoryTimeline(tx, projectTrajectory(tx, audits), mode)).toBeNull();
   }
-  ui.rerender(<Trajectory cache={cacheOf(structuredClone(records))} loadEarlier={noop} onSelect={noop} onLoadDetail={noop}/>);
-  expect(document.querySelectorAll('[data-display-type="RecordRow"]')).toHaveLength(3);
+  expect(projectTrajectory(tx, audits).sections).toEqual([]);
+  const load = vi.fn(), ui = show(cacheOf(records), load);
+  expect(document.querySelector('[data-kind="subagent"]')).toBeNull();
+  expect(document.querySelector('[data-timeline-span="subagent"]')).toBeNull();
+  expect(screen.queryByText('SUBAGENT')).toBeNull();
+  expect(row('RecordRow', context.id).textContent).toContain('CONTEXT');
+  fireEvent.click(row('RecordRow', tool.id));
+  expect(row('RecordRow', tool.id).getAttribute('aria-selected')).toBe('true');
+  const reads = load.mock.calls.length;
+  ui.rerender(<Trajectory cache={cacheOf(structuredClone(records))} loadEarlier={noop} onSelect={noop} onLoadDetail={load}/>);
+  expect(row('RecordRow', tool.id).getAttribute('aria-selected')).toBe('true');
+  expect(load).toHaveBeenCalledTimes(reads);
+  expect(JSON.stringify(records)).toBe(original);
+});
+
+it('activation-only native pages and selection produce no trajectory row or Inspector', () => {
+  const record = traceRecord(0, { kind: 'subagent', request: null, agent_id: 'agent', activation_id: 'activation' });
+  const cache = selectTrace(cacheOf([record]), record.id), load = vi.fn();
+  show(cache, load);
+  expect(row('RecordRow', record.id)).toBeNull();
+  expect(screen.queryByRole('complementary', { name: 'Event details' })).toBeNull();
+  expect(load).not.toHaveBeenCalled();
+  expect(cache.page.records).toEqual([record]);
 });
 
 
@@ -1567,4 +1618,79 @@ it('compaction summary exposes loading and read errors before detail arrives', (
   const failed = { ...cache, details: { [record.id]: { epoch: cache.epoch, error: 'Summary read failed' } } };
   view.rerender(<Trajectory cache={failed} loadEarlier={noop} onSelect={noop} onLoadDetail={noop} />);
   expect(screen.getByRole('alert').textContent).toBe('Summary read failed');
+});
+
+
+it('checkpoint summaries and unscoped reused history display Between turns without acquiring execution ownership', () => {
+  const records = [
+    traceRecord(0, { kind: 'user', request: null, location: {}, preview: { text: 'Reused original context', truncated: false } }),
+    traceRecord(1, { kind: 'compaction', request: null, location: { attempt_id: 'native-attempt', step_id: 'native-step' } }),
+    traceRecord(2, { kind: 'user', request: null, location: { attempt_id: 'native-attempt' } }),
+  ];
+  const original = JSON.stringify(records);
+  const tx = translator('en'), projection = projectTrajectory(tx, records);
+  const rows = ledgerRows(tx, projection, flattenTrajectory(tx, projection), new Set(), false);
+  expect(rows.filter(row => row.betweenTurns).map(row => row.item?.owner_record_id)).toEqual(['trace:0', 'trace:1']);
+  expect(rows.find(row => row.item?.owner_record_id === 'trace:2')?.turnStart).toBe(true);
+  show(cacheOf(records));
+  expect(row('RecordRow', 'trace:0').querySelector('[aria-label="Between turns"]')).not.toBeNull();
+  expect(row('RecordRow', 'trace:1').querySelector('[aria-label="Between turns"]')).not.toBeNull();
+  fireEvent.click(row('RecordRow', 'trace:1'));
+  expect(within(screen.getByRole('complementary', { name: 'Event details' })).getByText('Between turns')).toBeTruthy();
+  expect(document.querySelector('[class*="turnRail"]')).toBeNull();
+  expect(JSON.stringify(records)).toBe(original);
+});
+
+it.each(['background', 'workflow', 'tool'] as const)('unscoped %s activity is not a between-turn section or an inferred nearby Turn', kind => {
+  const records = [
+    traceRecord(0, { kind: 'user', request: null, location: {}, preview: { text: 'Reused original context', truncated: false } }),
+    traceRecord(1, { kind: 'compaction', request: null, location: {} }),
+    traceRecord(2, { kind: 'assistant', request: null, location: { attempt_id: 'parent-turn', step_id: '1' } }),
+    traceRecord(3, { kind, request: null, location: {}, agent_id: 'native-agent', activation_id: 'native-activation', originating_tool_call_id: 'source-call' }),
+  ];
+  const original = JSON.stringify(records), tx = translator('en'), projection = projectTrajectory(tx, records);
+  const items = flattenTrajectory(tx, projection);
+  const rows = ledgerRows(tx, projection, items, new Set(), false);
+  const activity = rows.find(row => row.item?.owner_record_id === 'trace:3')!;
+  expect(activity.betweenTurns).toBe(false); expect(activity.turn).toBeUndefined(); expect(activity.turnStart).toBe(false);
+  for (const query of ['Between turns', '轮次之间']) {
+    const matches = searchItems(projection, query)!;
+    expect(items.filter(item => isInspectable(item) && matches.has(item.display_key)).map(item => (item as InspectableDisplayItem).owner_record_id)).toEqual(['trace:0', 'trace:1']);
+  }
+  const ui = show(cacheOf(records));
+  expect(row('RecordRow', 'trace:3').querySelector('[aria-label="Between turns"]')).toBeNull();
+  fireEvent.click(row('RecordRow', 'trace:3'));
+  const inspector = within(screen.getByRole('complementary', { name: 'Event details' }));
+  expect(inspector.queryByText('Between turns')).toBeNull(); expect(inspector.queryByText(/Turn 1/)).toBeNull();
+  expect(row('RecordRow', 'trace:3').getAttribute('aria-selected')).toBe('true');
+  ui.rerender(<Trajectory cache={cacheOf(structuredClone(records))} loadEarlier={noop} onSelect={noop} onLoadDetail={noop}/>);
+  expect(row('RecordRow', 'trace:3').getAttribute('aria-selected')).toBe('true');
+  expect(JSON.stringify(records)).toBe(original);
+});
+
+it('native-owned Agent Tool retains its actual Turn/Step across folding and selection', () => {
+  const records = [traceRecord(1, { kind: 'user', request: null }), traceTool(2, { tool: { ...traceTool(2).tool!, name: 'subagent', tool_id: 'tool-subagent' } })];
+  show(cacheOf(records));
+  fireEvent.click(row('RecordRow', 'trace:2'));
+  const inspector = within(screen.getByRole('complementary', { name: 'Event details' }));
+  expect(inspector.getByText('Turn 1 · Step 1')).toBeTruthy();
+  expect(inspector.queryByText('Between turns')).toBeNull();
+  expect(row('RecordRow', 'trace:2').hasAttribute('data-between-turns')).toBe(false);
+  fireEvent.doubleClick(row('RecordRow', 'trace:1'));
+  expect(row('RecordRow', 'trace:2')).toBeNull();
+  expect(inspector.getByText('Turn 1 · Step 1')).toBeTruthy();
+  fireEvent.doubleClick(row('RecordRow', 'trace:1'));
+  expect(row('RecordRow', 'trace:2').getAttribute('aria-selected')).toBe('true');
+});
+
+it('a request after a between-turn summary keeps a full-height Turn label seat', () => {
+  const records = [
+    traceRecord(0, { kind: 'compaction', request: null, location: { attempt_id: 'attempt-a', step_id: '1' } }),
+    traceRecord(1, { state: 'running' }),
+  ];
+  const tx = translator('en'), projection = projectTrajectory(tx, records);
+  const rows = ledgerRows(tx, projection, flattenTrajectory(tx, projection), new Set(), false);
+  expect(rows.find(row => row.request)?.height).toBe(20);
+  expect(rows.find(row => row.request)?.turnStart).toBe(true);
+  expect(rows.find(row => row.item?.record.kind === 'compaction')?.turnStart).toBe(false);
 });

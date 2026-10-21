@@ -3,8 +3,7 @@ import { useTranslation, useNotice } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Rewritten from ui-commands/PopupSelectView.tsx; see PROVENANCE.md. */
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { AppServerClient } from '../../client/app-server';
-import type { CheckpointPage } from '../../../../protocol/app-server/v50';
-import { CollectionPages } from '../agent/CollectionPages';
+import type { CheckpointPage } from '../../../../protocol/app-server/v51';
 import { lineageSwitchSafe } from '../../bindings/projection';
 import { Modal } from '../../presentation/primitives/Modal';
 import { Button } from '../../presentation/primitives/Button';
@@ -39,7 +38,7 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
     if (!valid()) return;
     const matches = (selection: typeof page.selections[number]) => !request.messageId || selection.boundary.locator.type === 'by_message_id' && selection.boundary.locator.message_id === request.messageId;
     setRows(page.selections.filter(matches).map(selection => ({ id: JSON.stringify(selection.boundary.locator),
-      label: selection.boundary.message ? selection.boundary.message.content.map(block => block.type === 'text' ? block.text : block.type === 'uploaded_file' ? block.name : `[${block.type}]`).join(' ').slice(0, 240) : message('common:activity.content-deferred'),
+      label: selection.boundary.message ? selection.boundary.message.content.map(block => block.type === 'text' ? block.text : block.type === 'uploaded_file' ? block.name : `[${block.type}]`).join(' ').slice(0, 240) : message('common:activity.loading'),
 
       choice: { kind: 'history', action, selection } })));
     setNext(page.nextOffset); setActive(0);
@@ -81,14 +80,7 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
   return <Modal closeLabel={tx('commands:command-panel.close-dialog')} open title={request.id === 'tree' ? tx('commands:command-panel.session-tree') : tx('commands:command-panel.value', { p0: request.id })} onClose={close}>
     <p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{detail}</p>
     {toolsPage && <>
-      {toolsPage.items.some(item => item.value == null || item.deferred) && <p role="status">{tx('common:activity.content-deferred')}</p>}
       {toolsPage.items.map(item => item.value != null ? <pre key={item.offset}>{JSON.stringify(item.value, null, 2)}</pre> : null)}
-      {/* This inspector has loaded the native descriptor, not the selected
-          field rows. Its local loaded ranges start empty; native evidence stays
-          intact in toolsPage and Applied is untouched. */}
-      <CollectionPages client={client} target={scope.target} cut={toolsPage.read_cut}
-        collections={(toolsPage.collections ?? []).map(field => ({ ...field, loaded: '0', next_offset: BigInt(field.total) > 0n ? '0' : null }))}
-        owned={scope.current} />
     </>}
     {error && <p role="alert">{error}</p>}
     {blocked && <p role="status">{tx('commands:command-panel.waiting-for-native-execution-and-accepted-inbound-to-settle')}</p>}

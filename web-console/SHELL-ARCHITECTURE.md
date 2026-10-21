@@ -20,13 +20,13 @@ The shell decision from #345 remains in force. #346 completes the Agent seats;
 | Workspace browser/rows | B Harness UI + rustX binding | Compact tree/search/hover/menu; native DTO projections; archive becomes native deletion preview |
 | SettingsRoot | B Harness UI + rustX binding | Modal/nav/content seats; existing CFG3 editors; no Settings Controller |
 | Conversation/composer/tools/interactions/model/permission | B Harness UI + rustX binding | Pinned Agent presentation, bounded native adapters; see AGENT-ARCHITECTURE.md |
-| Connection/Inspector/CFG3 scopes | C rustX extension | Harness primitives/panel seats; native product semantics |
+| Connection/CFG3 scopes | C rustX extension | Harness primitives/panel seats; native product semantics |
 
 ## Boundary
 
 WEB-12 uses one Session identity/header with Chat/Trajectory tabs, a bounded
-Session actions menu (tree navigation and advanced lifecycle), and the existing
-Inspector corner/side-panel seat. The former duplicate title/connection bar and
+Session actions menu (tree navigation and advanced lifecycle), and the file
+preview/workbench side-panel seat. The former duplicate title/connection bar and
 permanent attach/resync/detach/unload toolbar are removed. Paths identify the
 execution location without attachment suffixes; Sidebar tooltips use product copy.
 Sidebar is the sole Session selector. The top Session strip is deleted, not hidden.
@@ -62,11 +62,10 @@ See [the complete classification](PRODUCT-SURFACE.md).
 `bindings/session-product.ts` is a pure projection, shared by Session status and
 Sidebar observation. It carries no transitions, timers or guessed settlement.
 Transport reconnect, attachment open and bounded checkpoint refresh remain distinct actions.
-Inspector accepts observations and `ProtocolLog` only, so its controls cannot
-dispatch runtime operations. Unresolved evidence stays in the client; reading,
-filtering, clearing or pausing the log cannot acknowledge it.
-Selected sections filter operation evidence by Session; separate global/other
-diagnostics never attribute another Session's uncertainty to the selected one.
+The developer inspector, raw protocol log and generic conversation collection
+browser have been removed. Unresolved evidence stays in the client and remains
+actionable through Connection Settings. Session status and Sidebar warnings
+never attribute another Session's uncertainty to the selected one.
 
 `presentation/` has no imports of app, bindings, workspaces, client or protocol.
 `app/` and `workspaces/` bind its props to the typed App Server client.
@@ -98,6 +97,6 @@ Only widths, collapse, menus, theme, search text and section selection are local
 No official brand marks, desktop integrations, Cordis/Host module loader,
 frontend provisional Session identities, archive store, schedule, Workspace
 ownership or content-search protocol. Native metadata search/paging replace
-controller queries. Delete uses native preview/revision confirmation. Inspector
-occupies the right-panel seat. Narrow Settings navigation accommodates CFG3's
+controller queries. Delete uses native preview/revision confirmation. File previews
+and the workbench occupy the right-panel seat. Narrow Settings navigation accommodates CFG3's
 larger section set. No generic plugin platform or compatibility exports.

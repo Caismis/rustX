@@ -1,23 +1,18 @@
-import { JournalSourceProvider } from '../agent/JournalValue';
-import { DeferredContent } from '../agent/DeferredContent';
-import { CollectionPages } from '../agent/CollectionPages';
+/* Copyright (c) 2026 DeepSeek. MIT. Child composer frame adapted from ui-subagent; native observation/control ownership is rustX. See PROVENANCE.md. */
+import { useWorkflowContent } from '../agent/useWorkflowContent';
+import { JournalSourceProvider } from '../agent/ObservationSource';
 import { ChildObservation } from '../../../../protocol/app-server/child-observation';
 import { ToolInspectionContext, useToolTraceNavigation } from '../agent/tool-inspection';
 import { AgentConversationContext } from '../agent/subagent-context';
 import { StateDot } from '../../presentation/primitives/StateDot';
-import { displayText, message as uiMessage, type DisplayText } from '../../locale/translation';
+import { displayText } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
 import { createPortal } from 'react-dom';
 import { useEffect, useLayoutEffect, useContext, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import type { AgentStatistics, RuntimeClientAgent, RuntimeClientJob, MethodResult, WorkflowRunView, WorkflowRunId } from '../../../../protocol/app-server/v50';
+import type { AgentStatistics, RuntimeClientAgent, MethodResult } from '../../../../protocol/app-server/v51';
 import type { Observation } from '../../client/session-lifecycle/port';
 import { AppServerClient } from '../../client/app-server';
-import { RpcFailure } from '../../client/errors';
-import { json } from '../../bindings/projection';
-import { Badge, SettingsCard } from '../../presentation/settings/SettingsContent';
-import { Button } from '../../presentation/primitives/Button';
-import { ToolCard } from '../../presentation/agent/ToolCard';
-import { ArtifactContext, ToolArtifacts } from './Artifact';
+import { ArtifactContext } from './Artifact';
 import { PreviewContext } from './ArtifactPreview';
 import css from './ActivityCards.module.css';
 import { SubagentChat } from '../agent/SubagentChat';
@@ -26,51 +21,20 @@ import { agentDot, agentRunning, agentStatus } from '../agent/subagent-state';
 import { SubagentTrajectory, type SubagentTraceHandle } from '../agent/SubagentTrajectory';
 import { ComposerSeat } from '../agent/ComposerSeat';
 import { AgentComposer } from '../agent/AgentComposer';
+import { SubagentObservationNotice } from '../agent/SubagentObservationNotice';
+import { PermissionSelect } from '../../presentation/agent/PermissionSelect';
 import { ArtifactResources } from '../../client/artifacts';
-import { IconRefreshOutline14, IconClockOutline16 } from '../../presentation/primitives/icons';
+import { IconRefreshOutline14, IconClockOutline16, IconCloseOutline16 } from '../../presentation/primitives/icons';
+
+import { useActivityRequest } from './useActivityRequest';
 
 const detail = (value: string) => value.length > 1024 ? `${value.slice(0, 1024)}…` : value;
-export const workflowKey = (id: WorkflowRunId) => JSON.stringify([id.conversation_id, id.attempt_id, id.invocation]);
 type AgentWait = Extract<MethodResult, { type: 'agent_wait' }>;
 type Controls = { client?: AppServerClient; sessionId?: string };
 const noSubscription = () => () => {};
 
-/** Typed domain failures are presentation copy; opaque native diagnostics stay raw. */
-function activityFailure(cause: unknown): DisplayText {
-  const data = cause instanceof RpcFailure ? cause.error.data : undefined;
-  switch (data?.kind) {
-    case 'agent_not_delivered': return uiMessage('common:activity.not-delivered', { id: data.agent_id });
-    case 'agent_delivery_unknown': return uiMessage('common:activity.delivery-unknown', { id: data.agent_id });
-    case 'job_publication_abandoned': return uiMessage('common:activity.publication-abandoned', { id: data.job_id });
-    case 'agent_settlement': return uiMessage('common:activity.agent-unresolved', { id: data.agent_id });
-    default: return cause instanceof Error ? cause.message : String(cause);
-  }
-}
-
-/** Request presentation only: native state always comes from the next snapshot.
- * A lost response is never retried, and a changed attachment cannot adopt it. */
-function useActivityRequest({ client, sessionId }: Controls) {
-  const view = useSyncExternalStore(client?.subscribe ?? noSubscription, () => sessionId ? client?.getSnapshot().views[sessionId] : undefined);
-  const proof = view?.attachmentObservation;
-  const [state, setState] = useState<{ operation: { proof: Observation }; pending: boolean; error?: DisplayText }>();
-  const visible = !!client && !!sessionId && client.isAttachmentObservationCurrent(sessionId, proof) && state?.operation.proof === proof;
-  const pending = visible && !!state?.pending, error = visible ? state?.error : undefined;
-  const enabled = !!client && !!sessionId && client.isAttachmentControlCurrent(sessionId, proof);
-  async function run(operation: (client: AppServerClient, target: ReturnType<AppServerClient['target']>, current: () => boolean) => Promise<void>, refreshAfter = true) {
-    if (!enabled || pending || !client || !sessionId || !proof) return false;
-    const target = client.target(sessionId), owner = { proof };
-    const current = () => client.isAttachmentObservationCurrent(sessionId, owner.proof);
-    if (!current()) return false;
-    setState({ operation: owner, pending: true });
-    try { await operation(client, target, current); if (refreshAfter && current()) await client.refresh(sessionId); return current(); }
-    catch (cause) { if (current()) setState(previous => current() && previous?.operation === owner ? { ...previous, error: activityFailure(cause) } : previous); return false; }
-    finally { setState(previous => previous?.operation === owner ? { ...previous, pending: false } : previous); }
-  }
-  return { run, disabled: !enabled || pending, pending, error };
-}
-
 /** Durable identity is the React key; the selected transcript survives resume. */
-export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible = true, embedded = false, onMode, ...controls }: { agent: RuntimeClientAgent; metrics?: AgentStatistics; metricsError?: string; mode?: 'chat' | 'trajectory'; visible?: boolean; embedded?: boolean; onMode?: (mode: 'chat' | 'trajectory') => void } & Controls) {
+export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible = true, embedded = false, inspection = false, onMode, close, ...controls }: { agent: RuntimeClientAgent; metrics?: AgentStatistics; metricsError?: string; mode?: 'chat' | 'trajectory'; visible?: boolean; embedded?: boolean; inspection?: boolean; onMode?: (mode: 'chat' | 'trajectory') => void; close?: () => void } & Controls) {
   const tx = useTranslation();
   const trace = useRef<SubagentTraceHandle>(null);
   const [headerHost, setHeaderHost] = useState<HTMLElement | null>(null);
@@ -85,7 +49,7 @@ export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible
 
   const [transcriptRefresh, refreshTranscript] = useState(0);
   const [transcriptLoading, setTranscriptLoading] = useState(false);
-  const [transcriptError, setTranscriptError] = useState<string>();
+  const [transcriptError, setTranscriptError] = useState<{ owner: object; cause: unknown }>();
   const [conversation, setConversation] = useState<ChildObservation>();
   const observationOwner=useRef<ChildObservation|undefined>(undefined);
   const observationRefresh=useRef(0);
@@ -103,10 +67,10 @@ export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible
   // Event-driven native watch: every response is a coherent child-owned cut.
   // Cursor and activation travel together; no client invents stream identity.
   useEffect(() => {
-    if (!visible || mode!=='chat' || !client || !sessionId || !admission || !client.isAttachmentObservationCurrent(sessionId, admission)) { setTranscriptLoading(false); return; }
+    if (!visible || (!inspection && mode !== 'chat') || !client || !sessionId || !admission || !client.isAttachmentObservationCurrent(sessionId, admission)) { setTranscriptLoading(false); return; }
     let observing = true; const controller = new AbortController();
     const current = () => observing && currentViewOwner.current===viewOwner && client.isAttachmentObservationCurrent(sessionId, admission);
-    setTranscriptLoading(true); setTranscriptError(undefined);
+    setTranscriptLoading(true);
     void (async () => {
       const retained=observationOwner.current;
       const observation=retained&&retained.agentId===agent.agent_id&&retained.conversationId===agent.child_conversation_id&&retained.activationId===agent.activation_id?retained:new ChildObservation(agent.agent_id,agent.child_conversation_id,agent.activation_id);
@@ -118,42 +82,48 @@ export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible
         if (!current()) return;
         observation.apply(result.observation);
         setConversation(Object.assign(Object.create(Object.getPrototypeOf(observation)), observation));
+        setTranscriptError(undefined);
         setTranscriptLoading(false);
         if (observation.phase === 'durableOnly') return;
         if (observation.phase === 'resyncRequired' && ++recoveries > 2) throw new Error('Observation recovery is unavailable. Reopen the conversation.');
       }
-    })().catch(cause => { if (current()) { setTranscriptError(cause instanceof Error ? cause.message : String(cause)); setTranscriptLoading(false); } });
+    })().catch(cause => { if (current()) { setTranscriptError({ owner: viewOwner, cause }); setTranscriptLoading(false); } });
     return () => { observing = false; controller.abort(); };
-  }, [client, sessionId, admission, agent.agent_id, agent.child_conversation_id, agent.activation_id,agent.current_activation,agent.state,agent.activation_state,transcriptRefresh,visible,mode,viewOwner]);
+  }, [client, sessionId, admission, agent.agent_id, agent.child_conversation_id, agent.activation_id,agent.current_activation,agent.state,agent.activation_state,transcriptRefresh,visible,mode,inspection,viewOwner]);
   const ownsContent = useMemo(() => () => Boolean(visible&&mode==='chat'&&currentViewOwner.current===viewOwner&&client&&sessionId&&admission&&observationOwner.current?.activationId===agent.activation_id&&client.isAttachmentObservationCurrent(sessionId,admission)),[client,sessionId,admission,viewOwner,visible,mode,agent.activation_id]);
   const scopedPreview = useMemo(() => preview ? {
     openPreview: (artifact: Parameters<typeof preview.openPreview>[0]) => {if(artifact.source.kind==='session_file'&&artifact.source.conversationId!==agent.child_conversation_id)throw new Error('Obsolete Child delivery source');return preview.openPreview({ ...artifact, source: { ...artifact.source,agentId:agent.agent_id,...(artifact.source.kind==='session_file'?{owned:ownsContent}:{} ) } });},
     download: (artifact: Parameters<typeof preview.download>[0]) => {if(artifact.source.kind==='session_file'&&artifact.source.conversationId!==agent.child_conversation_id)throw new Error('Obsolete Child delivery source');return preview.download({ ...artifact, source: { ...artifact.source,agentId:agent.agent_id,...(artifact.source.kind==='session_file'?{owned:ownsContent}:{} ) } });},
   } : undefined, [preview,agent.agent_id,agent.child_conversation_id,ownsContent]);
+  const workflows = useWorkflowContent(client, admission && sessionId && conversation?.checkpoint ? { id: sessionId, target: admission.target, attachmentObservation: admission, snapshot: conversation.snapshot, checkpoint: conversation.checkpoint } : undefined, visible && mode === 'chat' && conversation?.activationId === agent.activation_id, agent.agent_id);
   const unavailable = agent.state === 'unavailable';
   const acceptsMessage = agent.state === 'active' || agent.state === 'inactive';
+  const observationError = transcriptError?.owner === viewOwner ? transcriptError : undefined;
+  const childSnapshot = conversation?.activationId === agent.activation_id ? conversation.snapshot : undefined;
   return <AgentConversationContext.Provider value={agent}><ArtifactContext.Provider value={artifacts}><PreviewContext.Provider value={scopedPreview}><section className={css.agentConversation} data-agent-id={agent.agent_id} data-agent-state={agent.state} data-view={mode} data-activation-id={agent.current_activation ?? undefined} aria-label={tx('common:activity.agent-label', { name: agent.agent })}>
-    <div hidden={mode !== 'chat'} className={css.agentChat}><JournalSourceProvider source={client&&admission&&conversation?.checkpoint ? {client,target:admission.target,agentId:agent.agent_id,cut:()=>conversation.checkpoint?.read_cut,owned:ownsContent} : undefined}><ToolInspectionContext value={inspect}><SubagentChat client={client} sessionId={sessionId} admission={admission} agent={agent} snapshot={conversation?.snapshot} visible={visible && mode === 'chat'}>
-      {client && admission && conversation?.checkpoint && <CollectionPages client={client} target={admission.target} agentId={agent.agent_id} cut={conversation.checkpoint.read_cut} collections={conversation.checkpoint.collections} owned={ownsContent}/>}
-      {client && admission && conversation?.checkpoint && <DeferredContent client={client} target={admission.target} agentId={agent.agent_id} bindings={conversation.content} owned={ownsContent}/>}
-      {conversation?.phase === 'durableOnly' && <p role="status">{tx('common:activity.durable-only')}</p>}
+    <div hidden={mode !== 'chat'} className={css.agentChat}><JournalSourceProvider content={conversation?.content} messages={conversation?.snapshot?.messages} transcript={conversation?.snapshot?.transcript} source={client&&admission&&conversation?.checkpoint ? {client,target:admission.target,agentId:agent.agent_id,cut:()=>conversation.checkpoint?.read_cut,owned:ownsContent} : undefined}><ToolInspectionContext value={inspect}><SubagentChat client={client} sessionId={sessionId} admission={admission} agent={agent} snapshot={conversation?.snapshot} workflows={workflows.snapshot} visible={visible && mode === 'chat'}>
       {transcriptLoading && !conversation && <p role="status">{tx('common:activity.reading')}</p>}
       {metricsError && <p role="alert">{metricsError}</p>}
-      {transcriptError && <p role="alert">{transcriptError}</p>}
+      {workflows.error && <p role="alert">{workflows.error}</p>}
       {agent.detail && <p>{detail(agent.detail)}</p>}
       {settledActivation && settledActivation.proof === admission && <small role="status">{settledActivation.outcome ? tx(`common:state.${settledActivation.outcome}`) : tx('common:activity.observed-inactive')}</small>}
       {[request.error, waitRequest.error, interruptRequest.error].filter(Boolean).map((error, index) => <p role="alert" key={index}>{displayText(tx, error!)}</p>)}
     </SubagentChat></ToolInspectionContext></JournalSourceProvider></div>
-    {client && sessionId && <div hidden={mode !== 'trajectory'} className={css.agentTrace}><SubagentTrajectory ref={trace} agent={agent} client={client} sessionId={sessionId} visible={visible && mode === 'trajectory'}/></div>}
+    {client && sessionId && <div hidden={mode !== 'trajectory'} className={css.agentTrace}><SubagentTrajectory ref={trace} agent={agent} client={client} sessionId={sessionId} visible={visible && mode === 'trajectory'} observationRevision={conversation?.checkpoint?.cursor}/></div>}
     {visible && headerHost && client && createPortal(<div className={css.agentActions}>
       <span className={css.headerStatus} role="status"><StateDot state={agentDot(agent)}/>{agentStatus(agent, tx)}{request.pending && <span>{tx('common:activity.waiting-runtime')}</span>}</span>
       <button type="button" aria-label={tx('common:activity.transcript')} title={tx('common:activity.transcript')} disabled={request.disabled} onClick={() => refreshTranscript(value => value + 1)}><IconRefreshOutline14/></button>
-      <button type="button" aria-label={tx('common:activity.wait-activation')} title={tx('common:activity.wait-activation')} disabled={waitRequest.disabled || unavailable} onClick={() => void waitRequest.run(async (client, target, current) => { const result = await client.request({ method: 'agent/wait', params: { target, agent_id: agent.agent_id } }, 'agent_wait', undefined, current); if (current()) observeSettlement(result, current); })}><IconClockOutline16/></button>
+      {!inspection && <button type="button" aria-label={tx('common:activity.wait-activation')} title={tx('common:activity.wait-activation')} disabled={waitRequest.disabled || unavailable} onClick={() => void waitRequest.run(async (client, target, current) => { const result = await client.request({ method: 'agent/wait', params: { target, agent_id: agent.agent_id } }, 'agent_wait', undefined, current); if (current()) observeSettlement(result, current); })}><IconClockOutline16/></button>}
+      {close && <button type="button" aria-label={tx('common:subagents.close-view')} title={tx('common:subagents.close-view')} onClick={close}><IconCloseOutline16/></button>}
     </div>, headerHost)}
     <ComposerSeat>
+      {observationError && <SubagentObservationNotice error={observationError.cause} loading={transcriptLoading}
+        disabled={!client || !sessionId || !client.isAttachmentObservationCurrent(sessionId, admission)} retry={() => refreshTranscript(value => value + 1)}/>}
       {!client && <div role="status"><StateDot state={agentDot(agent)}/>{agentStatus(agent, tx)}</div>}
-      {unavailable && <div className={css.readOnly} role="status"><StateDot state={agentDot(agent)}/><span>{tx('common:subagents.read-only')}</span></div>}
-      {client && sessionId && <div hidden={unavailable}><AgentComposer placeholder={agent.state === 'inactive' ? tx('common:subagents.reply-placeholder') : undefined} permission={embedded ? <span className={css.headerStatus}><StateDot state={agentDot(agent)}/>{agentStatus(agent, tx)}</span> : undefined} messageLabel={tx('common:activity.message-label', { name: agent.title })} busyEnterBehavior="steer" binding={`${sessionId}:${agent.agent_id}`}
+      {(inspection || unavailable) && <div className={css.readOnly} role="status"><strong>{tx(inspection ? 'common:subagents.one-shot-title' : 'common:subagents.read-only-title')}</strong><span>{tx(inspection ? 'common:subagents.one-shot' : 'common:subagents.read-only')}</span></div>}
+      {client && sessionId && !inspection && <div hidden={unavailable}><AgentComposer separateStop
+        permission={childSnapshot && <PermissionSelect value={childSnapshot.effective_approval_mode} disabled choose={() => {}}/>}
+        messageLabel={tx('common:activity.message-label', { name: agent.title })} busyEnterBehavior="steer" binding={`${sessionId}:${agent.agent_id}`}
         disabled={request.disabled && !request.pending || !acceptsMessage} busy={request.pending} active={agentRunning(agent)}
         uploadPolicy={client.getSnapshot().capabilities?.upload_policy}
         onUpload={(files, operation) => client.upload(sessionId, files, { current: () => client.isAttachmentControlCurrent(sessionId, admission), acknowledged: () => {} }, operation)}
@@ -163,50 +133,12 @@ export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible
           if (current()) refreshTranscript(value => value + 1);
         })}
         cancellationAvailable={!interruptRequest.disabled && !unavailable && agent.state !== 'inactive'}
+        cancellationScope={admission ? { authority: admission, identity: `${agent.agent_id}:${agent.current_activation ?? agent.activation_id}` } : undefined}
         onCancel={() => void interruptRequest.run(async (client, target, current) => { const result = await client.request({ method: 'agent/interrupt', params: { target, agent_id: agent.agent_id } }, 'agent_interruption_accepted', undefined, current); if (result.agent_id !== agent.agent_id) throw new Error('Agent interruption receipt named another native owner.'); }, false)}
       /></div>}
-      <JournalSourceProvider source={client&&admission&&conversation?.checkpoint ? {
+      <JournalSourceProvider content={conversation?.content} messages={conversation?.snapshot?.messages} transcript={conversation?.snapshot?.transcript} source={client&&admission&&conversation?.checkpoint ? {
         client,target:admission.target,agentId:agent.agent_id,cut:()=>conversation.checkpoint?.read_cut,owned:ownsContent,
       }:undefined}><ConversationStats statistics={metrics?.statistics} occupancy={metrics?.occupancy}/></JournalSourceProvider>
     </ComposerSeat>
   </section></PreviewContext.Provider></ArtifactContext.Provider></AgentConversationContext.Provider>;
-}
-
-export function JobCard({ job, ...controls }: { job: RuntimeClientJob } & Controls) {
-  const tx = useTranslation();
-  const request = useActivityRequest(controls);
-  const waitRequest = useActivityRequest(controls);
-  const output = job.result ? (job.result.content ?? []).flatMap(block => block.type === 'text' ? [block.text] : block.type === 'json' ? [block.value && typeof block.value === 'object' && !Array.isArray(block.value) && typeof block.value.combined === 'string' ? block.value.combined : json(block.value)] : []).join('\n') : job.progress ? [job.progress.message, job.progress.completed == null ? undefined : job.progress.total == null ? tx('common:activity.completed', { n: job.progress.completed }) : `${job.progress.completed} / ${job.progress.total}`].filter(Boolean).join('\n') : undefined;
-  const active = job.state === 'starting' || job.state === 'running' || job.state === 'cancelling' || job.state === 'publishing_terminal';
-  return <section data-job-state={job.state} aria-label={tx('common:activity.job-label', { name: job.tool_name })}>
-    <ToolCard tool={{ id: job.job_id, identity: 'job', title: job.tool_name, variant: job.tool_id === 'tool-bash' ? 'bash' : 'generic', summary: job.bash?.description ?? job.bash?.command ?? tx('common:activity.job-title', { id: job.job_id }), input: job.bash?.command,
-      state: job.state === 'succeeded' ? 'success' : job.state === 'failed' || job.state === 'denied' || job.state === 'timed_out' ? 'failure' : job.state === 'outcome_unknown' ? 'uncertain' : job.state,
-      output, exitCode: job.result?.exit_code, truncated: job.result?.truncation?.truncated,
-      artifacts: job.result ? <ToolArtifacts result={job.result}/> : undefined }}/>
-    {job.result?.managed_output && <details><summary>{tx('common:activity.retained', { type: job.result.managed_output.type })}</summary>
-      {'locator' in job.result.managed_output && <p className={css.identity}>{job.result.managed_output.locator}</p>}
-      {'diagnostic' in job.result.managed_output && <p>{detail(job.result.managed_output.diagnostic)}</p>}
-    </details>}
-    {controls.client && <div className={css.controls}>
-      <Button size="sm" variant="outline" disabled={request.disabled} onClick={() => void request.run(async (client, target, current) => { await client.request({ method: 'job/status', params: { target, job_id: job.job_id } }, 'domain_page', undefined, current); })}>{tx('common:activity.status')}</Button>
-      <Button size="sm" variant="outline" disabled={waitRequest.disabled || !active} onClick={() => void waitRequest.run(async (client, target, current) => { await client.request({ method: 'job/wait', params: { target, job_id: job.job_id } }, 'job_outcome', undefined, current); })}>{tx('common:activity.wait-job')}</Button>
-      <Button size="sm" variant="outline" disabled={request.disabled || !active || job.state === 'cancelling'} onClick={() => void request.run(async (client, target, current) => { const receipt = await client.request({ method: 'job/cancel', params: { target, job_id: job.job_id } }, 'job_cancellation_accepted', undefined, current); if (receipt.job_id !== job.job_id) throw new Error('Job cancellation receipt named another native execution.'); }, false)}>{tx('common:activity.cancel-job')}</Button>
-      {request.pending && <small role="status">{tx('common:activity.pending')}</small>}
-      {waitRequest.pending && <small role="status">{tx('common:activity.settling')}</small>}
-      {waitRequest.error && <p role="alert">{displayText(tx, waitRequest.error)}</p>}
-      {request.error && <p role="alert">{displayText(tx, request.error)}</p>}
-    </div>}
-  </section>;
-}
-
-export function WorkflowCard({ run }: { run: WorkflowRunView }) {
-  const tx = useTranslation();
-  return <section data-workflow-run-id={workflowKey(run.id)} aria-label={tx('common:activity.workflow-label', { id: run.workflow_id })}><SettingsCard title={tx('common:activity.workflow-title', { id: run.workflow_id })} meta={<Badge>{run.state.type === 'settled' ? tx(`common:state.${run.state.outcome}`) : tx(`common:state.${run.state.type}`)}</Badge>}>
-    <p>{tx('common:activity.workflow-counts', { used: run.steps_consumed, max: run.steps_max, agents: run.agents_consumed })}</p>
-    {run.state.type === 'waiting' && <p>{tx('common:activity.waiting-for', { state: tx(`common:state.${run.state.reason}`) })}</p>}
-    {run.instances.filter(instance => instance.child).map(instance => <p key={JSON.stringify([instance.block, instance.node, instance.visit])} data-workflow-activation-id={instance.child} className={css.identity}>
-      {instance.node ?? tx('common:activity.agent-step')} · {tx('common:activity.activation', { id: instance.child! })} · {instance.state.type === 'settled' ? tx(`common:state.${instance.state.outcome}`) : tx(`common:state.${instance.state.type}`)}
-    </p>)}
-    {run.omitted_instances > 0 && <small>{tx('common:activity.omitted', { n: run.omitted_instances })}</small>}
-  </SettingsCard></section>;
 }

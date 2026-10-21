@@ -1,0 +1,34 @@
+import { test, expect } from '@playwright/test';
+const origin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
+for (const width of [1440, 390]) test(`short Chat and Trace load automatically while Goal context stays diagnostic (${width})`, async ({page}) => {
+ const errors: string[] = [];page.on('pageerror',error=>errors.push(error.message));page.on('console',message=>{if(message.type()==='error')errors.push(message.text())});
+ await page.addInitScript(width=>localStorage.setItem('rustx-appearance-v1',width===390?'dark':'light'),width);
+ await page.setViewportSize({width:1440,height:1000});
+ await page.goto(`${origin}/test/fixtures/startup.html?existing&reading-window`);await expect(page).toHaveTitle('rustX startup ownership fixture');
+ await page.evaluate(()=>{const fixture=(window as any).startupFixture;fixture.allow('session/summary');fixture.resumeCatalog()});
+ await page.locator('button[data-session-id=A]').click();await page.evaluate(()=>(window as any).startupFixture.release('session/attach'));
+ if(width<600){const collapse=page.getByRole('button',{name:'Collapse Sidebar',exact:true});if(await collapse.isVisible())await collapse.click();await page.setViewportSize({width,height:844});}
+ const chat=page.getByLabel('Canonical conversation');
+ await expect(chat.getByText('History message 1',{exact:true})).toBeAttached();await expect(chat.getByText('History message 40',{exact:true})).toBeAttached();
+ await expect(chat.getByRole('button',{name:'Load earlier',exact:true})).toHaveCount(0);
+ await expect(chat).not.toContainText('Current Goal observation');await expect(chat.getByText('Current context',{exact:true})).toHaveCount(0);
+ await expect(page.getByText('Finish a novel outline',{exact:true})).toBeVisible();
+ await expect(page.getByRole('button',{name:'Return to latest',exact:true})).toHaveCount(0);
+ const reader=page.locator('[data-conversation-scroll]').first();
+ await reader.evaluate(element=>{element.scrollTop=0;element.dispatchEvent(new Event('scroll'))});
+ await expect(chat.getByText('History message 1',{exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Return to latest',exact:true}).click();
+ await expect(chat.getByText('History message 40',{exact:true})).toBeVisible();
+ await expect(chat.getByText('History message 1',{exact:true})).toBeAttached();
+ await page.getByRole('textbox',{name:'Message',exact:true}).fill('Draft survives reading history');
+ await page.screenshot({path:`/tmp/rustx-goal-history-chat-${width}.png`});
+ await page.getByRole('tab',{name:'Trajectory',exact:true}).click();
+ await expect(page.getByRole('button',{name:'Load earlier history',exact:true})).toHaveCount(0);
+ const search=page.getByRole('searchbox',{name:'Search trajectory',exact:true});await search.fill('History message 1');
+ await expect(page.locator('[data-display-type=RecordRow][data-owner="trace:1"]')).toBeAttached();
+ await search.fill('');
+ await expect(page.getByText('Goal status model context',{exact:true}).first()).toBeAttached();
+ await page.screenshot({path:`/tmp/rustx-goal-history-trace-${width}.png`});
+ await page.getByRole('tab',{name:'Chat',exact:true}).click();await expect(page.getByRole('textbox',{name:'Message',exact:true})).toHaveValue('Draft survives reading history');
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await expect(page.locator('vite-error-overlay')).toHaveCount(0);expect(errors).toEqual([]);
+});

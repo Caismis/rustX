@@ -9,6 +9,8 @@ import { workspaceHandler } from '../../host/http.ts';
 export function workbenchFixture(): Plugin {
   return { name: 'workbench-fixture', configureServer(server) {
     const root = mkdtempSync(join(tmpdir(), 'rustx-workbench-browser-')); mkdirSync(join(root, 'src')); writeFileSync(join(root, 'src/hello.txt'), 'Workspace preview works.');
+    const otherRoot = mkdtempSync(join(tmpdir(), 'rustx-workbench-other-'));
+    writeFileSync(join(otherRoot, 'other.txt'), 'Other workspace.');
     writeFileSync(join(root, 'src/test.py'), 'def greet(name):\n    return "Hello, " + name\n\n' + '# long line ' + 'source '.repeat(120) + '\n');
     writeFileSync(join(root, 'src/file10.txt'), 'ten'); writeFileSync(join(root, 'src/file2.txt'), 'two');
     mkdirSync(join(root, 'docs'));
@@ -21,10 +23,10 @@ export function workbenchFixture(): Plugin {
     writeFileSync(join(root, 'docs/counter.css'), '#counter{color:rgb(12,34,56)}');
     writeFileSync(join(root, 'docs/counter.js'), 'let n=0;counter.onclick=()=>counter.textContent="Count "+(++n);try{parent.localStorage.getItem("secret");boundary.textContent="exposed"}catch{boundary.textContent="isolated"}');
     writeFileSync(join(root, 'docs/table.csv'), 'Name,Amount\nApples,12\nPears,8\n');
-    for (const name of ['sample.pdf','sample.xlsx']) copyFileSync(new URL(`../fixtures/documents/${name}`,import.meta.url),join(root,'docs',name));
-    const host = new LocalWorkspaceHost({ roots: [{ id: 'A', cwd: root, displayName: 'Workspace A' }], endpoint: 'ws://localhost:8080', picker: false, metadataFile: join(root, 'registry.json'), nativeFilesystem: 'shared', terminalSupervisor: fileURLToPath(new URL('../../../target/debug/interactive-supervisor', import.meta.url)), transportToken: 'fixture' }, undefined, async (_endpoint, _token, target) => { if (target.session_id !== 'A' || target.active_node !== 'node-A') throw new Error('Wrong native Session'); return { cwd: root, ownershipGeneration: '1' }; }, async () => async () => {});
+    for (const name of ['sample.pdf','sample.xlsx','linked.docx','linked.pptx','slides.pptx']) copyFileSync(new URL(`../fixtures/documents/${name}`,import.meta.url),join(root,'docs',name));
+    const host = new LocalWorkspaceHost({ roots: [{ id: 'A', cwd: root, displayName: 'Workspace A' }, { id: 'B', cwd: otherRoot, displayName: 'Workspace B' }], endpoint: 'ws://localhost:8080', picker: false, metadataFile: join(root, 'registry.json'), nativeFilesystem: 'shared', terminalSupervisor: fileURLToPath(new URL('../../../target/debug/interactive-supervisor', import.meta.url)), transportToken: 'fixture' }, undefined, async (_endpoint, _token, target) => { if (target.session_id !== 'A' || target.active_node !== 'node-A') throw new Error('Wrong native Session'); return { cwd: root, ownershipGeneration: '1' }; }, async () => async () => {});
     const handler = workspaceHandler(host);
     server.middlewares.use('/product-host/workbench-fixture', (request, response, next) => { request.url = '/product-host' + request.url; void handler(request, response, next); });
-    server.httpServer?.on('close', () => { void host.close().then(() => rmSync(root, { recursive: true, force: true })); });
+    server.httpServer?.on('close', () => { void host.close().then(() => { for (const path of [root, otherRoot]) rmSync(path, { recursive: true, force: true }); }); });
   } };
 }

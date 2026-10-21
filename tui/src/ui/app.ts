@@ -875,16 +875,8 @@ export class RustxTuiApp {
       let bytes: Buffer;
       try {
         const stat = await file.stat();
-        if (!stat.isFile() || stat.size > session.uploadPolicy!.max_file_bytes) throw new Error("Select a regular file within the native upload policy.");
-        const buffer = Buffer.alloc(session.uploadPolicy!.max_file_bytes + 1);
-        let bytesRead = 0;
-        while (bytesRead < buffer.length) {
-          const read = await file.read(buffer, bytesRead, buffer.length - bytesRead, bytesRead);
-          if (read.bytesRead === 0) break;
-          bytesRead += read.bytesRead;
-        }
-        if (bytesRead > session.uploadPolicy!.max_file_bytes) throw new Error("Attachment exceeds native upload policy.");
-        bytes = buffer.subarray(0, bytesRead);
+        if (!stat.isFile()) throw new Error("Select a regular file.");
+        bytes = await file.readFile();
       } finally { await file.close(); }
       const receipts = await session.upload(basename(path), bytes);
       // A resync cannot invalidate a confirmed Session receipt. Navigation

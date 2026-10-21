@@ -2,7 +2,7 @@ import {applicationReceipt} from './fixture';
 import {readCut} from './fixture';
 import { checkpoint } from "./fixture";
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { RuntimeClientSnapshot } from '../../protocol/app-server/v50';
+import type { RuntimeClientSnapshot } from '../../protocol/app-server/v51';
 import { interactionKey } from '../src/client/contracts';
 import { OutcomeUncertain, RequestNotDispatched, RpcFailure } from '../src/client/errors';
 import { conversation } from '../src/bindings/projection';
@@ -45,8 +45,8 @@ describe('native App Server connection', () => {
     const s = server(); await s.connect();
     expect(s.client.getSnapshot().connection).toBe('connected');
     expect(s.client.getSnapshot().capabilities).toEqual(capabilities);
-    expect(s.requests[0].request).toMatchObject({ method: 'initialize', params: { protocol_version: 50 } });
-    expect(JSON.stringify(s.client.log.getSnapshot())).not.toContain(TOKEN);
+    expect(s.requests[0].request).toMatchObject({ method: 'initialize', params: { protocol_version: 51 } });
+    expect(JSON.stringify(s.client.getSnapshot())).not.toContain(TOKEN);
   });
   it('rejects incompatible versions and missing native capabilities', async () => {
     const s = server(); s.version = 28;
@@ -168,13 +168,7 @@ describe('native App Server connection', () => {
     expect(s.client.getSnapshot().views.B.snapshot?.pending_interactions).toEqual([b]);
     expect(s.requests.filter(item => item.request.method === 'interaction/respond')).toHaveLength(1);
   });
-  it('observes actual wire requests/responses/notifications before adaptation', async () => {
-    const s = server(); await s.attached('A'); await s.update('A', snapshot());
-    const log = s.client.log.getSnapshot();
-    expect(log.entries.some(entry => entry.kind === 'notification' && JSON.parse(entry.json).method === 'session/event')).toBe(true);
-    expect(log.entries.some(entry => entry.kind === 'response' && entry.method === 'session/attach' && entry.sessionId === 'A')).toBe(true);
-    expect(log.entries.filter(entry => entry.direction === 'out').map(entry => JSON.parse(entry.json))).toEqual(s.requests.map(item => item.request));
-  });
+
   it('close view releases attachment and preserves runtime for reopen', async () => {
     const s = server(); await s.attached('A'); await s.client.release('A');
     expect(s.client.getSnapshot().views.A.attachment).toBe('detached');
@@ -211,14 +205,7 @@ describe('native App Server connection', () => {
     expect(s.client.getSnapshot().uncertain).toEqual([]);
     expect(s.client.getSnapshot().interactionOperations).toEqual({});
   });
-  it('pausing raw-log presentation does not pause authoritative protocol processing', async () => {
-    const s = server(); await s.attached('A'); s.client.log.pause(true);
-    const frozen = s.client.log.getSnapshot().entries;
-    await s.update('A', { ...snapshot(), pending_interactions: [interaction('questionnaire')] });
-    expect(s.client.getSnapshot().views.A.snapshot?.pending_interactions).toHaveLength(1);
-    expect(s.client.log.getSnapshot().entries).toBe(frozen);
-    s.client.log.pause(false); expect(s.client.log.getSnapshot().entries.length).toBeGreaterThan(frozen.length);
-  });
+
   it('lost close acknowledgement preserves released intent and never reattaches or replays', async () => {
     const s = server(); await s.attached('A', 'B'); const method = 'session/detach' as const;
     s.held.add(method); const baseline = s.requests.length;

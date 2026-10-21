@@ -1,5 +1,4 @@
 import * as common from './dictionaries/common';
-import * as inspector from './dictionaries/inspector';
 import * as agent from './dictionaries/agent';
 import * as workspace from './dictionaries/workspace';
 import * as interactions from './dictionaries/interactions';
@@ -10,7 +9,7 @@ import * as trajectory from './dictionaries/trajectory';
 import * as tools from './dictionaries/tools';
 import * as sidebar from './dictionaries/sidebar';
 import { documentLanguage, type LocaleId } from './controller';
-const dictionaries = { common, inspector, agent, workspace, interactions, commands, artifacts, settings, trajectory, tools, sidebar };
+const dictionaries = { common, agent, workspace, interactions, commands, artifacts, settings, trajectory, tools, sidebar };
 export type Namespace = keyof typeof dictionaries;
 export type TranslationKey = { [N in Namespace]: `${N}:${keyof typeof dictionaries[N]['en'] & string}` }[Namespace];
 export type Translate = ((key: TranslationKey, params?: Readonly<Record<string, string | number>>) => string) & { readonly locale: LocaleId; readonly language: string };

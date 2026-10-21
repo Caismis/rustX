@@ -9,7 +9,7 @@ import type { Translate } from '../../locale/translation';
  * relationship. Missing bridge evidence leaves a request as a marker, with separate numeric metrics.
  */
 import { trajectoryItems, isInspectable, type TrajectoryProjection } from './layout';
-import type { TraceKind, TraceRecord } from '../../../../protocol/app-server/v50';
+import type { TraceKind, TraceRecord } from '../../../../protocol/app-server/v51';
 
 /** Horizontal projection of the overview's domain: equal-width operations, or
  * recorded durations with idle time compressed, the two Harness exposes. */
@@ -72,7 +72,7 @@ export function timelineProjectionRevision(model: TrajectoryTimelineModel | null
 
 /** Lanes group related activity, exactly as the Harness overview does. */
 function laneOf(kind: TraceKind): number {
-  if (kind === 'tool' || kind === 'background' || kind === 'subagent' || kind === 'workflow') return 2;
+  if (kind === 'tool' || kind === 'background' || kind === 'workflow') return 2;
   if (kind === 'request' || kind === 'compaction') return 1;
   return 0;
 }

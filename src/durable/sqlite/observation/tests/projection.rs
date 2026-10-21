@@ -6,7 +6,7 @@ use crate::durable::sqlite::*;
 use crate::durable::{
     CanonicalStore, JournalStore, ObservationStore, ProjectionStore, RequestStore,
 };
-use crate::durable::{ConversationStore, ConversationStoreError};
+use crate::durable::{ConversationStore, ConversationStoreError, InboxStore};
 use crate::events::types::RuntimeEvent;
 use crate::runtime::identity::{AttemptId, ConversationId};
 use chrono::Utc;
@@ -52,6 +52,17 @@ pub(super) fn assert_projection_receipt_head(
     assert!(!witness.source_unavailable);
     let reading = witness.occupancy.as_ref().unwrap();
     assert_eq!(
+        reading.projection_head.transcript_anchor.get(),
+        receipt
+            .completed
+            .observation
+            .as_ref()
+            .unwrap()
+            .read_cut
+            .read
+            .transcript
+    );
+    assert_eq!(
         reading.projection_head.activation_id,
         receipt.checkpoint.activation.activation
     );
@@ -67,6 +78,98 @@ pub(super) fn assert_projection_receipt_head(
         reading.compaction.activation_id,
         reading.projection_head.activation_id
     );
+}
+#[test]
+fn compaction_marker_keeps_its_original_transcript_boundary_as_history_grows() {
+    let store = store();
+    store
+        .initialize(&[user_message("anchor-original", "original C")])
+        .unwrap();
+    // Accepted user input has a T position before it enters the canonical Ledger.
+    store
+        .accept_inbound(draft("accepted before compaction"))
+        .unwrap();
+    let receipt = store
+        .commit_projection(observation_projection_input(&store, "anchored-head"))
+        .unwrap();
+    assert_projection_receipt_head(&receipt);
+    let before = store
+        .observation_projection_activation(receipt.checkpoint.activation.activation)
+        .unwrap();
+    assert_eq!(before.transcript_anchor.get(), 2);
+    assert_eq!(before.activation_ledger.0, 1);
+    store
+        .accept_inbound(draft("accepted after compaction"))
+        .unwrap();
+    store
+        .append_canonical(&user_message("anchor-later", "later C"))
+        .unwrap();
+    let later = store
+        .commit_projection(observation_projection_input(&store, "later-head"))
+        .unwrap();
+    let after = store
+        .observation_projection_activation(receipt.checkpoint.activation.activation)
+        .unwrap();
+    assert_eq!(after, before);
+    assert_eq!(
+        store
+            .observation_projection_head(later.completed.sequence)
+            .unwrap()
+            .unwrap()
+            .transcript_anchor
+            .get(),
+        4
+    );
+    let page = crate::runtime_client::projection_history::page(
+        &store,
+        later.completed.sequence,
+        crate::context::checkpoint::ProjectionActivationId::default(),
+        16,
+    )
+    .unwrap();
+    assert_eq!(
+        page.records
+            .iter()
+            .map(|head| head.transcript_anchor.get())
+            .collect::<Vec<_>>(),
+        [2, 4]
+    );
+}
+#[test]
+fn inherited_compaction_marker_uses_the_destination_transcript_boundary() {
+    let source = store();
+    let original = user_message("inherited-anchor", "original C");
+    source.initialize(std::slice::from_ref(&original)).unwrap();
+    source
+        .accept_inbound(draft("source-only pending T"))
+        .unwrap();
+    let mut checkpoint = source
+        .commit_projection(observation_projection_input(&source, "inherited-head"))
+        .unwrap()
+        .checkpoint;
+    assert_eq!(
+        source
+            .observation_projection_activation(checkpoint.activation.activation)
+            .unwrap()
+            .transcript_anchor
+            .get(),
+        2
+    );
+    checkpoint.activation.destination_installation = Some(
+        crate::runtime::identity::LineageInstallationId::new("installed-anchor"),
+    );
+    let destination = SqliteConversationStore::in_memory(source.conversation_id().clone()).unwrap();
+    let seed = crate::durable::LineageSeed::history(vec![
+        original,
+        user_message("later-inherited-anchor", "later C"),
+    ])
+    .with_projections(vec![checkpoint])
+    .unwrap();
+    destination.initialize_lineage(&seed).unwrap();
+    let head = destination
+        .observation_projection_activation(crate::context::checkpoint::ProjectionActivationId(1))
+        .unwrap();
+    assert_eq!(head.transcript_anchor.get(), 1);
 }
 pub(super) fn deny_projection_body(
     context: rusqlite::hooks::AuthContext<'_>,

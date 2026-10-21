@@ -37,7 +37,6 @@ export const selectShell = (state: ClientView): ShellView => ({
     deleting: view.deleting, deletionRecovery: view.deletionRecovery, recoveringDeletion: view.recoveringDeletion,
   }])),
 });
-export const selectClient = (state: ClientView) => state;
 
 /** Fixed responsibility slices compare their immediate immutable fields only. */
 export function shallowEqual<T extends object | undefined>(a: T, b: T): boolean {

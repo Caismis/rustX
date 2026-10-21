@@ -18,26 +18,50 @@ use std::path::{Component, Path, PathBuf};
 #[derive(Debug)]
 pub struct UploadFile {
     pub name: String,
-    pub bytes: Vec<u8>,
+    pub data: UploadData,
 }
-/// Finite native storage admission, independent of image and control-frame limits.
+/// Upload bytes are either already owned by a native caller or streamed into an
+/// anonymous carrier file. The latter keeps browser uploads bounded in memory;
+/// dropping a refused/truncated carrier closes and removes its scratch storage.
+#[derive(Debug)]
+pub enum UploadData {
+    Bytes(Vec<u8>),
+    File { file: File, size: usize },
+}
+impl From<Vec<u8>> for UploadData {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self::Bytes(bytes)
+    }
+}
+impl UploadData {
+    #[must_use]
+    pub fn size(&self) -> usize {
+        match self {
+            Self::Bytes(bytes) => bytes.len(),
+            Self::File { size, .. } => *size,
+        }
+    }
+    fn write_to(&self, output: &mut File) -> io::Result<()> {
+        match self {
+            Self::Bytes(bytes) => output.write_all(bytes),
+            Self::File { file, size } => {
+                let copied = io::copy(&mut &*file, output)?;
+                if copied != *size as u64 {
+                    return Err(invalid("upload length mismatch"));
+                }
+                Ok(())
+            }
+        }
+    }
+}
+/// Transport flow control, independent of image and control-frame limits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UploadPolicy {
-    pub max_file_bytes: usize,
-    pub max_transfer_bytes: usize,
-    pub max_files_per_transfer: usize,
-    pub max_uploads_per_user_input: usize,
-    pub max_upload_bytes_per_user_input: usize,
     pub max_concurrent_transfers: usize,
     pub max_chunk_bytes: usize,
 }
 pub const UPLOAD_POLICY: UploadPolicy = UploadPolicy {
-    max_file_bytes: 2 * 1024 * 1024,
-    max_transfer_bytes: 4 * 1024 * 1024,
-    max_files_per_transfer: 8,
-    max_uploads_per_user_input: crate::message::content::MAX_INPUT_ATTACHMENTS,
-    max_upload_bytes_per_user_input: 4 * 1024 * 1024,
     max_concurrent_transfers: 2,
     max_chunk_bytes: 64 * 1024,
 };
@@ -55,28 +79,24 @@ pub enum UploadOutcome {
     Failed,
     Ready { files: Vec<UploadedFile> },
 }
-/// Validate before allocating any transport payload buffer.
+/// Validate metadata before opening a carrier. Generic workspace files have no
+/// product count/size cap, matching DSH; framing and checked sizes stay native.
 /// # Errors
-/// Rejects unsafe names, duplicate basenames and every native policy overflow.
+/// Rejects empty selections, unsafe/duplicate names and arithmetic overflow.
 pub fn validate_metadata(files: &[UploadMetadata]) -> io::Result<()> {
-    if files.is_empty() || files.len() > UPLOAD_POLICY.max_files_per_transfer {
-        return Err(invalid("upload file count exceeds native policy"));
+    if files.is_empty() {
+        return Err(invalid("upload selection must not be empty"));
     }
     let mut total = 0usize;
     let mut names = BTreeSet::new();
     for file in files {
         validate_name(&file.name)?;
-        if !names.insert(&file.name) || file.size > UPLOAD_POLICY.max_file_bytes {
-            return Err(invalid(
-                "duplicate name or upload file size exceeds native policy",
-            ));
+        if !names.insert(&file.name) {
+            return Err(invalid("duplicate upload name"));
         }
         total = total
             .checked_add(file.size)
             .ok_or_else(|| invalid("upload size overflow"))?;
-        if total > UPLOAD_POLICY.max_transfer_bytes {
-            return Err(invalid("upload batch size exceeds native policy"));
-        }
     }
     Ok(())
 }
@@ -291,21 +311,14 @@ impl UploadRegistry {
                 }
             }
             validate_workspace(&allocation.workspace)?;
-            if !valid_identity(batch)
-                || allocation.files.is_empty()
-                || allocation.files.len() > UPLOAD_POLICY.max_files_per_transfer
-            {
+            if !valid_identity(batch) || allocation.files.is_empty() {
                 return Err(invalid("invalid owned upload allocation"));
             }
             let mut names = BTreeSet::new();
             let mut admitted_bytes = 0usize;
             for file in &allocation.files {
-                if file.admitted_bytes > UPLOAD_POLICY.max_file_bytes {
-                    return Err(invalid("invalid admitted upload file size"));
-                }
                 admitted_bytes = admitted_bytes
                     .checked_add(file.admitted_bytes)
-                    .filter(|total| *total <= UPLOAD_POLICY.max_transfer_bytes)
                     .ok_or_else(|| invalid("invalid admitted upload transfer size"))?;
                 validate_name(&file.name)?;
                 if !valid_identity(&file.token) || !names.insert(&file.name) {
@@ -338,7 +351,7 @@ impl UploadRegistry {
                 }
                 Ok(UploadEntry {
                     name: file.name.clone(),
-                    admitted_bytes: file.bytes.len(),
+                    admitted_bytes: file.data.size(),
                     token: identity()?,
                 })
             })
@@ -397,7 +410,7 @@ impl UploadRegistry {
             )?);
             #[cfg(test)]
             tests::materialize_checkpoint("file write")?;
-            output.write_all(&input.bytes)?;
+            input.data.write_to(&mut output)?;
             #[cfg(test)]
             tests::materialize_checkpoint("file sync")?;
             output.sync_all()?;
@@ -471,9 +484,6 @@ impl UploadRegistry {
         session: &SessionId,
         receipts: &[UploadReceipt],
     ) -> io::Result<Vec<crate::message::types::UserContentBlock>> {
-        if receipts.len() > UPLOAD_POLICY.max_uploads_per_user_input {
-            return Err(invalid("user input upload count exceeds native policy"));
-        }
         let mut total = 0usize;
         receipts
             .iter()
@@ -487,9 +497,6 @@ impl UploadRegistry {
                 total = total
                     .checked_add(entry.admitted_bytes)
                     .ok_or_else(|| invalid("user input upload size overflow"))?;
-                if total > UPLOAD_POLICY.max_upload_bytes_per_user_input {
-                    return Err(invalid("user input upload bytes exceed native policy"));
-                }
                 Ok(crate::message::types::UserContentBlock::UploadedFile(
                     reference,
                 ))

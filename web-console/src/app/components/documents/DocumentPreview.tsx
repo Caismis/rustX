@@ -32,7 +32,7 @@ export function DocumentPreview({ kind, bytes, resources, retry, viewState, onVi
     return <HtmlPreview bytes={bytes} viewState={viewState} onViewStateChange={onViewStateChange} />;
   }
   const loading = <p role="status">{tx('artifacts:document.loading')}</p>;
-  if (kind === 'pdf' || pdf) return <>{pdf && <p>{tx('artifacts:document.fidelity')}</p>}<Suspense fallback={loading}><PdfPreview bytes={pdf ?? bytes} signal={resources.signal} retry={retry} viewState={viewState} onViewStateChange={onViewStateChange} /></Suspense></>;
+  if (kind === 'pdf' || pdf) return <><Suspense fallback={loading}><PdfPreview bytes={pdf ?? bytes} signal={resources.signal} retry={retry} viewState={viewState} onViewStateChange={onViewStateChange} /></Suspense></>;
   if (derived?.kind === 'xlsx') return <WorkbookPreview workbook={derived} viewState={viewState} onViewStateChange={onViewStateChange} />;
   return loading;
 }

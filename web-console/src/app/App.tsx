@@ -14,6 +14,7 @@ import { ConversationSeat, ConversationStatus } from './agent/ConversationSeat';
 import { readTheme, applyTheme } from './appearance';
 import { Settings } from './settings/Settings';
 import type { ProductHostWorkspaces } from '../workspaces/host';
+import type { WorkbenchTarget } from '../workspaces/workbench';
 import { HttpWorkspaceHost } from '../workspaces/http-host';
 import { WorkspaceAuthority } from '../workspaces/authority';
 import { WorkspaceAssociations } from '../workspaces/associations';
@@ -24,7 +25,7 @@ import { useActorRef, useSelector } from '@xstate/react';
 import { shellNavigationMachine, committedRouteCurrent, draftSessionCurrent, type ShellNavigationActor } from './navigation/machine';
 import { HistorySurface } from './navigation/HistorySurface';
 import type { AppServerClient } from '../client/app-server';
-import type { CompletedResponseView, SourceTarget } from '../../../protocol/app-server/v50';
+import type { CompletedResponseView, SourceTarget } from '../../../protocol/app-server/v51';
 import type { ForkOrigin } from './agent/ForkPoint';
 import { CommandPanel, type CommandRequest } from './commands/CommandPanel';
 import { type ResponseAction } from './commands/native';
@@ -47,7 +48,6 @@ import { Button } from '../presentation/primitives/Button';
 import { IconPanelLeftOutline16 } from '../presentation/primitives/icons';
 import { sessionDisplayTitle } from '../bindings/session-title';
 import { sessionDeletionNotice } from '../bindings/session-deletion';
-import { LiveInspector } from './Inspector';
 import { SessionDeletion } from './SessionDeletion';
 import { userSettingsTarget, workspaceSettingsTarget, type SettingsTarget } from './settings/projection';
 import { createOwnerLookup, settingsNavigationMachine } from './settings/machines/navigation';
@@ -110,7 +110,6 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
   const [previewFocus, setPreviewFocus] = useState(0);
   const previewOpener = useRef<HTMLElement | null>(null);
   const [workbenchFullscreen, setWorkbenchFullscreen] = useState(false);
-  const inspectorOpen = previews.mode === 'inspector';
   const returnPreviewFocus = () => {
     const opener = previewOpener.current;
     const target = opener?.isConnected && !opener.closest('[inert]') && opener.checkVisibility() ? opener : document.querySelector<HTMLElement>('[data-preview-toggle]') ?? document.querySelector<HTMLElement>('#conversation-view');
@@ -165,6 +164,9 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
 
   const selectedView = selected ? state.views[selected] : center.kind === 'new-conversation' && routeState.context.draftSession ? state.views[routeState.context.draftSession.sessionId] : undefined;
   const view = selectedView?.deleting && !selectedView.target ? undefined : selectedView;
+  const workbenchTarget: WorkbenchTarget | undefined = view?.summary
+    ? { session_id: view.id, active_node: view.summary.active_node }
+    : center.kind === 'new-conversation' && workspace ? { workspace_id: workspace } : undefined;
   useLayoutEffect(() => previewOwner.selectSession(selected), [previewOwner, selected]);
   const artifacts = useMemo(() => selected && view?.target ? new ArtifactResources(client, selected) : undefined, [client, selected, view?.target, state.generation, state.authorityRevision, fileAuthority]);
   useEffect(() => () => artifacts?.dispose(), [artifacts]);
@@ -275,12 +277,11 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
       workspaceSettings={(id, label) => { openSettings(workspaceSettingsTarget(id, label)); geometry.dismissSidebar(); }} workspace={workspace} selected={selected}
       draft={center.kind === 'new-conversation' && workspace ? { workspaceId: workspace, binding: String(draftBinding), focus: focusDraft } : undefined} selectWorkspace={id => { createInWorkspace(id); geometry.dismissSidebar(); }}
       openSession={id => open(id, undefined, geometry)} openViews={openViews} closeView={closeView} closeAllViews={closeAllViews} createSession={id => { createInWorkspace(id); geometry.dismissSidebar(); }} deleteSession={setDeletingSession}
-      forkSession={id => open(id, { id: 'fork' }, geometry)} />}
+      forkSession={id => shell.send({ type: 'OPEN', destination: { kind: 'fork-session', sessionId: id, sidebar: !!geometry.overlay } })} />}
     settings={wide => <SettingsTrigger wide={wide} onClick={() => { openSettings(userSettingsTarget); geometry.dismissSidebar(); }} />} />}
-    rightOpen={previews.mode !== 'collapsed'} rightPanel={geometry => <RightPanel headerless={previews.mode !== 'inspector'} docked={previews.mode === 'workbench' || previews.mode === 'collapsed'} closeLabel={previews.mode === 'workbench' ? tx('artifacts:workbench.toggle') : previews.mode === 'preview' ? tx('artifacts:workspace.collapse') : tx('common:right-panel.close-inspector')} {...geometry} fullscreen={previews.mode === 'workbench' ? workbenchFullscreen : previews.mode === 'preview' && previews.workspace?.fullscreen} open={previews.mode !== 'collapsed'} close={collapsePanel} title={previews.mode === 'workbench' ? tx('artifacts:workbench.start') : previews.mode === 'preview' ? tx('artifacts:workspace.title') : tx('common:app.developer-inspector')}>
-      <Workbench renderAgent={(id, visible) => <SubagentAside id={id} visible={visible}/>} fileRef={fileWorkbench} key={JSON.stringify([state.generation, selected, view?.summary?.active_node, workspaceAuthority.getRevision()])} closePanel={collapsePanel} host={workspaceHost} scope={workspaceAuthority.getCatalog()} target={view?.summary ? { session_id: view.id, active_node: view.summary.active_node } : undefined} visible={previews.mode === 'workbench'} floatingVisible={previews.mode === 'workbench' || previews.mode === 'collapsed'} fullscreen={workbenchFullscreen || !geometry.canShow} toggleFullscreen={() => { if (!geometry.canShow) collapsePanel(); else setWorkbenchFullscreen(value => !value); }}/>
+    rightOpen={previews.mode !== 'collapsed'} rightPanel={geometry => <RightPanel docked={previews.mode !== 'preview'} {...geometry} fullscreen={previews.mode === 'workbench' ? workbenchFullscreen : previews.mode === 'preview' && previews.workspace?.fullscreen} open={previews.mode !== 'collapsed'} title={previews.mode === 'preview' ? tx('artifacts:workspace.title') : tx('artifacts:workbench.start')}>
+      <Workbench renderAgent={(id, visible) => <SubagentAside id={id} visible={visible}/>} fileRef={fileWorkbench} key={JSON.stringify([state.generation, selected, workbenchTarget, fileAuthority])} closePanel={collapsePanel} host={workspaceHost} scope={workspaceAuthority.getCatalog()} target={workbenchTarget} visible={previews.mode === 'workbench'} floatingVisible={previews.mode === 'workbench' || previews.mode === 'collapsed'} fullscreen={workbenchFullscreen || !geometry.canShow} toggleFullscreen={() => { if (!geometry.canShow) collapsePanel(); else setWorkbenchFullscreen(value => !value); }}/>
       <PreviewWorkspace openWorkbench={() => previewOwner.showWorkbench()} owner={previewOwner} snapshot={previews} focusRequest={previewFocus} returnFocus={returnPreviewFocus}/>
-      {inspectorOpen && <LiveInspector client={client} sessionId={view?.id} />}
     </RightPanel>}
     overlay={<>
       {/* Settings renders the navigation machine's state and nothing else: which
@@ -302,13 +303,12 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
     <DetachedFirstSubmissions client={client} binding={String(draftBinding)} active={!!selected}/>
     {(previews.problem || previews.downloadError) && <div className="notice error" role="alert">{previews.problem ? tx(`artifacts:workspace.limit-${previews.problem}`) : previews.downloadError}<Button size="sm" onClick={() => previewOwner.dismissProblem()}>{tx('common:app.dismiss-notice')}</Button></div>}
     {(error || routeState.context.error) && <div className="notice error" role="alert">{error || routeState.context.error}<Button size="sm" onClick={() => { setError(''); shell.send({ type: 'DISMISS.ERROR' }); }}>{tx('common:app.dismiss-notice')}</Button></div>}
-    {routeState.matches('preparing') && <div className="notice" role="status"><span>{tx(routeState.context.pending?.destination.kind === 'history' ? 'agent:navigation.opening-history' : 'agent:navigation.opening-conversation')}</span><Button size="sm" onClick={() => shell.send({ type: 'CANCEL' })}>{tx('agent:navigation.stay')}</Button></div>}
     {/* Native automatic configuration repairs: nonblocking, never a modal,
         and silent for a healthy source. View details opens the exact owner,
         which acknowledges the receipt once it has presented its details. */}
     <RepairNotice client={client} acknowledgements={repairAcknowledgements}
       viewDetails={({ source, authorityId, receiptId }) => shell.send({ type: 'SETTINGS', destination: { type: 'OPEN.REPAIRS', source, inspection: { authorityId, receiptId } } })} />
-    {state.uncertain.some(item => !item.sessionId) && <div className="notice" role="status">{tx('common:app.a-global-operation-needs-verification-inspect-global-other-sessi')}</div>}
+    {state.uncertain.some(item => !item.sessionId) && <div className="notice" role="status">{tx('common:app.a-global-operation-needs-verification-review-connection-settings')}</div>}
     {deletingSession && <SessionDeletion key={JSON.stringify([state.authorityRevision, deletingSession])} client={client} sessionId={deletingSession} title={sessionDisplayTitle(tx, state.sessions.find(session => session.id === deletingSession) ?? state.views[deletingSession]?.summary)} close={() => setDeletingSession(undefined)} deleted={() => {
       const remaining = openViews.filter(id => id !== deletingSession);
       setOpenViews(remaining);
@@ -320,8 +320,8 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
     <FileLinks.Provider value={center.kind === 'history' ? undefined : file => { previewOwner.showWorkbench(); void fileWorkbench.current?.openFile(file.path, file.line); }}><section className={`session-panel ${agentCss.root}`} data-phase={view || center.kind === 'history' ? 'active' : 'hero'} data-shell-route={center.kind} id="session-view" role="region" aria-labelledby="session-title">
       {center.kind === 'history' ? <HistorySurface key={JSON.stringify([center.sessionId, center.nodeId, center.messageId, center.window.cut])} client={client} route={center} settings={navigationActor} current={newConversationCurrent} back={() => shell.send({ type: 'RETURN', route: center })}/> : <>
       <ConversationHeader workspaceId={workspace} host={workspaceHost} authority={workspaceAuthority} client={client} view={view && { ...view, summary: state.sessions.find(session => session.id === view.id) ?? view.summary }} authorityRevision={state.authorityRevision}
-        connected={connected} attached={attached} commandOpen={commandOpen} inspectorOpen={inspectorOpen}
-        toggleInspector={() => previewOwner.toggleInspector()} previewToggle={<Button size="sm" className={agentCss.iconButton} data-preview-toggle aria-label={tx(previews.workspace ? 'artifacts:workspace.reopen' : 'artifacts:workbench.toggle')} title={tx('artifacts:workbench.toggle')} aria-expanded={previews.mode === 'preview' || previews.mode === 'workbench'} onClick={event => { previewOpener.current = event.currentTarget; if (previews.mode === 'preview' || previews.mode === 'workbench') collapsePanel(); else { if (previews.workspace) previewOwner.reveal(); else previewOwner.showWorkbench(); setPreviewFocus(value => value + 1); } }}><IconPanelLeftOutline16 className={agentCss.mirrored} /></Button>} invokeCommand={invokeCommand}
+        connected={connected} attached={attached} commandOpen={commandOpen}
+        previewToggle={<Button size="sm" className={agentCss.iconButton} data-preview-toggle aria-label={tx(previews.workspace ? 'artifacts:workspace.reopen' : 'artifacts:workbench.toggle')} title={tx('artifacts:workbench.toggle')} aria-expanded={previews.mode === 'preview' || previews.mode === 'workbench'} onClick={event => { previewOpener.current = event.currentTarget; if (previews.mode === 'preview' || previews.mode === 'workbench') collapsePanel(); else { if (previews.workspace) previewOwner.reveal(); else previewOwner.showWorkbench(); setPreviewFocus(value => value + 1); } }}><IconPanelLeftOutline16 className={agentCss.mirrored} /></Button>} invokeCommand={invokeCommand}
         settingsFeedback={<SettingsNavigationFeedback navigation={navigationActor}/>} openOwningSettings={openOwningSettings} conversationMode={conversationMode} setConversationMode={setConversationMode}/>
 
       {view && <ConversationStatus client={client} sessionId={view.id} recover={action => {
@@ -334,11 +334,11 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
       <section className={`conversation-panel ${agentCss.body}`} id="conversation-view" role={view && displayPreferences.codingView ? 'tabpanel' : undefined} aria-labelledby={view && displayPreferences.codingView ? `view-tab-${conversationMode}` : undefined} tabIndex={0}>
       <ConversationWidthControls active={!!view && conversationMode === 'chat'}/>
       <ArtifactContext.Provider value={artifacts}><SubagentSurface mode={conversationMode}><div className={agentCss.scrollBody} data-conversation-scroll>
-      <ConversationLive previewCurrent={previewCurrent} onOpenSource={openForkSource} onMode={setConversationMode} client={client} sessionId={view?.id} mode={conversationMode} historicalPending={routeState.matches('preparing')} disabled={commandOpen} onHistorical={transitionResponse}/>
+      <ConversationLive previewCurrent={previewCurrent} onOpenSource={openForkSource} onMode={setConversationMode} client={client} sessionId={view?.id} mode={conversationMode} retry={routeState.context.retry} historicalPending={routeState.matches('preparing')} disabled={commandOpen} onHistorical={transitionResponse}/>
       <ConversationSeat draftOwner={composerDraft} client={client} host={workspaceHost} authority={workspaceAuthority} associations={associations} sessionId={view?.id}
         initialWorkspace={workspace ?? (center.kind === 'new-conversation' ? center.workspaceId : undefined)}
         workspacePicked={id => { if (newConversationCurrent()) shell.send({ type: 'DRAFT.WORKSPACE', workspaceId: id }); }}
-        binding={String(draftBinding)} current={center.kind !== 'session' && routeState.context.draftSession ? startupCurrent : newConversationCurrent} executable={center.kind === 'session'} consumed={consumed} restored={restored}
+        transitioning={!!routeState.context.retry} binding={String(draftBinding)} current={center.kind !== 'session' && routeState.context.draftSession ? startupCurrent : newConversationCurrent} executable={center.kind === 'session'} consumed={consumed} restored={restored}
         onCommand={id => { if (id !== 'model') invokeCommand({ id }); }}
         preparePublication={() => {
           shell.send({ type: 'CREATE', binding: String(draftBinding), control: routeState.context.control });

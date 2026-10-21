@@ -151,7 +151,7 @@ pub enum SubagentStartOutcome {
 pub enum SubagentStartError {
     /// The owning conversation is draining or draining-complete.
     ConversationInactive,
-    /// The task input is empty, exceeds [`MAX_TASK_BYTES`] or the shared attachment limit.
+    /// The task input is empty or its text exceeds [`MAX_TASK_BYTES`].
     InvalidTask {
         /// The offending byte length.
         bytes: usize,
@@ -214,9 +214,7 @@ impl core::fmt::Display for SubagentStartError {
             }
             Self::InvalidTask { bytes } => write!(
                 f,
-                "the task input must contain text or attachments, at most {MAX_TASK_BYTES} bytes \
-                 and at most {} attachments ({bytes} bytes given)",
-                crate::message::content::MAX_INPUT_ATTACHMENTS
+                "the task input must contain text or attachments and at most {MAX_TASK_BYTES} text bytes ({bytes} bytes given)"
             ),
             Self::ContextOversized { bytes } => write!(
                 f,

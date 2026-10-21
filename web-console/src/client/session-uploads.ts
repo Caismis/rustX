@@ -2,7 +2,7 @@ import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { uploadOperationId, type transferUpload } from '../../../protocol/app-server/upload';
 import { RequestNotDispatched, RpcFailure, isOutcomeUncertain } from './errors';
 import { UploadFailure } from './uploads';
-import type { AttachmentTarget, UploadedFile } from '../../../protocol/app-server/v50';
+import type { AttachmentTarget, UploadedFile } from '../../../protocol/app-server/v51';
 import type { ClientView, ConnectionRequest, SessionView } from './contracts';
 
 /** What native uploads read from and write to their client. */
@@ -37,7 +37,7 @@ export class SessionUploads {
     try { target = this.port.target(id); } catch (error) { throw new UploadFailure('failed', error); }
     const policy = this.port.state().capabilities?.upload_policy;
     if (!policy) throw new UploadFailure('failed', 'Upload policy unavailable');
-    if (!files.length || files.length > policy.max_files_per_transfer || files.some(file => file.size > policy.max_file_bytes) || files.reduce((sum, file) => sum + file.size, 0) > policy.max_transfer_bytes) throw new UploadFailure('failed', 'Selection exceeds native upload policy');
+    if (files.length !== 1 || files.some(file => !Number.isSafeInteger(file.size) || file.size < 0)) throw new UploadFailure('failed', 'Invalid upload selection');
     const admission = this.port.state().views[id]?.attachmentObservation;
     const current = () => (!evidence || evidence.current()) && this.port.controls(id, admission) && sameTarget(admission?.target, target);
     if (!current()) throw new UploadFailure('failed', 'Upload authority changed');
@@ -50,7 +50,7 @@ export class SessionUploads {
     };
     let transfer;
     try {
-      ({ transfer } = await this.port.request({ method: 'session/uploadPrepare', params: { target, operation_id: operationId, files: files.map(file => ({ name: file.name, size: file.size })) } }, 'upload_prepared', undefined, current));
+      ({ transfer } = await this.port.request({ method: 'session/uploadPrepare', params: { target, operation_id: operationId, files: [{ name: files[0].name, size: files[0].size }] } }, 'upload_prepared', undefined, current));
     } catch (error) {
       if (error instanceof RequestNotDispatched) throw new UploadFailure('failed', error);
       // A server refusal published no new preparation, but the exact operation

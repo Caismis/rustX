@@ -81,8 +81,8 @@ for (const locale of ['en', 'zh']) test(`composer follows its pane width with bo
   await page.keyboard.press('Escape');
   await input.fill('A retained draft while panels resize.');
   await model.click();
-  await page.getByRole('menuitem', { name: locale === 'zh' ? '模型' : 'Model', exact: true }).hover();
-  await page.getByRole('menuitem', { name: 'Short', exact: true }).click();
+  await page.getByRole('menuitem', { name: locale === 'zh' ? '模型' : 'Model', exact: true }).click();
+  await page.getByRole('menuitemradio', { name: 'Short', exact: true }).click();
   await expect(model).toContainText('Short');
   await oneRow();
   await resize(980);
@@ -92,8 +92,8 @@ for (const locale of ['en', 'zh']) test(`composer follows its pane width with bo
   await page.locator('[data-preview-toggle]').click(); await oneRow();
   await resize(680);
   await model.click();
-  await page.getByRole('menuitem', { name: locale === 'zh' ? '模型' : 'Model', exact: true }).hover();
-  await page.getByRole('menuitem', { name: 'DeepSeek/deepseek-flash', exact: true }).click();
+  await page.getByRole('menuitem', { name: locale === 'zh' ? '模型' : 'Model', exact: true }).click();
+  await page.getByRole('menuitemradio', { name: 'DeepSeek/deepseek-flash', exact: true }).click();
   await expect(model).toContainText('DeepSeek/deepseek-flash');
   await oneRow();
   await page.screenshot({ path: `/tmp/rustx-composer-sidebar-${locale}.png` });

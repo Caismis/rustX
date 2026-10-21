@@ -9,7 +9,7 @@ import { RpcFailure } from '../../src/client/errors';
 import { App } from '../../src/app/App';
 import { Server, interaction, snapshot, projectionHead, endpoint } from '../fixture';
 import { traceRecord } from '../trace-fixture';
-import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v50';
+import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v51';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -75,6 +75,27 @@ if (mode === 'questionnaire') {
 if (mode === 'compaction') {
  s.attempt = null;
  s.context = { compaction_count: 1, compaction_in_progress: false, projection_head: projectionHead('## 已完成的工作\n\n保留 fork 前的历史预览，并整理上下文摘要的显示。\n\n- 历史仍由原生会话数据提供\n- Continue with the original conversation context.') };
+ const records = [s.context.projection_head!];
+ server.handlers.set('session/projections', () => ({ type: 'projections', page: { records, next_activation: null } }));
+ let turn = 1;
+ window.compactionFixture = {
+  async reply() {
+   const next = structuredClone(server.snapshots.get('A')!);
+   turn++;
+   const prompt = { role: 'user' as const, source: 'human' as const, id: `prompt-${turn}`, content: [{ type: 'text' as const, text: `Continue after checkpoint ${turn - 1}` }] };
+   const answer = { role: 'assistant' as const, id: `reply-${turn}`, content: [{ type: 'text' as const, text: `New reply ${turn}` }] };
+   next.messages.push(prompt, answer);
+   next.transcript.entries!.push(...[prompt, answer].map((message, index) => ({ cursor: String((turn - 1) * 2 + index + 1), item: { type: 'message' as const, message } })));
+   await server.update('A', next);
+  },
+  async compact() {
+   const next = structuredClone(server.snapshots.get('A')!);
+   const head = { ...projectionHead('Second preserved summary.'), checkpoint_id: 'checkpoint-2', activation_id: '2', transcript_anchor: next.transcript.entries!.at(-1)!.cursor };
+   records.push(head);
+   next.context = { ...next.context!, compaction_count: 2, projection_head: head };
+   await server.update('A', next);
+  },
+ };
 }
 if (mode === 'fork') {
  s.attempt = null;
@@ -110,7 +131,15 @@ createRoot(document.getElementById('root')!).render(mode === 'restored' ? <Resto
 // Browser-only controls for deterministic composer projection/transport tests.
 // No fixture code enters the production bundle.
 if (mode === 'composer') {
+  let uploadStart = 0;
     window.composerFixture = {
+    holdUploads: () => { uploadStart = server.requests.length; server.held.add('session/uploadStatus'); },
+    settleUploads: state => {
+      server.held.delete('session/uploadStatus');
+      if (state !== 'ready') for (const key of server.uploads.keys()) server.uploads.set(key, { state });
+      for (const { request, socket } of server.requests.slice(uploadStart)) if (request.method === 'session/uploadStatus') server.reply(request, socket);
+    },
+    uploads: () => server.requests.filter(row => row.request.method === 'session/uploadPrepare').length,
     running: async value => { const next = structuredClone(server.snapshots.get('A')!); next.attempt = value ? { attempt_id: 'attempt-A', phase: { type: 'running' }, turn: 1, execution_settings: { resource_revision: '1', approval_mode: 'policy' } } : null; await server.update('A', next); },
     docks: async value => {
       const next = structuredClone(server.snapshots.get('A')!);
@@ -135,7 +164,8 @@ if (mode === 'composer') {
   };
 }
 declare global {
-  interface Window { composerFixture: { running(value: boolean): Promise<void>; docks(value: boolean): Promise<void>; holdCancellation(): void; busyEnter(value: 'queue' | 'steer'): void; cancellations(): import('../../../protocol/app-server/v50').AttachmentTarget[]; acknowledgeCancellation(): Promise<void>; submissions(): string[] } }
+ interface Window { compactionFixture: { reply(): Promise<void>; compact(): Promise<void> } }
+  interface Window { composerFixture: { holdUploads(): void; settleUploads(state: 'ready' | 'failed' | 'unresolved'): void; uploads(): number; running(value: boolean): Promise<void>; docks(value: boolean): Promise<void>; holdCancellation(): void; busyEnter(value: 'queue' | 'steer'): void; cancellations(): import('../../../protocol/app-server/v51').AttachmentTarget[]; acknowledgeCancellation(): Promise<void>; submissions(): string[] } }
 }
 
 function RestoredComposerFixture() {

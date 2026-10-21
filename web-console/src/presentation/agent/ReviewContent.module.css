@@ -1,0 +1,13 @@
+.root { min-width: 0; overflow-wrap: anywhere; font-size: var(--dsh-content-font-size, 14px); }
+.root h3 { font-size: inherit; font-weight: 510; }
+.fields { margin: 8px 0; }
+.field { margin: 8px 0; }
+.field > dt { color: var(--dsw-alias-label-tertiary); font-size: var(--dsh-content-font-size-secondary, 13px); }
+.field > dd { margin: 4px 0 0; padding-left: 12px; border-left: 1px solid var(--dsw-alias-border-l1); }
+.list { padding-left: 20px; }
+.empty { color: var(--dsw-alias-label-tertiary); }
+.detail { padding: 4px 24px 0; }
+.feedback { margin: 8px 24px; }
+.feedback textarea { box-sizing: border-box; width: 100%; min-height: 64px; padding: 10px 12px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 12px; background: transparent; color: inherit; font: inherit; resize: vertical; }
+
+.status { display: block; flex: 1; min-width: 0; color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 20px; }

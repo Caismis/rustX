@@ -84,7 +84,7 @@ async fn pending_destination(controller: &SessionController) -> SessionId {
 fn file(name: &str, bytes: &[u8]) -> UploadFile {
     UploadFile {
         name: name.into(),
-        bytes: bytes.into(),
+        data: bytes.to_vec().into(),
     }
 }
 fn settings(path: &Path) -> SessionPersistentState {
@@ -1512,7 +1512,7 @@ fn materialized_modes_and_leaf_types_are_verified() {
 }
 
 #[test]
-fn native_policy_boundaries_are_independent_of_json_and_images() {
+fn generic_files_have_no_product_count_or_byte_cap() {
     let metadata = |sizes: &[usize]| {
         sizes
             .iter()
@@ -1523,42 +1523,10 @@ fn native_policy_boundaries_are_independent_of_json_and_images() {
             })
             .collect::<Vec<_>>()
     };
-    for size in [
-        UPLOAD_POLICY.max_file_bytes - 1,
-        UPLOAD_POLICY.max_file_bytes,
-    ] {
-        assert!(validate_metadata(&metadata(&[size])).is_ok());
-    }
-    assert!(validate_metadata(&metadata(&[UPLOAD_POLICY.max_file_bytes + 1])).is_err());
-    for total in [
-        UPLOAD_POLICY.max_transfer_bytes - 1,
-        UPLOAD_POLICY.max_transfer_bytes,
-    ] {
-        assert!(
-            validate_metadata(&metadata(&[
-                UPLOAD_POLICY.max_file_bytes,
-                total - UPLOAD_POLICY.max_file_bytes
-            ]))
-            .is_ok()
-        );
-    }
-    assert!(
-        validate_metadata(&metadata(&[
-            UPLOAD_POLICY.max_file_bytes,
-            UPLOAD_POLICY.max_file_bytes,
-            1
-        ]))
-        .is_err()
-    );
-    for count in [
-        UPLOAD_POLICY.max_files_per_transfer - 1,
-        UPLOAD_POLICY.max_files_per_transfer,
-    ] {
-        assert!(validate_metadata(&metadata(&vec![0; count])).is_ok());
-    }
-    for count in [0, UPLOAD_POLICY.max_files_per_transfer + 1] {
-        assert!(validate_metadata(&metadata(&vec![0; count])).is_err());
-    }
+    assert!(validate_metadata(&metadata(&vec![100 * 1024 * 1024; 32])).is_ok());
+    assert!(validate_metadata(&metadata(&[usize::MAX])).is_ok());
+    assert!(validate_metadata(&metadata(&[usize::MAX, 1])).is_err());
+    assert!(validate_metadata(&[]).is_err());
 }
 
 #[tokio::test]
@@ -1819,12 +1787,9 @@ async fn catalog_reopen_validates_durable_upload_admission_bounds() {
     let batch = &uploaded[0].receipt.batch_id;
     for (sizes, valid) in [
         (vec![], false),
-        (vec![UPLOAD_POLICY.max_file_bytes + 1], false),
-        (vec![UPLOAD_POLICY.max_file_bytes; 3], false),
-        (vec![0; UPLOAD_POLICY.max_files_per_transfer + 1], false),
-        (vec![UPLOAD_POLICY.max_file_bytes], true),
-        (vec![UPLOAD_POLICY.max_file_bytes; 2], true),
-        (vec![0; UPLOAD_POLICY.max_files_per_transfer], true),
+        (vec![usize::MAX, 1], false),
+        (vec![100 * 1024 * 1024; 32], true),
+        (vec![0; 32], true),
     ] {
         let mut document = original.clone();
         let files =

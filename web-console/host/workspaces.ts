@@ -15,6 +15,7 @@ import { WebSocketTransport } from '../../tui/src/app-server/websocket-transport
 import { DesktopAdapter } from './desktop.ts';
 import { readDesktopSession } from './desktop-session.ts';
 import type { DesktopAppId, DesktopTarget, DesktopCatalog } from '../src/workspaces/desktop.ts';
+import type { WorkbenchCall, WorkbenchResult } from '../src/workspaces/workbench.ts';
 import { NativeFileReadError, readNativeDelivery, readNativeSource } from './file-read.ts';
 
 import { deriveDocument } from './documents/operation.ts';
@@ -120,7 +121,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       if (this.closed || this.terminalObserverEnded) return;
       this.terminalObserverEnded = true;
       this.terminalFailure ??= new Error('Native terminal ownership connection ended');
-      void this.terminals.close().catch(error => { this.terminalFailure = error; });
+      void this.terminals.retireNative().catch(error => { this.terminalFailure = error; });
     }));
   }
   /** Only currently registered Workspaces authorize bytes. Configured picker
@@ -198,27 +199,36 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       throw cause;
     } finally { signal?.removeEventListener('abort', abort); if (settled) this.documentReads.delete(operation); }
   }
-  async workbench(scope: WorkspaceAuthorityScope, call: import('../src/workspaces/workbench.ts').WorkbenchCall, signal?: AbortSignal) {
+  async workbench(scope: WorkspaceAuthorityScope, call: WorkbenchCall, signal?: AbortSignal): Promise<WorkbenchResult> {
     this.mutationScope(scope);
     const target = call?.target;
-    if (!target || !['session_id', 'active_node'].every(key => typeof target[key as keyof DesktopTarget] === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(target[key as keyof DesktopTarget])) || !call.request) throw new Error('Invalid workbench target');
-    if (this.config.nativeFilesystem !== 'shared' || !this.config.transportToken) throw new Error('Native filesystem mapping unavailable on this Product Host');
+    if (!target || typeof target !== 'object' || Array.isArray(target) || !call.request) throw new Error('Invalid workbench target');
+    const keys = 'workspace_id' in target ? ['workspace_id'] : ['session_id', 'active_node'];
+    if (Object.keys(target).length !== keys.length || !Object.entries(target).every(([key, value]) => keys.includes(key) && typeof value === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(value))) throw new Error('Invalid workbench target');
+    if ('session_id' in target && (this.config.nativeFilesystem !== 'shared' || !this.config.transportToken)) throw new Error('Native filesystem mapping unavailable on this Product Host');
     const read = async () => {
+      this.mutationScope(scope); signal?.throwIfAborted();
+      if ('workspace_id' in target) return { cwd: this.cwd(this.registered(target.workspace_id).location) };
       const native = await this.readSession(this.config.endpoint, this.config.transportToken!, target);
       this.mutationScope(scope); signal?.throwIfAborted();
       if (!this.classifyLocation(native.cwd).authorized) throw new Error('Workspace is not authorized');
       return { ...native, cwd: realpathSync(native.cwd) };
     };
+    const check = (cwd: string) => {
+      this.mutationScope(scope); signal?.throwIfAborted();
+      if ('workspace_id' in target && this.cwd(this.registered(target.workspace_id).location) !== cwd) throw new Error('Workspace authority changed');
+    };
     const request = call.request;
     if (request.kind === 'create' || request.kind === 'input' || request.kind === 'resize' || request.kind === 'poll' || request.kind === 'terminals' || request.kind === 'close') {
-      if (request.kind !== 'close') await this.watchTerminals();
+      if ('session_id' in target && request.kind !== 'close') await this.watchTerminals();
       this.mutationScope(scope);
-      if (this.terminalFailure) throw this.terminalFailure;
+      if ('session_id' in target && this.terminalFailure) throw this.terminalFailure;
       const value = await this.terminals.request(target, read, request, signal);
       this.mutationScope(scope); signal?.throwIfAborted();
       return value;
     }
     const { cwd: root } = await read();
+    check(root);
     if (request.kind === 'resolve') {
       const input = request.path;
       if (typeof input !== 'string' || !input || input.length > 4096 || /[\u0000-\u001f\u007f]/.test(input)) throw new Error('Invalid file reference');
@@ -234,11 +244,12 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       if (extension !== 'docx' && extension !== 'pptx') throw new Error('converter_unavailable');
       const result = await deriveWorkspaceOffice(extension, async () => {
         this.mutationScope(scope); signal?.throwIfAborted();
-        const { cwd: current } = await this.readSession(this.config.endpoint, this.config.transportToken!, target);
-        this.mutationScope(scope); signal?.throwIfAborted();
-        if (!this.classifyLocation(current).authorized || realpathSync(current) !== root) throw new Error('source_changed');
+        const { cwd: current } = await read();
+        check(current);
+        if (current !== root) throw new Error('source_changed');
         return { data: workspaceFile(root, path, true, true).base64! };
       }, signal ?? new AbortController().signal);
+      check(root);
       if (result.preview.kind !== 'pdf') throw new Error('converter_failure');
       return { cwd: root, base64: result.preview.data };
     }
@@ -324,7 +335,11 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   }
   async removeWorkspace(scope: WorkspaceAuthorityScope, id: string) {
     // Validate inside the lane, when the queued write actually executes.
-    return this.lane(id, async () => { this.mutationScope(scope); this.registered(id); this.commit(this.registrations.filter(row => row.id !== id)); });
+    return this.lane(id, async () => {
+      this.mutationScope(scope); this.registered(id);
+      this.commit(this.registrations.filter(row => row.id !== id));
+      await this.terminals.retireWorkspace(id);
+    });
   }
   async resolveWorkspace(id: string, endpoint: string) { this.route(endpoint); return { cwd: this.cwd(this.registered(id).location) }; }
   async configureWorkspace(id: string, endpoint: string, operation: WorkspaceConfigurationOperation): Promise<WorkspaceConfigurationResult> {

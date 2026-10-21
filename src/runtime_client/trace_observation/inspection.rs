@@ -102,12 +102,20 @@ pub(crate) fn messages_selection(domain: &str) -> Option<u64> {
 
 pub(crate) fn canonical_selection(domain: &str) -> bool {
     domain
-        .strip_prefix("messages.ledger:")
+        .strip_prefix("messages.")
         .and_then(|tail| {
-            let (position, collection) = tail.split_once('.')?;
-            position.parse::<u64>().ok().filter(|position| {
-                *position > 0 && *position <= crate::observation::content::CONTENT_SAFE_INTEGER_MAX
-            })?;
+            let (identity, collection) = tail.rsplit_once('.')?;
+            if let Some(position) = identity.strip_prefix("ledger:") {
+                position.parse::<u64>().ok().filter(|position| {
+                    *position > 0
+                        && *position <= crate::observation::content::CONTENT_SAFE_INTEGER_MAX
+                })?;
+            } else {
+                let id = identity.strip_prefix("message:")?;
+                if id.is_empty() || id.len() > 256 {
+                    return None;
+                }
+            }
             matches!(collection, "blocks" | "tools").then_some(())
         })
         .is_some()

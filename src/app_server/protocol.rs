@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v50 envelope and method vocabulary.
+//! Rust authority for the App Server v51 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 50;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 51;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -182,6 +182,8 @@ pub enum Method {
     SessionUploadPrepare {
         target: AttachmentTarget,
         operation_id: String,
+        /// One file per wire operation keeps committed receipts recoverable within a record.
+        #[schemars(length(min = 1, max = 1))]
         files: Vec<crate::local_runtime::session::uploads::UploadMetadata>,
     },
     #[serde(rename = "session/uploadStatus")]

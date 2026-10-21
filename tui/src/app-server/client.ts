@@ -1,6 +1,6 @@
 import { transferUpload } from '../../../protocol/app-server/upload.ts';
 import { requestEffect, requestLane, type MethodEffect, type RequestLane } from '../../../protocol/app-server/method-policy.ts';
-import type { Request1 } from '../../../protocol/app-server/v50.ts';
+import type { Request1 } from '../../../protocol/app-server/v51.ts';
 /**
  * The one typed App Server client.
  *
@@ -73,7 +73,7 @@ import {
 } from "./transport.ts";
 
 /** The protocol version this client speaks. Independent of every other version. */
-export const APP_SERVER_PROTOCOL_VERSION = 50;
+export const APP_SERVER_PROTOCOL_VERSION = 51;
 
 /** Notifications retained before the first subscription; level-triggered
  * owners re-announce or reread anything beyond this. */
@@ -437,7 +437,7 @@ export class AppServerClient {
 
     const record = decodeProtocolMessage(untrusted);
     if (record === undefined) {
-      this.#fail("invalid App Server v50 protocol message");
+      this.#fail("invalid App Server v51 protocol message");
       return;
     }
 

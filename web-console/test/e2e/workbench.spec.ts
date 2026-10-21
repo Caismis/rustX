@@ -1,5 +1,62 @@
 import { test, expect } from '@playwright/test';
 const origin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
+test('new conversation workspace tools work before first submission and follow workspace selection', async ({ page }, info) => {
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce' });
+  await page.goto(`${origin}/test/fixtures/workbench.html?draft`);
+  await page.getByRole('button', { name: 'Select Workspace Workspace A', exact: true }).click();
+  await page.locator('[data-preview-toggle]').click();
+  const panel = page.locator('[data-workbench]');
+  await expect(panel.getByRole('button', { name: /Workspace files/ })).toBeEnabled();
+  await expect(panel.getByRole('button', { name: 'New terminal', exact: true })).toBeEnabled();
+  await expect(panel).not.toContainText('Select a local workspace');
+  const conversation = (await page.locator('.conversation-panel:visible').boundingBox())!;
+  await expect.poll(async () => {
+    const card = (await page.locator('[data-composer-card]:visible').boundingBox())!;
+    return card.x + card.width;
+  }).toBeLessThanOrEqual(conversation.x + conversation.width);
+  await page.screenshot({ path: info.outputPath('new-conversation-guide.png') });
+  await panel.getByRole('button', { name: /Workspace files/ }).click();
+  await panel.getByRole('button', { name: 'src', exact: true }).click();
+  await panel.getByRole('button', { name: 'hello.txt', exact: true }).click();
+  await expect(panel.locator('pre')).toHaveText('Workspace preview works.');
+  await panel.getByRole('button', { name: 'New tab', exact: true }).click();
+  await panel.getByRole('button', { name: 'New terminal', exact: true }).click();
+  await panel.locator('.xterm-helper-textarea').fill("printf 'DRAFT_%s\\n' READY");
+  await panel.locator('.xterm-helper-textarea').press('Enter');
+  await expect.poll(() => panel.locator('.xterm-rows').textContent()).toContain('DRAFT_READY');
+  await page.getByRole('button', { name: 'Select Workspace Workspace B', exact: true }).click();
+  await expect(panel.getByRole('button', { name: /Workspace files/ })).toBeEnabled();
+  await expect(panel.locator('.xterm')).toHaveCount(0);
+  await expect(panel.locator('[data-workbench-file]')).toHaveCount(0);
+  await panel.getByRole('button', { name: /Workspace files/ }).click();
+  await panel.getByRole('button', { name: 'other.txt', exact: true }).click();
+  await expect(panel.locator('pre')).toHaveText('Other workspace.');
+  await page.getByRole('button', { name: 'Select Workspace Workspace A', exact: true }).click();
+  await expect.poll(() => panel.locator('.xterm-rows').textContent()).toContain('DRAFT_READY');
+  await panel.getByRole('tab', { selected: true }).getByRole('button', { name: 'Close tab' }).click();
+  await expect(panel.locator('.xterm')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test('Chinese new conversation can browse its workspace on a narrow screen', async ({ page }, info) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce' });
+  await page.addInitScript(() => localStorage.setItem('rustx-locale-v1', 'zh'));
+  await page.goto(`${origin}/test/fixtures/workbench.html?draft`);
+  await page.getByRole('button', { name: '选择工作区', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Workspace A', exact: true }).click();
+  await page.locator('[data-preview-toggle]').click();
+  const panel = page.locator('[data-workbench]');
+  await expect(panel.getByRole('button', { name: '新建终端', exact: true })).toBeEnabled();
+  await expect(panel).not.toContainText('选择本地工作区');
+  await page.screenshot({ path: info.outputPath('new-conversation-guide-zh-narrow.png') });
+  await panel.getByRole('button', { name: /工作区文件/ }).click();
+  await panel.getByRole('button', { name: 'src', exact: true }).click();
+  await panel.getByRole('button', { name: 'hello.txt', exact: true }).click();
+  await expect(panel.locator('pre')).toHaveText('Workspace preview works.');
+});
+
 test('workspace panel browses real files and runs a real PTY, including collapse and fullscreen', async ({ page }, info) => {
   await page.goto(`${origin}/test/fixtures/workbench.html`);
   const toggle = page.locator('[data-preview-toggle]');

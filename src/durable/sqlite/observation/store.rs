@@ -1260,6 +1260,15 @@ impl ObservationStore for SqliteConversationStore {
     > {
         self.read_transaction(|transaction| observation_projection::read(transaction, through))
     }
+    fn observation_projection_activation(
+        &self,
+        activation: crate::context::checkpoint::ProjectionActivationId,
+    ) -> Result<crate::observation::head::RuntimeClientProjectionHeadView, ConversationStoreError>
+    {
+        self.read_transaction(|transaction| {
+            observation_projection::read_id(transaction, activation.0)
+        })
+    }
     fn mark_observation_ready(&self, first: u64, last: u64) -> Result<(), ConversationStoreError> {
         if first == 0 || first > last {
             return Err(ConversationStoreError::InvalidReference(

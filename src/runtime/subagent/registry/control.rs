@@ -34,7 +34,7 @@ pub enum SubagentSteerError {
         /// The named child.
         subagent_id: SubagentId,
     },
-    /// The guidance input is empty, exceeds [`MAX_TASK_BYTES`] or the shared attachment limit.
+    /// The guidance input is empty or its text exceeds [`MAX_TASK_BYTES`].
     InvalidMessage {
         /// The offending byte length.
         bytes: usize,
@@ -86,9 +86,7 @@ impl core::fmt::Display for SubagentSteerError {
             }
             Self::InvalidMessage { bytes } => write!(
                 f,
-                "the guidance input must contain text or attachments, at most {MAX_TASK_BYTES} bytes \
-                 and at most {} attachments ({bytes} bytes given)",
-                crate::message::content::MAX_INPUT_ATTACHMENTS
+                "the guidance input must contain text or attachments and at most {MAX_TASK_BYTES} text bytes ({bytes} bytes given)"
             ),
             Self::CancellationCommitted { reason } => write!(
                 f,
@@ -282,9 +280,7 @@ impl SubagentRegistry {
 
     /// Shared task/guidance content admission, before ownership or preparation.
     pub(super) fn valid_input(message: &str, attachments: usize) -> bool {
-        (!message.trim().is_empty() || attachments > 0)
-            && message.len() <= MAX_TASK_BYTES
-            && attachments <= crate::message::content::MAX_INPUT_ATTACHMENTS
+        (!message.trim().is_empty() || attachments > 0) && message.len() <= MAX_TASK_BYTES
     }
 
     /// Advances one ticket to

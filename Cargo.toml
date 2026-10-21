@@ -56,7 +56,7 @@ uv-normalize = "0.0.40"
 toml_edit = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = { version = "0.10", features = ["serde"] }
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "net", "io-util", "io-std", "process", "signal"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "net", "io-util", "io-std", "process", "signal", "fs"] }
 tokio-util = { version = "0.7", features = ["rt", "codec"] }
 futures-util = "0.3"
 tracing = "0.1"

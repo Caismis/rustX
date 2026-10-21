@@ -1,3 +1,4 @@
+import { closeSessionView } from './shell-actions';
 import { test as base, expect } from '@playwright/test';
 import { startDogfood } from './dogfood-server';
 import { AppServerHost } from '../../../tui/src/app-server/host';
@@ -102,7 +103,7 @@ test('native distant reading rail, detached/latest follow and measured width in 
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.addInitScript(() => {
       const NativeSocket = window.WebSocket;
-      const state = { gate: false, fail: false, held: [] as (() => void)[], reads: 0, other: 0, windows: [] as number[] };
+      const state = { gate: false, fail: false, held: [] as (() => void)[], reads: 0, other: 0, requests: [] as any[], windows: [] as number[] };
       Object.assign(window, { readingTransport: state });
       class GatedSocket extends NativeSocket {
         private methods = new Map<string, string>();
@@ -121,6 +122,7 @@ test('native distant reading rail, detached/latest follow and measured width in 
         send(data: Parameters<WebSocket['send']>[0]) {
           const request = JSON.parse(String(data));
           if (request.method === 'session/transcript' && request.params.at.type === 'turn_ordinal') { this.methods.set(String(request.id), 'turn'); state.reads++; }
+          if (request.method === 'session/transcript') state.requests.push(request);
           if (request.method === 'session/transcript' && request.params.at.type !== 'turn_ordinal') state.other++;
           super.send(data);
         }
@@ -131,6 +133,13 @@ test('native distant reading rail, detached/latest follow and measured width in 
     await page.locator(`button[data-session-id="${id}"]`).click();
     const rail = page.getByRole('navigation', { name: 'Turn navigation' }), viewport = page.locator('[data-conversation-scroll]').first();
     const railScroll = (top: number) => rail.locator(':scope > div').first().evaluate((el, top) => { el.scrollTop = top; }, top);
+    // Initial history has its own bounded fill. Finish it before measuring
+    // requests attributable to distant navigation.
+    await expect.poll(() => page.evaluate(() => (window as any).readingTransport.other)).toBe(2);
+    await expect(page.getByRole('button', { name: 'Load earlier', exact: true })).toBeEnabled();
+    const initialReads = await page.evaluate(() => (window as any).readingTransport.requests);
+    expect(initialReads).toHaveLength(2);
+    expect(initialReads.every((request: any) => request.params.at.type === 'older' && request.params.limit === 32)).toBe(true);
     // Every native turn has a mark; following the latest output places the newest in view.
     const newest = rail.locator('[data-turn-ordinal="300"]');
     await expect(newest).toBeInViewport();
@@ -182,12 +191,22 @@ test('native distant reading rail, detached/latest follow and measured width in 
     }
     // Two direct windows (one rejected, one accepted), independent live tail,
     // and a finite presentation. No prefix traversal or duplicate output.
-    expect(await page.evaluate(()=>(window as any).readingTransport.other)).toBe(0);
+    await test.info().attach('reading-requests', { body: JSON.stringify(await page.evaluate(() => (window as any).readingTransport.requests), null, 2), contentType: 'application/json' });
+    expect(await page.evaluate(()=>(window as any).readingTransport.requests.filter((request: any) => request.params.at.type !== 'turn_ordinal'))).toEqual(initialReads);
     expect(await page.evaluate(()=>(window as any).readingTransport.reads)).toBe(2);
     await expect(page.getByText(/Native reading answer 299\n/)).toHaveCount(1);
     expect(await page.evaluate(()=>(window as any).readingTransport.windows)).toEqual([32,32]);
     expect(await viewport.locator('[data-chat-anchor-key]').count()).toBeLessThanOrEqual(256);
-    await expect(page.getByRole('button', { name: 'Load later', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Load later', exact: true })).toHaveCount(0);
+    const continuation = page.locator('[data-chat-history-boundary]');
+    await expect(continuation).toHaveCount(1);
+    const after = await continuation.getAttribute('data-chat-history-boundary');
+    await continuation.scrollIntoViewIfNeeded();
+    await viewport.hover();
+    await page.mouse.wheel(0, 80);
+    await expect.poll(() => page.evaluate(() => (window as any).readingTransport.other)).toBe(initialReads.length + 1);
+    await expect(continuation).not.toHaveAttribute('data-chat-history-boundary', after!);
+    await page.screenshot({ path: '/tmp/rustx-history-main-continuation.png' });
     await page.getByRole('button', { name: 'Return to latest', exact: true }).click();
     await expect.poll(()=>viewport.evaluate(el=>el.scrollHeight-el.clientHeight-el.scrollTop)).toBeLessThan(3);
     // Ordinary detached state has no historical jump/cache-limit prerequisite.
@@ -286,11 +305,14 @@ test('Fork source exact Message landing and cancellation by scrolling, newer nav
   } else if (race === 'newer-navigation') {
     await page.locator(`button[data-session-id="${id}"]`).click();
     await expect(page.locator(`button[data-session-id="${id}"]`)).toHaveAttribute('aria-current', 'page');
+    // Selecting a different Session intentionally follows its latest window.
+    // Its passive initial fill must settle before testing stale source delivery.
+    await expect.poll(() => page.evaluate(id => (window as any).sourceTransport.requests.filter((request: any) => request.method === 'session/transcript' && request.params.target.session_id === id && request.params.at.type === 'older').length, id)).toBe(2);
+    await expect(page.getByRole('button', { name: 'Load earlier', exact: true })).toBeEnabled();
+    await expect.poll(() => viewport.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(3);
   } else if (race === 'attachment') {
     // Explicitly retire the initiating Fork attachment, not the source read.
-    await page.locator(`button[data-session-id="${forkId}"]`).hover();
-    await page.locator(`button[data-session-actions="${forkId}"]`).click();
-    await page.getByRole('menuitem', { name: /^Close .* view$/ }).click();
+    await closeSessionView(page, forkId);
     await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', 'new-conversation');
   }
   await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
@@ -304,9 +326,18 @@ test('Fork source exact Message landing and cancellation by scrolling, newer nav
       return row.top >= view.top - 1 && row.top < view.bottom && row.bottom > view.top;
     })).toBe(true);
     await expect.poll(async () => Math.abs(await anchor.evaluate(el => el.getBoundingClientRect().top) - await viewport.evaluate(el => el.getBoundingClientRect().top))).toBeLessThan(3);
-    await expect(page.getByRole('button', { name: 'Load later', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Load later', exact: true })).toHaveCount(0);
+    await expect(page.locator('[data-chat-history-boundary]')).toHaveCount(1);
     await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toHaveCount(0);
     await page.screenshot({ path: '/tmp/pr458-shell-read-only-history.png' });
+    const continuation = page.locator('[data-chat-history-boundary]');
+    const after = await continuation.getAttribute('data-chat-history-boundary');
+    await continuation.scrollIntoViewIfNeeded();
+    await viewport.hover();
+    await page.mouse.wheel(0, 80);
+    await expect(continuation).not.toHaveAttribute('data-chat-history-boundary', after!);
+    const forward = await page.evaluate(() => (window as any).sourceTransport.requests.filter((request: any) => request.method === 'session/history' && request.params.at.type === 'newer'));
+    expect(forward).toHaveLength(1);
     await expect(page.locator('[data-history-session]')).toHaveAttribute('data-history-node', sourceNode);
     await page.getByRole('button', { name: 'Return to conversation', exact: true }).click();
     await expect(page.locator(`button[data-session-id="${forkId}"]`)).toHaveAttribute('aria-current', 'page');
@@ -314,7 +345,9 @@ test('Fork source exact Message landing and cancellation by scrolling, newer nav
     // The fixture delivery is synchronous; two layout frames settle any queued publication.
     await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
     await expect(anchor).toHaveCount(0);
-    expect(await viewport.evaluate(el => el.scrollTop)).toBe(position);
+    const actualPosition = await viewport.evaluate(el => el.scrollTop);
+    await test.info().attach(`source-${race}`, { body: JSON.stringify({ position, actualPosition, requests: await page.evaluate(() => (window as any).sourceTransport.requests) }, null, 2), contentType: 'application/json' });
+    expect(actualPosition, `retired source read: ${race}`).toBe(position);
     if (race === 'attachment') await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', 'new-conversation');
     else await expect(page.locator(`button[data-session-id="${race === 'scroll' ? forkId : id}"]`)).toHaveAttribute('aria-current', 'page');
   }

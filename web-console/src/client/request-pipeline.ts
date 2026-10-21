@@ -2,8 +2,7 @@ import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { hasResponseDeadline, requestEffect, requestLane } from '../../../protocol/app-server/method-policy';
 import { OutcomeUncertain, RequestAdmissionDeferred, RequestNotDispatched, RpcFailure } from './errors';
 import { interactionKey, type ClientView, type OperationAdmission, type SessionView, type Socket, type Submission, type UncertainOperation } from './contracts';
-import type { MethodResult, Request, Request1, Response } from '../../../protocol/app-server/v50';
-import type { ProtocolLog, WireContext } from './protocol-log';
+import type { MethodResult, Request, Request1, Response } from '../../../protocol/app-server/v51';
 
 interface Pending {
   /** Pure actor authority, evaluated after caller-owned admission callbacks. */
@@ -13,7 +12,7 @@ interface Pending {
   validation?: AbortController;
   acknowledged?: (result: MethodResult) => void;
   request: Request;
-  context: WireContext;
+  sessionId?: string;
   mutation: boolean;
   sent: boolean;
   expected: MethodResult['type'];
@@ -37,7 +36,6 @@ const dispatchCurrent = ({ dispatchCurrent: proof }: Pending) => !proof || (type
 /** What the request pipeline reads from its connection. */
 export interface RequestPipelinePort {
   timeoutMs(): number;
-  readonly log: ProtocolLog;
   socket(): Socket | undefined;
   initialized(): boolean;
   state(): Readonly<ClientView>;
@@ -72,11 +70,11 @@ export class RequestPipeline {
 
   get size() { return this.pending.size; }
   /** Sessions with requests still owned by this pipeline, sent or not. */
-  sessions(): string[] { return [...this.pending.values()].flatMap(item => item.context.sessionId ? [item.context.sessionId] : []); }
+  sessions(): string[] { return [...this.pending.values()].flatMap(item => item.sessionId ? [item.sessionId] : []); }
   /** Current-generation turn/start and turn/steer requests of one Session. */
   inboundRequests(id: string): number {
     return [...this.pending.values()].filter(item =>
-      (item.request.method === 'turn/start' || item.request.method === 'turn/steer') && item.context.sessionId === id).length;
+      (item.request.method === 'turn/start' || item.request.method === 'turn/steer') && item.sessionId === id).length;
   }
   private capacityReleased() {
     ++this.admissionRevision;
@@ -126,9 +124,8 @@ export class RequestPipeline {
     let abortObservation = () => {};
     const work = new Promise<MethodResult>((resolve, reject) => {
       const params = operation.params;
-      const context = { method: operation.method,
-        sessionId: 'target' in params && 'session_id' in params.target ? params.target.session_id : 'session_id' in params ? params.session_id : undefined };
-      this.pending.set(id, { request, context, mutation: mayCommit(operation), sent: false, expected, resolve, reject, dispatchCurrent, authority, acknowledged: result => acknowledged?.(result as Extract<MethodResult, { type: T }>) });
+      const sessionId = 'target' in params && 'session_id' in params.target ? params.target.session_id : 'session_id' in params ? params.session_id : undefined;
+      this.pending.set(id, { request, sessionId, mutation: mayCommit(operation), sent: false, expected, resolve, reject, dispatchCurrent, authority, acknowledged: result => acknowledged?.(result as Extract<MethodResult, { type: T }>) });
       abortObservation = () => {
         if (operation.method !== 'agent/observe') return;
         const pending = this.pending.get(id);
@@ -229,7 +226,6 @@ export class RequestPipeline {
     // No external observer runs between this final proof and send invocation.
     // sent means transmission attempted, never native acceptance.
     pending.sent = true;
-    this.port.log.observe('out', generation, raw, pending.context);
     if (requestLane(pending.request.method) === 'rpc' && hasResponseDeadline(pending.request.method)) pending.timer = setTimeout(() => this.port.lose(generation), this.port.timeoutMs());
     try { socket.send(raw); } catch { this.port.lose(generation); }
     try { if (typeof pending.dispatchCurrent === 'object') pending.dispatchCurrent.sent?.(); }
@@ -249,7 +245,7 @@ export class RequestPipeline {
     this.pending.delete(String(value.id)); clearTimeout(pending.timer);
     this.capacityReleased();
     if ('result' in value && value.result?.type === 'session_transition' && value.result.durability_diagnostic) {
-      this.port.uncertainCommit({ id: String(value.id), method: pending.request.method, sessionId: pending.context.sessionId, generation,
+      this.port.uncertainCommit({ id: String(value.id), method: pending.request.method, sessionId: pending.sessionId, generation,
         committedNode: { sessionId: value.result.session.id, nodeId: value.result.session.active_node }, diagnostic: value.result.durability_diagnostic });
     }
     // Evidence observers run at decode time, before continuation authority
@@ -279,8 +275,6 @@ export class RequestPipeline {
       this.pump();
     }
   }
-  /** The request context of a response id, for protocol evidence only. */
-  context(id: Response['id']): WireContext | undefined { return id === null ? undefined : this.pending.get(String(id))?.context; }
   /** The connection ended: every request settles now. A sent mutation becomes
    * uncertain exactly once; unsent work was provably never dispatched. */
   disconnect(generation: number): UncertainOperation[] {
@@ -289,7 +283,7 @@ export class RequestPipeline {
       clearTimeout(pending.timer); pending.validation?.abort(); pending.validation = undefined;
       if (pending.sent && pending.mutation) {
         const params = pending.request.params;
-        uncertain.push({ id, method: pending.request.method, sessionId: pending.context.sessionId, generation,
+        uncertain.push({ id, method: pending.request.method, sessionId: pending.sessionId, generation,
           ...(pending.request.method === 'session/uploadPrepare' ? { uploadOperationId: pending.request.params.operation_id } : {}),
           ...(pending.request.method === 'context/compact' ? { compactionRequestId: pending.request.params.request_id } : {}),
           ...('interaction' in params ? { interactionKey: interactionKey(params.interaction) } : {}),

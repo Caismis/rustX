@@ -35,8 +35,6 @@ for (const [locale, theme] of [['en', 'light'], ['zh', 'dark']] as const) {
       await routeWorkspaceHost(page, fixture); await page.goto('/');
       await connectRemote(page, fixture.endpoint, fixture.token);
       await openEmptySession(page, fixture, 'Workspace A');
-      const inspector = page.getByRole('button', { name: 'Toggle Inspector', exact: true });
-      if (await inspector.getAttribute('aria-expanded') === 'true') await inspector.click();
       if (locale === 'zh') {
         await page.getByRole('button', { name: 'Settings', exact: true }).click();
         await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文');
@@ -49,9 +47,9 @@ for (const [locale, theme] of [['en', 'light'], ['zh', 'dark']] as const) {
       await expect(page.getByRole('option', { name: copy('Compact compact', '压缩 compact'), exact: true })).toBeVisible();
       await input.press('Enter');
       await expect(page.getByText(copy('Compaction failed', '上下文压缩失败'), { exact: true })).toBeVisible();
-      const diagnostic = page.getByText(copy('Compaction details', '上下文压缩详情'), { exact: true });
+      const diagnostic = page.locator('[data-context-seat]').getByRole('button', { name: copy('compact · Compaction failed', 'compact · 上下文压缩失败'), exact: true });
       await diagnostic.focus(); await diagnostic.press('Enter');
-      await expect(page.getByRole('status').locator('details p')).not.toBeEmpty();
+      await expect(page.getByRole('status').locator('[data-compaction-body] p')).not.toBeEmpty();
       await expect(page.getByRole('dialog')).toHaveCount(0);
       await page.getByRole('button', { name: copy('Read current context', '读取当前上下文'), exact: true }).click();
       await expect(page.getByText(copy('Compaction failed', '上下文压缩失败'), { exact: true })).toBeVisible();
@@ -67,13 +65,15 @@ for (const [locale, theme] of [['en', 'light'], ['zh', 'dark']] as const) {
       const message = page.getByRole('textbox', { name: locale === 'zh' ? '消息' : 'Message', exact: true });
       holdCompact = true;
       await message.fill('/compact'); await message.press('Enter');
-      await expect(page.getByText(copy('Submitting compaction request…', '正在提交上下文压缩请求…'), { exact: true })).toBeVisible();
+      await expect(page.getByText(copy('Compacting context…', '正在压缩…'), { exact: true })).toBeVisible();
       await expect.poll(() => !!releaseCompact).toBe(true);
       releaseCompact!();
       await fixture.gate('manual-summary');
       await expect(page.getByRole('dialog')).toHaveCount(0);
-      await expect(page.getByText(locale === 'zh' ? '正在压缩上下文…' : 'Compacting context…', { exact: true })).toBeVisible();
+      await expect(page.getByText(locale === 'zh' ? '正在压缩…' : 'Compacting context…', { exact: true })).toBeVisible();
       await expect(message).toHaveValue('');
+      await expect(page.locator('[data-context-seat]')).toContainText('compact');
+      await page.screenshot({ path: `/tmp/rustx-compacting-${locale}-${theme}.png` });
       await message.fill(draft);
       await expect(message).toBeEditable();
       if (locale === 'en' && theme === 'light') {
@@ -86,6 +86,7 @@ for (const [locale, theme] of [['en', 'light'], ['zh', 'dark']] as const) {
       const compactionRows = page.locator('[data-display-type="RecordRow"][data-kind="compaction"]');
       await expect(compactionRows).toHaveCount(2);
       const compactionRow = compactionRows.last();
+      await expect(compactionRow).toHaveAttribute('data-between-turns', 'true');
       await compactionRow.click();
       await fixture.release('manual-summary');
       const traceInspector = page.getByRole('complementary', { name: copy('Event details', '事件详情'), exact: true });
@@ -109,12 +110,12 @@ for (const [locale, theme] of [['en', 'light'], ['zh', 'dark']] as const) {
       await expect(message).toHaveValue(draft);
       const marker = page.locator('[data-compaction-marker]').getByRole('button');
       await expect(marker).toHaveCount(1);
-      await expect(marker).toContainText(copy(/Compacted model context.*Projection \d+.*canonical frontier \d+/, /已压缩的模型上下文.*投影 \d+.*规范历史边界 \d+/));
-      await expect(marker).toContainText('The user supplied compaction-evidence-435. Preserve that fact.');
+      await expect(marker).toContainText(copy('View compaction summary', '点击查看压缩摘要'));
+      await expect(marker).not.toContainText('compaction-evidence-435');
       await expect(page.locator('[data-compaction-body]')).toHaveCount(0);
       await marker.focus(); await marker.press('Enter');
       await expect(page.locator('[data-compaction-body]').getByText('The user supplied compaction-evidence-435. Preserve that fact.', { exact: true })).toBeVisible();
-      await expect(page.locator('[data-compaction-body]').getByText(copy('This projection supplies model context. Canonical conversation facts retain their original execution ownership.', '此投影提供模型上下文。规范会话事实保留其原始执行归属。'), { exact: true })).toBeVisible();
+      await expect(page.locator('[data-compaction-body]')).not.toContainText(copy('canonical frontier', '规范历史边界'));
       await expect(marker).toHaveAttribute('aria-expanded', 'true');
       await marker.press('Space');
       await expect(marker).toHaveAttribute('aria-expanded', 'false');
@@ -158,28 +159,19 @@ for (const [locale, theme] of [['en', 'light'], ['zh', 'dark']] as const) {
       await page.getByRole('radio', { name: 'Continue', exact: true }).click();
       await page.getByRole('button', { name: copy('Submit', '提交'), exact: true }).click();
       await fixture.gate('automatic-summary');
-      await expect(page.getByText(copy('Compacting context…', '正在压缩上下文…'), { exact: true })).toBeVisible();
+      await expect(page.getByText(copy('Compacting context…', '正在压缩…'), { exact: true })).toBeVisible();
       await fixture.release('automatic-summary');
       await expect(page.getByText('Question answered after compaction.', { exact: true })).toBeVisible();
       await expect(page.locator('[data-context-seat]')).toHaveCount(0);
       const latest = page.locator('[data-chat-latest]');
       if (await latest.isVisible()) await latest.click();
       await expect(page.getByText('Question answered after compaction.', { exact: true })).toBeInViewport();
-      await expect(marker).toHaveCount(1);
-      await expect(marker).toContainText(copy(/Projection 2/, /投影 2/));
+      await expect(marker).toHaveCount(2);
+      await expect(marker.last()).toContainText(copy('Context compacted', '上下文已压缩'));
+      expect(await page.locator('[data-compaction-checkpoint]').last().evaluate(el => !!(el.compareDocumentPosition([...document.querySelectorAll('p')].find(p => p.textContent === 'Question answered after compaction.')!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
       await marker.last().click();
       await expect(page.locator('[data-compaction-body]').getByText("Preserve compaction-evidence-435 and the user's instruction to continue.", { exact: true })).toBeVisible();
-      const historical = page.locator('[data-projection-history]');
-      await historical.locator('summary').first().click();
-      await expect(historical.locator('[data-projection-origin="local"]')).toHaveCount(2);
-      await expect(historical.locator('[data-projection-origin="inherited"]')).toHaveCount(0);
-      await historical.getByRole('button', { name: copy('Inspect projected messages', '查看投影消息'), exact: true }).first().click();
-      await expect(historical.locator('[data-projection-detail]')).toContainText('The user supplied compaction-evidence-435. Preserve that fact.');
-      await historical.getByRole('button', { name: copy('Inspect projected messages', '查看投影消息'), exact: true }).nth(1).click();
-      await expect(historical.locator('[data-projection-detail]')).toContainText("Preserve compaction-evidence-435 and the user's instruction to continue.");
-      await expect(historical.locator('[data-projection-origin="local"]')).toHaveCount(2);
-      await page.screenshot({ path: `/tmp/rustx-projection-history-${locale}-${theme}.png` });
-      await historical.locator('summary').first().click();
+      await expect(page.locator('[data-projection-history]')).toHaveCount(0);
       await page.screenshot({ path: `/tmp/rustx-compaction-${locale}-${theme}.png` });
       await page.getByRole('tab', { name: copy('Trajectory', '轨迹'), exact: true }).click();
       await compactionRow.click();
@@ -209,6 +201,14 @@ for (const [locale, theme] of [['en', 'light'], ['zh', 'dark']] as const) {
       await fixture.control('observations/await?kind=response_completed&count=8&timeoutMs=30000');
       await expect(page.getByText('Conversation continued after stopping.', { exact: true })).toBeVisible();
       await expect(page.getByText('This must not appear after stopping.', { exact: true })).toHaveCount(0);
+      await expect(marker).toHaveCount(2);
+      if (locale === 'en') {
+        await page.reload();
+        await connectRemote(page, fixture.endpoint, fixture.token);
+        await expect(page.getByText('Conversation continued after stopping.', { exact: true })).toBeVisible();
+        await expect(marker).toHaveCount(2);
+        expect(await page.locator('[data-compaction-checkpoint]').last().evaluate(el => !!(el.compareDocumentPosition([...document.querySelectorAll('p')].find(p => p.textContent === 'Question answered after compaction.')!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
+      }
       expect(errors).toEqual([]);
       passed = true;
     } catch (error) {

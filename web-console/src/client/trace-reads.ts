@@ -1,7 +1,8 @@
 import { validateObservationCut } from '../../../protocol/app-server/observation';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
-import { standaloneTraceCut, inlineTraceDetail, retainedTraceDetailPage, bindTraceDetailReader, TRACE_LIMIT, TRACE_PAGE_SIZE, beginTraceDetail, completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterestBatches, type TraceCache, type TraceFieldReader } from './trace';
-import type { AttachmentTarget, CheckpointReadCut, ProjectionDetail, TraceToolLocator } from '../../../protocol/app-server/v50';
+import { standaloneTraceCut, inlineTraceDetail, retainedTraceDetailPage, bindTraceDetailReader, TRACE_PAGE_SIZE, beginTraceDetail, completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterestBatches, type TraceCache, type TraceFieldReader } from './trace';
+import type { AttachmentTarget, CheckpointReadCut, ProjectionDetail, TraceRecord, TraceToolLocator } from '../../../protocol/app-server/v51';
+import { traceWindowReady } from './history-policy';
 import type { SessionLifecycles } from './session-lifecycle/system';
 import type { ClientView, ConnectionRequest, OperationAdmission, SessionView } from './contracts';
 import type { ColdReads } from './cold-reads';
@@ -33,8 +34,8 @@ export class TraceReads {
     const { node, conversation, current } = scope;
     if (previous && previous.conversationId !== conversation) return;
     const cache = previous?.cache ?? replaceTrace({ records: [], next_cursor: null });
-    const limit = Math.min(TRACE_PAGE_SIZE, TRACE_LIMIT - cache.page.records.length);
-    if (limit < 1 || !current()) return;
+    const limit = TRACE_PAGE_SIZE;
+    if (!current()) return;
     if (previous) this.port.setSession(id, { tracePreview: { ...previous, cache: { ...cache, loading: true, error: undefined } } });
     try {
       const admission = older ? await this.port.admit(id, current) : current;
@@ -129,6 +130,7 @@ export class TraceReads {
           // while it awaits owns a separate, coalesced follow-up obligation.
           read.dirty = false;
           const authority = this.traceAuthorities.get(id);
+          const observed = this.port.state().views[id]?.snapshot;
           const batches=traceInterestBatches(this.port.state().views[id]?.trace);
           for(const [index,records] of batches.entries()) {
             if(!current()||this.traceAuthorities.get(id)!==authority)break;
@@ -137,7 +139,15 @@ export class TraceReads {
               result=await this.port.request({method:'session/trace',params:{target,before:null,limit:index?1:TRACE_PAGE_SIZE,records}},'trace',undefined,current);
             }catch(error){if(!read.dirty||!current())throw error;break;}
             standaloneTraceCut(result.page,target.conversation_id);
-            if(current()&&this.traceAuthorities.get(id)===authority)this.port.setSession(id,{trace:{...refreshTrace(this.port.state().views[id]?.trace,result.page,result.page.updates??[],undefined,index>0),fields:this.liveFields(target)}});
+            if(current()&&this.traceAuthorities.get(id)===authority) {
+              const latest = this.port.state().views[id]?.snapshot;
+              if (latest?.trace !== observed?.trace || latest?.trace_updates !== observed?.trace_updates) {
+                // A newer native head already landed. Keep its rows and the
+                // resident detail, then coalesce one read for the new head.
+                read.dirty = true; break;
+              }
+              this.port.setSession(id,{trace:{...refreshTrace(this.port.state().views[id]?.trace,result.page,result.page.updates??[],undefined,index>0),fields:this.liveFields(target)}});
+            }
           }
         }
       } finally {
@@ -151,8 +161,13 @@ export class TraceReads {
   }
   /** Older reads are fenced by attachment, connection and read-window epoch.
    * Ordinary live refreshes preserve the epoch only with a durable overlap. */
-  /** One older page, as Harness's loadOlder. */
-  async loadEarlierTrace(id: string) {
+  /** One Turn-aligned reading window, assembled from bounded native pages. */
+  loadInitialTrace(id: string) {
+    const trace = this.port.state().views[id]?.trace;
+    if (!trace || trace.located || trace.loading || trace.error || trace.page.next_cursor == null || traceWindowReady(trace.page.records)) return Promise.resolve();
+    return this.loadEarlierTrace(id, true);
+  }
+  async loadEarlierTrace(id: string, initial = false) {
     if (this.port.state().views[id]?.attachment === 'attaching') return this.readPreview(id, () => true, true);
     const observation = this.port.observe(id);
     if (!observation) return;
@@ -160,17 +175,28 @@ export class TraceReads {
     const cache = this.port.state().views[id].trace;
     const authority = this.traceAuthorities.get(id);
     if (!cache || cache.loading || cache.page.next_cursor == null) return;
-    const limit = Math.min(TRACE_PAGE_SIZE, TRACE_LIMIT - cache.page.records.length);
-    if (limit < 1) throw new Error('Trace window is full. Return to latest first.');
     const current = () => observation.current()
       && this.traceAuthorities.get(id) === authority
       && this.port.state().views[id]?.trace?.epoch === cache.epoch;
     this.port.setSession(id, { trace: { ...cache, loading: true, error: undefined } });
     try {
-      const result = await this.port.request({ method: 'session/trace', params: { target, before: cache.page.next_cursor, limit } }, 'trace', undefined, current);
-      standaloneTraceCut(result.page,target.conversation_id);
+      let next = cache;
+      const visited = new Set<string>();
+      const added: TraceRecord[] = [];
+      do {
+        const before = next.page.next_cursor!;
+        if (visited.has(before)) throw new Error('Native Trace history did not advance.');
+        visited.add(before);
+        const result = await this.port.request({ method: 'session/trace', params: { target, before, limit: TRACE_PAGE_SIZE } }, 'trace', undefined, current);
+        if (!current()) return;
+        standaloneTraceCut(result.page,target.conversation_id);
+        if (result.page.next_cursor != null && result.page.next_cursor === before) throw new Error('Native Trace history did not advance.');
+        added.push(...result.page.records);
+        next = prependTrace(next, result.page);
+      } while (next.page.next_cursor != null && !traceWindowReady(initial ? next.page.records : added));
       if (current()) {
-        this.port.setSession(id, { trace: prependTrace(this.port.state().views[id].trace!, result.page) });
+        const live = this.port.state().views[id].trace!;
+        this.port.setSession(id, { trace: { ...prependTrace(live, next.page), readCuts: { ...next.readCuts, ...live.readCuts }, loading: false } });
         // Include newly loaded identities in a repair even if their terminal
         // notification raced this pending historical read.
         await this.refreshDomain(id);
@@ -230,12 +256,12 @@ export class TraceReads {
     const epoch = cache.epoch;
     const authority = this.traceAuthorities.get(id);
     const existing = cache.details[record];
-    if (existing && (existing.loading || existing.detail || existing.page)) return;
+    if (existing?.loading || existing && !existing.stale && !existing.error && (existing.detail || existing.page)) return;
     const pending = beginTraceDetail(cache, record);
     const current = () => observation.current()
       && this.traceAuthorities.get(id) === authority
       && this.port.state().views[id]?.trace?.epoch === epoch
-      && this.port.state().views[id]?.trace?.details[record] === pending.details[record];
+      && this.port.state().views[id]?.trace?.details[record]?.read === pending.details[record].read;
     this.port.setSession(id, { trace: pending });
     try {
       const result = await this.port.request({ method: 'session/traceDetail', params: { target, record_id: record } }, 'domain_page', undefined, current);

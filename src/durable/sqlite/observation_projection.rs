@@ -21,6 +21,7 @@ fn witness(fingerprint: &str, activation: &str, bytes: &[u8]) -> [u8; 32] {
     digest.finalize().into()
 }
 fn view(
+    connection: &Connection,
     candidate: &CheckpointCandidate,
     activation: &ProjectionActivation,
 ) -> Result<RuntimeClientProjectionHeadView, ConversationStoreError> {
@@ -55,9 +56,25 @@ fn view(
         }
         _ => None,
     });
+    // Local activation observes pending inputs, publication audits and terminal
+    // controls as well as canonical messages. An inherited activation instead
+    // uses the destination's translated canonical prefix, never the source's T.
+    let transcript_anchor: u64 = if activation.destination_installation.is_none() {
+        connection.query_row(
+            "SELECT next_transcript_position FROM rustx_store WHERE id=1",
+            [],
+            |row| row.get(0),
+        )
+    } else {
+        connection.query_row("SELECT coalesce((SELECT native_transcript FROM message_ledger WHERE position<=?1 AND native_transcript IS NOT NULL ORDER BY position DESC LIMIT 1),0)", [activation.ledger.0], |row| row.get(0))
+    }
+    .map_err(|error| storage(error.to_string()))?;
     Ok(RuntimeClientProjectionHeadView {
         checkpoint_id: candidate.checkpoint_id.clone(),
         activation_id: activation.activation,
+        transcript_anchor: crate::observation::transcript::RuntimeClientTranscriptCursor::new(
+            transcript_anchor,
+        ),
         base_frontier: candidate.base_frontier,
         activation_ledger: activation.ledger,
         origin: activation.origin.clone(),
@@ -84,7 +101,7 @@ pub(super) fn index_activation(
     activation: &ProjectionActivation,
 ) {
     let _ = super::optional_display_layout(transaction, || {
-        let value = view(candidate, activation)?;
+        let value = view(transaction, candidate, activation)?;
         let bytes = crate::observation::bounded::bounded_bytes(&value, MAX)
             .ok_or_else(|| storage("projection display header exceeds bound"))?;
         let native:Option<String>=transaction.query_row("SELECT CASE WHEN typeof(activation_digest)='text' AND octet_length(activation_digest)=64 THEN activation_digest END FROM projection_activations WHERE activation=?1",[activation.activation.0],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
@@ -104,7 +121,7 @@ pub(super) fn read(
     };
     read_id(connection, id).map(Some)
 }
-fn read_id(
+pub(super) fn read_id(
     connection: &Connection,
     id: u64,
 ) -> Result<RuntimeClientProjectionHeadView, ConversationStoreError> {

@@ -1,8 +1,9 @@
+import { selectedSessionId, selectedCheckpoint } from './shell-actions';
+import { wireProbe } from './wire-probe';
 import { openEmptySession } from './shell-actions';
 import { connectRemote } from './shell-actions';
 import { expectSettled } from './shell-actions';
 import { sessionTree } from './shell-actions';
-import { showInspector } from './shell-actions';
 import { connectionAction } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { test, expect } from '@playwright/test';
@@ -12,31 +13,32 @@ import { startDogfood } from './dogfood-server';
 
 test('typed selectors, native upload-bearing retry branch, original lineage and independent Fork', async ({ page }) => {
   const fixture = await startDogfood('web_commands');
+  const wire = await wireProbe(page);
   let passed = false;
   let phase = 'original turn setup';
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   const message = page.getByRole('textbox', { name: 'Message', exact: true });
-  const facts = page.getByLabel('Native diagnostic JSON', { exact: true });
+  const snapshot = async () => (await selectedCheckpoint(page, wire)).snapshot;
   const command = async (name: string) => { await message.fill(`/${name}`); await expect(page.getByRole('listbox', { name: 'Commands' }).getByRole('option').first()).toBeVisible(); await message.press('Enter'); return page.getByRole('dialog', { name: `/${name}`, exact: true }); };
-  const settled = () => expectSettled(page);
+  const settled = () => expectSettled(page, wire);
   try {
     await routeWorkspaceHost(page, fixture);
     await page.goto('/'); await expect(page).toHaveTitle(/rustX/);
     await connectRemote(page, fixture.endpoint, fixture.token);
-    await expect(page.getByLabel('Transport token')).toHaveCount(0); await showInspector(page);
+    await expect(page.getByLabel('Transport token')).toHaveCount(0);
     await openEmptySession(page, fixture, 'Workspace A');
     await expect(message).toBeEnabled();
-    await expect(facts).toContainText(/"ConversationId": "conv_/);
-    const originalId = JSON.parse(await facts.innerText()).SessionId as string;
-    const originalConversation = JSON.parse(await facts.innerText()).ConversationId as string;
+    expect((await snapshot()).conversation_id).toMatch(/^conv_/);
+    const originalId = await selectedSessionId(page);
+    const originalConversation = (await snapshot()).conversation_id;
     await message.fill('/model');
     let popup = page.locator('[data-model-picker]');
     await popup.getByRole('combobox', { name: 'Search models…' }).fill('second');
     await popup.getByRole('option', { name: /fixture\/second-model/ }).click();
     await expect(popup).toHaveCount(0); await expect(message).toHaveValue('');
-    await expect(facts).toContainText('fixture/second-model');
+    await expect.poll(async () => (await snapshot()).model?.configured.model).toBe('fixture/second-model');
     popup = await command('tools');
     await expect(message).toHaveValue(''); await expect(popup).toBeVisible();
     await popup.getByRole('button', { name: 'Close dialog' }).click();
@@ -44,14 +46,14 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     await expect(popup).toHaveCount(0); await expect(message).toBeFocused();
     await expect(message).toHaveValue('/model');
     await connectionAction(page, 'Reconnect');
-    await expect(page.getByLabel('Transport token')).toHaveCount(0); await showInspector(page);
-    await expect(facts).toContainText('fixture/second-model');
+    await expect(page.getByLabel('Transport token')).toHaveCount(0);
+    await expect.poll(async () => (await snapshot()).model?.configured.model).toBe('fixture/second-model');
     await message.fill('/not-a-command'); await message.press('Enter');
     await expect(page.getByRole('alert')).toContainText('Unsupported command');
     await expect(message).toHaveValue('/not-a-command');
     await message.fill('Regenerate my uploaded note');
     await page.getByLabel('Attach files').setInputFiles({ name: 'note.txt', mimeType: 'text/plain', buffer: Buffer.from('Owned by native Session') });
-    await expect(page.getByText('Uploaded', { exact: true })).toBeVisible();
+    await expect(page.locator('[data-attachment-state=ready]')).toBeVisible();
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await expect(page.getByText('Original native answer', { exact: true })).toBeVisible(); await settled();
     const usageButton = page.getByRole('button', { name: 'Usage 120 token', exact: true });
@@ -82,10 +84,10 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
       // deadlock protection, not a five-second budget for the entire transition.
       expect(await fixture.gate('retry-request-reached')).toMatchObject({ kind: 'gate_reached', name: 'retry-request-reached', requestIndex: 1 });
       phase = 'validated retry request reached; checking attached native lineage while provider is parked';
-      await expect(facts).toContainText(originalId);
-      await expect(facts).not.toContainText(`"ConversationId": "${originalConversation}"`);
-      expect(JSON.parse(await facts.innerText()).SessionId).toBe(originalId);
-      expect(JSON.parse(await facts.innerText()).ConversationId).not.toBe(originalConversation);
+      expect(await selectedSessionId(page)).toBe(originalId);
+      await expect.poll(async () => (await snapshot()).conversation_id).not.toBe(originalConversation);
+      expect(await selectedSessionId(page)).toBe(originalId);
+      expect((await snapshot()).conversation_id).not.toBe(originalConversation);
       await expect(page.getByLabel('Session status')).toHaveCount(0);
     await expect(page.getByRole('status').filter({ hasText: 'Deep diving' }).first()).toBeVisible();
       await expect(page.getByText('Regenerated native answer', { exact: true })).toHaveCount(0);
@@ -105,10 +107,10 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     await page.getByRole('button', { name: 'Branch into a new Session', exact: true }).click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
     // The Fork runs on the click; the attached Fork replaces the selected Session.
-    await expect.poll(async () => JSON.parse(await facts.innerText()).SessionId).not.toBe(originalId);
+    await expect.poll(() => selectedSessionId(page)).not.toBe(originalId);
     await expect(message).toHaveValue('');
-    const forkId = JSON.parse(await facts.innerText()).SessionId as string;
-    const forkConversation = JSON.parse(await facts.innerText()).ConversationId as string;
+    const forkId = await selectedSessionId(page);
+    const forkConversation = (await snapshot()).conversation_id;
     await expect(transcript.getByText('Original native answer', { exact: true })).toBeVisible();
     await expect(page.getByText(/Native restored upload batch/)).toHaveCount(0);
     await expect(page.getByLabel('Completed Turn', { exact: true })).toHaveCount(1);
@@ -123,12 +125,12 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     expect(batches).toHaveLength(1);
     expect(readFileSync(join(root, batches[0], 'note.txt'), 'utf8')).toBe('Owned by native Session');
     await connectionAction(page, 'Reconnect');
-    await expect(page.getByLabel('Transport token')).toHaveCount(0); await showInspector(page);
+    await expect(page.getByLabel('Transport token')).toHaveCount(0);
     await expect(message).toBeEnabled();
     // Model selection belongs to Session identity and is inherited by its Fork;
     // cold lineage replacement does not select the global default again.
-    await expect(facts).toContainText('fixture/second-model');
-    await expect(facts).toContainText('policy');
+    await expect.poll(async () => (await snapshot()).model?.configured.model).toBe('fixture/second-model');
+    expect((await snapshot()).effective_approval_mode).toBeTruthy();
     // A reopened inherited Assistant remains a valid native continuation anchor.
     await expect(page.getByLabel('Completed Turn', { exact: true })).toHaveCount(1);
     await expect(usageButton).toHaveCount(1);
@@ -145,7 +147,6 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     await page.getByRole('dialog', { name: 'Session tree', exact: true }).getByRole('option').filter({ hasText: forkConversation }).click();
     await expect(transcript.getByText('Original native answer', { exact: true })).toBeVisible();
     await expect(transcript.getByText('Inherited replay answer', { exact: true })).toHaveCount(0);
-    await page.getByRole('button', { name: 'Close Inspector' }).click();
     await page.setViewportSize({ width: 390, height: 844 });
     await usageButton.click();
     await expect(page.getByRole('dialog', { name: 'Turn usage', exact: true })).toBeVisible();
@@ -157,17 +158,14 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     expect(errors).toEqual([]); passed = true;
   } catch (error) {
     // Capture before shutdown: teardown closes the socket and can otherwise
-    // obscure the original failure. Read the current DOM without locator waits:
-    // the inspector can legitimately be closed, including by timeout teardown.
+    // obscure the original failure. Read the current DOM without locator waits.
     try {
       const browser = page.isClosed() ? { closed: true } : await page.evaluate(() => ({
-        facts: document.querySelector('[aria-label="Native diagnostic JSON"]')?.textContent ?? null,
         notices: Array.from(document.querySelectorAll('.notice'), node => node.textContent),
-        wire: Array.from(document.querySelectorAll('.protocol-log pre'), node => node.textContent),
       }));
       await test.info().attach('retry-native-frontier', {
         contentType: 'application/json',
-        body: JSON.stringify({ phase, diagnostics: fixture.diagnostics(), browser }, null, 2),
+        body: JSON.stringify({ phase, diagnostics: fixture.diagnostics(), requests: wire.requests, responses: wire.responses, browser }, null, 2),
       });
     } catch {
       // Failure diagnostics must never replace the original test exception.
