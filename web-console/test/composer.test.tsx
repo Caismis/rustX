@@ -44,7 +44,7 @@ it.each(['button', 'Enter'])('running command %s uses the selected typed command
   expect(input).toHaveProperty('value', '/mdl');
   fireEvent.change(input, { target: { value: '/unknown' } });
   fireEvent.click(screen.getByRole('button', { name: 'Review command' }));
-  expect(screen.getByRole('alert').textContent).toContain('Unsupported command');
+  expect((await screen.findByRole('alert')).textContent).toContain('Unsupported command');
   expect(input).toHaveProperty('value', '/unknown'); expect(p.onSend).not.toHaveBeenCalled();
 });
 it('IME, keyCode 229 and Shift+Enter cannot submit, including the command discovery path', () => {
@@ -64,7 +64,7 @@ it('an uploaded attachment cannot be discarded by command selection', async () =
   await act(async () => fireEvent.change(screen.getByLabelText('Attach files'), { target: { files: [new File(['note'], 'note.txt')] } }));
   fireEvent.change(screen.getByLabelText('Message'), { target: { value: '/model' } });
   fireEvent.click(screen.getByRole('button', { name: 'Run command' }));
-  expect(screen.getByRole('alert').textContent).toContain('Remove draft attachments');
+  expect((await screen.findByRole('alert')).textContent).toContain('Remove draft attachments');
   expect(screen.getByRole('button', { name: 'Remove note.txt' })).toBeTruthy();
   expect(p.onCommand).not.toHaveBeenCalled(); expect(p.onSend).not.toHaveBeenCalled();
 });

@@ -159,9 +159,9 @@ function useNavigationFocusHandoff(dialog: HTMLElement | null, sectionTriggerRef
   }, [dialog, sectionTriggerRef]);
 }
 
-export function SettingsTrigger({ wide, onClick }: { wide: boolean; onClick: () => void }) {
+export function SettingsTrigger({ wide, onClick, feedback }: { wide: boolean; onClick: () => void; feedback?: ReactNode }) {
   const tx = useTranslation();
   return <div className={clsx(css.triggerRow, !wide && css.railRow)}><button type="button" className={clsx(css.trigger, !wide && css.rail)} aria-label={tx('settings:settings.settings')} aria-haspopup="dialog" onClick={onClick}>
     <IconSettingsOutline16 />{wide && <span className={css.triggerLabel}>{tx('settings:settings.settings')}</span>}
-  </button></div>;
+  </button>{feedback}</div>;
 }

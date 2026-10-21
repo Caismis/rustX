@@ -1,8 +1,10 @@
+import { useToastNotice } from '../../locale/use-toast-notice';
+import { actionError } from '../../bindings/action-error';
 import { ComposerDraft, type ComposerSubmission, type ComposerConversation, type InputAcceptance } from '../composer/draft';
 import { isOutcomeUncertain, RpcFailure } from '../../client/errors';
 import type { FirstSubmission } from '../new-conversation/first-submit';
 import { message } from '../../locale/translation';
-import { useTranslation, useNotice } from '../../locale/react';
+import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
 // Presentation extracted from DeepSeek Harness ui-conversation/AgentComposer.
 // Native textarea replaces Lexical. Commands are client grammar; effects are typed.
@@ -65,15 +67,13 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
   const inTranscript = !!retained && !!(retained.session || retained.existingSessionId) && ['attaching', 'uploading', 'admitting'].includes(retained.phase);
   const shownText = inTranscript ? '' : retained?.draft.text;
   const files: readonly Pick<IntakeFile, "id" | "file" | "name" | "receipt" | "status" | "error">[] = inTranscript ? [] : retained ? retained.draft.files.map((file, index) => ({ id: retained.attachmentIds[index], name: file.name, file, receipt: retained.receipts[index], status: retained.receipts[index] ? 'ready' : index === retained.uploadIndex && retained.failedPhase === 'uploading' && retained.phase === 'uncertain' ? 'uncertain' : index === retained.uploadIndex && retained.failedPhase === 'uploading' && retained.phase === 'failed' ? 'failed' : index === retained.uploadIndex && retained.phase === 'uploading' ? 'uploading' : 'draft', error: undefined })) : selections;
-  const [error, setError] = useNotice();
-  const [uploadNotice, setUploadNotice] = useNotice();
-  const [noticeSequence, setNoticeSequence] = useState(0);
+  const [notice, setError] = useToastNotice();
   const pending = files.some(file => file.status !== 'ready' && !(onDraftSend && file.status === 'draft'));
   const port: UploadPort = { upload: onUpload, status: onReconcile ?? (async () => ({ state: 'unresolved' })) };
   const pick = useCallback((picked: IntakeInput[]) => {
     if (disabled || busy || !editor) return;
     const rejection = intake.add(picked, uploadPolicy, onDraftSend ? undefined : { upload: onUpload, status: onReconcile ?? (async () => ({ state: 'unresolved' })) });
-    if (rejection) { setUploadNotice(message(`agent:upload.${rejection}`)); setNoticeSequence(sequence => sequence + 1); }
+    if (rejection) { setError(message(`agent:upload.${rejection}`)); }
     else if (picked.length) owner.attachmentsEdited(editor.incarnation);
   }, [disabled, busy, editor, intake, uploadPolicy, onDraftSend, onUpload, onReconcile, owner]);
   const draft = retained ? shownText ?? '' : editor?.text ?? '';
@@ -100,7 +100,7 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
     const selection = owner.snapshot()?.selection;
     if (selection) input.current?.setSelectionRange(selection.start, selection.end, selection.direction);
   }, [owner, editor?.incarnation]);
-  useEffect(() => { setError(''); setUploadNotice(''); invocation.current = undefined; if (!intakeOwner) intake.clear(); }, [editorIdentity]);
+  useEffect(() => { setError(''); invocation.current = undefined; if (!intakeOwner) intake.clear(); }, [editorIdentity]);
   const query = trigger.state?.query;
   const modelInvocation = useRef<{ incarnation: number; revision: number } | undefined>(undefined);
   const [modelRequested, setModelRequested] = useState(false);
@@ -156,7 +156,7 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
     if (action.disabled || action.kind === 'stop') return;
     if (action.kind === 'command') {
       if (selectedCommand) invoke(selectedCommand);
-      else setError(message('agent:copy.unsupported-command-edit-the-draft-it-will-not-be-sent-as-a-prompt'));
+      else { trigger.dismiss(); setError(message('agent:copy.unsupported-command-edit-the-draft-it-will-not-be-sent-as-a-prompt')); }
       return;
     }
     if (!editor) return;
@@ -167,12 +167,11 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
       if (accepted) ticket.accepted(); else ticket.failed('unsent');
     } catch (cause) {
       ticket.failed(isOutcomeUncertain(cause) ? 'uncertain' : cause instanceof RpcFailure ? 'rejected' : 'unsent');
-      if (owner.snapshot()?.incarnation === ticket.incarnation) setError(String(cause));
+      if (owner.snapshot()?.incarnation === ticket.incarnation) setError(actionError(cause));
     }
   };
   return <div ref={root} className={css.root} data-file-drop-owner="">
-    {uploadNotice && <Toast key={noticeSequence} text={uploadNotice} icon={<IconWarningOutline16/>} anchor={root.current} onDone={() => setUploadNotice('')}/>}
-    {error && <p role="alert">{error}</p>}
+    {notice && <Toast key={notice.sequence} text={notice.text} holdMs={6000} icon={<IconWarningOutline16/>} anchor={root.current} onDone={() => setError('')}/>}
     {!restoreSupported && <p role="alert">{tx('agent:agent-composer.cannot-restore-this-ordered-native-input-in-the-flat-web-editor')}</p>}
     <div className={css.card} data-composer-card data-editor-incarnation={editor?.incarnation} data-editor-revision={editor?.revision} data-submission-outcome={editor?.submission?.outcome} aria-busy={busy}>
       {modelMenu && <ModelPicker state={modelPicker!} close={() => { modelInvocation.current = undefined; setModelRequested(false); trigger.dismiss(); trigger.restore(); }} chosen={() => { if (modelRevision) owner.consumeRevision(modelRevision.incarnation, modelRevision.revision); setModelRequested(false); trigger.dismiss(); modelInvocation.current = undefined; trigger.restore(); }}/>}

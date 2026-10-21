@@ -90,6 +90,7 @@ it('lost cancellation remains uncertain through reconnect and a settled snapshot
   expect(screen.getByLabelText('Session status').textContent).toBe('Stopping…');
   await act(async () => server.socket.close());
   expect(screen.getByLabelText('Session status').textContent).toContain('Needs verification');
+  expect(screen.getByRole('button', { name: 'Review outcome' })).toBeTruthy();
   server.snapshots.get('A')!.attempt = { ...running(), phase: { type: 'settled', outcome: { type: 'cancelled', reason: 'user_requested' } } };
   await act(async () => server.connect());
   expect(screen.getByLabelText('Session status').textContent).toContain('Needs verification');

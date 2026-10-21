@@ -71,9 +71,9 @@ it('a native approval has identical request count, ordering, methods and payload
 it('Tool chrome and global connection notices switch while opaque tool output stays byte-for-byte intact', async () => {
   server = new Server();
   await act(async () => { render(<App client={server!.client} workspaceHost={server!.workspaceHost}/>); });
-  expect(screen.getByText('Unable to connect to rustX', { exact: true })).toBeTruthy();
+  expect(screen.getByText('Reconnect', { exact: true })).toBeTruthy();
   act(() => localeController.setLocale('zh'));
-  expect(screen.getByText(text('common:app.unable-to-connect-to-rustx'), { exact: true })).toBeTruthy();
+  expect(screen.getByText(text('common:connection.disconnected'), { exact: true })).toBeTruthy();
   expect(server.requests).toHaveLength(0);
   cleanup();
   render(<ToolCard tool={{ id: 'native-id', title: 'native.tool', summary: '/raw/path', variant: 'generic', state: 'failure', output: 'Native failure: do NOT translate {name}' }}/>);

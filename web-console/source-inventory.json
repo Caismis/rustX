@@ -3,6 +3,63 @@
   "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
   "files": [
     {
+      "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
+      "destination": "web-console/src/app/ConnectionFeedback.tsx",
+      "treatment": "800 ms minimum connecting presentation and 2 s recovery confirmation; adapts only display timing to native App Server and ConnectionController facts.",
+      "upstream_sha256": "01966a7299b66d16b2f80106c72dd1f37c541bbfe2d3a0397ca9edd96c21f466",
+      "retained_dependencies": [
+        "../client/app-server",
+        "../client/selectors",
+        "../connection/controller",
+        "../locale/react",
+        "../presentation/primitives/ConnectionIndicator",
+        "../presentation/primitives/Tooltip",
+        "../presentation/primitives/icons",
+        "./ConnectionFeedback.module.css",
+        "react"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness request assembly, event history and runtime authority"
+      ],
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "local_sha256": "b108a7c9595f35be70ddfe6362113615e4d3e094de5bbbb4377fd5bfdc572b82"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/ConnectionIndicator.module.css",
+      "destination": "web-console/src/presentation/primitives/ConnectionIndicator.module.css",
+      "treatment": "Shared theme-token warning/success indicator styling with collapsed-rail sizing.",
+      "upstream_sha256": "e48ba1dfdb2baf2e094e338621bb0bf6970f60dc7eefaaef1ddeea5864bf3797",
+      "retained_dependencies": [
+        "CSS modules",
+        "existing theme tokens"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness request assembly, event history and runtime authority"
+      ],
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "local_sha256": "08a01984657777a358b6e893fd023b451116d4b9584e454502c9ee0e84eaa399"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/ConnectionIndicator.tsx",
+      "destination": "web-console/src/presentation/primitives/ConnectionIndicator.tsx",
+      "treatment": "Compact reconnect control and recovery confirmation; native connection state and explicit callbacks, with accessible collapsed-rail presentation.",
+      "upstream_sha256": "66a34a4ebf606353f307fd07d9119ab774f7cc9ae784a62bdabc7c7992f70169",
+      "retained_dependencies": [
+        "./ConnectionIndicator.module.css",
+        "./StateDot",
+        "./icons",
+        "react"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness request assembly, event history and runtime authority"
+      ],
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "local_sha256": "b59e0197c813d6f50f71c0453107b5c1a27f11638886760c5d955f578b3e7584"
+    },
+    {
       "upstream": "packages/client/ui-chat/src/client/chat/ContextInjectionRow.module.css",
       "destination": "web-console/src/app/agent/SystemChanges.module.css",
       "treatment": "141px opaque scrollport and compact summary adapted to existing theme tokens.",
@@ -74,10 +131,12 @@
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../../../protocol/app-server/v51",
+        "../../bindings/action-error",
         "../../client/errors",
         "../../client/uploads",
         "../../locale/react",
         "../../locale/translation",
+        "../../locale/use-toast-notice",
         "../../presentation/agent/Composer.module.css",
         "../../presentation/agent/control-row-layout",
         "../../presentation/primitives/Button",
@@ -103,7 +162,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "f988ad7ecebbe679a52a28dae3f7ff6b25da889da3a45451dcf485f5b4979737",
+      "local_sha256": "daf4721256fa1d3ff05af1f4f709253c67ebb54198446e3e5f577991ea3b01fd",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
@@ -2464,7 +2523,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "4b492c160263ab3f8af9f1aca2671c9ad9ff6a3c5af46ac837825a0a4551cb68",
+      "local_sha256": "7ee12530c10ce9e12c0e17cf15437ecabbf29804459ab65a52273661be69de50",
       "retained_dependencies": [],
       "classification": "B"
     },
@@ -2492,7 +2551,7 @@
         "react",
         "react-aria-components"
       ],
-      "local_sha256": "c0833282544956c972ad48051b0e4a65e858a9a994aad66ed22030e6ab1799bb",
+      "local_sha256": "656c2108880e023798586359478fe70b6f2283b8bb78ed815fea665dd5f6957b",
       "classification": "B"
     },
     {
@@ -2820,6 +2879,7 @@
       "treatment": "adapted grouped/flat navigation, bounded metadata search, capability-gated picker and metadata actions; native and Product Host authority replace Harness controllers; WEB-12 removes ordinary diagnostic counters/lifecycle labels while preserving native controls and authoritative refs; WEB-12 review repair: Sidebar-only selection/close callbacks, native display-title projection and Session-scoped uncertainty. Native authority unchanged. Explicit Sidebar Close all views also releases unlisted/restored browser views without cancelling native work. Issue #406: current App Server v27 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v27 imports; upstream reference unchanged. Issue #433 review repair: consume the shared owner current-demand status instead of aggregating retained historical entries; no new upstream reuse or dependencies. #436 metadata dispatch repair: retain the opened dialog Product Host mutation scope, send it for add/rename/unregister and independently fence display settlement; native Session rename remains separate. #436 contract hardening: bind Sidebar metadata intent capture to the exact catalog that rendered the action, matching the Composer; no new upstream reuse or dependencies. New conversation sidebar: show only the current browser draft, pinned above native sessions, without allocating a native identity; native creation acknowledgement retains ownership. PR #458 navigation ownership: catalog search supersedes preparation/read continuations without revoking committed controls or acquiring route ownership. PR #458 Shell navigation: one XState route owner, independent native lifecycle settlement and read-only Fork history; upstream reference unchanged. Session-list alignment: DSH row/menu/rename geometry and interaction patterns; browser-scoped pin preference, native completed-response Fork and permanent deletion retain rustX ownership. Archive is excluded. Issue #487: client contract, error and first-submission owner import paths only; upstream reference unchanged.",
       "upstream_sha256": "541bcf73a753b049ca25ade38a6565ddeabc750d8b4098eee4901c6d4a461d09",
       "retained_dependencies": [
+        "../bindings/action-error",
         "../bindings/projection",
         "../bindings/session-product",
         "../bindings/session-title",
@@ -2828,6 +2888,7 @@
         "../client/selectors",
         "../locale/react",
         "../locale/translation",
+        "../locale/use-toast-notice",
         "../presentation/primitives/Button",
         "../presentation/primitives/Input",
         "../presentation/primitives/Modal",
@@ -2874,7 +2935,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "99e5a26d7cc7df53e307e6397e65ebab19cc9aa10dc84306baceabc9cf36ea98"
+      "local_sha256": "f18a414cccdb4bccd957fd1e95aa418042728e0d1131b1f60862a3f64268d4eb"
     },
     {
       "upstream": "packages/client/ui-primitives/tests/markdown-incremental.client.spec.tsx",
@@ -3565,7 +3626,7 @@
           "treatment": "Task count, stop confirmation, duration and output disclosure wording follows the Harness job menu."
         }
       ],
-      "local_sha256": "ba9329ee5dfd7e61aaa3e23c475331effd7f18f156a727bc5e567c13bb556e9e"
+      "local_sha256": "4fb6671f2a6d658aaa0fc849862bdc779c19bd847228cf79674a888858244c6b"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -6204,10 +6265,11 @@
       "classification": "B",
       "treatment": "Harness transient warning announcement adapted to rustX: body portal, composer-centered top placement, three-second hold and one-second fade. Floating UI owns viewport clamping and layout tracking; only the required warning/text surface is retained. Existing rustX theme tokens replace upstream-only aliases.",
       "upstream_sha256": "85ed92693c910decadb38f095764bbdb3a1c6992b60bf63dedabdbebccd309b6",
-      "local_sha256": "bd46fd332ffb292ea53fcd014556643cea7101278764128cc62bcda2477b2db0",
+      "local_sha256": "1461f0d7d6a4f4e5333b74ec46564dca2e86379ed03340c682059044783d8c7c",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "./Toast.module.css",
+        "./icons",
         "@floating-ui/react-dom",
         "react",
         "react-dom"
@@ -6223,7 +6285,7 @@
       "classification": "A",
       "treatment": "Harness transient warning announcement adapted to rustX: body portal, composer-centered top placement, three-second hold and one-second fade. Floating UI owns viewport clamping and layout tracking; only the required warning/text surface is retained. Existing rustX theme tokens replace upstream-only aliases.",
       "upstream_sha256": "74cab625e372a6cdaff92fa468b7d59bc037212d738e476ea0f8d485e4f8dbcb",
-      "local_sha256": "5df91e370be74f238020400f4ea42847d1b8a1f33ed8f0874fa90c1ea1b9eda9",
+      "local_sha256": "2ff6c1116a3b748299bf1d9510c4a1f468e342cd4b828fb029b1e093f7f06348",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [

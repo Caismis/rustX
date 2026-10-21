@@ -1,3 +1,7 @@
+import { useToastNotice } from '../../locale/use-toast-notice';
+import { Toast } from '../../presentation/primitives/Toast';
+import { IconWarningOutline16 } from '../../presentation/primitives/icons';
+import { actionError } from '../../bindings/action-error';
 import { SubagentHeader } from './Subagents';
 import { BackgroundJobs } from './BackgroundJobs';
 import { useSubagents } from './subagent-context';
@@ -31,9 +35,9 @@ export function ConversationHeader({ host, authority, client, view, workspaceId,
   const subagents = useSubagents();
   const [sessionSettingsOpen, setSessionSettingsOpen] = useState(false);
   const owner = JSON.stringify([client.getSnapshot().generation, view?.id]);
-  const [failure, setFailure] = useState<{ owner: string; message: string }>();
-  const error = failure?.owner === owner ? failure.message : undefined;
-  const exportSession = () => { if (!view) return; setFailure(undefined); void client.exportSession(view.id).catch(cause => setFailure({ owner, message: String(cause) })); };
+  const [failure, setFailure] = useToastNotice(owner);
+  const error = failure?.text;
+  const exportSession = () => { if (!view) return; setFailure(''); void client.exportSession(view.id).catch(cause => setFailure(actionError(cause))); };
   return <header className={`${agentCss.header} ${!view ? agentCss.headerBlank : ""}`}>
       <div className={agentCss.titleRow}>
         <div className={agentCss.titleCluster}>
@@ -51,7 +55,7 @@ export function ConversationHeader({ host, authority, client, view, workspaceId,
       {settingsFeedback}
       {view && !subagents?.selected && sessionSettingsOpen && <section aria-label={tx('agent:conversation-header.session-settings')}><p>{tx('agent:conversation-header.workspace')}{' '}{view.settings?.cwd ?? tx('agent:conversation-header.unavailable')}</p><WorkspaceControls client={client} host={host} workspaceId={workspaceId}>{source => <LiveAgentControls client={client} sessionId={view.id} coldSource={source}/>}</WorkspaceControls><Button onClick={() => setSessionSettingsOpen(false)}>{tx('agent:conversation-header.close-session-settings')}</Button></section>}
       {view && displayPreferences.codingView && <div className={agentCss.tabs} role="tablist" aria-label={tx('agent:conversation-header.conversation-view')} onKeyDown={navigateTabs}>{(['chat', 'trajectory'] as const).map(mode => <button type="button" className={`${agentCss.tab} ${conversationMode === mode ? agentCss.tabActive : ""}`} key={mode} role="tab" id={`view-tab-${mode}`} aria-controls="conversation-view" tabIndex={conversationMode === mode ? 0 : -1} aria-selected={conversationMode === mode} onClick={() => setConversationMode(mode)}>{mode === 'chat' ? tx('agent:conversation-header.chat') : tx('agent:conversation-header.trajectory')}</button>)}</div>}
-      {error && <p role="alert">{error}</p>}
+      {error && <Toast key={failure?.sequence} text={error} holdMs={6000} icon={<IconWarningOutline16/>} onDone={() => setFailure('')}/>}
       </header>;
 }
 function LiveAgentControls({ client, sessionId, coldSource }: { client: AppServerClient; sessionId: string; coldSource?: import('../../../../protocol/app-server/v51').SourceSettings }) {

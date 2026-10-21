@@ -1,3 +1,4 @@
+import { actionError } from '../../bindings/action-error';
 import { assign, fromCallback, fromPromise, setup, type ActorRefFrom } from 'xstate';
 import type { AppServerClient } from '../../client/app-server';
 import type { CompletedResponseView, UserInputBlock } from '../../../../protocol/app-server/v51';
@@ -193,7 +194,7 @@ export const shellNavigationMachine = setup({
       const control = route === context.route ? context.control : {};
       return { retry: undefined, draftSession: undefined, binding: preserveDraft ? context.binding : context.binding + 1, control, route, pending: undefined, error: undefined, restored: preserveDraft && context.restored?.conversation === context.client.getSnapshot().views[event.destination.sessionId]?.target?.conversation_id ? context.restored : undefined, publication: { control, sidebar: event.destination.sidebar }, command: event.destination.command ? { request: event.destination.command, route, generation: context.client.getSnapshot().generation } : undefined };
     }),
-    fail: assign(({ event }) => ({ retry: undefined, pending: undefined, error: String((event as unknown as { error: unknown }).error) })),
+    fail: assign(({ event }) => ({ retry: undefined, pending: undefined, error: actionError((event as unknown as { error: unknown }).error) })),
     draft: assign(({ context, event }) => {
       if (event.type !== 'DRAFT' && event.type !== 'DRAFT.WORKSPACE') return {};
       // Registered Workspace metadata refines a resident draft. A completed or

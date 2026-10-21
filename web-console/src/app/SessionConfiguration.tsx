@@ -54,7 +54,10 @@ function ConfigurationObservation({ actor, connection, eligibility, openOwningSe
   // observation is retained; a
   // reread in flight is still known, merely not *current*, and only a current
   // observation offers adoption — still subject to native eligibility.
-  const unavailable = useSelector(actor, observationUnavailable);
+  const observationMissing = useSelector(actor, observationUnavailable);
+  // A physical outage is already actionable beside Settings. Keep explicit
+  // configuration failures and adoption facts without repeating that outage.
+  const unavailable = connection === 'connected' && observationMissing;
   const current = useSelector(actor, applicationCurrent);
   const busy = useSelector(actor, snapshot => snapshot.matches({ adoption: 'submitting' }));
   const candidate = application?.candidate;
@@ -64,7 +67,7 @@ function ConfigurationObservation({ actor, connection, eligibility, openOwningSe
   const observations = observedUnits.map(unit => ({ unit, result: observedResult(unitApplication(application, unit)) })).filter(row => row.result.state !== 'unavailable');
   const preparing = observations.filter(row => row.result.state === 'preparing');
   const failed = observations.filter(row => row.result.state === 'failed');
-  if (!unavailable && !candidate && !preparing.length && !failed.length && !adoptionError) return null;
+  if (!unavailable && !candidate && !preparing.length && !failed.length && !readError && !adoptionError) return null;
   // Presentation only: which line of the banner each native fact is. Nothing
   // here decides eligibility, adoption, ownership or residency.
   const owners = openOwningSettings ? applicationOwners(application) : [];

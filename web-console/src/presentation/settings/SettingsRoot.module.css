@@ -10,6 +10,7 @@
 }
 
 .triggerRow.railRow {
+  flex-direction: column;
   width: 36px;
   margin: 8px 0 10px;
 }

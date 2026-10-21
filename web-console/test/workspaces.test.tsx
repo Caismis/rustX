@@ -323,7 +323,7 @@ it('late cold open cannot restore focus after Workspace navigation', async () =>
 it('stale or unloaded snapshots cannot claim running work', () => {
   const view = { id: 'A', attachmentIntent: 'wanted' as const, attachment: 'stale' as const, snapshot: snapshot('A') };
   expect(sessionObservation(translator('en'), { ...server.client.getSnapshot(), views: { A: view }, connection: 'connected' }, 'A')).toBe('Connection interrupted');
-  expect(sessionObservation(translator('en'), { ...server.client.getSnapshot(), views: { A: view }, connection: 'disconnected' }, 'A')).toBe('Connection interrupted');
+  expect(sessionObservation(translator('en'), { ...server.client.getSnapshot(), views: { A: view }, connection: 'disconnected' }, 'A')).toBe('');
 });
 it('sidebar Fork uses the exact native boundary and late completion cannot undo Workspace focus', async () => {
   server.snapshots.get('A')!.transcript.entries = [{ cursor: '1', item: { type: 'message', message: { id: 'reply-cut', role: 'assistant', content: [{ type: 'text', text: 'Completed native reply' }] } }, completed_response: { closing_locator: {type:'by_message_id',message_id:'reply-cut'}, origin: {conversation_id:'conversation-A',attempt_id:'original'}, deferred_fields:[], surface_revision:'37', completed_at:'2026-10-20T00:00:00Z' } }];

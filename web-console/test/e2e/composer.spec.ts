@@ -219,7 +219,7 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toMatch(/Verify the composer docks|Bind native Todo|Queued during/);
 
     await connectionAction(page, 'Disconnect');
-    await expect(page.getByLabel('Session status')).toContainText(/Connection interrupted|Needs verification/);
+    await expect(page.locator('button[data-phase=disconnected]')).toBeVisible();
     await expect(goal.getByRole('button', { name: 'Resume goal' })).toBeDisabled();
     await connectionAction(page, 'Reconnect');
     await expect(page.getByLabel('Transport token')).toHaveCount(0);

@@ -21,7 +21,7 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
     expect(await selectedSettingsPage(page)).toBe('General');
     const writes = () => wire.requests.filter(request => request.method === 'configuration/sourceWrite');
     const reconnect = async () => {
-      await expect(page.getByLabel('Session status')).toContainText(/Connection interrupted|Needs verification/);
+      await expect(page.locator('button[data-phase=disconnected]')).toBeVisible();
       await connectionAction(page, 'Reconnect');
       await expect(page.getByLabel('Transport token')).toHaveCount(0);
       await settings.getByRole('button', { name: 'Reload configuration', exact: true }).click();

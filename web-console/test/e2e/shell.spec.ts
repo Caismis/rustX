@@ -194,14 +194,15 @@ test('Session product states stay concise without developer diagnostics', async 
     await expect(page.getByLabel('Session status')).toHaveCount(0);
     await expect(page.getByRole('status').filter({ hasText: 'Deep diving' }).first()).toBeVisible();
     await page.evaluate(mode => window.sessionFixture.state(mode), mode);
-    const expected = { idle: undefined, queued: 'Queued', stopping: 'Stopping…', reconnect: 'Connection interrupted', uncertain: 'Needs verification' }[mode];
+    const expected = { idle: undefined, queued: 'Queued', stopping: 'Stopping…', reconnect: undefined, uncertain: 'Needs verification' }[mode];
     if (expected) await expect(page.getByLabel('Session status')).toContainText(expected);
     else await expect(page.getByLabel('Session status')).toHaveCount(0);
     const ordinary = await page.locator('main').innerText();
     expect(ordinary).not.toMatch(/attempt-A|runtime_incarnation|connection_generation|Attach \/ cold resume|Unload runtime|Detach|Resync/);
     if (mode === 'reconnect' || mode === 'uncertain') {
       await expect(page.locator('[data-workspace-group="project"] button[data-session-id="A"]')).toBeVisible();
-      await expect(page.getByRole('status').filter({ hasText: 'Disconnected. Last confirmed groups are shown.' })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Reconnect now', exact: true })).toBeVisible();
+      await expect(page.getByText('Disconnected. Last confirmed groups are shown.', { exact: true })).toHaveCount(0);
     }
     await expectStableScreenshot(page, `session-${mode}-light.png`);
     await expect(page.getByRole('button', { name: /Inspector/ })).toHaveCount(0);

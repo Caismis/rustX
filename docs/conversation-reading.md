@@ -454,6 +454,22 @@ pending. Actual transport loss, uncertain outcomes and storage or observation
 failures retain their recovery presentation. These UI states grant no execution
 authority and never replay a native mutation.
 
+Connection feedback follows Harness's compact control beside Settings, with an
+accessible icon in the collapsed rail. Connecting stays visible for at least
+800 ms and a recovered connection confirms for 2 seconds; both are display-only
+timers. Native attachment and execution readiness are never delayed by them.
+Physical outages have one recovery surface instead of repeated conversation and
+Session-row banners. Attachment loss, uncertain outcomes and storage failures
+remain Session-owned, with expandable detail and explicit recovery.
+
+Action failures use the shared, anchored Toast without moving the conversation
+or composer. Repeated errors get a new display occurrence. Long failure notices
+hold for 6 seconds before fading; success confirmations use a polite status and
+green check. Native message/code and diagnostic text stay readable without a
+wire JSON dump. Form validation remains local and terminal model failures stay
+at their durable turn positions. Dismissing a transient notice never verifies a
+native uncertain outcome or replays a request.
+
 The immutable inherited transcript boundary was introduced in SQLite schema 58 and remains part of the current schema 74 lineage bootstrap. Initialization records the final native transcript watermark in the same transaction as the seed, including terminal-only inherited Turns and excluding invisible Context messages. Repeated bounded transcript and checkpoint reads resolve this boundary through a single bootstrap primary-key lookup. Older development stores are rejected without migration.
 
 ## Request field metadata

@@ -3984,3 +3984,20 @@ the fork marker, supplementary origin-metadata reads and their dedicated source
 history route are removed. Native fork/branch transactions, Session tree origin
 metadata, response controls and compaction checkpoint placement remain owned by
 their existing native facts. No runtime dependency or protocol change was added.
+
+## Connection and notice feedback alignment
+
+Reference commit: `687f282e8625c6b8d11ff58211a90524be2e4317`.
+`ConnectionIndicator.tsx` and its stylesheet adapt the current ui-primitives
+control. `app/ConnectionFeedback.tsx` adapts only SettingsRoot's 800 ms minimum
+connecting display and 2 second recovery confirmation to rustX's existing native
+connection controller. The collapsed rail keeps an accessible icon and direct
+connection-details entry. These display timers neither gate execution nor
+reconnect, replay or acknowledge operations.
+
+The existing Toast adaptation now includes upstream's owner-controlled hold,
+success tone and actionable text. Operation failures use transient portals;
+Session uncertainty and storage failures keep persistent expandable recovery,
+and native terminal model errors retain their transcript position. Structured
+wire diagnostics stay with their native owners instead of being JSON banners.
+No Harness connection, request, store or runtime implementation is imported.

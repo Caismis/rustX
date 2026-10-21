@@ -1,3 +1,7 @@
+import { useToastNotice } from '../../locale/use-toast-notice';
+import { Toast } from '../../presentation/primitives/Toast';
+import { IconWarningOutline16 } from '../../presentation/primitives/icons';
+import { actionError } from '../../bindings/action-error';
 import { useTranslation } from '../../locale/react';
 import { useState } from 'react';
 import { UploadFailure } from '../../client/uploads';
@@ -22,6 +26,10 @@ import { ComposerSeat } from './ComposerSeat';
 export function ConversationStatus({ client, sessionId, recover, transition }: { client: AppServerClient; sessionId: string; recover: (action: SessionRecovery) => void; transition?: SessionTransition }) {
   const tx = useTranslation();
   const product = useClientSelector(client, state => deriveSessionProductState(tx, state, state.views[sessionId], sessionId, transition), sameValue);
+  // Physical connection feedback has one owner beside Settings. Session-owned
+  // uncertainty, storage failures and a lost attachment remain actionable here.
+  if (product.status === 'reconnect' && product.recovery?.action === 'connect'
+    || product.status === 'failure' && product.recovery?.action === 'connection-settings') return null;
   return <SessionStatus product={product} recover={recover}/>;
 }
 
@@ -40,8 +48,8 @@ export function ConversationSeat({ client, host, authority, associations, sessio
   const uploadCurrent = () => current() && nativeUploadCurrent();
   const cancellation = view && executable && current() ? client.cancellationTarget(view.id) : undefined;
   const [sending, setSending] = useState<string>();
-  const [failure, setFailure] = useState<{ owner: string; message: string }>();
-  const error = failure?.owner === owner ? failure.message : undefined;
+  const [failure, setFailure] = useToastNotice(owner);
+  const error = failure?.text;
   const attached = state.connection === 'connected' && !!view && client.isAttachmentControlCurrent(view.id, view.attachmentObservation);
   const disabled = transitioning || !attached || !executable || !!view?.modelMutation || !!view?.snapshot?.shutting_down || !!view?.snapshot?.durability_failure;
   return <ComposerSeat>
@@ -54,7 +62,7 @@ export function ConversationSeat({ client, host, authority, associations, sessio
           lineageSwitchSafe: lineageSwitchSafe(view), hasGoal: !!goalDock(view.snapshot), onCommand,
           consumed, cancellationAvailable: !!cancellation, cancellationOnly: !attached && !!cancellation,
           cancellationScope: cancellation ? { authority: client, identity: JSON.stringify([binding, cancellation]) } : undefined,
-          onCancel: () => { setFailure(undefined); if (!cancellation || !current()) return; void client.cancelTurn(cancellation).catch(cause => setFailure({ owner, message: String(cause) })); },
+          onCancel: () => { setFailure(''); if (!cancellation || !current()) return; void client.cancelTurn(cancellation).catch(cause => setFailure(actionError(cause))); },
           onUpload: (files, operation) => {
             if (!uploadCurrent()) return Promise.reject(new UploadFailure('failed', 'Upload view replaced'));
             // The current gesture admits work. Once sent, its native result
@@ -64,7 +72,7 @@ export function ConversationSeat({ client, host, authority, associations, sessio
           onReconcile: async operation => { if (!uploadCurrent()) throw new Error('Upload view replaced'); const result = await client.uploadStatus(view.id, operation); if (!nativeUploadCurrent()) throw new Error('Upload view replaced'); return result; },
           onSend: async (text, receipts, delivery, acknowledged) => {
             if (!uploadCurrent()) return false;
-            setFailure(undefined); setSending(owner);
+            setFailure(''); setSending(owner);
             try {
               await client.send(view.id, text, receipts, delivery, acceptance => {
                 const native = client.getSnapshot().views[view.id];
@@ -77,7 +85,7 @@ export function ConversationSeat({ client, host, authority, associations, sessio
             finally { setSending(value => value === owner ? undefined : value); }
           },
         } : undefined}/>
-      {error && <p role="alert">{error}</p>}
+      {error && <Toast key={failure?.sequence} text={error} holdMs={6000} icon={<IconWarningOutline16/>} onDone={() => setFailure('')}/>}
       {view && <ConversationTotals client={client} sessionId={view.id}/>}
     </div>
     {sessionId && <LiveInteractions key={owner} client={client} sessionId={sessionId}/>}
