@@ -1842,6 +1842,15 @@ The Child inspection handshake carries read-only identity/capabilities; explicit
 bounded checkpoint/event/content/page requests follow. It carries no snapshot.
 One absolute fifteen-second budget covers Child observation setup and reads.
 
+Frozen Child canonical message pages keep the `source_cut` supplied by
+`agent/transcript`, independently of subsequent live checkpoints. Their
+`CheckpointReadCut` carries the exact Child conversation and activation, revision
+zero, `through = source_cut.read.journal`, empty domain/collection revisions and
+no live-publication or foreground selector. The Registry resolves the owned
+Child store for those pages and immutable canonical content bytes even while the
+Child is active. Append-only source growth preserves reconstructible history;
+foreign conversation/activation identities and inconsistent or mutated cuts fail.
+
 SQLite v50 private Agent authority persists the required `title` independently of its profile name. The
 `subagent` tool requires a short title; continuation preserves that title and the
 same Agent identity. Workflow children derive titles from their node names.

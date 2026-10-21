@@ -1582,3 +1582,186 @@ async fn t20_real_unix_shutdown_retires_the_exact_pending_observe_before_its_dea
     drop(unpark);
     child.runtime.shutdown().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn frozen_child_message_continuation_survives_live_admission_and_binds_registry_owner() {
+    use crate::durable::reading::ConversationWindowAt;
+    use crate::runtime_client::RuntimeClientError;
+    use crate::runtime_client::checkpoint::CheckpointReadCut;
+    use base64::Engine as _;
+
+    let directory = inspection_tempdir().unwrap();
+    let (parent, host) = parent_runtime_host_plane(
+        &directory,
+        "conv_01900000-0000-7000-8000-000000000601",
+        Vec::new(),
+    )
+    .await;
+    let conversation = ConversationId::new("conv_01900000-0000-7000-8000-000000000602");
+    let path = crate::runtime::subagent::child_conversation_store_path(
+        &parent.plane.runtime_root,
+        &crate::runtime::identity::SessionId::new("ses_01900000-0000-7000-8000-000000000001"),
+        &conversation,
+    );
+    let suffix = "Original frozen child instruction. ".repeat(4096);
+    let mut message = support::fake::inbound_message("frozen-instruction", "", UserSource::Human);
+    message.content = (0..32)
+        .map(|n| {
+            UserContentBlock::Text(crate::message::content::TextBlock {
+                text: format!("Instruction part {n}"),
+            })
+        })
+        .collect();
+    message
+        .content
+        .push(UserContentBlock::Text(crate::message::content::TextBlock {
+            text: suffix.clone(),
+        }));
+    let (release, released) = support::fake::model_release();
+    let child = child_fixture_scoped_at(
+        &directory,
+        &conversation,
+        vec![
+            parking_answer_script("first answer", released),
+            answer_script("follow-up answer"),
+        ],
+        ToolRegistry::new(),
+        vec![MessageBlock::User(message)],
+        path.parent().unwrap().to_path_buf(),
+        Some(SubagentId::for_conversation(
+            parent.runtime.conversation_id(),
+            1,
+        )),
+    )
+    .await;
+    let wired = launch_wired_child(&parent.plane, &child, "inspect the frozen instruction").await;
+    await_model_parks(&child.model, 1).await;
+    let agent = &wired.accepted.child_agent_id;
+    // No live inspection server: frozen pages and immutable canonical bytes
+    // belong to the Registry-bound Child store even during live execution.
+    let original = host
+        .inner
+        .agent_transcript_window(agent, &ConversationWindowAt::Latest, 32)
+        .unwrap();
+    let source = original.page.source_cut.clone().unwrap();
+    let cut = CheckpointReadCut {
+        conversation_id: conversation.clone(),
+        activation_id: Some(wired.accepted.subagent_id.clone()),
+        revision: 0,
+        through: source.read.journal,
+        source_cut: Some(source.clone()),
+        canonical_foreground: None,
+        live_publication: None,
+        domain_revisions: std::collections::BTreeMap::new(),
+        collection_cuts: std::collections::BTreeMap::new(),
+    };
+    let domain = "messages.message:frozen-instruction.blocks";
+    let before = host
+        .inner
+        .agent_checkpoint_page(agent, &cut, domain, 32, 32)
+        .await
+        .unwrap();
+    assert_eq!(before.read_cut, cut);
+    assert_eq!(before.total, 33);
+    assert_eq!(before.items.len(), 1);
+    let reference = before.items[0]
+        .content
+        .iter()
+        .find(|binding| {
+            matches!(
+                binding.content_ref.source,
+                crate::runtime_client::content::ContentSource::CanonicalMessageBlock {
+                    component: crate::runtime_client::content::CanonicalContentComponent::Payload,
+                    ..
+                }
+            )
+        })
+        .unwrap()
+        .content_ref
+        .clone();
+    host.inner
+        .agent_send_message(
+            agent,
+            "Append guidance while the child is still running".into(),
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    let current = child.store.observation_read_cut().unwrap();
+    assert!(source.read.reconstructible_from(&current.read));
+    assert_ne!(
+        current, source,
+        "live admission advances the pending/source frontier"
+    );
+    assert_eq!(
+        child.model.requests().len(),
+        1,
+        "the live Child remains parked"
+    );
+    child.host.inner.projection_settled().await;
+    let after = host
+        .inner
+        .agent_checkpoint_page(agent, &cut, domain, 32, 32)
+        .await
+        .unwrap();
+    assert_eq!(
+        after, before,
+        "the same C0 window survives independent C1 admission"
+    );
+    let mut bytes = Vec::new();
+    let mut offset = 0;
+    loop {
+        let chunk = host
+            .inner
+            .agent_content_read(agent, &reference, offset, 65_536)
+            .await
+            .unwrap();
+        bytes.extend(
+            base64::engine::general_purpose::STANDARD
+                .decode(chunk.data_base64)
+                .unwrap(),
+        );
+        if let Some(next) = chunk.next_offset {
+            offset = next;
+        } else {
+            break;
+        }
+    }
+    assert_eq!(String::from_utf8(bytes).unwrap(), suffix);
+    for foreign in [
+        CheckpointReadCut {
+            activation_id: Some(SubagentId::new("foreign-activation")),
+            ..cut.clone()
+        },
+        CheckpointReadCut {
+            conversation_id: parent.runtime.conversation_id().clone(),
+            ..cut.clone()
+        },
+        CheckpointReadCut {
+            through: cut.through + 1,
+            ..cut.clone()
+        },
+    ] {
+        assert!(matches!(
+            host.inner
+                .agent_checkpoint_page(agent, &foreign, domain, 32, 32)
+                .await,
+            Err(RuntimeClientError::ReadCutExpired)
+        ));
+    }
+    assert_eq!(
+        child.store.observation_read_cut().unwrap(),
+        current,
+        "inspection is read-only"
+    );
+    release.send(true).unwrap();
+    await_serve(wired.serve).await;
+    parent
+        .plane
+        .registry
+        .wait_until_settled(&wired.accepted.subagent_id)
+        .await
+        .unwrap();
+    child.runtime.shutdown().await.unwrap();
+    parent.runtime.shutdown().await.unwrap();
+}

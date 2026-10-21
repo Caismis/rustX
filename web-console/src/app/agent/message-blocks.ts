@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { AssistantContentBlock, CanonicalContentLocator, CheckpointReadCut, ContentBinding, MessageBlock, RuntimeClientMessageDescriptor, RuntimeClientTranscriptPage, UserContentBlock } from '../../../../protocol/app-server/v51';
 import { canonicalLocatorKey } from '../../../../protocol/app-server/content-identity';
 import { readBinding, readTraceCollection } from '../../client/trace-content';
-import { observationSourceIdentity, useObservationSource } from './ObservationSource';
+import { childHistoryReadCut, observationSourceIdentity, useObservationSource } from './ObservationSource';
 
 type Source = NonNullable<ReturnType<typeof useObservationSource>>;
 type Block = UserContentBlock | AssistantContentBlock;
@@ -13,11 +13,13 @@ const object = (value: unknown): Record<string, unknown> => value != null && typ
 /** Continue the canonical message, using the same bounded pages as Trace. */
 export async function readMessageBlocks(source: Source, request: Request, current: () => boolean) {
   const key = request.locator.type === 'by_message_id' ? `message:${request.locator.message_id}` : `ledger:${request.locator.position}`;
-  const domain = `messages.${key}.blocks`, captured = source.cut();
+  const domain = `messages.${key}.blocks`;
   const history = 'historyCut' in source ? source.historyCut : source.historyFrozen ? source.history?.source_cut : undefined;
-  const historical = history && !('target' in source && source.agentId);
+  if (source.historyFrozen && !history) throw Error('Original message history cut is unavailable.');
+  const childHistory = history && 'target' in source && source.agentId;
+  const captured = childHistory ? childHistoryReadCut(source, history) : source.cut();
+  const historical = history && !childHistory;
   if (!source.owned() || !current() || !historical && !captured) throw Error('Message source is unavailable.');
-  if (source.historyFrozen && 'target' in source && source.agentId && JSON.stringify(history) !== JSON.stringify(captured?.source_cut)) throw Error('Original child message cut is unavailable.');
   const page = async (cut: CheckpointReadCut | undefined, offset: number, owns: () => boolean) => {
     const result = historical
       ? await source.client.request({ method: 'session/historyPage', params: { session_id: 'target' in source ? source.target.session_id : source.sessionId, node_id: 'nodeId' in source ? source.nodeId : null, cut: history, domain, offset, limit: 32 } }, 'checkpoint_page', undefined, owns)
@@ -78,9 +80,9 @@ export function useMessageBlocks(requests: readonly Request[]) {
   const revision = source?.historyFrozen || source && 'historyCut' in source && source.historyCut ? undefined : source?.cut()?.revision;
   const activeKeys = new Set(requests.map(requestKey));
   const errors = Object.entries(loaded.errors).filter(([key]) => activeKeys.has(key)).map(([,error])=>error);
-  const retryVersion = errors.length ? revision : undefined;
+  const retryVersion = errors.length ? revision : undefined, active = !!source?.owned();
   useEffect(() => {
-    if (!source?.owned()) return;
+    if (!source || !active) return;
     let mounted = true;
     const current = () => mounted && latest.current.identity === identity && latest.current.plan === plan && !!latest.current.source?.owned();
     void (async () => {
@@ -100,7 +102,7 @@ export function useMessageBlocks(requests: readonly Request[]) {
       }
     })();
     return () => { mounted = false; };
-  }, [identity, plan, source?.client, retry, retryVersion]);
+  }, [identity, plan, source?.client, retry, retryVersion, active]);
   return { blocks: (request: Request) => loaded.blocks[requestKey(request)], errors: errors.filter(error => error.revision === revision).map(error => error.error), retry: () => { setState(previous => ({ ...previous, errors: {} })); setRetry(value => value + 1); } };
 }
 export function messageContinuation(message: MessageBlock, descriptors: readonly RuntimeClientMessageDescriptor[], page: RuntimeClientTranscriptPage): Request | undefined {

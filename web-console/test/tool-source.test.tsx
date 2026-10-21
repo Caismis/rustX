@@ -76,7 +76,7 @@ it('a physically late argument read cannot enter a replacement source', async ()
 });
 
 
-it('a frozen canonical descriptor read stays at its native history cut; argument hydration cannot upgrade its lifecycle', async () => {
+it.each(['root','child'] as const)('a frozen %s descriptor stays at C0 after live C1 advances; argument hydration cannot upgrade its lifecycle', async mode => {
   const { server, source, cut, page } = await fixture();
   try {
     const frozen = { ...deferred, state: { type: 'running' as const, arguments: '' } };
@@ -87,17 +87,20 @@ it('a frozen canonical descriptor read stays at its native history cut; argument
       result.page.items[0].value = frozen as never;
       return result;
     });
-    const current = { ...source, cut: () => ({ ...cut, through: '999', source_cut: { ...cut.source_cut!, read: { ...cut.source_cut!.read, journal: '999' } } }) };
+    const current = { ...source, agentId: mode === 'child' ? 'worker' : undefined, cut: () => ({ ...cut, activation_id: mode === 'child' ? 'worker-activation' : undefined, revision: '999', through: '999', source_cut: { ...cut.source_cut!, read: { ...cut.source_cut!.read, journal: '999' } } }) };
     server.handlers.set('conversation/checkpointPage', request => {
       if (request.method !== 'conversation/checkpointPage') throw Error();
       const result = page(request.params.domain);
-      result.page.read_cut = current.cut();
+      result.page.read_cut = request.params.cut as typeof cut;
+      result.page.items[0].value = frozen as never;
       return result;
     });
     const ui = render(<JournalSourceProvider historical source={current} history={{ source_cut: cut.source_cut, entries: [] }}><Content messageId={original.message_id!} blocks={[{ type: 'tool_call', id: original.call_id!, tool_id: 'tool-write', name: 'write', arguments: {} }]}/></JournalSourceProvider>);
     fireEvent.click(await ui.findByRole('button', { expanded: false }));
     expect(await ui.findByText('# Native write report')).toBeTruthy();
     expect(ui.container.querySelector('[data-tool-renderer="write"] [data-state]')?.getAttribute('data-state')).toBe('running');
+    const requests = server.requests.filter(({request})=>request.method === (mode === 'child' ? 'conversation/checkpointPage' : 'session/historyPage'));
+    expect(requests[0].request.params).toMatchObject(mode === 'child' ? {agent_id:'worker',cut:{activation_id:'worker-activation',revision:'0',source_cut:cut.source_cut}} : {cut:cut.source_cut});
   } finally { server.client.disconnect(); }
 });
 

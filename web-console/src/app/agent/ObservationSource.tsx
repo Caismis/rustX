@@ -9,6 +9,13 @@ export function observationSourceIdentity(source?: Source) {
   const cut = source?.cut();
   return source && ('target' in source ? [source.target, source.agentId, source.agentId ? cut?.conversation_id : undefined, source.agentId ? cut?.activation_id : undefined, source.epoch] : [source.sessionId, source.nodeId, source.epoch]);
 }
+/** Freeze a Child read at its selected durable window, independently of the live tail. */
+export function childHistoryReadCut(source: Source, history: ObservationReadCut): CheckpointReadCut {
+  const live = source.cut();
+  if (!('target' in source) || !source.agentId || !live?.activation_id || live.conversation_id !== history.read.conversation_id) throw Error('Original child history owner is unavailable.');
+  return { conversation_id: live.conversation_id, activation_id: live.activation_id, revision: '0', through: history.read.journal,
+    source_cut: history, domain_revisions: {}, collection_cuts: {} };
+}
 /** The advertised field stays in its native live or historical owner domain. */
 export async function readObservationValue(source: Source, cut: CheckpointReadCut, domain: string, path: string[], offset: number, current: () => boolean) {
   return 'target' in source

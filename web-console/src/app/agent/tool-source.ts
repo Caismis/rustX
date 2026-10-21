@@ -3,17 +3,18 @@ import type { CanonicalContentLocator, ContentBinding, ForegroundToolExecution }
 import { ContentCache } from '../../../../protocol/app-server/content-cache';
 import { canonicalLocatorKey } from '../../../../protocol/app-server/content-identity';
 import { readContentText } from '../../client/content-text';
-import { observationSourceIdentity, useContentSource, useObservationSource } from './ObservationSource';
+import { childHistoryReadCut, observationSourceIdentity, useContentSource, useObservationSource } from './ObservationSource';
 
 type Source = NonNullable<ReturnType<typeof useObservationSource>>;
 /** One native occurrence, including calls excluded by an inline header's byte budget. */
 export async function readToolOccurrence(source: Source, locator: CanonicalContentLocator, blockIndex: number, current: () => boolean, frozen = false) {
   const key = locator.type === 'by_message_id' ? `message:${locator.message_id}` : `ledger:${locator.position}`;
-  const domain = `messages.${key}.tools`, cut = source.cut();
+  const domain = `messages.${key}.tools`;
   const history = 'historyCut' in source ? source.historyCut : frozen ? source.history?.source_cut : undefined;
   if (!current() || !source.owned()) throw Error('Tool source is unavailable.');
   if (frozen && !history) throw Error('Original Tool history cut is unavailable.');
-  if ('target' in source && source.agentId && history && JSON.stringify(history) !== JSON.stringify(cut?.source_cut)) throw Error('Original child Tool observation is unavailable.');
+  const childHistory = history && 'target' in source && source.agentId;
+  const cut = childHistory ? childHistoryReadCut(source, history) : source.cut();
   const result = history && !('target' in source && source.agentId)
     ? await source.client.request({ method: 'session/historyPage', params: { session_id: 'target' in source ? source.target.session_id : source.sessionId, node_id: 'nodeId' in source ? source.nodeId : null, cut: history, domain, offset: blockIndex, limit: 1 } }, 'checkpoint_page', undefined, current)
     : 'target' in source && cut
@@ -24,7 +25,7 @@ export async function readToolOccurrence(source: Source, locator: CanonicalConte
   if (!current()) throw Error('Tool view changed.');
   const page = result?.page, item = page?.items[0];
   if (!page || page.domain !== domain || page.items.length !== 1 || item?.offset !== String(blockIndex)
-    || (history ? JSON.stringify(page.read_cut.source_cut) !== JSON.stringify(history) : JSON.stringify(page.read_cut) !== JSON.stringify(cut))) throw Error('Original Tool occurrence is unavailable.');
+    || (history && !childHistory ? JSON.stringify(page.read_cut.source_cut) !== JSON.stringify(history) : JSON.stringify(page.read_cut) !== JSON.stringify(cut))) throw Error('Original Tool occurrence is unavailable.');
   const tool = item.value as ForegroundToolExecution | undefined;
   if (!tool || tool.block_index !== blockIndex || tool.occurrence?.block_index !== blockIndex || typeof tool.name !== 'string'
     || !['assembled', 'running', 'settled'].includes(tool.state?.type) || typeof tool.state.arguments !== 'string') throw Error('Original Tool descriptor is unavailable.');

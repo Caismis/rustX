@@ -7,6 +7,7 @@ import { WorkspaceAuthority } from '../../src/workspaces/authority';
 import { WorkspaceSessionAdmission } from '../../src/workspaces/session-admission';
 import { ConnectionController } from '../../src/connection/controller';
 import { childNavigation } from './child-navigation';
+import { childMessageContinuation } from './child-message-continuation';
 import { childObservationRecovery } from './child-observation-recovery';
 import { childParentMessages } from './child-parent-messages';
 import { messageAttachments } from './message-attachments';
@@ -175,6 +176,7 @@ if (new URL(location.href).searchParams.has('parent-messages')) childParentMessa
 if (new URL(location.href).searchParams.has('message-attachments')) messageAttachments(server);
 if (new URL(location.href).searchParams.has('trace-live')) liveTrace(server);
 if (new URL(location.href).searchParams.has('child-turn-navigation')) childNavigation(server);
+if (new URL(location.href).searchParams.has('child-message-continuation')) childMessageContinuation(server);
 let nativeDefault = 'fixture/native';
 server.handlers.set('session/create', request => {
   if (request.method !== 'session/create') throw Error('Wrong method');

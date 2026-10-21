@@ -3909,3 +3909,17 @@ rendered verification uses the repository's pinned Playwright 1.63 Linux contain
 including a real native 32-file/33-block submission and reload, desktop/mobile Chat
 reading, upload interactions and resident Trace inspection. Screenshot tolerances
 and Harness source pins are unchanged.
+
+## Child message continuation ownership
+
+Native-backed Chat continuation now restarts unfinished reads when a resident
+Child view regains visibility, while retaining successful immutable blocks and
+rejecting late results from its former effect lifetime. Frozen Child messages
+and Tool descriptors use their original durable window cut with the Registry's
+conversation/activation identity; the live observation advances independently.
+The Registry serves those historical pages from the Child's own durable store.
+No Harness state owner, protocol, loading surface or visual styling is added.
+
+QA uses the production transcript/provider/client with controlled native reads,
+a real Registry/Child boundary test and the existing pinned Playwright browser
+for Chat/Trace switching at desktop and narrow widths. Browser plugin not available.

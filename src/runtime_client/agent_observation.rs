@@ -495,9 +495,9 @@ fn durable_host(
     super::host::RuntimeClientHost::new_durable(std::sync::Arc::new(store), None).map_err(failed)
 }
 
-// Cold Trace owns an immutable historical cut, authenticated by the Registry
-// activation. It does not carry a durable Host's publication/cache cut.
-fn cold_trace_selection(cut: &super::checkpoint::CheckpointReadCut, domain: &str) -> bool {
+// Historical inspection owns an immutable cut authenticated by the Registry
+// activation, independently of the live Host's publication/cache cut.
+fn historical_selection(cut: &super::checkpoint::CheckpointReadCut, domain: &str) -> bool {
     cut.revision == 0
         && cut.canonical_foreground.is_none()
         && cut.live_publication.is_none()
@@ -523,7 +523,7 @@ fn cold_agent_value_read(
     path: &[String],
     range: (u64, u32),
 ) -> Result<super::checkpoint::CheckpointValueChunk, RuntimeClientError> {
-    if cold_trace_selection(cut, domain) {
+    if historical_selection(cut, domain) {
         let store = registry
             .transcript_store(activation)
             .map_err(|_| RuntimeClientError::ContentSourceUnavailable)?;
@@ -549,7 +549,7 @@ fn cold_agent_page(
     offset: u64,
     limit: usize,
 ) -> Result<super::checkpoint::CheckpointPage, RuntimeClientError> {
-    if cold_trace_selection(cut, domain) {
+    if historical_selection(cut, domain) {
         let store = registry
             .transcript_store(activation)
             .map_err(|_| RuntimeClientError::ContentSourceUnavailable)?;
@@ -1122,7 +1122,13 @@ impl ClientInner {
             if reference.conversation_id != agent.child_conversation_id {
                 return Err(RuntimeClientError::ContentSourceUnavailable);
             }
+            // Canonical history is already durable, even while the Child runs.
+            // Its immutable reference is resolved by the same Registry store as
+            // historical pages, without borrowing the live publication source.
             if matches!(
+                reference.source,
+                super::content::ContentSource::CanonicalMessageBlock { .. }
+            ) || matches!(
                 agent.state,
                 crate::runtime::subagent::AgentState::Inactive
                     | crate::runtime::subagent::AgentState::Unavailable
@@ -1201,11 +1207,13 @@ impl ClientInner {
                 return Err(RuntimeClientError::ReadCutExpired);
             }
             let mut native_cut = cut.clone();
-            if matches!(
-                agent.state,
-                crate::runtime::subagent::AgentState::Inactive
-                    | crate::runtime::subagent::AgentState::Unavailable
-            ) {
+            if historical_selection(&native_cut, domain)
+                || matches!(
+                    agent.state,
+                    crate::runtime::subagent::AgentState::Inactive
+                        | crate::runtime::subagent::AgentState::Unavailable
+                )
+            {
                 native_cut.activation_id = None;
                 let registry = self.agent_registry()?.clone();
                 let activation = agent.activation_id.clone();
@@ -1288,11 +1296,13 @@ impl ClientInner {
                 return Err(RuntimeClientError::ReadCutExpired);
             }
             let mut native_cut = cut.clone();
-            if matches!(
-                agent.state,
-                crate::runtime::subagent::AgentState::Inactive
-                    | crate::runtime::subagent::AgentState::Unavailable
-            ) {
+            if historical_selection(&native_cut, domain)
+                || matches!(
+                    agent.state,
+                    crate::runtime::subagent::AgentState::Inactive
+                        | crate::runtime::subagent::AgentState::Unavailable
+                )
+            {
                 native_cut.activation_id = None;
                 let registry = self.agent_registry()?.clone();
                 let activation = agent.activation_id.clone();

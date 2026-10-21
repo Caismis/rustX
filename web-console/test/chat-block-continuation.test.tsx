@@ -72,3 +72,47 @@ it('an expired live cut retries on the next native checkpoint and retains the su
  cut={...cut,revision:'2'};ui.rerender(view());expect(ui.getByText('Recovered instruction')).toBe(body);
  expect(server.requests.filter(row=>row.request.method==='conversation/checkpointPage')).toHaveLength(2);
 });
+
+it.each(['hidden','reopened'] as const)('child continuation resumes after Chat reopens and fences the old response completed while %s',async completion=>{
+ const {act,waitFor}=await import('@testing-library/react');
+ server=new Server();await server.attached('A');const base=snapshot(),cut={...checkpoint(base).read_cut,activation_id:'worker-activation'};
+ const message:MessageBlock={id:'child-instruction',role:'user',source:{agent:{agent_id:'parent'}},content:Array.from({length:32},(_,n)=>({type:'uploaded_file',batch_id:'child-batch',name:`child-file-${n}.txt`}))};
+ const descriptor:RuntimeClientMessageDescriptor={identity:message.id,locator:{type:'by_ledger_position',position:17},role:'user',kind:'message',block_count:'33',tool_call_count:'0',tool_calls:[],content:[],collections:[{domain:'messages.ledger:17.blocks',revision:'1',total:'33',loaded:'32',next_offset:'32'}]};
+ const current={...base,messages:[message],message_descriptors:[descriptor],transcript:{entries:[{cursor:'17',item:{type:'message' as const,message}}]}};
+ let active=true;const source={client:server.client,target:server.target('A'),agentId:'worker',cut:()=>cut,owned:()=>active};
+ const view=()=> <div hidden={!active}><JournalSourceProvider source={source} messages={[message]} transcript={current.transcript}><AgentTranscript snapshot={current}/></JournalSourceProvider></div>;
+ const answer=(request:Awaited<ReturnType<Server['waitFor']>>,text:string)=>server.socket.success(request,{type:'checkpoint_page',page:{read_cut:cut,cursor:cut.revision,domain:'messages.message:child-instruction.blocks',total:'33',next_offset:null,collections:[],items:[{offset:'32',identity:'text',value:{type:'text',text},content:[],deferred:false}]}});
+ server.held.add('conversation/checkpointPage');
+ const ui=render(view()),first=await server.waitFor('conversation/checkpointPage',1);
+ active=false;ui.rerender(view());
+ if(completion==='hidden')await act(async()=>answer(first,'Discarded response'));
+ active=true;ui.rerender(view());
+ await waitFor(()=>expect(server.requests.filter(row=>row.request.method==='conversation/checkpointPage')).toHaveLength(2));
+ const second=await server.waitFor('conversation/checkpointPage',2);
+ if(completion==='reopened')await act(async()=>answer(first,'Discarded response'));
+ expect(ui.queryByText('Discarded response')).toBeNull();
+ await act(async()=>answer(second,'Complete child instruction'));
+ const body=await ui.findByText('Complete child instruction');
+ active=false;ui.rerender(view());active=true;ui.rerender(view());
+ expect(ui.getByText('Complete child instruction')).toBe(body);
+ expect(ui.queryByRole('alert')).toBeNull();
+ expect(server.requests.filter(row=>row.request.method==='conversation/checkpointPage')).toHaveLength(2);
+});
+
+it.each([false,true])('frozen child continuation keeps C0 when the independent live cut advances: %s',async advance=>{
+ server=new Server();await server.attached('A');const base=snapshot(),history={read:{...readingWindow({}).cut,ledger_through:'70',transcript_total:'70'},ledger_through:'70',transcript_total:'70',surface_revision:'0',inherited_through:'0'};
+ const live={...checkpoint(base).read_cut,conversation_id:history.read.conversation_id,activation_id:'worker-activation',source_cut:advance?{...history,read:{...history.read,journal:'1001',ledger_through:'99'},ledger_through:'99'}:history};
+ const message:MessageBlock={id:'frozen-child-message',role:'assistant',content:Array.from({length:32},(_,n)=>({type:'text',text:`Historical paragraph ${n}`}))};
+ const frontier={domain:'messages.ledger:17.blocks',revision:'1',total:'33',loaded:'32',next_offset:'32'};
+ const page={source_cut:history,entries:[{cursor:'17',item:{type:'message' as const,message}}],collections:[frontier]};
+ server.handlers.set('conversation/checkpointPage',request=>{
+  if(request.method!=='conversation/checkpointPage')throw Error('page');
+  expect(request.params).toMatchObject({agent_id:'worker',cut:{conversation_id:history.read.conversation_id,activation_id:'worker-activation',revision:'0',through:history.read.journal,source_cut:history,domain_revisions:{},collection_cuts:{}},offset:32});
+  return {type:'checkpoint_page',page:{read_cut:request.params.cut,cursor:'0',domain:request.params.domain,total:'33',next_offset:null,collections:[],items:[{offset:'32',identity:'text',value:{type:'text',text:'Original C0 historical suffix'},content:[],deferred:false}]}};
+ });
+ const ui=render(<JournalSourceProvider historical source={{client:server.client,target:server.target('A'),agentId:'worker',cut:()=>live,owned:()=>true}} messages={[message]} transcript={page} history={page}><AgentTranscript snapshot={{...base,messages:[message],transcript:page}} history={{epoch:1,page}}/></JournalSourceProvider>);
+ await ui.findByText('Original C0 historical suffix');
+ expect(ui.queryByRole('alert')).toBeNull();
+ expect(server.requests.filter(row=>row.request.method==='conversation/checkpointPage')).toHaveLength(1);
+ expect(server.requests.filter(row=>row.request.method==='session/historyPage')).toHaveLength(0);
+});
