@@ -5220,7 +5220,13 @@ fn bootstrap_live_projection(
     if seed.source_failure.is_none()
         && let Some(cut) = seed.observation_cut.clone()
     {
-        if let Err(error) = projection.initialize_descriptor_heads(store, cut) {
+        let initialized = durable_bootstrap::read_latest_compaction(store, &cut)
+            .map_err(RuntimeClientError::observation_store_error)
+            .and_then(|compaction| {
+                projection.bootstrap_compaction(compaction);
+                projection.initialize_descriptor_heads(store, cut)
+            });
+        if let Err(error) = initialized {
             projection.mark_observation_unavailable(format!("{error:?}"));
         } else {
             projection.initialize_read_domains(store);

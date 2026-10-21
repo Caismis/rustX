@@ -124,8 +124,11 @@ async fn complete_history_turn(runtime: &ConversationRuntime) {
     let notification = settled.notified();
     tokio::pin!(notification);
     notification.as_mut().enable();
+    // Exceed the default recent-history budget. A successor turn can then
+    // retire the previous retained tail instead of replacing only the same
+    // tiny summary with the fixture's identical response and making no progress.
     runtime
-        .submit_inbound(input(&"important history for a real Summary ".repeat(256)))
+        .submit_inbound(input(&"important history for a real Summary ".repeat(1024)))
         .unwrap();
     notification.await;
     loop {
@@ -158,6 +161,17 @@ fn compaction_receipt(
         panic!("native success retains the invocation's complete receipt");
     };
     receipt
+}
+
+fn assert_compaction_snapshot(
+    client: &ManagedRuntimeClient,
+    expected: Option<&crate::runtime_client::snapshot::RuntimeClientCompactionView>,
+    count: u64,
+) {
+    let context = client.checkpoint().unwrap().snapshot.context;
+    assert_eq!(context.latest_compaction.as_ref(), expected);
+    assert_eq!(context.compaction_count, count);
+    assert!(!context.compaction_in_progress);
 }
 
 /// Assert the composed ownership chain, not just counts: one operation owns one
@@ -407,16 +421,7 @@ async fn committed_summary_reply_loss_and_cold_successor_preserve_exact_receipt_
                 .unwrap()
                 .unwrap();
             assert_eq!(recovered, native_receipt);
-            assert_eq!(
-                successor
-                    .client()
-                    .checkpoint()
-                    .unwrap()
-                    .snapshot
-                    .context
-                    .latest_compaction,
-                Some(a.clone())
-            );
+            assert_compaction_snapshot(&successor.client(), Some(&a), 1);
             assert_eq!(f.provider.request_bodies().len(), 2);
 
             // B is a real new compaction after cold load, not a synthetic
@@ -437,6 +442,7 @@ async fn committed_summary_reply_loss_and_cold_successor_preserve_exact_receipt_
             assert_eq!(b.generation, 2);
             assert_ne!(b.checkpoint_id, a.checkpoint_id);
             assert_ne!(b.activation_id, a.activation_id);
+            assert_compaction_snapshot(&next_client, Some(&b), 2);
             let after_b = journal(&current);
             assert_eq!(&after_b[..original.len()], original.as_slice());
             assert_one_summary_chain(&after_b[original.len()..], true);
@@ -450,6 +456,11 @@ async fn committed_summary_reply_loss_and_cold_successor_preserve_exact_receipt_
                 after_b,
                 "delivery/drain append no replay facts"
             );
+            // A second cold load keeps B's identity. The client statistic
+            // counts its one seeded completion, not the durable generation.
+            let reloaded = f.load(0).await.unwrap().unwrap();
+            assert_compaction_snapshot(&reloaded.client(), Some(&b), 1);
+            assert_eq!(journal(&reloaded.inspect_runtime().unwrap()), after_b);
             assert_eq!(
                 f.provider.request_bodies().len(),
                 4,
@@ -522,16 +533,7 @@ async fn lost_summary_reply_does_not_block_unload_cancellation_or_replay_after_c
                 .is_none()
         );
         assert_eq!(current.historical_canonical_history().unwrap(), canonical);
-        assert_eq!(
-            successor
-                .client()
-                .checkpoint()
-                .unwrap()
-                .snapshot
-                .context
-                .compaction_count,
-            0
-        );
+        assert_compaction_snapshot(&successor.client(), None, 0);
         release.send(()).unwrap();
         // Draining the reactivated owner proves there is no hidden resumed Call.
         f.manager.unload(&id).await.unwrap();

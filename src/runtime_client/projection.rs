@@ -2219,9 +2219,15 @@ impl RuntimeClientProjection {
         self.snapshot.todos.clone_from(&seed.todos);
         self.snapshot.goal.clone_from(&seed.goal);
         self.snapshot.model_status = Some(seed.model.status());
-        // An inactive runtime has never admitted an attempt, composed an
-        // Agent Status, or compacted, so `attempt`, `statuses`, and
-        // `context` keep their empty initial values by construction.
+        // This inactive allocation has no live attempt, Agent Status, or
+        // compaction owner. The host separately seeds committed compaction
+        // metadata from the same durable bootstrap cut.
+    }
+
+    /// Seeds the latest committed completion without publishing a live transition.
+    pub(crate) fn bootstrap_compaction(&mut self, compaction: Option<RuntimeClientCompactionView>) {
+        self.snapshot.context.compaction_count = u64::from(compaction.is_some());
+        self.snapshot.context.latest_compaction = compaction;
     }
 
     /// Installs constructor-prepared finite historical readings without a live cursor.

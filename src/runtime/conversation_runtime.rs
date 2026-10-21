@@ -7115,10 +7115,11 @@ impl std::error::Error for RuntimeBootstrapError {}
 /// immutable view; the Runtime Client layer owns the translation into its
 /// snapshot read model.
 ///
-/// There is deliberately no attempt / Agent Status / compaction field: a
-/// runtime binds its Runtime Client host while inactive, so no attempt has
-/// ever run, no status has been composed, and no compaction has occurred.
-/// Every one of those facts arrives through the live observation stream.
+/// There is deliberately no live attempt / Agent Status / compaction owner
+/// field: this allocation binds its Runtime Client host while inactive and
+/// has admitted none of them. The client separately reads committed historical
+/// compaction metadata at `observation_cut`; later transitions arrive through
+/// the live observation stream.
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeBootstrapSnapshot {
     pub observation_cut: Option<crate::durable::observation::ObservationReadCut>,

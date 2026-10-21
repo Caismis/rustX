@@ -681,7 +681,7 @@ async fn rejected_frozen_authority_never_starts_a_call_or_leaks_native_reservati
             0 => fixture.frozen.start.call_id = AuxiliaryCallId::generate(),
             1 => {
                 fixture.frozen.start.semantic_input_fingerprint =
-                    AuxiliaryFingerprint::new("0".repeat(64)).unwrap()
+                    AuxiliaryFingerprint::new("0".repeat(64)).unwrap();
             }
             2 => fixture.frozen.resource_revision += 1,
             3 => fixture.frozen.request.invocation.model = "another-model".into(),
