@@ -452,14 +452,24 @@ semantic input are checked before durable start. Context owns transcript
 construction, Summary acceptance and the checkpoint transaction.
 
 An admitted Call creates at most one native owner thread and one serialized
-write thread. Thirty-two live Calls therefore create at most 64 such threads,
-plus one process-owned reaper. The write thread performs exact confirmation
-after a write exits; the owner joins that real thread, then the reaper joins
-the real owner thread. Completed owners alone enter the bounded reaper
-channel, so a stuck write cannot block other Calls' cleanup there. No
-provider-execution waiting queue or extra join-offloading pool is used.
-Capacity is released only after these joins and confirmed obligations or a
-proven-exited handoff of the exact intent to native durability failure.
+write thread. Before the first owner is spawned, the process installs a fixed
+pool of 32 retirement workers, matching the shared Call limit. Thus 32 live
+Calls plus process retirement use at most 96 auxiliary threads. Conversations
+that never submit a Call create no retirement threads. Partial pool startup
+failure closes its channel and joins every worker already created before
+refusing submission; no physical execution starts without retirement capacity.
+
+The write thread performs exact confirmation; the owner joins that thread,
+then a retirement worker joins the actual owner, including its thread-local
+destructors ([the Rust join contract](https://doc.rust-lang.org/std/thread/struct.JoinHandle.html#method.join)).
+Handoff is not exit proof. A worker releases the shared receiver mutex before
+joining, so an unexited owner occupies only its own retirement worker and
+retains its Call permits while unrelated Conversations retire independently.
+The channel holds at most 32 records, and existing Call permits bound all
+queued/in-progress retirement; cleanup obtains no fresh execution permit.
+No provider-execution waiting queue or unbounded join-offloading backlog is
+used. Capacity is released only after actual joins and confirmed obligations
+or a proven-exited handoff of the exact intent to native durability failure.
 
 `model::assembly` supplies canonical event/block validation to Agent and
 auxiliary consumers. Its text-only entry validates reasoning/continuation

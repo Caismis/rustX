@@ -4,6 +4,9 @@ use std::sync::{Arc, OnceLock};
 
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
+/// Shared bound for physical Calls, required writers and independent retirement.
+pub(super) const PROCESS_CALL_LIMIT: usize = 32;
+
 /// The precise nonblocking reservation that refused admission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CapacityDomain {
@@ -41,9 +44,9 @@ impl ProcessCapacity {
     #[must_use]
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
-            total: Arc::new(Semaphore::new(32)),
+            total: Arc::new(Semaphore::new(PROCESS_CALL_LIMIT)),
             general: Arc::new(Semaphore::new(24)),
-            writers: Arc::new(Semaphore::new(32)),
+            writers: Arc::new(Semaphore::new(PROCESS_CALL_LIMIT)),
         })
     }
 

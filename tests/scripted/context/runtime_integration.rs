@@ -2630,88 +2630,128 @@ async fn no_progress_compaction_fails_without_retry() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines)] // One matrix preserves the same native admission gate across trigger, reason and saturation.
 async fn cancellation_winning_summary_admission_is_not_a_compaction_failure() {
-    for (reason, overflow) in [
-        (CancellationReason::UserRequested, false),
-        (CancellationReason::UserRequested, true),
-        (CancellationReason::RuntimeShutdown, false),
-        (CancellationReason::RuntimeShutdown, true),
-    ] {
-        let model = fake_model(if overflow {
-            vec![vec![
-                FakeStep::Emit(started()),
-                FakeStep::Emit(overflow_event()),
-            ]]
-        } else {
-            Vec::new()
-        });
-        let cancellation = AgentCancellation::new(reason);
-        let policy = crate::scripted_suites::support::default_execution_policy();
-        let request = request(
-            "cancel-summary-admission",
-            vec![user("history", "history")],
-            1,
-            &model,
-        );
-        let mut context = runtime_with(
-            if overflow { 5_000 } else { 50 },
-            0,
-            0,
-            weighted(100, 10, 0),
-            FakeContextSummarizer::new(Vec::new()),
-        );
-        context.summarizer = Arc::new(rustx::context::ModelBackedSummarizer::new(
-            request.model.summary_invocation().clone(),
-            policy.model_timeout_policy,
-            policy.monotonic_clock.clone(),
-        ));
-        let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
-        let capability = common::capability_lease(ToolRegistry::new(), &tool_runtime).await;
-        let mut execution = AgentExecution::new(
-            request,
-            capability.into_lease(),
-            &cancellation,
-            policy,
-            context,
-            &tool_runtime,
-            rustx::agent::AttemptLifecycle::inert(),
-        )
-        .unwrap();
-        let gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
-        let _release = gate.arm_scoped();
-        execution.install_compaction_admission_gate(gate.clone());
-        let cancel = cancellation.clone();
-        let controller = tokio::task::spawn_blocking(move || {
-            gate.wait_entered();
-            cancel.cancel();
-            gate.release();
-        });
-        let result = common::durable_agent_result(
-            execution.run().await,
-            tool_runtime.durable_store().as_ref(),
-        );
-        controller.await.unwrap();
-        assert_eq!(result.outcome, AttemptOutcome::Cancelled { reason });
-        assert!(
-            result
-                .event_history
-                .iter()
-                .any(|event| matches!(event, RuntimeEvent::CompactionStarted { .. }))
-        );
-        assert!(!result.event_history.iter().any(|event| matches!(
-            event,
-            RuntimeEvent::CompactionFailed { .. } | RuntimeEvent::AttemptFailed { .. }
-        )));
-        assert!(matches!(
-            result.event_history.last(),
-            Some(RuntimeEvent::AttemptCancelled { .. })
-        ));
-        assert_eq!(
-            model.requests().len(),
-            usize::from(overflow),
-            "cancellation prevents Summary dispatch and any subsequent primary dispatch"
-        );
-        assert_no_compaction_committed(&result);
+    for saturated in [false, true] {
+        for (reason, overflow) in [
+            (CancellationReason::UserRequested, false),
+            (CancellationReason::UserRequested, true),
+            (CancellationReason::RuntimeShutdown, false),
+            (CancellationReason::RuntimeShutdown, true),
+        ] {
+            let model = fake_model(if overflow {
+                vec![vec![
+                    FakeStep::Emit(started()),
+                    FakeStep::Emit(overflow_event()),
+                ]]
+            } else {
+                Vec::new()
+            });
+            let cancellation = AgentCancellation::new(reason);
+            let policy = crate::scripted_suites::support::default_execution_policy();
+            let request = request(
+                "cancel-summary-admission",
+                vec![user("history", "history")],
+                1,
+                &model,
+            );
+            let mut context = runtime_with(
+                if overflow { 5_000 } else { 50 },
+                0,
+                0,
+                weighted(100, 10, 0),
+                FakeContextSummarizer::new(Vec::new()),
+            );
+            context.summarizer = Arc::new(rustx::context::ModelBackedSummarizer::new(
+                request.model.summary_invocation().clone(),
+                policy.model_timeout_policy,
+                policy.monotonic_clock.clone(),
+            ));
+            let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
+            let capacity = crate::runtime::auxiliary::capacity::ProcessCapacity::new();
+            let lifecycle = crate::runtime::types::ConversationLifecycle::new();
+            assert!(lifecycle.activate());
+            let backend = crate::runtime::auxiliary::executor::AuxiliaryExecutor::new(
+                tool_runtime.durable_store().clone(),
+                Arc::new(crate::runtime::types::SystemClock),
+                policy.monotonic_clock.clone(),
+                lifecycle,
+                Arc::new(crate::runtime::types::DurabilityGate::new()),
+                capacity.conversation(),
+            )
+            .unwrap();
+            context
+                .summarizer
+                .bind_backend(Arc::new(backend), context.resource_revision.get());
+            let capability = common::capability_lease(ToolRegistry::new(), &tool_runtime).await;
+            let mut execution = AgentExecution::new(
+                request,
+                capability.into_lease(),
+                &cancellation,
+                policy,
+                context,
+                &tool_runtime,
+                rustx::agent::AttemptLifecycle::inert(),
+            )
+            .unwrap();
+            let gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
+            let _release = gate.arm_scoped();
+            execution.install_compaction_admission_gate(gate.clone());
+            let cancel = cancellation.clone();
+            let controller = tokio::task::spawn_blocking(move || {
+                gate.wait_entered();
+                let mut held = Vec::new();
+                if saturated {
+                    for _ in 0..8 {
+                        let domain = capacity.conversation();
+                        for _ in 0..4 {
+                            held.push(domain.reserve_compaction().unwrap());
+                        }
+                    }
+                }
+                cancel.cancel();
+                gate.release();
+                held
+            });
+            let result = common::durable_agent_result(
+                execution.run().await,
+                tool_runtime.durable_store().as_ref(),
+            );
+            let _held = controller.await.unwrap();
+            assert_eq!(result.outcome, AttemptOutcome::Cancelled { reason });
+            assert!(
+                result
+                    .event_history
+                    .iter()
+                    .any(|event| matches!(event, RuntimeEvent::CompactionStarted { .. }))
+            );
+            assert!(!result.event_history.iter().any(|event| matches!(
+                event,
+                RuntimeEvent::CompactionFailed { .. } | RuntimeEvent::AttemptFailed { .. }
+            )));
+            assert!(matches!(
+                result.event_history.last(),
+                Some(RuntimeEvent::AttemptCancelled { .. })
+            ));
+            assert_eq!(
+                model.requests().len(),
+                usize::from(overflow),
+                "cancellation prevents Summary dispatch and any subsequent primary dispatch"
+            );
+            assert_no_compaction_committed(&result);
+            let journal = tool_runtime.durable_store().read_events(None, 32).unwrap();
+            assert!(
+                !journal.events.iter().any(|event| matches!(
+                    event.event,
+                    RuntimeEvent::AuxiliaryCallStarted { .. }
+                        | RuntimeEvent::ModelRequestStarted {
+                            owner: rustx::model::ModelRequestOwner::Auxiliary { .. },
+                            ..
+                        }
+                )),
+                "cancelled admission creates no Summary Call or Request start"
+            );
+        }
     }
 }
 

@@ -1,6 +1,6 @@
 # Auxiliary request facts and inspection
 
-Auxiliary execution shares the physical model-request Journal with Agent execution. The native Runtime will own execution in AUX-02; this layer supplies the synchronous Store transitions and bounded inspection contract. It does not schedule inference, retain generated auxiliary output, or make historical Calls runnable after restart.
+Auxiliary execution shares the physical model-request Journal with Agent execution. Native Runtime owns supervised execution and physical cleanup; Store supplies synchronous transitions and bounded inspection. Durable audit does not retain generated auxiliary output or make historical Calls runnable after restart.
 
 ## Identity and authority
 
@@ -96,10 +96,15 @@ The checkpoint names the confirmed local Call at its exact settlement Journal
 cut. No input body, generated output, credentials or logical budget is copied
 into auxiliary audit metadata.
 
-Each live Call owns at most one owner thread and one serialized write thread;
-one process reaper joins completed owners. At full capacity this is at most
-65 auxiliary threads. Actual write/confirmation and owner joins precede
-resource release. Unresolved exact intent moves to the native failed-durability
+Each live Call owns at most one owner thread and one serialized write thread.
+Before the first physical owner starts, 32 process-owned retirement workers
+are installed, independently joining up to the existing 32 admitted Calls.
+The global bound is 96 auxiliary threads; queued retirement records remain
+bounded at 32 and cleanup reserves no new execution permit. A record handed
+off before its owner physically exits retains its real join and permits;
+that join cannot prevent another Conversation from delivering confirmed work
+and releasing its own allocation. Actual write/confirmation and owner joins
+precede resource release. Unresolved exact intent moves to the native failed-durability
 owner only after physical exit; historical uncertainty does not pin global
 capacity indefinitely. Live/unproven cleanup retains its old allocation.
 

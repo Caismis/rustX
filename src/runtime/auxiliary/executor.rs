@@ -20,7 +20,7 @@ use crate::runtime::types::{
     LifecycleAdmission, RuntimeClock,
 };
 
-use super::capacity::{CallPermit, ConversationCapacity};
+use super::capacity::{CallPermit, ConversationCapacity, PROCESS_CALL_LIMIT};
 use super::stream::{AuxiliaryTextOutput, SealedExecution};
 use super::writer::JoinedAuxiliaryWriter;
 
@@ -41,7 +41,6 @@ pub(super) struct ExecutorInner {
     capacity: ConversationCapacity,
     state: Mutex<RegistryState>,
     changed: Notify,
-    reaper: mpsc::SyncSender<Arc<CallRecord>>,
 }
 
 pub(super) struct ExecutionResources {
@@ -93,7 +92,6 @@ struct RecordState {
 pub(super) struct CallRecord {
     pub executor: Arc<ExecutionResources>,
     registry: Weak<ExecutorInner>,
-    reaper: mpsc::SyncSender<Arc<CallRecord>>,
     pub scope: Arc<AuxiliaryScope>,
     pub call_id: AuxiliaryCallId,
     pub request_id: RequestId,
@@ -206,7 +204,6 @@ impl AuxiliaryExecutor {
             capacity,
             state: Mutex::default(),
             changed: Notify::new(),
-            reaper: process_reaper()?,
         })))
     }
 
@@ -248,12 +245,28 @@ impl AuxiliaryExecutor {
                 "auxiliary operation uses another monotonic clock domain",
             ));
         }
-        let permit = (if compaction {
+        let permit = match if compaction {
             self.0.capacity.reserve_compaction()
         } else {
             self.0.capacity.reserve_general()
-        })
-        .map_err(|busy| ContextError::new(ContextErrorKind::AuxiliaryBusy, busy.to_string()))?;
+        } {
+            Ok(permit) => permit,
+            Err(busy) => {
+                // Refusal has the same cancellation ordering as successful
+                // registration. Saturation cannot turn an earlier cancellation
+                // into a business failure, and active callers still get Busy.
+                return scope
+                    .cancellation
+                    .with_active(|| {
+                        scope.budget.check(&scope.cancellation)?;
+                        Err(ContextError::new(
+                            ContextErrorKind::AuxiliaryBusy,
+                            busy.to_string(),
+                        ))
+                    })
+                    .unwrap_or_else(|| Err(closed()));
+            }
+        };
         self.0
             .resources
             .durability
@@ -275,7 +288,6 @@ impl AuxiliaryExecutor {
                                 let record = Arc::new(CallRecord {
                                     executor: self.0.resources.clone(),
                                     registry: Arc::downgrade(&self.0),
-                                    reaper: self.0.reaper.clone(),
                                     scope: scope.clone(),
                                     call_id: call_id.clone(),
                                     request_id: RequestId::new(format!(
@@ -420,6 +432,9 @@ impl AuxiliaryReservation {
             ));
         }
         record.scope.budget.check(&record.cancellation)?;
+        // Provision bounded retirement before starting any physical work.
+        // Conversations that never submit a Call create no reaper threads.
+        let reaper = process_reaper()?;
         let (sender, receiver) = oneshot::channel();
         let (release, admitted) = mpsc::sync_channel(1);
         *lock(&record.completion) = Some(sender);
@@ -456,7 +471,6 @@ impl AuxiliaryReservation {
                         .map(super::writer::AuxiliaryWriter::join);
                 }
                 *lock(&owned.exit) = Some(exit);
-                let reaper = owned.reaper.clone();
                 // At most 32 admitted Calls can await reaping. This bounded
                 // cleanup channel is never a provider execution waiting queue.
                 let _ = reaper.send(owned);
@@ -642,30 +656,51 @@ impl CallRecord {
 fn process_reaper() -> Result<mpsc::SyncSender<Arc<CallRecord>>, ContextError> {
     struct ProcessReaper {
         sender: mpsc::SyncSender<Arc<CallRecord>>,
-        _worker: std::thread::JoinHandle<()>,
+        _workers: Vec<std::thread::JoinHandle<()>>,
     }
     static REAPER: OnceLock<Mutex<Option<ProcessReaper>>> = OnceLock::new();
     let mut installed = lock(REAPER.get_or_init(Mutex::default));
     if let Some(reaper) = installed.as_ref() {
         return Ok(reaper.sender.clone());
     }
-    let (sender, incoming) = mpsc::sync_channel::<Arc<CallRecord>>(32);
-    let worker = std::thread::Builder::new()
-        .name("auxiliary-reaper".into())
-        .spawn(move || {
-            while let Ok(record) = incoming.recv() {
-                record.reap();
+    let (sender, incoming) = mpsc::sync_channel::<Arc<CallRecord>>(PROCESS_CALL_LIMIT);
+    let incoming = Arc::new(Mutex::new(incoming));
+    let mut workers: Vec<std::thread::JoinHandle<()>> = Vec::with_capacity(PROCESS_CALL_LIMIT);
+    // Every admitted Call can retain an independent actual join without
+    // waiting for another Call's physical exit. The same 32-Call capacity
+    // bounds these permanent process workers and all queued records.
+    for index in 0..PROCESS_CALL_LIMIT {
+        let incoming = incoming.clone();
+        let worker = std::thread::Builder::new()
+            .name(format!("auxiliary-reaper-{index}"))
+            .spawn(move || {
+                loop {
+                    // Release the receiver lock before joining: holding it during
+                    // reap would recreate process-wide head-of-line blocking.
+                    let next = { lock(&incoming).recv() };
+                    let Ok(record) = next else {
+                        return;
+                    };
+                    record.reap();
+                }
+            });
+        match worker {
+            Ok(worker) => workers.push(worker),
+            Err(error) => {
+                drop(sender);
+                for worker in workers {
+                    let _ = worker.join();
+                }
+                return Err(ContextError::new(
+                    ContextErrorKind::AuxiliaryNotStarted,
+                    format!("cannot start auxiliary reaper: {error}"),
+                ));
             }
-        })
-        .map_err(|error| {
-            ContextError::new(
-                ContextErrorKind::AuxiliaryNotStarted,
-                format!("cannot start auxiliary reaper: {error}"),
-            )
-        })?;
+        }
+    }
     *installed = Some(ProcessReaper {
         sender: sender.clone(),
-        _worker: worker,
+        _workers: workers,
     });
     Ok(sender)
 }

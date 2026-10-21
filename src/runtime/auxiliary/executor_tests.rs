@@ -174,9 +174,15 @@ struct Fixture {
 }
 
 fn fixture(script: Script) -> Fixture {
+    fixture_in_process(script, super::super::capacity::ProcessCapacity::new())
+}
+
+fn fixture_in_process(
+    script: Script,
+    process: Arc<super::super::capacity::ProcessCapacity>,
+) -> Fixture {
     let store = Arc::new(SqliteConversationStore::in_memory(ConversationId::generate()).unwrap());
     let clock = Arc::new(ManualMonotonicClock::new());
-    let process = super::super::capacity::ProcessCapacity::new();
     let lifecycle = ConversationLifecycle::new();
     assert!(lifecycle.activate());
     let executor = AuxiliaryExecutor::new(
@@ -806,4 +812,110 @@ async fn adapter_entry_panic_consumes_dispatch_and_preserves_unreported_remote_u
     fixture.scope.wait_closed().await;
     fixture.executor.drain().await;
     assert_eq!(fixture.store.read_events(None, 32).unwrap().events, events);
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[allow(clippy::too_many_lines)] // One held physical owner versus independent retirement in the same saturated process.
+async fn an_unexited_owner_does_not_block_another_conversations_retirement() {
+    use super::super::capacity::{CapacityDomain, ProcessCapacity};
+    use futures_util::FutureExt as _;
+
+    let process = ProcessCapacity::new();
+    let first = fixture_in_process(Script::Complete, process.clone());
+    let second = fixture_in_process(Script::Complete, process.clone());
+    let _close_first = CloseScopeOnDrop(first.scope.clone());
+    let _close_second = CloseScopeOnDrop(second.scope.clone());
+    let first_record = first.reservation.record.clone();
+    let second_record = second.reservation.record.clone();
+    let domains = (0..8).map(|_| process.conversation()).collect::<Vec<_>>();
+    let _held = (0..30)
+        .map(|index| domains[index / 4].reserve_compaction().unwrap())
+        .collect::<Vec<_>>();
+    let probe = process.conversation();
+    assert_eq!(
+        probe.reserve_compaction().unwrap_err().domain,
+        CapacityDomain::ProcessTotal
+    );
+    let (owner_exiting, owner_exit_entered) = oneshot::channel();
+    let (allow_exit, held_exit) = mpsc::channel();
+    let explicitly_released = Arc::new(AtomicBool::new(false));
+    *first.adapter.exit_gate.lock().unwrap() = Some(OwnerExitGate {
+        entered: Some(owner_exiting),
+        release: held_exit,
+        explicitly_released: explicitly_released.clone(),
+    });
+    let mut first_reply = first.reservation.submit(first.frozen).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(10), owner_exit_entered)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(first.executor.drain().now_or_never().is_none());
+    assert!(matches!(
+        first_reply.try_recv(),
+        Err(oneshot::error::TryRecvError::Empty)
+    ));
+    let second_reply = second.reservation.submit(second.frozen).unwrap();
+    let completed = tokio::time::timeout(std::time::Duration::from_secs(10), second_reply)
+        .await
+        .expect("unrelated completed Call must retire before the held owner exits")
+        .unwrap()
+        .unwrap();
+    assert_eq!(completed.output.unwrap().text, "traduit");
+    assert!(
+        lock(&first_record.state).permit.is_some(),
+        "the unexited owner must retain its physical permit"
+    );
+    assert!(lock(&second_record.state).permit.is_none());
+    assert!(
+        lock(&second_record.state).worker.is_none(),
+        "B delivered only after its actual owner join"
+    );
+    assert!(matches!(
+        first_reply.try_recv(),
+        Err(oneshot::error::TryRecvError::Empty)
+    ));
+    let recovered = probe
+        .reserve_compaction()
+        .expect("B released its process allocation independently");
+    assert_eq!(
+        probe.reserve_compaction().unwrap_err().domain,
+        CapacityDomain::ProcessTotal
+    );
+    drop(recovered);
+    second.executor.drain().await;
+    allow_exit.send(()).unwrap();
+    let completed = tokio::time::timeout(std::time::Duration::from_secs(10), first_reply)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(completed.output.unwrap().text, "traduit");
+    first.executor.drain().await;
+    assert!(explicitly_released.load(Ordering::SeqCst));
+    assert!(lock(&first_record.state).worker.is_none());
+    assert!(lock(&first_record.state).permit.is_none());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn saturated_active_admission_remains_busy_until_cancellation_wins() {
+    let fixture = fixture(Script::Complete);
+    let domains = (0..8)
+        .map(|_| fixture.process.conversation())
+        .collect::<Vec<_>>();
+    let _held = (0..31)
+        .map(|index| domains[index / 4].reserve_compaction().unwrap())
+        .collect::<Vec<_>>();
+    let error = fixture
+        .executor
+        .reserve(&fixture.scope)
+        .err()
+        .expect("active saturated admission refuses");
+    assert_eq!(error.kind, ContextErrorKind::AuxiliaryBusy);
+    fixture.scope.cancellation.cancel();
+    let error = fixture
+        .executor
+        .reserve(&fixture.scope)
+        .err()
+        .expect("cancelled saturated admission refuses");
+    assert_eq!(error.kind, ContextErrorKind::Cancelled);
 }
