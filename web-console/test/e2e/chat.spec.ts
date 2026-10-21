@@ -145,12 +145,16 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
 
     await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
+    // Reconnection first exposes a short native head. Wait for initial history
+    // assembly to create a real reading range before testing detached intent.
+    await expect.poll(() => ledger.evaluate(el => el.scrollHeight - el.clientHeight)).toBeGreaterThan(200);
     await expect.poll(() => ledger.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(2);
     await expect(trajectory.locator('[data-request-owner][data-state="running"]').first()).toBeVisible();
     // A reader away from the tail owns their position while live repair runs.
     await ledger.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
     await connectionAction(page, 'Reconnect');
     await expect(page.getByLabel('Transport token')).toHaveCount(0);
+    await expect.poll(() => ledger.evaluate(el => el.scrollHeight - el.clientHeight)).toBeGreaterThan(200);
     await ledger.evaluate(el => { el.scrollTop = el.scrollHeight; el.dispatchEvent(new Event('scroll')); });
     await expect(trajectory.locator('[data-request-owner][data-state="running"]').first()).toBeVisible();
     await ledger.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });

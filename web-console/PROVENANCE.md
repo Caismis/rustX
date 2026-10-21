@@ -3936,3 +3936,9 @@ new tail messages retain their live checkpoint and revision-based error recovery
 Live canonical block counts discover tail continuations without borrowing live
 Tool lifecycle state for historical rows. Regressions cover both short/long old
 messages alongside a long new message, and expired live reads inside a frozen view.
+
+The native Chat acceptance waits for post-reconnect Trace history to create an
+actual scrolling range before asserting detached reading during settlement.
+A short native head at scrollTop zero is still following the tail; passive
+history assembly may correctly move that viewport. The assertion after an
+explicit detached gesture remains exactly scrollTop zero.
