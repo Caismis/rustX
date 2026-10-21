@@ -27,9 +27,10 @@
 //! its typed failure for the same id, one that overlaps it waits for it and is
 //! ordered after it, and accepted bytes are never retracted.
 use super::{
-    connection::{Route, client_error, domain, host_error, manager_error},
+    connection::Route,
     host::AppServerHost,
     protocol::{ErrorData, MethodResult, RequestId, Response, RpcError},
+    rpc_error::{client_error, domain, host_error, manager_error},
 };
 use crate::tools::session_files::SessionFileReadFailure as FileFailure;
 use base64::Engine;
@@ -82,7 +83,7 @@ pub(crate) fn unauthorized() -> RpcError {
 /// A selected read coordinate is independent of the native present authoring limit.
 fn validate_index(index: usize) -> Result<(), RpcError> {
     let index = u64::try_from(index).map_err(|_| domain(ErrorData::InvalidParams))?;
-    if index > crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX {
+    if index > crate::observation::content::CONTENT_SAFE_INTEGER_MAX {
         return Err(domain(ErrorData::InvalidParams));
     }
     Ok(())
@@ -94,7 +95,7 @@ fn validate_index(index: usize) -> Result<(), RpcError> {
 pub(super) async fn request(
     host: AppServerHost,
     route: Arc<Route>,
-    locator: crate::runtime_client::content::CanonicalContentLocator,
+    locator: crate::observation::content::CanonicalContentLocator,
     delivery_index: usize,
     roots: Roots,
     access: Access,
@@ -174,7 +175,7 @@ async fn resolve(
     route: &Arc<Route>,
     authority: &Arc<crate::runtime_client::host::ClientInner>,
     sessions: crate::local_runtime::session_controller::SessionController,
-    locator: crate::runtime_client::content::CanonicalContentLocator,
+    locator: crate::observation::content::CanonicalContentLocator,
     delivery_index: usize,
     roots: Roots,
     access: Access,
@@ -565,7 +566,7 @@ impl Publication {
         });
         match decision {
             Ok(()) => response,
-            Err(error) => super::connection::failure(Some(self.id.clone()), error),
+            Err(error) => super::rpc_error::failure(Some(self.id.clone()), error),
         }
     }
 
@@ -590,7 +591,7 @@ impl Publication {
             let replacement = match self.decide(*state, success) {
                 Ok(()) => None,
                 Err(error) => Some(super::transport::serialize_record(
-                    &super::connection::failure(Some(self.id.clone()), error),
+                    &super::rpc_error::failure(Some(self.id.clone()), error),
                 )?),
             };
             let accepted = ready!(accept(replacement.as_deref().unwrap_or(record)));

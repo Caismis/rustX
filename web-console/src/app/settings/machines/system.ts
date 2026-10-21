@@ -1,5 +1,6 @@
 import { createActor, type Actor, type Subscription } from 'xstate';
-import type { AppServerClient, ClientView } from '../../../client/app-server';
+import type { AppServerClient } from '../../../client/app-server';
+import type { ClientView } from '../../../client/contracts';
 import type { ProductHostWorkspaces } from '../../../workspaces/host';
 import { settingsTargetKey, type SettingsTarget } from '../projection';
 import { createConfigurationPort } from './port';

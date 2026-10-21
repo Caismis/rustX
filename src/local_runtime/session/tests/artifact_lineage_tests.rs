@@ -1,7 +1,11 @@
 //! Artifact copying preserves the same immutable native history as an ordinary copy.
 use super::*;
-use crate::durable::inbox::{InboundDraft, LineageSeed};
+use crate::durable::AuxiliaryStore;
 use crate::durable::reading::{ConversationWindowAt, InheritedTurnOutcome};
+use crate::durable::{
+    CanonicalStore, InboxStore, JournalStore, ObservationStore, ProjectionStore, RequestStore,
+};
+use crate::durable::{InboundDraft, LineageSeed};
 use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
 use crate::message::content::FileReference;
 use crate::model::finish::ModelFinishReason;
@@ -1150,7 +1154,7 @@ fn verify_copy(copy: &PreparedLineage, expected: &LineageSeed, artifact: bool, c
             assert_eq!(window.target.as_ref(), Some(&turn.id));
             assert_eq!(window.target_cursor, turn.cursor);
             let mut page =
-                crate::runtime_client::snapshot::transcript_page_view(window.page).unwrap();
+                crate::observation::transcript::transcript_page_view(window.page).unwrap();
             crate::runtime_client::response::native_oracle_decorate(&store, &mut page).unwrap();
             let process = page.entries[0].turn_process.as_ref().unwrap();
             assert_eq!(

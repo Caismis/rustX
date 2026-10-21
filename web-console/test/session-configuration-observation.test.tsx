@@ -7,7 +7,7 @@ import { SessionConfiguration } from '../src/app/SessionConfiguration';
 import type { AdoptionEligibility, ConfigurationApplication, RuntimeClientEvent } from '../../protocol/app-server/v51';
 import { cfg3Application } from './cfg3-data';
 import { Server, snapshot } from './fixture';
-import { RpcFailure } from '../src/client/app-server';
+import { RpcFailure } from '../src/client/errors';
 import { sameValue, selectShell, useClientSelector } from '../src/client/selectors';
 afterEach(cleanup);
 const servers: Server[] = [];

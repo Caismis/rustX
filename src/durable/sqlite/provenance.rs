@@ -1,8 +1,8 @@
 //! Immutable bootstrap records and exact canonical Assistant membership.
 use super::{
     Connection, ConversationStoreError, Digest, LineageSeed, MessageBlock, MessageId,
-    OptionalExtension, Sha256, decode, encode, params, read_inherited_occupancy, seq_to_i64,
-    storage,
+    OptionalExtension, Sha256, canonical::read_inherited_occupancy, decode, encode, params,
+    seq_to_i64, storage,
 };
 use crate::durable::reading::TurnReadingProvenance;
 use crate::durable::response::CompletedResponseProvenance;
@@ -73,7 +73,7 @@ pub(super) fn write_turn_header<T: serde::Serialize>(
         [ordinal], |row| row.get(0),
     ).map_err(|error| storage(error.to_string()))?;
     let native = native.ok_or_else(|| storage("native turn digest unavailable"))?;
-    let bytes = crate::runtime_client::checkpoint::bounded_bytes(
+    let bytes = crate::observation::bounded::bounded_bytes(
         &CapturedTurnHeader {
             ordinal,
             payload_digest: &native,
@@ -340,7 +340,7 @@ pub(super) fn persist(
         let _ = super::optional_display_layout(connection, || {
             super::observation_identity::capture(
                 connection,
-                crate::runtime_client::response::InheritedAttemptIdentityKind::Turn,
+                crate::observation::turn::InheritedAttemptIdentityKind::Turn,
                 u64::try_from(ordinal).map_err(|_| storage("negative inherited ordinal"))?,
                 &turn.id.attempt_id,
             )
@@ -377,7 +377,7 @@ pub(super) fn persist(
         let _ = super::optional_display_layout(connection, || {
             super::observation_identity::capture(
                 connection,
-                crate::runtime_client::response::InheritedAttemptIdentityKind::Response,
+                crate::observation::turn::InheritedAttemptIdentityKind::Response,
                 u64::try_from(ordinal).map_err(|_| storage("negative inherited ordinal"))?,
                 &response.origin.attempt_id,
             )?;
@@ -771,7 +771,7 @@ pub(super) fn verify_seed_membership(
 }
 
 fn display_bytes(value: &impl serde::Serialize) -> Result<Vec<u8>, ConversationStoreError> {
-    crate::runtime_client::checkpoint::bounded_bytes(
+    crate::observation::bounded::bounded_bytes(
         value,
         crate::durable::observation::HEADER_ENCODED_MAX,
     )

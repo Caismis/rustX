@@ -890,7 +890,7 @@ tokens = 1024
             "mcp_tool_policies = {}",
         ] {
             for workspace in [false, true] {
-                super::super::configuration::parse_layer(
+                super::super::configuration::capture::parse_layer(
                     std::path::Path::new("rustx.toml"),
                     text.as_bytes(),
                     workspace,
@@ -905,7 +905,7 @@ tokens = 1024
         ] {
             for workspace in [false, true] {
                 assert!(
-                    super::super::configuration::parse_layer(
+                    super::super::configuration::capture::parse_layer(
                         std::path::Path::new("rustx.toml"),
                         text.as_bytes(),
                         workspace

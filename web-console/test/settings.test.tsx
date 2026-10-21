@@ -6,7 +6,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { TextField } from '../src/app/settings/forms/controls';
 import { UnitForm } from '../src/app/settings/forms/bridge';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
-import { OutcomeUncertain, RpcFailure } from '../src/client/app-server';
+import { OutcomeUncertain, RpcFailure } from '../src/client/errors';
 import { cfg3Application, cfg3Source } from './cfg3-data';
 import {
   confirmAction, openResourceRow, openSettingsPage, renderEditor, sameRevision,

@@ -1,5 +1,6 @@
 import { useState, useSyncExternalStore } from 'react';
-import { AppServerClient, RpcFailure } from '../../client/app-server';
+import { AppServerClient } from '../../client/app-server';
+import { RpcFailure } from '../../client/errors';
 import type { Observation } from '../../client/session-lifecycle/port';
 import { message as uiMessage, type DisplayText } from '../../locale/translation';
 

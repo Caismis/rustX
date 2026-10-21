@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { App } from '../src/app/App';
-import { RpcFailure } from '../src/client/app-server';
+import { RpcFailure } from '../src/client/errors';
 import { Server, endpoint, snapshot } from './fixture';
 let server: Server;
 beforeEach(() => { localStorage.clear(); server = new Server(); });

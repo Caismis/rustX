@@ -153,7 +153,7 @@ pub enum ConversationWindowAt {
     },
     /// Finite immutable canonical locator; absent cut captures native facts.
     Canonical {
-        locator: crate::runtime_client::content::CanonicalContentLocator,
+        locator: crate::observation::content::CanonicalContentLocator,
         cut: Option<ConversationReadCut>,
     },
     /// Exact canonical message position; absent cut captures current native facts.
@@ -268,7 +268,7 @@ impl From<InheritedTurnOutcome> for TurnProcessOutcome {
 /// may retain a newer outcome; later source activity cannot change captured (R, C).
 #[derive(Debug, Clone, PartialEq)]
 pub struct LineageReadCut {
-    pub raw_tool_arguments: Vec<super::inbox::CanonicalRawToolArguments>,
+    pub raw_tool_arguments: Vec<super::CanonicalRawToolArguments>,
     /// Only auxiliary Calls explicitly named by retained checkpoints.
     pub auxiliary_audits: Vec<AuxiliaryAuditSnapshot>,
     pub projections: Vec<super::projection::ProjectionCheckpoint>,

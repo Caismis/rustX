@@ -1,51 +1,13 @@
 //! Durable Session selection has one owner across every native client handle.
 #![allow(clippy::large_futures)]
 
+use super::model_selection::{assert_authority, selection};
 use super::*;
 use crate::local_runtime::configuration::settings::SourceTarget;
-use crate::model::catalog::ModelRef;
-use crate::model::session::SessionModelConfig;
 use crate::runtime::conversation_runtime::ModelUpdateError;
 use crate::runtime_client::{
     RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientError, RuntimeClientRequest,
 };
-
-fn selection(model: &str) -> SessionModelConfig {
-    SessionModelConfig::of(ModelRef::parse(model).unwrap())
-}
-
-async fn assert_authority(f: &Fixture, expected: &SessionModelConfig) {
-    let id = &f.sessions[0].id;
-    let (_, settings) = f.manager.sessions.read_settings(id).await.unwrap();
-    assert_eq!(settings.model.as_ref(), Some(expected));
-    let reopened = crate::local_runtime::session::SessionCatalog::open_existing(&f.archive_root)
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        reopened.lineage(id, None).unwrap().1.model.as_ref(),
-        Some(expected)
-    );
-    let retained = f.manager.sessions.configuration_bindings.lock().unwrap()[id].clone();
-    let runtime = f.manager.configuration_runtime(id).unwrap();
-    assert_eq!(retained.session_model(), expected);
-    assert_eq!(runtime.model_view().configured, *expected);
-    assert_eq!(
-        runtime.configuration_view().unwrap().adopted_binding,
-        retained.binding_revision
-    );
-    assert_eq!(
-        f.manager
-            .configuration_host(id)
-            .unwrap()
-            .checkpoint()
-            .unwrap()
-            .snapshot
-            .model
-            .unwrap()
-            .configured,
-        *expected
-    );
-}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn session_owned_model_selection_rejects_runtime_client_bypass_without_divergence() {
@@ -74,7 +36,11 @@ async fn session_owned_model_selection_rejects_runtime_client_bypass_without_div
         let binding = retained();
         let resources = runtime.runtime_resources();
         let view = runtime.model_view();
-        let configuration = runtime.configuration_view().unwrap();
+        let configuration =
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime,
+            )
+            .unwrap();
         let application = f.manager.configuration_application(id);
         let checkpoint = host.checkpoint().unwrap();
         let (projection, cursor) = (checkpoint.snapshot, checkpoint.cursor);
@@ -111,7 +77,13 @@ async fn session_owned_model_selection_rejects_runtime_client_bypass_without_div
         assert_eq!(retained(), binding);
         assert!(Arc::ptr_eq(&runtime.runtime_resources(), &resources));
         assert_eq!(runtime.model_view(), view);
-        assert_eq!(runtime.configuration_view().unwrap(), configuration);
+        assert_eq!(
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime
+            )
+            .unwrap(),
+            configuration
+        );
         assert_eq!(f.manager.configuration_application(id), application);
         let checkpoint = host.checkpoint().unwrap();
         assert_eq!(

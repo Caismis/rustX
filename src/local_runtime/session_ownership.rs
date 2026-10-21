@@ -1,5 +1,6 @@
 //! Native Session/Conversation ownership facts shared by inspection and deletion.
 //! One global identity map, derived only under the product ownership freeze.
+use crate::durable::JournalStore;
 use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
 

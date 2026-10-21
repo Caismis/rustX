@@ -3,7 +3,10 @@ import { useTranslation, useNotice } from '../../locale/react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { sourceObservation } from '../../../../protocol/app-server/source-observation';
 import type { SourceFieldPage, CheckpointPage, ModelCatalogView, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v51';
-import { AppServerClient, isOutcomeUncertain, sameTarget, type SessionView } from '../../client/app-server';
+import { AppServerClient } from '../../client/app-server';
+import { isOutcomeUncertain } from '../../client/errors';
+import type { SessionView } from '../../client/contracts';
+import { sameTarget } from '../../../../protocol/app-server/attachment-identity';
 import type { ModelPickerState } from '../composer/ModelPicker';
 import { ModelSelect } from '../../presentation/agent/ModelSelect';
 import { Toast } from '../../presentation/primitives/Toast';
@@ -20,7 +23,7 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
  const [sourceCatalog,setSourceCatalog] = useState<ModelCatalogView>();
  const [catalogPage,setCatalogPage] = useState<CheckpointPage>();
  const [catalog, setCatalog] = useState<ModelCatalogView>();
- const [originalModel, setOriginalModel] = useState<{scope:object;revision?:string|null;value:Awaited<ReturnType<AppServerClient['modelRead']>>}>();
+ const [originalModel, setOriginalModel] = useState<{scope:object;revision?:string|null;value:Awaited<ReturnType<AppServerClient['reads']['modelRead']>>}>();
  const [busy, setBusy] = useState(false), [error, setError] = useNotice(), [blocked, setBlocked] = useState(true);
  const [selectionError, setSelectionError] = useNotice(), [toastSequence, setToastSequence] = useState(0);
  const root = useRef<HTMLDivElement>(null);
@@ -44,7 +47,7 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
  };
  const read = async (at: number, previous?: CheckpointPage) => {
    if (!target || !current(at)) return;
-     const result = await client.modelCatalogRead(target,()=>current(at),previous);
+     const result = await client.reads.modelCatalogRead(target,()=>current(at),previous);
      if (!current(at)) return;
      const mutation = client.getSnapshot().views[view!.id]?.modelMutation;
      if (mutation && mutation.status !== 'in-flight') await client.repairAgentModel(view!.id);
@@ -52,7 +55,7 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
      const observed = client.getSnapshot().views[view!.id];
      if (observed?.snapshot?.model_status?.body_deferred) {
        const revision = observed.snapshot.model_status.binding_revision;
-       const value = await client.modelRead(target, () => current(at));
+       const value = await client.reads.modelRead(target, () => current(at));
        if (!current(at)) return;
        setOriginalModel({scope,revision,value});
      }
@@ -92,7 +95,7 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
      if (!owns()) return false;
      const observed = client.getSnapshot().views[view!.id].snapshot!;
      const revision = observed.model_status?.binding_revision;
-     const confirmed = observed.model_status?.body_deferred ? await client.modelRead(target!, owns) : observed.model;
+     const confirmed = observed.model_status?.body_deferred ? await client.reads.modelRead(target!, owns) : observed.model;
      if (!owns()) return false;
      if (client.getSnapshot().views[view!.id].snapshot?.model_status?.binding_revision !== revision
        || confirmed?.configured.model !== requested.model || (confirmed.configured.profile ?? undefined) !== (requested.profile ?? undefined))
@@ -149,7 +152,7 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
  const nextSourcePage = source && sourceOffset != null ? async () => {
    if(guard.current)return;const at=epoch.current,sourceAt=sourceEpoch.current,owned=source;guard.current=true;setBusy(true);
    const currentSource=()=>epoch.current===at && sourceEpoch.current===sourceAt && client.getSnapshot().generation===generation;
-   try {const result=await client.sourceModelCatalogRead(owned,currentSource,sourceOffset);if(currentSource()){setSourcePage(result.page);setSourceCatalog(result.catalog);}}
+   try {const result=await client.reads.sourceModelCatalogRead(owned,currentSource,sourceOffset);if(currentSource()){setSourcePage(result.page);setSourceCatalog(result.catalog);}}
    catch(cause){if(currentSource())setError(String(cause));}
    finally{if(epoch.current===at){guard.current=false;setBusy(false);}}
  } : undefined;

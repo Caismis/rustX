@@ -59,7 +59,9 @@ turn folding or inferred subcall nesting is supported.
 
 `App` owns an explicit New Conversation / Session center route. The shared
 Harness-derived composer accepts browser File drafts before Session creation;
-`AppServerClient.firstSubmissions` owns creation and the Session-scoped continuation.
+The application-layer `firstSubmissions(client)` owner (`app/new-conversation/first-submit.ts`)
+owns creation and the Session-scoped continuation for one client lifetime; the
+client only announces authority retirement and disposal and never imports it.
 Native create ACK transfers intent before immediate navigation; component remounts
 only observe. Attach/readiness gates upload/admission. Admission consumes the draft.
 Catalog refresh is independent; initial model intent is native creation state.

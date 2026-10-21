@@ -3017,6 +3017,7 @@ pub(crate) mod test_sync {
 
 #[cfg(test)]
 mod tests {
+    use crate::durable::{CanonicalStore, InboxStore, JournalStore};
     use std::sync::Arc;
 
     use tokio::sync::watch;
@@ -3027,7 +3028,6 @@ mod tests {
         BackgroundLifecycle, BackgroundRecord, BackgroundResources, ConversationBackgroundRegistry,
         NotificationState,
     };
-    use crate::durable::inbox::ConversationStore;
     use crate::events::{RecordingEventSink, RuntimeEvent};
     use crate::runtime::identity::{ConversationId, ToolCallId, ToolExecutionId, ToolId};
     use crate::runtime::inbound::ConversationInboundMailbox;
@@ -3201,7 +3201,7 @@ mod tests {
         let captured = page.items[0].clone();
         assert!(Arc::ptr_eq(&captured.tool_id, &original));
         captured.with_value(|value| {
-            let header = crate::runtime_client::projection::background_source_view(value);
+            let header = crate::runtime_client::projection::views::background_source_view(value);
             assert!(header.tool_id.is_none());
             assert!(header.deferred_fields.contains(&vec!["tool_id".into()]));
             assert!(serde_json::to_vec(&header).unwrap().len() < 1024);

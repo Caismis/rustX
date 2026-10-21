@@ -533,7 +533,7 @@ async fn foreground_tools_project_with_stable_identities() {
     );
     assert!(foreground.iter().all(|slot| matches!(
         slot.state,
-        rustx::runtime_client::ForegroundToolState::Settled { .. }
+        rustx::observation::tool::ForegroundToolState::Settled { .. }
     )));
 }
 
@@ -927,7 +927,7 @@ async fn agent_status_shares_one_composition() {
     );
     assert!(matches!(
         status_view.sections.first(),
-        Some(rustx::runtime_client::RuntimeClientStatusSection::Temporal { .. })
+        Some(rustx::observation::status::RuntimeClientStatusSection::Temporal { .. })
     ));
     let composed_wire = serde_json::to_value(
         events
@@ -1006,15 +1006,15 @@ async fn agent_status_shares_one_composition() {
         .target_locator
         .as_ref()
         .expect("positive canonical target locator");
-    let loaded = page.entries.iter().any(|entry| matches!(&entry.item, rustx::runtime_client::RuntimeClientTranscriptItem::Message { message } if rustx::conversation::message_id_of(message) == target_message_id));
+    let loaded = page.entries.iter().any(|entry| matches!(&entry.item, rustx::observation::transcript::RuntimeClientTranscriptItem::Message { message } if rustx::conversation::message_id_of(message) == target_message_id));
     let deferred = page
         .deferred_entries
         .iter()
         .filter_map(|item| item.value.as_ref())
         .filter(|value| value.get("locator").is_some())
         .any(|value| {
-            let descriptor: rustx::runtime_client::snapshot::RuntimeClientMessageDescriptor =
-                rustx::runtime_client::checkpoint::decode_domain_value(value.clone())
+            let descriptor: rustx::observation::transcript::RuntimeClientMessageDescriptor =
+                rustx::observation::bounded::decode_domain_value(value.clone())
                     .expect("finite original message descriptor");
             descriptor.locator == *target_locator
                 && descriptor.identity.as_ref() == Some(&target_message_id)
@@ -1026,7 +1026,7 @@ async fn agent_status_shares_one_composition() {
     assert!(
         !snapshot.transcript.entries.iter().any(|entry| matches!(
             &entry.item,
-            rustx::runtime_client::RuntimeClientTranscriptItem::Message { message }
+            rustx::observation::transcript::RuntimeClientTranscriptItem::Message { message }
                 if rustx::conversation::message_id_of(message)
                     == status_view.status_message_id.as_ref().expect("native inline status identity").clone()
         )),
@@ -1069,7 +1069,7 @@ async fn agent_status_shares_one_composition() {
     }));
     assert!(matches!(
         status_view.sections.first(),
-        Some(rustx::runtime_client::RuntimeClientStatusSection::Temporal { .. })
+        Some(rustx::observation::status::RuntimeClientStatusSection::Temporal { .. })
     ));
     assert_eq!(
         snapshot
@@ -1354,7 +1354,7 @@ async fn capability_projection_carries_builtin_tools_and_revision() {
     let response = attachment.handle_request(RuntimeClientRequest::CapabilityGet {
         id: rustx::runtime_client::RequestId::new(1),
     });
-    let capabilities: rustx::runtime_client::snapshot::CapabilityView =
+    let capabilities: rustx::observation::capability_source::CapabilityView =
         super::super::common::native_domain_single(
             response.result.expect("successful native domain read"),
         );
@@ -1383,7 +1383,7 @@ async fn capability_projection_carries_builtin_tools_and_revision() {
 /// eligibility never re-reads configuration because output streamed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn streamed_deltas_publish_no_adoption_eligibility_change() {
-    use rustx::local_runtime::configuration::application::AdoptionEligibility;
+    use rustx::runtime::adoption::AdoptionEligibility;
     const DELTAS: usize = 200;
     let (release_tx, release_rx) = support::fake::model_release();
     let mut steps = vec![

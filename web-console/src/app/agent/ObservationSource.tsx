@@ -36,7 +36,7 @@ export function useContentSource() {
   const read = useCallback(async (content_ref: ContentRef, offset: number, current: () => boolean) => {
     const captured = latest.current;
     if (!captured || !captured.owned()) throw Error('Content source is unavailable.');
-    if ('target' in captured) return captured.client.readContent(captured.target, captured.agentId, content_ref, offset, current);
+    if ('target' in captured) return captured.client.reads.readContent(captured.target, captured.agentId, content_ref, offset, current);
     if (captured.historyCut) return (await captured.client.request({ method: 'session/historyContentRead', params: { session_id: captured.sessionId, node_id: captured.nodeId ?? null, cut: captured.historyCut, content_ref, offset, max_bytes: 65_536 } }, 'content_chunk', undefined, current)).chunk;
     const cut = captured.cut();
     if (!cut) throw Error('Content source is unavailable.');

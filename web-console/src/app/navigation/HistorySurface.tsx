@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { JournalSourceProvider } from '../agent/ObservationSource';
-import type { AppServerClient, OperationAdmission } from '../../client/app-server';
+import type { AppServerClient } from '../../client/app-server';
+import type { OperationAdmission } from '../../client/contracts';
 import { extendTranscriptWindow, installTranscriptWindow, sameReadCut } from '../../client/transcript';
 import { ChatViewport } from '../../presentation/layout/ChatViewport';
 import { AgentTranscript } from '../agent/AgentTranscript';

@@ -153,7 +153,7 @@ fn journal(runtime: &ConversationRuntime) -> Vec<crate::events::types::RuntimeEv
 
 fn compaction_receipt(
     result: CompactionReply,
-) -> crate::runtime_client::snapshot::RuntimeClientCompactionView {
+) -> crate::observation::head::RuntimeClientCompactionView {
     let crate::runtime_client::types::RuntimeClientResult::ContextCompacted {
         compaction: Some(receipt),
     } = result.unwrap()
@@ -165,7 +165,7 @@ fn compaction_receipt(
 
 fn assert_compaction_snapshot(
     client: &ManagedRuntimeClient,
-    expected: Option<&crate::runtime_client::snapshot::RuntimeClientCompactionView>,
+    expected: Option<&crate::observation::head::RuntimeClientCompactionView>,
     count: u64,
 ) {
     let context = client.checkpoint().unwrap().snapshot.context;
@@ -343,7 +343,11 @@ async fn committed_summary_reply_loss_and_cold_successor_preserve_exact_receipt_
             let id = loaded.conversation_id().clone();
             let live = loaded.inspect_runtime().unwrap();
             complete_history_turn(&live).await;
-            let canonical = live.historical_canonical_history().unwrap();
+            let canonical = live
+                .tool_runtime()
+                .durable_store()
+                .load_canonical()
+                .unwrap();
             let weak = live.weak_inner();
             let client = loaded.client();
             let (attachment, pin) = client.attach().unwrap();
@@ -394,7 +398,13 @@ async fn committed_summary_reply_loss_and_cold_successor_preserve_exact_receipt_
                 "reading a receipt is not a second commit"
             );
             assert_eq!(&native_receipt.completed, original.last().unwrap());
-            assert_eq!(live.historical_canonical_history().unwrap(), canonical);
+            assert_eq!(
+                live.tool_runtime()
+                    .durable_store()
+                    .load_canonical()
+                    .unwrap(),
+                canonical
+            );
             drop(store);
             drop(live);
 
@@ -413,7 +423,14 @@ async fn committed_summary_reply_loss_and_cold_successor_preserve_exact_receipt_
             ));
             let current = successor.inspect_runtime().unwrap();
             assert_eq!(journal(&current), original);
-            assert_eq!(current.historical_canonical_history().unwrap(), canonical);
+            assert_eq!(
+                current
+                    .tool_runtime()
+                    .durable_store()
+                    .load_canonical()
+                    .unwrap(),
+                canonical
+            );
             let recovered = current
                 .tool_runtime()
                 .durable_store()
@@ -482,7 +499,11 @@ async fn lost_summary_reply_does_not_block_unload_cancellation_or_replay_after_c
         let id = loaded.conversation_id().clone();
         let live = loaded.inspect_runtime().unwrap();
         complete_history_turn(&live).await;
-        let canonical = live.historical_canonical_history().unwrap();
+        let canonical = live
+            .tool_runtime()
+            .durable_store()
+            .load_canonical()
+            .unwrap();
         let weak = live.weak_inner();
         let client = loaded.client();
         let (attachment, pin) = client.attach().unwrap();
@@ -532,7 +553,14 @@ async fn lost_summary_reply_does_not_block_unload_cancellation_or_replay_after_c
                 .unwrap()
                 .is_none()
         );
-        assert_eq!(current.historical_canonical_history().unwrap(), canonical);
+        assert_eq!(
+            current
+                .tool_runtime()
+                .durable_store()
+                .load_canonical()
+                .unwrap(),
+            canonical
+        );
         assert_compaction_snapshot(&successor.client(), None, 0);
         release.send(()).unwrap();
         // Draining the reactivated owner proves there is no hidden resumed Call.

@@ -1,5 +1,6 @@
 //! Cross-owner WF-02 composition. Every wait below names an observed frontier.
 use super::*;
+use crate::durable::JournalStore;
 
 #[test]
 fn typed_failure_aggregation_uses_definition_keys_with_unknown_dominance() {

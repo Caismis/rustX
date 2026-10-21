@@ -22,21 +22,28 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::snapshot::{
-    AgentStatusView, CapabilityView, RuntimeClientAgent, RuntimeClientContextView,
-    RuntimeClientJob, RuntimeClientResourcesView, RuntimeClientTranscriptCursor,
-    RuntimeClientTranscriptInteractionRequested, RuntimeClientTranscriptInteractionSettled,
-};
+use crate::observation::status::AgentStatusView;
+
+use crate::observation::capability_source::CapabilityView;
+
+use super::snapshot::{RuntimeClientAgent, RuntimeClientContextView, RuntimeClientJob};
+
+use crate::observation::resource_source::RuntimeClientResourcesView;
+
 use crate::events::types::AttemptLimit;
 use crate::message::types::{ContentBlockIndex, MessageBlock, UserMessageBlock};
-use crate::model::error::ModelErrorKind;
 use crate::model::finish::ModelFinishReason;
 use crate::model::session::{AttemptModelView, SessionModelView};
+use crate::observation::failure::RuntimeClientAttemptFailure;
+use crate::observation::transcript::{
+    RuntimeClientTranscriptCursor, RuntimeClientTranscriptInteractionRequested,
+    RuntimeClientTranscriptInteractionSettled,
+};
 use crate::publication::PublicationAudit;
 use crate::runtime::identity::{AttemptId, MessageId, ToolCallId, ToolExecutionId, ToolId};
 use crate::runtime::inbound::InboundSequence;
 use crate::runtime::interaction::{InteractionOutcome, InteractionRef};
-use crate::runtime::types::{CancellationReason, RuntimeError};
+use crate::runtime::types::CancellationReason;
 use crate::tools::types::{ToolExecutionResult, ToolProgress};
 
 /// One externally visible Runtime Client observation.
@@ -70,15 +77,15 @@ pub enum RuntimeClientEvent {
         end_length: u64,
         content_revision: u64,
         inline_delta: Option<String>,
-        content_ref: super::content::ContentRef,
+        content_ref: crate::observation::content::ContentRef,
     },
     /// Native derived read domains at a committed journal cut. Published only
     /// when durable facts change, never for publication text/argument suffixes.
     ReadDomainsUpdated {
-        projection_head: Option<super::snapshot::RuntimeClientProjectionHeadView>,
-        transcript: super::snapshot::RuntimeClientTranscriptPage,
-        trace: super::trace::TracePage,
-        occupancy: Option<super::occupancy::RuntimeClientContextOccupancy>,
+        projection_head: Option<crate::observation::head::RuntimeClientProjectionHeadView>,
+        transcript: crate::observation::transcript::RuntimeClientTranscriptPage,
+        trace: crate::observation::trace::TracePage,
+        occupancy: Option<crate::observation::occupancy::RuntimeClientContextOccupancy>,
         todos: Option<crate::tools::todo::TodoSnapshot>,
     },
     /// Independent Trace invalidation; reread Trace, not the Session snapshot.
@@ -89,12 +96,12 @@ pub enum RuntimeClientEvent {
     /// ordinary streaming. Advisory: `session/adoptConfiguration` revalidates
     /// the real gate at its commit boundary.
     ConfigurationAdoptionEligibilityChanged {
-        eligibility: crate::local_runtime::configuration::application::AdoptionEligibility,
+        eligibility: crate::runtime::adoption::AdoptionEligibility,
     },
     /// Bounded authoritative durable Goal view. Every emission follows a
     /// committed durable transition; there is no activation-only form.
     GoalChanged {
-        view: crate::runtime_client::goal::RuntimeClientGoalView,
+        view: crate::observation::goal::RuntimeClientGoalView,
     },
     /// Complete bounded replacement at one native Workflow revision.
     WorkflowsUpdated {
@@ -150,11 +157,11 @@ pub enum RuntimeClientEvent {
     PendingHeadChanged {
         owner: String,
         cut: crate::runtime::identity::ObservationCollectionCut,
-        head: Vec<super::snapshot::RuntimeClientInteractionHeader>,
+        head: Vec<crate::observation::interaction::RuntimeClientInteractionHeader>,
     },
     InteractionPending {
         /// The complete routed interaction projection.
-        interaction: super::snapshot::RuntimeClientInteractionHeader,
+        interaction: crate::observation::interaction::RuntimeClientInteractionHeader,
     },
     /// A native interaction was removed from the live pending projection.
     InteractionSettled {
@@ -260,7 +267,7 @@ pub enum RuntimeClientEvent {
         block_index: ContentBlockIndex,
         /// The fully assembled tool call.
         call: super::snapshot::RuntimeClientToolCall,
-        arguments_ref: Option<super::content::ContentRef>,
+        arguments_ref: Option<crate::observation::content::ContentRef>,
     },
 
     /// The in-flight Assistant publication settled without ever becoming a
@@ -277,7 +284,8 @@ pub enum RuntimeClientEvent {
     /// The audit is a noncanonical derived transcript item, not a Message
     /// Ledger message or an execution fact.
     AssistantPublicationSettled {
-        settlement_head: Vec<super::snapshot::RuntimeClientPublicationSettlementRecord>,
+        settlement_head:
+            Vec<crate::observation::transcript::RuntimeClientPublicationSettlementRecord>,
         /// The attempt that streamed the publication.
         attempt_id: AttemptId,
         /// The bounded immutable audit of the settled stream.
@@ -288,40 +296,41 @@ pub enum RuntimeClientEvent {
 
     /// The native stream settled, with retained audit content available by bounded reads.
     AssistantPublicationDeferredSettled {
-        settlement_head: Vec<super::snapshot::RuntimeClientPublicationSettlementRecord>,
+        settlement_head:
+            Vec<crate::observation::transcript::RuntimeClientPublicationSettlementRecord>,
         attempt_id: AttemptId,
-        settlement: super::snapshot::RuntimeClientPublicationSettlement,
+        settlement: crate::observation::transcript::RuntimeClientPublicationSettlement,
         /// Bounded retained prefix, never a claim that deferred content is empty.
         audit: Option<Box<PublicationAudit>>,
         transcript_cursor: RuntimeClientTranscriptCursor,
         /// Exact immutable source evidence captured by the native audit transaction.
         read_cut: crate::durable::observation::ObservationReadCut,
-        content: Vec<super::checkpoint::ContentBinding>,
-        collections: Vec<super::checkpoint::CollectionFrontier>,
+        content: Vec<crate::observation::cut::ContentBinding>,
+        collections: Vec<crate::observation::cut::CollectionFrontier>,
     },
 
     /// The same provisional block acquired its canonical immutable locator at C.
     ToolOccurrenceRebound {
         attempt_id: AttemptId,
-        previous_locator: super::content::CanonicalContentLocator,
-        occurrence: super::snapshot::RuntimeClientToolOccurrence,
-        metadata_ref: Option<super::content::ContentRef>,
+        previous_locator: crate::observation::content::CanonicalContentLocator,
+        occurrence: crate::observation::tool::RuntimeClientToolOccurrence,
+        metadata_ref: Option<crate::observation::content::ContentRef>,
     },
     /// Canonical Tool result commitment; execution-terminal state remains Journal-owned.
     ToolResultCommitted {
         attempt_id: AttemptId,
-        occurrence: super::snapshot::RuntimeClientToolOccurrence,
+        occurrence: crate::observation::tool::RuntimeClientToolOccurrence,
         result: ToolExecutionResult,
         result_deferred: bool,
-        result_metadata_ref: Option<super::content::ContentRef>,
+        result_metadata_ref: Option<crate::observation::content::ContentRef>,
     },
 
     /// A foreground tool execution started.
     ToolExecutionStarted {
         /// The attempt executing the call.
         attempt_id: AttemptId,
-        occurrence: Option<super::snapshot::RuntimeClientToolOccurrence>,
-        metadata_ref: Option<super::content::ContentRef>,
+        occurrence: Option<crate::observation::tool::RuntimeClientToolOccurrence>,
+        metadata_ref: Option<crate::observation::content::ContentRef>,
         /// The logical tool-call identity.
         tool_call_id: Option<ToolCallId>,
         /// The canonical tool identity.
@@ -331,8 +340,8 @@ pub enum RuntimeClientEvent {
     ToolExecutionProgress {
         /// The attempt executing the call.
         attempt_id: AttemptId,
-        occurrence: Option<super::snapshot::RuntimeClientToolOccurrence>,
-        metadata_ref: Option<super::content::ContentRef>,
+        occurrence: Option<crate::observation::tool::RuntimeClientToolOccurrence>,
+        metadata_ref: Option<crate::observation::content::ContentRef>,
         /// The logical tool-call identity.
         tool_call_id: Option<ToolCallId>,
         /// The canonical tool identity.
@@ -348,8 +357,8 @@ pub enum RuntimeClientEvent {
     ToolExecutionSettled {
         /// The attempt executing the call.
         attempt_id: AttemptId,
-        occurrence: Option<super::snapshot::RuntimeClientToolOccurrence>,
-        metadata_ref: Option<super::content::ContentRef>,
+        occurrence: Option<crate::observation::tool::RuntimeClientToolOccurrence>,
+        metadata_ref: Option<crate::observation::content::ContentRef>,
         /// The logical tool-call identity.
         tool_call_id: Option<ToolCallId>,
         /// The canonical tool identity.
@@ -357,9 +366,9 @@ pub enum RuntimeClientEvent {
         /// The normalized execution result.
         result: ToolExecutionResult,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        result_source: Option<super::snapshot::JournalFieldRef>,
+        result_source: Option<crate::observation::tool::JournalFieldRef>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        result_metadata_ref: Option<super::content::ContentRef>,
+        result_metadata_ref: Option<crate::observation::content::ContentRef>,
     },
 
     /// A canonical message was committed to conversation history.
@@ -371,8 +380,8 @@ pub enum RuntimeClientEvent {
     /// read-only.
     MessageDescriptorCommitted {
         attempt_id: Option<AttemptId>,
-        descriptor: super::snapshot::RuntimeClientMessageDescriptor,
-        head: Vec<super::snapshot::RuntimeClientMessageDescriptor>,
+        descriptor: crate::observation::transcript::RuntimeClientMessageDescriptor,
+        head: Vec<crate::observation::transcript::RuntimeClientMessageDescriptor>,
         transcript_cursor: Option<RuntimeClientTranscriptCursor>,
         evicted_message_id: Option<MessageId>,
     },
@@ -424,7 +433,7 @@ pub enum RuntimeClientEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         evicted_status_message_id: Option<MessageId>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        evicted_status_locator: Option<super::content::CanonicalContentLocator>,
+        evicted_status_locator: Option<crate::observation::content::CanonicalContentLocator>,
     },
 
     /// An inbound message was enqueued into the conversation mailbox.
@@ -593,7 +602,7 @@ pub enum RuntimeClientOutcome {
         finish_reason_deferred: bool,
         /// Exact allowlisted reason bytes at the published native cut.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        finish_reason_source: Option<super::snapshot::JournalFieldRef>,
+        finish_reason_source: Option<crate::observation::tool::JournalFieldRef>,
     },
     /// The attempt was cancelled.
     Cancelled {
@@ -616,32 +625,7 @@ pub enum RuntimeClientOutcome {
         error_deferred: bool,
         /// Normalized diagnostic source; never a raw provider error.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        error_source: Option<super::snapshot::JournalFieldRef>,
-    },
-}
-
-/// The normalized client-visible failure of one attempt.
-///
-/// This is the external projection of the internal [`AttemptFailure`]
-/// ([`crate::events::types::AttemptFailure`]): provider-specific fields
-/// (such as the raw provider error code) never appear here.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
-pub enum RuntimeClientAttemptFailure {
-    /// A model request exhausted its retry policy.
-    Model {
-        /// The normalized model error kind.
-        kind: ModelErrorKind,
-        /// The normalized human-readable message.
-        message: String,
-        /// The retry hint, when the provider reported one.
-        retry_after_ms: Option<u64>,
-    },
-    /// A runtime failure.
-    Runtime {
-        /// The normalized runtime error.
-        error: RuntimeError,
+        error_source: Option<crate::observation::tool::JournalFieldRef>,
     },
 }
 
@@ -654,70 +638,4 @@ impl RuntimeClientEvent {
             event => std::slice::from_ref(event),
         }
     }
-}
-
-/// Borrow only diagnostics into a finite display; original fields retain their J source.
-pub(crate) fn finite_attempt_failure(
-    failure: &crate::events::types::AttemptFailure,
-) -> (RuntimeClientAttemptFailure, bool) {
-    fn text(value: &str, deferred: &mut bool) -> String {
-        *deferred |= value.chars().nth(256).is_some();
-        value.chars().take(256).collect()
-    }
-    let mut deferred = false;
-    let value = match failure {
-        crate::events::types::AttemptFailure::Model { error } => {
-            RuntimeClientAttemptFailure::Model {
-                kind: error.kind.clone(),
-                message: text(&error.message, &mut deferred),
-                retry_after_ms: error.retry_after_ms,
-            }
-        }
-        crate::events::types::AttemptFailure::Runtime { error } => {
-            use crate::runtime::types::RuntimeError as E;
-            let error = match error {
-                E::Internal { message } => E::Internal {
-                    message: text(message, &mut deferred),
-                },
-                E::InvalidState { message } => E::InvalidState {
-                    message: text(message, &mut deferred),
-                },
-                E::Unsupported { message } => E::Unsupported {
-                    message: text(message, &mut deferred),
-                },
-                E::UnknownTool { name } => E::UnknownTool {
-                    name: text(name, &mut deferred),
-                },
-                E::DurableStore { message } => E::DurableStore {
-                    message: text(message, &mut deferred),
-                },
-                E::ContractViolation { message } => E::ContractViolation {
-                    message: text(message, &mut deferred),
-                },
-                E::ContextPreparationFailed { message } => E::ContextPreparationFailed {
-                    message: text(message, &mut deferred),
-                },
-                E::ContextCompactionFailed { message } => E::ContextCompactionFailed {
-                    message: text(message, &mut deferred),
-                },
-                E::PreStepRejected { reason } => E::PreStepRejected {
-                    reason: text(reason, &mut deferred),
-                },
-                E::PreStepPolicyFailed { message } => E::PreStepPolicyFailed {
-                    message: text(message, &mut deferred),
-                },
-                E::ToolResultObservationFailed { message } => E::ToolResultObservationFailed {
-                    message: text(message, &mut deferred),
-                },
-                E::RestartInterrupted { message } => E::RestartInterrupted {
-                    message: text(message, &mut deferred),
-                },
-                E::DeferredContextRejected { message } => E::DeferredContextRejected {
-                    message: text(message, &mut deferred),
-                },
-            };
-            RuntimeClientAttemptFailure::Runtime { error }
-        }
-    };
-    (value, deferred)
 }

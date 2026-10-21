@@ -2,6 +2,7 @@
 #[path = "auxiliary_lineage.rs"]
 mod auxiliary_lineage;
 
+mod store;
 use super::{
     Connection, ConversationStoreError, OptionalExtension, Transaction, decode, encode,
     nonnegative, params, seq_to_i64, storage,
@@ -999,7 +1000,7 @@ pub(super) fn commit(
         &fingerprint,
         &activation,
     );
-    let completed = super::persist_event_tx(transaction, scope, event)?.event;
+    let completed = super::journal::persist_event_tx(transaction, scope, event)?.event;
     if completed.sequence != activation.origin.completed_journal.0 {
         return Err(invalid("completion Journal coordinate mismatch"));
     }
@@ -1758,7 +1759,7 @@ pub(super) fn validate_warm_selection(
         if !seen.insert(reference.message_id.clone()) {
             return Err(invalid("duplicate native selected Context"));
         }
-        let message = super::load_message(connection, &reference.message_id)?;
+        let message = super::canonical::ledger::load_message(connection, &reference.message_id)?;
         if reference.conversation_id != *scope
             || !reference.matches(&message)
             || !matches!(message,crate::message::types::MessageBlock::User(user) if matches!(user.kind,crate::message::types::InboundKind::Context(_)))
@@ -1808,7 +1809,7 @@ pub(super) fn validate_request_selection(
         if expected.iter().any(|m| m.canonical_id() == Some(&id)) {
             continue;
         }
-        let message = super::load_message(connection, &id)?;
+        let message = super::canonical::ledger::load_message(connection, &id)?;
         if !matches!(&message,crate::message::types::MessageBlock::User(user) if matches!(user.kind,crate::message::types::InboundKind::Context(_)))
         {
             return Err(invalid(

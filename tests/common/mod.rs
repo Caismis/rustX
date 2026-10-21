@@ -811,14 +811,14 @@ impl AgentExecutionObserver for RecordingPublicationObserver {
         &self,
         _attempt_id: &AttemptId,
         _block: &MessageBlock,
-        _receipt: &rustx::durable::inbox::TranscriptCommitReceipt,
+        _receipt: &rustx::durable::TranscriptCommitReceipt,
     ) {
     }
 
     fn observe_status(
         &self,
         _observation: &AgentStatusObservation,
-        _source: Option<&rustx::durable::inbox::StatusObservationSource>,
+        _source: Option<&rustx::durable::StatusObservationSource>,
     ) {
     }
 
@@ -850,7 +850,7 @@ impl AgentExecutionObserver for RecordingPublicationObserver {
         &self,
         _attempt_id: &AttemptId,
         audit: &PublicationAudit,
-        _receipt: &rustx::durable::inbox::PublicationAuditReceipt,
+        _receipt: &rustx::durable::PublicationAuditReceipt,
     ) {
         self.audits
             .lock()
@@ -1896,10 +1896,8 @@ pub fn native_domain_single<T: serde::de::DeserializeOwned + schemars::JsonSchem
     );
     let item = page.items.remove(0);
     assert!(!item.deferred, "small fixture must materialize inline");
-    rustx::runtime_client::checkpoint::decode_domain_value(
-        item.value.expect("inline typed native row"),
-    )
-    .expect("valid native structural value")
+    rustx::observation::bounded::decode_domain_value(item.value.expect("inline typed native row"))
+        .expect("valid native structural value")
 }
 
 /// Current finite model header; additional profile facts are checked explicitly.
@@ -1938,7 +1936,7 @@ pub fn native_catalog_page(
             assert_eq!(item.offset, u64::try_from(ordinal).unwrap());
             assert!(!item.deferred, "fixture model header is inline");
             let header: NativeCatalogModelHeader =
-                rustx::runtime_client::checkpoint::decode_domain_value(
+                rustx::observation::bounded::decode_domain_value(
                     item.value.expect("finite model header value"),
                 )
                 .expect("current typed native model header");

@@ -26,6 +26,7 @@
 //! boundary is reached through the coordinator's own observation seam and
 //! through watch channels.
 
+use rustx::durable::CanonicalStore;
 use std::sync::{Arc, Mutex};
 
 use futures_util::future::BoxFuture;
@@ -733,7 +734,7 @@ async fn interaction_settlement_is_exactly_once_for_one_identity() {
     };
     assert!(
         matches!(
-            rustx::durable::ConversationStore::append_event(run.store.as_ref(), replay),
+            rustx::durable::JournalStore::append_event(run.store.as_ref(), replay),
             Err(rustx::durable::ConversationStoreError::InvalidReference(_))
         ),
         "the generic durable seam refuses a transcript-visible settlement"
@@ -746,7 +747,7 @@ async fn interaction_settlement_is_exactly_once_for_one_identity() {
         .expect("one settled envelope");
     assert!(
         matches!(
-            rustx::durable::ConversationStore::append_interaction_audit(
+            rustx::durable::JournalStore::append_interaction_audit(
                 run.store.as_ref(),
                 RuntimeEventEnvelope {
                     sequence: 0,

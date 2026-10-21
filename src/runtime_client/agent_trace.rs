@@ -2,8 +2,8 @@
 //! Registry identity chooses the store; callers never supply a child path or
 //! substitute the parent's observation cursor. Reads remain valid after exit.
 use super::agent_observation::{AgentObservation, ObservationSource};
-use super::trace::TraceCursor;
 use super::{RuntimeClientError, RuntimeClientResult, host::ClientInner};
+use crate::observation::trace::TraceCursor;
 use crate::runtime::identity::AgentId;
 use std::sync::Arc;
 

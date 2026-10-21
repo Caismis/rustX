@@ -6,6 +6,7 @@
 //! from the frozen Request Snapshot without consulting live pending state.
 
 use super::super::{common, support};
+use rustx::durable::{PublicationStore, RequestStore};
 
 use chrono::TimeZone;
 use std::sync::Arc;

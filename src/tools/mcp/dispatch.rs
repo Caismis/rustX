@@ -96,7 +96,7 @@
 //! the progress token inside the request, so that window is unavoidable and
 //! a fast server can answer inside it. Reading a correlated response as
 //! proof that no caller remains deleted the very evidence
-//! [`crate::tools::mcp::McpProgressRouter`] exists to keep. So this seam
+//! [`crate::tools::mcp::progress::McpProgressRouter`] exists to keep. So this seam
 //! completes the *remote* dimension on an answer or refusal. Admission in
 //! the outbound prologue independently consumes the admission dimension.
 //! The caller's `McpProgressLease` relinquishes local ownership; only an
@@ -121,7 +121,7 @@ use rmcp::model::{
 use rmcp::service::RoleClient;
 use rmcp::transport::Transport;
 
-use super::McpProgressRouter;
+use super::progress::McpProgressRouter;
 use super::streamable_http::{DispatchOwnership, McpHttpRequestOwnership, OutboundDispatch};
 
 /// The transport error of a request rustX refused to dispatch.
@@ -496,7 +496,7 @@ mod tests {
     };
 
     use super::{McpDispatchSeam, answered_request};
-    use crate::tools::mcp::McpProgressRouter;
+    use crate::tools::mcp::progress::McpProgressRouter;
 
     fn id(value: i64) -> RequestId {
         RequestId::Number(value)
@@ -599,7 +599,7 @@ mod tests {
                     .get(&id(i64::from(value)))
                     .expect("live caller");
                 assert!(entry.admission_consumed);
-                assert!(entry.remote == crate::tools::mcp::RemoteOwnership::Terminal);
+                assert!(entry.remote == crate::tools::mcp::progress::RemoteOwnership::Terminal);
             }
             drop(lease);
             assert_eq!(progress.tracked_requests(), 0);

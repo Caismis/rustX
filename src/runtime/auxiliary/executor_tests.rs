@@ -1,4 +1,5 @@
 use super::*;
+use crate::durable::{AuxiliaryStore, CanonicalStore, JournalStore};
 use futures_util::StreamExt as _;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 

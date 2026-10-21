@@ -109,14 +109,14 @@ pub trait AgentExecutionObserver: Sync {
         &self,
         attempt_id: &AttemptId,
         block: &MessageBlock,
-        receipt: &crate::durable::inbox::TranscriptCommitReceipt,
+        receipt: &crate::durable::TranscriptCommitReceipt,
     );
 
     /// Observes the one composed Agent Status of a request preparation.
     fn observe_status(
         &self,
         observation: &AgentStatusObservation,
-        source: Option<&crate::durable::inbox::StatusObservationSource>,
+        source: Option<&crate::durable::StatusObservationSource>,
     );
 
     /// Borrows native contribution authority; the display owner can prepare a
@@ -126,7 +126,7 @@ pub trait AgentExecutionObserver: Sync {
         contribution: &crate::context::contribution::ContributionStart,
         attempt: &AttemptId,
         turn: u32,
-        source: Option<&crate::durable::inbox::StatusObservationSource>,
+        source: Option<&crate::durable::StatusObservationSource>,
     ) {
         if let Some(crate::context::contribution::ContributionPresentation::AgentStatus(status)) =
             &contribution.presentation
@@ -176,7 +176,7 @@ pub trait AgentExecutionObserver: Sync {
         &self,
         attempt_id: &AttemptId,
         audit: &PublicationAudit,
-        receipt: &crate::durable::inbox::PublicationAuditReceipt,
+        receipt: &crate::durable::PublicationAuditReceipt,
     );
 
     /// Observes one LIVE (not yet durable) foreground tool progress report

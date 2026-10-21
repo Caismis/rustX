@@ -1,8 +1,6 @@
 //! Original owner fields, indexed at their native provenance commit.
 use super::{Connection, ConversationStoreError, OptionalExtension, params, storage};
-use crate::runtime_client::response::{
-    AttemptIdentitySource, InheritedAttemptIdentityKind as Kind,
-};
+use crate::observation::turn::{AttemptIdentitySource, InheritedAttemptIdentityKind as Kind};
 
 fn label(kind: Kind) -> &'static str {
     match kind {
@@ -57,7 +55,7 @@ pub(super) fn journal(
 ) -> Result<AttemptIdentitySource, ConversationStoreError> {
     let encoded_bytes = super::observation_request_summary::serialized_bytes(&attempt.as_str())?;
     Ok(AttemptIdentitySource::Journal {
-        field: crate::runtime_client::snapshot::JournalFieldRef {
+        field: crate::observation::tool::JournalFieldRef {
             sequence,
             path: vec!["attempt_id".into()],
             encoded_bytes,

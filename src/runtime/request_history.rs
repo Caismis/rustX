@@ -7,13 +7,13 @@
 
 use std::sync::Arc;
 
-use crate::durable::{ConversationStore, ConversationStoreError, RequestSnapshotPage};
+use crate::durable::{ConversationStoreError, RequestSnapshotPage};
 use crate::model::{ModelRequest, RequestIdentity, RequestSnapshot};
 
 /// A durable request-history read handle for one conversation.
 #[derive(Clone)]
 pub struct RequestHistory {
-    store: Arc<dyn ConversationStore>,
+    store: Arc<dyn crate::durable::RequestStore>,
 }
 
 impl std::fmt::Debug for RequestHistory {
@@ -48,7 +48,7 @@ impl std::error::Error for RequestHistoryError {}
 impl RequestHistory {
     /// Creates a read handle over the conversation store.
     #[must_use]
-    pub fn new(store: Arc<dyn ConversationStore>) -> Self {
+    pub fn new(store: Arc<dyn crate::durable::RequestStore>) -> Self {
         Self { store }
     }
 

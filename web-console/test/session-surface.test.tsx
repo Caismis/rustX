@@ -2,7 +2,7 @@ import { boundedSettings } from "./fixture";
 import { translator, displayText } from '../src/locale/translation';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import { OutcomeUncertain } from '../src/client/app-server';
+import { OutcomeUncertain } from '../src/client/errors';
 import { App } from '../src/app/App';
 import { SessionDeletion } from '../src/app/SessionDeletion';
 import { sessionDisplayTitle } from '../src/bindings/session-title';

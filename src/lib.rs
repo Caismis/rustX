@@ -17,6 +17,7 @@ pub mod goal;
 pub mod local_runtime;
 pub mod message;
 pub mod model;
+pub mod observation;
 pub mod protocol;
 pub mod publication;
 pub mod runtime;

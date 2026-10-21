@@ -1,19 +1,18 @@
 //! Bounded summary joins over finite own facts, canonical headers and request summaries.
 use super::TraceProjection;
 use super::anchor::AnchorFacts;
-use super::bounds::{TRACE_RECORD_BYTES, TracePreview, encoded_len, identity_fits};
-#[cfg(test)]
-use super::types::TraceState;
-use super::types::{
-    TraceFieldKind, TraceFieldSource, TraceGeneration, TraceGenerationTimeline, TraceRecord,
-    TraceRequestSummary,
-};
 use crate::durable::ConversationStoreError;
 use crate::durable::observation::{TraceFactData as D, TraceFactHeader};
 #[cfg(test)]
 use crate::events::types::RuntimeEvent as E;
-use crate::model::generation_evidence::GenerationEvidence;
-use crate::model::types::ModelUsage;
+use crate::observation::trace::bounds::{
+    TRACE_RECORD_BYTES, TracePreview, encoded_len, identity_fits,
+};
+#[cfg(test)]
+use crate::observation::trace::types::TraceState;
+use crate::observation::trace::types::{
+    TraceFieldKind, TraceFieldSource, TraceRecord, TraceRequestSummary,
+};
 #[cfg(test)]
 use crate::tools::types::ToolExecutionStatus;
 
@@ -204,42 +203,6 @@ pub(super) fn field(fields: &[TraceFieldSource], kind: TraceFieldKind) -> Option
             }
         })
         .cloned()
-}
-
-/// Derives display metrics from settled evidence and this request's usage.
-pub(super) fn generation_metrics(
-    evidence: GenerationEvidence,
-    usage: Option<&ModelUsage>,
-) -> TraceGeneration {
-    TraceGeneration {
-        timeline: generation_timeline(evidence),
-        ttft_ms: evidence.time_to_first_output_ms(),
-        generation_ms: evidence.generation_ms(),
-        terminal_ms: evidence.terminal_ms,
-        // Throughput needs both a measured decode span and reported output
-        // tokens. Missing usage leaves it unavailable rather than zero.
-        output_tokens_per_second: usage
-            .and_then(|usage| evidence.throughput_tokens_per_second(usage.output_tokens)),
-    }
-}
-
-/// Positions require the runtime's bridge; numeric TTFT alone is insufficient.
-fn generation_timeline(evidence: GenerationEvidence) -> Option<TraceGenerationTimeline> {
-    let dispatch_ms = evidence.dispatch_after_start_ms?;
-    let first_output_ms = match evidence.first_output_ms {
-        Some(v) => Some(dispatch_ms.checked_add(v)?),
-        None => None,
-    };
-    let last_output_ms = match evidence.last_output_ms {
-        Some(v) => Some(dispatch_ms.checked_add(v)?),
-        None => None,
-    };
-    Some(TraceGenerationTimeline {
-        dispatch_ms,
-        first_output_ms,
-        last_output_ms,
-        terminal_ms: dispatch_ms.checked_add(evidence.terminal_ms)?,
-    })
 }
 
 /// The typed state proven by one terminal fact.

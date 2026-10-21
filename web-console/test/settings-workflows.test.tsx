@@ -8,7 +8,7 @@ import type { RuntimeClientSnapshot, Model, Request1, SourceSettings } from '../
 type CapabilityInspection = NonNullable<NonNullable<RuntimeClientSnapshot['resources']>['inspection']>;
 import { settingsTransactionOwners } from '../src/app/settings/Settings';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
-import { OutcomeUncertain } from '../src/client/app-server';
+import { OutcomeUncertain } from '../src/client/errors';
 import {
   chooseOption, confirmAction, openMcpContractEditor, openResourceRow, openSettingsPage, settingsReady, SettingsSurface,
 } from './settings-harness';

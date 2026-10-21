@@ -1,11 +1,11 @@
 //! The finite native preparation loop. One active preparation, latest pending
 //! input per scope. Source commits and final publication use the parent's lock.
 use super::{
-    AdoptionError, ApplicationIdentity, ApplyUnit, AvailableConfiguration, CacheImpact,
-    CapturedApplication, ConfigurationApplication, ConfigurationApplications, ReadyConfiguration,
-    UnitApplication,
+    ApplicationIdentity, ApplyUnit, AvailableConfiguration, CapturedApplication,
+    ConfigurationApplication, ConfigurationApplications, ReadyConfiguration, UnitApplication,
 };
 use crate::local_runtime::session_runtime_manager::SessionRuntimeManager;
+use crate::runtime::adoption::AdoptionError;
 use crate::runtime::identity::SessionId;
 
 impl ConfigurationApplications {
@@ -110,7 +110,13 @@ impl ConfigurationApplications {
             .configuration
             .test_hooks
             .reach("configuration_policy_prepared");
-        let runtime = manager.configuration_runtime(&session);
+        // The runtime and the resource preparation it was composed with are
+        // taken from one resident composition, never from two lookups.
+        let (runtime, resource_loader) = manager
+            .configuration_preparation(&session)
+            .map_or((None, None), |(runtime, loader)| {
+                (Some(runtime), Some(loader))
+            });
         {
             let mut state = self.lock();
             if !state.current(scope, identity) {
@@ -134,7 +140,9 @@ impl ConfigurationApplications {
             state.publish(scope, identity, ApplyUnit::ProcessBindings, || outcome);
             state.publish(scope, identity, ApplyUnit::SharedCapacity, || {
                 if let Some(runtime) = &runtime {
-                    runtime.apply_shared_capacity(&policy);
+                    runtime.apply_shared_capacity(&policy, |base| {
+                        policy.compose_runtime_shared_capacity(base)
+                    });
                 }
                 UnitApplication::Applied
             });
@@ -142,10 +150,13 @@ impl ConfigurationApplications {
                 scope,
                 identity,
                 ApplyUnit::ExecutionPolicy,
-                || match runtime
-                    .as_ref()
-                    .map(|runtime| runtime.apply_execution_policy(&policy))
-                {
+                || match runtime.as_ref().map(|runtime| {
+                    policy.timeout_policy().map_err(|e| e.to_string())?;
+                    policy.tool_deadline_policy().map_err(|e| e.to_string())?;
+                    runtime.apply_execution_policy(|base| {
+                        policy.compose_runtime_execution_policy(base)
+                    })
+                }) {
                     Some(Err(diagnostic)) => UnitApplication::Failed { diagnostic },
                     _ => UnitApplication::Applied,
                 },
@@ -372,7 +383,11 @@ impl ConfigurationApplications {
                 self.lock()
                     .make_available(scope, identity, &capture, &manager.credentials)
                     .and_then(|()| bindings(&capture))
-                    .and_then(|models| runtime.prepare_context_configuration(&capture, models))
+                    .and_then(|models| {
+                        runtime.prepare_context_configuration(|base| {
+                            capture.compose_context_binding(base, models)
+                        })
+                    })
             }
         } else {
             let capability_capture = adopted.as_ref().map_or_else(
@@ -380,10 +395,13 @@ impl ConfigurationApplications {
                 |old| capture.clone().retaining_context_from(old),
             );
             let cancellation = crate::runtime::cancellation::CancellationSignal::new();
+            let resource_loader = resource_loader
+                .as_ref()
+                .expect("a resident runtime has its composed resource preparation");
+            let prepared_capture = capture.clone();
             let mut preparation = Box::pin(runtime.prepare_configuration(
-                capture.clone(),
+                |capability| resource_loader.prepare(capability, prepared_capture, &cancellation),
                 capture.config.initial_model().clone(),
-                &cancellation,
             ));
             let prepared =
                 tokio::time::timeout(std::time::Duration::from_mins(2), &mut preparation).await;
@@ -415,8 +433,8 @@ impl ConfigurationApplications {
                         .and_then(|models| {
                             runtime.complete_candidate_context(
                                 &mut candidate,
-                                &capability_capture,
-                                models,
+                                &capability_capture.context_binding(models),
+                                capability_capture.session_model().clone(),
                             )
                         });
                     match result {
@@ -468,11 +486,14 @@ impl ConfigurationApplications {
                 self.notify(&state);
                 drop(state);
                 capture = (**old).clone().retaining_context_from(&capture);
-                bindings(&capture)
-                    .and_then(|models| runtime.prepare_context_configuration(&capture, models))
+                bindings(&capture).and_then(|models| {
+                    runtime.prepare_context_configuration(|base| {
+                        capture.compose_context_binding(base, models)
+                    })
+                })
             } else {
                 let mut candidate = candidate.expect("successful capability candidate");
-                if candidate.impact == CacheImpact::Preserved {
+                if candidate.adopts_implicitly() {
                     let mut state = self.lock();
                     if !state.current(scope, identity) {
                         return;
@@ -552,11 +573,18 @@ impl ConfigurationApplications {
                     self.notify(&state);
                     drop(state);
                     context_only = true;
-                    bindings(&capture)
-                        .and_then(|models| runtime.prepare_context_configuration(&capture, models))
+                    bindings(&capture).and_then(|models| {
+                        runtime.prepare_context_configuration(|base| {
+                            capture.compose_context_binding(base, models)
+                        })
+                    })
                 } else {
                     match bindings(&capture).and_then(|models| {
-                        runtime.complete_candidate_context(&mut candidate, &capture, models)
+                        runtime.complete_candidate_context(
+                            &mut candidate,
+                            &capture.context_binding(models),
+                            capture.session_model().clone(),
+                        )
                     }) {
                         Ok(()) => Ok(candidate),
                         Err(error) => Err(error),
@@ -617,8 +645,9 @@ impl ConfigurationApplications {
         }
         let impact = prepared.impact;
         let baseline = prepared.baseline;
+        let implicit = prepared.adopts_implicitly();
         let mut prepared = Some(prepared);
-        let outcome = if impact == CacheImpact::Preserved {
+        let outcome = if implicit {
             let retained = capture.clone().admit(|| manager.credentials.clone());
             match retained {
                 Err(diagnostic) => UnitApplication::Failed { diagnostic },
@@ -713,18 +742,23 @@ impl ConfigurationApplications {
             state.deferred.insert(session.to_string());
             return Ok(true);
         };
-        runtime.publish_model_catalog(capture, models, |revision| {
-            let mut bindings = manager
-                .sessions
-                .configuration_bindings
-                .lock()
-                .expect("Session configuration bindings");
-            let retained = bindings
-                .get_mut(session)
-                .ok_or("the resident Session has no retained configuration binding")?;
-            *retained = retained.with_published_catalog(capture, revision);
-            Ok(())
-        })
+        let catalog = models.clone();
+        runtime.publish_model_catalog(
+            catalog,
+            |base| capture.compose_model_catalog(base, models),
+            |revision| {
+                let mut bindings = manager
+                    .sessions
+                    .configuration_bindings
+                    .lock()
+                    .expect("Session configuration bindings");
+                let retained = bindings
+                    .get_mut(session)
+                    .ok_or("the resident Session has no retained configuration binding")?;
+                *retained = retained.with_published_catalog(capture, revision);
+                Ok(())
+            },
+        )
     }
 
     #[allow(clippy::needless_pass_by_value)] // consumes diagnostics from fallible preparation branches

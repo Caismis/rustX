@@ -1,5 +1,6 @@
 use super::*;
 use crate::message::content::UploadedFileRef;
+use crate::runtime::subagent::MAX_TASK_BYTES;
 
 const FILE_COUNT: usize = 32;
 

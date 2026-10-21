@@ -1,6 +1,6 @@
 //! Derived byte layout construction uses one 64 KiB output buffer.
 use super::{Connection, ConversationStoreError, params, storage};
-use crate::runtime_client::content::{CONTENT_SAFE_INTEGER_MAX, ContentRepresentation};
+use crate::observation::content::{CONTENT_SAFE_INTEGER_MAX, ContentRepresentation};
 use serde::Serialize;
 use std::io::Write as _;
 
@@ -50,7 +50,7 @@ pub(super) fn put_native<T: Serialize + schemars::JsonSchema>(
         written: 0,
         segment: 0,
     };
-    crate::runtime_client::structural_json::to_writer(&mut writer, value)
+    crate::observation::structural_json::to_writer(&mut writer, value)
         .map_err(|error| storage(error.to_string()))?;
     writer.flush().map_err(|error| storage(error.to_string()))?;
     let length = writer.written;

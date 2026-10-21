@@ -53,7 +53,7 @@ export function BackgroundJobItem({ job, timing, now, expanded, onToggle, armed,
     void (async () => {
       const { page } = await client.request({ method: 'job/status', params: { target, job_id: job.job_id } }, 'domain_page', undefined, owned);
       if (page.domain !== `jobs.${job.job_id}` || page.read_cut.conversation_id !== target.conversation_id) throw new Error('Job details source changed.');
-      const original = await domainOriginalValue<RuntimeClientJob>(page, client.domainReader(target, owned));
+      const original = await domainOriginalValue<RuntimeClientJob>(page, client.reads.domainReader(target, owned));
       if (original.job_id !== job.job_id) throw new Error('Job details named another native execution.');
       if (owned()) setLoaded({ source: job, value: original, current });
     })().catch(cause => { if (owned()) setReadError({ source: job, message: cause instanceof Error ? cause.message : String(cause) }); });

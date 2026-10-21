@@ -109,7 +109,6 @@ function fakeSession(
       closedListeners.add(listener);
       return () => closedListeners.delete(listener);
     },
-    updateState: () => {},
     resync: async () => {},
     detach: async () => {},
     publishState(nextState: unknown): void {

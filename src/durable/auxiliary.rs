@@ -4,7 +4,7 @@
 //! facts and bounded audit projections without introducing an executor,
 //! scheduler, or retry policy.
 
-use crate::durable::inbox::ConversationStoreError;
+use crate::durable::ConversationStoreError;
 use crate::events::types::RuntimeEventEnvelope;
 use crate::model::auxiliary::{
     AuxiliaryCallAudit, AuxiliaryCommitDisposition, AuxiliaryRequestAudit,

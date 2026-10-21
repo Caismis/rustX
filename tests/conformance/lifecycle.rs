@@ -19,6 +19,7 @@
 //!   semantic composition (Test H).
 
 use crate::launch_fixture::LaunchFixture;
+use rustx::durable::CanonicalStore;
 use std::sync::Arc;
 
 use crate::common::provider_emulator::ProviderEmulator;
@@ -422,7 +423,7 @@ async fn interactive_production_turn_still_builds_over_the_same_composition() {
 /// complete provider-backed ordinary turn, over an aliased product root.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn active_session_a_executes_while_historical_b_preflight_retains_authority() {
-    use rustx::durable::{ConversationStore, SqliteConversationStore};
+    use rustx::durable::SqliteConversationStore;
     use rustx::local_runtime::session_deletion::DeletionTargetSnapshot;
     use rustx::runtime_client::types::{RequestId, RuntimeClientRequest, RuntimeClientResult};
     let Some(emulator) = ProviderEmulator::start("openai_chat_streamed_turn").await else {

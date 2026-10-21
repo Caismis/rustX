@@ -196,7 +196,7 @@ mod tests {
     use super::*;
     use std::sync::Barrier;
 
-    use crate::durable::{ConversationStore, ConversationStoreError, SqliteConversationStore};
+    use crate::durable::{AuxiliaryStore, ConversationStoreError, SqliteConversationStore};
     use crate::model::auxiliary::{
         AuxiliaryAttribution, AuxiliaryBusinessSource, AuxiliaryCallStart,
         AuxiliaryCommitConfirmation, AuxiliaryCommitDisposition, AuxiliaryFingerprint,

@@ -3,7 +3,7 @@ import type { CompletedResponseView, ContentBinding, RuntimeClientTranscriptEntr
 import { responseRetry, responseRetryReady } from '../src/app/agent/response-retry';
 import { deferredToolDescriptors } from '../src/bindings/deferred-tools';
 import { snapshot } from './fixture';
-import type { SessionView } from '../src/client/app-server';
+import type { SessionView } from '../src/client/contracts';
 
 const process: TurnProcessView = { conversation_id: 'conversation-A', attempt_id: 'original', attempt_id_source: null,
   control_cursor: '3', final_message_id_deferred: false, outcome: 'completed', tool_call_count: 1, message_count: 3 };

@@ -223,14 +223,14 @@ pub(crate) fn read(
 ) -> Result<EffectiveValueChunk, String> {
     if max_bytes == 0
         || max_bytes > READ_BYTES
-        || offset > crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX
+        || offset > crate::observation::content::CONTENT_SAFE_INTEGER_MAX
         || offset
             .checked_add(u64::from(max_bytes))
-            .is_none_or(|end| end > crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX)
-        || reference.byte_length > crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX
+            .is_none_or(|end| end > crate::observation::content::CONTENT_SAFE_INTEGER_MAX)
+        || reference.byte_length > crate::observation::content::CONTENT_SAFE_INTEGER_MAX
         || reference
             .item_index
-            .is_some_and(|index| index > crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX)
+            .is_some_and(|index| index > crate::observation::content::CONTENT_SAFE_INTEGER_MAX)
     {
         return Err("invalid configuration byte bounds".into());
     }
@@ -287,8 +287,7 @@ pub(crate) fn page(
     offset: u64,
     limit: usize,
 ) -> Result<EffectivePage, String> {
-    if offset > crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX || limit == 0 || limit > 32
-    {
+    if offset > crate::observation::content::CONTENT_SAFE_INTEGER_MAX || limit == 0 || limit > 32 {
         return Err("invalid configuration page bounds".into());
     }
     if digest(source)? != revision {

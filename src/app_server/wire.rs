@@ -493,7 +493,7 @@ pub(super) fn protocol_schema() -> Value {
     // DomainPage.value carries bounded display DTOs without an unbounded RPC
     // result variant. Export their Rust-owned shapes for generated consumers.
     let mut generator = schemars::SchemaGenerator::default();
-    let _ = generator.subschema_for::<crate::runtime_client::trace::TraceDetail>();
+    let _ = generator.subschema_for::<crate::observation::trace::TraceDetail>();
     let _ = generator.subschema_for::<crate::runtime_client::trace::TraceInspectionHead>();
     let _ = generator.subschema_for::<crate::runtime_client::RuntimeClientModelName>();
     let _ = generator.subschema_for::<crate::runtime::interaction::RoutedInteraction>();
@@ -794,18 +794,16 @@ mod tests {
             revision: EXACT,
             ..Default::default()
         });
-        native_round_trip(
-            &crate::runtime_client::snapshot::RuntimeClientCompactionView {
-                generation: EXACT,
-                checkpoint_id: crate::runtime::identity::CheckpointId::new("summary"),
-                activation_id: crate::context::checkpoint::ProjectionActivationId(EXACT),
-                tokens_before: crate::runtime::types::TokenMeasurement {
-                    input_tokens: 100,
-                    source: crate::runtime::types::TokenMeasurementSource::ProviderReported,
-                },
-                estimated_tokens_after: 50,
+        native_round_trip(&crate::observation::head::RuntimeClientCompactionView {
+            generation: EXACT,
+            checkpoint_id: crate::runtime::identity::CheckpointId::new("summary"),
+            activation_id: crate::context::checkpoint::ProjectionActivationId(EXACT),
+            tokens_before: crate::runtime::types::TokenMeasurement {
+                input_tokens: 100,
+                source: crate::runtime::types::TokenMeasurementSource::ProviderReported,
             },
-        );
+            estimated_tokens_after: 50,
+        });
         native_round_trip(&crate::tools::todo::TodoSnapshot {
             next_id: EXACT + 1,
             tasks: vec![crate::tools::todo::TodoTask {

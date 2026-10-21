@@ -3,7 +3,7 @@ import type {
   ConfigurationApplication, McpView, McpWrite, Origin, ProcessPolicyImpact, ResourceFamily, RuntimeLayer,
   SourceMutation, SourceScope, SourceSettings, SourceTarget, SourceView, UnitApplication,
 } from '../../../../protocol/app-server/v51';
-import type { ConnectionState } from '../../client/app-server';
+import type { ConnectionState } from '../../client/contracts';
 
 /** Each Settings target names one exact configuration owner. The catalog scope
  * menu switches targets; transactions and source facts remain owned separately. */

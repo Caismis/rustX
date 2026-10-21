@@ -297,8 +297,11 @@ suites run, never in what a suite asserts:
 The `plan` job (`.github/scripts/verification.py`) owns selection. It reads
 the pull request's changed files — each path with GitHub's change status and,
 for a rename or copy, its original path — and decides the profile, the risk, the
-affected surfaces (`rust`, `protocol`, `web`, `tui`, `dev`) and which jobs
-and affected steps run. Every gated job runs only when the plan's
+affected surfaces (`rust`, `protocol`, `web`, `tui`, `dev`, `documentation`)
+and which jobs and affected steps run. Documentation is low risk but not
+inert: the `contracts` target reads the top-level, `docs/`, Web and TUI
+Markdown, so in FAST such a change selects the `documentation-contracts`
+job, which runs that target alone (FULL runs it in `rust-contracts`). Every gated job runs only when the plan's
 `run[<job id>]` is true, and the script's tests check that `ci.yml` gates
 each job exactly that way.
 

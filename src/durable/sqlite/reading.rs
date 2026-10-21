@@ -1,7 +1,10 @@
 //! One transaction owns outline identity, location and bounded transcript selection.
+
+#[cfg(test)]
+mod tests;
 use super::{
-    Connection, ConversationStoreError, OptionalExtension, load_transcript_page, nonnegative,
-    params, seq_to_i64, storage,
+    Connection, ConversationStoreError, OptionalExtension,
+    canonical::transcript::load_transcript_page, nonnegative, params, seq_to_i64, storage,
 };
 use crate::durable::reading::{
     ConversationReadCut, ConversationTurn, ConversationTurnId, ConversationTurnPage,
@@ -488,7 +491,7 @@ fn require_message_target(
     }
 }
 pub(super) struct WindowSelection {
-    pub observed_target: Option<crate::runtime_client::turn::ObservedTurnIdentity>,
+    pub observed_target: Option<crate::observation::turn::ObservedTurnIdentity>,
     pub cut: ConversationReadCut,
     pub before: Option<crate::durable::TranscriptCursor>,
     pub target: Option<ConversationTurnId>,
@@ -760,7 +763,7 @@ fn turn_execution(
     if let Some((request, Some(usage))) = boundary {
         execution.occupancy = crate::context::occupancy::measure(
             &usage,
-            &super::load_request_snapshot(connection, conversation, &request)?,
+            &super::request::snapshot::load_request_snapshot(connection, conversation, &request)?,
         )?;
     }
     Ok(execution)

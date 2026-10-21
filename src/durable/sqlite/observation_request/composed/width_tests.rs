@@ -3,8 +3,8 @@ use super::{Connection, ConversationStoreError, Template, bounded, fragments, no
 use crate::durable::observation::MessageHeader;
 use crate::model::ModelInputMessage;
 use crate::model::projected::FrozenModelInput;
+use crate::observation::trace::{TraceContentBlock, TraceRequestMessage};
 use crate::runtime::identity::ConversationId;
-use crate::runtime_client::trace::{TraceContentBlock, TraceRequestMessage};
 fn value(view: &TraceRequestMessage, header: Option<&MessageHeader>) -> serde_json::Value {
     match header {
         Some(header) => super::super::message_value_capture(header, view).unwrap().0,

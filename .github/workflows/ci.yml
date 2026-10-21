@@ -226,6 +226,42 @@ jobs:
       - name: Check test lane coverage
         run: cargo run --all-features --example check_test_lanes -- --job rust-fast
 
+  # FAST documentation contracts: a low-risk documentation change merges on
+  # FAST, but the `contracts` target reads the top-level, docs/, Web and TUI
+  # Markdown (tests/contracts/documentation.rs, runtime_examples.rs). This
+  # lane runs that target alone so such a change cannot merge unchecked. FULL
+  # runs the same target in rust-contracts and does not select this job.
+  documentation-contracts:
+    name: Documentation contracts (Linux)
+    needs: plan
+    if: fromJSON(needs.plan.outputs.run)['documentation-contracts']
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      VERIFICATION_PROFILE: fast
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.98.1"
+
+      - name: Install SQLite binding build dependency
+        uses: ./.github/actions/libclang
+      # A consumer of the rust-contracts lineage (the same dependency graph):
+      # this lane never publishes a cache of its own, so it adds no lineage to
+      # the shared cache budget; see the policy note in the `quality` job.
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-contracts
+          save-if: false
+
+      - name: Run the documentation and runtime-example contracts
+        run: cargo test --test contracts --all-features
+
   # Fast deterministic classes: source-module unit tests, the in-crate
   # scripted contract suites, and the pure contract targets. No cross-module
   # boundary conformance suite runs here: none needs a real process, a
@@ -1142,6 +1178,7 @@ jobs:
       - notifications
       - quality
       - rust-fast
+      - documentation-contracts
       - rust-contracts
       - rust-boundaries
       - rust-platform-core
