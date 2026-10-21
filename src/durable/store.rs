@@ -12,6 +12,7 @@
 //! PublicationStore  durable publication plane               (store::publication)
 //! ProjectionStore   Context projection, compaction, lineage (store::projection)
 //! ObservationStore  bounded observation reads, readiness    (store::observation)
+//! AuxiliaryStore    auxiliary Call/request ownership, audit (store::auxiliary)
 //! ```
 //!
 //! The split is by semantic domain, never by table: a compound transition that
@@ -20,6 +21,7 @@
 //! point, and the backend commits it in one transaction. A consumer that needs
 //! only one domain depends on that domain's contract.
 
+pub mod auxiliary;
 pub mod canonical;
 pub mod journal;
 pub mod observation;
@@ -30,8 +32,8 @@ pub mod request;
 use crate::runtime::identity::{ConversationId, MessageId, RequestId};
 
 use crate::durable::{
-    CanonicalStore, InboxStore, JournalStore, ObservationStore, ProjectionStore, PublicationStore,
-    RequestStore,
+    AuxiliaryStore, CanonicalStore, InboxStore, JournalStore, ObservationStore, ProjectionStore,
+    PublicationStore, RequestStore,
 };
 
 /// A `ConversationStore` contract violation or storage failure.
@@ -172,6 +174,7 @@ pub trait ConversationStore:
     + PublicationStore
     + ProjectionStore
     + ObservationStore
+    + AuxiliaryStore
 {
     /// The conversation this store is the durable authority of.
     fn conversation_id(&self) -> &ConversationId;

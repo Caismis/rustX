@@ -118,6 +118,7 @@ pub struct CanonicalRawToolArguments {
 /// raw Tool argument bytes; compaction never manufactures canonical messages.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LineageSeed {
+    auxiliary_audits: Vec<crate::durable::reading::AuxiliaryAuditSnapshot>,
     raw_tool_arguments: Vec<CanonicalRawToolArguments>,
     projections: Vec<crate::durable::projection::ProjectionCheckpoint>,
     canonical: Vec<MessageBlock>,
@@ -188,6 +189,7 @@ impl LineageSeed {
             })
             .collect();
         Self {
+            auxiliary_audits: Vec::new(),
             projections: Vec::new(),
             canonical,
             surface_history,
@@ -281,6 +283,7 @@ impl LineageSeed {
             )));
         }
         Ok(Self {
+            auxiliary_audits: Vec::new(),
             projections: Vec::new(),
             canonical,
             surface_history,
@@ -320,6 +323,91 @@ impl LineageSeed {
     #[must_use]
     pub fn projections(&self) -> &[crate::durable::projection::ProjectionCheckpoint] {
         &self.projections
+    }
+
+    /// Attach exactly the bounded source audits named by retained checkpoints.
+    /// Audits are stored in canonical `(source_conversation_id, call_id,
+    /// through_journal)` order, matching durable reload order.
+    ///
+    /// # Errors
+    /// Rejects missing, extra, duplicate or oversized source evidence.
+    pub fn with_auxiliary_audits(
+        mut self,
+        mut audits: Vec<crate::durable::reading::AuxiliaryAuditSnapshot>,
+    ) -> Result<Self, ConversationStoreError> {
+        let limits = crate::context::resources::ResourceLimits::default();
+        if audits.len() > limits.total_items {
+            return Err(ConversationStoreError::ResourceBoundExceeded(
+                "inherited auxiliary audit count exceeds lineage budget".into(),
+            ));
+        }
+        crate::context::resources::bounded_encoded_len(&audits, limits.total_bytes)?;
+        let mut expected = std::collections::BTreeSet::new();
+        for checkpoint in &self.projections {
+            if let Some(reference) = &checkpoint.candidate.summary_generation {
+                expected.insert((
+                    reference.conversation_id.clone(),
+                    reference.call_id.clone(),
+                    reference.through_journal,
+                ));
+            }
+        }
+        let mut actual = std::collections::BTreeSet::new();
+        for audit in &audits {
+            if audit.through_journal == 0
+                || audit.records.is_empty()
+                || audit
+                    .records
+                    .iter()
+                    .any(|record| record.journal_sequence > audit.through_journal)
+                || !actual.insert((
+                    audit.source_conversation_id.clone(),
+                    audit.call_id.clone(),
+                    audit.through_journal,
+                ))
+            {
+                return Err(ConversationStoreError::InvalidReference(
+                    "invalid or duplicate inherited Summary generation audit".into(),
+                ));
+            }
+            let Some(crate::model::auxiliary::AuxiliaryAuditFact::CallStarted(call)) =
+                audit.records.first().map(|record| &record.fact)
+            else {
+                return Err(ConversationStoreError::InvalidReference(
+                    "inherited Summary generation audit lacks CallStarted".into(),
+                ));
+            };
+            if call.call_id != audit.call_id || call.purpose.as_str() != "summary" {
+                return Err(ConversationStoreError::InvalidReference(
+                    "inherited generation audit is not the named Summary Call".into(),
+                ));
+            }
+        }
+        if actual != expected {
+            return Err(ConversationStoreError::InvalidReference(
+                "retained checkpoints and inherited Summary generation audits differ".into(),
+            ));
+        }
+        audits.sort_by(|left, right| {
+            let left_key = (
+                left.source_conversation_id.as_str(),
+                left.call_id.as_str(),
+                left.through_journal,
+            );
+            let right_key = (
+                right.source_conversation_id.as_str(),
+                right.call_id.as_str(),
+                right.through_journal,
+            );
+            left_key.cmp(&right_key)
+        });
+        self.auxiliary_audits = audits;
+        Ok(self)
+    }
+
+    #[must_use]
+    pub fn auxiliary_audits(&self) -> &[crate::durable::reading::AuxiliaryAuditSnapshot] {
+        &self.auxiliary_audits
     }
 
     /// Attach immutable response provenance to this seed's exact canonical identities.

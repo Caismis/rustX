@@ -2,6 +2,7 @@
 
 use crate::events::types::RuntimeEventEnvelope;
 use crate::message::types::MessageBlock;
+use crate::model::ModelRequestOwner;
 use crate::model::snapshot::RequestSnapshot;
 use crate::model::types::ModelRequest;
 use crate::runtime::identity::{AttemptId, MessageId, PublicationStreamId, RequestId};
@@ -155,6 +156,13 @@ impl<T: RequestStore + ?Sized> ContributionEmissionLookup for T {
 /// the attempt terminal that replaces pending carryover.
 #[allow(clippy::missing_errors_doc)]
 pub trait RequestStore: Send + Sync + 'static {
+    /// Reads the ownership recorded by the exact request-start Journal fact.
+    /// Missing or inconsistent ownership for an existing request is an error.
+    fn load_request_owner(
+        &self,
+        request_id: &RequestId,
+    ) -> Result<Option<ModelRequestOwner>, ConversationStoreError>;
+
     /// Bounded native Attempt outline, including immutable copied origins.
     /// Native opening-input ownership for one actual Attempt at a Journal cut.
     fn attempt_prompt(

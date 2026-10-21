@@ -1284,10 +1284,11 @@ export type TurnId = string;
  * Identifies one actual provider-neutral model request.
  *
  * A request identity is distinct from an attempt, turn, retry ordinal,
- * and Event Journal sequence. It is derived once from the immutable
- * [`RequestIdentity`](crate::model::snapshot::RequestIdentity) and is
- * the durable correlation key for the Request Snapshot and its
- * request-start fact.
+ * and Event Journal sequence. Primary requests derive the `request:`
+ * namespace from immutable [`RequestIdentity`](crate::model::snapshot::RequestIdentity).
+ * Auxiliary requests allocate the separate `req_` `UUIDv7` namespace with
+ * [`RequestId::generate_auxiliary`]. Each physical retry is a distinct
+ * request. Identity alone grants no execution permission.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "RequestId".
@@ -6858,10 +6859,11 @@ export type SubagentActivity =
        * Identifies one actual provider-neutral model request.
        *
        * A request identity is distinct from an attempt, turn, retry ordinal,
-       * and Event Journal sequence. It is derived once from the immutable
-       * [`RequestIdentity`](crate::model::snapshot::RequestIdentity) and is
-       * the durable correlation key for the Request Snapshot and its
-       * request-start fact.
+       * and Event Journal sequence. Primary requests derive the `request:`
+       * namespace from immutable [`RequestIdentity`](crate::model::snapshot::RequestIdentity).
+       * Auxiliary requests allocate the separate `req_` `UUIDv7` namespace with
+       * [`RequestId::generate_auxiliary`]. Each physical retry is a distinct
+       * request. Identity alone grants no execution permission.
        */
       request_id: string;
       /**
@@ -10370,10 +10372,11 @@ export interface PublicationAudit {
    * Identifies one actual provider-neutral model request.
    *
    * A request identity is distinct from an attempt, turn, retry ordinal,
-   * and Event Journal sequence. It is derived once from the immutable
-   * [`RequestIdentity`](crate::model::snapshot::RequestIdentity) and is
-   * the durable correlation key for the Request Snapshot and its
-   * request-start fact.
+   * and Event Journal sequence. Primary requests derive the `request:`
+   * namespace from immutable [`RequestIdentity`](crate::model::snapshot::RequestIdentity).
+   * Auxiliary requests allocate the separate `req_` `UUIDv7` namespace with
+   * [`RequestId::generate_auxiliary`]. Each physical retry is a distinct
+   * request. Identity alone grants no execution permission.
    */
   request_id: string;
   /**
@@ -12222,10 +12225,11 @@ export interface SubagentObservation {
          * Identifies one actual provider-neutral model request.
          *
          * A request identity is distinct from an attempt, turn, retry ordinal,
-         * and Event Journal sequence. It is derived once from the immutable
-         * [`RequestIdentity`](crate::model::snapshot::RequestIdentity) and is
-         * the durable correlation key for the Request Snapshot and its
-         * request-start fact.
+         * and Event Journal sequence. Primary requests derive the `request:`
+         * namespace from immutable [`RequestIdentity`](crate::model::snapshot::RequestIdentity).
+         * Auxiliary requests allocate the separate `req_` `UUIDv7` namespace with
+         * [`RequestId::generate_auxiliary`]. Each physical retry is a distinct
+         * request. Identity alone grants no execution permission.
          */
         request_id: string;
         /**
@@ -14350,10 +14354,11 @@ export interface PublicationAudit1 {
    * Identifies one actual provider-neutral model request.
    *
    * A request identity is distinct from an attempt, turn, retry ordinal,
-   * and Event Journal sequence. It is derived once from the immutable
-   * [`RequestIdentity`](crate::model::snapshot::RequestIdentity) and is
-   * the durable correlation key for the Request Snapshot and its
-   * request-start fact.
+   * and Event Journal sequence. Primary requests derive the `request:`
+   * namespace from immutable [`RequestIdentity`](crate::model::snapshot::RequestIdentity).
+   * Auxiliary requests allocate the separate `req_` `UUIDv7` namespace with
+   * [`RequestId::generate_auxiliary`]. Each physical retry is a distinct
+   * request. Identity alone grants no execution permission.
    */
   request_id: string;
   /**
@@ -14405,10 +14410,11 @@ export interface PublicationAudit2 {
    * Identifies one actual provider-neutral model request.
    *
    * A request identity is distinct from an attempt, turn, retry ordinal,
-   * and Event Journal sequence. It is derived once from the immutable
-   * [`RequestIdentity`](crate::model::snapshot::RequestIdentity) and is
-   * the durable correlation key for the Request Snapshot and its
-   * request-start fact.
+   * and Event Journal sequence. Primary requests derive the `request:`
+   * namespace from immutable [`RequestIdentity`](crate::model::snapshot::RequestIdentity).
+   * Auxiliary requests allocate the separate `req_` `UUIDv7` namespace with
+   * [`RequestId::generate_auxiliary`]. Each physical retry is a distinct
+   * request. Identity alone grants no execution permission.
    */
   request_id: string;
   /**
@@ -16898,10 +16904,11 @@ export interface SubagentObservation1 {
          * Identifies one actual provider-neutral model request.
          *
          * A request identity is distinct from an attempt, turn, retry ordinal,
-         * and Event Journal sequence. It is derived once from the immutable
-         * [`RequestIdentity`](crate::model::snapshot::RequestIdentity) and is
-         * the durable correlation key for the Request Snapshot and its
-         * request-start fact.
+         * and Event Journal sequence. Primary requests derive the `request:`
+         * namespace from immutable [`RequestIdentity`](crate::model::snapshot::RequestIdentity).
+         * Auxiliary requests allocate the separate `req_` `UUIDv7` namespace with
+         * [`RequestId::generate_auxiliary`]. Each physical retry is a distinct
+         * request. Identity alone grants no execution permission.
          */
         request_id: string;
         /**

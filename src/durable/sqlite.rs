@@ -287,15 +287,20 @@ fn count_conversation_store_open() {
 /// Version 57 requires the immutable inherited transcript watermark in bootstrap identity.
 /// Version 58 adds transaction-owned content byte segments and exact versioned
 /// publication frontier evidence for bounded observation range reads.
-/// Earlier development stores are rejected without migration.
+/// Version 59 replaces canonical summary/Surface replacement ownership with
+/// independently durable typed checkpoints, historical activations, operation
+/// receipts and exact frozen request manifests. Earlier stores are refused.
+/// Version 60 normalizes immutable activation eligibility and installed prefix authority.
 /// Immutable context projection plus finite bounded observation layouts.
 /// Version 62 gives request fields explicit inline-header or original-span storage.
 /// Version 67 stores child lookup paths rather than duplicate Source Fact payloads.
 /// Version 68 binds canonical binary `ContentRefs` to frozen fixed-chunk digests.
 /// Version 69 requires explicit native artifact settlement evidence.
-/// Version 70 removes the redundant serialized active history from the Surface head.
-/// Version 71 stores authenticated Source pages with a bounded binary codec.
-pub const SQLITE_SCHEMA_VERSION: i64 = 71;
+/// Main versions 70/71 removed redundant active history and added the bounded
+/// authenticated Source page codec. The AUX branch independently used 70..=73
+/// for request ownership, audit/lineage and consumer-defined attribution.
+/// Version 74 combines both layouts; neither prior branch layout is accepted.
+pub const SQLITE_SCHEMA_VERSION: i64 = 74;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -934,6 +939,14 @@ impl SqliteConversationStore {
             )
             .expect("force sequence");
     }
+
+    #[cfg(test)]
+    pub(crate) fn install_after_request_row_read_hook(
+        request_id: crate::runtime::identity::RequestId,
+        hook: impl FnOnce() + 'static,
+    ) {
+        auxiliary::install_after_request_row_read_hook(request_id, hook);
+    }
 }
 
 impl ConversationStore for SqliteConversationStore {
@@ -1019,6 +1032,7 @@ fn is_constraint_violation(error: &rusqlite::Error) -> bool {
 
 // Finite archive readers share the concrete durable schema, never transport DTOs.
 pub(crate) mod archive;
+mod auxiliary;
 pub(crate) mod canonical;
 mod compaction_resources;
 mod inbox;
@@ -1028,6 +1042,7 @@ mod provenance;
 mod publication;
 mod reading;
 pub(crate) mod request;
+mod request_owner_shape;
 mod schema;
 #[cfg(test)]
 mod test_support;

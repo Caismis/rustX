@@ -271,7 +271,7 @@ fn a_version_30_questionnaire_journal_is_refused_at_open_never_decoded() {
             expected: SQLITE_SCHEMA_VERSION
         })
     ));
-    assert_eq!(SQLITE_SCHEMA_VERSION, 71);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 74);
 
     // And the refusal is not ceremony: had the gate admitted the file,
     // these are the rows the typed decoder would have had to interpret,
@@ -336,7 +336,7 @@ fn a_version_31_subagent_ownership_journal_is_refused_at_open_never_decoded() {
             expected: SQLITE_SCHEMA_VERSION
         })
     ));
-    assert_eq!(SQLITE_SCHEMA_VERSION, 71);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 74);
 
     // And the refusal is not ceremony: the envelope framing is unchanged,
     // and the row the gate refused really is undecodable under the current
@@ -364,6 +364,7 @@ fn trace_schema_indexes_are_required_and_queries_use_them() {
     verify_schema_shape(&connection).unwrap();
     let scopes = [
         (FactScope::All, "events_kind_idx"),
+        (FactScope::AgentRequest, "events_primary_request_kind_idx"),
         (
             FactScope::Attempt(AttemptId::new("a")),
             "events_attempt_kind_idx",

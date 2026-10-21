@@ -728,6 +728,10 @@ fn latest_event(
                 .as_ref()
                 .and_then(|witness| witness.attempt_id.clone()),
             turn_id: witness.as_ref().and_then(|witness| witness.turn_id.clone()),
+            owner: witness.as_ref().and_then(|witness| witness.owner),
+            auxiliary_call_id: witness
+                .as_ref()
+                .and_then(|witness| witness.auxiliary_call_id.clone()),
             deferred: display.is_none(),
             witness,
             display,

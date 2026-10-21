@@ -341,6 +341,9 @@ fn failure(store: &dyn ConversationStore, request: &RequestSnapshot, kind: Model
     append(
         store,
         E::ModelRequestFailed {
+            owner: crate::model::ModelRequestOwner::Agent {
+                identity: request.identity.clone(),
+            },
             request_id: request.request_id.clone(),
             usage: None,
             error: ModelError {
@@ -370,6 +373,9 @@ fn completion(
     let mut completed = event(
         store,
         E::ModelRequestCompleted {
+            owner: crate::model::ModelRequestOwner::Agent {
+                identity: request.identity.clone(),
+            },
             request_id: request.request_id.clone(),
             finish_reason: ModelFinishReason::Stop,
             usage,
@@ -2814,6 +2820,9 @@ fn a_fresh_step_at_retry_zero_is_still_compared_with_the_previous_request() {
     append_in_step(
         &store,
         E::ModelRequestCompleted {
+            owner: crate::model::ModelRequestOwner::Agent {
+                identity: second.identity.clone(),
+            },
             request_id: second.request_id.clone(),
             finish_reason: ModelFinishReason::Stop,
             usage: None,

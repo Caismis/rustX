@@ -3,6 +3,10 @@
 #[cfg(test)]
 mod tests;
 
+use crate::durable::sqlite::auxiliary;
+use crate::durable::sqlite::request::snapshot::find_request_start_event;
+use crate::durable::sqlite::schema::validate_primary_request_owner_event;
+use crate::model::ModelRequestOwner;
 use rusqlite::OptionalExtension;
 pub(super) mod reference;
 
@@ -77,7 +81,14 @@ impl JournalStore for SqliteConversationStore {
         &self,
         event: RuntimeEventEnvelope,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
-        if requires_specialized_transition(&event.event) {
+        if requires_specialized_transition(&event.event)
+            || (event.event.is_auxiliary_model_request()
+                && matches!(
+                    event.event,
+                    RuntimeEvent::ModelRequestCompleted { .. }
+                        | RuntimeEvent::ModelRequestFailed { .. }
+                ))
+        {
             return Err(ConversationStoreError::InvalidReference(
                 "this event kind must use its specialized durable transition".to_owned(),
             ));
@@ -315,6 +326,14 @@ impl JournalStore for SqliteConversationStore {
             events.reverse();
         }
         events.truncate(query.limit);
+        if matches!(
+            query.scope,
+            crate::durable::presentation::FactScope::AgentRequest
+        ) {
+            for event in &events {
+                validate_primary_request_owner_event(&connection, event)?;
+            }
+        }
         Ok(events)
     }
     fn read_events(
@@ -516,6 +535,13 @@ pub(super) fn persist_event_tx_internal(
     } else {
         validate_event_reference(transaction, &event)?;
     }
+    if let RuntimeEvent::ModelRequestStarted { request_id, .. } = &event.event
+        && find_request_start_event(transaction, request_id)?.is_some()
+    {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "request {request_id} already has a request-start fact"
+        )));
+    }
     let current: i64 = transaction
         .query_row(
             "SELECT next_event_sequence FROM rustx_store WHERE id=1",
@@ -595,6 +621,7 @@ pub(super) fn persist_event_tx_internal(
             ],
         )
         .map_err(|error| storage(format!("insert runtime event: {error}")))?;
+    auxiliary::index_event_tx(transaction, &event)?;
     // Missing auxiliary evidence is the fail-closed initial state. Independent
     // savepoints preserve own lifecycle facts if a different layout fails.
     // Readiness has its own recoverable missing-evidence flag. A newly
@@ -701,7 +728,12 @@ pub(super) fn persist_event_tx_internal(
     // The **P** marker: a durable provider outcome is recorded against its
     // exact request, so the publication plane can reject U-without-P with one
     // keyed lookup instead of a Journal scan.
-    if let RuntimeEvent::ModelRequestCompleted { request_id, .. } = &event.event {
+    if let RuntimeEvent::ModelRequestCompleted {
+        owner: ModelRequestOwner::Agent { .. },
+        request_id,
+        ..
+    } = &event.event
+    {
         let updated = transaction
             .execute(
                 "UPDATE request_snapshots SET completed_sequence=?1 WHERE request_id=?2 AND completed_sequence IS NULL",
@@ -973,6 +1005,8 @@ pub(super) fn requires_specialized_transition(event: &RuntimeEvent) -> bool {
             | RuntimeEvent::ToolMessageCommitted { .. }
             | RuntimeEvent::CompactionCompleted { .. }
             | RuntimeEvent::ModelRequestStarted { .. }
+            | RuntimeEvent::AuxiliaryCallStarted { .. }
+            | RuntimeEvent::AuxiliaryCallSettled { .. }
             | RuntimeEvent::ContextContributionEmitted { .. }
             | RuntimeEvent::BackgroundTerminalPublished { .. }
             | RuntimeEvent::SubagentTerminalPublished { .. }
@@ -1011,6 +1045,37 @@ pub(super) fn validate_canonical_event_for_message(
 #[allow(clippy::too_many_lines)] // Closed mapping from durable facts to exact terminal domains.
 pub(super) fn lifecycle_keys(event: &RuntimeEventEnvelope) -> Vec<(String, bool)> {
     match &event.event {
+        RuntimeEvent::AuxiliaryCallStarted { call_id, .. } => {
+            return vec![(format!("auxiliary-call:{call_id}"), false)];
+        }
+        RuntimeEvent::AuxiliaryCallSettled { call_id, .. } => {
+            return vec![(format!("auxiliary-call:{call_id}"), true)];
+        }
+        RuntimeEvent::ModelRequestStarted {
+            owner: ModelRequestOwner::Auxiliary { call_id, ordinal },
+            request_id,
+            ..
+        } => {
+            return vec![
+                (format!("auxiliary-call:{call_id}:request:{ordinal}"), false),
+                (format!("auxiliary-request:{request_id}"), false),
+            ];
+        }
+        RuntimeEvent::ModelRequestCompleted {
+            owner: ModelRequestOwner::Auxiliary { call_id, ordinal },
+            request_id,
+            ..
+        }
+        | RuntimeEvent::ModelRequestFailed {
+            owner: ModelRequestOwner::Auxiliary { call_id, ordinal },
+            request_id,
+            ..
+        } => {
+            return vec![
+                (format!("auxiliary-call:{call_id}:request:{ordinal}"), true),
+                (format!("auxiliary-request:{request_id}"), true),
+            ];
+        }
         RuntimeEvent::CompactionStarted { operation_id } => {
             return vec![(format!("compaction:{operation_id}"), false)];
         }

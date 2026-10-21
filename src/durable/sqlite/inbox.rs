@@ -894,7 +894,7 @@ pub(super) fn load_pending_exact(
         let message: UserMessageBlock =
             serde_json::from_str(&json).map_err(|error| storage(error.to_string()))?;
         if message.id.as_str() != id
-            || (!matches!(message.kind, InboundKind::Context(_))) != cursor.is_some()
+            || matches!(message.kind, InboundKind::Context(_)) == cursor.is_some()
         {
             return Err(ConversationStoreError::InvalidReference(
                 "pending source identity or transcript mismatch".into(),

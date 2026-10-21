@@ -1,5 +1,6 @@
 //! Bounded reading projections over existing native Attempt and transcript owners.
-use crate::runtime::identity::{AttemptId, ConversationId};
+use crate::model::auxiliary::{AuxiliaryAuditCut, AuxiliaryAuditRecord};
+use crate::runtime::identity::{AttemptId, AuxiliaryCallId, ConversationId};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -8,6 +9,54 @@ pub const TURN_PAGE_MAX: usize = 64;
 pub const TURN_PROMPT_PREVIEW_MAX: usize = 50;
 /// Three rail-card lines of the turn's final response.
 pub const TURN_RESPONSE_PREVIEW_MAX: usize = 120;
+
+/// Origin of one bounded auxiliary audit snapshot in a destination lineage.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AuxiliaryAuditOrigin {
+    /// The audit facts are owned by the local execution domain.
+    Local,
+    /// The audit facts were copied from an explicitly owned source lineage.
+    Inherited {
+        source_conversation_id: ConversationId,
+    },
+}
+
+/// Completeness of an auxiliary audit snapshot at its exact provenance cut.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuxiliaryAuditCompleteness {
+    /// The Call settled and every retained request terminal is visible.
+    CompleteAtCut,
+    /// The source Call remained open at this cut.
+    OpenAtCut,
+}
+
+/// Bounded, independently owned source audit for one explicitly referenced Call.
+///
+/// Records retain the source Conversation, Call/Request identities and original
+/// Journal positions. They are evidence only: this is not target-local
+/// execution, quota, correlation, or retry authority.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuxiliaryAuditSnapshot {
+    pub origin: AuxiliaryAuditOrigin,
+    pub source_conversation_id: ConversationId,
+    pub call_id: AuxiliaryCallId,
+    pub through_journal: u64,
+    pub completeness: AuxiliaryAuditCompleteness,
+    pub records: Vec<AuxiliaryAuditRecord>,
+}
+
+impl AuxiliaryAuditSnapshot {
+    /// Stable source cut carried by this independently owned snapshot.
+    #[must_use]
+    pub fn cut(&self) -> AuxiliaryAuditCut {
+        AuxiliaryAuditCut {
+            journal: self.through_journal,
+        }
+    }
+}
 
 /// Origin survives lineage copying; ordinal never participates in identity.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -220,6 +269,8 @@ impl From<InheritedTurnOutcome> for TurnProcessOutcome {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LineageReadCut {
     pub raw_tool_arguments: Vec<super::CanonicalRawToolArguments>,
+    /// Only auxiliary Calls explicitly named by retained checkpoints.
+    pub auxiliary_audits: Vec<AuxiliaryAuditSnapshot>,
     pub projections: Vec<super::projection::ProjectionCheckpoint>,
     pub read_cut: ConversationReadCut,
     pub conversation_id: ConversationId,

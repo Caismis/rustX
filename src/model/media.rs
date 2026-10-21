@@ -918,6 +918,7 @@ mod tests {
                         result_call: None,
                     }],
                     summary_metadata: None,
+                    summary_generation: None,
                 },
                 owner: store.projection_owner(None).unwrap(),
                 tokens_before: crate::runtime::types::TokenMeasurement {

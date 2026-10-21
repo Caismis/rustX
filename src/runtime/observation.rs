@@ -2116,10 +2116,7 @@ pub(crate) fn trace_fact_requires_publication(event: &RuntimeEvent) -> bool {
         | RuntimeEvent::AttemptFailed { .. }
         | RuntimeEvent::TurnStarted
         | RuntimeEvent::TurnCompleted
-        | RuntimeEvent::ModelRequestStarted { .. }
         | RuntimeEvent::ContextContributionEmitted { .. }
-        | RuntimeEvent::ModelRequestCompleted { .. }
-        | RuntimeEvent::ModelRequestFailed { .. }
         | RuntimeEvent::ModelRetryScheduled { .. }
         // Adoption is the canonical linearization point at which inbound
         // became a turn this conversation owes an answer for. Trace projects
@@ -2147,8 +2144,25 @@ pub(crate) fn trace_fact_requires_publication(event: &RuntimeEvent) -> bool {
         | RuntimeEvent::WorkflowCancelled { .. }
         | RuntimeEvent::InteractionRequested { .. }
         | RuntimeEvent::InteractionSettled { .. }
-        | RuntimeEvent::Goal { .. } => true,
-        RuntimeEvent::NativeToolInvocation { .. }
+        | RuntimeEvent::Goal { .. }
+        | RuntimeEvent::ModelRequestStarted {
+            owner: crate::model::snapshot::ModelRequestOwner::Agent { .. },
+            ..
+        }
+        | RuntimeEvent::ModelRequestCompleted {
+            owner: crate::model::snapshot::ModelRequestOwner::Agent { .. },
+            ..
+        }
+        | RuntimeEvent::ModelRequestFailed {
+            owner: crate::model::snapshot::ModelRequestOwner::Agent { .. },
+            ..
+        } => true,
+        RuntimeEvent::ModelRequestStarted { .. }
+        | RuntimeEvent::ModelRequestCompleted { .. }
+        | RuntimeEvent::ModelRequestFailed { .. }
+        | RuntimeEvent::AuxiliaryCallStarted { .. }
+        | RuntimeEvent::AuxiliaryCallSettled { .. }
+        | RuntimeEvent::NativeToolInvocation { .. }
         | RuntimeEvent::ToolExecutionProgress { .. }
         | RuntimeEvent::ToolExecutionDeadlineFired { .. }
         | RuntimeEvent::ToolExecutionCancellationRequested { .. }

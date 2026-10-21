@@ -125,6 +125,7 @@ impl RuntimeClientProjection {
             read_failure: None,
             read_revision: 0,
             domain_revisions: std::collections::BTreeMap::new(),
+            auxiliary_audit_total: None,
             domain_sources: DomainSources::new(),
             domain_source_bytes: 0,
             source_frontiers: std::collections::BTreeMap::default(),
@@ -194,6 +195,11 @@ impl RuntimeClientProjection {
         evidence: super::super::settings::SettingsEvidence,
     ) {
         self.snapshot.settings_evidence = evidence;
+    }
+
+    /// Seeds the exact dense audit count captured at the bootstrap Journal cut.
+    pub(crate) fn set_auxiliary_audit_total(&mut self, total: u64) {
+        self.auxiliary_audit_total = Some(total);
     }
 
     /// Installs the frozen effective native Agent Extension composition of

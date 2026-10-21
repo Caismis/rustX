@@ -4,6 +4,7 @@ use super::{
     find_event_at_sequence, find_event_by_id, load_user_notification_tx,
     runtime_event_dependency_name,
 };
+use crate::durable::sqlite::auxiliary;
 use crate::durable::sqlite::canonical::ledger::{
     ledger_message_exists, load_head, load_message_tx,
 };
@@ -31,6 +32,7 @@ use crate::message::content::TextBlock;
 use crate::message::types::{
     AssistantContentBlock, InboundKind, MessageBlock, UserContentBlock, UserSource,
 };
+use crate::model::ModelRequestOwner;
 use crate::runtime::identity::{AgentId, AttemptId, ConversationId, InteractionId, TurnId};
 use rusqlite::OptionalExtension;
 use rusqlite::Transaction;
@@ -573,35 +575,44 @@ pub(in crate::durable::sqlite) fn validate_event_reference(
                 )));
             }
         }
-        // A provider outcome names an actual started request. Without this
-        // the P marker could be recorded against a request that never had a
-        // durable start fact.
-        RuntimeEvent::ModelRequestCompleted { request_id, .. }
-        | RuntimeEvent::ModelRequestFailed { request_id, .. } => {
-            let Some(row) = read_request_snapshot_tx(transaction, request_id)? else {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "model request outcome references request {request_id}, which never started"
-                )));
-            };
-            let (snapshot, _, _) = validate_started_request_row_tx(
-                transaction,
-                &envelope.conversation_id,
-                request_id,
-                row,
-            )?;
-            if envelope.attempt_id.as_ref() != Some(&snapshot.identity.attempt_id)
-                || envelope.turn_id.as_ref() != Some(&snapshot.identity.turn)
-            {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "model request outcome for {request_id} has a foreign attempt or turn envelope"
-                )));
-            }
-            if find_request_outcome_event(transaction, request_id)?.is_some() {
-                return Err(ConversationStoreError::TerminalViolation(format!(
-                    "request {request_id} already has a durable provider outcome"
-                )));
-            }
+        // Provider terminal ownership is checked on the closed owner branch.
+        // Agent terminals retain every existing Snapshot/P rule; auxiliary
+        // terminals require a Call prerequisite and exactly one settlement.
+        RuntimeEvent::ModelRequestCompleted {
+            owner, request_id, ..
         }
+        | RuntimeEvent::ModelRequestFailed {
+            owner, request_id, ..
+        } => match owner {
+            ModelRequestOwner::Agent { .. } => {
+                let Some(row) = read_request_snapshot_tx(transaction, request_id)? else {
+                    return Err(ConversationStoreError::InvalidReference(format!(
+                        "model request outcome references request {request_id}, which never started"
+                    )));
+                };
+                let (snapshot, _, _) = validate_started_request_row_tx(
+                    transaction,
+                    &envelope.conversation_id,
+                    request_id,
+                    row,
+                )?;
+                if envelope.attempt_id.as_ref() != Some(&snapshot.identity.attempt_id)
+                    || envelope.turn_id.as_ref() != Some(&snapshot.identity.turn)
+                {
+                    return Err(ConversationStoreError::InvalidReference(format!(
+                        "model request outcome for {request_id} has a foreign attempt or turn envelope"
+                    )));
+                }
+                if find_request_outcome_event(transaction, request_id)?.is_some() {
+                    return Err(ConversationStoreError::TerminalViolation(format!(
+                        "request {request_id} already has a durable provider outcome"
+                    )));
+                }
+            }
+            ModelRequestOwner::Auxiliary { .. } => {
+                auxiliary::validate_request_terminal_event_tx(transaction, envelope)?;
+            }
+        },
         // Every Tool Plane transition that names a proposal uses the same
         // semantic owner. This includes execution starts/progress/outcomes
         // and detached background authorization.
@@ -918,8 +929,16 @@ pub(in crate::durable::sqlite) fn validate_event_reference(
                 ));
             }
         }
-        RuntimeEvent::ModelRequestStarted { .. } => {
-            let _ = reconstruct_request_start_reference(transaction, envelope, None)?;
+        RuntimeEvent::ModelRequestStarted { owner, .. } => match owner {
+            ModelRequestOwner::Agent { .. } => {
+                let _ = reconstruct_request_start_reference(transaction, envelope, None)?;
+            }
+            ModelRequestOwner::Auxiliary { .. } => {
+                auxiliary::validate_request_start_event_tx(transaction, envelope)?;
+            }
+        },
+        RuntimeEvent::AuxiliaryCallStarted { .. } | RuntimeEvent::AuxiliaryCallSettled { .. } => {
+            auxiliary::validate_call_event_tx(transaction, envelope)?;
         }
         RuntimeEvent::BackgroundTerminalPublished { message_id, .. } => {
             let notification = load_user_notification_tx(transaction, message_id, "background")?;

@@ -374,6 +374,8 @@ pub(crate) struct RuntimeClientProjection {
     collection_ordinal: Option<u64>,
     tool_occurrence: Option<crate::events::types::ToolObservationOccurrence>,
     domain_revisions: std::collections::BTreeMap<&'static str, u64>,
+    /// Exact dense auxiliary-audit total seeded by the owning Store read.
+    auxiliary_audit_total: Option<u64>,
     /// The cursor of the last published event (0 = nothing published yet).
     cursor: RuntimeClientCursor,
     /// Set when the cursor space is exhausted: publishing stops and

@@ -122,10 +122,15 @@ impl CanonicalStore for SqliteConversationStore {
             );
         }
         let seed = seed.with_projections(inherited)?;
+        let auxiliary_audits = {
+            let connection = self.lock()?;
+            projection::load_inherited_auxiliary_audits(&connection)?
+        };
         self.initialize_lineage(
             &seed
                 .with_completed_responses(self.load_inherited_responses()?)?
-                .with_turns(self.load_inherited_turns()?)?,
+                .with_turns(self.load_inherited_turns()?)?
+                .with_auxiliary_audits(auxiliary_audits)?,
         )
     }
     #[allow(clippy::too_many_lines)] // One atomic bootstrap owns Ledger, Surface and inherited facts.
@@ -135,6 +140,7 @@ impl CanonicalStore for SqliteConversationStore {
                 .with_completed_responses(seed.completed_responses().to_vec())?
                 .with_turns(seed.turns().to_vec())?
                 .with_projections(seed.projections().to_vec())?
+                .with_auxiliary_audits(seed.auxiliary_audits().to_vec())?
                 .with_raw_tool_arguments(seed.raw_tool_arguments().to_vec())?;
         let seed = &validated;
         let messages = seed.canonical();
@@ -152,19 +158,33 @@ impl CanonicalStore for SqliteConversationStore {
         // Fail closed if initialized metadata is missing or damaged. The marker
         // and identity are written in this same transaction, never independently.
         read_inherited_occupancy(&transaction)?;
-        let bootstrap: Option<(i64, String, String, String)> = transaction
+        let bootstrap: Option<(i64, String, String, String, u64, String)> = transaction
             .query_row(
-                "SELECT message_count,history_digest,occupancy_json,occupancy_digest FROM bootstrap_identity WHERE id=1",
+                "SELECT message_count,history_digest,occupancy_json,occupancy_digest,auxiliary_audit_count,auxiliary_audit_digest FROM bootstrap_identity WHERE id=1",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
             )
             .optional()
             .map_err(|error| storage(format!("bootstrap probe: {error}")))?;
-        if let Some((count, digest, retained_occupancy, retained_digest)) = bootstrap {
+        if let Some((
+            count,
+            digest,
+            retained_occupancy,
+            retained_digest,
+            auxiliary_audit_count,
+            auxiliary_audit_digest,
+        )) = bootstrap
+        {
             let bootstrap_revision = SurfaceRevision::new(
                 u64::try_from(count).map_err(|_| storage("negative bootstrap message count"))?,
             );
             projection::verify_lineage(&transaction, seed.projections())?;
+            projection::verify_inherited_auxiliary_audits(&transaction, seed.auxiliary_audits())?;
+            projection::verify_auxiliary_lineage_bootstrap(
+                &transaction,
+                auxiliary_audit_count,
+                &auxiliary_audit_digest,
+            )?;
             if replay_surface_history(&transaction, bootstrap_revision)?.1 != seed.surface_history()
             {
                 return Err(ConversationStoreError::InitialHistoryMismatch);
@@ -285,6 +305,14 @@ impl CanonicalStore for SqliteConversationStore {
                 observation_occupancy::inherited(&transaction, occupancy.as_ref())
             });
             provenance::persist(&transaction, seed)?;
+            projection::install_inherited_auxiliary_audits(&transaction, seed.auxiliary_audits())?;
+            let (auxiliary_audit_count, auxiliary_audit_digest) =
+                projection::auxiliary_lineage_bootstrap(&transaction)?;
+            transaction.execute(
+                "UPDATE bootstrap_identity SET auxiliary_audit_count=?1,auxiliary_audit_digest=?2 WHERE id=1",
+                params![seq_to_i64(auxiliary_audit_count)?, auxiliary_audit_digest],
+            ).map_err(|error| storage(format!("install inherited auxiliary audit witness: {error}")))?;
+
             // The original identity and provenance now exist together. Derived
             // readers validate this same transaction's complete bootstrap shape;
             // no external reader sees the marker before COMMIT.

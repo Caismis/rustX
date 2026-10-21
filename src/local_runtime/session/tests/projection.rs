@@ -185,7 +185,21 @@ fn exact_summary_is_not_a_fuzzy_search_page() {
             .unwrap();
         earlier.push(prepared.session_id.clone());
     }
-    let target = earlier.remove(0);
+    // Select the actual oldest row, including the public tie-break rule;
+    // wall-clock adjustments need not preserve allocation order.
+    let target = earlier
+        .iter()
+        .min_by(|a, b| {
+            catalog
+                .summary(a)
+                .unwrap()
+                .updated_at
+                .cmp(&catalog.summary(b).unwrap().updated_at)
+                .then_with(|| b.cmp(a))
+        })
+        .unwrap()
+        .clone();
+    earlier.retain(|id| id != &target);
     for id in &earlier {
         catalog
             .rename(id, &format!("mentions {}", target.as_str()))
@@ -427,6 +441,12 @@ fn catalog_with_projected_sessions(count: usize) -> (TempDir, SessionCatalog, Ve
                 .rename(&session_id, &format!("Project {index:02}"))
                 .expect("name the Session");
         }
+        // This fixture tests paging of persisted activity, not the host
+        // wall clock's monotonicity while creating many databases.
+        let activity =
+            chrono::DateTime::from_timestamp(4_102_444_800 + i64::try_from(index).unwrap(), 0)
+                .unwrap();
+        catalog.publish_activity(&session_id, activity).unwrap();
         sessions.push(session_id);
     }
     (directory, catalog, sessions)
@@ -969,9 +989,18 @@ fn session_list_projection_is_bounded_searchable_and_continuable() {
         .chain(third.sessions)
         .map(|summary| summary.id)
         .collect::<Vec<_>>();
+    let mut expected = allocated
+        .iter()
+        .map(|id| catalog.summary(id).unwrap())
+        .collect::<Vec<_>>();
+    expected.sort_by(|a, b| {
+        b.updated_at
+            .cmp(&a.updated_at)
+            .then_with(|| a.id.cmp(&b.id))
+    });
     assert_eq!(
         ids,
-        allocated.into_iter().rev().collect::<Vec<_>>(),
+        expected.into_iter().map(|row| row.id).collect::<Vec<_>>(),
         "offsets and next_offset describe the visible set: no holes, no duplicates"
     );
 

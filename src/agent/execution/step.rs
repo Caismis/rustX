@@ -482,12 +482,24 @@ impl<'a> AgentExecution<'a> {
                 },
             });
         };
+        let Some(owner) = self.exact_started_request_owner(&request_id) else {
+            return Some(Terminal::Failed {
+                failure: AttemptFailure::Runtime {
+                    error: RuntimeError::ContractViolation {
+                        message:
+                            "a model stream completed without the matching durable start identity"
+                                .to_owned(),
+                    },
+                },
+            });
+        };
         // P: the provider outcome of this exact request becomes durable.
         // This downstream copy is derived only after canonical assembly has
         // validated and retained the event's terminal fact.
         let finish_reason = turn_assembly.finish_reason.clone();
         let generation = self.settle_generation_evidence();
         self.emit(RuntimeEvent::ModelRequestCompleted {
+            owner,
             request_id,
             finish_reason: finish_reason.clone(),
             usage: reported_usage.clone(),

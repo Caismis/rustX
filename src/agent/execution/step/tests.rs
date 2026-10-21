@@ -361,12 +361,26 @@ fn expected_trace(adopted: Option<&str>) -> Vec<crate::events::types::RuntimeEve
         },
         RuntimeEvent::TurnStarted,
         RuntimeEvent::ModelRequestStarted {
+            owner: crate::model::ModelRequestOwner::Agent {
+                identity: crate::model::RequestIdentity {
+                    attempt_id: AttemptId::new("attempt-1"),
+                    turn: crate::runtime::identity::TurnId::new("1"),
+                    retry_number: 0,
+                },
+            },
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             model: "scripted".to_owned(),
         },
         // Assistant streaming assembly is no longer an Event Journal
         // fact (Issue #108): it lives in the durable publication plane.
         RuntimeEvent::ModelRequestCompleted {
+            owner: crate::model::ModelRequestOwner::Agent {
+                identity: crate::model::RequestIdentity {
+                    attempt_id: AttemptId::new("attempt-1"),
+                    turn: crate::runtime::identity::TurnId::new("1"),
+                    retry_number: 0,
+                },
+            },
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             finish_reason: ModelFinishReason::ToolCalls,
             usage: None,

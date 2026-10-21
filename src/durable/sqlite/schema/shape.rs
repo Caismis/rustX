@@ -2,6 +2,8 @@
 
 use super::PRESENTATION_INDEXES;
 use crate::durable::ConversationStoreError;
+use crate::durable::sqlite::auxiliary;
+use crate::durable::sqlite::request_owner_shape;
 use crate::durable::sqlite::{
     content, manifest, observation, observation_request, observation_trace, projection, provenance,
     storage,
@@ -40,6 +42,8 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
             "inherited_transcript_through",
             "projection_count",
             "projection_digest",
+            "auxiliary_audit_count",
+            "auxiliary_audit_digest",
         ]
     {
         return Err(ConversationStoreError::IncompatibleSchema(
@@ -387,6 +391,8 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
                 "inherited_transcript_through",
                 "projection_count",
                 "projection_digest",
+                "auxiliary_audit_count",
+                "auxiliary_audit_digest",
             ],
         ),
         (
@@ -681,6 +687,9 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
     observation::verify_schema(connection)?;
     observation_trace::verify_schema(connection)?;
     observation_request::verify_schema(connection)?;
+    auxiliary::verify_schema(connection)?;
+    projection::verify_auxiliary_lineage_schema(connection)?;
+    request_owner_shape::verify(connection)?;
     Ok(())
 }
 

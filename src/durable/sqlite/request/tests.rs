@@ -20,6 +20,7 @@ use crate::message::types::{
     AssistantContentBlock, ContentBlockIndex, ContributionEmission, InboundKind, MessageBlock,
     UserContentBlock, UserMessageBlock, UserSource,
 };
+use crate::model::ModelRequestOwner;
 use crate::model::finish::ModelFinishReason;
 use crate::model::snapshot::RequestIdentity;
 use crate::model::snapshot::RequestSnapshot;
@@ -39,6 +40,7 @@ use std::sync::{Arc, Mutex};
 mod fragment;
 mod header_capture;
 mod manifest_store;
+mod owner;
 mod probe;
 mod retry;
 mod snapshot_validation;
@@ -1880,6 +1882,9 @@ fn incomplete_historical_snapshot_does_not_block_independently_complete_current_
         "old-request-completed",
         Some(first.identity.attempt_id.clone()),
         RuntimeEvent::ModelRequestCompleted {
+            owner: ModelRequestOwner::Agent {
+                identity: first.identity.clone(),
+            },
             request_id: first.request_id.clone(),
             finish_reason: ModelFinishReason::Stop,
             usage: None,

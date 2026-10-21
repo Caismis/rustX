@@ -19,6 +19,14 @@ pub(super) fn durable_projection(
         .observation_read_cut()
         .map_err(|error| HostConstructionError::Durable(error.to_string()))?;
     let through = source_cut.read.journal;
+    let auxiliary_total = store
+        .auxiliary_audit_total(crate::model::auxiliary::AuxiliaryAuditCut { journal: through })
+        .map_err(|error| HostConstructionError::Durable(error.to_string()))?;
+    if auxiliary_total > 9_007_199_254_740_991 {
+        return Err(HostConstructionError::Durable(
+            "auxiliary audit total exceeds the protocol integer domain".into(),
+        ));
+    }
     let capabilities = crate::observation::capability_source::CapabilityView {
         configured_tools: Vec::new(),
         revision: crate::runtime::identity::CapabilityRevision::new(0),
@@ -34,6 +42,7 @@ pub(super) fn durable_projection(
         None,
         replay_limit,
     );
+    projection.set_auxiliary_audit_total(auxiliary_total);
     projection.set_settings_evidence(super::super::settings::SettingsEvidence::HistoricalPartial);
     // No runtime stands behind a durable projection, so there is no
     // authoritative Agent composition to project: `effective_plugins`
@@ -87,6 +96,16 @@ pub(super) fn bootstrap_live_projection(
         seed.model.inline(),
         replay_limit,
     );
+    let auxiliary_journal = seed
+        .observation_cut
+        .as_ref()
+        .map_or(seed.journal_through, |cut| cut.read.journal);
+    if let Ok(total) = store.auxiliary_audit_total(crate::model::auxiliary::AuxiliaryAuditCut {
+        journal: auxiliary_journal,
+    }) && total <= 9_007_199_254_740_991
+    {
+        projection.set_auxiliary_audit_total(total);
+    }
     install_bootstrap_sources(&mut projection, seed, &resource_source, &capability_source);
     projection.bootstrap(seed);
     install_bootstrap_frontiers(&mut projection, seed, &resource_source, &capability_source);

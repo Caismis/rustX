@@ -1391,6 +1391,17 @@ pub fn assert_compiled_execution_mode_schema(
 pub fn replay_execution_states(events: &[RuntimeEvent]) -> Result<Vec<ExecutionState>, String> {
     let mut phases = vec![ExecutionState::Idle];
     for event in events {
+        // This fold is primary-Agent evidence. Auxiliary requests and Calls
+        // share the physical Journal but have no Agent phase.
+        if event.is_auxiliary_model_request()
+            || matches!(
+                event,
+                RuntimeEvent::AuxiliaryCallStarted { .. }
+                    | RuntimeEvent::AuxiliaryCallSettled { .. }
+            )
+        {
+            continue;
+        }
         let current = *phases.last().expect("at least the idle phase");
         if !current.is_active() {
             return Err(format!("event after the terminal phase: {event:?}"));
@@ -1413,7 +1424,10 @@ pub fn replay_execution_states(events: &[RuntimeEvent]) -> Result<Vec<ExecutionS
             RuntimeEvent::AttemptFailed { .. } | RuntimeEvent::AttemptCancelled { .. } => {
                 ExecutionState::Failed
             }
-            RuntimeEvent::ModelRequestStarted { .. } => ExecutionState::RunningModel,
+            RuntimeEvent::ModelRequestStarted {
+                owner: rustx::model::ModelRequestOwner::Agent { .. },
+                ..
+            } => ExecutionState::RunningModel,
             RuntimeEvent::ToolExecutionStarted { .. }
             | RuntimeEvent::ToolExecutionCompleted { .. }
             | RuntimeEvent::ToolExecutionFailed { .. } => ExecutionState::WaitingForTool,

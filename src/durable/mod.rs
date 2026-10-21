@@ -69,6 +69,7 @@
 //! acceptance **C** ([`PublicationStore::commit_canonical_publication`]),
 //! ordered `P < U < C` and enforced by the store as `C => U => P`.
 
+pub mod auxiliary;
 pub mod inbox;
 pub mod observation;
 pub mod presentation;
@@ -78,6 +79,10 @@ pub mod sqlite;
 pub mod store;
 pub mod trace;
 
+pub use auxiliary::{
+    AuxiliaryCallStartCommit, AuxiliaryRequestStartCommit, AuxiliarySettlementCommit,
+    AuxiliaryWriteFailure,
+};
 pub use inbox::{
     AcceptedInbound, AdoptedBatch, ConversationInboundCapability, ConversationInteractionAudit,
     ConversationStoreBinding, GoalObservationReceipt, InboundDraft, InboxStore, PendingBatch,
@@ -87,6 +92,7 @@ pub use inbox::{
 #[cfg(test)]
 pub(crate) use sqlite::conversation_store_opens_on_this_thread;
 pub use sqlite::{SqliteConversationStore, conversation_store_open_count};
+pub use store::auxiliary::AuxiliaryStore;
 pub use store::canonical::{
     CanonicalMessagePage, CanonicalObservationBatch, CanonicalRawToolArguments, CanonicalStore,
     DurableConversationHead, InspectionSeed, LineageSeed, NativeTodoObservation,

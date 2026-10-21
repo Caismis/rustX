@@ -217,6 +217,9 @@ fn uploaded_retry_deferred_identity_uses_the_same_original_anchor_as_its_locator
         "first-upload-request-completed",
         Some(snapshot.identity.attempt_id.clone()),
         RuntimeEvent::ModelRequestCompleted {
+            owner: crate::model::ModelRequestOwner::Agent {
+                identity: snapshot.identity.clone(),
+            },
             request_id: snapshot.request_id.clone(),
             finish_reason: ModelFinishReason::Stop,
             usage: None,

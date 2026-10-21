@@ -8,6 +8,7 @@ use crate::context::{
     PostToolBatchOpportunity,
 };
 use crate::conversation::ConversationState;
+use crate::durable::AuxiliaryStore;
 use crate::durable::CanonicalStore;
 use crate::durable::JournalStore;
 use crate::durable::ObservationStore;
@@ -415,6 +416,371 @@ fn event_observation(event: RuntimeEvent) -> ConversationObservation {
     ConversationObservation::Event {
         attempt_id: attempt(),
         event,
+    }
+}
+
+fn auxiliary_witness() -> crate::durable::observation::ObservationEventWitness {
+    let call_id =
+        crate::runtime::identity::AuxiliaryCallId::new("aux_36524fd8-f674-7fc2-8125-06d01fee0e18");
+    crate::durable::observation::ObservationEventWitness {
+        occupancy: None,
+        native_direct: false,
+        trace_total: Some(0),
+        source_unavailable: false,
+        sequence: 1,
+        transcript_cursor: None,
+        event_id: None,
+        attempt_id: None,
+        turn_id: None,
+        owner: Some(crate::durable::observation::RequestOwnerKind::Auxiliary),
+        auxiliary_call_id: Some(call_id),
+        timestamp: chrono::DateTime::UNIX_EPOCH,
+        event_kind: "model_request_started".into(),
+        tool_occurrence: None,
+        result_ledger_position: None,
+        value: serde_json::json!({"type": "model_request_started"}),
+        fields: Vec::new(),
+        deferred: false,
+    }
+}
+
+#[test]
+fn auxiliary_journal_fact_advances_only_its_audit_domain() {
+    let mut projection = projection();
+    projection.set_auxiliary_audit_total(7);
+    let before_snapshot = projection.snapshot().unwrap().0;
+    let before = |projection: &RuntimeClientProjection, domain| projection.domain_revision(domain);
+    let attempt = before(&projection, "attempt");
+    let context = before(&projection, "context");
+    let trace = before(&projection, "trace");
+    let auxiliary = before(&projection, "auxiliary");
+    projection.advance_domain_revisions(&ConversationObservation::JournalFact(auxiliary_witness()));
+    assert_eq!(projection.domain_revision("auxiliary"), auxiliary + 1);
+    assert_eq!(projection.domain_revision("attempt"), attempt);
+    assert_eq!(projection.domain_revision("context"), context);
+    assert_eq!(projection.domain_revision("trace"), trace);
+    assert!(!super::observe::invalidates_read_domains(
+        &ConversationObservation::JournalFact(auxiliary_witness())
+    ));
+    let events = projection.fold_journal_fact(auxiliary_witness());
+    assert!(matches!(
+        events.as_slice(),
+        [RuntimeClientEvent::CollectionChanged { domain, cut }]
+            if domain == crate::runtime_client::auxiliary::DOMAIN
+                && cut.total == 8
+    ));
+    assert_eq!(projection.snapshot().unwrap().0, before_snapshot);
+    let checkpoint = projection.checkpoint_candidate().unwrap();
+    assert!(
+        checkpoint
+            .collections
+            .iter()
+            .all(|frontier| frontier.domain != crate::runtime_client::auxiliary::DOMAIN)
+    );
+}
+
+#[test]
+fn auxiliary_native_direct_fact_still_advances_only_the_audit_domain() {
+    let mut projection = projection();
+    projection.set_auxiliary_audit_total(3);
+    let attempt = projection.domain_revision("attempt");
+    let read_revision = projection.read_revision;
+    let mut witness = auxiliary_witness();
+    witness.native_direct = true;
+    projection.apply(ConversationObservation::JournalFact(witness));
+    assert_eq!(projection.domain_revision("auxiliary"), 1);
+    assert_eq!(projection.domain_revision("attempt"), attempt);
+    assert_eq!(projection.auxiliary_audit_total, Some(4));
+    assert_eq!(projection.read_revision, read_revision);
+    assert!(!projection.read_domains_dirty);
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // Exercise actual Store receipts and the complete live projection path.
+fn r1_primary_request_usage_survives_reduced_native_witness_and_auxiliary_interleave() {
+    use crate::durable::observation::NativeObservationTransition;
+    use crate::durable::{ConversationStore, SqliteConversationStore};
+    use crate::model::auxiliary::{
+        AuxiliaryAttribution, AuxiliaryBusinessSource, AuxiliaryCallOutcome, AuxiliaryCallStart,
+        AuxiliaryFingerprint, AuxiliaryInputEvidence, AuxiliaryObservedProviderTerminal,
+        AuxiliaryRequestEvidence, AuxiliaryRequestStart, AuxiliaryUsageCompleteness,
+    };
+    use crate::model::deadline::ModelTimeoutPhase;
+    use crate::model::snapshot::ModelRequestOwner;
+    use crate::runtime::identity::{AuxiliaryCallId, SystemUuidV7Generator};
+
+    for (completed, primary_usage) in [
+        (
+            true,
+            ModelUsage {
+                input_tokens: 101,
+                output_tokens: 23,
+                total_tokens: 124,
+                details: None,
+            },
+        ),
+        (
+            false,
+            ModelUsage {
+                input_tokens: 211,
+                output_tokens: 37,
+                total_tokens: 248,
+                details: None,
+            },
+        ),
+        (
+            true,
+            ModelUsage {
+                input_tokens: u64::MAX - 23,
+                output_tokens: 23,
+                total_tokens: u64::MAX,
+                details: None,
+            },
+        ),
+    ] {
+        let expected_usage = completed.then_some(primary_usage.clone());
+        let mut projection = projection();
+        let store = SqliteConversationStore::in_memory(projection.snapshot.conversation_id.clone())
+            .unwrap();
+        projection
+            .initialize_descriptor_heads(&store, store.observation_read_cut().unwrap())
+            .unwrap();
+        projection.initialize_publication_view();
+
+        let attempt_started = store
+            .append_event(source_tool_event(
+                &store,
+                RuntimeEvent::AttemptStarted {
+                    attempt_id: attempt(),
+                },
+                "r1-primary-attempt-start",
+            ))
+            .unwrap();
+        publish_source_fact(&mut projection, |projection| {
+            projection.apply_native_batch(attempt_started.observation.as_deref().unwrap());
+        });
+
+        let snapshot = raw_publication_snapshot(crate::context::resources::LedgerFrontier(
+            store.observation_read_cut().unwrap().ledger_through,
+        ));
+        let started = store
+            .commit_model_turn_start(&[], &snapshot, chrono::Utc::now())
+            .unwrap();
+        let started_native = started.started.observation.as_deref().unwrap();
+        let NativeObservationTransition::RequestStart {
+            started: started_witness,
+            ..
+        } = &started_native.transition
+        else {
+            panic!("primary request start has its native request transition");
+        };
+        assert_eq!(
+            started_witness.owner,
+            Some(crate::durable::observation::RequestOwnerKind::Agent)
+        );
+        assert!(started_witness.value["owner"].get("identity").is_none());
+        publish_source_fact(&mut projection, |projection| {
+            projection.apply_native_batch(started_native);
+        });
+
+        let owner = ModelRequestOwner::Agent {
+            identity: snapshot.identity.clone(),
+        };
+        let terminal = if completed {
+            RuntimeEvent::ModelRequestCompleted {
+                owner,
+                request_id: snapshot.request_id.clone(),
+                finish_reason: ModelFinishReason::Stop,
+                usage: Some(primary_usage.clone()),
+                generation: None,
+            }
+        } else {
+            RuntimeEvent::ModelRequestFailed {
+                owner,
+                request_id: snapshot.request_id.clone(),
+                error: ModelError::timeout(ModelTimeoutPhase::ResponseStart),
+                usage: Some(primary_usage.clone()),
+                generation: None,
+            }
+        };
+        let terminal = store
+            .append_event(source_tool_event(
+                &store,
+                terminal,
+                if completed {
+                    "r1-primary-request-completed"
+                } else {
+                    "r1-primary-request-failed"
+                },
+            ))
+            .unwrap();
+        let terminal_native = terminal.observation.as_deref().unwrap();
+        let NativeObservationTransition::Single(terminal_witness) = &terminal_native.transition
+        else {
+            panic!("primary request terminal has one native witness");
+        };
+        assert_eq!(
+            terminal_witness.owner,
+            Some(crate::durable::observation::RequestOwnerKind::Agent)
+        );
+        assert!(terminal_witness.value["owner"].get("identity").is_none());
+        assert!(
+            crate::observation::structural_json::decode::<RuntimeEvent>(
+                terminal_witness.value.clone()
+            )
+            .is_err(),
+            "Reduced display witnesses must not satisfy authoritative event identity requirements"
+        );
+        assert_eq!(
+            crate::observation::bounded::decode_domain_value::<ModelUsage>(
+                terminal_witness.value["usage"].clone(),
+            )
+            .unwrap(),
+            primary_usage
+        );
+
+        let before_terminal = projection.cursor;
+        publish_source_fact(&mut projection, |projection| {
+            projection.apply_native_batch(terminal_native);
+        });
+        let terminal_events = collect(&mut projection, before_terminal);
+        let usage_events = terminal_events
+            .iter()
+            .flat_map(|event| event.event.facts())
+            .filter_map(|fact| match fact {
+                RuntimeClientEvent::AttemptUsageUpdated { attempt_id, usage } => {
+                    Some((attempt_id.clone(), usage.clone()))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            usage_events,
+            if completed {
+                vec![(attempt(), primary_usage.clone())]
+            } else {
+                Vec::new()
+            },
+            "Only completed primary requests update live attempt Usage"
+        );
+        assert_eq!(
+            projection.snapshot().unwrap().0.attempt.unwrap().last_usage,
+            expected_usage
+        );
+
+        let auxiliary_usage = ModelUsage {
+            input_tokens: 7,
+            output_tokens: 3,
+            total_tokens: 10,
+            details: None,
+        };
+        let call_id = AuxiliaryCallId::generate();
+        let auxiliary_request_id = RequestId::generate_auxiliary(&SystemUuidV7Generator).unwrap();
+        let call_started = store
+            .commit_auxiliary_call_start(
+                &AuxiliaryCallStart {
+                    call_id: call_id.clone(),
+                    purpose: AuxiliaryAttribution::new("summary").unwrap(),
+                    trigger: AuxiliaryAttribution::new("automatic").unwrap(),
+                    business_source: AuxiliaryBusinessSource::Independent,
+                    input: AuxiliaryInputEvidence::Temporary,
+                    semantic_input_fingerprint: AuxiliaryFingerprint::new("a".repeat(64)).unwrap(),
+                    invocation_fingerprint: AuxiliaryFingerprint::new("b".repeat(64)).unwrap(),
+                    selected_message_ids: Vec::new(),
+                },
+                chrono::Utc::now(),
+            )
+            .unwrap();
+        publish_source_fact(&mut projection, |projection| {
+            projection.apply_native_batch(call_started.event.observation.as_deref().unwrap());
+        });
+        let request_started = store
+            .commit_auxiliary_request_start(
+                &AuxiliaryRequestStart {
+                    call_id: call_id.clone(),
+                    ordinal: 0,
+                    request_id: auxiliary_request_id.clone(),
+                    model: "fixture/auxiliary".into(),
+                },
+                chrono::Utc::now(),
+            )
+            .unwrap();
+        publish_source_fact(&mut projection, |projection| {
+            projection.apply_native_batch(request_started.event.observation.as_deref().unwrap());
+        });
+        let auxiliary_terminal = crate::durable::auxiliary::auxiliary_settlement_envelope(
+            store.conversation_id().clone(),
+            chrono::Utc::now(),
+            RuntimeEvent::ModelRequestCompleted {
+                owner: ModelRequestOwner::Auxiliary {
+                    call_id: call_id.clone(),
+                    ordinal: 0,
+                },
+                request_id: auxiliary_request_id.clone(),
+                finish_reason: ModelFinishReason::Stop,
+                usage: Some(auxiliary_usage.clone()),
+                generation: None,
+            },
+        )
+        .unwrap();
+        let auxiliary_settled = crate::durable::auxiliary::auxiliary_settlement_envelope(
+            store.conversation_id().clone(),
+            chrono::Utc::now(),
+            RuntimeEvent::AuxiliaryCallSettled {
+                call_id,
+                outcome: AuxiliaryCallOutcome::Completed,
+                request_evidence: Some(AuxiliaryRequestEvidence {
+                    request_id: auxiliary_request_id,
+                    observed_provider_terminal: Some(
+                        AuxiliaryObservedProviderTerminal::Completed {
+                            finish_reason: crate::model::auxiliary::AuxiliaryFinishReason::Stop,
+                        },
+                    ),
+                    usage: Some(auxiliary_usage),
+                    usage_completeness: AuxiliaryUsageCompleteness::Complete,
+                    remote_execution_uncertainty: false,
+                }),
+            },
+        )
+        .unwrap();
+        let auxiliary = store
+            .commit_auxiliary_request_settlement(auxiliary_terminal, auxiliary_settled)
+            .unwrap();
+        let auxiliary_native = auxiliary
+            .request_terminal
+            .as_ref()
+            .unwrap()
+            .observation
+            .as_deref()
+            .unwrap();
+        let NativeObservationTransition::Single(auxiliary_witness) = &auxiliary_native.transition
+        else {
+            panic!("auxiliary request terminal has one native witness");
+        };
+        assert_eq!(
+            auxiliary_witness.owner,
+            Some(crate::durable::observation::RequestOwnerKind::Auxiliary)
+        );
+        let before_auxiliary = projection.cursor;
+        publish_source_fact(&mut projection, |projection| {
+            projection.apply_native_batch(auxiliary_native);
+            projection.apply_native_batch(auxiliary.call_settled.observation.as_deref().unwrap());
+        });
+        let auxiliary_events = collect(&mut projection, before_auxiliary);
+        assert!(auxiliary_events.iter().flat_map(|event| event.event.facts()).any(|fact|
+            matches!(fact, RuntimeClientEvent::CollectionChanged { domain, .. } if domain == "auxiliary.audit")
+        ), "The auxiliary receipt must actually reach its audit projection");
+        assert!(
+            auxiliary_events
+                .iter()
+                .flat_map(|event| event.event.facts())
+                .all(|fact| !matches!(fact, RuntimeClientEvent::AttemptUsageUpdated { .. }))
+        );
+        assert_eq!(
+            projection.snapshot().unwrap().0.attempt.unwrap().last_usage,
+            expected_usage,
+            "Auxiliary Usage must not replace primary attempt Usage"
+        );
     }
 }
 
@@ -2434,6 +2800,7 @@ fn frame(sequence: u64, payload: PublicationPayload) -> PublicationFrame {
 /// Streaming assembly arrives as durably committed publication frames
 /// (Issue #108); only the surrounding execution facts are Event Journal
 /// observations.
+#[allow(clippy::too_many_lines)] // Representative event history for projection conformance.
 fn representative_sequence() -> Vec<ConversationObservation> {
     let mut observations = vec![
         event_observation(RuntimeEvent::AttemptStarted {
@@ -2441,6 +2808,13 @@ fn representative_sequence() -> Vec<ConversationObservation> {
         }),
         event_observation(RuntimeEvent::TurnStarted),
         event_observation(RuntimeEvent::ModelRequestStarted {
+            owner: crate::model::ModelRequestOwner::Agent {
+                identity: crate::model::RequestIdentity {
+                    attempt_id: AttemptId::new("attempt-1"),
+                    turn: crate::runtime::identity::TurnId::new("1"),
+                    retry_number: 0,
+                },
+            },
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             model: "scripted".to_owned(),
         }),
@@ -2491,6 +2865,13 @@ fn representative_sequence() -> Vec<ConversationObservation> {
     }
     observations.extend([
         event_observation(RuntimeEvent::ModelRequestCompleted {
+            owner: crate::model::ModelRequestOwner::Agent {
+                identity: crate::model::RequestIdentity {
+                    attempt_id: attempt(),
+                    turn: crate::runtime::identity::TurnId::new("1"),
+                    retry_number: 0,
+                },
+            },
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             finish_reason: ModelFinishReason::ToolCalls,
             usage: None,
@@ -2554,10 +2935,24 @@ fn request_payloads_stay_internal_and_trace_is_owned_by_journal_batch() {
     let mut projection = projection();
     for event in [
         RuntimeEvent::ModelRequestStarted {
+            owner: crate::model::ModelRequestOwner::Agent {
+                identity: crate::model::RequestIdentity {
+                    attempt_id: AttemptId::new("attempt-1"),
+                    turn: crate::runtime::identity::TurnId::new("1"),
+                    retry_number: 0,
+                },
+            },
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             model: "m".to_owned(),
         },
         RuntimeEvent::ModelRequestFailed {
+            owner: crate::model::ModelRequestOwner::Agent {
+                identity: crate::model::RequestIdentity {
+                    attempt_id: attempt(),
+                    turn: crate::runtime::identity::TurnId::new("1"),
+                    retry_number: 0,
+                },
+            },
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             error: ModelError {
                 kind: ModelErrorKind::RateLimit,
@@ -2723,6 +3118,13 @@ fn turn_and_usage_events_agree_with_the_attempt_view() {
     apply_event(
         &mut projection,
         RuntimeEvent::ModelRequestCompleted {
+            owner: crate::model::ModelRequestOwner::Agent {
+                identity: crate::model::RequestIdentity {
+                    attempt_id: attempt(),
+                    turn: crate::runtime::identity::TurnId::new("1"),
+                    retry_number: 0,
+                },
+            },
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             finish_reason: ModelFinishReason::Stop,
             usage: Some(ModelUsage {

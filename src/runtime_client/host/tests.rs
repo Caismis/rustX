@@ -1,3 +1,4 @@
+use crate::durable::AuxiliaryStore;
 use crate::durable::CanonicalStore;
 use crate::durable::JournalStore;
 use crate::durable::ObservationStore;
@@ -718,6 +719,33 @@ fn inbound_text(id: &str, text: &str) -> UserMessageBlock {
     }
 }
 
+fn commit_auxiliary_call(
+    store: &SqliteConversationStore,
+) -> crate::runtime::identity::AuxiliaryCallId {
+    use crate::model::auxiliary::{
+        AuxiliaryAttribution, AuxiliaryBusinessSource, AuxiliaryCallStart, AuxiliaryFingerprint,
+        AuxiliaryInputEvidence,
+    };
+    let call_id = crate::runtime::identity::AuxiliaryCallId::generate();
+    let fingerprint = AuxiliaryFingerprint::new("a".repeat(64)).unwrap();
+    store
+        .commit_auxiliary_call_start(
+            &AuxiliaryCallStart {
+                call_id: call_id.clone(),
+                purpose: AuxiliaryAttribution::new("summary").unwrap(),
+                trigger: AuxiliaryAttribution::new("manual").unwrap(),
+                business_source: AuxiliaryBusinessSource::Independent,
+                input: AuxiliaryInputEvidence::Temporary,
+                semantic_input_fingerprint: fingerprint.clone(),
+                invocation_fingerprint: fingerprint,
+                selected_message_ids: Vec::new(),
+            },
+            chrono::Utc::now(),
+        )
+        .unwrap();
+    call_id
+}
+
 fn submit_content(text: &str) -> Vec<UserContentBlock> {
     vec![UserContentBlock::Text(TextBlock {
         text: text.to_owned(),
@@ -987,6 +1015,211 @@ async fn receive_until_metadata(
             }
         }
     }).await.expect("the native metadata stream must advance")
+}
+
+fn append_auxiliary_test_primary_facts(store: &SqliteConversationStore, ordinal: u64) {
+    let attempt = crate::runtime::identity::AttemptId::new(format!("cold-audit-primary-{ordinal}"));
+    for event in [
+        RuntimeEvent::AttemptStarted {
+            attempt_id: attempt.clone(),
+        },
+        RuntimeEvent::AttemptCompleted {
+            attempt_id: attempt.clone(),
+            finish_reason: crate::model::ModelFinishReason::Stop,
+        },
+    ] {
+        store
+            .append_event(crate::events::types::RuntimeEventEnvelope {
+                schema_version: crate::events::types::EVENT_SCHEMA_VERSION,
+                event_id: crate::runtime::identity::EventId::new(format!(
+                    "cold-audit-primary-{ordinal}-{}",
+                    store.auxiliary_audit_cut().unwrap().journal
+                )),
+                sequence: 0,
+                conversation_id: store.conversation_id().clone(),
+                attempt_id: Some(attempt.clone()),
+                turn_id: None,
+                timestamp: chrono::Utc::now(),
+                tool_occurrence: None,
+                observation: None,
+                event,
+            })
+            .unwrap();
+    }
+}
+
+/// A cold durable checkpoint discovers audit rows from the Store at its
+/// exact captured Journal cut, without waiting for a live auxiliary event.
+#[test]
+fn cold_checkpoint_discovers_existing_auxiliary_audit_with_dense_paging() {
+    let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    store.initialize(&[]).unwrap();
+    for ordinal in 0..33 {
+        commit_auxiliary_call(&store);
+        append_auxiliary_test_primary_facts(&store, ordinal);
+        store
+            .append_canonical(&MessageBlock::User(inbound_text(
+                &format!("cold-primary-{ordinal}"),
+                &format!("unrelated primary fact {ordinal}"),
+            )))
+            .unwrap();
+    }
+    let expected_journal = store.observation_read_cut().unwrap().read.journal;
+    let host = RuntimeClientHost::new_durable(Arc::new(store), Some(16)).unwrap();
+    let checkpoint = host.checkpoint().unwrap();
+    assert_eq!(checkpoint.read_cut.through, expected_journal);
+    assert!(checkpoint.read_cut.through > 33);
+    let frontier = checkpoint
+        .collections
+        .iter()
+        .find(|frontier| frontier.domain == crate::runtime_client::auxiliary::DOMAIN)
+        .expect("cold checkpoint advertises existing auxiliary audit");
+    assert_eq!(frontier.total, 33);
+    assert_eq!(frontier.loaded, 0);
+    assert_eq!(frontier.next_offset, Some(0));
+
+    let first = host
+        .inner
+        .checkpoint_page(
+            &checkpoint.read_cut,
+            crate::runtime_client::auxiliary::DOMAIN,
+            0,
+            32,
+        )
+        .unwrap();
+    assert_eq!(first.total, 33);
+    assert_eq!(first.items.len(), 32);
+    assert_eq!(first.next_offset, Some(32));
+    assert_eq!(first.items[0].offset, 0);
+    assert_eq!(first.items[31].offset, 31);
+
+    let final_page = host
+        .inner
+        .checkpoint_page(
+            &first.read_cut,
+            crate::runtime_client::auxiliary::DOMAIN,
+            first.next_offset.unwrap(),
+            32,
+        )
+        .unwrap();
+    assert_eq!(final_page.total, 33);
+    assert_eq!(final_page.items.len(), 1);
+    assert_eq!(final_page.items[0].offset, 32);
+    assert_eq!(final_page.next_offset, None);
+}
+
+#[test]
+fn cold_empty_auxiliary_audit_has_no_pages_after_long_unrelated_history() {
+    let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    store.initialize(&[]).unwrap();
+    for ordinal in 0..48 {
+        store
+            .append_canonical(&MessageBlock::User(inbound_text(
+                &format!("cold-empty-primary-{ordinal}"),
+                &format!("unrelated history {ordinal}"),
+            )))
+            .unwrap();
+    }
+    let host = RuntimeClientHost::new_durable(Arc::new(store), Some(16)).unwrap();
+    let checkpoint = host.checkpoint().unwrap();
+    let frontier = checkpoint
+        .collections
+        .iter()
+        .find(|frontier| frontier.domain == crate::runtime_client::auxiliary::DOMAIN)
+        .expect("empty audit still has an explicit finite frontier");
+    assert_eq!(frontier.total, 0);
+    assert_eq!(frontier.loaded, 0);
+    assert_eq!(frontier.next_offset, None);
+    let page = host
+        .inner
+        .checkpoint_page(
+            &checkpoint.read_cut,
+            crate::runtime_client::auxiliary::DOMAIN,
+            0,
+            32,
+        )
+        .unwrap();
+    assert_eq!(page.total, 0);
+    assert!(page.items.is_empty());
+    assert_eq!(page.next_offset, None);
+}
+
+#[test]
+fn auxiliary_checkpoint_page_retains_its_exact_target_and_read_cut() {
+    let store = Arc::new(SqliteConversationStore::in_memory(ConversationId::generate()).unwrap());
+    store.initialize(&[]).unwrap();
+    for ordinal in 0..33 {
+        commit_auxiliary_call(&store);
+        store
+            .append_canonical(&MessageBlock::User(inbound_text(
+                &format!("exact-cut-primary-{ordinal}"),
+                &format!("interleaved primary fact {ordinal}"),
+            )))
+            .unwrap();
+    }
+    let host = RuntimeClientHost::new_durable(store.clone(), Some(16)).unwrap();
+    let checkpoint = host.checkpoint().unwrap();
+    let first = host
+        .inner
+        .checkpoint_page(
+            &checkpoint.read_cut,
+            crate::runtime_client::auxiliary::DOMAIN,
+            0,
+            32,
+        )
+        .unwrap();
+    assert_eq!(first.total, 33);
+    assert_eq!(first.items.len(), 32);
+    assert_eq!(first.next_offset, Some(32));
+    assert_eq!(first.read_cut, checkpoint.read_cut);
+
+    commit_auxiliary_call(&store);
+    store
+        .append_canonical(&MessageBlock::User(inbound_text(
+            "exact-cut-later-admission",
+            "admitted after the checkpoint",
+        )))
+        .unwrap();
+    let retained = host
+        .inner
+        .checkpoint_page(
+            &checkpoint.read_cut,
+            crate::runtime_client::auxiliary::DOMAIN,
+            0,
+            32,
+        )
+        .unwrap();
+    assert_eq!(retained.items, first.items);
+    assert_eq!(retained.total, 33);
+
+    let mut wrong_incarnation = checkpoint.read_cut.clone();
+    wrong_incarnation.activation_id = Some(crate::runtime::identity::SubagentId::new(
+        "foreign-auxiliary-reader",
+    ));
+    assert!(matches!(
+        host.inner.checkpoint_page(
+            &wrong_incarnation,
+            crate::runtime_client::auxiliary::DOMAIN,
+            0,
+            32,
+        ),
+        Err(RuntimeClientError::ReadCutExpired)
+    ));
+
+    let mut wrong_revision = checkpoint.read_cut.clone();
+    *wrong_revision
+        .domain_revisions
+        .entry("auxiliary".into())
+        .or_default() += 1;
+    assert!(matches!(
+        host.inner.checkpoint_page(
+            &wrong_revision,
+            crate::runtime_client::auxiliary::DOMAIN,
+            0,
+            32,
+        ),
+        Err(RuntimeClientError::ReadCutExpired)
+    ));
 }
 
 /// A durable attachment reads the child's canonical Ledger and Event

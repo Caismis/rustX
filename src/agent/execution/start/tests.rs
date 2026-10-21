@@ -50,6 +50,13 @@ fn observer_start_commit(disposition: ModelTurnStartCommitDisposition) -> ModelT
             turn_id: Some(turn.clone()),
             timestamp,
             event: RuntimeEvent::ModelRequestStarted {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: crate::model::RequestIdentity {
+                        attempt_id: attempt_id.clone(),
+                        turn: turn.clone(),
+                        retry_number: 0,
+                    },
+                },
                 request_id: request_id.clone(),
                 model: "observer-model".to_owned(),
             },

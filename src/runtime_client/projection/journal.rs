@@ -8,17 +8,45 @@ use super::{
 };
 
 impl RuntimeClientProjection {
+    #[allow(clippy::too_many_lines)] // Exhaustive owner-scoped Journal folding.
     pub(super) fn fold_journal_fact(
         &mut self,
         witness: crate::durable::observation::ObservationEventWitness,
     ) -> Vec<RuntimeClientEvent> {
-        if witness.source_unavailable {
-            self.mark_observation_unavailable("native Journal display family unavailable".into());
+        if witness.auxiliary_call_id.is_some()
+            || matches!(
+                witness.owner.as_ref(),
+                Some(crate::durable::observation::RequestOwnerKind::Auxiliary)
+            )
+        {
+            self.prepared_journal.remove(&witness.sequence);
+            self.prepared_outcomes.remove(&witness.sequence);
+            let total = self
+                .auxiliary_audit_total
+                .unwrap_or_else(|| self.domain_revision("auxiliary"))
+                .saturating_add(1);
+            if total > 9_007_199_254_740_991 {
+                self.mark_observation_unavailable(
+                    "auxiliary audit total exceeds the protocol integer domain".into(),
+                );
+                return Vec::new();
+            }
+            self.auxiliary_audit_total = Some(total);
+            return vec![RuntimeClientEvent::CollectionChanged {
+                domain: crate::runtime_client::auxiliary::DOMAIN.into(),
+                cut: crate::runtime::identity::ObservationCollectionCut {
+                    generation: self.domain_revision("auxiliary"),
+                    total,
+                },
+            }];
         }
         if !self.publication_state.installing_native_batch && witness.native_direct {
             self.prepared_journal.remove(&witness.sequence);
             self.prepared_outcomes.remove(&witness.sequence);
             return Vec::new();
+        }
+        if witness.source_unavailable {
+            self.mark_observation_unavailable("native Journal display family unavailable".into());
         }
         self.install_native_trace_total(witness.trace_total);
         let outcome_source = self
@@ -55,6 +83,21 @@ impl RuntimeClientProjection {
             }
             return Vec::new();
         };
+        // Request terminal witnesses deliberately retain only the finite owner
+        // kind, not the full primary RequestIdentity required by RuntimeEvent.
+        // Consume their bounded Usage directly instead of treating the reduced
+        // witness as a complete event.
+        if matches!(
+            witness.owner,
+            Some(crate::durable::observation::RequestOwnerKind::Agent)
+        ) && witness.event_kind == "model_request_completed"
+        {
+            let usage = witness.value.get("usage").cloned().and_then(|value| {
+                crate::observation::bounded::decode_domain_value::<crate::model::ModelUsage>(value)
+                    .ok()
+            });
+            return self.fold_request_usage(attempt, usage.as_ref());
+        }
         self.tool_occurrence.clone_from(&witness.tool_occurrence);
         if witness.event_kind == "attempt_failed" {
             return prepared.0.map_or_else(Vec::new, |error| {
@@ -99,6 +142,24 @@ impl RuntimeClientProjection {
         } else {
             Vec::new()
         }
+    }
+
+    pub(super) fn fold_request_usage(
+        &mut self,
+        attempt_id: &AttemptId,
+        usage: Option<&crate::model::ModelUsage>,
+    ) -> Vec<RuntimeClientEvent> {
+        if let Some(usage) = usage
+            && let Some(attempt) = &mut self.snapshot.attempt
+            && attempt.attempt_id.as_ref() == Some(attempt_id)
+        {
+            attempt.last_usage = Some(usage.clone());
+            return vec![RuntimeClientEvent::AttemptUsageUpdated {
+                attempt_id: attempt_id.clone(),
+                usage: usage.clone(),
+            }];
+        }
+        Vec::new()
     }
 
     pub(super) fn start_tool_witness(
@@ -257,6 +318,20 @@ impl RuntimeClientProjection {
         event: &RuntimeEvent,
     ) -> Vec<RuntimeClientEvent> {
         match event {
+            RuntimeEvent::ModelRequestStarted {
+                owner: crate::model::snapshot::ModelRequestOwner::Auxiliary { .. },
+                ..
+            }
+            | RuntimeEvent::ModelRequestCompleted {
+                owner: crate::model::snapshot::ModelRequestOwner::Auxiliary { .. },
+                ..
+            }
+            | RuntimeEvent::ModelRequestFailed {
+                owner: crate::model::snapshot::ModelRequestOwner::Auxiliary { .. },
+                ..
+            }
+            | RuntimeEvent::AuxiliaryCallStarted { .. }
+            | RuntimeEvent::AuxiliaryCallSettled { .. } => Vec::new(),
             RuntimeEvent::AttemptStarted { .. } => {
                 let model = self.frozen_attempt_model(attempt_id);
                 let execution_settings = self.frozen_execution_settings(attempt_id);
@@ -332,17 +407,7 @@ impl RuntimeClientProjection {
             | RuntimeEvent::ModelRetryScheduled { .. } => Vec::new(),
             RuntimeEvent::ContextContributionEmitted { .. } => Vec::new(),
             RuntimeEvent::ModelRequestCompleted { usage, .. } => {
-                if let Some(usage) = usage
-                    && let Some(attempt) = &mut self.snapshot.attempt
-                    && attempt.attempt_id.as_ref() == Some(attempt_id)
-                {
-                    attempt.last_usage = Some(usage.clone());
-                    return vec![RuntimeClientEvent::AttemptUsageUpdated {
-                        attempt_id: attempt_id.clone(),
-                        usage: usage.clone(),
-                    }];
-                }
-                Vec::new()
+                self.fold_request_usage(attempt_id, usage.as_ref())
             }
             // The durable Journal event carries identity only; the projection
             // already receives the canonical body from the commit

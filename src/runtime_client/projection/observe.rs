@@ -13,7 +13,12 @@ use super::{
 /// `JournalBatch`, whose source vocabulary is owned by `PendingObservations`.
 pub(super) fn invalidates_read_domains(observation: &ConversationObservation) -> bool {
     match observation {
-        ConversationObservation::JournalFact(_) => true,
+        ConversationObservation::JournalFact(witness) => {
+            !matches!(
+                witness.owner.as_ref(),
+                Some(crate::durable::observation::RequestOwnerKind::Auxiliary)
+            ) && witness.auxiliary_call_id.is_none()
+        }
         ConversationObservation::JournalSourceReady
         | ConversationObservation::TranscriptSourceReady(_) => false,
         ConversationObservation::CanonicalCommitted { .. }
@@ -63,23 +68,26 @@ pub(super) fn invalidates_read_domains(observation: &ConversationObservation) ->
 }
 #[cfg(test)]
 pub(super) fn invalidates_event(event: &RuntimeEvent) -> bool {
-    matches!(
-        event,
+    match event {
+        RuntimeEvent::ModelRequestStarted { owner, .. }
+        | RuntimeEvent::ModelRequestCompleted { owner, .. }
+        | RuntimeEvent::ModelRequestFailed { owner, .. } => matches!(
+            owner,
+            crate::model::snapshot::ModelRequestOwner::Agent { .. }
+        ),
         RuntimeEvent::AttemptStarted { .. }
-            | RuntimeEvent::AttemptCompleted { .. }
-            | RuntimeEvent::AttemptCancelled { .. }
-            | RuntimeEvent::AttemptFailed { .. }
-            | RuntimeEvent::AttemptTimedOut { .. }
-            | RuntimeEvent::AttemptLimitExceeded { .. }
-            | RuntimeEvent::TurnStarted
-            | RuntimeEvent::ModelRequestStarted { .. }
-            | RuntimeEvent::ModelRequestCompleted { .. }
-            | RuntimeEvent::ModelRequestFailed { .. }
-            | RuntimeEvent::AssistantMessageCommitted { .. }
-            | RuntimeEvent::ToolMessageCommitted { .. }
-            | RuntimeEvent::CompactionStarted { .. }
-            | RuntimeEvent::CompactionCompleted { .. }
-    )
+        | RuntimeEvent::AttemptCompleted { .. }
+        | RuntimeEvent::AttemptCancelled { .. }
+        | RuntimeEvent::AttemptFailed { .. }
+        | RuntimeEvent::AttemptTimedOut { .. }
+        | RuntimeEvent::AttemptLimitExceeded { .. }
+        | RuntimeEvent::TurnStarted
+        | RuntimeEvent::AssistantMessageCommitted { .. }
+        | RuntimeEvent::ToolMessageCommitted { .. }
+        | RuntimeEvent::CompactionStarted { .. }
+        | RuntimeEvent::CompactionCompleted { .. } => true,
+        _ => false,
+    }
 }
 
 impl RuntimeClientProjection {
@@ -90,6 +98,7 @@ impl RuntimeClientProjection {
     /// allocation, replay retention, and delivery share the caller's
     /// synchronization boundary, so no caller may partially apply an
     /// observation.
+    #[allow(clippy::too_many_lines)] // Observation folding and publication share one synchronization boundary.
     pub(crate) fn apply(&mut self, observation: ConversationObservation) {
         if let ConversationObservation::TranscriptSourceReady(proof) = observation {
             if self.observe_transcript_source_prefix(proof.prefix, &proof.read_cut) {
@@ -167,7 +176,12 @@ impl RuntimeClientProjection {
         if let ConversationObservation::JournalFact(witness) = &observation
             && ((!self.publication_state.installing_native_batch
                 && witness.native_direct
-                && !witness.source_unavailable)
+                && !witness.source_unavailable
+                && witness.auxiliary_call_id.is_none()
+                && !matches!(
+                    witness.owner.as_ref(),
+                    Some(crate::durable::observation::RequestOwnerKind::Auxiliary)
+                ))
                 || self.already_installed_tool_start(witness))
         {
             self.prepared_journal.remove(&witness.sequence);
@@ -751,6 +765,21 @@ impl RuntimeClientProjection {
             ConversationObservation::ManualCompactionEvent { .. } => &["context"],
             ConversationObservation::ToolProgress { .. }
             | ConversationObservation::AttemptAdmitted { .. } => &["attempt"],
+            #[cfg(test)]
+            ConversationObservation::Event { event, .. }
+                if event.is_auxiliary_model_request() || event.auxiliary_call_id().is_some() =>
+            {
+                &["auxiliary"]
+            }
+            ConversationObservation::JournalFact(witness)
+                if witness.auxiliary_call_id.is_some()
+                    || matches!(
+                        witness.owner.as_ref(),
+                        Some(crate::durable::observation::RequestOwnerKind::Auxiliary)
+                    ) =>
+            {
+                &["auxiliary"]
+            }
             _ => &["attempt", "context", "trace"],
         };
         for owner in owners {

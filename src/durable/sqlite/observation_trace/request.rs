@@ -13,7 +13,7 @@ pub(in crate::durable::sqlite) fn predecessor(
     through: u64,
 ) -> Result<Option<TraceRequestPredecessorHeader>, ConversationStoreError> {
     super::super::observation_request::validate_start(connection, start, through)?;
-    let previous:Option<u64>=connection.query_row("SELECT sequence FROM events INDEXED BY events_trace_kind_idx WHERE observation_kind='model_request_started' AND sequence<?1 ORDER BY sequence DESC LIMIT 1",[start],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+    let previous:Option<u64>=connection.query_row("SELECT sequence FROM events INDEXED BY events_primary_trace_kind_idx WHERE observation_kind='model_request_started' AND observation_trace_fact_required=1 AND sequence<?1 ORDER BY sequence DESC LIMIT 1",[start],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
     previous
         .map(|previous| {
             let own = header(connection, previous, through)?;

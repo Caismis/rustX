@@ -7,6 +7,12 @@
 #[cfg(test)]
 mod tests;
 
+use crate::durable::sqlite::auxiliary;
+use crate::durable::sqlite::request_owner_shape;
+use crate::events::RuntimeEvent;
+use crate::events::RuntimeEventEnvelope;
+use crate::model::ModelRequestOwner;
+use crate::runtime::RequestId;
 use rusqlite::OptionalExtension;
 pub(super) mod shape;
 
@@ -154,7 +160,141 @@ pub(super) fn validate_existing_schema(
 
 // This is an index discriminator, not a second occupancy fact. The Journal
 // continues to own the usage payload and the compaction's explicit absence.
-pub(super) const CONTEXT_READING_PREDICATE: &str = "json_extract(event_json, '$.event.type') = 'compaction_completed' OR COALESCE(json_type(event_json, '$.event.usage'), 'null') != 'null'";
+pub(super) const CONTEXT_READING_PREDICATE: &str = "json_extract(event_json, '$.event.type') = 'compaction_completed' OR (COALESCE(json_type(event_json, '$.event.usage'), 'null') != 'null' AND json_extract(event_json, '$.event.owner.type') = 'agent')";
+
+#[derive(Clone, Copy)]
+pub(super) enum PrimaryRequestFactKind {
+    Started,
+    Completed,
+    Failed,
+}
+
+impl PrimaryRequestFactKind {
+    fn terminal_kind(self) -> Option<&'static str> {
+        match self {
+            Self::Started => None,
+            Self::Completed => Some("completed"),
+            Self::Failed => Some("failed"),
+        }
+    }
+}
+
+pub(super) fn validate_primary_request_owner_event(
+    connection: &Connection,
+    event: &RuntimeEventEnvelope,
+) -> Result<(), ConversationStoreError> {
+    let (request_id, identity, kind) = match &event.event {
+        RuntimeEvent::ModelRequestStarted {
+            owner: ModelRequestOwner::Agent { identity },
+            request_id,
+            ..
+        } => (request_id, identity, PrimaryRequestFactKind::Started),
+        RuntimeEvent::ModelRequestCompleted {
+            owner: ModelRequestOwner::Agent { identity },
+            request_id,
+            ..
+        } => (request_id, identity, PrimaryRequestFactKind::Completed),
+        RuntimeEvent::ModelRequestFailed {
+            owner: ModelRequestOwner::Agent { identity },
+            request_id,
+            ..
+        } => (request_id, identity, PrimaryRequestFactKind::Failed),
+        _ => {
+            return Err(ConversationStoreError::InvalidReference(
+                "AgentRequest scope selected a fact without primary Agent ownership".into(),
+            ));
+        }
+    };
+    validate_primary_request_owner_fact(connection, request_id, identity, event.sequence, kind)
+}
+
+pub(super) fn validate_primary_request_owner_fact(
+    connection: &Connection,
+    request_id: &RequestId,
+    identity: &crate::model::snapshot::RequestIdentity,
+    sequence: u64,
+    kind: PrimaryRequestFactKind,
+) -> Result<(), ConversationStoreError> {
+    type PrimaryOwnerRow = (
+        String,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+        i64,
+        Option<i64>,
+        Option<String>,
+    );
+    if request_id != &identity.request_id() {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "Agent request {request_id} does not match its canonical RequestIdentity"
+        )));
+    }
+    let indexed: Option<PrimaryOwnerRow> = connection
+        .query_row(
+            "SELECT owner_kind,attempt_id,turn_id,retry_number,start_sequence,
+                    terminal_sequence,terminal_kind
+             FROM request_owners WHERE request_id=?1",
+            [request_id.as_str()],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| storage(format!("primary request owner lookup: {error}")))?;
+    let Some((
+        owner_kind,
+        attempt_id,
+        turn_id,
+        retry_number,
+        start_sequence,
+        terminal_sequence,
+        terminal_kind,
+    )) = indexed
+    else {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "Agent request {request_id} fact has no mandatory owner row"
+        )));
+    };
+    if owner_kind != "agent" {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "Agent request {request_id} owner row has a foreign owner kind"
+        )));
+    }
+    if attempt_id.as_deref() != Some(identity.attempt_id.as_str())
+        || turn_id.as_deref() != Some(identity.turn.as_str())
+        || retry_number != Some(i64::from(identity.retry_number))
+    {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "Agent request {request_id} owner identity disagrees with its canonical fact"
+        )));
+    }
+    let sequence = seq_to_i64(sequence)?;
+    match kind {
+        PrimaryRequestFactKind::Started if start_sequence != sequence => {
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "Agent request {request_id} owner start sequence disagrees with its canonical fact"
+            )));
+        }
+        PrimaryRequestFactKind::Completed | PrimaryRequestFactKind::Failed
+            if terminal_sequence != Some(sequence)
+                || terminal_kind.as_deref() != kind.terminal_kind() =>
+        {
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "Agent request {request_id} owner terminal sequence or kind disagrees with its canonical fact"
+            )));
+        }
+        _ => {}
+    }
+    Ok(())
+}
 
 #[allow(clippy::too_many_lines)] // Closed indexed scope vocabulary in one place.
 /// The actual bounded SQL used by the reader and its query-plan contract tests.
@@ -174,6 +314,9 @@ pub(super) fn presentation_statements(
     ];
     let scope = match &query.scope {
         FactScope::All => String::new(),
+        FactScope::AgentRequest => {
+            " AND json_extract(event_json, '$.event.owner.type') = 'agent'".to_owned()
+        }
         FactScope::ContextReading => format!(" AND ({CONTEXT_READING_PREDICATE}) = 1"),
         FactScope::Compaction(operation) => {
             values.push(Value::Text(operation.to_string()));
@@ -218,6 +361,7 @@ pub(super) fn presentation_statements(
                 FactScope::Interaction(value) => ("interaction_id", value),
                 FactScope::Message(value) => ("message_id", value),
                 FactScope::All
+                | FactScope::AgentRequest
                 | FactScope::ContextReading
                 | FactScope::Step(..)
                 | FactScope::Attempt(..)
@@ -229,6 +373,7 @@ pub(super) fn presentation_statements(
     };
     let index = match query.scope {
         FactScope::All => "events_kind_idx",
+        FactScope::AgentRequest => "events_primary_request_kind_idx",
         FactScope::ContextReading => "events_context_reading_idx",
         FactScope::Message(..) => "events_message_id_kind_idx",
         FactScope::Attempt(..) => "events_attempt_kind_idx",
@@ -264,8 +409,12 @@ pub(super) fn presentation_statements(
 
 pub(super) const PRESENTATION_INDEXES: &[(&str, &str)] = &[
     (
+        "events_primary_request_kind_idx",
+        "json_extract(event_json, '$.event.type'), json_extract(event_json, '$.event.owner.type'), sequence",
+    ),
+    (
         "events_context_reading_idx",
-        "json_extract(event_json, '$.event.type'), (json_extract(event_json, '$.event.type') = 'compaction_completed' OR COALESCE(json_type(event_json, '$.event.usage'), 'null') != 'null'), sequence",
+        "json_extract(event_json, '$.event.type'), (json_extract(event_json, '$.event.type') = 'compaction_completed' OR (COALESCE(json_type(event_json, '$.event.usage'), 'null') != 'null' AND json_extract(event_json, '$.event.owner.type') = 'agent')), sequence",
     ),
     (
         "events_message_id_kind_idx",
@@ -487,7 +636,9 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
                 provenance_digest TEXT NOT NULL,
                 inherited_transcript_through INTEGER NOT NULL CHECK(inherited_transcript_through >= 0),
                 projection_count INTEGER NOT NULL DEFAULT 0 CHECK(projection_count>=0),
-                projection_digest TEXT NOT NULL DEFAULT ''
+                projection_digest TEXT NOT NULL DEFAULT '',
+                auxiliary_audit_count INTEGER NOT NULL DEFAULT 0 CHECK(auxiliary_audit_count>=0),
+                auxiliary_audit_digest TEXT NOT NULL DEFAULT ''
             );
             CREATE TABLE IF NOT EXISTS inherited_turn_provenance (
                 observation_turn_display_witness BLOB CHECK(observation_turn_display_witness IS NULL OR length(observation_turn_display_witness)=32),
@@ -789,6 +940,9 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
     content::create_binary_schema(connection)?;
     manifest::create_schema(connection)?;
     observation_request::composed::create_schema(connection)?;
+    auxiliary::create_schema(connection)?;
+    request_owner_shape::create_schema(connection)?;
+    projection::create_auxiliary_lineage_schema(connection)?;
     connection
         .execute_batch(&projection::completion_index_sql())
         .map_err(|error| storage(error.to_string()))?;

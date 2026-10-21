@@ -13,6 +13,7 @@ use crate::model::error::{ModelError, ModelErrorKind};
 use crate::model::event::ModelEvent;
 use crate::model::generation::GenerationGuard;
 use crate::model::generation_evidence::GenerationTiming;
+use crate::runtime::RequestId;
 use crate::runtime::identity::MessageId;
 use crate::runtime::types::RuntimeError;
 use futures_util::StreamExt;
@@ -394,11 +395,22 @@ impl AgentExecution<'_> {
                 },
             });
         };
+        let Some(owner) = self.exact_started_request_owner(&request_id) else {
+            return Err(Terminal::Failed {
+                failure: AttemptFailure::Runtime {
+                    error: RuntimeError::ContractViolation {
+                        message: "a model failure has no matching durable start identity"
+                            .to_owned(),
+                    },
+                },
+            });
+        };
         // The stream is consumed or dropped by the caller before this path
         // returns. No late adapter terminal can re-enter the loop and create
         // a second outcome for this RequestId.
         let generation = self.settle_generation_evidence();
         self.emit(RuntimeEvent::ModelRequestFailed {
+            owner,
             request_id,
             error: error.clone(),
             usage,
@@ -408,6 +420,20 @@ impl AgentExecution<'_> {
             return Err(terminal);
         }
         Ok(())
+    }
+
+    /// Returns the primary owner of the in-flight request only when the
+    /// frozen start identity and request ID still describe the same physical
+    /// request. A terminal is classification evidence, not an authority of
+    /// its own, so no unrelated or reconstructed identity may stand in here.
+    pub(super) fn exact_started_request_owner(
+        &self,
+        request_id: &RequestId,
+    ) -> Option<crate::model::ModelRequestOwner> {
+        let identity = self.logical_step.last_started_request.as_ref()?;
+        (&identity.request_id() == request_id).then(|| crate::model::ModelRequestOwner::Agent {
+            identity: identity.clone(),
+        })
     }
 
     /// Settles the in-flight request's generation timing evidence at its

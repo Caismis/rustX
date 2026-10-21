@@ -50,8 +50,8 @@ use rustx::message::types::{
 };
 use rustx::model::catalog::{ModelCapabilities, ModelCompat};
 use rustx::model::{
-    ModelFinishReason, ModelInvocationConfig, ModelProtocol, RequestIdentity, RequestParams,
-    RequestSnapshot,
+    ModelFinishReason, ModelInvocationConfig, ModelProtocol, ModelRequestOwner, RequestIdentity,
+    RequestParams, RequestSnapshot,
 };
 use rustx::publication::{PublicationFrame, PublicationPayload, PublicationStreamStart};
 use rustx::runtime::ApprovalDecision;
@@ -490,6 +490,13 @@ fn commit_generation_with_request(
                 generation.attempt, generation.turn
             ),
             RuntimeEvent::ModelRequestCompleted {
+                owner: ModelRequestOwner::Agent {
+                    identity: RequestIdentity {
+                        attempt_id: generation.attempt.clone(),
+                        turn: generation.turn.clone(),
+                        retry_number: 0,
+                    },
+                },
                 request_id,
                 finish_reason: ModelFinishReason::ToolCalls,
                 usage: None,

@@ -158,7 +158,7 @@
       ]
     },
     "RequestId": {
-      "description": "Identifies one actual provider-neutral model request.\n\nA request identity is distinct from an attempt, turn, retry ordinal,\nand Event Journal sequence. It is derived once from the immutable\n[`RequestIdentity`](crate::model::snapshot::RequestIdentity) and is\nthe durable correlation key for the Request Snapshot and its\nrequest-start fact.",
+      "description": "Identifies one actual provider-neutral model request.\n\nA request identity is distinct from an attempt, turn, retry ordinal,\nand Event Journal sequence. Primary requests derive the `request:`\nnamespace from immutable [`RequestIdentity`](crate::model::snapshot::RequestIdentity).\nAuxiliary requests allocate the separate `req_` `UUIDv7` namespace with\n[`RequestId::generate_auxiliary`]. Each physical retry is a distinct\nrequest. Identity alone grants no execution permission.",
       "type": "string"
     },
     "TraceInputProvenance": {

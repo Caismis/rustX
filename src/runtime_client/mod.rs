@@ -101,6 +101,7 @@
 pub mod agent_observation;
 mod agent_trace;
 pub mod attachment;
+pub(crate) mod auxiliary;
 pub mod checkpoint;
 pub(crate) mod domain;
 pub mod endpoint;

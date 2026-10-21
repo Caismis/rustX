@@ -571,11 +571,21 @@ pub(super) fn validate_start(
     sequence: u64,
     through: u64,
 ) -> Result<(), ConversationStoreError> {
-    match super::observation_event::kind(connection, sequence, through)?.as_deref() {
-        Some("model_request_started") => Ok(()),
-        _ => Err(ConversationStoreError::InvalidReference(
-            "source is not an actual Request start".into(),
-        )),
+    let agent: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM request_owners o WHERE o.start_sequence=e.sequence AND o.owner_kind='agent') FROM events e WHERE e.sequence=?1 AND e.sequence<=?2",
+            params![sequence, through],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| storage(error.to_string()))?
+        .unwrap_or(false);
+    if agent {
+        Ok(())
+    } else {
+        Err(ConversationStoreError::InvalidReference(
+            "source is not an actual primary Agent Request start".into(),
+        ))
     }
 }
 pub(super) fn header_at(

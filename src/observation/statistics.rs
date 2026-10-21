@@ -111,6 +111,9 @@ impl StatisticsFold {
     }
 
     fn apply(&mut self, id: Option<AttemptId>, at: DateTime<Utc>, event: &RuntimeEvent) {
+        if event.is_auxiliary_model_request() {
+            return;
+        }
         if matches!(event, RuntimeEvent::AttemptStarted { .. }) {
             // An abandoned interval must not bridge a process restart or idle gap.
             if let Some(active) = &self.view.duration.active {

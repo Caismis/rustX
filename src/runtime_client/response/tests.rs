@@ -178,6 +178,9 @@ fn request_timed(
         attempt,
         if failed {
             RuntimeEvent::ModelRequestFailed {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: snapshot.identity.clone(),
+                },
                 request_id: snapshot.request_id,
                 error: crate::model::error::ModelError {
                     kind: crate::model::error::ModelErrorKind::Transport,
@@ -195,6 +198,9 @@ fn request_timed(
             }
         } else {
             RuntimeEvent::ModelRequestCompleted {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: snapshot.identity.clone(),
+                },
                 request_id: snapshot.request_id,
                 finish_reason: ModelFinishReason::Stop,
                 usage,
@@ -1412,6 +1418,9 @@ fn occupancy_compaction_absence_invalid_window_and_failed_usage_are_boundaries()
         &store,
         "a",
         RuntimeEvent::ModelRequestCompleted {
+            owner: crate::model::ModelRequestOwner::Agent {
+                identity: snapshot.identity.clone(),
+            },
             request_id: snapshot.request_id,
             finish_reason: ModelFinishReason::Stop,
             usage: Some(usage(None)),

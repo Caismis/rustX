@@ -220,7 +220,11 @@ impl SubagentObservationProjector {
                 self.observation.attempt_id = None;
                 true
             }
-            RuntimeEvent::ModelRequestStarted { request_id, .. } => {
+            RuntimeEvent::ModelRequestStarted {
+                owner: crate::model::snapshot::ModelRequestOwner::Agent { .. },
+                request_id,
+                ..
+            } => {
                 // The retry ordinal of THIS request: whatever retry the
                 // scheduler armed, consumed exactly once. A later turn's
                 // fresh request therefore projects retry 0 regardless of
@@ -234,8 +238,14 @@ impl SubagentObservationProjector {
                 };
                 true
             }
-            RuntimeEvent::ModelRequestCompleted { .. }
-            | RuntimeEvent::ModelRequestFailed { .. }
+            RuntimeEvent::ModelRequestCompleted {
+                owner: crate::model::snapshot::ModelRequestOwner::Agent { .. },
+                ..
+            }
+            | RuntimeEvent::ModelRequestFailed {
+                owner: crate::model::snapshot::ModelRequestOwner::Agent { .. },
+                ..
+            }
             | RuntimeEvent::CompactionCompleted { .. }
             | RuntimeEvent::CompactionFailed { .. } => {
                 self.visible_tool = None;
@@ -594,6 +604,13 @@ mod tests {
         assert_folded(
             &mut projector,
             &event(RuntimeEvent::ModelRequestStarted {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: crate::model::RequestIdentity {
+                        attempt_id: AttemptId::new("attempt-1"),
+                        turn: crate::runtime::identity::TurnId::new("1"),
+                        retry_number: 0,
+                    },
+                },
                 request_id: RequestId::new("req-1"),
                 model: "local/model".to_owned(),
             }),
@@ -610,6 +627,13 @@ mod tests {
         assert_folded(
             &mut projector,
             &event(RuntimeEvent::ModelRequestCompleted {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: crate::model::RequestIdentity {
+                        attempt_id: AttemptId::new("attempt-1"),
+                        turn: crate::runtime::identity::TurnId::new("1"),
+                        retry_number: 0,
+                    },
+                },
                 request_id: RequestId::new("req-1"),
                 finish_reason: crate::model::ModelFinishReason::Stop,
                 usage: None,
@@ -623,11 +647,67 @@ mod tests {
     }
 
     #[test]
+    fn auxiliary_request_and_call_facts_do_not_change_child_activity() {
+        let mut projector = SubagentObservationProjector::default();
+        let call_id = crate::runtime::identity::AuxiliaryCallId::new(
+            "aux_36524fd8-f674-7fc2-8125-06d01fee0e18",
+        );
+        let owner = crate::model::ModelRequestOwner::Auxiliary {
+            call_id: call_id.clone(),
+            ordinal: 0,
+        };
+        let fingerprint = crate::model::AuxiliaryFingerprint::new("b".repeat(64)).unwrap();
+        assert_ignored(
+            &mut projector,
+            &event(RuntimeEvent::AuxiliaryCallStarted {
+                call_id,
+                purpose: crate::model::AuxiliaryAttribution::new("summary").unwrap(),
+                trigger: crate::model::AuxiliaryAttribution::new("automatic").unwrap(),
+                semantic_input_fingerprint: fingerprint.clone(),
+                invocation_fingerprint: fingerprint,
+                business_source: crate::model::auxiliary::AuxiliaryBusinessSource::Independent,
+                input: crate::model::auxiliary::AuxiliaryInputEvidence::Temporary,
+                selected_message_ids: Vec::new(),
+            }),
+        );
+        assert_ignored(
+            &mut projector,
+            &event(RuntimeEvent::ModelRequestStarted {
+                owner: owner.clone(),
+                request_id: RequestId::new("aux-request"),
+                model: "aux-model".into(),
+            }),
+        );
+        assert_ignored(
+            &mut projector,
+            &event(RuntimeEvent::ModelRequestCompleted {
+                owner,
+                request_id: RequestId::new("aux-request"),
+                finish_reason: crate::model::ModelFinishReason::Stop,
+                usage: None,
+                generation: None,
+            }),
+        );
+        assert_eq!(projector.observation.counters.model_requests, 0);
+        assert_eq!(
+            projector.observation.activity,
+            SubagentActivity::AwaitingActivity
+        );
+    }
+
+    #[test]
     fn a_scheduled_retry_marks_the_next_request_as_a_retry() {
         let mut projector = SubagentObservationProjector::default();
         assert_folded(
             &mut projector,
             &event(RuntimeEvent::ModelRequestStarted {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: crate::model::RequestIdentity {
+                        attempt_id: AttemptId::new("attempt-1"),
+                        turn: crate::runtime::identity::TurnId::new("1"),
+                        retry_number: 0,
+                    },
+                },
                 request_id: RequestId::new("req-1"),
                 model: "local/model".to_owned(),
             }),
@@ -635,6 +715,13 @@ mod tests {
         assert_folded(
             &mut projector,
             &event(RuntimeEvent::ModelRequestFailed {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: crate::model::RequestIdentity {
+                        attempt_id: AttemptId::new("attempt-1"),
+                        turn: crate::runtime::identity::TurnId::new("1"),
+                        retry_number: 0,
+                    },
+                },
                 request_id: RequestId::new("req-1"),
                 error: model_error(),
                 usage: None,
@@ -663,6 +750,13 @@ mod tests {
         assert_folded(
             &mut projector,
             &event(RuntimeEvent::ModelRequestStarted {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: crate::model::RequestIdentity {
+                        attempt_id: AttemptId::new("attempt-1"),
+                        turn: crate::runtime::identity::TurnId::new("1"),
+                        retry_number: 1,
+                    },
+                },
                 request_id: RequestId::new("req-2"),
                 model: "local/model".to_owned(),
             }),
@@ -683,6 +777,7 @@ mod tests {
     /// `retry: 1`, and a fresh request of a later turn projects `retry: 0`
     /// even though the counter stays cumulative.
     #[test]
+    #[allow(clippy::too_many_lines)] // Keep the interleaved event history visible with its assertions.
     fn a_fresh_request_of_a_later_turn_never_inherits_an_earlier_retry_ordinal() {
         let mut projector = SubagentObservationProjector::default();
 
@@ -691,6 +786,13 @@ mod tests {
         assert_folded(
             &mut projector,
             &event(RuntimeEvent::ModelRequestStarted {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: crate::model::RequestIdentity {
+                        attempt_id: AttemptId::new("attempt-1"),
+                        turn: crate::runtime::identity::TurnId::new("1"),
+                        retry_number: 0,
+                    },
+                },
                 request_id: RequestId::new("req-1"),
                 model: "local/model".to_owned(),
             }),
@@ -698,6 +800,13 @@ mod tests {
         assert_folded(
             &mut projector,
             &event(RuntimeEvent::ModelRequestFailed {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: crate::model::RequestIdentity {
+                        attempt_id: AttemptId::new("attempt-1"),
+                        turn: crate::runtime::identity::TurnId::new("1"),
+                        retry_number: 0,
+                    },
+                },
                 request_id: RequestId::new("req-1"),
                 error: model_error(),
                 usage: None,
@@ -715,6 +824,13 @@ mod tests {
         assert_folded(
             &mut projector,
             &event(RuntimeEvent::ModelRequestStarted {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: crate::model::RequestIdentity {
+                        attempt_id: AttemptId::new("attempt-1"),
+                        turn: crate::runtime::identity::TurnId::new("1"),
+                        retry_number: 1,
+                    },
+                },
                 request_id: RequestId::new("req-2"),
                 model: "local/model".to_owned(),
             }),
@@ -730,6 +846,13 @@ mod tests {
         assert_folded(
             &mut projector,
             &event(RuntimeEvent::ModelRequestCompleted {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: crate::model::RequestIdentity {
+                        attempt_id: AttemptId::new("attempt-1"),
+                        turn: crate::runtime::identity::TurnId::new("1"),
+                        retry_number: 1,
+                    },
+                },
                 request_id: RequestId::new("req-2"),
                 finish_reason: crate::model::ModelFinishReason::Stop,
                 usage: None,
@@ -742,6 +865,13 @@ mod tests {
         assert_folded(
             &mut projector,
             &event(RuntimeEvent::ModelRequestStarted {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: crate::model::RequestIdentity {
+                        attempt_id: AttemptId::new("attempt-1"),
+                        turn: crate::runtime::identity::TurnId::new("2"),
+                        retry_number: 0,
+                    },
+                },
                 request_id: RequestId::new("req-3"),
                 model: "local/model".to_owned(),
             }),

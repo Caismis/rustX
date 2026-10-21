@@ -3,11 +3,15 @@
 use super::validate_request_start_metadata;
 use crate::durable::ConversationStoreError;
 use crate::durable::sqlite::canonical::ledger::load_message;
+use crate::durable::sqlite::journal::validate_event_identity;
 use crate::durable::sqlite::request::contribution::validate_carryover_snapshot;
 use crate::durable::sqlite::{decode, manifest, seq_to_i64, sequence_from_i64, storage};
+use crate::events::EVENT_SCHEMA_VERSION;
 use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
 use crate::model::snapshot::RequestSnapshot;
 use crate::model::types::ModelRequest;
+use crate::runtime::AttemptId;
+use crate::runtime::TurnId;
 use crate::runtime::identity::{ConversationId, RequestId};
 use rusqlite::OptionalExtension;
 use rusqlite::{Connection, Transaction, params};
@@ -214,7 +218,8 @@ pub(in crate::durable::sqlite) fn load_request_snapshot_bounded(
 // than optional observation headers. Two starts retain duplicate detection;
 // one winner per terminal kind retains earliest native sequence ordering.
 pub(in crate::durable::sqlite) const REQUEST_START_PROBE_SQL: &str =
-    "SELECT event_json FROM events INDEXED BY events_request_id_kind_idx
+    "SELECT sequence,event_id,schema_version,conversation_id,attempt_id,turn_id,event_json
+    FROM events INDEXED BY events_request_id_kind_idx
     WHERE json_extract(event_json,'$.event.request_id')=?1
       AND json_extract(event_json,'$.event.type')='model_request_started'
     ORDER BY sequence LIMIT 2";
@@ -246,6 +251,20 @@ pub(in crate::durable::sqlite) fn record_request_probe_work(json: &str) {
     });
 }
 
+pub(in crate::durable::sqlite) fn has_request_journal_fact_tx(
+    transaction: &Transaction<'_>,
+    request_id: &RequestId,
+) -> Result<bool, ConversationStoreError> {
+    transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_request_id_kind_idx
+             WHERE json_extract(event_json, '$.event.request_id')=?1 LIMIT 1)",
+            [request_id.as_str()],
+            |row| row.get(0),
+        )
+        .map_err(|error| storage(format!("request owner orphan probe: {error}")))
+}
+
 pub(in crate::durable::sqlite) fn find_request_start_event(
     transaction: &Transaction<'_>,
     request_id: &RequestId,
@@ -254,28 +273,55 @@ pub(in crate::durable::sqlite) fn find_request_start_event(
         .prepare_cached(REQUEST_START_PROBE_SQL)
         .map_err(|error| storage(format!("request-start event probe: {error}")))?;
     let rows = statement
-        .query_map([request_id.as_str()], |row| row.get::<_, String>(0))
+        .query_map([request_id.as_str()], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, String>(6)?,
+            ))
+        })
         .map_err(|error| storage(format!("request-start event query: {error}")))?;
     let mut found = None;
     for row in rows {
-        let json = row.map_err(|error| storage(format!("request-start event row: {error}")))?;
+        let (sequence, event_id, schema_version, conversation_id, attempt_id, turn_id, json) =
+            row.map_err(|error| storage(format!("request-start event row: {error}")))?;
         #[cfg(test)]
         record_request_probe_work(&json);
+        if found.is_some() {
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "request {request_id} has duplicate request-start facts"
+            )));
+        }
         let event: RuntimeEventEnvelope = decode(&json, "request-start event")?;
-        if matches!(
+        if !matches!(
             &event.event,
             RuntimeEvent::ModelRequestStarted {
                 request_id: candidate,
                 ..
             } if candidate == request_id
         ) {
-            if found.is_some() {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "request {request_id} has duplicate request-start facts"
-                )));
-            }
-            found = Some(event);
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "request-start lookup for {request_id} returned a different fact"
+            )));
         }
+        if event.sequence != sequence_from_i64(sequence)?
+            || event.event_id.as_str() != event_id
+            || event.schema_version != EVENT_SCHEMA_VERSION
+            || i64::from(event.schema_version) != schema_version
+            || event.conversation_id.as_str() != conversation_id
+            || event.attempt_id.as_ref().map(AttemptId::as_str) != attempt_id.as_deref()
+            || event.turn_id.as_ref().map(TurnId::as_str) != turn_id.as_deref()
+        {
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "request-start fact for {request_id} disagrees with its stored envelope"
+            )));
+        }
+        validate_event_identity(&event)?;
+        found = Some(event);
     }
     Ok(found)
 }
@@ -406,6 +452,41 @@ pub(in crate::durable::sqlite) fn require_started_request_tx(
         )));
     };
     validate_started_request_row_tx(transaction, conversation_id, request_id, row)
+}
+
+pub(in crate::durable::sqlite) fn verified_started_request_tx(
+    transaction: &Transaction<'_>,
+    conversation_id: &ConversationId,
+    request_id: &RequestId,
+) -> Result<(RequestSnapshot, RuntimeEventEnvelope), ConversationStoreError> {
+    let Some((snapshot, started_sequence, _)) = read_request_snapshot_tx(transaction, request_id)?
+    else {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "request snapshot {request_id} does not exist"
+        )));
+    };
+    let Some(started_sequence) = started_sequence else {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "request snapshot {request_id} has no durable start sequence"
+        )));
+    };
+    let started = find_request_start_event(transaction, request_id)?.ok_or_else(|| {
+        ConversationStoreError::InvalidReference(format!(
+            "request snapshot {request_id} has no durable request-start fact"
+        ))
+    })?;
+    if started.sequence != started_sequence {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "request snapshot {request_id} start sequence disagrees with its request-start fact"
+        )));
+    }
+    if started.conversation_id != *conversation_id {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "request-start fact for {request_id} belongs to a foreign conversation"
+        )));
+    }
+    validate_request_start_metadata(&snapshot, &started)?;
+    Ok((snapshot.0, started))
 }
 
 /// Reuses a row decoded in this same transaction, preserving all original start

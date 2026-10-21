@@ -494,7 +494,10 @@ pub(crate) fn lineage_cut(
         seed.canonical(),
         &source.projections,
     )?;
+    let auxiliary_audits =
+        retain_summary_generation_audits(&projections, &source.auxiliary_audits)?;
     seed.with_projections(projections)
+        .and_then(|seed| seed.with_auxiliary_audits(auxiliary_audits))
         .map_err(|error| SessionError::Seed {
             detail: error.to_string(),
         })
@@ -614,6 +617,54 @@ fn inherit_projections(
         copied.push(checkpoint);
     }
     Ok(copied)
+}
+
+/// Retain only source audit snapshots named by copied checkpoints.
+///
+/// The source read may discover snapshots for the complete eligible timeline;
+/// a Fork that excludes a checkpoint must not copy its unrelated Summary Call.
+#[allow(dead_code)] // Invoked by the LineageSeed attachment hook in `lineage_cut`.
+pub(crate) fn retain_summary_generation_audits(
+    projections: &[crate::durable::projection::ProjectionCheckpoint],
+    source_audits: &[crate::durable::reading::AuxiliaryAuditSnapshot],
+) -> Result<Vec<crate::durable::reading::AuxiliaryAuditSnapshot>, SessionError> {
+    let mut source = BTreeMap::new();
+    for audit in source_audits {
+        let key = (
+            audit.source_conversation_id.clone(),
+            audit.call_id.clone(),
+            audit.through_journal,
+        );
+        if source.insert(key, audit).is_some() {
+            return Err(SessionError::Seed {
+                detail: "duplicate Summary generation audit dependency".into(),
+            });
+        }
+    }
+    let mut retained = Vec::new();
+    let mut seen = BTreeSet::new();
+    for projection in projections {
+        let Some(reference) = &projection.candidate.summary_generation else {
+            continue;
+        };
+        let key = (
+            reference.conversation_id.clone(),
+            reference.call_id.clone(),
+            reference.through_journal,
+        );
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+        retained.push(
+            source
+                .remove(&key)
+                .cloned()
+                .ok_or_else(|| SessionError::Seed {
+                    detail: "missing named Summary generation audit dependency".into(),
+                })?,
+        );
+    }
+    Ok(retained)
 }
 
 /// Reconstructs a destination seed with destination-owned canonical message/occurrence

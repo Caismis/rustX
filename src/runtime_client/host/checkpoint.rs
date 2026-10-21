@@ -5,6 +5,8 @@ use super::{
     ClientInner, ConversationObservation, Ordering, RuntimeClientCursor, RuntimeClientError,
     TranscriptFieldSource,
 };
+use crate::observation::cut::CollectionFrontier;
+use crate::runtime_client::checkpoint::RuntimeClientCheckpoint;
 
 impl ClientInner {
     pub(crate) fn checkpoint_page(
@@ -25,6 +27,9 @@ impl ClientInner {
         }
         if super::super::occupancy::selection(domain).is_some() {
             return super::super::occupancy::page(self.store.as_ref(), cut, domain, offset, limit);
+        }
+        if domain == crate::runtime_client::auxiliary::DOMAIN {
+            return crate::runtime_client::auxiliary::page(self.store.as_ref(), cut, offset, limit);
         }
         if let Some(page) = self.domain_source_page(cut, domain, offset, limit)? {
             return Ok(page);
@@ -595,6 +600,7 @@ impl ClientInner {
         let mut checkpoint = seed.checkpoint_candidate()?;
         self.materialize_content_bindings(&mut checkpoint.content)?;
         self.materialize_trace(&mut checkpoint.snapshot, &checkpoint.read_cut, records)?;
+        self.materialize_auxiliary_audit_frontier(&mut checkpoint, deadline)?;
         if !records.is_empty() {
             checkpoint
                 .collections
@@ -621,6 +627,52 @@ impl ClientInner {
             .projection
             .validate_checkpoint_cut(&checkpoint.read_cut)?;
         Ok(checkpoint)
+    }
+
+    fn materialize_auxiliary_audit_frontier(
+        &self,
+        checkpoint: &mut super::checkpoint::RuntimeClientCheckpoint,
+        deadline: std::time::Instant,
+    ) -> Result<(), RuntimeClientError> {
+        if std::time::Instant::now() >= deadline {
+            return Err(RuntimeClientError::ObservationUnavailable {
+                message: "checkpoint auxiliary audit deadline exhausted".into(),
+            });
+        }
+        let total = self
+            .store
+            .auxiliary_audit_total(crate::model::auxiliary::AuxiliaryAuditCut {
+                journal: checkpoint.read_cut.through,
+            })
+            .map_err(RuntimeClientError::observation_store_error)?;
+        if total > 9_007_199_254_740_991 {
+            return Err(RuntimeClientError::ObservationUnavailable {
+                message: "auxiliary audit total exceeds the protocol integer domain".into(),
+            });
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(RuntimeClientError::ObservationUnavailable {
+                message: "checkpoint auxiliary audit deadline exhausted".into(),
+            });
+        }
+        checkpoint
+            .collections
+            .retain(|frontier| frontier.domain != crate::runtime_client::auxiliary::DOMAIN);
+        checkpoint
+            .collections
+            .push(super::checkpoint::CollectionFrontier {
+                domain: crate::runtime_client::auxiliary::DOMAIN.into(),
+                revision: checkpoint
+                    .read_cut
+                    .domain_revisions
+                    .get("auxiliary")
+                    .copied()
+                    .unwrap_or(0),
+                total,
+                loaded: 0,
+                next_offset: (total > 0).then_some(0),
+            });
+        Ok(())
     }
 
     pub(crate) fn checkpoint(

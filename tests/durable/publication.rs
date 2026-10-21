@@ -41,8 +41,8 @@ use rustx::message::types::{
 };
 use rustx::model::catalog::{ModelCapabilities, ModelCompat};
 use rustx::model::{
-    ModelFinishReason, ModelInvocationConfig, ModelProtocol, RequestIdentity, RequestParams,
-    RequestSnapshot,
+    ModelFinishReason, ModelInvocationConfig, ModelProtocol, ModelRequestOwner, RequestIdentity,
+    RequestParams, RequestSnapshot,
 };
 use rustx::publication::{
     PublicationAuditBlock, PublicationAuditKind, PublicationFrame, PublicationPayload,
@@ -120,6 +120,16 @@ fn attempt() -> AttemptId {
     AttemptId::new("attempt-1")
 }
 
+fn agent_owner(turn: &str) -> ModelRequestOwner {
+    ModelRequestOwner::Agent {
+        identity: RequestIdentity {
+            attempt_id: attempt(),
+            turn: TurnId::new(turn),
+            retry_number: 0,
+        },
+    }
+}
+
 /// Commits the one durable request-start transaction of a turn and returns
 /// the started request identity.
 fn start_request(store: &SqliteConversationStore, turn: &str) -> RequestId {
@@ -177,6 +187,7 @@ fn commit_provider_outcome(store: &SqliteConversationStore, turn: &str, request_
             &format!("request-completed-{turn}"),
             turn,
             RuntimeEvent::ModelRequestCompleted {
+                owner: agent_owner(turn),
                 request_id: request_id.clone(),
                 finish_reason: ModelFinishReason::Stop,
                 usage: None,
@@ -2532,6 +2543,7 @@ fn publication_generation_rejections_are_side_effect_free() {
         "foreign-provider-attempt",
         "1",
         RuntimeEvent::ModelRequestCompleted {
+            owner: agent_owner("1"),
             request_id: request_id.clone(),
             finish_reason: ModelFinishReason::Stop,
             usage: None,
@@ -2547,6 +2559,7 @@ fn publication_generation_rejections_are_side_effect_free() {
         "foreign-provider-turn",
         "1",
         RuntimeEvent::ModelRequestCompleted {
+            owner: agent_owner("1"),
             request_id: request_id.clone(),
             finish_reason: ModelFinishReason::Stop,
             usage: None,
@@ -2568,6 +2581,7 @@ fn publication_generation_rejections_are_side_effect_free() {
         "duplicate-provider-outcome",
         "1",
         RuntimeEvent::ModelRequestCompleted {
+            owner: agent_owner("1"),
             request_id: request_id.clone(),
             finish_reason: ModelFinishReason::Stop,
             usage: None,
@@ -2582,6 +2596,7 @@ fn publication_generation_rejections_are_side_effect_free() {
         "contradictory-provider-outcome",
         "1",
         RuntimeEvent::ModelRequestFailed {
+            owner: agent_owner("1"),
             request_id: request_id.clone(),
             error: rustx::model::ModelError {
                 kind: rustx::model::ModelErrorKind::ProviderError,
@@ -2715,10 +2730,12 @@ fn a_provider_outcome_names_one_started_request_exactly_once() {
     store.initialize(&[]).expect("initialize");
     let request_id = start_request(&store, "1");
 
+    let before_events = event_count(&store);
     let unknown = store.append_event(envelope(
         "unknown-request",
         "1",
         RuntimeEvent::ModelRequestCompleted {
+            owner: agent_owner("1"),
             request_id: RequestId::new("request-never-started"),
             finish_reason: ModelFinishReason::Stop,
             usage: None,
@@ -2734,12 +2751,15 @@ fn a_provider_outcome_names_one_started_request_exactly_once() {
         "P must name an actually started request, got {unknown:?}"
     );
 
+    assert_eq!(event_count(&store), before_events);
+
     commit_provider_outcome(&store, "1", &request_id);
     assert!(matches!(
         store.append_event(envelope(
             "duplicate-outcome",
             "1",
             RuntimeEvent::ModelRequestCompleted {
+                owner: agent_owner("1"),
                 request_id,
                 finish_reason: ModelFinishReason::Stop,
                 usage: None,
@@ -4046,6 +4066,7 @@ fn t08_t19_native_usage_u64_frontier_and_opaque_canonical_bytes_remain_exact() {
             "wide-usage",
             "wide-usage",
             RuntimeEvent::ModelRequestCompleted {
+                owner: agent_owner("wide-usage"),
                 request_id: request,
                 finish_reason: ModelFinishReason::Stop,
                 usage: Some(ModelUsage {

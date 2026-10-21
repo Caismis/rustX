@@ -3,6 +3,10 @@
 #[cfg(test)]
 mod tests;
 
+use crate::durable::sqlite::auxiliary;
+use crate::durable::sqlite::request::snapshot::has_request_journal_fact_tx;
+use crate::durable::sqlite::schema::validate_primary_request_owner_event;
+use crate::model::ModelRequestOwner;
 use rusqlite::OptionalExtension;
 pub(super) mod contribution;
 pub(crate) mod snapshot;
@@ -13,9 +17,9 @@ use self::contribution::{
     verify_contribution_start_tx, verify_frozen_contributions_tx,
 };
 use self::snapshot::{
-    encode_snapshot, find_request_start_event, load_request_snapshot, read_manifest_digest,
-    read_stored_snapshot_root, reconstruct_snapshot_input, stored_snapshot_digest,
-    validate_accepted_continuation_source, validate_snapshot_identity,
+    encode_snapshot, load_request_snapshot, read_manifest_digest, read_stored_snapshot_root,
+    reconstruct_snapshot_input, stored_snapshot_digest, validate_accepted_continuation_source,
+    validate_snapshot_identity,
 };
 #[cfg(test)]
 use super::RequestStartFaultOperation;
@@ -53,6 +57,17 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 impl RequestStore for SqliteConversationStore {
+    fn load_request_owner(
+        &self,
+        request_id: &RequestId,
+    ) -> Result<Option<ModelRequestOwner>, ConversationStoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|error| storage(format!("request owner read transaction: {error}")))?;
+        auxiliary::load_request_owner_tx(&transaction, &self.conversation_id, request_id)
+    }
+
     fn attempt_prompt(
         &self,
         attempt: &AttemptId,
@@ -110,6 +125,7 @@ impl RequestStore for SqliteConversationStore {
             }
             let mut verified = verify_committed_start_tx(
                 &transaction,
+                &self.conversation_id,
                 &json,
                 started_sequence,
                 context,
@@ -120,6 +136,12 @@ impl RequestStore for SqliteConversationStore {
                 .map_err(|error| storage(format!("request start retry commit: {error}")))?;
             verified.verified_snapshot = Some(Box::new(snapshot.clone()));
             return Ok(verified);
+        }
+        if has_request_journal_fact_tx(&transaction, &snapshot.request_id)? {
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "request {} has Journal evidence without its request snapshot",
+                snapshot.request_id
+            )));
         }
         let projection = projection::current_checkpoint_id(&transaction)?;
         if projection.as_ref() != snapshot.history_cut.checkpoint_id.as_ref() {
@@ -455,6 +477,7 @@ pub(super) fn index_request_read_layouts(
 /// event, and the sequence binding must all match exactly.
 pub(super) fn verify_committed_start_tx(
     transaction: &rusqlite::Transaction<'_>,
+    conversation_id: &ConversationId,
     json: &str,
     started_sequence: Option<i64>,
     context: &[MessageBlock],
@@ -508,12 +531,8 @@ pub(super) fn verify_committed_start_tx(
             )));
         }
     }
-    let Some(started) = find_request_start_event(transaction, &snapshot.request_id)? else {
-        return Err(ConversationStoreError::InvalidReference(format!(
-            "request snapshot {} exists without its request-start fact",
-            snapshot.request_id
-        )));
-    };
+    let (_, started) =
+        snapshot::verified_started_request_tx(transaction, conversation_id, &snapshot.request_id)?;
     if seq_to_i64(started.sequence)? != started_sequence {
         return Err(ConversationStoreError::InvalidReference(format!(
             "request snapshot {} start sequence disagrees with its event",
@@ -521,6 +540,7 @@ pub(super) fn verify_committed_start_tx(
         )));
     }
     validate_request_start_metadata(&stored, &started)?;
+    validate_primary_request_owner_event(transaction, &started)?;
     let contribution_emissions =
         verify_contribution_start_tx(transaction, context, &stored, &started)?;
     Ok(ModelTurnStartCommit {
@@ -591,13 +611,19 @@ pub(super) fn validate_request_start_metadata(
     snapshot: &RequestSnapshot,
     envelope: &RuntimeEventEnvelope,
 ) -> Result<(), ConversationStoreError> {
-    let RuntimeEvent::ModelRequestStarted { request_id, model } = &envelope.event else {
+    let RuntimeEvent::ModelRequestStarted {
+        request_id,
+        model,
+        owner,
+    } = &envelope.event
+    else {
         return Err(ConversationStoreError::InvalidReference(
             "request snapshot is paired with a non-request-start event".to_owned(),
         ));
     };
     if request_id != &snapshot.request_id
         || model != &snapshot.invocation.model
+        || !matches!(owner, ModelRequestOwner::Agent { identity } if identity == &snapshot.identity)
         || envelope.attempt_id.as_ref() != Some(&snapshot.identity.attempt_id)
         || envelope.turn_id.as_ref() != Some(&snapshot.identity.turn)
     {
@@ -755,6 +781,9 @@ impl SqliteConversationStore {
             event: RuntimeEvent::ModelRequestStarted {
                 request_id: snapshot.request_id.clone(),
                 model: snapshot.invocation.model.clone(),
+                owner: ModelRequestOwner::Agent {
+                    identity: snapshot.identity.clone(),
+                },
             },
         };
         #[cfg(test)]

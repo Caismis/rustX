@@ -321,6 +321,7 @@ pub(crate) fn checkpoint_fixture(
         base_frontier: history.cut.ledger,
         items,
         summary_metadata: Some(metadata),
+        summary_generation: None,
     }
 }
 

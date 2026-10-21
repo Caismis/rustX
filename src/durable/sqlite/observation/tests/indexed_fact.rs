@@ -140,6 +140,9 @@ pub(super) fn terminal(
         &format!("terminal-{retry}"),
         Some(snapshot.identity.attempt_id.clone()),
         RuntimeEvent::ModelRequestCompleted {
+            owner: crate::model::ModelRequestOwner::Agent {
+                identity: snapshot.identity.clone(),
+            },
             request_id: snapshot.request_id,
             finish_reason: ModelFinishReason::Stop,
             usage: measured.then_some(crate::model::types::ModelUsage {

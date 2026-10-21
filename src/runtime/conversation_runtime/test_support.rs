@@ -1857,6 +1857,13 @@ pub(super) fn append_completed_request(
         "request-completed",
         attempt_id,
         crate::events::types::RuntimeEvent::ModelRequestCompleted {
+            owner: crate::model::ModelRequestOwner::Agent {
+                identity: crate::model::RequestIdentity {
+                    attempt_id: attempt_id.clone(),
+                    turn: TurnId::new("0"),
+                    retry_number: 0,
+                },
+            },
             request_id: request_id.clone(),
             finish_reason: crate::model::finish::ModelFinishReason::Stop,
             usage: None,

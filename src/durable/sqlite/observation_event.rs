@@ -60,9 +60,25 @@ fn selected_paths(event: &crate::events::types::RuntimeEvent) -> Option<&'static
         | Event::AssistantMessageCommitted { .. }
         | Event::ModelRetryScheduled { .. } => Some(&["type"]),
         Event::AttemptCompleted { .. } => Some(&["type", "finish_reason"]),
+        // Owner, identity and usage come from the committing typed fact below;
+        // probing their indexed previews again adds no evidence.
         Event::ModelRequestCompleted { .. } => Some(&["type", "finish_reason", "generation"]),
         Event::ModelRequestFailed { .. } => Some(&["type", "error", "generation"]),
         Event::AttemptFailed { .. } => Some(&["type", "error"]),
+        Event::AuxiliaryCallStarted { .. } => Some(&[
+            "type",
+            "call_id",
+            "purpose",
+            "trigger",
+            "business_source",
+            "input",
+            "semantic_input_fingerprint",
+            "invocation_fingerprint",
+            "selected_message_ids",
+        ]),
+        Event::AuxiliaryCallSettled { .. } => {
+            Some(&["type", "call_id", "outcome", "request_evidence"])
+        }
         Event::ToolExecutionProgress { .. } => {
             Some(&["type", "tool_call_id", "tool_id", "progress"])
         }
@@ -330,6 +346,11 @@ fn mandatory_witness(
             .as_ref()
             .filter(|id| id.as_str().len() <= 256)
             .cloned(),
+        owner: event
+            .event
+            .model_request_owner()
+            .map(crate::durable::observation::RequestOwnerKind::from),
+        auxiliary_call_id: event.event.auxiliary_call_id().cloned(),
         timestamp: event.timestamp,
         event_kind,
         tool_occurrence: event.tool_occurrence.clone(),
@@ -442,6 +463,11 @@ fn index_with_paths(
             .as_ref()
             .filter(|id| id.as_str().len() <= 256)
             .cloned(),
+        owner: event
+            .event
+            .model_request_owner()
+            .map(crate::durable::observation::RequestOwnerKind::from),
+        auxiliary_call_id: event.event.auxiliary_call_id().cloned(),
         timestamp: event.timestamp,
         event_kind,
         tool_occurrence: event.tool_occurrence.clone(),
@@ -525,7 +551,10 @@ pub(super) fn witness(
         .map(|bytes| {
             let mut witness: ObservationEventWitness =
                 serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string()))?;
-            let (direct,missing):(bool,bool)=connection.query_row("SELECT COALESCE(r.direct=1 AND r.ready=1,0),e.observation_readiness_missing OR e.observation_unavailable FROM events e LEFT JOIN event_observation_readiness r ON r.sequence=e.sequence WHERE e.sequence=?1",[sequence],|row|Ok((row.get(0)?,row.get(1)?))).map_err(|error|storage(error.to_string()))?;
+            let (direct, missing): (bool, bool) = connection.query_row(
+                "SELECT COALESCE(r.direct=1 AND r.ready=1,0),e.observation_readiness_missing OR e.observation_unavailable FROM events e LEFT JOIN event_observation_readiness r ON r.sequence=e.sequence WHERE e.sequence=?1",
+                [sequence], |row| Ok((row.get(0)?, row.get(1)?)),
+            ).map_err(|error| storage(error.to_string()))?;
             witness.native_direct=direct;
             witness.source_unavailable|=missing;
             Ok(witness)
@@ -563,6 +592,7 @@ pub(super) fn read(
     )
 }
 
+#[allow(clippy::too_many_lines)] // Closed event identity mapping stays exhaustive in one place.
 fn identity_fields(
     event: &RuntimeEventEnvelope,
     value: &mut serde_json::Value,
@@ -577,6 +607,14 @@ fn identity_fields(
             serde_json::Value::Null
         }
     };
+    if let Some(owner) = event.event.model_request_owner() {
+        value["owner"] = serde_json::json!({
+            "type": crate::durable::observation::RequestOwnerKind::from(owner)
+        });
+    }
+    if let Some(call_id) = event.event.auxiliary_call_id() {
+        value["call_id"] = identity(call_id.as_str());
+    }
     match &event.event {
         Event::AttemptStarted { attempt_id }
         | Event::AttemptCompleted { attempt_id, .. }
@@ -586,7 +624,9 @@ fn identity_fields(
         | Event::AttemptLimitExceeded { attempt_id, .. } => {
             value["attempt_id"] = identity(attempt_id.as_str());
         }
-        Event::ModelRequestStarted { request_id, model } => {
+        Event::ModelRequestStarted {
+            request_id, model, ..
+        } => {
             value["request_id"] = identity(request_id.as_str());
             value["model"] = serde_json::json!(prefix(model));
         }
@@ -607,6 +647,39 @@ fn identity_fields(
                 .ok_or_else(|| storage("usage witness exceeds finite header"))?;
             value["generation"] = crate::observation::bounded::structural_value(generation)
                 .ok_or_else(|| storage("generation witness exceeds finite header"))?;
+        }
+        Event::AuxiliaryCallStarted {
+            purpose,
+            trigger,
+            business_source,
+            input,
+            semantic_input_fingerprint,
+            invocation_fingerprint,
+            selected_message_ids,
+            ..
+        } => {
+            value["purpose"] =
+                serde_json::to_value(purpose).map_err(|error| storage(error.to_string()))?;
+            value["trigger"] =
+                serde_json::to_value(trigger).map_err(|error| storage(error.to_string()))?;
+            value["business_source"] = serde_json::to_value(business_source)
+                .map_err(|error| storage(error.to_string()))?;
+            value["input"] =
+                serde_json::to_value(input).map_err(|error| storage(error.to_string()))?;
+            value["semantic_input_fingerprint"] =
+                serde_json::json!(semantic_input_fingerprint.as_str());
+            value["invocation_fingerprint"] = serde_json::json!(invocation_fingerprint.as_str());
+            value["selected_message_ids"] = serde_json::json!(selected_message_ids);
+        }
+        Event::AuxiliaryCallSettled {
+            outcome,
+            request_evidence,
+            ..
+        } => {
+            value["request_evidence"] = serde_json::to_value(request_evidence)
+                .map_err(|error| storage(error.to_string()))?;
+            value["outcome"] =
+                serde_json::to_value(outcome).map_err(|error| storage(error.to_string()))?;
         }
         Event::ToolExecutionStarted {
             tool_call_id,
