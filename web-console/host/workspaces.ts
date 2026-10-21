@@ -9,7 +9,7 @@ import { isAbsolute, join, relative, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { sameEndpoint } from '../src/workspaces/endpoint.ts';
 import { WorkspaceHostError } from '../src/workspaces/host.ts';
-import type { ProductHostWorkspaces, WorkspaceAuthorityScope, WorkspaceCatalog, SessionLocation, WorkspaceConfigurationOperation, WorkspaceConfigurationResult, WorkspaceConfigurationReread } from '../src/workspaces/host.ts';
+import type { ProductHostWorkspaces, WorkspaceAuthorityScope, WorkspaceCatalog, SessionLocation, WorkspaceConfigurationOperation, WorkspaceConfigurationResult, WorkspaceConfigurationReread, WorkflowHostOperation, WorkflowHostResult, WorkflowReread } from '../src/workspaces/host.ts';
 import { AppServerClient } from '../../tui/src/app-server/client.ts';
 import { WebSocketTransport } from '../../tui/src/app-server/websocket-transport.ts';
 import { DesktopAdapter } from './desktop.ts';
@@ -342,47 +342,101 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     });
   }
   async resolveWorkspace(id: string, endpoint: string) { this.route(endpoint); return { cwd: this.cwd(this.registered(id).location) }; }
-  async configureWorkspace(id: string, endpoint: string, operation: WorkspaceConfigurationOperation): Promise<WorkspaceConfigurationResult> {
-    const run = async (): Promise<WorkspaceConfigurationResult> => {
-      const { cwd } = await this.resolveWorkspace(id, endpoint);
+  /** One native App Server connection in one registration's authority lane.
+   * The registration is resolved before connecting and again immediately
+   * before submission; `current` re-resolves it after native work. */
+  private nativeLane<T>(id: string, resolve: () => Promise<string>, run: (client: AppServerClient, cwd: string, current: () => Promise<boolean>) => Promise<T>): Promise<T> {
+    return this.lane(id, async () => {
+      const cwd = await resolve();
       if (!this.config.transportToken) throw new Error('Workspace Host has no native configuration connection');
       const transport = await WebSocketTransport.connect({ endpoint: this.config.endpoint, token: this.config.transportToken });
       const client = await AppServerClient.initialize({ transport, identity: { name: 'rustx-product-host', version: '0.1.0' } }).catch(error => { transport.close(); throw error; });
       try {
         // Resolve again after asynchronous admission, immediately before submission.
-        if ((await this.resolveWorkspace(id, endpoint)).cwd !== cwd) throw new Error('Workspace authority changed');
-        const target = { kind: 'workspace' as const, directory: cwd };
-        const readSource = async () => {
-          const result = await client.call('configuration/sourcesRead', {target}, 'source_settings');
-          return materializeSource(result.projection, async(reference,offset)=>(await client.call('configuration/sourceValueRead',{target,reference,offset,max_bytes:65536},'source_value_chunk')).chunk, ()=>true);
-        };
-        if (operation.kind === 'mcp_probe') {
-          const { result } = await client.call('mcp/probe', { target, id: operation.id, expected_revision: operation.expected_revision }, 'mcp_probe');
-          if ((await this.resolveWorkspace(id, endpoint)).cwd !== cwd) throw new Error('Workspace authority changed');
-          return { kind: 'mcp_probe', result };
-        }
-        if (operation.kind === 'write') {
-          // The native write is the linearization point. Once it acknowledges,
-          // the mutation is committed and nothing below may turn it into a
-          // rejection; the authoritative reread is a separate, independent fact.
-          const acknowledgement = await client.call('configuration/sourceWrite', { target, expected_revision: operation.expected_revision, mutation: operation.mutation }, 'sources_written');
-          let reread: WorkspaceConfigurationReread;
-          try {
-            const projection = await readSource();
-            reread = (await this.resolveWorkspace(id, endpoint)).cwd === cwd
-              ? { status: 'observed', projection }
-              : { status: 'failed', error: 'Workspace authority changed during the authoritative reread' };
-          } catch (error) { reread = { status: 'failed', error: error instanceof Error ? error.message : String(error) }; }
-          return { kind: 'write', commit: { acknowledgement: {target, revision:acknowledgement.revision}, reread } };
-        }
-        if (operation.kind === 'reconcile') await client.call('configuration/reconcile', { target }, 'configuration_receipt');
-        else if (operation.kind !== 'read') throw new Error('Unknown configuration operation');
-        const projection = await readSource();
-        if ((await this.resolveWorkspace(id, endpoint)).cwd !== cwd) throw new Error('Workspace authority changed');
-        return { kind: operation.kind, projection };
+        if (await resolve() !== cwd) throw new Error('Workspace authority changed');
+        return await run(client, cwd, async () => await resolve() === cwd);
       } finally { await client.close(); }
+    });
+  }
+  async configureWorkspace(id: string, endpoint: string, operation: WorkspaceConfigurationOperation): Promise<WorkspaceConfigurationResult> {
+    return this.nativeLane(id, async () => (await this.resolveWorkspace(id, endpoint)).cwd, async (client, cwd, current) => {
+      const target = { kind: 'workspace' as const, directory: cwd };
+      const readSource = async () => {
+        const result = await client.call('configuration/sourcesRead', {target}, 'source_settings');
+        return materializeSource(result.projection, async(reference,offset)=>(await client.call('configuration/sourceValueRead',{target,reference,offset,max_bytes:65536},'source_value_chunk')).chunk, ()=>true);
+      };
+      if (operation.kind === 'mcp_probe') {
+        const { result } = await client.call('mcp/probe', { target, id: operation.id, expected_revision: operation.expected_revision }, 'mcp_probe');
+        if (!await current()) throw new Error('Workspace authority changed');
+        return { kind: 'mcp_probe', result };
+      }
+      if (operation.kind === 'write') {
+        // The native write is the linearization point. Once it acknowledges,
+        // the mutation is committed and nothing below may turn it into a
+        // rejection; the authoritative reread is a separate, independent fact.
+        const acknowledgement = await client.call('configuration/sourceWrite', { target, expected_revision: operation.expected_revision, mutation: operation.mutation }, 'sources_written');
+        let reread: WorkspaceConfigurationReread;
+        try {
+          const projection = await readSource();
+          reread = await current()
+            ? { status: 'observed', projection }
+            : { status: 'failed', error: 'Workspace authority changed during the authoritative reread' };
+        } catch (error) { reread = { status: 'failed', error: error instanceof Error ? error.message : String(error) }; }
+        return { kind: 'write', commit: { acknowledgement: {target, revision:acknowledgement.revision}, reread } };
+      }
+      if (operation.kind === 'reconcile') await client.call('configuration/reconcile', { target }, 'configuration_receipt');
+      else if (operation.kind !== 'read') throw new Error('Unknown configuration operation');
+      const projection = await readSource();
+      if (!await current()) throw new Error('Workspace authority changed');
+      return { kind: operation.kind, projection };
+    });
+  }
+  /** Native Workflow file authoring in exactly this registered Workspace. A
+   * registration that is unknown, unavailable or changed is the typed
+   * `workspace_unavailable` refusal, never a fallback to another scope. */
+  async workflowWorkspace(id: string, endpoint: string, operation: WorkflowHostOperation): Promise<WorkflowHostResult> {
+    validateWorkflowOperation(operation);
+    const resolve = async () => {
+      try { return (await this.resolveWorkspace(id, endpoint)).cwd; }
+      catch (cause) { throw new WorkspaceHostError(cause instanceof Error ? cause.message : String(cause), 'workspace_unavailable'); }
     };
-    return this.lane(id, run);
+    return this.nativeLane(id, resolve, async (client, cwd, current) => {
+      const target = { kind: 'workspace' as const, directory: cwd };
+      const unchanged = async () => {
+        if (!await current()) throw new WorkspaceHostError('Workspace authority changed', 'workspace_unavailable');
+      };
+      switch (operation.kind) {
+        case 'list': {
+          const { library } = await client.call('workflow/list', { target }, 'workflow_library');
+          await unchanged();
+          return { kind: 'list', library };
+        }
+        case 'read': {
+          const { source } = await client.call('workflow/read', { target, id: operation.id }, 'workflow_source');
+          await unchanged();
+          return { kind: 'read', source };
+        }
+        case 'check': {
+          const params = operation.scope === 'workspace'
+            ? { target, id: operation.id, document: operation.document, explain: operation.explain }
+            : { target: { kind: 'user' as const }, id: operation.id, document: operation.document, context: cwd, explain: operation.explain };
+          const { report } = await client.call('workflow/check', params, 'workflow_check');
+          await unchanged();
+          return { kind: 'check', report };
+        }
+        case 'write': {
+          // The native write is the linearization point; its reread is a
+          // separate fact that can fail without undoing the commit.
+          const acknowledgement = await client.call('configuration/sourceWrite', { target, expected_revision: operation.expected_revision, mutation: { kind: 'workflow', id: operation.id, edit: operation.edit } }, 'sources_written');
+          let reread: WorkflowReread;
+          try {
+            const { source } = await client.call('workflow/read', { target, id: operation.id }, 'workflow_source');
+            reread = await current() ? { status: 'observed', source } : { status: 'failed', error: 'Workspace authority changed during the authoritative reread' };
+          } catch (error) { reread = { status: 'failed', error: error instanceof Error ? error.message : String(error) }; }
+          return { kind: 'write', commit: { acknowledgement: { revision: acknowledgement.revision, configuration_revision: acknowledgement.configuration_revision ?? null }, reread } };
+        }
+      }
+    });
   }
   async classifyLocations(cwds: readonly string[], endpoint: string, authorityId?: string): Promise<SessionLocation[]> {
     this.route(endpoint);
@@ -402,6 +456,20 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       return { authorized: true, ...(workspaceId ? { workspaceId } : {}) };
     } catch { return { authorized: false, reason: 'unavailable' }; }
   }
+}
+
+/** Browser-supplied Workflow coordinates; native validates the documents. */
+function validateWorkflowOperation(operation: WorkflowHostOperation) {
+  const value = operation as unknown as Record<string, unknown> | null;
+  const id = () => typeof value?.id === 'string' && value.id.length > 0 && value.id.length <= 64;
+  const object = (field: unknown) => !!field && typeof field === 'object' && !Array.isArray(field);
+  const fields = (allowed: string[]) => Object.keys(value ?? {}).every(key => allowed.includes(key));
+  const valid = object(value) && (
+    value!.kind === 'list' ? fields(['kind'])
+      : value!.kind === 'read' ? fields(['kind', 'id']) && id()
+        : value!.kind === 'check' ? fields(['kind', 'scope', 'id', 'document', 'explain']) && id() && ['workspace', 'user'].includes(value!.scope as string) && object(value!.document) && typeof value!.explain === 'boolean'
+          : value!.kind === 'write' && fields(['kind', 'id', 'expected_revision', 'edit']) && id() && typeof value!.expected_revision === 'string' && object(value!.edit));
+  if (!valid) throw new Error('Invalid Workflow operation');
 }
 
 /** Coordinates select canonical evidence; authentication and native mapping grant access. */

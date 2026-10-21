@@ -628,41 +628,17 @@ impl UserConfigManager {
                 return Err(LaunchFailure::resource(error.clone()));
             }
         }
-        let main_subagents =
-            subagents.selected_definitions(&config.agent.agents.iter().cloned().collect());
-        let native_metadata =
-            crate::tools::native::definitions(config.native_tools.to_policies(), &main_subagents);
-        let native_leaves: std::collections::BTreeSet<_> = native_metadata
-            .iter()
-            .filter(|(_, policy)| *policy == crate::tools::deadline::ForegroundPolicy::Leaf)
-            .map(|(definition, _)| definition.id.clone())
-            .collect();
-        let mut definitions: Vec<_> = native_metadata
-            .into_iter()
-            .map(|(definition, _)| definition)
-            .collect();
-        definitions.extend(
-            workflows
-                .entries()
-                .values()
-                .map(|entry| &entry.source)
-                .map(|program| crate::tools::native::workflow_definition(program)),
-        );
         let managed_python = super::super::managed_python_resources::discover(
             Some(&locations.workspace),
             &host.home_directory.join("rustx/.agents"),
         )
         .map_err(LaunchFailure::resource)?;
-        let availability = config
-            .mcp_servers
-            .keys()
-            .cloned()
-            .map(crate::capabilities::ToolSourceId::Mcp)
-            .chain(managed_python.packages().keys().cloned())
-            .map(|id| (id, crate::capabilities::CapabilitySourceState::Unprepared))
-            .collect();
-        let available_catalog =
-            crate::capabilities::AvailableToolCatalog::metadata(definitions.clone());
+        let MetadataAdmission {
+            definitions,
+            catalog: available_catalog,
+            availability,
+            native_leaves,
+        } = MetadataAdmission::compose(&config, &subagents, &workflows, &managed_python);
         workflows.admit_metadata(
             &available_catalog,
             &availability,
@@ -1096,6 +1072,63 @@ pub(in crate::local_runtime) fn source_manifest_revision(
         }
     }
     format!("{:x}", hash.finalize())
+}
+
+/// The offline metadata-admission inputs of one composed configuration: the
+/// native and Workflow Tool metadata, every configured external source as
+/// `Unprepared`, and the native leaf identities. Capture and candidate
+/// Workflow authoring checks admit with exactly these facts; nothing here
+/// prepares a source, connects or reads a credential.
+pub(in crate::local_runtime) struct MetadataAdmission {
+    pub(in crate::local_runtime) definitions: Vec<crate::tools::types::ToolDefinition>,
+    pub(in crate::local_runtime) catalog: crate::capabilities::AvailableToolCatalog,
+    pub(in crate::local_runtime) availability: crate::capabilities::CapabilityAvailability,
+    pub(in crate::local_runtime) native_leaves:
+        std::collections::BTreeSet<crate::runtime::identity::ToolId>,
+}
+
+impl MetadataAdmission {
+    pub(in crate::local_runtime) fn compose(
+        config: &super::CurrentRuntimeConfig,
+        subagents: &crate::runtime::subagent::AgentCatalog,
+        workflows: &crate::runtime::workflow::WorkflowCatalog,
+        managed_python: &crate::runtime::resources::ManagedPythonCatalog,
+    ) -> Self {
+        let main_subagents =
+            subagents.selected_definitions(&config.agent.agents.iter().cloned().collect());
+        let native_metadata =
+            crate::tools::native::definitions(config.native_tools.to_policies(), &main_subagents);
+        let native_leaves = native_metadata
+            .iter()
+            .filter(|(_, policy)| *policy == crate::tools::deadline::ForegroundPolicy::Leaf)
+            .map(|(definition, _)| definition.id.clone())
+            .collect();
+        let mut definitions: Vec<_> = native_metadata
+            .into_iter()
+            .map(|(definition, _)| definition)
+            .collect();
+        definitions.extend(
+            workflows
+                .entries()
+                .values()
+                .map(|entry| &entry.source)
+                .map(|program| crate::tools::native::workflow_definition(program)),
+        );
+        let availability = config
+            .mcp_servers
+            .keys()
+            .cloned()
+            .map(crate::capabilities::ToolSourceId::Mcp)
+            .chain(managed_python.packages().keys().cloned())
+            .map(|id| (id, crate::capabilities::CapabilitySourceState::Unprepared))
+            .collect();
+        Self {
+            catalog: crate::capabilities::AvailableToolCatalog::metadata(definitions.clone()),
+            definitions,
+            availability,
+            native_leaves,
+        }
+    }
 }
 
 #[cfg(test)]

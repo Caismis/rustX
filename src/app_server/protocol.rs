@@ -716,6 +716,33 @@ pub enum Method {
         #[schemars(range(min = 1, max = 65_536))]
         max_bytes: u32,
     },
+    /// The Workflow files physically owned by exactly one source scope
+    /// (Issue #491); never the merged effective catalog.
+    #[serde(rename = "workflow/list")]
+    WorkflowList {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+    },
+    /// The complete authorized source of one exact Workflow file.
+    #[serde(rename = "workflow/read")]
+    WorkflowRead {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        id: crate::runtime::workflow::WorkflowId,
+    },
+    /// Offline structural check, optional explanation, and dependency
+    /// admission in an explicit Workspace context of one candidate document.
+    /// Executes nothing; writes nothing.
+    #[serde(rename = "workflow/check")]
+    WorkflowCheck {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        id: crate::runtime::workflow::WorkflowId,
+        document: Box<crate::runtime::workflow::WorkflowDefinition>,
+        /// A User (Global) file's explicit Workspace dependency context. A
+        /// Workspace file is always checked in its own Workspace.
+        #[serde(default)]
+        context: Option<std::path::PathBuf>,
+        #[serde(default)]
+        explain: bool,
+    },
     #[serde(rename = "configuration/sourceWrite")]
     SourcesWrite {
         target: crate::local_runtime::configuration::settings::SourceTarget,
@@ -825,6 +852,9 @@ impl Method {
             | Self::SourcesRead { .. }
             | Self::SourcesPage { .. }
             | Self::SourcesValueRead { .. }
+            | Self::WorkflowList { .. }
+            | Self::WorkflowRead { .. }
+            | Self::WorkflowCheck { .. }
             | Self::McpProbe { .. }
             | Self::SettingsRead { .. }
             | Self::SettingsValueRead { .. }
@@ -946,6 +976,11 @@ pub enum ErrorData {
     StaleSettings {
         expected: u64,
         actual: u64,
+    },
+    /// The native parser or compiler rejected a Workflow candidate; the file
+    /// is unchanged.
+    WorkflowInvalid {
+        diagnostic: Box<crate::local_runtime::workflow_authoring::WorkflowDiagnostic>,
     },
     InteractionNotPending {
         interaction: InteractionRef,
@@ -1221,6 +1256,15 @@ pub enum MethodResult {
     },
     SourceSettings {
         projection: Box<crate::local_runtime::configuration::observation::BoundedSourceSettings>,
+    },
+    WorkflowLibrary {
+        library: crate::local_runtime::workflow_authoring::WorkflowLibrary,
+    },
+    WorkflowSource {
+        source: Box<crate::local_runtime::workflow_authoring::WorkflowSource>,
+    },
+    WorkflowCheck {
+        report: Box<crate::local_runtime::workflow_authoring::WorkflowCheckReport>,
     },
     SessionConfiguration {
         projection: Option<crate::local_runtime::configuration::observation::BoundedSessionApplication>,

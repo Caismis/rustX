@@ -206,6 +206,7 @@ pub(super) fn source_error(
             actual,
         },
         SettingsError::Invalid => ErrorData::InvalidParams,
+        SettingsError::InvalidWorkflow(diagnostic) => ErrorData::WorkflowInvalid { diagnostic },
         SettingsError::Io => ErrorData::OperationFailed,
         SettingsError::Committed => ErrorData::CommittedDurabilityUncertain,
     })

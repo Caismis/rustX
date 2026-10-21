@@ -9,6 +9,7 @@ use super::{
     WorkflowValue,
 };
 use serde_json::json;
+use std::borrow::Cow;
 
 impl WorkflowProgram {
     /// Every Agent node that carries a trusted static invocation override,
@@ -58,6 +59,57 @@ impl WorkflowProgram {
     }
 }
 
+impl WorkflowProgram {
+    /// Every node's compiled output contract keyed by its authored path
+    /// (`block.nodes.<id>`, nested blocks included). Parallel and Loop
+    /// outputs are the compiler's derived results, never authored schemas.
+    ///
+    /// This is an authoring fact of the owner's own program, so schemas are
+    /// not redacted; the redacted [`WorkflowInspection`] stays the Explain
+    /// surface.
+    #[must_use]
+    pub fn node_outputs(&self) -> BTreeMap<String, Value> {
+        fn walk(block: &WorkflowBlockProgram, path: &str, found: &mut BTreeMap<String, Value>) {
+            for (id, node) in &block.nodes {
+                let path = format!("{path}.nodes.{id}");
+                let output = match node {
+                    WorkflowNodeProgram::Agent(agent) => Some(agent.output_schema.clone()),
+                    WorkflowNodeProgram::Tool { result, .. } => Some(result.schema()),
+                    WorkflowNodeProgram::Review { .. } => Some(super::review::result_schema()),
+                    WorkflowNodeProgram::Loop {
+                        body,
+                        output_schema,
+                        ..
+                    } => {
+                        walk(body, &format!("{path}.body"), found);
+                        Some(output_schema.clone())
+                    }
+                    WorkflowNodeProgram::Parallel {
+                        branches,
+                        output_schema,
+                    } => {
+                        for (key, branch) in branches {
+                            walk(
+                                &branch.block,
+                                &format!("{path}.branches.{key}.block"),
+                                found,
+                            );
+                        }
+                        Some(output_schema.clone())
+                    }
+                    WorkflowNodeProgram::Branch { .. } | WorkflowNodeProgram::Return { .. } => None,
+                };
+                if let Some(output) = output {
+                    found.insert(path, output);
+                }
+            }
+        }
+        let mut found = BTreeMap::new();
+        walk(&self.block, "block", &mut found);
+        found
+    }
+}
+
 /// One Agent node's trusted static invocation override, with the authored
 /// path a diagnostic must name.
 #[derive(Debug, Clone)]
@@ -71,26 +123,26 @@ pub struct AgentOverrideNode<'a> {
 }
 
 /// Static program facts. Literals and task text are deliberately not exported.
-#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct WorkflowInspection {
     /// Projected once at the local report surface, including selected role policies.
     #[serde(skip)]
     pub runtime_requirements: BTreeSet<&'static str>,
     pub identity: WorkflowToolIdentity,
-    pub stage: &'static str,
+    pub stage: Cow<'static, str>,
     pub input_schema: Value,
     pub output_schema: Value,
     pub configured_timeout_ms: u64,
     pub conservative_steps: usize,
     pub conservative_agent_runs: usize,
     pub conservative_retained_bytes: usize,
-    pub caps: BTreeMap<&'static str, usize>,
+    pub caps: BTreeMap<Cow<'static, str>, usize>,
     pub blocks: BTreeMap<String, BlockInspection>,
     pub tools: BTreeSet<crate::capabilities::selection::ExactToolSelector>,
     pub profiles: BTreeSet<SubagentName>,
 }
 
-#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct BlockInspection {
     pub entry: String,
     pub input_schema: Value,
@@ -107,16 +159,16 @@ pub struct BlockInspection {
 /// are exported — capability selectors, Skill names, and the composed
 /// extension names — never a Skill body, a prompt, a credential, or a
 /// materialization secret.
-#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct AgentOverrideInspection {
     pub tools: Option<Vec<crate::capabilities::selection::AgentToolSelection>>,
     pub skills: Option<Vec<String>>,
-    pub extensions: Option<Vec<&'static str>>,
+    pub extensions: Option<Vec<Cow<'static, str>>>,
 }
 
-#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct NodeInspection {
-    pub kind: &'static str,
+    pub kind: Cow<'static, str>,
     pub edges: Vec<(WorkflowPort, String)>,
     pub bindings: BTreeMap<String, Value>,
     pub profile: Option<SubagentName>,
@@ -125,10 +177,10 @@ pub struct NodeInspection {
     pub selector: Option<crate::capabilities::selection::ExactToolSelector>,
     pub output_schema: Option<Value>,
     pub result_part: Option<usize>,
-    pub result_kind: Option<&'static str>,
+    pub result_kind: Option<Cow<'static, str>>,
     pub branches: Vec<String>,
     pub max_iterations: Option<u32>,
-    pub review_subject: Option<&'static str>,
+    pub review_subject: Option<Cow<'static, str>>,
 }
 
 impl WorkflowProgram {
@@ -139,7 +191,7 @@ impl WorkflowProgram {
         let mut result = WorkflowInspection {
             runtime_requirements: BTreeSet::from(["invoking_attempt_frozen_admission"]),
             identity: self.tool_identity(),
-            stage: "statically_compiled_online_admission_unresolved",
+            stage: "statically_compiled_online_admission_unresolved".into(),
             input_schema: schema(&self.block.input_schema),
             output_schema: schema(&self.block.output_schema),
             configured_timeout_ms: self.timeout_ms,
@@ -147,17 +199,20 @@ impl WorkflowProgram {
             conservative_agent_runs: self.agent_bound,
             conservative_retained_bytes: self.retained_bound,
             caps: BTreeMap::from([
-                ("steps", MAX_WORKFLOW_STEPS),
-                ("agent_runs", MAX_WORKFLOW_AGENTS),
-                ("nodes", MAX_WORKFLOW_NODES),
-                ("parallel_branches", MAX_PARALLEL_BRANCHES),
-                ("loop_iterations", MAX_LOOP_ITERATIONS as usize),
-                ("block_depth", MAX_BLOCK_DEPTH),
-                ("value_bytes", MAX_VALUE_BYTES),
-                ("retained_bytes", MAX_LOCAL_BYTES),
-                ("program_bytes", super::MAX_WORKFLOW_BYTES),
-                ("value_depth", super::MAX_VALUE_DEPTH),
-                ("reference_components", super::MAX_REFERENCE_COMPONENTS),
+                ("steps".into(), MAX_WORKFLOW_STEPS),
+                ("agent_runs".into(), MAX_WORKFLOW_AGENTS),
+                ("nodes".into(), MAX_WORKFLOW_NODES),
+                ("parallel_branches".into(), MAX_PARALLEL_BRANCHES),
+                ("loop_iterations".into(), MAX_LOOP_ITERATIONS as usize),
+                ("block_depth".into(), MAX_BLOCK_DEPTH),
+                ("value_bytes".into(), MAX_VALUE_BYTES),
+                ("retained_bytes".into(), MAX_LOCAL_BYTES),
+                ("program_bytes".into(), super::MAX_WORKFLOW_BYTES),
+                ("value_depth".into(), super::MAX_VALUE_DEPTH),
+                (
+                    "reference_components".into(),
+                    super::MAX_REFERENCE_COMPONENTS,
+                ),
             ]),
             blocks: BTreeMap::new(),
             tools: self.tools.clone(),
@@ -248,7 +303,7 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
     let mut nodes = BTreeMap::new();
     for (id, node) in &program.nodes {
         let mut view = NodeInspection {
-            kind: "return",
+            kind: "return".into(),
             edges: program.outgoing[id]
                 .iter()
                 .map(|edge| (edge.port, edge.to.clone()))
@@ -267,7 +322,7 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
         match node {
             WorkflowNodeProgram::Agent(agent) => {
                 result.runtime_requirements.insert("provider_execution");
-                view.kind = "agent";
+                view.kind = "agent".into();
                 view.profile = Some(agent.profile.clone());
                 result.profiles.insert(agent.profile.clone());
                 if let Some(invocation_override) = &agent.invocation_override {
@@ -285,6 +340,9 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
                             .as_ref()
                             .map(|selection| {
                                 crate::extensions::composed_extension_names(&selection.resolve())
+                                    .into_iter()
+                                    .map(Cow::Borrowed)
+                                    .collect()
                             }),
                     });
                 }
@@ -306,7 +364,7 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
                     "capability_availability_at_admission",
                     "native_interaction_if_requested",
                 ]);
-                view.kind = "tool";
+                view.kind = "tool".into();
                 view.selector = Some(selector.clone());
                 view.bindings.insert("arguments".into(), binding(arguments));
                 view.output_schema = Some(schema(&tool_result.schema()));
@@ -315,14 +373,14 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
                     super::WorkflowToolResult::Text { part } => (*part, "text"),
                 };
                 view.result_part = Some(part);
-                view.result_kind = Some(kind);
+                view.result_kind = Some(kind.into());
             }
             WorkflowNodeProgram::Return { output } => {
                 view.bindings.insert("output".into(), binding(output));
             }
             WorkflowNodeProgram::Branch { condition } => {
                 result.runtime_requirements.insert("branch_outcome");
-                view.kind = "branch";
+                view.kind = "branch".into();
                 view.bindings
                     .insert("condition".into(), predicate(condition));
             }
@@ -335,7 +393,7 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
                 output_schema,
             } => {
                 result.runtime_requirements.insert("actual_loop_iterations");
-                view.kind = "loop";
+                view.kind = "loop".into();
                 view.max_iterations = Some(*max_iterations);
                 view.output_schema = Some(schema(output_schema));
                 view.bindings.extend([
@@ -349,7 +407,7 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
                 branches,
                 output_schema,
             } => {
-                view.kind = "parallel";
+                view.kind = "parallel".into();
                 view.branches = branches.keys().cloned().collect();
                 view.output_schema = Some(schema(output_schema));
                 for (key, branch) in branches {
@@ -366,9 +424,9 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
                 result
                     .runtime_requirements
                     .insert("human_review_decision_and_interaction_availability");
-                view.kind = "review";
+                view.kind = "review".into();
                 view.review_subject = Some(match subject {
-                    WorkflowReviewSubject::Plan { .. } => "plan",
+                    WorkflowReviewSubject::Plan { .. } => "plan".into(),
                 });
                 view.bindings
                     .insert("subject".into(), binding(subject.value()));
