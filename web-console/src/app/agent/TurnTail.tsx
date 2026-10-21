@@ -1,7 +1,7 @@
 import { attemptOwnerKey } from '../../../../protocol/app-server/attempt-identity';
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from MessageIconActions; see PROVENANCE.md. */
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, type ReactNode } from 'react';
 import type { CompletedResponseView, PublicationAudit } from '../../../../protocol/app-server/v51';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { Tooltip } from '../../presentation/primitives/Tooltip';
@@ -61,9 +61,9 @@ export function CopyMessage({ text, messageId, publication }: { text: string; me
     })().catch(() => { if (current()) setStatus('failed'); });
   }}>{status === 'copied' ? <IconCheckOutline16/> : <IconCopyOutline16/>}</button></Tooltip>;
 }
-export function TurnTail({ text, response, onHistorical, disabled, lineageSwitchSafe, latest = false }: { text: string; response: CompletedResponseView; onHistorical?: (action: ResponseAction, response: CompletedResponseView) => void; disabled?: boolean; lineageSwitchSafe: boolean; latest?: boolean }) {
+export function TurnTail({ text, response, onHistorical, disabled, lineageSwitchSafe, latest = false, children }: { text: string; response: CompletedResponseView; onHistorical?: (action: ResponseAction, response: CompletedResponseView) => void; disabled?: boolean; lineageSwitchSafe: boolean; latest?: boolean; children?: ReactNode }) {
   const tx = useTranslation();
-  return <div className={css.actions} aria-label={tx('agent:turn-tail.completed-turn')} data-chat-turn-owner={turnAnchor(response.origin)} data-response-reveal={latest ? 'always' : 'hover'} data-turn-tail={attemptOwnerKey(response.origin)}>
+  const actions = <div className={css.actions} aria-label={tx('agent:turn-tail.completed-turn')} data-chat-turn-owner={turnAnchor(response.origin)} data-response-reveal={latest ? 'always' : 'hover'} data-turn-tail={attemptOwnerKey(response.origin)}>
     <CopyMessage text={text} messageId={response.closing_message_id}/>
     {onHistorical && <>
       {/* rustX's Retry replays the original input on a sibling branch; it sits
@@ -74,4 +74,5 @@ export function TurnTail({ text, response, onHistorical, disabled, lineageSwitch
     {response.usage && <TurnUsage usage={response.usage} models={response.models ?? []}/>}
     <MessageTime time={response.completed_at}/>
   </div>;
+  return children ? <div className={css.root}>{children}{actions}</div> : actions;
 }

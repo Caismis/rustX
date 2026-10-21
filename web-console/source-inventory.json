@@ -2901,7 +2901,7 @@
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.tsx",
       "destination": "web-console/src/app/agent/TurnTail.tsx",
-      "treatment": "Adapted presentation geometry and interaction hierarchy over native rustX completed-response and Context projections; existing Modal and Tooltip handle focus/dismissal. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: Turn-owned direct actions, usage and end clock; native response boundary and origin identities retained. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. Session configuration observation (App Server v35 / Runtime Client v58): generated protocol import only; upstream reference unchanged. UI/UX alignment: the Turn usage pill moved to the Harness TurnUsagePanel port (UsageStats.tsx); the rustX Ran-for timing pill and its modal were removed, the process header owns the Turn duration. UI/UX alignment: Harness MessageIconActions order with one branch action (Branch into a new Session) and Regenerate seated as an extra action; both run on the click through App, as Harness forkAt does, and the duplicate in-Session Branch action was removed. Trace input ownership repair: current App Server v39 imports and protocol display; upstream source unchanged. Native Tool Trace location: App Server v44 imports and exact occurrence navigation; existing upstream baseline unchanged. Main integration #456: general Model Profiles and JSON-object request parameter authoring; existing upstream baseline unchanged. Issue #467: bounded native observation, deferred source reads and exact view ownership; original presentation and license attribution retained. #464: App Server v47 generated-protocol import path. #467: App Server v48 current generated-protocol import path. PR #477 final contract repair: mandatory App Server v49 import for nullable native-covered Tool wire correlation; upstream reference unchanged. PR #478: reconciled bounded observation with immutable model-context projections under App Server v50. App Server v51: mandatory current generated-protocol import; upstream presentation and native ownership remain unchanged. Stop alignment: copy frozen prose/refusal from its exact immutable audit stream, including deferred content; no completed-response action is inferred.",
+      "treatment": "Adapted presentation geometry and interaction hierarchy over native rustX completed-response and Context projections; existing Modal and Tooltip handle focus/dismissal. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: Turn-owned direct actions, usage and end clock; native response boundary and origin identities retained. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. Session configuration observation (App Server v35 / Runtime Client v58): generated protocol import only; upstream reference unchanged. UI/UX alignment: the Turn usage pill moved to the Harness TurnUsagePanel port (UsageStats.tsx); the rustX Ran-for timing pill and its modal were removed, the process header owns the Turn duration. UI/UX alignment: Harness MessageIconActions order with one branch action (Branch into a new Session) and Regenerate seated as an extra action; both run on the click through App, as Harness forkAt does, and the duplicate in-Session Branch action was removed. Trace input ownership repair: current App Server v39 imports and protocol display; upstream source unchanged. Native Tool Trace location: App Server v44 imports and exact occurrence navigation; existing upstream baseline unchanged. Main integration #456: general Model Profiles and JSON-object request parameter authoring; existing upstream baseline unchanged. Issue #467: bounded native observation, deferred source reads and exact view ownership; original presentation and license attribution retained. #464: App Server v47 generated-protocol import path. #467: App Server v48 current generated-protocol import path. PR #477 final contract repair: mandatory App Server v49 import for nullable native-covered Tool wire correlation; upstream reference unchanged. PR #478: reconciled bounded observation with immutable model-context projections under App Server v50. App Server v51: mandatory current generated-protocol import; upstream presentation and native ownership remain unchanged. Stop alignment: copy frozen prose/refusal from its exact immutable audit stream, including deferred content; no completed-response action is inferred. Turn delivery alignment: one settled native Turn selection after final prose and before actions; original delivery addresses and native observation ownership retained.",
       "upstream_sha256": "43d2e3e5713b6f08a33ce20a918eb8c73497f894438805413ef925f9e5437c5d",
       "additional_sources": [
         {
@@ -2939,12 +2939,12 @@
         "Cordis/plugin slots"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "3e85e8cb67b75258c01a3b9914ce00d5768e01440c5c40ab5f05d622164d7a1e"
+      "local_sha256": "167c1e1babfa6472b1c2e14d95a50df8cb4d1bc0a35fb878d729ae63a2fd037a"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.module.css",
       "destination": "web-console/src/app/agent/TurnTail.module.css",
-      "treatment": "Adapted presentation geometry and interaction hierarchy over native rustX completed-response and Context projections; existing Modal and Tooltip handle focus/dismissal. Issue #406: current App Server v27 type imports / TurnTail owner imports; upstream presentation otherwise retained. UI/UX alignment: stat pill and modal metric rules removed with the TurnUsagePanel port.",
+      "treatment": "Adapted presentation geometry and interaction hierarchy over native rustX completed-response and Context projections; existing Modal and Tooltip handle focus/dismissal. Issue #406: current App Server v27 type imports / TurnTail owner imports; upstream presentation otherwise retained. UI/UX alignment: stat pill and modal metric rules removed with the TurnUsagePanel port. Turn delivery alignment: one settled native Turn selection after final prose and before actions; original delivery addresses and native observation ownership retained.",
       "upstream_sha256": "ee0015510141e0a14b9a7c10a7acecede962a2d6480076f2638842bf1875ac05",
       "additional_sources": [
         {
@@ -2957,6 +2957,12 @@
           "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
           "upstream_sha256": "409248425512a70d9287d0a67d2a045b9cd025e4cefb09c908e97c0ab5edb211",
           "treatment": "Centered conversation pills, 12/20 tertiary typography, pill spacing and tabular figures; retained message-action styles now serve Turn tails."
+        },
+        {
+          "upstream": "packages/client/ui-chat/src/client/chat/TurnTailNodeView.module.css",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "9a40577b0c47199b8c9f2801ad484b1947e9b53f57182b4176badf03bbbc113f",
+          "treatment": "Turn-tail stack gap and action spacing for delivered files before the action row; rustX native Turn ownership retained."
         }
       ],
       "retained_dependencies": [],
@@ -2967,7 +2973,7 @@
         "Cordis/plugin slots"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "be14b6e8b5ea588ab8a404a6c98c74d2d7031d99dc0fd4422a343903ceca5da1"
+      "local_sha256": "c70424c41226edc769fe099d7fd3be7fe521f46c436f1fdfb7bb257952dd3589"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
@@ -5997,7 +6003,7 @@
       "destination": "web-console/src/presentation/attachments/PresentedFileCard.tsx",
       "upstream_sha256": "07addc96e0d9664c1d8d7ffbac53c4c0a53deb761ebc4fc95559381585e45fe9",
       "classification": "B",
-      "treatment": "#454: Harness whole-card Preview gesture, filename/description hierarchy, file-type glyph and separate action slot, plus the Deliverables two-column four-card summary and expand toggle. Host open/reveal phases, desktop metadata, file URLs and native-open controller excluded; rustX PreviewWorkspace owners supply Preview and Download.",
+      "treatment": "#454: Harness whole-card Preview gesture, filename/description hierarchy, file-type glyph and separate action slot, plus the Deliverables two-column four-card summary and expand toggle. Host open/reveal phases, desktop metadata, file URLs and native-open controller excluded; rustX PreviewWorkspace owners supply Preview and Download. Turn delivery alignment: one settled native Turn selection after final prose and before actions; original delivery addresses and native observation ownership retained.",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../locale/react",
@@ -6020,7 +6026,7 @@
           "upstream_sha256": "b8d0a19dc208af7f8f44459adba9afe648cd3c398d75917ccfaf2f8c730cfe74"
         }
       ],
-      "local_sha256": "80e2891c4d9b25078f9f0f0eee0e5c9fa8d846d79a31f591fbeb16fee1bf6cbb"
+      "local_sha256": "19b94311ad90a54e372fc9ea5fbbb26d8ae4927de6981effdcb4c9e865c2daf0"
     },
     {
       "upstream": "packages/client/ui-deliverables/src/client/Deliverables.module.css",
@@ -7752,6 +7758,30 @@
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
       "upstream_sha256": "295b53cc9e924f7cb2e843e0d0d296e89ead73da2aab9790282db30736e2e063",
       "treatment": "Inspected token-based recent-history retention and balanced tool-call/result selection; no Harness context execution imported."
+    },
+    {
+      "upstream": "packages/client/ui-chat/src/client/chat/TurnTailNodeView.tsx",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "835118e15bb4518d8865de9421425456e377bd623cd8bad2d88ac95ae038b94f",
+      "treatment": "Inspected completed-Turn tail placement, closing boundary and latest-path delivery selection; no Harness runtime, events or plugin authority imported."
+    },
+    {
+      "upstream": "packages/client/ui-chat/src/client/conversation-nodes/turn-tail.ts",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "a711d66ecdebac759a298aa3770019d4027c25694059c754d11e58d8afc6ff07",
+      "treatment": "Inspected completed-Turn tail placement, closing boundary and latest-path delivery selection; no Harness runtime, events or plugin authority imported."
+    },
+    {
+      "upstream": "packages/client/ui-deliverables/src/client/Deliverables.tsx",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "b8d0a19dc208af7f8f44459adba9afe648cd3c398d75917ccfaf2f8c730cfe74",
+      "treatment": "Inspected completed-Turn tail placement, closing boundary and latest-path delivery selection; no Harness runtime, events or plugin authority imported."
+    },
+    {
+      "upstream": "packages/client/ui-deliverables/src/client/turn-deliverables.ts",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "1f352e6e58cae1aaaaaf91ca0acd7835b37f601e8e145758156f484f9b578e1e",
+      "treatment": "Inspected completed-Turn tail placement, closing boundary and latest-path delivery selection; no Harness runtime, events or plugin authority imported."
     }
   ],
   "historical_inspection": {

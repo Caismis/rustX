@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import type { ForegroundToolExecution, SessionFileReference, ToolExecutionResult } from '../../protocol/app-server/v51';
 import { presentRow, presentedDeliveries } from '../src/bindings/present';
 import { Tool } from '../src/app/agent/Tool';
-import { ToolDeliveries } from '../src/app/components/Artifact';
+import { TurnDeliveries } from '../src/app/agent/TurnDeliveries';
 import { PreviewContext } from '../src/app/components/ArtifactPreview';
 import { localeController } from '../src/locale/controller';
 
@@ -64,7 +64,7 @@ it('committed cards: canonical order, four-card summary, separate Preview and Do
   expect(presentedDeliveries({type:'by_message_id',message_id:'m'}, result({ type: 'failed', error: 'x' }, files))).toEqual([]);
   expect(presentedDeliveries({type:'by_message_id',message_id:'m'}, { ...result({ type: 'success' }), content: [{ type: 'json', value: { deliveries: files } }] })).toEqual([]);
   const openPreview = vi.fn(), download = vi.fn();
-  const ui = render(<PreviewContext.Provider value={{ openPreview, download }}><ToolDeliveries conversationId="conversation-A" locator={{type:'by_message_id',message_id:'canonical-tool'}} result={result({ type: 'success' }, files)}/></PreviewContext.Provider>);
+  const ui = render(<PreviewContext.Provider value={{ openPreview, download }}><TurnDeliveries conversationId="conversation-A" batches={[{position:'2',deliveries:presentedDeliveries({type:'by_message_id',message_id:'canonical-tool'},result({type:'success'},files))}]}/></PreviewContext.Provider>);
   const names = () => [...ui.container.querySelectorAll('[data-presented-name]')].map(node => node.textContent);
   expect(names()).toEqual(files.slice(0, 4).map(item => item.name));
   // Harness strips a trailing parenthetical; the extension stands in for an absent description.

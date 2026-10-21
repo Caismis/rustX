@@ -36,8 +36,23 @@ managed `artifacts`. `AgentLoopExecution::commit_tool_result_batch` prepares nor
 `MessageBlock::Tool` blocks, then atomically calls
 `ConversationStore::append_canonical_batch_with_events`. The transcript renders
 cards only from successful committed Tool messages. Earlier execution-completion
-observations do not authorize cards. Cards sit outside completed activity's
-collapsed seat while keeping its native message/turn anchors.
+observations do not authorize cards. Web Chat collects these declarations by
+their exact native Attempt membership and renders one settled Turn tail after
+the closing prose and before message actions. Cards stay outside the completed
+activity's collapsed seat. Before that Turn settles there is no delivery-card
+row in the active message stream. A closing response selects only declarations
+before its native transcript position; partial reading windows cannot borrow
+another Turn's footer. Deferred rows use their native transcript offsets for
+placement; canonical ledger locators are file addresses, not transcript cursors.
+A terminal Turn without a closing response seats its
+deliveries at its native terminal entry.
+
+Within that Web tail, files keep first-seen path order and the latest declaration
+of each original file supplies its description, locator and original index.
+The row shows four files until expanded. This is a presentation selection over
+committed facts, not cross-invocation suppression in the native ledger. Inline
+results and bounded native delivery heads share the same row, including selected
+metadata and continuation reads from their original live, Child or history owner.
 
 Requests name `{target, locator, delivery_index}`. Inline loaded messages may use
 `ByMessageId`; deferred messages use their actual numeric `ByLedgerPosition`.

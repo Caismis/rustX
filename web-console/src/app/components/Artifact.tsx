@@ -1,6 +1,6 @@
 import { message } from '../../locale/translation';
 import { useTranslation, useNotice } from '../../locale/react';
-import type { CanonicalContentLocator, ToolExecutionResult } from '../../../../protocol/app-server/v51';
+import type { ToolExecutionResult } from '../../../../protocol/app-server/v51';
 import { createContext, useContext, useEffect, useState } from 'react';
 import type { ArtifactResources } from '../../client/artifacts';
 import { PreviewContext } from './ArtifactPreview';
@@ -10,7 +10,7 @@ import { MessageFile } from '../../presentation/agent/Message';
 import { PresentedFileCard, PresentedFiles } from '../../presentation/attachments/PresentedFileCard';
 import cardCss from '../../presentation/attachments/Deliverables.module.css';
 import { IconDownloadOutline16 } from '../../presentation/primitives/icons';
-import { presentedDeliveries, type PresentedDelivery } from '../../bindings/present';
+import type { PresentedDelivery } from '../../bindings/present';
 export const ArtifactContext = createContext<ArtifactResources | undefined>(undefined);
 export function Artifact({ id, name = id, image = false, mimeType, messageAttachment = false }: { id: string; name?: string; image?: boolean; mimeType?: string; messageAttachment?: boolean }) {
   const tx = useTranslation();
@@ -36,11 +36,6 @@ export function Artifact({ id, name = id, image = false, mimeType, messageAttach
     onDownload={preview && resources ? () => preview.download({ source: { kind: 'artifact', id }, name, image, mimeType }) : undefined}
     onLoad={resources ? () => setAttempt(value => value + 1) : undefined}
     onDecodeError={() => { if (url) resources?.release(url); setUrl(undefined); setError(message('artifacts:copy.image-could-not-be-decoded')); }} />{preview && resources && <Button size="sm" onClick={() => preview.openPreview({ source: { kind: 'artifact', id }, name, image, mimeType })}>{tx('artifacts:artifact.preview')}{' '}{name}</Button>}</div>;
-}
-
-/** Only successful committed canonical Tool messages contribute cards. */
-export function ToolDeliveries({ locator, conversationId, result }: { locator: CanonicalContentLocator; conversationId:string; result: ToolExecutionResult }) {
-  return <DeliveryCards conversationId={conversationId} deliveries={presentedDeliveries(locator,result)}/>;
 }
 
 export function DeliveryCards({conversationId,deliveries,owned}:{conversationId:string;deliveries:PresentedDelivery[];owned?:()=>boolean}) {

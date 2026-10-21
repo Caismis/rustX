@@ -28,8 +28,8 @@ import { Message, Content } from './Message';
 import { messageContinuation, useMessageBlocks } from './message-blocks';
 import { AssistantMessage, UserMessage } from '../../presentation/agent/Message';
 import { ForkPoint, type ForkPointInfo, type ForkOrigin } from './ForkPoint';
-import { ToolDeliveries } from '../components/Artifact';
-import { DeliveryHead } from './DeliveryHead';
+import { TurnDeliveries } from './TurnDeliveries';
+import { descriptorTranscriptPosition, turnDeliveries } from '../../bindings/present';
 import { Tool } from './Tool';
 import { deferredToolDescriptors } from '../../bindings/deferred-tools';
 import { canonicalLocatorKey } from '../../../../protocol/app-server/content-identity';
@@ -108,6 +108,16 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
     .map(head => ({ cursor: head.transcript_cursor, item: { type: 'publication_audit', audit: head.audit } }));
   const entries = heads.length ? [...loaded, ...heads].sort((a,b) => BigInt(a.cursor) < BigInt(b.cursor) ? -1 : 1) : loaded;
   const descriptors = deferredToolDescriptors(snapshot.message_descriptors ?? [], history?.page ?? snapshot.transcript, entries, !!history?.window).filter(descriptor => !isRuntimeStatusContext(descriptor));
+  const deliveries = turnDeliveries(entries, deferredToolDescriptors(snapshot.message_descriptors ?? [], page, [], !!history?.window), page);
+  const deliveredTurns = new Set<string>();
+  const deliveryTail = (key: string, before?: string) => {
+    const turn = deliveries.get(key);
+    if (!turn || turn.owner.outcome === 'running' || turn.owner.outcome === 'incomplete_at_cut' || deliveredTurns.has(key)) return null;
+    const batches = before == null ? turn.batches : turn.batches.filter(batch => BigInt(batch.position) < BigInt(before));
+    if (!batches.length) return null;
+    deliveredTurns.add(key);
+    return <TurnDeliveries conversationId={history?.page.source_cut?.read.conversation_id ?? snapshot.conversation_id} batches={batches}/>;
+  };
   const descriptorProcessSeats = new Map<string,string>();
   const loadedProcessOwners = new Set(entries.flatMap(entry=>entry.turn_process?[attemptOwnerKey(entry.turn_process)]:[]));
   for(const descriptor of descriptors){
@@ -231,10 +241,14 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
         <TurnProcess id={attemptOwnerKey(descriptor.turn_process)} open tools={descriptor.turn_process.tool_call_count} messages={descriptor.turn_process.message_count}
           outcome={descriptor.turn_process.outcome} running={descriptor.turn_process.outcome==='running'} start={descriptor.turn_process.started_at??undefined} end={descriptor.turn_process.ended_at??undefined}/>
       </>);
-  const descriptorResponse = (descriptor:RuntimeClientMessageDescriptor) => (descriptor.completed_response && <div className={tailCss.actions} aria-label={tx('agent:turn-tail.completed-turn')} data-turn-tail={attemptOwnerKey(descriptor.completed_response.origin)}>
+  const descriptorResponse = (descriptor:RuntimeClientMessageDescriptor) => {
+    const cursor = descriptorTranscriptPosition(descriptor, entries, page);
+    return descriptor.completed_response && <div className={tailCss.root}>
+      {cursor != null && deliveryTail(attemptOwnerKey(descriptor.completed_response.origin), cursor)}<div className={tailCss.actions} aria-label={tx('agent:turn-tail.completed-turn')} data-turn-tail={attemptOwnerKey(descriptor.completed_response.origin)}>
         {descriptor.completed_response.usage && <TurnUsage usage={descriptor.completed_response.usage} models={descriptor.completed_response.models??[]}/>}
         <MessageTime time={descriptor.completed_response.completed_at}/>
-      </div>);
+      </div></div>;
+  };
   const flow = [...compactionPlacement(turnPresentation(entries, forkPoint ? { ...(history?.page ?? snapshot.transcript), inherited_through: forkPoint.through } : undefined, snapshot.conversation_id), compactions, entries, snapshot.transcript, history),
       ...(!history?.window ? messages.filter(message => !durableIds.has(message.id) && message.role !== 'tool'
         && !(message.role === 'user' && message.kind && message.kind !== 'message')).map(message => ({kind:'canonical' as const,message})) : []),
@@ -263,9 +277,9 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
         const tools = descriptor?.tool_calls ?? snapshot.attempt?.foreground?.filter(tool => tool.message_id === node.message.id) ?? [];
         const childUser = !!receiver && isUser(node.message);
         return <div className={css.flowItem} data-chat-flow-kind={childUser ? 'user' : undefined} key={`message:${node.message.id}`}><MessageSeat key="seat" id={`message:${node.message.id}`} reveal={childUser ? 'always' : undefined}
-          prefix={<>{requestFeedback?.messages.get(node.message.id)}{descriptor && descriptorOwner(descriptor)}{descriptor && descriptorResponse(descriptor)}</>}
+          prefix={<>{requestFeedback?.messages.get(node.message.id)}{descriptor && descriptorOwner(descriptor)}</>}
           message={node.message.role !== 'assistant' ? node.message : undefined} tools={tools} actions={childUser && userActions(node.message)}
-          other={node.message.role === 'assistant' ? messageSegments(node.message,node.message.content,tools) : undefined}/></div>;
+          other={node.message.role === 'assistant' ? messageSegments(node.message,node.message.content,tools) : undefined} suffix={descriptor && descriptorResponse(descriptor)}/></div>;
       }
       if (node.kind === 'streaming') {
         const tools = snapshot.attempt?.foreground?.filter(tool => tool.message_id === node.streaming.message_id) ?? [];
@@ -274,12 +288,12 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
           prefix={requestFeedback?.messages.get(node.streaming.message_id)} other={messageSegments({role:'assistant',id:node.streaming.message_id,content:[]}, node.streaming.blocks ?? [], tools, { streaming: true })}/></div>;
       }
       if (node.kind === 'process' && node.process.outcome === 'running') return null;
-      if (node.kind === 'tail') return <TurnTail key={node.key} text={node.text} response={node.response} latest={node.response === latestResponse?.completed_response} onHistorical={onHistorical} disabled={historicalDisabled} lineageSwitchSafe={lineageSwitchSafe}/>;
+      if (node.kind === 'tail') return <TurnTail key={node.key} text={node.text} response={node.response} latest={node.response === latestResponse?.completed_response} onHistorical={onHistorical} disabled={historicalDisabled} lineageSwitchSafe={lineageSwitchSafe}>{deliveryTail(node.key, entries.find(entry => entry.completed_response === node.response)?.cursor)}</TurnTail>;
       if (node.kind === 'process') return <div className={css.flowItem} data-chat-flow-kind="turn-process" key={node.key} data-chat-turn-owner={turnAnchor(node.process)} data-chat-anchor-key={entries.some(entry => entry.cursor === node.process.control_cursor) ? turnAnchor(node.process) : undefined}><TurnProcess id={node.key} open tools={node.process.tool_call_count} messages={node.process.message_count} outcome={node.process.outcome} start={node.process.started_at ?? undefined} end={node.process.ended_at ?? undefined}/>{requestFeedback?.attempts.get(attemptOwnerKey(node.process))}</div>;
       const entry = node.entry;
       if (entry.item.type === 'attempt_terminal') {
         const turn = entry.item.turn;
-        if (turn.outcome !== 'failed') return null;
+        if (turn.outcome !== 'failed') return <div key={entryIdentity(entry)}>{deliveryTail(attemptOwnerKey(turn))}</div>;
         const failure = turn.failure;
         const error = failure?.type === 'runtime' ? failure.error : undefined;
         const code = failure?.type === 'model' ? failure.kind : error?.type;
@@ -289,6 +303,7 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
             : tx('agent:failure.unavailable');
         return <div key={entryIdentity(entry)} data-chat-anchor-key={entryIdentity(entry)} data-chat-turn-owner={turnAnchor(turn)}>
           <TurnError title={tx('agent:failure.turn-error')} message={message} code={code}/>
+          {deliveryTail(attemptOwnerKey(turn))}
         </div>;
       }
       const statuses = statusesAt(placement, { messageId: entry.item.type === 'message' ? entry.item.message.id : undefined, cursor: entry.cursor });
@@ -302,15 +317,14 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
       const stepped = steps.get(entry.cursor);
       const entrySeat = group?.seat?.kind === 'entry' && group.seat.cursor === entry.cursor;
       const statusSeat = statuses.some(status => { const owner = statusOwner(status); const seat = owner ? process.groups.get(owner)?.seat : undefined; return seat?.kind === 'status' && seat.statusId === statusIdentity(status); });
-      const delivery = entry.item.type === 'message' && entry.item.message.role === 'tool' && entry.item.message.result.status.type === 'success' && !!entry.item.message.result.deliveries?.length;
       const runPanels = workflowPanels(workflowSeats.get(entry.cursor) ?? []);
       const feedback = entry.item.type === 'message' ? requestFeedback?.messages.get(entry.item.message.id)
         : entry.item.type === 'publication_audit' ? requestFeedback?.messages.get(entry.item.audit.message_id) : undefined;
       // An entry whose rows all render in an earlier step group keeps no seat of its own.
-      if ((!body || stepped?.length === 0) && !statuses.length && !entrySeat && !delivery && !feedback && !runPanels.length) return null;
+      if ((!body || stepped?.length === 0) && !statuses.length && !entrySeat && !feedback && !runPanels.length) return null;
       const seatHidden = (!body || stepped?.length === 0 || !!group && !processOpen && !final) && !entrySeat && !statusSeat && !visibleStatus;
       const response = entry.item.type === 'message' && entry.item.message.role === 'assistant' && (stepped ? stepped.some(piece => piece.kind === 'reply') : entry.item.message.content.some(block => block.type === 'text' || block.type === 'refusal'));
-      return <div className={css.flowItem} hidden={seatHidden && !delivery && !feedback && !runPanels.length} data-chat-group-part={response ? 'response' : undefined} data-chat-flow-kind={entry.item.type === 'message' && isUser(entry.item.message) ? 'user' : undefined} key={entry.item.type === 'publication_audit' ? `message:${entry.item.audit.message_id}` : entryIdentity(entry)} data-chat-anchor-key={entry.turn_process?.outcome==='completed' && entry.turn_process.control_cursor===entry.cursor ? turnAnchor(entry.turn_process) : undefined}>{delivery && entry.item.type === 'message' && entry.item.message.role === 'tool' && <ToolDeliveries conversationId={history?.page.source_cut?.read.conversation_id??snapshot.conversation_id} locator={{type:'by_message_id',message_id:entry.item.message.id}} result={entry.item.message.result}/>}<MessageSeat key="seat" id={entryIdentity(entry)} turnOwner={entry.turn_process ? turnAnchor(entry.turn_process) : undefined} hidden={seatHidden && !feedback} owner={key} reveal={entry === latestResponse || entry === latestPartial || entry === latestUser ? 'always' : 'hover'}
+      return <div className={css.flowItem} hidden={seatHidden && !feedback && !runPanels.length} data-chat-group-part={response ? 'response' : undefined} data-chat-flow-kind={entry.item.type === 'message' && isUser(entry.item.message) ? 'user' : undefined} key={entry.item.type === 'publication_audit' ? `message:${entry.item.audit.message_id}` : entryIdentity(entry)} data-chat-anchor-key={entry.turn_process?.outcome==='completed' && entry.turn_process.control_cursor===entry.cursor ? turnAnchor(entry.turn_process) : undefined}><MessageSeat key="seat" id={entryIdentity(entry)} turnOwner={entry.turn_process ? turnAnchor(entry.turn_process) : undefined} hidden={seatHidden && !feedback} owner={key} reveal={entry === latestResponse || entry === latestPartial || entry === latestUser ? 'always' : 'hover'}
         prefix={<>
         {entrySeat && disclosure(key!)}
         {entry.completed_response && !process.groups.has(process.attempts.get(attemptOwnerKey(entry.completed_response.origin)) ?? '') && <><TurnProcess id={attemptOwnerKey(entry.completed_response.origin)} open tools={entry.turn_process?.tool_call_count ?? 0} messages={entry.turn_process?.message_count ?? 0} durationMs={entry.completed_response.timing?.total_duration_ms ?? undefined}/>{requestFeedback?.attempts.get(attemptOwnerKey(entry.completed_response.origin))}</>}
@@ -329,7 +343,6 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
         })}</>}/>{runPanels}</div>;
     })}
     {blockPages.errors.map(error => <p role="alert" key={error}>{error} <button type="button" onClick={blockPages.retry}>{tx('agent:message.retry-content')}</button></p>)}
-    {descriptors.filter(descriptor=>descriptor.deliveries && (descriptor.identity==null||!durableIds.has(descriptor.identity))).map(descriptor=><DeliveryHead key={`deliveries:${canonicalLocatorKey(descriptor.locator)}`} head={descriptor.deliveries!}/>)}
     {descriptors.filter(descriptor => history?.window || descriptor.identity == null || !messages.some(message => message.id === descriptor.identity)).map(descriptor => <section key={canonicalLocatorKey(descriptor.locator)} data-canonical-locator={JSON.stringify(descriptor.locator)}>
       {descriptorOwner(descriptor)}
       <DescriptorContent descriptor={descriptor}/>

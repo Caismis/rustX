@@ -1,6 +1,6 @@
 import {act,cleanup,fireEvent,render,waitFor} from '@testing-library/react';
 import {afterEach,expect,it,vi} from 'vitest';
-import {DeliveryHead} from '../src/app/agent/DeliveryHead';
+import {TurnDeliveries} from '../src/app/agent/TurnDeliveries';
 import {JournalSourceProvider} from '../src/app/agent/ObservationSource';
 import {PreviewContext} from '../src/app/components/ArtifactPreview';
 import {checkpoint,Server,snapshot} from './fixture';
@@ -11,7 +11,7 @@ afterEach(()=>{cleanup();server?.client.disconnect();});
 const file:SessionFileReference={scope:{conversation_id:'original-inherited-owner',device:'1',inode:'2'},path:'out/report.md',name:'report.md',mime_type:'text/markdown',description:'native selected metadata'};
 const locator={type:'by_ledger_position' as const,position:2};
 const item=(index:number):RuntimeClientDeliveryItem=>({index,locator,file:null,metadata_deferred:true,encoded_bytes:String(new TextEncoder().encode(JSON.stringify(file)).length),metadata_domain:`messages.ledger:2.deliveries.${index}.metadata`});
-const head:RuntimeClientDeliveryHead={domain:'messages.ledger:2.deliveries',total:'9',items:Array.from({length:8},(_,index)=>({...item(index),file,metadata_deferred:false})) as RuntimeClientDeliveryHead['items'],next_offset:8};
+const head:RuntimeClientDeliveryHead={domain:'messages.ledger:2.deliveries',total:'9',items:Array.from({length:8},(_,index)=>({...item(index),file:{...file,path:`out/report-${index}.md`},metadata_deferred:false})) as RuntimeClientDeliveryHead['items'],next_offset:8};
 it('successful C ninth-item discovery reads only selected original metadata and preserves protected locator ownership',async()=>{
  server=new Server();await server.attached('A');const cut=checkpoint(snapshot()).read_cut,target=server.target('A'),openPreview=vi.fn(),download=vi.fn();
  const selected=item(8),original=new TextEncoder().encode(JSON.stringify(file));
@@ -27,7 +27,7 @@ it('successful C ninth-item discovery reads only selected original metadata and 
   return {type:'checkpoint_value_chunk',chunk:{representation:'canonical_json_v1',cut,domain:selected.metadata_domain,item_offset:0,path:[],offset,bytes_base64:btoa(String.fromCharCode(...original.slice(offset,end))),readable_end:original.length,next_offset:end===original.length?null:end}};
  });
  const source={client:server.client,target,cut:()=>cut,owned:()=>true};
- const ui=render(<JournalSourceProvider source={source}><PreviewContext.Provider value={{openPreview,download}}><DeliveryHead head={head}/></PreviewContext.Provider></JournalSourceProvider>);
+ const ui=render(<JournalSourceProvider source={source}><PreviewContext.Provider value={{openPreview,download}}><TurnDeliveries conversationId="conversation-A" batches={[{position:'2',head}]}/></PreviewContext.Provider></JournalSourceProvider>);
  await act(async()=>fireEvent.click(ui.getByRole('button',{name:'Show more'})));
  expect(ui.queryByRole('button',{name:'Show more'})).toBeNull();
  await waitFor(()=>expect(ui.getByRole('button',{name:'Show all 9 delivered files'})).toBeTruthy());
@@ -44,7 +44,7 @@ it('successful C ninth-item discovery reads only selected original metadata and 
 it('a metadata response after exact owner retirement cannot dispatch Preview or Download',async()=>{
  server=new Server();await server.attached('A');const cut=checkpoint(snapshot()).read_cut,target=server.target('A'),openPreview=vi.fn(),download=vi.fn(),selected=item(0);let owned=true;
  server.held.add('conversation/checkpointValueRead');
- const ui=render(<JournalSourceProvider source={{client:server.client,target,cut:()=>cut,owned:()=>owned}}><PreviewContext.Provider value={{openPreview,download}}><DeliveryHead head={{...head,items:[selected],next_offset:null}}/></PreviewContext.Provider></JournalSourceProvider>);
+ const ui=render(<JournalSourceProvider source={{client:server.client,target,cut:()=>cut,owned:()=>owned}}><PreviewContext.Provider value={{openPreview,download}}><TurnDeliveries conversationId="conversation-A" batches={[{position:'2',head:{...head,items:[selected],next_offset:null}}]}/></PreviewContext.Provider></JournalSourceProvider>);
  expect(ui.queryByRole('button',{name:'Preview 1/9'})).toBeNull();
  const request=await server.waitFor('conversation/checkpointValueRead',1);owned=false;
  await act(async()=>server.socket.success(request,{type:'checkpoint_value_chunk',chunk:{representation:'canonical_json_v1',cut,domain:selected.metadata_domain,item_offset:0,path:[],offset:0,bytes_base64:btoa(JSON.stringify(file)),readable_end:Number(selected.encoded_bytes),next_offset:null}}));

@@ -10,6 +10,7 @@ import { App } from '../../src/app/App';
 import { Server, interaction, snapshot, projectionHead, endpoint } from '../fixture';
 import { traceRecord } from '../trace-fixture';
 import { deferredReplyFixture } from './deferred-reply';
+import { turnDeliveriesFixture } from './turn-deliveries';
 import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v51';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
@@ -125,6 +126,7 @@ if (mode === 'retry-active' || mode === 'retry-settled') {
  }
 }
 if (mode === 'deferred-reply') deferredReplyFixture(server, s);
+if (mode === 'turn-deliveries') turnDeliveriesFixture(server, s);
 server.snapshots.set('A', s);
 await server.attached('A');
 localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));

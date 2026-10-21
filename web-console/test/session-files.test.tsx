@@ -3,7 +3,8 @@ import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { FilePreviewCoordinator, SESSION_FILE_MAX_BYTES, samePreviewSource, type PreviewSource } from '../src/client/session-files';
 import { ArtifactPreview, PreviewContext } from '../src/app/components/ArtifactPreview';
-import { ToolDeliveries } from '../src/app/components/Artifact';
+import { DeliveryCards } from '../src/app/components/Artifact';
+import { presentedDeliveries } from '../src/bindings/present';
 import { WorkspaceAuthority } from '../src/workspaces/authority';
 import { validateRaster, RASTER_MAX_PIXELS } from '../src/client/raster';
 import { WorkspaceHostError, type DeliveryBytes, type DeliveryRead, type ProductHostWorkspaces } from '../src/workspaces/host';
@@ -173,14 +174,15 @@ it('Markdown HTML, executable URLs and embedded images remain inert', async () =
 it('typed committed cards distinguish Preview and Download; prose/JSON/failed facts cannot grant access', () => {
   const openPreview = vi.fn(), download = vi.fn(), intents = { openPreview, download };
   const result: ToolExecutionResult = { status: { type: 'success' }, duration_ms: "0", content: [{ type: 'json', value: { deliveries: [file], path: file.path } }] };
-  const ui = render(<PreviewContext.Provider value={intents}><ToolDeliveries conversationId="conversation-A" locator={{type:'by_message_id',message_id:'canonical-tool'}} result={result}/></PreviewContext.Provider>);
+  const cards = (result: ToolExecutionResult) => <PreviewContext.Provider value={intents}><DeliveryCards conversationId="conversation-A" deliveries={presentedDeliveries({type:'by_message_id',message_id:'canonical-tool'},result)}/></PreviewContext.Provider>;
+  const ui = render(cards(result));
   expect(ui.queryAllByRole('button')).toHaveLength(0);
-  ui.rerender(<PreviewContext.Provider value={intents}><ToolDeliveries conversationId="conversation-A" locator={{type:'by_message_id',message_id:'canonical-tool'}} result={{ ...result, deliveries: [file] }}/></PreviewContext.Provider>);
+  ui.rerender(cards({ ...result, deliveries: [file] }));
   fireEvent.click(ui.getByRole('button', { name: `Preview ${file.name} in sidebar` }));
   expect(openPreview).toHaveBeenCalledWith(expect.objectContaining({ source, name: file.name }));
   fireEvent.click(ui.getByRole('button', { name: `Download ${file.name}` }));
   expect(download).toHaveBeenCalledWith(expect.objectContaining({ source, name: file.name })); expect(openPreview).toHaveBeenCalledOnce();
-  ui.rerender(<PreviewContext.Provider value={intents}><ToolDeliveries conversationId="conversation-A" locator={{type:'by_message_id',message_id:'canonical-tool'}} result={{ ...result, deliveries: [file], status: { type: 'failed', error: 'bad declaration' } }}/></PreviewContext.Provider>);
+  ui.rerender(cards({ ...result, deliveries: [file], status: { type: 'failed', error: 'bad declaration' } }));
   expect(ui.queryAllByRole('button')).toHaveLength(0);
 });
 it('typed source equality preserves declarations, delivery indexes, namespaces and managed Artifact distinction', () => {

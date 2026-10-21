@@ -3942,3 +3942,24 @@ actual scrolling range before asserting detached reading during settlement.
 A short native head at scrollTop zero is still following the tail; passive
 history assembly may correctly move that viewport. The assertion after an
 explicit detached gesture remains exactly scrollTop zero.
+
+## Turn-tail file delivery placement
+
+Behavioral reference inspected read-only: local `../deepseek-harness` at
+`687f282e8625c6b8d11ff58211a90524be2e4317`, specifically
+`ui-chat/src/client/chat/TurnTailNodeView.tsx`,
+`ui-chat/src/client/conversation-nodes/turn-tail.ts`, and
+`ui-deliverables/src/client/{Deliverables,turn-deliverables}.ts{,x}` under
+`packages/client`. Delivered files are a settled Turn-tail contribution after
+the closing content and before actions, independent of collapsed process rows.
+The selection uses first-seen path order with the latest declaration per path,
+and the four-card summary applies to the entire Turn.
+
+rustX uses its existing native Attempt membership, closing transcript positions,
+successful canonical Tool results and bounded delivery heads. It retains every
+selected file's original locator/index and original live, Child or historical
+read owner. Deferred transcript offsets remain separate from canonical ledger
+addresses. No Session-event accumulator, inferred Turn boundary, Host service,
+Cordis slot or runtime code is imported. The Turn-tail stack gap and action
+spacing adapt `TurnTailNodeView.module.css` at the same immutable reference;
+the source inventory records that additional source and updated local hashes.

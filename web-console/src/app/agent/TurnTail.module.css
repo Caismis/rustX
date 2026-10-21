@@ -13,3 +13,5 @@
 
 .time { color: var(--dsw-alias-label-tertiary); font-size: 13px; white-space: nowrap; }
 @media (prefers-reduced-motion: reduce) { .actions { transition: none !important; } }
+.root { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.root > .actions { margin-top: 4px; }
