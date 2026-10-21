@@ -65,7 +65,11 @@ pub(in crate::local_runtime) fn encode(
 ) -> Result<Vec<u8>, SettingsError> {
     crate::local_runtime::workflow_resources::compile_definition(id, path, definition.clone())
         .map_err(|error| invalid(WorkflowDiagnostic::from_resource(&error)))?;
-    let text = serde_yaml::to_string(definition).map_err(|_| SettingsError::Invalid)?;
+    let mut document = serde_yaml::to_value(definition).map_err(|_| SettingsError::Invalid)?;
+    if let Some(block) = document.get_mut("block") {
+        omit_ordinary_ports(block);
+    }
+    let text = serde_yaml::to_string(&document).map_err(|_| SettingsError::Invalid)?;
     let reread: WorkflowDefinition =
         serde_yaml::from_str(&text).map_err(|_| SettingsError::Invalid)?;
     if reread != *definition {
@@ -79,6 +83,44 @@ pub(in crate::local_runtime) fn encode(
         )));
     }
     Ok(text.into_bytes())
+}
+
+/// An ordinary edge's absent port serializes as `port: null`; omit it, as
+/// authored files do. Only the `edges` of each lexical block are touched,
+/// found structurally — never authored literal or schema data. The caller
+/// proves the result parses back to exactly the compiled definition.
+fn omit_ordinary_ports(block: &mut serde_yaml::Value) {
+    use serde_yaml::Value;
+    if let Some(Value::Sequence(edges)) = block.get_mut("edges") {
+        for edge in edges {
+            if let Value::Mapping(edge) = edge
+                && edge.get("port") == Some(&Value::Null)
+            {
+                edge.remove("port");
+            }
+        }
+    }
+    if let Some(Value::Mapping(nodes)) = block.get_mut("nodes") {
+        for node in nodes.values_mut() {
+            match node.get("type").and_then(Value::as_str) {
+                Some("loop") => {
+                    if let Some(body) = node.get_mut("body") {
+                        omit_ordinary_ports(body);
+                    }
+                }
+                Some("parallel") => {
+                    if let Some(Value::Mapping(branches)) = node.get_mut("branches") {
+                        for branch in branches.values_mut() {
+                            if let Some(child) = branch.get_mut("block") {
+                                omit_ordinary_ports(child);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 /// The candidate bytes of `edit` (`None` removes the file).

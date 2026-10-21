@@ -23,6 +23,8 @@ export interface LibraryContext {
 export type LibraryEvent =
   | { type: 'SCOPE'; scope: WorkflowScope }
   | { type: 'REFRESH' }
+  /** The library became visible: list now. Nothing is read before. */
+  | { type: 'ACTIVATE' }
   | { type: 'OPERATE'; operation: LibraryOperation }
   | { type: 'DISMISS' };
 
@@ -53,7 +55,7 @@ export const workflowLibraryMachine = setup({
 }).createMachine({
   id: 'workflowLibrary',
   context: ({ input }) => ({ ports: input.ports, scope: input.scope, port: input.ports(input.scope) }),
-  initial: 'loading',
+  initial: 'dormant',
   on: {
     SCOPE: { guard: ({ context, event }) => !sameScope(context.scope, event.scope), target: '.loading',
       actions: assign(({ context, event }) => ({ scope: event.scope, port: context.ports(event.scope), library: undefined, operationFailure: undefined })) },
@@ -61,6 +63,7 @@ export const workflowLibraryMachine = setup({
     DISMISS: { actions: assign({ operationFailure: undefined }) },
   },
   states: {
+    dormant: { on: { ACTIVATE: 'loading' } },
     loading: {
       entry: assign({ listFailure: undefined }),
       invoke: {
@@ -69,9 +72,10 @@ export const workflowLibraryMachine = setup({
         onError: { target: 'failed', actions: assign(({ event }) => ({ listFailure: classifyFailure(event.error, false) })) },
       },
     },
-    failed: {},
+    failed: { on: { ACTIVATE: 'loading' } },
     ready: {
       on: {
+        ACTIVATE: 'loading',
         OPERATE: { guard: ({ context }) => !!context.library, target: 'operating', actions: assign(({ event }) => ({ pending: event.operation, operationFailure: undefined })) },
       },
     },

@@ -2,6 +2,7 @@ import { assign, fromPromise, setup, type ActorRefFrom, type SnapshotFrom } from
 import type { WorkflowCheckReport, WorkflowSource } from '../../../../../protocol/app-server/v51';
 import type { WorkflowCommit } from '../../../workspaces/host';
 import { CommandRejected, type RejectionCode } from '../document/commands';
+import { incompleteIdentities, type IncompleteIdentity } from '../document/identities';
 import { existingPath, sameDocument, ROOT, type BlockPath, type WorkflowDocument } from '../document/model';
 import { classifyFailure, type WorkflowFailure, type WorkflowScopePort, type WorkflowTarget } from '../port';
 
@@ -37,7 +38,9 @@ export type EditorNotice =
   /** Reconciliation found the uncertain save committed. */
   | { kind: 'reconciled' }
   /** Reconciliation found a revision this editor did not write. */
-  | { kind: 'changed_externally'; revision: string };
+  | { kind: 'changed_externally'; revision: string }
+  /** Typed identities still to choose; nothing was sent. */
+  | { kind: 'incomplete'; identities: readonly IncompleteIdentity[] };
 
 export interface EditorContext {
   readonly port: WorkflowScopePort;
@@ -115,6 +118,7 @@ export const workflowEditorMachine = setup({
   guards: {
     editable: ({ context }) => !!context.document && !!context.base?.document,
     savable: ({ context }) => !!context.document && !!context.base?.document && !context.uncertain,
+    incomplete: ({ context }) => !!context.document && incompleteIdentities(context.document).length > 0,
     canUndo: ({ context }) => context.past.length > 0,
     canRedo: ({ context }) => context.future.length > 0,
   },
@@ -145,6 +149,7 @@ export const workflowEditorMachine = setup({
     }),
     navigate: assign(({ context, event }) => event.type === 'NAVIGATE' && context.document ? { block: existingPath(context.document, event.block) } : {}),
     dismiss: assign({ notice: undefined, rejection: undefined }),
+    incomplete: assign(({ context }) => ({ notice: { kind: 'incomplete', identities: incompleteIdentities(context.document!) } as EditorNotice })),
   },
 }).createMachine({
   id: 'workflowEditor',
@@ -175,8 +180,8 @@ export const workflowEditorMachine = setup({
       states: {
         idle: {
           on: {
-            CHECK: { guard: 'editable', target: 'checking' },
-            SAVE: { guard: 'savable', target: 'saving' },
+            CHECK: [{ guard: 'incomplete', actions: 'incomplete' }, { guard: 'editable', target: 'checking' }],
+            SAVE: [{ guard: 'incomplete', actions: 'incomplete' }, { guard: 'savable', target: 'saving' }],
             RECONCILE: { guard: ({ context }) => !!context.uncertain, target: 'reconciling' },
             RELOAD: '#workflowEditor.loading',
           },
@@ -196,8 +201,8 @@ export const workflowEditorMachine = setup({
             onError: { target: 'idle', actions: assign(({ event }) => ({ notice: { kind: 'failure', operation: 'check', failure: failure(event, false) } as EditorNotice })) },
           },
           on: {
-            CHECK: { guard: 'editable', target: 'checking', reenter: true },
-            SAVE: { guard: 'savable', target: 'saving' },
+            CHECK: [{ guard: 'incomplete', target: 'idle', actions: 'incomplete' }, { guard: 'editable', target: 'checking', reenter: true }],
+            SAVE: [{ guard: 'incomplete', target: 'idle', actions: 'incomplete' }, { guard: 'savable', target: 'saving' }],
           },
         },
         saving: {

@@ -763,6 +763,10 @@ fn native_examples_round_trip_semantically_through_canonical_serialization() {
         let bytes = candidate::encode(&id(name), &path, &wire).unwrap();
         let canonical: WorkflowDefinition = serde_yaml::from_slice(&bytes).unwrap();
         assert_eq!(canonical, original, "{name}");
+        assert!(
+            !String::from_utf8(bytes).unwrap().contains("port: null"),
+            "{name}"
+        );
         assert_eq!(
             WorkflowProgram::compile(id(name), canonical)
                 .unwrap()

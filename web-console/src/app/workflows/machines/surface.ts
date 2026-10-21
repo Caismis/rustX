@@ -42,8 +42,8 @@ export const workflowSurfaceMachine = setup({
     }),
     close: enqueueActions(({ context, enqueue }) => {
       if (context.editor) enqueue(stopChild(context.editor));
+      // The library re-lists when it is shown again.
       enqueue.assign({ editor: undefined, leaving: undefined });
-      enqueue.sendTo(context.library, { type: 'REFRESH' });
     }),
     proceed: ({ context }) => { if (context.leaving?.kind === 'external') context.leaving.proceed(); },
   },

@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { createActor } from 'xstate';
-import { fixtures } from '../../protocol/app-server/fixtures';
+import { exampleSource } from './workflow-fixtures';
 import type { WorkflowCheckReport, WorkflowDefinition, WorkflowEdit, WorkflowLibrary, WorkflowSource } from '../../protocol/app-server/v51';
 import { RpcFailure } from '../src/client/errors';
 import { WorkspaceHostError, type WorkflowCommit } from '../src/workspaces/host';
-import { renameNode, setWorkflow } from '../src/app/workflows/document/commands';
+import { addNode, renameNode, replaceNode, setWorkflow } from '../src/app/workflows/document/commands';
 import { sameDocument, ROOT } from '../src/app/workflows/document/model';
 import { isDirty, workflowEditorMachine } from '../src/app/workflows/machines/editor';
 import { workflowSurfaceMachine } from '../src/app/workflows/machines/surface';
@@ -22,10 +22,7 @@ function deferred<T>() {
 const flush = async () => { for (let turn = 0; turn < 16; turn++) await Promise.resolve(); };
 
 function source(id: string, revision = 'sha256:base'): WorkflowSource {
-  const message = fixtures.find(entry => 'result' in entry && entry.id === 'workflow-source-parallel_review');
-  if (!message || !('result' in message) || message.result.type !== 'workflow_source') throw new Error('fixture');
-  const fixture = message.result.source as WorkflowSource;
-  return structuredClone({ ...fixture, id, revision, relative_path: `.agents/workflows/${id}.yaml` });
+  return { ...exampleSource('parallel_review'), id, revision, relative_path: `.agents/workflows/${id}.yaml` };
 }
 const listing = (scope: WorkflowScope, files: string[]): WorkflowLibrary => ({
   target: scope.kind === 'user' ? { kind: 'user' } : { kind: 'workspace', directory: `/${scope.workspaceId}` },
@@ -214,6 +211,20 @@ describe('Workflow editor races', () => {
     expect(editor.getSnapshot().context.document?.description).toBe('abc');
   });
 
+  it('sends nothing while a typed identity is still unchosen', async () => {
+    const script = scripted();
+    const editor = await readyEditor(script);
+    editor.send({ type: 'EDIT', apply: document => addNode(document, ROOT, 'agent', 'draft_agent') });
+    editor.send({ type: 'CHECK', explain: false });
+    editor.send({ type: 'SAVE' });
+    expect(editor.getSnapshot().context.notice).toEqual({ kind: 'incomplete', identities: [{ block: [], node: 'draft_agent', field: 'profile' }] });
+    expect(script.checks).toHaveLength(0);
+    expect(script.writes).toHaveLength(0);
+    editor.send({ type: 'EDIT', apply: document => replaceNode(document, ROOT, 'draft_agent', { ...(document.block.nodes.draft_agent as Extract<WorkflowDefinition['block']['nodes'][string], { type: 'agent' }>), profile: 'reviewer' }) });
+    editor.send({ type: 'SAVE' });
+    expect(script.writes).toHaveLength(1);
+  });
+
   it('presents an unparseable file without an editable document', async () => {
     const script = scripted();
     const editor = createActor(workflowEditorMachine, { input: { port: script.port, target: { endpoint: script.port.endpoint, scope: USER_SCOPE, id: 'broken' } } }).start();
@@ -235,6 +246,9 @@ describe('Workflow surface and library', () => {
       return script.port;
     };
     const actor = createActor(workflowSurfaceMachine, { input: { ports } }).start();
+    // Nothing is listed until the library is shown.
+    expect([...scripts.values()].every(script => script.lists.length === 0)).toBe(true);
+    actor.getSnapshot().context.library.send({ type: 'ACTIVATE' });
     const script = (key: string) => [...scripts].filter(([name]) => name.startsWith(`${key}#`)).map(([, value]) => value);
     return { actor, script, library: () => actor.getSnapshot().context.library };
   }
