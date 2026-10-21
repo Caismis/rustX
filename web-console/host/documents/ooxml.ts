@@ -23,11 +23,21 @@ function xml(bytes: Buffer | undefined, open: (tag: SaxesTagNS) => void, text = 
   const source = new TextDecoder(encoding, { fatal: true }).decode(bytes);
   parser.write(source).close();
 }
+/** Hyperlinks are inert text destinations, not resources to fetch during preview.
+ * Conversion has no network access; the PDF viewer renders no link actions. */
+function externalHyperlink(tag: SaxesTagNS): boolean {
+  if (attribute(tag, 'TargetMode') !== 'External'
+    || !['http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink',
+      'http://purl.oclc.org/ooxml/officeDocument/relationships/hyperlink'].includes(attribute(tag, 'Type') ?? '')) return false;
+  try { return ['https:', 'http:', 'mailto:'].includes(new URL(attribute(tag, 'Target') ?? '').protocol); }
+  catch { return false; }
+}
 function relationships(files: Map<string, Buffer>, owner: string) {
   const path = owner ? `${posix.dirname(owner)}/_rels/${posix.basename(owner)}.rels` : '_rels/.rels';
   const links = new Map<string, { path: string; type: string }>();
   xml(files.get(path), tag => {
     if (tag.local !== 'Relationship') return;
+    if (externalHyperlink(tag)) return;
     const id = attribute(tag, 'Id'), target = attribute(tag, 'Target'), type = attribute(tag, 'Type');
     if (!id || !target || !type || links.has(id) || attribute(tag, 'TargetMode') === 'External' || /[\\:%?#]/.test(target)) fail('archive_rejected');
     const resolved = posix.normalize(target.startsWith('/') ? target.slice(1) : posix.join(posix.dirname(owner), target));
@@ -37,7 +47,7 @@ function relationships(files: Map<string, Buffer>, owner: string) {
   return links;
 }
 
-/** Parser-only worker entry: rejects active/external package relationships for
+/** Parser-only worker entry: rejects active/external resource relationships for
  * all three OOXML formats. No formula engine, scripts, filesystem or network IO. */
 export function inspectOoxml(bytes: Uint8Array, extension: 'docx' | 'pptx' | 'xlsx'): WorkbookPreview | undefined {
   const files = admitOoxml(bytes);
@@ -45,8 +55,9 @@ export function inspectOoxml(bytes: Uint8Array, extension: 'docx' | 'pptx' | 'xl
     if (/vba|activex|embeddings|externallinks/i.test(path)) fail('archive_rejected');
     if (/\.(?:xml|rels)$/i.test(path)) xml(data, tag => {
       if (tag.local === 'Relationship' && ((attribute(tag, 'TargetMode') !== undefined && attribute(tag, 'TargetMode') !== 'Internal')
-        || /[\\:%?#]/.test(attribute(tag, 'Target') ?? '') || /(?:vba|oleObject|activeX|externalLink|attachedTemplate)/i.test(attribute(tag, 'Type') ?? ''))) fail('archive_rejected');
-      if (tag.local === 'Override' && /macroEnabled|vbaProject|activeX/i.test(attribute(tag, 'ContentType') ?? '')) fail('archive_rejected');
+        || /[\\:%?#]/.test(attribute(tag, 'Target') ?? '') || /(?:vba|oleObject|activeX|externalLink|attachedTemplate)/i.test(attribute(tag, 'Type') ?? ''))
+        && !externalHyperlink(tag)) fail('archive_rejected');
+      if (['Default', 'Override'].includes(tag.local) && /macroEnabled|vbaProject|activeX/i.test(attribute(tag, 'ContentType') ?? '')) fail('archive_rejected');
     });
   }
   const main = [...relationships(files, '').values()].filter(link => link.type.endsWith('/officeDocument'));

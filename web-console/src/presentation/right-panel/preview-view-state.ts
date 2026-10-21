@@ -3,8 +3,7 @@ export interface PreviewViewState {
   wrap?: boolean;
   bodyScrollTop?: number;
   bodyScrollLeft?: number;
-  pdfPage?: number;
-  pdfZoom?: number;
+  pdfZoom?: { readonly kind: 'fit-width' } | { readonly kind: 'fixed'; readonly scale: number };
   pdfScrollTop?: number;
   pdfScrollLeft?: number;
   workbookSheet?: number;

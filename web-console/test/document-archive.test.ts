@@ -20,6 +20,33 @@ it('parses real OOXML and preserves the deliberately stale cached value without 
   expect(workbook.sheets[0].cells[3]).toEqual({ address: 'D1', type: 'n', formula: 'NOW()' });
   expect(() => inspectOoxml(fixture('docx'), 'xlsx')).toThrow('malformed');
 });
+it.each(['docx', 'pptx'] as const)('admits ordinary hyperlinks and printer settings in %s', extension => {
+  const bytes = readFileSync(new URL(`./fixtures/documents/linked.${extension}`, import.meta.url));
+  expect(() => inspectOoxml(bytes, extension)).not.toThrow();
+});
+it.each(['http://example.invalid/a?q=1#anchor', 'https://example.invalid/%20?q=1', 'mailto:reader@example.invalid'])('admits inert hyperlink %s', target => {
+  const original = admitOoxml(fixture('docx'));
+  original.set('word/_rels/document.xml.rels', Buffer.from(`<Relationships><Relationship Id="link" TargetMode="External" Target="${target}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink"/></Relationships>`));
+  expect(() => inspectOoxml(zip([...original].map(([name, data]) => ({ name, data: data.toString() }))), 'docx')).not.toThrow();
+});
+it.each([
+  '<Default Extension="bin" ContentType="application/vnd.ms-office.vbaProject"/>',
+  '<Override PartName="/word/printerSettings/printerSettings1.bin" ContentType="application/vnd.ms-office.activeX"/>',
+])('rejects active binary content disguised as printer settings: %s', declaration => {
+  const original = admitOoxml(fixture('docx'));
+  original.set('word/printerSettings/printerSettings1.bin', Buffer.from('binary payload'));
+  original.set('[Content_Types].xml', Buffer.from(original.get('[Content_Types].xml')!.toString().replace('</Types>', `${declaration}</Types>`)));
+  expect(() => inspectOoxml(zip([...original].map(([name, data]) => ({ name, data: data.toString() }))), 'docx')).toThrow('archive_rejected');
+});
+it.each([
+  ['hyperlink', 'file:///etc/passwd'], ['hyperlink', 'javascript:alert(1)'], ['hyperlink', 'data:text/html,test'],
+  ['image', 'https://example.invalid/image.png'], ['attachedTemplate', 'https://example.invalid/template.dotx'],
+  ['externalLink', 'https://example.invalid/book.xlsx'], ['oleObject', 'https://example.invalid/object.bin'],
+])('rejects external %s resource %s', (type, target) => {
+  const original = admitOoxml(fixture('docx'));
+  original.set('word/_rels/document.xml.rels', Buffer.from(`<Relationships><Relationship Id="link" TargetMode="External" Target="${target}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${type}"/></Relationships>`));
+  expect(() => inspectOoxml(zip([...original].map(([name, data]) => ({ name, data: data.toString() }))), 'docx')).toThrow('archive_rejected');
+});
 it.each(['../escape', '/absolute', 'a/../b', 'a\\b', 'a:b', 'a%2fb', 'a//b', 'nested.zip', 'vbaProject.bin'])('rejects archive path %s', name => {
   expect(() => admitOoxml(zip([{ name, data: 'x' }]))).toThrow('archive_rejected');
 });

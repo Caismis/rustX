@@ -3816,29 +3816,6 @@
   ]
 },
 {
-  "reference": "composer-attachment-light-390-linux.png",
-  "evidence": "PR #457 pinned Chromium 1243: four stable captures with byte-identical descendant/ancestor DOM geometry, scroll positions, borders, shadows, backgrounds, transforms and opacity (geometry SHA256 4bee8b7b89470baa28392654c86711be80e2cab1bed10e1a8b71aee3202ff918); corroborated by four preceding captures. Only measured row spans are admitted: no neighbouring pixel or global tolerance. Probe: agent.spec.ts, uploads and context stack light 390, repeat-each=4. Captures bb412e5905c612621d7d67ddc22d9785b10e417bf64b940e2eb10397fe3a8280,d7d004d4e98da06891dd33c2242ff8cf547ff1be73bcebbe92779a159cacc50a,bb412e5905c612621d7d67ddc22d9785b10e417bf64b940e2eb10397fe3a8280,d7d004d4e98da06891dd33c2242ff8cf547ff1be73bcebbe92779a159cacc50a After the intentional model-button centering correction, the pinned-browser stable reference 3077ce28edabd6c93d5df72057f0580f6773eef94fded1ceeeedf90724571ac5 uses the previously measured opposite raster variant at 8 unchanged background pixels; before/after tuples are reversed only at those sites, with identical regions and bounds.",
-  "regions": [
-    {"label": "measured attachment raster row 153 x290", "x": 290, "y": 153, "width": 1, "height": 1, "maxChangedPixels": 1, "maxChannelDelta": 1},
-    {"label": "measured attachment raster row 153 x291", "x": 291, "y": 153, "width": 1, "height": 1, "maxChangedPixels": 1, "maxChannelDelta": 4},
-    {"label": "measured attachment raster row 153 x292", "x": 292, "y": 153, "width": 1, "height": 1, "maxChangedPixels": 1, "maxChannelDelta": 6},
-    {"label": "measured attachment raster row 153 x293", "x": 293, "y": 153, "width": 1, "height": 1, "maxChangedPixels": 1, "maxChannelDelta": 7},
-    {"label": "measured attachment raster row 153 x294", "x": 294, "y": 153, "width": 1, "height": 1, "maxChangedPixels": 1, "maxChannelDelta": 4},
-    {"label": "measured attachment raster row 154 x292", "x": 292, "y": 154, "width": 2, "height": 1, "maxChangedPixels": 2, "maxChannelDelta": 1},
-    {"label": "measured attachment raster row 154 x294", "x": 294, "y": 154, "width": 1, "height": 1, "maxChangedPixels": 1, "maxChannelDelta": 2}
-  ],
-  "pixels": [
-    [290, 153, [255, 255, 255, 255], [254, 254, 254, 255]],
-    [291, 153, [255, 255, 255, 255], [251, 251, 251, 255]],
-    [292, 153, [255, 255, 255, 255], [249, 249, 249, 255]],
-    [293, 153, [253, 253, 253, 255], [246, 246, 246, 255]],
-    [294, 153, [248, 248, 248, 255], [244, 244, 244, 255]],
-    [292, 154, [229, 229, 229, 255], [230, 230, 230, 255]],
-    [293, 154, [233, 233, 233, 255], [232, 232, 232, 255]],
-    [294, 154, [237, 237, 237, 255], [235, 235, 235, 255]]
-  ]
-},
-{
   "reference": "composer-context-light-390-linux.png",
   "evidence": "PR #457 pinned Chromium 1243: four stable captures with byte-identical descendant/ancestor DOM geometry, scroll positions, borders, shadows, backgrounds, transforms and opacity (geometry SHA256 77b042a2979f24b5f513deed343fd72b40e5da6b3f6a049e6e73c5d8025e288f); corroborated by four preceding captures. Only measured row spans are admitted: no neighbouring pixel or global tolerance. Probe: agent.spec.ts, uploads and context stack light 390, repeat-each=4. Captures 8d33db2fcafad87df59b3dd2831c7a1df34b0fb24e8aaf9aea15e75e4648d4cb,8d33db2fcafad87df59b3dd2831c7a1df34b0fb24e8aaf9aea15e75e4648d4cb,9753e70b5c9c7def66a227dd2a53d93d28230a14ab57ef25fd90f7e5b114ed67,8d33db2fcafad87df59b3dd2831c7a1df34b0fb24e8aaf9aea15e75e4648d4cb After the intentional model-button centering correction, the pinned-browser stable reference 6104e3289b1465b9df4b6d15ab8a81acd3f69686600f8004ece4d37cf8679730 uses the previously measured opposite raster variant at 1201 unchanged background pixels; before/after tuples are reversed only at those sites, with identical regions and bounds.",
   "regions": [
@@ -5692,30 +5669,6 @@
     [316, 29, [254, 254, 254, 255], [255, 255, 255, 255]],
     [320, 29, [254, 254, 254, 255], [255, 255, 255, 255]],
     [324, 29, [254, 254, 254, 255], [255, 255, 255, 255]]
-  ]
-},
-{
-  "reference": "composer-attachment-dark-390-linux.png",
-  "evidence": "PR #457 pinned Playwright 1.63.0 / Chromium 1243, image sha256 bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7. Four isolated dark-390 captures have byte-identical descendant/ancestor geometry, scroll extents, borders, shadows, backgrounds, transforms, opacity, filters, fonts, overflow, zoom and clip paths (geometry/style SHA256 f64dcd9ecf76700886fe67b28a91499e08af79285d69d7279f4c3f01ab734b30). Two stable RGBA outputs equal the reference (SHA256 5b0f845069143a8e5c2110683c4921afd1d7c891ce4f8c2459e8952047ffc5d8); two equal the independently captured CI runs 37799052911 and 37804880530 (SHA256 172afcb9b88f9383eb48c5540faa5d0f60d8bb5a9435dc4ba00bcd129c756106). Only the eight measured attachment-card corner pixels differ in the identical 327x291 image. Each region admits its own observed channel delta; neighbours and larger deltas remain failures. No reference or comparator change. After the intentional model-button centering correction, the pinned-browser stable reference e0bc29c2ec48f38b5cd9d503e2701f83c68da0383ed021cc90be3c4fcfc9fabb uses the previously measured opposite raster variant at 8 unchanged background pixels; before/after tuples are reversed only at those sites, with identical regions and bounds.",
-  "regions": [
-    {"label": "measured dark attachment corner x290 y153", "x": 290, "y": 153, "width": 1, "height": 1, "maxChangedPixels": 1, "maxChannelDelta": 1},
-    {"label": "measured dark attachment corner x291 y153", "x": 291, "y": 153, "width": 1, "height": 1, "maxChangedPixels": 1, "maxChannelDelta": 4},
-    {"label": "measured dark attachment corner x292 y153", "x": 292, "y": 153, "width": 1, "height": 1, "maxChangedPixels": 1, "maxChannelDelta": 6},
-    {"label": "measured dark attachment corner x293 y153", "x": 293, "y": 153, "width": 1, "height": 1, "maxChangedPixels": 1, "maxChannelDelta": 7},
-    {"label": "measured dark attachment corner x294 y153", "x": 294, "y": 153, "width": 1, "height": 1, "maxChangedPixels": 1, "maxChannelDelta": 4},
-    {"label": "measured dark attachment corner x292 y154", "x": 292, "y": 154, "width": 1, "height": 1, "maxChangedPixels": 1, "maxChannelDelta": 1},
-    {"label": "measured dark attachment corner x293 y154", "x": 293, "y": 154, "width": 1, "height": 1, "maxChangedPixels": 1, "maxChannelDelta": 1},
-    {"label": "measured dark attachment corner x294 y154", "x": 294, "y": 154, "width": 1, "height": 1, "maxChangedPixels": 1, "maxChannelDelta": 2}
-  ],
-  "pixels": [
-    [290, 153, [44, 44, 46, 255], [45, 45, 47, 255]],
-    [291, 153, [44, 44, 46, 255], [48, 48, 50, 255]],
-    [292, 153, [44, 44, 46, 255], [50, 50, 52, 255]],
-    [293, 153, [46, 46, 48, 255], [53, 53, 55, 255]],
-    [294, 153, [51, 51, 53, 255], [55, 55, 57, 255]],
-    [292, 154, [69, 69, 71, 255], [68, 68, 70, 255]],
-    [293, 154, [65, 65, 67, 255], [66, 66, 68, 255]],
-    [294, 154, [62, 62, 64, 255], [64, 64, 66, 255]]
   ]
 },
 {

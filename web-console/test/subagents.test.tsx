@@ -5,11 +5,11 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { AgentConversationContext } from '../src/app/agent/subagent-context';
 import { Message } from '../src/app/agent/Message';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
-import { RuntimeFacts } from '../src/app/agent/Activity';
+import { RuntimeFacts } from './runtime-facts';
 import { SubagentScope, SubagentHeader, SubagentSurface } from '../src/app/agent/Subagents';
 import { cellKind } from '../src/app/trajectory/TrajectoryCell';
 import { Server, snapshot } from './fixture';
-import type { RuntimeClientAgent, MessageBlock } from '../../protocol/app-server/v50';
+import type { RuntimeClientAgent, MessageBlock } from '../../protocol/app-server/v51';
 const servers: Server[] = [];
 afterEach(() => { cleanup(); for (const server of servers.splice(0)) server.client.disconnect(); });
 const agent: RuntimeClientAgent = { title: 'Research', agent_id: 'child', agent: 'Research', parent_agent_id: 'root', child_conversation_id: 'child-conversation', activation_id: 'activation', state: 'inactive', activation_state: 'succeeded', definition_digest: 'd', profile_digest: 'p', started_at: '2026-10-08T00:00:00Z', observation: { attempt_id: null, revision: '1', activity: { type: 'awaiting_activity' }, counters: { model_requests: 1, model_retries: 0, tool_executions: 0 } }, workspace: '/workspace' };
@@ -304,14 +304,45 @@ it.each([1, 80])('actual 64-request saturation defers %i stable Agent demands un
   request.mockRestore();
 });
 
-it('native task titles identify inbound senders and parent messages stay contextual', async () => {
+it('native task titles identify returns while the direct parent uses the ordinary user bubble and actions', async () => {
   const server = new Server(); servers.push(server); await server.attached('A');
   server.snapshots.get('A')!.agents = [{ ...agent, agent: 'explore', title: 'Verify source documents' }]; await server.client.refresh('A');
   const ui = render(<SubagentScope client={server.client} sessionId="A"><AgentTranscript snapshot={{ ...snapshot(), transcript: { entries: [{ cursor: '1', item: { type: 'message', message: report } }] } }}/></SubagentScope>);
   expect(ui.getByRole('button', { name: /Message from Verify source documents/ })).toBeTruthy();
-  ui.rerender(<AgentConversationContext value={agent}><AgentTranscript snapshot={{ ...snapshot(), transcript: { entries: [{ cursor: '2', item: { type: 'message', message: { ...report, source: { agent: { agent_id: agent.parent_agent_id } } } } }] } }}/></AgentConversationContext>);
-  expect(ui.getByRole('button', { name: /Message from parent agent/ })).toBeTruthy();
-  expect(ui.container.querySelector('[data-user-message]')).toBeNull();
+  const task: MessageBlock = { ...report, timestamp: '2026-10-08T07:15:00Z', source: { agent: { agent_id: agent.parent_agent_id } } };
+  ui.rerender(<AgentConversationContext value={agent}><AgentTranscript snapshot={{ ...snapshot(), transcript: { entries: [{ cursor: '2', item: { type: 'message', message: task } }] } }}/></AgentConversationContext>);
+  const bubble = ui.getByRole('article', { name: 'Message from parent agent' });
+  expect(bubble.textContent).toContain('**Research result**'); expect(bubble.querySelector('strong')).toBeNull();
+  expect(ui.queryByRole('button', { name: /Message from parent agent/ })).toBeNull();
+  expect(ui.container.querySelector('[data-inbound-source]')).toBeNull();
+  expect(ui.container.querySelector('[data-chat-flow-kind="user"]')).toBeTruthy();
+  expect(ui.getByRole('button', { name: 'Copy' })).toBeTruthy();
+  expect(ui.container.querySelector('time')?.dateTime).toBe(task.timestamp);
+  expect(task.source).toEqual({ agent: { agent_id: agent.parent_agent_id } });
+});
+
+it('a parent canonical head keeps its bubble, time and Copy when the native transcript catches up', () => {
+  const task: MessageBlock = { role: 'user', id: 'parent-task', source: { agent: { agent_id: agent.parent_agent_id } }, timestamp: '2026-10-08T07:15:00Z', content: [{ type: 'text', text: 'Delegated task\n\nKeep the original line breaks.' }] };
+  const s = { ...snapshot(), messages: [task] };
+  const ui = render(<AgentConversationContext value={agent}><AgentTranscript snapshot={s}/></AgentConversationContext>);
+  const before = ui.getByRole('article', { name: 'Message from parent agent' });
+  const copy = ui.getByRole('button', { name: 'Copy' });
+  expect(before.textContent).toContain('Delegated task\n\nKeep the original line breaks.');
+  expect(ui.container.querySelector('time')?.dateTime).toBe(task.timestamp);
+  ui.rerender(<AgentConversationContext value={agent}><AgentTranscript snapshot={{ ...s, transcript: { entries: [{ cursor: '1', item: { type: 'message', message: task } }] } }}/></AgentConversationContext>);
+  expect(ui.getByRole('article', { name: 'Message from parent agent' })).toBe(before);
+  expect(ui.getByRole('button', { name: 'Copy' })).toBe(copy);
+  expect(ui.container.querySelectorAll('[data-chat-flow-kind="user"]')).toHaveLength(1);
+});
+
+it('nested children match only their direct parent; sibling reports and runtime context remain disclosures', () => {
+  const nested = { ...agent, agent_id: 'grandchild', parent_agent_id: 'child' };
+  const ui = render(<AgentConversationContext value={nested}><Message message={report}/></AgentConversationContext>);
+  expect(ui.getByRole('article', { name: 'Message from parent agent' })).toBeTruthy();
+  ui.rerender(<AgentConversationContext value={nested}><Message message={{ ...report, source: { agent: { agent_id: 'sibling' } } }}/></AgentConversationContext>);
+  expect(ui.queryByRole('article')).toBeNull(); expect(ui.container.querySelector('[data-inbound-source="agent"]')).toBeTruthy();
+  ui.rerender(<AgentConversationContext value={nested}><Message message={{ ...report, kind: { context: 'native_environment' } }}/></AgentConversationContext>);
+  expect(ui.queryByRole('article')).toBeNull(); expect(ui.container.querySelector('details')).toBeTruthy();
 });
 
 it('T20 resident Child views have an eight-view bound and require explicit close without evicting drafts', async () => {

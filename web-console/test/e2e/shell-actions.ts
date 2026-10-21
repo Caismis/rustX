@@ -1,8 +1,10 @@
 import { expect, type Locator, type Page } from '@playwright/test';
+import type { AttachmentTarget } from '../../../protocol/app-server/v51';
+import type { wireProbe } from './wire-probe';
 export async function closeSessionView(page: Page, id: string) {
-  await page.locator(`button[data-session-id="${id}"]`).hover();
-  await page.locator(`button[data-session-actions="${id}"]`).click();
-  await page.getByRole('menuitem', { name: /^Close .+ view$/ }).click();
+  await page.getByRole('button', { name: 'View options', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Close view', exact: true }).hover();
+  await page.locator(`[role="menuitem"][data-menu-item-id="close:${id}"]`).click();
 }
 export async function closeSettings(page: Page) {
   const close = page.getByRole('button', { name: 'Close Settings', exact: true });
@@ -97,12 +99,19 @@ export async function connectRemote(page: Page, endpoint: string, token: string)
   await expect(page.locator('.connection-status')).toHaveText('Connected');
   await closeSettings(page);
 }
-export async function showInspector(page: Page) {
-  const panel = page.getByRole('complementary', { name: 'Developer inspector' });
-  if (!await panel.isVisible()) await page.getByRole('button', { name: 'Toggle Inspector' }).click();
-  await expect(panel).toBeVisible();
-  const details = panel.getByText('Complete native runtime facts', { exact: true });
-  if (!await panel.getByLabel('Native diagnostic JSON').isVisible()) await details.click();
+export async function selectedSessionId(page: Page) {
+  return (await page.locator('button[data-session-id][aria-current="page"]').getAttribute('data-session-id'))!;
+}
+
+export async function selectedTarget(page: Page, wire: Awaited<ReturnType<typeof wireProbe>>): Promise<AttachmentTarget> {
+  const id = await selectedSessionId(page);
+  const target = () => [...wire.responses].reverse().find(row => row.result?.target?.session_id === id)?.result.target as AttachmentTarget | undefined;
+  await expect.poll(target).toBeTruthy();
+  return target()!;
+}
+
+export async function selectedCheckpoint(page: Page, wire: Awaited<ReturnType<typeof wireProbe>>) {
+  return (await wire.read('session/checkpoint', await selectedTarget(page, wire))).checkpoint;
 }
 
 export async function sessionTree(page: Page) {
@@ -110,9 +119,8 @@ export async function sessionTree(page: Page) {
   await page.getByRole('menuitem', { name: 'Session tree', exact: true }).click();
 }
 
-export async function expectSettled(page: Page) {
-  await showInspector(page);
-  await expect.poll(async () => JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).attempt?.phase.type).toBe('settled');
+export async function expectSettled(page: Page, wire: Awaited<ReturnType<typeof wireProbe>>) {
+  await expect.poll(async () => (await selectedCheckpoint(page, wire)).snapshot.attempt?.phase.type).toBe('settled');
 }
 
 /** Native fixture setup for scenarios that begin with an existing empty Session.

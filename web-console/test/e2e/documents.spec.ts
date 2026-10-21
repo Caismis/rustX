@@ -76,7 +76,7 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await fixture.gate('document-stream');
     await page.evaluate(() => document.fonts.ready); documentFonts = await page.evaluate(() => document.fonts.size);
-    await open('sample.pdf'); await expect(panel.locator('.textLayer')).toContainText('page 1');
+    await open('sample.pdf'); await expect(panel.locator('[data-pdf-page="1"] .textLayer')).toContainText('page 1');
     const viewport = page.locator('[data-conversation-scroll]').first();
     await viewport.hover(); await page.mouse.wheel(0, -600);
     await expect.poll(() => viewport.evaluate(el => el.scrollTop)).toBe(0);
@@ -86,7 +86,7 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
     await fixture.release('document-stream');
     await expect(page.getByText('Documents delivered. Streaming continues.', { exact: true })).toBeVisible(); await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeVisible();
     expect(await readingCard.evaluate(el => el.getBoundingClientRect().top)).toBeCloseTo(streamingPosition, 0);
-    await expect(panel.locator('.textLayer')).toContainText('page 1');
+    await expect(panel.locator('[data-pdf-page="1"] .textLayer')).toContainText('page 1');
     await page.screenshot({ animations: 'disabled', path: info.outputPath('pdf-light.png') });
     await info.attach('pdf-light', { path: info.outputPath('pdf-light.png'), contentType: 'image/png' }); await close();
     const modelRequests = (await fixture.control('requests')).requests.length;
@@ -121,14 +121,20 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
       } else if (name === 'encrypted.pdf') {
         await expect(panel.getByRole('alert')).toContainText('Password-protected');
       } else {
-        await expect(panel.locator('.textLayer')).toContainText('rustX');
+        await expect(panel.locator('[data-pdf-page="1"] .textLayer')).toContainText('rustX');
         await expect(panel.getByRole('status')).toHaveCount(0);
         if (name === 'sample.pdf') {
-          await panel.getByRole('button', { name: 'Next', exact: true }).click();
-          await expect(panel.locator('.textLayer')).toContainText('page 2');
-          await panel.getByLabel('Zoom', { exact: true }).selectOption('1.5');
+          await panel.locator('[data-pdf-page="2"]').scrollIntoViewIfNeeded();
+          await expect(panel.locator('[data-pdf-page="2"] .textLayer')).toContainText('page 2');
+          const frame = panel.locator('[data-document-zoom-frame]');
+          const box = (await frame.boundingBox())!; await page.mouse.move(box.x + box.width / 2, box.y + box.height - 20);
+          await panel.getByRole('button', { name: 'Zoom', exact: true }).click();
+          await page.getByRole('menuitem', { name: '150%', exact: true }).click();
+          await panel.locator('[data-pdf-page="2"]').scrollIntoViewIfNeeded();
+          await expect(panel.locator('[data-pdf-page="2"] canvas')).toHaveJSProperty('width', 1224);
+          await expect(panel.locator('[data-pdf-page="2"] .textLayer')).toContainText('page 2');
           await expect(panel.getByRole('status')).toHaveCount(0);
-          const selected = await panel.locator('.textLayer').evaluate(element => {
+          const selected = await panel.locator('[data-pdf-page="2"] .textLayer').evaluate(element => {
             const selection = window.getSelection()!, range = document.createRange(); range.selectNodeContents(element); selection.removeAllRanges(); selection.addRange(range); return selection.toString();
           });
           expect(selected).toContain('page 2');
@@ -150,7 +156,7 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
       await page.getByRole('button', { name: 'Preview sample.pdf in sidebar', exact: true }).focus();
       const scroll = await page.locator('[data-conversation-scroll]').first().evaluate(el => el.scrollTop);
       await page.keyboard.press('Enter');
-      await expect(panel.locator('.textLayer')).toContainText('page 1');
+      await expect(panel.locator('[data-pdf-page="1"] .textLayer')).toContainText('page 1');
       if (width === 390) await page.screenshot({ animations: 'disabled', path: info.outputPath('pdf-narrow.png') });
       await close();
       // Worker/URL cleanup can complete while AppFrame's existing grid-track
@@ -164,11 +170,11 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
     await open('sample.pdf'); await expect(panel.getByRole('alert')).toContainText('PDF worker failed');
     await page.unroute('**/pdf.worker*.mjs');
     await panel.getByRole('button', { name: 'Retry preview', exact: true }).click();
-    await expect(panel.locator('.textLayer')).toContainText('page 1'); await close();
+    await expect(panel.locator('[data-pdf-page="1"] .textLayer')).toContainText('page 1'); await close();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('group', { name: 'Appearance', exact: true }).getByRole('button', { name: 'Dark', exact: true }).click();
     await page.getByRole('button', { name: 'Close Settings', exact: true }).click();
-    await open('sample.pdf'); await expect(panel.locator('.textLayer')).toContainText('page 1');
+    await open('sample.pdf'); await expect(panel.locator('[data-pdf-page="1"] .textLayer')).toContainText('page 1');
     await page.screenshot({ animations: 'disabled', path: info.outputPath('pdf-dark.png') });
     await info.attach('pdf-dark', { path: info.outputPath('pdf-dark.png'), contentType: 'image/png' }); await close();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();

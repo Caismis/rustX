@@ -42,12 +42,12 @@ async function fixture(mode: 'following' | 'detached' | 'navigated') {
   function Shell() {
     const snapshot = useSyncExternalStore(owner.subscribe, owner.getSnapshot);
     return <>
-      <button onClick={() => owner.toggleInspector()}>Inspector</button>
+      <button onClick={() => owner.showWorkbench()}>Workbench</button>
       <button onClick={() => owner.reveal()}>Reopen previews</button>
       <ChatViewport ref={node => { if (node) chat = node; }} latestLabel="Return to latest" latestTurn="turn:latest">
         {Object.keys(positions).map(key => <div key={key} data-chat-anchor-key={key} data-chat-turn-owner={key.startsWith('turn:') ? key : undefined}>{key}{key === 'turn:stream' ? ` streamed chunk ${streamed}` : ''}</div>)}
       </ChatViewport>
-      <RightPanel open={snapshot.mode !== 'collapsed'} close={() => owner.collapse()} width={width} canShow={width >= 608} fullscreen={snapshot.workspace?.fullscreen} title="Previews" closeLabel="Collapse previews">
+      <RightPanel open={snapshot.mode !== 'collapsed'} width={width} canShow={width >= 608} fullscreen={snapshot.workspace?.fullscreen} title="Previews">
         <PreviewWorkspace owner={owner} snapshot={snapshot} focusRequest={0} returnFocus={() => {}}/>
       </RightPanel>
     </>;
@@ -108,10 +108,10 @@ it.each(['following', 'detached', 'navigated'] as const)('actual preview geometr
   transition(() => f.width(390)); expect(f.owner.getSnapshot().leases.size).toBe(1);
   transition(() => fireEvent.click(f.ui.getByRole('button', { name: 'Switch preview pane' })));
   transition(() => f.width(1000)); expect(f.owner.getSnapshot().leases.size).toBe(2);
-  transition(() => fireEvent.click(f.ui.getByRole('button', { name: 'Inspector' })));
+  transition(() => fireEvent.click(f.ui.getByRole('button', { name: 'Workbench' })));
   expect(f.owner.getSnapshot().leases.size).toBe(0);
-  transition(() => fireEvent.click(f.ui.getByRole('button', { name: 'Inspector' })));
-  transition(() => fireEvent.click(f.ui.getByRole('button', { name: 'Collapse previews' })));
+  transition(() => fireEvent.click(f.ui.getByRole('button', { name: 'Reopen previews' })));
+  transition(() => fireEvent.click(f.ui.getByRole('button', { name: 'Collapse preview workspace' })));
   expect(f.owner.getSnapshot().leases.size).toBe(0);
   transition(() => f.width(390)); transition(() => f.width(1000));
   expect(f.owner.getSnapshot().mode).toBe('collapsed');

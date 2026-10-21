@@ -9,7 +9,7 @@ import { routeFixture } from './shell-navigation-fixture';
 import { RpcFailure } from '../src/client/app-server';
 import { sameEndpoint } from '../src/workspaces/endpoint';
 import { WorkspaceHostError, type WorkspaceCatalog, type ProductHostWorkspaces } from '../src/workspaces/host';
-import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v50';
+import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v51';
 import { cfg3Source } from './cfg3-data';
 import { Server, snapshot, endpoint } from './fixture';
 import { modelPreferences, NewSessionModelPreference } from '../src/app/model-preference';
@@ -53,10 +53,10 @@ async function mount({ current = () => true, source = workspaceSource(), configu
   return { host, opened, authority, associations };
 }
 const methods = () => server.requests.map(r => r.request.method);
-const modelChoices = () => screen.queryAllByRole('menuitem').filter(item => !(item as HTMLButtonElement).disabled).map(item => item.textContent ?? '').filter(label => label.startsWith('fixture/'));
+const modelChoices = () => screen.queryAllByRole('menuitemradio').filter(item => !(item as HTMLButtonElement).disabled).map(item => item.getAttribute('aria-label') ?? '').filter(label => label.startsWith('fixture/'));
 async function openModelMenu() {
-  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Model and profile' })));
-  fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Model and thinking effort' })));
+  if (document.querySelector('[data-model-menu]')?.getAttribute('data-pane') === 'root') fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
 }
 function gate<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
 it.each(['current', 'replacement'] as const)('Composer Add Workspace dispatches its opened picker scope to the %s Host', async kind => {
@@ -156,22 +156,22 @@ it('offers exactly the native Session catalog, in native order, never a configur
   await mount();
   await openModelMenu();
   expect(modelChoices()).toEqual(['fixture/native', 'fixture/second']);
-  expect(screen.queryByRole('menuitem', { name: 'fixture/configuration-only' })).toBeNull();
-  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'fixture/native' })));
+  expect(screen.queryByRole('menuitemradio', { name: 'fixture/configuration-only' })).toBeNull();
+  await act(async () => fireEvent.click(screen.getByRole('menuitemradio', { name: 'fixture/native' })));
   // The native default profile is shown as published, not invented.
-  expect(screen.getByRole('button', { name: 'Model and profile' }).textContent).toBe('fixture/nativehigh');
-  fireEvent.click(screen.getByRole('button', { name: 'Model and profile' }));
-  fireEvent.click(screen.getByRole('menuitem', { name: 'Profile' }));
-  expect(['low', 'high'].map(name => !!screen.queryByRole('menuitem', { name }))).toEqual([true, true]);
-  expect(screen.queryByRole('menuitem', { name: 'fixture/configuration-only' })).toBeNull();
+  expect(screen.getByRole('button', { name: 'Model and thinking effort' }).textContent).toBe('fixture/nativehigh');
+  fireEvent.click(screen.getByRole('button', { name: 'Model and thinking effort' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Thinking effort' }));
+  expect(['low', 'high'].map(name => !!screen.queryByRole('menuitemradio', { name }))).toEqual([true, true]);
+  expect(screen.queryByRole('menuitemradio', { name: 'fixture/configuration-only' })).toBeNull();
 });
 it('a model choice is draft Session intent: nothing is written, created or started until Send, and the first turn waits for its native observation', async () => {
   const { host } = await mount();
   await openModelMenu();
-  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'fixture/native' })));
-  fireEvent.click(screen.getByRole('button', { name: 'Model and profile' }));
-  fireEvent.click(screen.getByRole('menuitem', { name: 'Profile' }));
-  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'low' })));
+  await act(async () => fireEvent.click(screen.getByRole('menuitemradio', { name: 'fixture/native' })));
+  fireEvent.click(screen.getByRole('button', { name: 'Model and thinking effort' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Thinking effort' }));
+  await act(async () => fireEvent.click(screen.getByRole('menuitemradio', { name: 'low' })));
   expect(host.configureWorkspace.mock.calls.every(([, , operation]) => operation.kind === 'read')).toBe(true);
   expect(methods().filter(method => ['session/create', 'session/setModel', 'configuration/sourceWrite', 'turn/start'].includes(method))).toEqual([]);
   server.handlers.set('session/create', () => ({ type: 'session_transition', session: { id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' } }));
@@ -190,7 +190,7 @@ it.each([
 ] as const)('catalog %s offers no fabricated choice and creates no Session', async (_, configureWorkspace, message) => {
   await mount({ configureWorkspace, ready: false });
   await waitFor(() => expect(screen.getAllByRole('alert').some(alert => alert.textContent?.includes(message))).toBe(true));
-  expect((screen.getByRole('button', { name: 'Model and profile' }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole('button', { name: 'Model and thinking effort' }) as HTMLButtonElement).disabled).toBe(true);
   expect(modelChoices()).toEqual([]);
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
   expect(methods()).not.toContain('session/create');
@@ -203,17 +203,17 @@ it('an obsolete Workspace catalog read cannot replace the current Workspace cata
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Workspace B' })));
   await openModelMenu();
   expect(modelChoices()).toEqual(['fixture/current-workspace']);
-  expect((screen.getByRole('menuitem', { name: /fixture\/native .*unavailable/ }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.getAllByRole('status').some(row => row.textContent?.includes('fixture/native is unavailable'))).toBe(true);
   await act(async () => obsolete.resolve({ kind: 'read', projection: workspaceSource({ kind: 'available', default_model: { model: 'fixture/native' }, catalog: { models: [nativeModel('fixture/obsolete-workspace')] } }) }));
   expect(modelChoices()).toEqual(['fixture/current-workspace']);
-  expect((screen.getByRole('menuitem', { name: /fixture\/native .*unavailable/ }) as HTMLButtonElement).disabled).toBe(true);
-  expect(screen.queryByRole('menuitem', { name: 'fixture/obsolete-workspace' })).toBeNull();
+  expect(screen.getAllByRole('status').some(row => row.textContent?.includes('fixture/native is unavailable'))).toBe(true);
+  expect(screen.queryByRole('menuitemradio', { name: 'fixture/obsolete-workspace' })).toBeNull();
 });
 it('a draft model the native catalog stops publishing blocks Send instead of reaching Session creation', async () => {
   let projection = workspaceSource();
   const { host } = await mount({ configureWorkspace: async () => ({ kind: 'read', projection }) });
   await openModelMenu();
-  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'fixture/second' })));
+  await act(async () => fireEvent.click(screen.getByRole('menuitemradio', { name: 'fixture/second' })));
   const reads = host.configureWorkspace.mock.calls.length;
   projection = workspaceSource({ kind: 'available', default_model: { model: 'fixture/native' }, catalog: { models: [nativeModel('fixture/native', ['low', 'high'], 'high')] } });
   await act(async () => { server.socket.deliver({ jsonrpc: '2.0', method: 'configuration/changed', params: { application: (applicationReceipt(({
@@ -286,33 +286,33 @@ it('a draft Session pins or follows the native default Profile exactly as chosen
   const source = workspaceSource({ kind: 'available', default_model: { model: 'fixture/native', requestParams: { top_k: 1 } }, catalog: { models: [nativeModel('fixture/native', ['low', 'high'], 'high'), nativeModel('fixture/second')] } });
   await mount({ source });
   const profileRow = async (name: string, current: string) => {
-    fireEvent.click(screen.getByRole('button', { name: 'Model and profile' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Profile' }));
-    expect(screen.getByRole('menuitem', { name: current }).getAttribute('aria-current')).toBe('true');
-    await act(async () => fireEvent.click(screen.getByRole('menuitem', { name })));
+    fireEvent.click(screen.getByRole('button', { name: 'Model and thinking effort' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Thinking effort' }));
+    expect(screen.getByRole('menuitemradio', { name: current }).getAttribute('aria-checked')).toBe('true');
+    await act(async () => fireEvent.click(screen.getByRole('menuitemradio', { name })));
   };
-  // Following the default, then pinning that very Profile, then following
-  // again: no Profile ID is synthesized while following.
-  await profileRow('high', 'Model default profile (high)');
-  await profileRow('Model default profile (high)', 'high');
-  await profileRow('low', 'Model default profile (high)');
-  await profileRow('Model default profile (high)', 'low');
-  expect(screen.getByRole('button', { name: 'Model and profile' }).textContent).toBe('fixture/nativehigh');
+  // Repeated default choices stay local; another strength pins its exact
+  // native Profile, and the named default clears that pin again.
+  await profileRow('high', 'high');
+  await profileRow('high', 'high');
+  await profileRow('low', 'high');
+  await profileRow('high', 'low');
+  expect(screen.getByRole('button', { name: 'Model and thinking effort' }).textContent).toBe('fixture/nativehigh');
   server.handlers.set('session/create', () => ({ type: 'session_transition', session: { id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' } }));
   server.held.add('session/attach');
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
   expect((await server.waitFor('session/create', 1)).params).toEqual({ settings: { cwd: '/workspace', model: { model: 'fixture/native', requestParams: { top_k: 1 } } } });
   expect(methods()).not.toContain('session/setModel');
 });
-it('an explicitly pinned default Profile reaches Session creation as pinned', async () => {
+it('choosing the named default effort follows native defaults at Session creation', async () => {
   await mount();
-  fireEvent.click(screen.getByRole('button', { name: 'Model and profile' }));
-  fireEvent.click(screen.getByRole('menuitem', { name: 'Profile' }));
-  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'high' })));
+  fireEvent.click(screen.getByRole('button', { name: 'Model and thinking effort' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Thinking effort' }));
+  await act(async () => fireEvent.click(screen.getByRole('menuitemradio', { name: 'high' })));
   server.handlers.set('session/create', () => ({ type: 'session_transition', session: { id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' } }));
   server.held.add('session/attach');
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
-  expect((await server.waitFor('session/create', 1)).params).toEqual({ settings: { cwd: '/workspace', model: { model: 'fixture/native', profile: 'high' } } });
+  expect((await server.waitFor('session/create', 1)).params).toEqual({ settings: { cwd: '/workspace' } });
 });
 it('the persisted new-Session preference keeps a pinned Profile and an absent one distinct across reloads', () => {
   const stored = new Map<string, string>();
@@ -342,20 +342,20 @@ it('a persisted Profile the catalog stops declaring blocks Send until it is clea
   vi.spyOn(modelPreferences(), 'select').mockImplementation((authority, selection) => reloaded.select(authority, selection));
   await mount({ source: workspaceSource({ kind: 'available', default_model: { model: 'example/chat' }, catalog: { models: [nativeModel('example/chat')] } }), ready: false });
   const send = () => screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement;
-  const trigger = () => screen.getByRole('button', { name: 'Model and profile' });
+  const trigger = () => screen.getByRole('button', { name: 'Model and thinking effort' });
   await waitFor(() => expect(screen.getByText(/not in this Workspace's native model catalog/)).toBeTruthy());
   expect(send().disabled).toBe(true);
   expect(trigger().textContent).toBe('example/chatfast');
   // Choosing the selected Model keeps the stale pin.
   fireEvent.click(trigger());
-  expect(screen.getByText('Profile fast is unavailable for example/chat in this Workspace.')).toBeTruthy();
-  fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
-  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'example/chat' })));
+  expect(screen.getByText('Thinking effort fast is unavailable for example/chat in this Workspace.')).toBeTruthy();
+  if (document.querySelector('[data-model-menu]')?.getAttribute('data-pane') === 'root') fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
+  await act(async () => fireEvent.click(screen.getByRole('menuitemradio', { name: 'example/chat' })));
   expect(send().disabled).toBe(true);
   // The explicit recovery action clears only the pin.
   fireEvent.click(trigger());
-  fireEvent.click(screen.getByRole('menuitem', { name: 'Profile' }));
-  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Use model defaults' })));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Thinking effort' }));
+  await act(async () => fireEvent.click(screen.getByRole('menuitemradio', { name: 'Use model defaults' })));
   await waitFor(() => expect(send().disabled).toBe(false));
   expect(trigger().textContent).toBe('example/chat');
   expect(screen.queryByText(/not in this Workspace's native model catalog/)).toBeNull();

@@ -50,6 +50,22 @@
   padding: 2px 0;
 }
 
+/* Harness AssistantMarkdown's interruption marker, after frozen content. */
+.stopped {
+  align-self: flex-start;
+  width: fit-content;
+  padding: 0 6px;
+  border-radius: var(--dsw-radius-sm);
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  line-height: 18px;
+}
+
+:global([data-assistant-message]) > .stopped[data-assistant-stopped]:not([hidden]) {
+  margin-top: 16px;
+}
+
 /* Compaction marker: one dim 24px row with a context icon at rest and a
    hover/focus disclosure for the summary body. Dimmed title (not
    label-primary) — the row is a boundary notice, not conversation content. */
@@ -131,7 +147,7 @@
   width: calc(16px + var(--dsh-content-font-delta, 0px));
   height: calc(16px + var(--dsh-content-font-delta, 0px));
   margin-right: 6px;
-  color: var(--dsw-alias-label-secondary);
+  color: inherit;
 }
 
 /* Same glyph-scaling rule as DisclosureRow's leading: the CSS edge overrides
@@ -198,10 +214,7 @@
   line-height: calc(24px + var(--dsh-content-font-delta, 0px));
 }
 
-.compactionDescription {
-  margin: 0 0 12px;
-  color: var(--dsw-alias-label-tertiary);
-}
+.compactionSummary[data-error] { color: var(--dsw-alias-state-error-primary); }
 
 .retryRow {
   color: var(--dsw-alias-label-tertiary);
@@ -363,7 +376,10 @@
   border-radius: 16px;
   background: var(--dsw-specific-input-major, transparent);
   box-sizing: border-box;
+  text-align: left;
 }
+.fileCard:is(button) { cursor: pointer; }
+.fileCard:is(button):hover { background: var(--dsw-alias-interactive-bg-hover); }
 
 .fileIcon {
   flex: none;

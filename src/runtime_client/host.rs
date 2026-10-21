@@ -4647,7 +4647,7 @@ impl ClientInner {
         locator: &super::content::CanonicalContentLocator,
         index: usize,
     ) -> Result<crate::tools::session_files::SessionFileReference, RuntimeClientError> {
-        let agent = self.agent_view(id)?;
+        let agent = self.child_view(id)?;
         let store = self
             .agent_registry()?
             .transcript_store(&agent.activation_id)
@@ -4665,7 +4665,7 @@ impl ClientInner {
                 message: "delivery does not belong to this child".into(),
             });
         }
-        let current = self.agent_view(id)?;
+        let current = self.child_view(id)?;
         let durable = |state| {
             matches!(
                 state,
@@ -4687,7 +4687,7 @@ impl ClientInner {
         artifact_id: &crate::runtime::identity::ArtifactId,
     ) -> Result<String, RuntimeClientError> {
         use base64::Engine;
-        let agent = self.agent_view(id)?;
+        let agent = self.child_view(id)?;
         let registry = self.agent_registry()?;
         let _store = registry
             .transcript_store(&agent.activation_id)
@@ -4903,6 +4903,41 @@ impl ClientInner {
         Ok(super::projection::agent_view(&agent, &activation))
     }
 
+    /// Resolve either native child owner for inspection only. Mutations still
+    /// require the Registry's durable Agent record and reject Workflow executions.
+    pub(super) fn child_view(
+        &self,
+        id: &crate::runtime::identity::AgentId,
+    ) -> Result<super::snapshot::RuntimeClientAgent, RuntimeClientError> {
+        use crate::runtime::subagent::{AgentState, SubagentPublication, SubagentState};
+        let registry = self.agent_registry()?;
+        if registry.agent_snapshot(id).is_some() {
+            return self.agent_view(id);
+        }
+        let child = registry.workflow_inspection_snapshot(id).ok_or_else(|| {
+            RuntimeClientError::UnknownAgent {
+                agent_id: id.clone(),
+            }
+        })?;
+        let state = if child.is_settled() {
+            AgentState::Inactive
+        } else if child.state.is_terminal()
+            || child.settlement.publication == SubagentPublication::Abandoned
+        {
+            AgentState::Unavailable
+        } else if child.state == SubagentState::Running {
+            AgentState::Active
+        } else {
+            AgentState::Stopping
+        };
+        Ok(super::projection::activation_view(
+            &child,
+            state,
+            child.state.is_active().then(|| child.subagent_id.clone()),
+            &child.agent,
+        ))
+    }
+
     pub(crate) async fn agent_statistics(
         self: &Arc<Self>,
         id: &crate::runtime::identity::AgentId,
@@ -4920,7 +4955,7 @@ impl ClientInner {
         &self,
         id: &crate::runtime::identity::AgentId,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        let agent = self.agent_view(id)?;
+        let agent = self.child_view(id)?;
         let store = self
             .agent_registry()?
             .transcript_store(&agent.activation_id)
@@ -4947,7 +4982,22 @@ impl ClientInner {
         &self,
         id: &crate::runtime::identity::AgentId,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.domain_page(&format!("agents.{id}"), 0, 32)
+        if self.agent_registry()?.agent_snapshot(id).is_some() {
+            return self.domain_page(&format!("agents.{id}"), 0, 32);
+        }
+        let child = self.child_view(id)?;
+        let cut = self.lock_published_state().projection.checkpoint_read_cut();
+        Ok(RuntimeClientResult::DomainPage {
+            page: super::checkpoint::CheckpointPage {
+                cursor: RuntimeClientCursor::new(cut.revision),
+                read_cut: cut,
+                domain: format!("workflow_children.{}", child.activation_id),
+                total: 1,
+                items: vec![collection_page_item(&child, id.to_string(), 0)],
+                next_offset: None,
+                collections: Vec::new(),
+            },
+        })
     }
 
     pub(crate) fn agent_list(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
@@ -5021,14 +5071,9 @@ impl ClientInner {
         id: &crate::runtime::identity::AgentId,
     ) -> Result<crate::durable::SqliteConversationStore, RuntimeClientError> {
         let registry = self.agent_registry()?;
-        let agent =
-            registry
-                .agent_snapshot(id)
-                .ok_or_else(|| RuntimeClientError::UnknownAgent {
-                    agent_id: id.clone(),
-                })?;
+        let agent = self.child_view(id)?;
         registry
-            .transcript_store(&agent.latest_activation)
+            .transcript_store(&agent.activation_id)
             .map_err(|error| match error {
                 crate::runtime::subagent::SubagentTranscriptError::Unknown(subagent_id) => {
                     RuntimeClientError::UnknownSubagent { subagent_id }

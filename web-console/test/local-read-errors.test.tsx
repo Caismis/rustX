@@ -8,14 +8,15 @@ beforeEach(() => { localStorage.clear(); server = new Server(); });
 afterEach(() => { cleanup(); server.client.disconnect(); });
 it.each(['history', 'trace'] as const)('%s pagination failure has one local error and no App notice', async kind => {
   const value = snapshot();
-  value.transcript.next_cursor = '5'; value.trace.next_cursor = '5';
+  value.transcript.next_cursor = kind === 'history' ? '5' : null; value.trace.next_cursor = kind === 'trace' ? '5' : null;
+  server.handlers.set(kind === 'history' ? 'session/transcript' : 'session/trace', () => { throw new RpcFailure({ code: -32000, message: `${kind} read failed` }); });
   server.snapshots.set('A', value);
   await server.attached('A');
   localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
   await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost}/>); });
-  if (kind === 'trace') fireEvent.click(screen.getByRole('tab', { name: 'Trajectory' }));
+  if (kind === 'trace') await act(async () => fireEvent.click(screen.getByRole('tab', { name: 'Trajectory' })));
   server.handlers.set(kind === 'history' ? 'session/transcript' : 'session/trace', () => { throw new RpcFailure({ code: -32000, message: `${kind} read failed` }); });
-  await act(async () => fireEvent.click(screen.getByRole('button', { name: /Load earlier/ })));
+  // Initial history pagination now starts automatically when the view opens.
   expect(screen.getAllByRole('alert')).toHaveLength(1);
   expect(screen.getByRole('alert').textContent).toContain(`${kind} read failed`);
   expect(screen.getByRole('alert').closest('#conversation-view')).toBeTruthy();

@@ -2626,6 +2626,7 @@ impl WorkflowRuntime {
         };
         self.read_model.node(node_id, |view| {
             view.child = Some(accepted.subagent_id.clone());
+            view.child_agent_id = Some(accepted.child_agent_id.clone());
             view.state = read_model::WorkflowState::Waiting {
                 reason: read_model::WorkflowWait::Agent,
             };

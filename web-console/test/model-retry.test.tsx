@@ -5,7 +5,7 @@ import { modelRetryNotices, modelRetryPlacements } from '../src/bindings/model-r
 import { useModelRetryFeedback } from '../src/app/agent/ModelRetry';
 import { ConversationLive } from '../src/app/agent/ConversationLive';
 import type { AppServerClient } from '../src/client/app-server';
-import type { RuntimeClientTranscriptEntry, TraceFieldSource, Request } from '../../protocol/app-server/v50';
+import type { RuntimeClientTranscriptEntry, TraceFieldSource, Request } from '../../protocol/app-server/v51';
 import { Server, checkpoint, snapshot } from './fixture';
 import { traceRecord } from './trace-fixture';
 import { localeController } from '../src/locale/controller';
@@ -211,12 +211,7 @@ it('a large original failure remains an explicit bounded window and never loads 
  try{
   const ui=render(<RetryFeedback client={server.client} sessionId="A" attemptId="attempt-a"/>);
   await act(async()=>{const details=ui.container.querySelector('details')!;details.open=true;fireEvent(details,new Event('toggle'));});
-  expect(server.requests.filter(row=>row.request.method==='conversation/checkpointValueRead')).toHaveLength(0);
-  fireEvent.click(ui.getByText('Read original value'));
-  await waitFor(()=>expect(ui.container.querySelector('pre')).toBeTruthy());
-  expect(new TextEncoder().encode(ui.container.querySelector('pre')!.textContent!).length).toBe(65536);
-  expect(server.requests.filter(row=>row.request.method==='conversation/checkpointValueRead')).toHaveLength(1);
-  fireEvent.click(ui.getByText('Read next chunk'));
+  await waitFor(()=>expect(ui.container.querySelector('pre')?.textContent).toBe(text));
   await waitFor(()=>expect(server.requests.filter(row=>row.request.method==='conversation/checkpointValueRead')).toHaveLength(2));
   const requests=server.requests.filter(row=>row.request.method==='conversation/checkpointValueRead').map(row=>row.request);
   expect(requests[1].params).toMatchObject({offset:65536,max_bytes:65536,domain:'journal.5',path:['event','error']});
@@ -251,7 +246,7 @@ it('retry progress retains the disclosed original failure cut while a newer nati
   expect(request.params).toMatchObject({cut:old,domain:'journal.5',path:['event','error'],max_bytes:65536});
   const next=checkpoint(structuredClone(state),'14');
   await act(async()=>server.socket.deliver({jsonrpc:'2.0',method:'session/event',params:{target:server.target('A'),cursor:'14',event:{type:'checkpoint_advanced',transition:'native-next-head',checkpoint:next}}}));
-  expect(server.client.getSnapshot().views.A.trace!.readCuts!['trace:0']).toEqual(next.read_cut);
+  expect(server.client.getSnapshot().views.A.trace!.readCuts!['trace:0']).toEqual(old);
   await act(async()=>server.socket.success(request,originalFailureChunk(request)));
   await waitFor(()=>expect(ui.getByText('Fixture model response timeout')).toBeTruthy());
   expect(server.requests.filter(row=>row.request.method==='conversation/checkpointValueRead')).toHaveLength(1);

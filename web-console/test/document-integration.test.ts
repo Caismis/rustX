@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { expect, it } from 'vitest';
-import { deriveDocument } from '../host/documents/operation';
+import { deriveDocument, deriveWorkspaceOffice } from '../host/documents/operation';
 import type { DocumentRequest } from '../shared/documents.ts';
 
 function fixture(extension: DocumentRequest['extension']) {
@@ -34,6 +34,15 @@ it('real sandbox converts real DOCX and PPTX and reauthorizes all three reads', 
     if (result.preview.kind === 'pdf') expect(Buffer.from(result.preview.data, 'base64').subarray(0, 5).toString()).toBe('%PDF-');
   }
 }, process.platform === 'darwin' ? 130000 : 40000);
+
+it.skipIf(!['linux', 'darwin'].includes(process.platform)).each(['docx', 'pptx'] as const)('workspace converts %s with ordinary hyperlinks and printer settings', async extension => {
+  const bytes = readFileSync(new URL(`./fixtures/documents/linked.${extension}`, import.meta.url));
+  let reads = 0;
+  const result = await deriveWorkspaceOffice(extension, async () => { reads++; return { data: bytes.toString('base64') }; }, new AbortController().signal);
+  expect(reads).toBe(4);
+  expect(result.preview.kind).toBe('pdf');
+  if (result.preview.kind === 'pdf') expect(Buffer.from(result.preview.data, 'base64').subarray(0, 5).toString()).toBe('%PDF-');
+}, process.platform === 'darwin' ? 70000 : 20000);
 
 it('reauthorization compares Session-file fields, not their JSON property order', async () => {
   const { request, source } = fixture('xlsx');

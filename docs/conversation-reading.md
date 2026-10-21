@@ -65,7 +65,8 @@ composed source at the captured cut. Their work limits differ from ordinary
 segmented canonical, Journal and state sources; see [Request field metadata](#request-field-metadata)
 for the current page, traversal and byte limits.
 
-Loaded Trace caches retain at most 512 page records and one protected selection.
+Loaded Trace pages accumulate with one protected selection; the browser does not
+discard earlier records or refuse further paging at a total retained-row limit.
 Lifecycle repair admits at most eight explicit interests in one read; clients batch their cache independently of
 the native event cursor. A page bounds both its records and repair bytes, so a
 large loaded cache cannot turn a bounded row into an oversized response.
@@ -312,14 +313,31 @@ Only an exact native anchor satisfies a navigation scroll. Return to latest
 restores the current live identity and follow mode through ChatViewport. An
 unloaded mark reaches a distant page without accumulating outline history.
 
-The browser keeps at most 256 historical entries and 8 MiB of serialized UTF-16
-entry data, independently of the native live tail (at most 64 entries). A jump to
-an already loaded exact anchor needs no read; any other jump requests one native
-64-entry window. Older and later actions each request one page and trim the
-opposite end of the finite cache. The transcript explicitly identifies historical
-inspection and leaves the intervening history unloaded. Live streaming continues
-from the independent bounded runtime projection; overlapping cursors render exactly once
-using the current native entry. Return to latest releases the historical window.
+Each native Chat page has at most 32 entries and an 8 MiB serialized UTF-16
+admission limit. These are per-response limits, not a cap on retained Session
+history. Initial reading and older-history actions assemble a Harness-style
+window: at least 50 conversational messages and two Turns, with a 500-message
+ceiling or history exhaustion. Tool results and model-only Context do not consume
+that conversational message budget. Loaded Chat and Trace pages accumulate;
+normal live updates do not evict previously read rows or create artificial
+"load earlier" recovery work.
+Returning to the bottom of ordinary Chat preserves all loaded pages; it does not
+reload a smaller latest window. Only an explicit historical jump needs its frozen
+window released on return to latest. Root and child readers share this behavior.
+
+An unresolved response or Tool that leaves the live head is reread automatically
+by its exact native message identity. The old row remains mounted until its fresh
+projection is available. These passive reads coalesce newer observations, retain
+source bindings, and obey the same attachment, Conversation, epoch and navigation
+fences as other native reads. They neither expose an internal cache-reset notice
+nor detach the reader's scrolling position.
+
+A jump to an already loaded exact anchor needs no read; any other jump requests
+one native 32-entry window. Explicit historical navigation leaves intervening
+history unloaded until its continuation is requested. Live streaming continues
+from the independent bounded runtime projection; overlapping cursors render
+exactly once using the current native entry. Return to latest releases the
+historical window.
 
 A new navigation intent retires the previous read's commit authority immediately.
 An older page never joins or broadens a newer jump. Failed reads preserve the last

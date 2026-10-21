@@ -1,8 +1,9 @@
-import {traceAttemptKey,traceStepKey,traceFields} from '../../../../protocol/app-server/trace-identity';
+import {traceAttemptKey,traceStepKey} from '../../../../protocol/app-server/trace-identity';
+import { useTraceContexts } from './useTraceContexts';
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/TrajectoryTable.tsx and TrajectoryToolbar.tsx; see PROVENANCE.md. */
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { TRACE_LIMIT, type TraceCache } from '../../client/trace';
+import { type TraceCache } from '../../client/trace';
 import { IconSearchOutline16 } from '../../presentation/primitives/icons';
 import { TrajectoryInspector, inspectorTabs } from './TrajectoryInspector';
 import { TrajectoryLedger, type LedgerHandle } from './TrajectoryLedger';
@@ -60,7 +61,8 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLates
   const ledger = useRef<LedgerHandle>(null);
   const focusedDisplay = useRef<string | undefined>(undefined);
   const [pendingFocus, setPendingFocus] = useState<string | undefined>(() => selection?.display_key);
-  const records = cache.page.records;
+  const context = useTraceContexts(cache, selection?.owner_record_id);
+  const records = context.records;
   const projection = useMemo(() => projectTrajectory(tx, records), [tx, records]);
   const allItems = useMemo(() => trajectoryItems(tx, projection, cache.page.next_cursor), [tx, projection, cache.page.next_cursor]);
   const matches = useMemo(() => searchItems(projection, query), [projection, query]);
@@ -73,7 +75,7 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLates
   // Loaded-window ordinals, like the Turn labels: identity stays native.
   const requestNumbers = useMemo(() => new Map(records.filter(record => record.kind === 'request').map((record, index) => [record.id, index + 1])), [records]);
   const foldableTurns = useMemo(() => new Set(projection.sections.flatMap(section => section.kind === 'turn'
-    && allItems.filter(item => isInspectable(item) && item.type !== 'SystemPromptCell' && item.type !== 'RequestBoundary' && traceAttemptKey(item.record.location) === section.ownerKey).length > 1
+    && allItems.filter(item => isInspectable(item) && item.record.kind !== 'compaction' && item.type !== 'SystemPromptCell' && item.type !== 'RequestBoundary' && traceAttemptKey(item.record.location) === section.ownerKey).length > 1
     ? [section.ownerKey] : [])), [projection, allItems]);
   // Timeline focus is valid only within the Trace read domain that created it.
   // Within one epoch (prepend, lifecycle refresh) it persists as native record
@@ -126,7 +128,7 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLates
     }
   }, [selection, selectedItem]);
   const activeKey = selection?.display_key;
-  const canLoadEarlier = Boolean(cache.page.next_cursor) && !cache.loading && records.length < TRACE_LIMIT;
+  const canLoadEarlier = Boolean(cache.page.next_cursor) && !cache.loading;
   const requestOlder = () => ledger.current?.loadEarlier();
   const toggleTurn = (id: string) => setCollapsedTurns(current => { const next = new Set(current); if (!next.delete(id)) next.add(id); return next; });
   const toggleCalls = (id: string) => setCalls(current => { const next = new Set(current); if (!next.delete(id)) next.add(id); return next; });
@@ -154,14 +156,14 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLates
   // Harness locates a detail by its section and group: "Turn 2 · Step 1".
   const location = (() => {
     const attempt = selected&&traceAttemptKey(selected.location);
-    if (!attempt) return undefined;
+    if (!attempt || selected?.kind === 'compaction') return undefined;
     const step = traceStepKey(selected.location);
     const turn = allItems.find((item): item is StructuralDisplayItem => item.type === 'TurnHeader' && item.ownerKey === attempt);
     const group = allItems.find((item): item is StructuralDisplayItem => item.type === 'GroupHeader' && item.ownerKey === attempt && item.stepKey === step);
     return { turn: turn?.label, group: group?.label };
   })();
   const inspector = selected && selection && selectedItem
-    ? <TrajectoryInspector key={selection.display_key} item={selectedItem} detail={selectedDetail?.detail} onLoadEarlier={loadEarlier} detailPage={selectedDetail?.page} detailReader={selectedDetail?.reader} loading={selectedDetail?.loading} error={selectedDetail?.error} fieldSources={selectedItem.type==='ContextRow'?selectedItem.context.fields:traceFields(selected)} fieldCut={cache.readCuts?.[selected.id]} fieldReader={cache.fields} deferredContent={selectedDetail?.content} readContent={selectedDetail?.readContent}
+    ? <TrajectoryInspector key={`${cache.epoch}:${selection.display_key}`} item={selectedItem} detail={selectedDetail?.detail} onLoadEarlier={loadEarlier} detailPage={selectedDetail?.page} detailReader={selectedDetail?.reader} loading={selectedDetail?.loading} stale={selectedDetail?.stale} error={selectedDetail?.error}
       facet={selection.facet} onFacet={setFacet} onLoadDetail={onLoadDetail} onClose={close} location={location}
       records={records} executions={executions} requestNumbers={requestNumbers} completeHistory={!cache.page.next_cursor} onOpen={openRecord} />
     : null;
@@ -197,7 +199,7 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLates
         <input type="search" className={css.searchInput} aria-label={tx('trajectory:toolbar.search')} value={query} onChange={event => setQuery(event.target.value)} placeholder={tx('trajectory:toolbar.search-placeholder')} />
       </div>
     </div>
-    {cache.error && <p role="alert" className={css.error}>{cache.error}</p>}
+    {(cache.error || context.error) && <p role="alert" className={css.error}>{cache.error || context.error}</p>}
     {/* Epoch retires read-domain ownership; the Timeline separately fences
         coordinate interactions by its semantic projection revision. */}
     <TrajectoryTimeline key={cache.epoch} model={timelineModel} mode={mode} range={range}

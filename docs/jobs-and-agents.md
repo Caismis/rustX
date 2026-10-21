@@ -199,8 +199,29 @@ and explicit Admitting/Active/Stopping/Inactive/Unavailable state. Replay folds 
 same durable Agent identity; reconnect uses the same native projection.
 
 TUI and WebUI key Agent rows and child inspection by AgentId, not activation ID.
-Active → Inactive → resumed updates one row and preserves selection. Job cards
-retain terminal state and output. Both clients route controls to the owner and
+Active → Inactive → resumed updates one row and preserves selection. Web Jobs
+live in the fixed conversation header, outside the scrollable transcript. The
+menu separates active Jobs (including Cancelling and PublishingTerminal) from
+the initially folded ended group. Clear hides only the ended identities visible
+at that gesture in the current conversation view; it never deletes native
+history, cancels work, or clears a Job that ends later. Reopening the page reads
+the retained native history and groups it again. Empty menus have no header entry.
+Status, wait and cancel keep their native ownership and attachment fencing.
+Deferred original Job details are loaded explicitly, with stale responses
+discarded when their source or attachment changes. An open menu derives live
+elapsed time only from a matching native background Trace start; a missing
+start shows no invented duration. Terminal duration comes from the native result.
+
+Chat and Trace distinguish the successful background dispatch receipt from the
+detached Job's eventual outcome. A successful Bash launch keeps a static command
+and command-copy action, with no exit-status indicator or output placeholder.
+Failed launches retain their diagnostics. Historical Job control results render
+their recorded Job states independently of the control call's success, and
+runtime terminal notifications retain their actual outcome and output. Trace
+background records preserve native cancelling, settling and unknown states, and
+link to the originating Tool call only when its native Step match is unique.
+Clearing the header view never removes these historical receipts or records.
+Both clients route controls to the owner and
 render canonical final reports without inventing lifecycle decisions. Runtime
 Client bootstrap receives current Agent snapshots directly from the registry's
 atomic owner cut, never by interpreting activation-history iteration order.
@@ -209,6 +230,20 @@ AgentState from Starting, terminal naming, or an activation cleanup flag;
 Starting projects the owner's Admitting and terminal-unproven projects Unavailable.
 Wait and interrupt both return `agent_wait`: captured activation/outcome plus the
 latest Agent snapshot.
+
+A child inspection read can race with the child closing its live source. After
+the read, Runtime Client checks the same activation's registry state again. A
+proven transition to Inactive or Unavailable requires a new retained-history
+checkpoint; a transport error while still Active remains an observation failure,
+not an execution outcome. Web child views preserve the last coherent content and
+draft, offer explicit status-read recovery with diagnostic details, and never
+replay a message or control mutation to recover a read. Continuable children keep
+Send primary with a separate Stop button. The permission label comes from the
+exact child checkpoint and remains read-only under the current child API. Child
+composers have no model selector. The direct parent's ordinary tasks and guidance
+use the same user bubble, timestamp and copy action as human messages; their
+native Agent provenance stays intact. Other Agent reports and injected context
+retain their own context presentation.
 
 The TUI command dispatcher owns one pending Agent message submission per
 attachment. Repeated Enter while its preserved draft awaits an outcome sends

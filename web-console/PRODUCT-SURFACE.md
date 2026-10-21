@@ -21,7 +21,7 @@ Failure remains retryable, without polling, mutation replay or LLM naming.
 | Session selection | Product | Sidebar Session browser only; top Session strip deleted | One selector, no duplicate tabs/dropdown |
 | Current Session header | Product | Identity/status/actions and Chat/Trajectory, not a Session picker | Identify current work |
 | Session display title | Product | Explicit name > native first-message preview > New session | Reuse native catalog, no browser summarization |
-| Session ID | Developer Inspector | Identity / scoped runtime facts | Never a product fallback or accessible label |
+| Session ID | Internal | Native identity | Never a product fallback or accessible label |
 | Close browser view | Product | Corresponding Sidebar row menu; View options → Close all views for unlisted/restored views | Explicitly release controllers, free the 32-view capacity, retain server work; no eviction |
 | Automatic LLM title | Remove | Not implemented | Deterministic offline naming only; manual rename retained |
 | Workspace identity/location, cwd/path | Product | Quiet location under title | Identify execution location without lifecycle suffix |
@@ -30,38 +30,37 @@ Failure remains retryable, without polling, mutation replay or LLM naming.
 | Model controls | Product | Existing composer seat | Choose the model |
 | Permission controls | Product | Existing composer seat | Understand and configure permission |
 | Todo | Product | Existing dock | Work progress |
-| Goal | Product | Existing dock; revision in Inspector | Objective and budget controls |
+| Goal | Product | Existing dock; revision remains internal | Objective and budget controls |
 | Queue | Product | Existing dock; concise status | Review/edit pending input |
 | Composer | Product | Preserve WEB-11 | Send/Queue/Steer/Stop and attachments |
 | Runtime activity | Product | Concise progress | Understand ongoing work |
 | Child Agent activity | Product | Stable Agent row, current activation, canonical transcript and message/interrupt/wait controls | Active → Inactive → resumed under the same identity |
 | Job activity | Product | Finite Job status, retained output and wait/cancel controls | Proactive terminal settlement; terminal is final |
 | Workflow activity | Product | Named Workflow and steps, no attempt IDs | Workflow progress |
-| Raw Agent status | Developer Inspector | Execution section | Unstructured native diagnostics |
-| Attachment state / intent / ID | Developer Inspector | Attachment section | Internal controller lifecycle |
-| Runtime incarnation / residency | Developer Inspector | Attachment section | Exact native lifetime evidence |
-| Attempt ID / exact phase / outcome | Developer Inspector | Execution section | Product has deterministic status projection |
-| Generation / revision / CAS | Developer Inspector | Configuration and domain evidence | Exact fencing evidence; Settings keeps authoring conflicts |
-| Connection generation | Developer Inspector | Protocol section | Socket fencing detail |
+| Raw Agent status | Internal | Native client/runtime observations | Unstructured native diagnostics |
+| Attachment state / intent / ID | Internal | Native client/runtime observations | Internal controller lifecycle |
+| Runtime incarnation / residency | Internal | Native client/runtime observations | Exact native lifetime evidence |
+| Attempt ID / exact phase / outcome | Internal | Native client/runtime observations | Product has deterministic status projection |
+| Generation / revision / CAS | Internal | Native client/runtime observations | Exact fencing evidence; Settings keeps authoring conflicts |
+| Connection generation | Internal | Native client/runtime observations | Socket fencing detail |
 | Resync | Recovery | Conditional Retry connection | Existing refresh operation when observation is unavailable |
 | Open Session | Navigation / recovery | Opens the durable Session and acquires its client relationship | Residency is implicit in native admission |
 | Detach | Remove | Remove standalone button; closing a view retains client release | Redundant lifecycle chrome |
 | Session deletion / branch switching | Product action | Confirm delete or switch branch | Runtime retirement is internal to the manager |
 | Cancellation state | Recovery | Stopping; uncertainty remains Needs verification | Request is not settlement |
-| Uncertain-operation evidence | Developer Inspector | Exact request and reconciliation evidence | Ordinary notice remains actionable without raw IDs |
-| Durability failure | Recovery | Visible storage failure; exact evidence in Inspector | Never imply durable success |
-| Transport / protocol details | Developer Inspector | Existing bounded wire log | No new diagnostics system |
+| Uncertain-operation evidence | Settings / advanced | Connection → Review uncertain operations | Ordinary notice remains actionable without raw IDs |
+| Durability failure | Recovery | Visible storage failure and connection recovery evidence | Never imply durable success |
+| Developer Inspector / protocol log | Remove | Delete panel, toggle, mode, log retention and copy | No developer inspection UI |
+| More conversation details | Remove | Delete generic collection browser from all conversation and command surfaces | Keep product-specific navigation |
 | Historical interaction / assistant recovery evidence | Settings / advanced | Explicit per-entry disclosure; no ID in its summary | Durable history and recovery need inspectable evidence, not permanent raw text |
 | Message IDs in accessible names | Remove | Role-based message names; existing canonical anchors retained | Screen readers need content and role, not internal identity |
 | Scope / origin / effective / conflict / apply lifetime | Settings / advanced | Preserve existing CFG3 controls | Safe authoring requires provenance |
 
 The pure product projection reads client/native observations. It owns no timer,
-transition, retry, persistence, settlement or queue. Inspector receives only
-observations and the browser-local protocol log, never the runtime client.
+transition, retry, persistence, settlement or queue.
 
-Sidebar status includes only its Session's uncertainty. Selected Inspector sections
-are Session-scoped; Global / other Session diagnostics explicitly separates other
-and unscoped evidence. Connection's advanced disclosure permits explicit browser-local
+Sidebar status includes only its Session's uncertainty. Global uncertainty has a
+separate product notice. Connection's advanced disclosure permits explicit browser-local
 acknowledgement of reviewed non-interaction notices (no RPC or inferred outcome).
 Interaction uncertainty still requires native reconciliation. Queue conflicts say
 "Use latest version" without changing CAS. Deletion shows the display title and

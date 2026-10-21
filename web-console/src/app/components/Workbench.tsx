@@ -1,8 +1,7 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Harness guide and DockLayout port; see PROVENANCE.md. */
 import { lazy, Suspense, useCallback, useEffect, useImperativeHandle, type ReactNode, type Ref, useRef, useState, useSyncExternalStore } from 'react';
 import type { ProductHostWorkspaces, WorkspaceAuthorityScope } from '../../workspaces/host';
-import type { DesktopTarget } from '../../workspaces/desktop';
-import type { WorkbenchRequest, WorkbenchTerminal } from '../../workspaces/workbench';
+import type { WorkbenchRequest, WorkbenchTerminal, WorkbenchTarget } from '../../workspaces/workbench';
 import { useTranslation } from '../../locale/react';
 import { WorkspaceFiles, WorkspaceFile, fileTabView, type FileTabView } from './WorkbenchFiles';
 import { FileTypeIcon } from '../../presentation/primitives/FileTypeIcon';
@@ -20,10 +19,12 @@ const TerminalView = lazy(() => import('./WorkbenchTerminal'));
 const guideTab = (id: TabId): TabRecord => ({id,kind:'start',contentId:`start:${id}`,title:''});
 export interface WorkbenchHandle { openFile(path: string, line?: number): Promise<boolean>; openAgent(id: string, title: string): void }
 export function Workbench({ renderAgent, fileRef, host, scope, target, visible, floatingVisible, fullscreen, toggleFullscreen, closePanel }: {
-  renderAgent?: (id: string, visible: boolean) => ReactNode; fileRef?: Ref<WorkbenchHandle>; host: ProductHostWorkspaces; scope?: WorkspaceAuthorityScope; target?: DesktopTarget; visible: boolean; floatingVisible: boolean; fullscreen: boolean; toggleFullscreen: () => void; closePanel: () => void;
+  renderAgent?: (id: string, visible: boolean) => ReactNode; fileRef?: Ref<WorkbenchHandle>; host: ProductHostWorkspaces; scope?: WorkspaceAuthorityScope; target?: WorkbenchTarget; visible: boolean; floatingVisible: boolean; fullscreen: boolean; toggleFullscreen: () => void; closePanel: () => void;
 }) {
   const tx = useTranslation();
-  const storageKey = JSON.stringify([scope?.endpoint,scope?.authorityId,target?.session_id,target?.active_node]);
+  const session = target && 'session_id' in target ? target : undefined;
+  const workspace = target && 'workspace_id' in target ? target.workspace_id : undefined;
+  const storageKey = JSON.stringify([scope?.endpoint,scope?.authorityId,session?.session_id,session?.active_node,...(workspace ? [workspace] : [])]);
   const [dock] = useState(() => new DockController({makeInitialTab:guideTab,makePaneTab:guideTab,settle:true,restored:readSidebarLayout(storageKey)}));
   const {state} = useSyncExternalStore(dock.subscribe,dock.getSnapshot,dock.getSnapshot);
   useEffect(() => {
@@ -41,7 +42,7 @@ export function Workbench({ renderAgent, fileRef, host, scope, target, visible, 
   const call=useCallback(async(request:WorkbenchRequest,signal?:AbortSignal)=>{
     if(!host.workbench || !scope || !target) throw new Error(tx('artifacts:workbench.unavailable'));
     return host.workbench(scope,{target,request},signal ?? lifetime.current?.signal);
-  },[host,scope?.authorityId,scope?.endpoint,target?.session_id,target?.active_node,tx]);
+  },[host,scope?.authorityId,scope?.endpoint,session?.session_id,session?.active_node,workspace,tx]);
   const available=!!host.workbench && !!scope && !!target;
   const open=(paneId:PaneId,tab:{kind:string;path?:string;id?:string;title?:string})=>{
     navigation.current++;

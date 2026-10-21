@@ -79,7 +79,7 @@ import {
 import { correlateTools } from "../presentation/tools.ts";
 import { selectTodos } from "../presentation/todos.ts";
 import type { PresentationState } from "../presentation/state.ts";
-import type { CheckpointPage } from '../../../protocol/app-server/v50.ts';
+import type { CheckpointPage } from '../../../protocol/app-server/v51.ts';
 import { AppServerRequestError, isDeliveryCancelled } from "../app-server/client.ts";
 import type { AppServerHost } from "../app-server/host.ts";
 import type { AppServerSession } from "../app-server/session.ts";
@@ -994,16 +994,8 @@ export class RustxTuiApp {
       let bytes: Buffer;
       try {
         const stat = await file.stat();
-        if (!stat.isFile() || stat.size > session.uploadPolicy!.max_file_bytes) throw new Error("Select a regular file within the native upload policy.");
-        const buffer = Buffer.alloc(session.uploadPolicy!.max_file_bytes + 1);
-        let bytesRead = 0;
-        while (bytesRead < buffer.length) {
-          const read = await file.read(buffer, bytesRead, buffer.length - bytesRead, bytesRead);
-          if (read.bytesRead === 0) break;
-          bytesRead += read.bytesRead;
-        }
-        if (bytesRead > session.uploadPolicy!.max_file_bytes) throw new Error("Attachment exceeds native upload policy.");
-        bytes = buffer.subarray(0, bytesRead);
+        if (!stat.isFile()) throw new Error("Select a regular file.");
+        bytes = await file.readFile();
       } finally { await file.close(); }
       const receipts = await session.upload(basename(path), bytes);
       // A resync cannot invalidate a confirmed Session receipt. Navigation
@@ -2058,7 +2050,7 @@ export class RustxTuiApp {
       const { page, items } = await session.checkpointPage('pending_interactions', offset, previous?.page);
       if (!overlay || this.#hitlOverlay !== overlay || !this.#isCurrentPresentationLease(lease) || read !== this.#interactionRead || stamp !== this.#interactionStamp()) return;
       if (page.items.length > 32) throw new Error('Pending interaction page exceeded its item bound.');
-      this.#interactionPage = { session, stamp, offset, page, items: (items as import('../../../protocol/app-server/v50.ts').RuntimeClientInteractionHeader[]).map(displayInteraction) };
+      this.#interactionPage = { session, stamp, offset, page, items: (items as import('../../../protocol/app-server/v51.ts').RuntimeClientInteractionHeader[]).map(displayInteraction) };
       this.#interactionFocus = this.#interactionPage.items[0]?.interaction;
       this.#hitlDismissed = undefined;
       this.#renderState(session.state);

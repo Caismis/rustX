@@ -900,9 +900,7 @@ impl core::fmt::Display for SubagentSteerError {
             }
             Self::InvalidMessage { bytes } => write!(
                 f,
-                "the guidance input must contain text or attachments, at most {MAX_TASK_BYTES} bytes \
-                 and at most {} attachments ({bytes} bytes given)",
-                crate::message::content::MAX_INPUT_ATTACHMENTS
+                "the guidance input must contain text or attachments and at most {MAX_TASK_BYTES} text bytes ({bytes} bytes given)"
             ),
             Self::CancellationCommitted { reason } => write!(
                 f,
@@ -1155,9 +1153,7 @@ impl core::fmt::Display for SubagentStartError {
             }
             Self::InvalidTask { bytes } => write!(
                 f,
-                "the task input must contain text or attachments, at most {MAX_TASK_BYTES} bytes \
-                 and at most {} attachments ({bytes} bytes given)",
-                crate::message::content::MAX_INPUT_ATTACHMENTS
+                "the task input must contain text or attachments and at most {MAX_TASK_BYTES} text bytes ({bytes} bytes given)"
             ),
             Self::ContextOversized { bytes } => write!(
                 f,
@@ -3804,9 +3800,7 @@ impl SubagentRegistry {
 
     /// Shared task/guidance content admission, before ownership or preparation.
     fn valid_input(message: &str, attachments: usize) -> bool {
-        (!message.trim().is_empty() || attachments > 0)
-            && message.len() <= MAX_TASK_BYTES
-            && attachments <= crate::message::content::MAX_INPUT_ATTACHMENTS
+        (!message.trim().is_empty() || attachments > 0) && message.len() <= MAX_TASK_BYTES
     }
 
     /// Advances one ticket to
@@ -6088,6 +6082,63 @@ mod tests {
             plane.registry.workflow_agent_output(&accepted.subagent_id),
             late.then(|| serde_json::json!({"summary": "committed answer"}))
         );
+    }
+
+    #[tokio::test]
+    async fn workflow_child_inspection_does_not_grant_durable_agent_controls() {
+        let plane = plane(4);
+        let child = stage_exit0(&plane);
+        let accepted = start(
+            &plane,
+            &workflow_spec(&plane.conversation_id, "return a structured result"),
+        )
+        .await;
+        let inspection = plane
+            .registry
+            .workflow_inspection_snapshot(&accepted.child_agent_id)
+            .expect("finite child is inspectable");
+        assert_eq!(inspection.subagent_id, accepted.subagent_id);
+        assert!(
+            plane
+                .registry
+                .agent_snapshot(&accepted.child_agent_id)
+                .is_none()
+        );
+        assert!(
+            plane
+                .registry
+                .check_message_target(&accepted.child_agent_id)
+                .is_err()
+        );
+        assert!(
+            plane
+                .registry
+                .interrupt_agent_intent(&accepted.child_agent_id)
+                .is_err()
+        );
+        assert!(
+            plane
+                .registry
+                .agent_inspection_path(&accepted.child_agent_id)
+                .is_some()
+        );
+        assert!(
+            plane
+                .registry
+                .agent_workspace(&accepted.child_agent_id)
+                .is_some()
+        );
+        child
+            .complete(
+                ChildResultStatus::Succeeded,
+                Some(r#"{"summary":"answer"}"#),
+            )
+            .await;
+        plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .expect("settled");
     }
 
     #[tokio::test]

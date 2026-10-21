@@ -1,4 +1,4 @@
-import type { ForegroundToolExecution } from '../../../protocol/app-server/v50';
+import type { ForegroundToolExecution } from '../../../protocol/app-server/v51';
 import type { QuestionRowView } from '../presentation/agent/QuestionRow';
 
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -29,7 +29,10 @@ export function askUserRow(tool: ForegroundToolExecution): QuestionRowView | und
   const asked = questions(tool.state.arguments);
   if (status === 'cancelled') return asked && { id, verdict: 'interrupted', questions: asked };
   if (status !== 'success' || !asked) return undefined;
-  const value = (tool.state.result.content ?? []).find(block => block.type === 'json')?.value;
+  const body = tool.committed_result ?? tool.state.result;
+  if (body.status.type !== 'success') return undefined;
+  const blocks = body.content ?? [];
+  const value = blocks.length === 1 && blocks[0]?.type === 'json' ? blocks[0].value : undefined;
   if (!record(value) || typeof value.cancelled !== 'boolean' || !Array.isArray(value.answers)) return undefined;
   if (value.cancelled) return { id, verdict: 'cancelled', questions: asked };
   // Unanswered questions are omitted from the result; answers echo their question's index.

@@ -1,5 +1,5 @@
 import { useEffect, useState, useImperativeHandle, type Ref, useSyncExternalStore } from 'react';
-import type { RuntimeClientAgent, TraceToolLocator } from '../../../../protocol/app-server/v50';
+import type { RuntimeClientAgent, TraceToolLocator } from '../../../../protocol/app-server/v51';
 import type { AppServerClient } from '../../client/app-server';
 import type { Observation } from '../../client/session-lifecycle/port';
 import { AgentTraceReader } from '../../client/agent-trace';
@@ -8,7 +8,7 @@ import { useTranslation } from '../../locale/react';
 import { Button } from '../../presentation/primitives/Button';
 const noSubscription = () => () => {};
 export interface SubagentTraceHandle { locate: (locator: TraceToolLocator) => Promise<boolean> }
-export function SubagentTrajectory({ agent, client, sessionId, visible, ref }: { agent: RuntimeClientAgent; client: AppServerClient; sessionId: string; visible: boolean; ref?: Ref<SubagentTraceHandle> }) {
+export function SubagentTrajectory({ agent, client, sessionId, visible, ref, observationRevision }: { agent: RuntimeClientAgent; client: AppServerClient; sessionId: string; visible: boolean; observationRevision?: string; ref?: Ref<SubagentTraceHandle> }) {
   const tx = useTranslation();
   const proof = useSyncExternalStore(client.subscribe, () => client.getSnapshot().views[sessionId]?.attachmentObservation);
   const [domain, setDomain] = useState<{ proof: Observation; reader: AgentTraceReader }>();
@@ -18,12 +18,12 @@ export function SubagentTrajectory({ agent, client, sessionId, visible, ref }: {
     const reader = new AgentTraceReader(client, sessionId, proof, agent);
     setDomain({ proof, reader });
     return () => reader.retire();
-  }, [client, sessionId, proof, agent.agent_id,agent.child_conversation_id,agent.activation_id,agent.state]);
+  }, [client, sessionId, proof, agent.agent_id,agent.child_conversation_id,agent.activation_id]);
   useImperativeHandle(ref, () => ({ locate: locator => reader?.locate(locator) ?? Promise.resolve(false) }), [reader]);
   const cache = useSyncExternalStore(reader?.subscribe ?? noSubscription, () => reader?.snapshot());
 
-  useEffect(() => { if (visible) void reader?.refresh(); }, [reader, visible, agent.activation_id, agent.state, agent.observation.revision]);
+  useEffect(() => { if (visible) void reader?.refresh(agent.state).then(() => reader.initial()); }, [reader, visible, agent.activation_id, agent.state, agent.observation.revision, observationRevision]);
   if (!reader || !cache) return null;
   return <>{cache.loading && cache.page.records.length === 0 && <p role="status">{tx('common:activity.reading')}</p>}{cache.error && <Button size="sm" onClick={() => void reader.refresh()}>{tx('trajectory:toolbar.refresh')}</Button>}
-    <Trajectory cache={cache} onLatest={() => void reader.latest()} onSelect={reader.select} loadEarlier={() => void reader.earlier()} onLoadDetail={id => void reader.detail(id)}/></>;
+    <Trajectory cache={cache} onLatest={() => void reader.latest().then(() => reader.initial())} onSelect={reader.select} loadEarlier={() => void reader.earlier()} onLoadDetail={id => void reader.detail(id)}/></>;
 }

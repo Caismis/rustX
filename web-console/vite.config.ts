@@ -1,3 +1,4 @@
+import { pdfAssets } from './scripts/pdf-assets.ts';
 import { readFileSync } from 'node:fs';
 import { LocalWorkspaceHost } from './host/workspaces.ts';
 import { workspaceHandler } from './host/http.ts';
@@ -6,6 +7,7 @@ import react from '@vitejs/plugin-react';
 import { fileURLToPath } from 'node:url';
 const host = process.env.RUSTX_WORKSPACE_HOST_CONFIG ? new LocalWorkspaceHost(JSON.parse(readFileSync(process.env.RUSTX_WORKSPACE_HOST_CONFIG, 'utf8'))) : undefined;
 export default defineConfig({
+  define: { __RUSTX_PDFJS_ASSETS__: JSON.stringify(pdfAssets()) },
   plugins: [react(), { name: 'product-host-workspaces', async closeBundle() { await host?.close(); }, async closePreviewServer() { await host?.close(); }, configureServer(server) { server.middlewares.use(workspaceHandler(host));  }, configurePreviewServer(server) { server.middlewares.use(workspaceHandler(host));  } }],
   // TanStack Form core always constructs a devtools event client that
   // broadcasts and queues complete form state, secret field values included.

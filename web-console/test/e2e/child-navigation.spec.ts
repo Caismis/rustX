@@ -21,15 +21,18 @@ for (const width of [1440, 390]) test(`child native turn directory locates dista
     await expect(page.getByRole('heading', { name: 'Child report 126', exact: true })).toBeVisible();
     const input = page.getByRole('textbox', { name: 'Message Agent Verify findings', exact: true });
     await input.fill('Keep composing while reading history');
-    await page.screenshot({ path: '/tmp/rustx-child-turn-navigation-390.png' });
+    await page.getByRole('button', { name: 'Load earlier', exact: true }).scrollIntoViewIfNeeded();
+    await expect(page.getByRole('button', { name: 'Load later', exact: true })).toHaveCount(0);
+    await page.screenshot({ path: '/tmp/rustx-history-controls-mobile.png' });
     await page.getByRole('button', { name: 'Return to latest', exact: true }).click();
     await expect(input).toHaveValue('Keep composing while reading history');
-    await expect(page.getByRole('heading', { name: 'Child report 126', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: 'Child report 126', exact: true })).toBeAttached();
     const calls = await page.evaluate(() => (window as any).startupFixture.requests());
     expect(calls.some((request: any) => request.method === 'agent/turns')).toBe(true);
     expect(calls.some((request: any) => request.method === 'agent/transcript' && request.params.at.type === 'older')).toBe(true);
     expect(errors).toEqual([]); return;
   }
+  await expect(page.getByRole('button', { name: 'Load later', exact: true })).toHaveCount(0);
   await expect(rail).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Child report 130', exact: true })).toBeVisible();
   await rail.locator(':scope > div').first().evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
@@ -50,7 +53,7 @@ for (const width of [1440, 390]) test(`child native turn directory locates dista
   await expect(rail.getByRole('button', { name: 'Jump to turn 130', exact: true })).toHaveAttribute('aria-current', 'true');
   await expect(page.getByRole('heading', { name: 'Child report 130', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Return to latest', exact: true }).click();
-  await expect(page.getByText('Reading a history window. Latest activity continues below; intervening history is not loaded.', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Return to latest', exact: true })).toHaveCount(0);
   const calls = await page.evaluate(() => (window as any).startupFixture.requests());
   const located = calls.filter((request: any) => request.method === 'agent/transcript' && request.params.at.type === 'turn_ordinal');
   expect(located.map((request: any) => request.params.at.ordinal)).toEqual([1, 130]);
@@ -76,6 +79,14 @@ for (const width of [1440, 390]) test(`child native turn directory locates dista
     const box = (await input.boundingBox())!;
     expect(box.y + box.height).toBeLessThanOrEqual(1000);
     await page.screenshot({ path: '/tmp/rustx-child-sidebar-turn-navigation.png' });
+    const before = await page.evaluate(() => (window as any).startupFixture.requests().filter((request: any) => request.method === 'agent/transcript' && request.params.at.type === 'newer').length);
+    await aside.locator('[data-chat-history-boundary]').scrollIntoViewIfNeeded();
+    await aside.locator('[data-conversation-scroll]').last().hover();
+    await page.mouse.wheel(0, 80);
+    await expect.poll(() => page.evaluate(() => (window as any).startupFixture.requests().filter((request: any) => request.method === 'agent/transcript' && request.params.at.type === 'newer').length)).toBe(before + 1);
+    await expect(aside.getByRole('heading', { name: 'Child report 5', exact: true })).toHaveCount(1);
+    await expect(aside.getByRole('button', { name: 'Load later', exact: true })).toHaveCount(0);
+    await page.screenshot({ path: '/tmp/rustx-history-continuation-desktop.png' });
   }
   expect(errors).toEqual([]);
 });

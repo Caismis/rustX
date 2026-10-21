@@ -11,6 +11,64 @@ const directories: string[] = [];
 const services: WorkspaceTerminals[] = [];
 afterEach(async () => { vi.unstubAllEnvs(); await Promise.all(services.splice(0).map(service => service.close())); directories.splice(0).forEach(path => rmSync(path, { recursive: true, force: true })); });
 function directory() { const path = realpathSync(mkdtempSync(join(tmpdir(), 'rustx-workbench-'))); directories.push(path); return path; }
+it('admits registered workspace files before a native Session exists and rejects unregistered or mixed targets', async () => {
+  const root = directory(), other = directory();
+  writeFileSync(join(root, 'hello.txt'), 'Before first submission');
+  const native = vi.fn(async () => { throw new Error('No native Session exists'); });
+  const host = new LocalWorkspaceHost({ roots: [{ id: 'root', cwd: root, displayName: 'Root' }, { id: 'other', cwd: other, displayName: 'Other' }], picker: false, metadataFile: join(root, 'metadata.json'), endpoint: 'ws://localhost:8080' }, undefined, native);
+  try {
+    const scope = await host.listWorkspaces(), target = { workspace_id: scope.workspaces[0]!.id };
+    expect(await host.workbench(scope, { target, request: { kind: 'read', path: 'hello.txt' } })).toEqual({ cwd: root, text: 'Before first submission' });
+    for (const invalid of [{ workspace_id: 'root' }, { workspace_id: root }, { ...target, session_id: 'A', active_node: 'node-A' }])
+      await expect(host.workbench(scope, { target: invalid, request: { kind: 'files', path: '' } })).rejects.toThrow();
+    await expect(host.workbench({ ...scope, authorityId: 'retired' }, { target, request: { kind: 'files', path: '' } })).rejects.toThrow('replaced');
+    await expect(host.workbench(scope, { target, request: { kind: 'read', path: '../hello.txt' } })).rejects.toThrow();
+    await host.removeWorkspace(scope, target.workspace_id);
+    await expect(host.workbench(scope, { target, request: { kind: 'files', path: '' } })).rejects.toThrow('Unknown Workspace');
+    expect(native).not.toHaveBeenCalled();
+    const pendingRead = expect(host.workbench(scope, { target: { workspace_id: scope.workspaces[1]!.id }, request: { kind: 'files', path: '' } })).rejects.toThrow('replaced');
+    await host.close(); await pendingRead;
+  } finally { await host.close(); }
+});
+it('workspace PTYs stay isolated, survive native connection loss, and settle when their registration is removed', async () => {
+  const root = directory(), other = directory(), id = randomUUID();
+  let lost!: () => void;
+  const host = new LocalWorkspaceHost({ roots: [{ id: 'root', cwd: root, displayName: 'Root' }, { id: 'other', cwd: other, displayName: 'Other' }], picker: false, metadataFile: join(root, 'metadata.json'), endpoint: 'ws://localhost:8080', nativeFilesystem: 'shared', transportToken: 'test', terminalSupervisor: fileURLToPath(new URL('../../target/debug/interactive-supervisor', import.meta.url)) }, undefined, async () => ({ cwd: root, ownershipGeneration: '1' }), async (_e, _t, _r, onLost) => { lost = onLost; return async () => {}; });
+  try {
+    const scope = await host.listWorkspaces(), target = { workspace_id: scope.workspaces[0]!.id }, otherTarget = { workspace_id: scope.workspaces[1]!.id };
+    await host.workbench(scope, { target, request: { kind: 'create', id, shell: '/bin/sh' } });
+    expect((await host.workbench(scope, { target: otherTarget, request: { kind: 'terminals' } })).terminals).toEqual([]);
+    for (const request of [{ kind: 'input' as const, id, data: 'exit\r' }, { kind: 'close' as const, id }])
+      await expect(host.workbench(scope, { target: otherTarget, request })).rejects.toThrow('belong');
+    const session = { session_id: 'A', active_node: 'node-A' };
+    await host.workbench(scope, { target: session, request: { kind: 'terminals' } });
+    lost();
+    await expect(host.workbench(scope, { target: session, request: { kind: 'terminals' } })).rejects.toThrow('connection ended');
+    await host.workbench(scope, { target, request: { kind: 'input', id, data: "printf 'WORKSPACE_PID_%s\\n' \"$$\"; pwd\r" } });
+    let output = '', cursor = 0;
+    while (!/WORKSPACE_PID_(\d+)/.test(output) || !output.includes(root)) {
+      const result = await host.workbench(scope, { target, request: { kind: 'poll', id, cursor } });
+      output += result.output; cursor = result.cursor!;
+    }
+    const pid = Number(/WORKSPACE_PID_(\d+)/.exec(output)![1]);
+    await host.removeWorkspace(scope, target.workspace_id);
+    expect(() => process.kill(pid, 0)).toThrow();
+    await expect(host.workbench(scope, { target, request: { kind: 'input', id, data: 'echo leaked\r' } })).rejects.toThrow('Unknown Workspace');
+    await host.workbench(scope, { target, request: { kind: 'close', id } });
+  } finally { await expect(host.close()).rejects.toThrow('settlement failed'); }
+});
+it('workspace removal fences an already pending PTY admission', async () => {
+  const spawn = vi.fn(), service = new WorkspaceTerminals('/unused', spawn), target = { workspace_id: randomUUID() };
+  services.push(service);
+  let release!: (value: { cwd: string }) => void;
+  const pending = new Promise<{ cwd: string }>(resolve => { release = resolve; });
+  const create = service.request(target, () => pending, { kind: 'create', id: randomUUID(), shell: '/bin/sh' });
+  const failed = expect(create).rejects.toThrow('retired');
+  await service.retireWorkspace(target.workspace_id);
+  release({ cwd: directory() });
+  await failed;
+  expect(spawn).not.toHaveBeenCalled();
+});
 it('lists and reads relative files, rejects traversal, symlinks, binary and oversized content', () => {
   const root = directory(), outside = directory(); mkdirSync(join(root, 'nested')); writeFileSync(join(root, 'nested/a.txt'), 'hello'); writeFileSync(join(outside, 'secret'), 'outside'); symlinkSync(outside, join(root, 'escape'));
   expect(workspaceFile(root, '', false).entries?.map(row => row.name)).toContain('nested');
@@ -215,7 +273,7 @@ it.each(['native loss', 'Host shutdown'] as const)('%s fences a held native read
   const host=new LocalWorkspaceHost(config,undefined,async()=>{reached();await held;return {cwd:root,ownershipGeneration:'1'};},async(_e,_t,r,l)=>{retire=r;lost=l;return async()=>{};});
   const scope=await host.listWorkspaces();
   const work=host.workbench(scope,{target,request:{kind:'create',id:randomUUID(),shell:'/bin/sh'}});
-  const failed=expect(work).rejects.toThrow(reason==='native loss'?'closed':'replaced');
+  const failed=expect(work).rejects.toThrow(reason==='native loss'?'retired':'replaced');
   await reading;
   if(reason==='native loss')lost();else await host.close();
   release();await failed;

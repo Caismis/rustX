@@ -40,7 +40,7 @@ it('the built-in dictionary contract is exact and public keys stay bounded', () 
 });
 
 it('requires stable option values so localized labels cannot become filter identities', () => {
-  const source = `<select><option>{tx('inspector:inspector.request')}</option><option value="response">{tx('inspector:inspector.response')}</option></select>`;
+  const source = `<select><option>{tx('commands:command-panel.more')}</option><option value="response">{tx('commands:command-panel.nodes')}</option></select>`;
   expect(findCopy('example.tsx', source).map(row => row.kind)).toEqual(['identity']);
 });
 

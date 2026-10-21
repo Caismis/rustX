@@ -29,7 +29,8 @@
 .settings input:not([type=checkbox]), .settings select, .settings textarea { box-sizing: border-box; width: 100%; min-width: 0; height: 36px; padding: 0 12px; border: .5px solid var(--dsw-alias-border-l4); border-radius: 8px; background: var(--dsw-alias-bg-layer-3); font: inherit; font-size: 13px; color: var(--dsw-alias-label-primary); }
 .settings textarea { min-height: 112px; padding: 10px 12px; resize: vertical; }
 .settings input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--dsw-alias-state-business-primary); }
-.settings :is(input, select, textarea, button, summary):focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }
+.settings :is(input:not([type=checkbox]), textarea) { outline: none; }
+.settings :is(input[type=checkbox], select, button, summary):focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }
 /* Buttons retain their primitive's disabled appearance regardless of module
  * import order. Settings owns the opacity of its remaining form controls. */
 .settings :disabled:not(button) { opacity: .5; }

@@ -15,6 +15,39 @@ a=ns+'drawingml/2006/main'; pres=ns+'presentationml/2006/main'; rel=ns+'officeDo
 package('sample.pptx','pptx','ppt/presentation.xml',{'ppt/presentation.xml':f'<p:presentation xmlns:p="{pres}" xmlns:r="{rel}"><p:sldIdLst><p:sldId id="256" r:id="slide1"/></p:sldIdLst><p:sldSz cx="9144000" cy="6858000"/><p:notesSz cx="6858000" cy="9144000"/></p:presentation>', 'ppt/_rels/presentation.xml.rels':f'<Relationships xmlns="{ns}package/2006/relationships"><Relationship Id="slide1" Type="{rel}/slide" Target="slides/slide1.xml"/></Relationships>', 'ppt/slides/slide1.xml':f'<p:sld xmlns:p="{pres}" xmlns:a="{a}"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="2" name="Title"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="500000" y="500000"/><a:ext cx="8000000" cy="2000000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>rustX presentation preview</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>'},{'ppt/presentation.xml':'application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml','ppt/slides/slide1.xml':'application/vnd.openxmlformats-officedocument.presentationml.slide+xml'})
 x=ns+'spreadsheetml/2006/main'
 package('sample.xlsx','xlsx','xl/workbook.xml',{'xl/workbook.xml':f'<workbook xmlns="{x}" xmlns:r="{rel}"><sheets><sheet name="Values" sheetId="1" r:id="s1"/><sheet name="第二页" sheetId="2" r:id="s2"/></sheets></workbook>','xl/_rels/workbook.xml.rels':f'<Relationships xmlns="{ns}package/2006/relationships"><Relationship Id="s1" Type="{rel}/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="s2" Type="{rel}/worksheet" Target="worksheets/sheet2.xml"/></Relationships>','xl/worksheets/sheet1.xml':f'<worksheet xmlns="{x}"><sheetData><row r="1"><c r="A1"><v>2</v></c><c r="B1"><v>3</v></c><c r="C1"><f>A1+B1</f><v>99</v></c><c r="D1"><f>NOW()</f></c></row></sheetData></worksheet>','xl/worksheets/sheet2.xml':f'<worksheet xmlns="{x}"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Stored text only</t></is></c></row></sheetData></worksheet>'},{'xl/workbook.xml':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml','xl/worksheets/sheet1.xml':'application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml','xl/worksheets/sheet2.xml':'application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml'})
+# Ordinary hyperlinks and binary printer settings must not reject a whole file.
+# These are original minimal packages, not copies of a user's presentation.
+for ext,root in [('docx','word'),('pptx','ppt')]:
+    with zipfile.ZipFile(p/f'sample.{ext}') as z:
+        parts={name:z.read(name) for name in z.namelist()}
+    types=parts['[Content_Types].xml'].decode().replace('</Types>',f'<Default Extension="bin" ContentType="application/vnd.openxmlformats-officedocument.{"wordprocessingml" if ext=="docx" else "presentationml"}.printerSettings"/></Types>')
+    parts['[Content_Types].xml']=types
+    parts[f'{root}/printerSettings/printerSettings1.bin']=bytes(220)
+    hyperlink=f'<Relationship Id="link" Type="{rel}/hyperlink" Target="https://rustx-preview.invalid/guide?q=office#preview" TargetMode="External"/>'
+    if ext=='docx':
+        parts['word/document.xml']=parts['word/document.xml'].decode().replace('<w:document ',f'<w:document xmlns:r="{rel}" ').replace('<w:r><w:t>rustX document preview</w:t></w:r>','<w:hyperlink r:id="link"><w:r><w:t>rustX document preview</w:t></w:r></w:hyperlink>')
+        parts['word/_rels/document.xml.rels']=f'<Relationships xmlns="{ns}package/2006/relationships">{hyperlink}<Relationship Id="printer" Type="{rel}/printerSettings" Target="printerSettings/printerSettings1.bin"/></Relationships>'
+    else:
+        parts['ppt/_rels/presentation.xml.rels']=parts['ppt/_rels/presentation.xml.rels'].decode().replace('</Relationships>',f'<Relationship Id="printer" Type="{rel}/printerSettings" Target="printerSettings/printerSettings1.bin"/></Relationships>')
+        parts['ppt/slides/slide1.xml']=parts['ppt/slides/slide1.xml'].decode().replace('<p:sld ',f'<p:sld xmlns:r="{rel}" ').replace('<a:r><a:t>','<a:r><a:rPr><a:hlinkClick r:id="link"/></a:rPr><a:t>')
+        parts['ppt/slides/_rels/slide1.xml.rels']=f'<Relationships xmlns="{ns}package/2006/relationships">{hyperlink}</Relationships>'
+    with zipfile.ZipFile(p/f'linked.{ext}','w') as z:
+        for path,data in parts.items():
+            info=zipfile.ZipInfo(path,date_time=(2020,1,1,0,0,0));info.compress_type=zipfile.ZIP_DEFLATED
+            z.writestr(info,data)
+# Three original slides exercise the continuous Office reader.
+with zipfile.ZipFile(p/'sample.pptx') as z:
+    parts={name:z.read(name) for name in z.namelist()}
+parts['ppt/presentation.xml']=parts['ppt/presentation.xml'].decode().replace('<p:sldId id="256" r:id="slide1"/>',''.join(f'<p:sldId id="{255+i}" r:id="slide{i}"/>' for i in range(1,4)))
+parts['ppt/_rels/presentation.xml.rels']=f'<Relationships xmlns="{ns}package/2006/relationships">'+''.join(f'<Relationship Id="slide{i}" Type="{rel}/slide" Target="slides/slide{i}.xml"/>' for i in range(1,4))+'</Relationships>'
+slide=parts['ppt/slides/slide1.xml'].decode()
+for i in range(1,4):
+    parts[f'ppt/slides/slide{i}.xml']=slide.replace('rustX presentation preview',f'rustX presentation preview — slide {i}')
+parts['[Content_Types].xml']=parts['[Content_Types].xml'].decode().replace('</Types>',''.join(f'<Override PartName="/ppt/slides/slide{i}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>' for i in [2,3])+'</Types>')
+with zipfile.ZipFile(p/'slides.pptx','w') as z:
+    for path,data in parts.items():
+        info=zipfile.ZipInfo(path,date_time=(2020,1,1,0,0,0));info.compress_type=zipfile.ZIP_DEFLATED
+        z.writestr(info,data)
 # Minimal real PDF with correct cross-reference offsets and three textual pages.
 objects=['<< /Type /Catalog /Pages 2 0 R >>','<< /Type /Pages /Kids [3 0 R 5 0 R 7 0 R] /Count 3 >>']
 for i in range(3):

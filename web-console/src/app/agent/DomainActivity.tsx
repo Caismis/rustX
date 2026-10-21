@@ -1,16 +1,13 @@
 import { useToolInspection } from './tool-inspection';
-import { useState } from 'react';
-import { DisclosureRow } from '../../presentation/primitives/DisclosureRow';
-import { IconAgentPresetOutline16 } from '../../presentation/primitives/icons';
-import { subagentToolDetails } from './subagent-tool-details';
-import detailsCss from './AgentToolDetails.module.css';
+import { IconAgentPresetOutline16, IconChecklistOutline14 } from '../../presentation/primitives/icons';
+import { subagentToolDetails } from '../../bindings/subagent-tool-details';
 import { useSubagents } from './subagent-context';
-import css from '../../presentation/agent/Tool.module.css';
 import { useTranslation } from '../../locale/react';
 import type { TranslationKey } from '../../locale/translation';
-import type { ForegroundToolExecution } from '../../../../protocol/app-server/v50';
-import { ToolCard, ToolInspectionButton } from '../../presentation/agent/ToolCard';
+import type { ForegroundToolExecution } from '../../../../protocol/app-server/v51';
+import { ToolCard } from '../../presentation/agent/ToolCard';
 import { toolCard } from '../../bindings/tools';
+import { recordedToolDetails } from '../../bindings/recorded-tool-details';
 
 const names: Record<string, { domain: 'job' | 'agent'; title: TranslationKey }> = {
   'tool-job_list': { domain: 'job', title: 'common:activity.jobs' },
@@ -29,42 +26,28 @@ export function domainActivity(tool: ForegroundToolExecution) {
   return tool.tool_id==null?undefined:names[tool.tool_id];
 }
 export function DomainActivity({ tool }: { tool: ForegroundToolExecution }) {
-  const inspect = useToolInspection(tool);
-  const tx = useTranslation(), [expanded, setExpanded] = useState(false), scope = useSubagents();
-  const domain = domainActivity(tool)!;
-  const view = toolCard(tool);
-  if (domain.domain === 'agent') {
-    const details = subagentToolDetails(tool);
-    const target = details.target, task = details.task;
-    const agent = scope?.agents.find(agent => agent.agent_id === target);
-    return <div className={css.root} data-activity-domain="agent" data-tool-call-id={tool.call_id}>
-      <DisclosureRow icon={<IconAgentPresetOutline16 size={14}/>} title={tx(domain.title)} open={expanded} expandable expandOnRowClick keepContentWhenOpen onToggle={() => setExpanded(value => !value)}
-        collapsedContent={<><span className={css.sep}/><span className={css.summary}>{details.count !== undefined ? tx('common:subagents.count', { count: details.count }) : task ?? agent?.agent ?? target ?? tx('common:subagents.list')}</span></>}>
-        <div className={detailsCss.root}>
-          <div className={detailsCss.caption}><span>{tx('common:subagents.result')}</span>{inspect && <ToolInspectionButton inspect={inspect}/>}</div>
-          <ul className={detailsCss.list}>
-            {details.items.map((item, index) => {
-              const child = scope?.agents.find(agent => agent.agent_id === item.agentId);
-              const name = item.name ?? child?.agent ?? item.agentId;
-              return <li className={detailsCss.item} key={item.agentId ?? index}>
-                <div className={detailsCss.heading}><div className={detailsCss.text}>{item.text ?? (child ? <button className={detailsCss.link} type="button" onClick={() => scope?.open(child.agent_id)}>{name}</button> : name)}</div>
-                  {item.status && <span className={detailsCss.status} data-tone={item.tone}>{tx(item.status)}</span>}
-                </div>
-                {item.text && child && <button className={`${detailsCss.link} ${detailsCss.subtitle}`} type="button" onClick={() => scope?.open(child.agent_id)}>{name}</button>}
-                {tool.tool_id === 'tool-list_agents' && <div className={detailsCss.subtitle}>{item.agentId}</div>}
-              </li>;
-            })}
-            {details.count === 0 && <li className={detailsCss.item}>{tx('common:subagents.empty')}</li>}
-            {!details.items.length && details.count === undefined && <li className={detailsCss.item}><div className={detailsCss.text}>{task ?? (view.state === 'success' ? tx('common:state.success') : view.output || view.input)}</div></li>}
-            {details.truncated && <li className={detailsCss.item}>{tx('common:subagents.truncated', details.truncated)}</li>}
-          </ul>
-        </div>
-      </DisclosureRow>
-    </div>;
-  }
+  const inspect = useToolInspection(tool), tx = useTranslation(), scope = useSubagents();
+  const domain = domainActivity(tool)!, view = toolCard(tool);
+  const body = tool.committed_result ?? (tool.state.type === 'settled' ? tool.state.result : undefined);
+  let details = view.state === 'success' && body?.status.type === 'success' ? recordedToolDetails(tool.tool_id, body.content, tx) : undefined;
+  const result = subagentToolDetails(tool);
   let target: string | undefined;
-  try { const input = JSON.parse(tool.state.arguments); if (typeof input?.job_id === 'string') target = input.job_id; }
-  catch { /* Partial streaming arguments. */ }
-  return <div data-activity-domain={domain.domain}><ToolCard inspect={inspect} tool={{ ...view, title: tx(domain.title),
-    summary: target ?? tx('common:activity.finite-tool') }}/></div>;
+  try { const args = JSON.parse(tool.state.arguments); target = typeof args?.job_id === 'string' ? args.job_id : undefined; } catch { /* Streaming arguments. */ }
+  if (domain.domain === 'agent' && view.state === 'success' && body?.status.type === 'success') {
+    // Human titles and outcomes come only from this receipt. The current roster
+    // supplies navigation authority, never replacement historical state/text.
+    if (result.items.length || result.count === 0) details = {
+      items: result.items.map(item => ({ title: item.name ?? item.agentId ?? item.text ?? '',
+        agentId: item.agentId && scope?.agents.some(agent => agent.agent_id === item.agentId) ? item.agentId : undefined,
+        subtitle: item.name ? item.agentId : undefined, description: item.text,
+        badge: item.status ? { label: tx(item.status), tone: item.tone === 'done' ? 'success' : item.tone === 'error' ? 'error' : item.tone === 'warning' ? 'warning' : item.tone === 'ongoing' ? 'info' : 'neutral' } : undefined,
+      })),
+      summary: result.count !== undefined ? tx('common:subagents.count', { count: result.count }) : result.task ?? result.target,
+      empty: tx('common:subagents.empty'), caption: result.truncated ? tx('common:subagents.truncated', result.truncated) : undefined,
+    };
+  }
+  return <div data-activity-domain={domain.domain}><ToolCard inspect={inspect} onOpenAgent={id => scope?.open(id)} tool={{ ...view,
+    icon: domain.domain === 'job' ? <IconChecklistOutline14/> : <IconAgentPresetOutline16 size={14}/>,
+    title: tx(domain.title), details, summary: details?.summary ?? details?.empty ?? (view.state === 'failure' || view.state === 'uncertain' || view.state === 'cancelled' ? view.summary : result.task ?? result.target ?? target ?? tx('common:activity.finite-tool')),
+  }}/></div>;
 }
