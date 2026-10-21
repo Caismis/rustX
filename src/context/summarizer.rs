@@ -428,7 +428,8 @@ pub trait SummaryBackend: Send + Sync {
 pub struct ModelBackedSummarizer {
     invocation: ResolvedModelInvocation,
     model_timeout_policy: ModelTimeoutPolicy,
-    _monotonic_clock: Arc<dyn MonotonicClock>,
+    #[cfg(test)]
+    monotonic_clock: Arc<dyn MonotonicClock>,
     backend: OnceLock<(Arc<dyn SummaryBackend>, u64)>,
 }
 
@@ -490,10 +491,13 @@ impl ModelBackedSummarizer {
         model_timeout_policy: ModelTimeoutPolicy,
         monotonic_clock: Arc<dyn MonotonicClock>,
     ) -> Self {
+        #[cfg(not(test))]
+        drop(monotonic_clock);
         Self {
             invocation,
             model_timeout_policy,
-            _monotonic_clock: monotonic_clock,
+            #[cfg(test)]
+            monotonic_clock,
             backend: OnceLock::new(),
         }
     }
@@ -518,7 +522,7 @@ impl ModelBackedSummarizer {
                     Arc::new(
                         crate::runtime::auxiliary::executor::AuxiliaryExecutor::for_test(
                             store,
-                            self._monotonic_clock.clone(),
+                            self.monotonic_clock.clone(),
                         )?,
                     ),
                     0,
@@ -528,7 +532,7 @@ impl ModelBackedSummarizer {
                 crate::runtime::identity::CompactionOperationId::new(
                     uuid::Uuid::now_v7().to_string(),
                 ),
-                self._monotonic_clock.clone(),
+                self.monotonic_clock.clone(),
             );
             let operation = self.operation(budget, cancellation)?;
             let result = operation.prepare()?.summarize(request, None).await;

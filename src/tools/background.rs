@@ -1302,7 +1302,7 @@ impl ConversationBackgroundRegistry {
         let cancellation = attempt_cancellation.clone();
         tokio::task::spawn_blocking(move || {
             let _admission = admission;
-            registry.commit_dispatch_with_permission(prepared, &cancellation, permission)
+            registry.commit_dispatch_with_permission(prepared, &cancellation, permission.as_ref())
         })
         .await
         .map_err(|error| BackgroundDispatchError::Durable {
@@ -1310,8 +1310,11 @@ impl ConversationBackgroundRegistry {
         })?
     }
 
-    // Synchronous unit fixtures exercise the same final native commit section.
-    // Production uses the awaitable owner above, including on current-thread Tokio.
+    /// Synchronous unit fixtures exercise the final native commit section.
+    /// Production uses the awaitable owner above, including on current-thread Tokio.
+    ///
+    /// # Errors
+    /// Returns the same lifecycle, durability and dispatch errors as the native owner.
     #[cfg(test)]
     pub fn commit_dispatch(
         &self,
@@ -1319,8 +1322,8 @@ impl ConversationBackgroundRegistry {
         attempt_cancellation: &CancellationSignal,
     ) -> Result<BackgroundDispatchOutcome, BackgroundDispatchError> {
         let gate = self.state().durability_gate.clone();
-        let permission = gate.as_ref().map(|gate| gate.enter_ownership_commit());
-        self.commit_dispatch_with_permission(prepared, attempt_cancellation, permission)
+        let permission = gate.as_ref().map(DurabilityGate::enter_ownership_commit);
+        self.commit_dispatch_with_permission(prepared, attempt_cancellation, permission.as_ref())
     }
 
     /// Stage two: commits the prepared dispatch (the linearization point).
@@ -1359,7 +1362,7 @@ impl ConversationBackgroundRegistry {
         &self,
         mut prepared: PreparedBackgroundDispatch,
         attempt_cancellation: &CancellationSignal,
-        ownership_permission: Option<Result<OwnershipCommitGuard, OwnershipCommitRefused>>,
+        ownership_permission: Option<&Result<OwnershipCommitGuard, OwnershipCommitRefused>>,
     ) -> Result<BackgroundDispatchOutcome, BackgroundDispatchError> {
         // Hold the shared lifecycle admission guard across the prepared
         // registry transfer. This keeps a parked ownership attempt inside
@@ -1387,7 +1390,7 @@ impl ConversationBackgroundRegistry {
         // handle is copied out of the registry state first: the guard
         // borrows the gate, never the registry state, so the ownership
         // commit below may still mutate the state while the guard is held.
-        if let Some(Err(refused)) = &ownership_permission {
+        if let Some(Err(refused)) = ownership_permission {
             // Reject: roll the prepared dispatch back completely — the
             // runner is aborted while still parked behind its start gate —
             // and report the runtime-owned health diagnostic.

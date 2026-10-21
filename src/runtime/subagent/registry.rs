@@ -6290,7 +6290,7 @@ mod tests {
             .expect("known");
         assert_eq!(cancelled.state, SubagentState::Cancelling);
         child
-            .complete(ChildResultStatus::Succeeded, Some("late"))
+            .cancelled_after_delegation(ChildResultStatus::Succeeded, Some("late"))
             .await;
         let settled = plane
             .registry

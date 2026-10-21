@@ -4,7 +4,6 @@ use crate::model::{ModelStreamProgress, ModelTimeoutPhase};
 use crate::runtime::continuation::{AnthropicContinuation, ProviderContinuationState};
 use crate::runtime::identity::{ToolCallId, ToolId};
 use crate::tools::types::{ToolCall, ToolCallStart};
-use futures_util::StreamExt as _;
 
 fn fold() -> AuxiliaryStreamFold {
     AuxiliaryStreamFold::new(

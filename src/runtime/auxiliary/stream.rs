@@ -87,9 +87,7 @@ pub(super) async fn poll_stream_owned(
             return Ok(());
         };
         let now = clock.now_millis();
-        if let Err(error) = fold.accept(&item, now) {
-            return Err(error);
-        }
+        fold.accept(&item, now)?;
     }
 }
 
@@ -233,7 +231,7 @@ impl AuxiliaryStreamFold {
         }
         self.assembler
             .push_text_only(event)
-            .map_err(|error| invalid_stream(&error.to_string()))?;
+            .map_err(|error| invalid_stream(&format!("{error:?}")))?;
         // Only accepted envelopes can update usage, terminal or timing.
         self.timing.observe(event, now_millis);
         match event {
@@ -307,7 +305,7 @@ impl AuxiliaryStreamFold {
             Some(error) => Err(error),
             None => std::mem::take(&mut self.assembler)
                 .finish()
-                .map_err(|error| invalid_stream(&error.to_string()))
+                .map_err(|error| invalid_stream(&format!("{error:?}")))
                 .map(|assembled| {
                     let mut text = String::new();
                     let mut refused = assembled.finish_reason == ModelFinishReason::Refusal;

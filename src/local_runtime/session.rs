@@ -5784,6 +5784,7 @@ model = "provider/model"
     /// yet both are used and resume-visible, because the unused
     /// classification only ever fits the untouched root-`New` shell.
     #[test]
+    #[allow(clippy::too_many_lines)] // One empty Clone/Fork provenance and exact list-order scenario.
     fn clone_and_fork_with_empty_destinations_are_still_resume_visible() {
         let (_directory, mut catalog, _config) = open_catalog();
         let visible = |catalog: &SessionCatalog| {
@@ -5799,6 +5800,15 @@ model = "provider/model"
             .lineage(&first_session(&catalog), None)
             .map(|(node, state)| (first_session(&catalog), node, state))
             .expect("root lineage");
+        // List order follows UTC metadata, not creation sequence. Pin this
+        // fixture's timestamps so wall-clock adjustment cannot reorder rows.
+        let created_at = chrono::DateTime::<Utc>::from_timestamp(1_577_836_800, 0).unwrap();
+        catalog
+            .document
+            .sessions
+            .get_mut(&root_session)
+            .unwrap()
+            .created_at = created_at;
         let root_store = store_for(&catalog, &root_session, &root_node.conversation_id);
         let root_revision = root_store.load_head().expect("root head").revision;
         let source = lineage_at(&root_store, &root_node.conversation_id, root_revision);
@@ -5816,6 +5826,12 @@ model = "provider/model"
                 },
             )
             .expect("publish empty clone");
+        catalog
+            .document
+            .sessions
+            .get_mut(&clone_id)
+            .unwrap()
+            .created_at = created_at + chrono::Duration::seconds(1);
         assert!(
             !catalog.is_session_unused(&clone_id).expect("empty clone"),
             "an empty clone destination is used by provenance"
@@ -5863,6 +5879,12 @@ model = "provider/model"
                 },
             )
             .expect("publish empty fork");
+        catalog
+            .document
+            .sessions
+            .get_mut(&fork_id)
+            .unwrap()
+            .created_at = created_at + chrono::Duration::seconds(2);
 
         // The fork destination is genuinely empty — initial Surface, no
         // canonical message, no Pending Inbound — and used anyway.

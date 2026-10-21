@@ -2002,6 +2002,7 @@ impl RuntimeInner {
     /// admission is released by its owner. No wait here depends on a global
     /// health flag, so one owner's failure can never be mistaken for
     /// another's settlement.
+    #[allow(clippy::too_many_lines)] // Every native owner must be supervised before the drain verdict.
     async fn drain_to_quiescence(
         self: &Arc<Self>,
         _completion: Arc<DrainCompletion>,
@@ -4304,7 +4305,7 @@ impl ConversationRuntime {
             durability_gate.clone(),
             crate::runtime::auxiliary::capacity::ProcessCapacity::shared_process().conversation(),
         )
-        .map_err(|error| ConversationRuntimeError::Storage(error.to_string()))?;
+        .map_err(|error| ConversationRuntimeError::Storage(error.message))?;
         let inner = Arc::new(RuntimeInner {
             configuration_owner: Arc::new(()),
             model_selection_owner,
@@ -14256,26 +14257,27 @@ mod tests {
         failed_started_rx
             .recv()
             .expect("failure is invoked while the ownership is parked");
+        let failure_registered = failed_done_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .is_ok();
+        let failure_published = pending.drain_fixture_facts().iter().any(|observation| {
+            matches!(
+                observation,
+                ConversationObservation::DurabilityFailed { .. }
+            )
+        });
+
+        // Capture both facts while parked, then release before asserting so
+        // a regression reports its failure instead of stranding the worker.
+        hook.release();
         assert!(
-            failed_done_rx
-                .recv_timeout(std::time::Duration::from_secs(10))
-                .is_ok(),
+            failure_registered,
             "failure registration returns without parking the coordinator while its committed fact waits for ownership exit"
         );
         assert!(
-            !pending
-                .drain_fixture_facts()
-                .iter()
-                .any(|observation| matches!(
-                    observation,
-                    ConversationObservation::DurabilityFailed { .. }
-                )),
+            !failure_published,
             "the health failure has not linearized while the ownership commit holds the frontier"
         );
-
-        // Release the ownership commit: it completes its durable write and
-        // record publication first, then the failure commit linearizes.
-        hook.release();
         let outcome = tokio::time::timeout(std::time::Duration::from_secs(10), committer)
             .await
             .expect("commit liveness")

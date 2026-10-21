@@ -1355,8 +1355,10 @@ async fn runtime_composition_shares_one_clock_between_primary_and_summarizer() {
             .iter()
             .filter(|event| matches!(
                 event.event,
-                RuntimeEvent::ModelRequestFailed { ref error, .. }
-                    if error.kind == rustx::model::ModelErrorKind::Timeout
+                RuntimeEvent::ModelRequestFailed {
+                    owner: rustx::model::ModelRequestOwner::Agent { .. },
+                    ref error, ..
+                } if error.kind == rustx::model::ModelErrorKind::Timeout
             ))
             .count(),
         1,

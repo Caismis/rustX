@@ -76,6 +76,7 @@ pub fn fake_model(scripts: Vec<Vec<FakeStep>>) -> std::sync::Arc<FakeModel> {
 }
 
 pub struct FakeModel {
+    protocol: ModelProtocol,
     scripts: Mutex<VecDeque<Vec<FakeStep>>>,
     requests: Arc<Mutex<Vec<ModelRequest>>>,
     emitted: watch::Sender<u64>,
@@ -107,6 +108,7 @@ impl FakeModel {
     #[must_use]
     pub fn new(scripts: Vec<Vec<FakeStep>>) -> Self {
         Self {
+            protocol: ModelProtocol::OpenAiChatCompletions,
             scripts: Mutex::new(scripts.into()),
             requests: Arc::new(Mutex::new(Vec::new())),
             emitted: watch::Sender::new(0),
@@ -115,6 +117,13 @@ impl FakeModel {
             streams_started: watch::Sender::new(0),
             streams_exited: watch::Sender::new(0),
         }
+    }
+
+    /// Binds the scripted adapter to the same protocol as its fixture model.
+    #[must_use]
+    pub const fn with_protocol(mut self, protocol: ModelProtocol) -> Self {
+        self.protocol = protocol;
+        self
     }
 
     /// A receiver observing how many invocation stream owners have left.
@@ -196,7 +205,7 @@ impl FakeModel {
 
 impl ModelAdapter for FakeModel {
     fn protocol(&self) -> ModelProtocol {
-        ModelProtocol::OpenAiChatCompletions
+        self.protocol
     }
 
     fn stream(

@@ -50,7 +50,7 @@ impl AuxiliaryExecutor {
         budget: CompactionBudget,
         cancellation: &CancellationSignal,
     ) -> Result<Arc<dyn SummaryBackend>, ContextError> {
-        let scope = self.scope(budget, cancellation);
+        let scope = Self::scope(budget, cancellation);
         let first = self.reserve(&scope)?;
         Ok(Arc::new(PreAdmitted {
             executor: self.clone(),
@@ -112,7 +112,7 @@ impl SummaryBackend for AuxiliaryExecutor {
         budget: CompactionBudget,
         cancellation: CancellationSignal,
     ) -> Result<Box<dyn SummaryOperation>, ContextError> {
-        let scope = self.scope(budget, &cancellation);
+        let scope = Self::scope(budget, &cancellation);
         let first = self.reserve(&scope)?;
         Ok(Box::new(Operation {
             executor: self.clone(),

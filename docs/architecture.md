@@ -482,6 +482,9 @@ exit. The single failure publisher runs outside the gate mutex. Existing
 background and Subagent ownership writers await permission outside registry
 locks and perform their synchronous transaction/publication on blocking
 workers; already-owned settlement never reacquires healthy admission.
+Coordinator idle probes report busy immediately when the lifecycle commit
+boundary is held, so they cannot retain the coordinator while waiting for
+one of those writers.
 
 `ConversationRuntime` owns one lifecycle authority:
 

@@ -183,7 +183,6 @@ impl AuxiliaryExecutor {
     }
 
     pub(crate) fn scope(
-        &self,
         budget: CompactionBudget,
         cancellation: &CancellationSignal,
     ) -> Arc<AuxiliaryScope> {
@@ -465,7 +464,7 @@ impl CallRecord {
     pub(super) fn request_start(&self, model: String) -> AuxiliaryRequestStart {
         AuxiliaryRequestStart {
             call_id: self.call_id.clone(),
-            ordinal: 1,
+            ordinal: 0,
             request_id: self.request_id.clone(),
             model,
         }
@@ -576,7 +575,7 @@ impl CallRecord {
         if exit.durability_failed {
             let diagnostic = exit.result.as_ref().err().map_or_else(
                 || "auxiliary native supervision failed".into(),
-                ToString::to_string,
+                |error| error.message.clone(),
             );
             let failure = self
                 .executor

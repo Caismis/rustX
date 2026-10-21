@@ -249,11 +249,14 @@ impl ConversationLifecycle {
     /// A change token, never a copy of subsystem ownership. An idle probe
     /// must inspect native owners and then validate this token.
     pub(crate) fn idle_epoch(&self) -> Option<u64> {
-        let _boundary = self
-            .inner
-            .commit_boundary
-            .lock()
-            .expect("lifecycle boundary");
+        // An idle probe may run under the coordinator. A writer holding this
+        // boundary is busy; waiting for it would also park failure/control
+        // registration behind its SQL, defeating the native durability gate.
+        let _boundary = match self.inner.commit_boundary.try_lock() {
+            Ok(boundary) => boundary,
+            Err(std::sync::TryLockError::WouldBlock) => return None,
+            Err(std::sync::TryLockError::Poisoned(_)) => panic!("lifecycle boundary poisoned"),
+        };
         (self.is_running() && self.inner.admissions.load(Ordering::Acquire) == 0)
             .then(|| self.inner.activity.load(Ordering::Acquire))
     }

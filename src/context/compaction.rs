@@ -502,10 +502,6 @@ pub(crate) async fn execute_compaction_in_operation(
     }
 }
 
-fn cancelled(message: &str) -> ContextError {
-    ContextError::new(ContextErrorKind::Cancelled, message)
-}
-
 fn resource_failure(error: crate::durable::ConversationStoreError) -> CompactionExecutionError {
     match error {
         crate::durable::ConversationStoreError::ResourceBoundExceeded(message) => {

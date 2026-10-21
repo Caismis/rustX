@@ -326,8 +326,8 @@ impl Execution {
     }
 
     fn recover_pending(&mut self) {
-        match self.record.pending_write() {
-            Some(evidence) => match evidence.outcome.as_ref() {
+        if let Some(evidence) = self.record.pending_write() {
+            match evidence.outcome.as_ref() {
                 Ok(receipt) => self.accept_receipt(receipt),
                 Err(AuxiliaryWriteFailure::Unknown { .. }) => {
                     self.durability_failed = true;
@@ -337,8 +337,7 @@ impl Execution {
                     ));
                 }
                 Err(AuxiliaryWriteFailure::KnownNotCommitted { .. }) => {}
-            },
-            None => {}
+            }
         }
     }
 
@@ -414,7 +413,7 @@ impl Execution {
         let intent = if self.request_started {
             let owner = ModelRequestOwner::Auxiliary {
                 call_id: self.record.call_id.clone(),
-                ordinal: 1,
+                ordinal: 0,
             };
             let usage = evidence.and_then(|evidence| evidence.usage);
             let generation = self.sealed.as_ref().map(|sealed| sealed.generation);

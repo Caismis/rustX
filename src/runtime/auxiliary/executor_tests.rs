@@ -70,6 +70,7 @@ impl ModelAdapter for ConsumerAdapter {
             1,
             "adapter entry requires a real confirmed RequestStarted"
         );
+        assert_eq!(requests[0].ordinal, 0);
         assert_eq!(requests[0].model, request.model());
         assert!(requests[0].started_sequence > call.started_sequence);
         assert!(requests[0].terminal_sequence.is_none());
@@ -150,7 +151,7 @@ fn fixture(script: Script) -> Fixture {
     let store = Arc::new(SqliteConversationStore::in_memory(ConversationId::generate()).unwrap());
     let clock = Arc::new(SystemMonotonicClock::new());
     let executor = AuxiliaryExecutor::for_test(store.clone(), clock.clone()).unwrap();
-    let scope = executor.scope(
+    let scope = AuxiliaryExecutor::scope(
         CompactionBudget::new(
             CompactionOperationId::new(uuid::Uuid::now_v7().to_string()),
             clock,
@@ -190,7 +191,7 @@ fn fixture(script: Script) -> Fixture {
         .into(),
         tools: Vec::new(),
         effective_system_prompt: "Translate into French".into(),
-        images: Default::default(),
+        images: std::collections::BTreeMap::default(),
         continuation: None,
         continuation_source: None,
     };
@@ -304,8 +305,11 @@ async fn model_panic_keeps_trusted_usage_and_settles_without_reentry() {
 async fn waiter_loss_and_parent_close_leave_cleanup_under_the_native_owner() {
     let fixture = fixture(Script::AwaitCancellation);
     let call_id = fixture.reservation.call_id().clone();
-    let reply = fixture.reservation.submit(fixture.frozen).unwrap();
-    fixture.adapter.waiting.notified().await;
+    let mut reply = fixture.reservation.submit(fixture.frozen).unwrap();
+    tokio::select! {
+        () = fixture.adapter.waiting.notified() => {}
+        result = &mut reply => panic!("native execution ended before adapter entry: {result:?}"),
+    }
     drop(reply);
     fixture.scope.wait_closed().await;
     assert!(fixture.adapter.stream_exited.load(Ordering::SeqCst));
@@ -336,7 +340,7 @@ async fn waiter_loss_and_parent_close_leave_cleanup_under_the_native_owner() {
             .unwrap()
             .remote_execution_uncertainty
     );
-    let other_scope = fixture.executor.scope(
+    let other_scope = AuxiliaryExecutor::scope(
         CompactionBudget::new(
             CompactionOperationId::new(uuid::Uuid::now_v7().to_string()),
             fixture.executor.0.resources.monotonic.clone(),

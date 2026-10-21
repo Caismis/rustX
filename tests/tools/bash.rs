@@ -497,7 +497,8 @@ async fn bash_background_cancellation_uses_the_same_process_group_path() {
         )
         .expect("prepare");
     let outcome = registry
-        .commit_dispatch(prepared, &CancellationSignal::new())
+        .commit_dispatch_owned(prepared, &CancellationSignal::new())
+        .await
         .expect("dispatch commits");
     let rustx::tools::background::BackgroundDispatchOutcome::Accepted { execution_id, .. } =
         outcome
@@ -588,7 +589,8 @@ async fn bash_natural_exit_beats_late_cancel_in_the_registry() {
         )
         .expect("prepare");
     let outcome = registry
-        .commit_dispatch(prepared, &CancellationSignal::new())
+        .commit_dispatch_owned(prepared, &CancellationSignal::new())
+        .await
         .expect("dispatch commits");
     let rustx::tools::background::BackgroundDispatchOutcome::Accepted { execution_id, .. } =
         outcome
@@ -1372,7 +1374,8 @@ async fn model_selectable_bash_background_selection_dispatches_conversation_owne
         .expect("prepare background dispatch");
     let rustx::tools::background::BackgroundDispatchOutcome::Accepted { execution_id, .. } =
         background
-            .commit_dispatch(dispatch, &CancellationSignal::new())
+            .commit_dispatch_owned(dispatch, &CancellationSignal::new())
+            .await
             .expect("background dispatch commits")
     else {
         panic!("the background dispatch is accepted");
@@ -1540,7 +1543,8 @@ async fn background_cancel_at_native_gate() {
         .unwrap();
     let rustx::tools::background::BackgroundDispatchOutcome::Accepted { execution_id, .. } =
         registry
-            .commit_dispatch(prepared, &CancellationSignal::new())
+            .commit_dispatch_owned(prepared, &CancellationSignal::new())
+            .await
             .unwrap()
     else {
         panic!("accepted")

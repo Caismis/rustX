@@ -356,8 +356,9 @@ Native auxiliary acquisition and waits follow this graph:
   failure, release permits/admission, retire the child, then deliver its result.
 
 Failure registration under the coordinator takes only DurabilityGate's short
-state mutex. A pending winner refuses later work while an earlier writer
-finishes. Permission exit commits/publishes that first winner exactly once,
+state mutex. Coordinator idle probes treat a held lifecycle commit boundary as
+busy instead of waiting for its writer. A pending winner refuses later work
+while an earlier writer finishes. Permission exit commits/publishes that first winner exactly once,
 without holding the gate mutex or a SQL lease during the native callback.
 General work cannot select protected capacity by supplying a purpose string.
 

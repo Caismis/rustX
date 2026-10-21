@@ -382,7 +382,7 @@ impl ManagedRuntimeClient {
         Ok(receiver)
     }
 
-    /// Compaction transfers its whole business tail to ConversationRuntime.
+    /// Compaction transfers its whole business tail to `ConversationRuntime`.
     /// The manager lease covers native admission only; the reply cannot pin
     /// residency or prevent an explicit unload from draining that native tail.
     pub(crate) fn start_compaction_operation<F, Fut>(

@@ -1210,7 +1210,7 @@ impl<'a> AgentExecution<'a> {
                     runtime_policy.monotonic_clock.clone(),
                 )
                 .map_err(|error| {
-                    MailboxError::Durable(ConversationStoreError::Storage(error.to_string()))
+                    MailboxError::Durable(ConversationStoreError::Storage(error.message))
                 })?;
                 context_runtime
                     .summarizer
