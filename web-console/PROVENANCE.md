@@ -79,10 +79,10 @@ the popup; cached refresh does not add an inline loading label to the composer.
 Updated screenshot references use exact pixel comparison. Noise evidence tied
 to the previous layout is preserved with its original images in the comparator
 fixtures, rather than reused as an exception for the new layout.
-The narrow running-draft Composer references have newly measured rounded-shadow
-noise at 15 light and 16 dark pixel sites. Each site has its own measured channel
-bound; adjacent pixels, dimensions and all other references remain exact. The
-manifest records independent runs, the pinned browser and decoded-image hashes.
+Earlier narrow Composer rasterizer measurements are retained with their original
+images in the comparator fixtures. The Sidebar/conversation synchronization below
+changes the card geometry, so those earlier allowances do not apply to the new
+references. Current screenshot acceptance is exact, without live noise regions.
 
 ## Web frame separators
 
@@ -95,6 +95,44 @@ corners and the reference's `0.5px` sidebar separator using the existing
 Only the explicit Windows native-titlebar selector retains its caption inset
 and rounded content corner, as upstream defines. Native platform integration,
 column widths, resize ownership and conversation behavior are unchanged.
+
+## Sidebar and conversation style synchronization
+
+The same read-only Harness revision, `687f282e8625c6b8d11ff58211a90524be2e4317`,
+was audited across `ui-sidebar`, `ui-workspace`, `ui-conversation`, `ui-chat`,
+`ui-tool`, `ui-primitives`, `ui-user-questions`, `ui-permission-presets` and
+`ui-subagent`. Per-file source hashes and bounded adaptations are recorded in
+the source inventory.
+
+- Sidebar controls use the current shared radius tokens and inset keyboard
+  focus rings. The brand row uses the four-pixel bottom gap, and the collapsed
+  rail no longer clips its toggle. Session/search rows use the current rounding,
+  ten-pixel recency labels, fifteen-pixel action gap and five-pixel scrollbar.
+  View options retain a stable 200-pixel minimum width. Long titles follow the
+  reference's frame-driven marquee and edge masks; leaving or unmounting stops
+  it, and reduced motion reveals the end without animation. The native
+  observation line remains separate from the moving title.
+- The conversation header uses the current 76-pixel tabbed geometry and reclaims
+  unused tab space. The composer uses the
+  28-pixel panel radius, an inset dashed workspace-picker stroke and eight-pixel
+  toolbar gaps in narrow panes. User bubbles, file tiles, question/approval
+  cards and workspace/permission controls use the corresponding current tokens.
+- Shared process rows use tertiary text and glyphs, secondary on hover, with an
+  upward chevron while expanded. Running text uses the existing `TextShimmer`
+  primitive; the old background sweep was removed. The expanded reasoning
+  header stays sticky, and its streaming preview advances only after a
+  paragraph's first line is complete. Accessible native status and controlled
+  content targets remain singular and outside decorative copies.
+- Assistant-tail actions use the current eight-pixel radius and seventeen-pixel
+  glyphs, with smaller completion metadata. Agent catalog row rounding and
+  menu padding match the current header lineage surface.
+
+These are presentation adaptations of existing rustX surfaces. Native Session,
+tool, workspace, cancellation, publication and Settings owners retain their
+contracts. Harness plugin injection, shortcuts, archive operations and runtime
+services are not imported. Earlier live Composer noise evidence is frozen under
+`test/fixtures/screenshot-comparator/`; the new baselines use an empty live
+noise policy rather than inheriting bounds measured on the previous layout.
 
 ## Shared model selection surfaces
 

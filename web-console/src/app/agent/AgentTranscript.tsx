@@ -74,7 +74,7 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
   const tx = useTranslation();
   const receiver = useContext(AgentConversationContext);
   const isUser = (message: MessageBlock) => isUserBubble(message, receiver?.parent_agent_id);
-  const userActions = (message: MessageBlock) => isUser(message) && message.role === 'user' && <div className={tailCss.actions} aria-label={tx('agent:agent-transcript.message-actions')}><MessageTime time={message.timestamp}/><CopyMessage messageId={message.id} text={message.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('')}/></div>;
+  const userActions = (message: MessageBlock) => isUser(message) && message.role === 'user' && <div className={tailCss.actions} data-clock="start" aria-label={tx('agent:agent-transcript.message-actions')}><MessageTime time={message.timestamp}/><CopyMessage messageId={message.id} text={message.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('')}/></div>;
   const [{ transcriptMode }] = useConversationPreferences();
   const verbose = transcriptMode === 'verbose';
   const groupedLive = transcriptMode === 'compact' || transcriptMode === 'standard';
@@ -180,7 +180,7 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
       const text = partial.content.flatMap(block => block.kind === 'text' || block.kind === 'refusal' ? [block.text] : []).join('');
       return messageSegments({ role: 'assistant', id: partial.message_id, content: [] },
         partial.content.flatMap(block => block.kind === 'proposed_tool_call' ? [] : [{ type: block.kind, block_index: block.block_index, text: block.text }]), [], { stopped: true, publicationStream: partial.stream_id,
-          actions: partial.content.some(block => block.kind === 'text' || block.kind === 'refusal') && <div className={tailCss.actions}><CopyMessage text={text} publication={partial}/><MessageTime time={partial.settled_at}/></div> });
+          actions: partial.content.some(block => block.kind === 'text' || block.kind === 'refusal') && <div className={tailCss.actions} data-clock="end"><CopyMessage text={text} publication={partial}/><MessageTime time={partial.settled_at}/></div> });
     }
     if (entry.item.type === 'interaction_requested' || entry.item.type === 'interaction_settled') {
       const item = entry.item;
@@ -246,7 +246,7 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
   const descriptorResponse = (descriptor:RuntimeClientMessageDescriptor) => {
     const cursor = descriptorTranscriptPosition(descriptor, entries, page);
     return descriptor.completed_response && <div className={tailCss.root}>
-      {cursor != null && deliveryTail(attemptOwnerKey(descriptor.completed_response.origin), cursor)}<div className={tailCss.actions} aria-label={tx('agent:turn-tail.completed-turn')} data-turn-tail={attemptOwnerKey(descriptor.completed_response.origin)}>
+      {cursor != null && deliveryTail(attemptOwnerKey(descriptor.completed_response.origin), cursor)}<div className={tailCss.actions} data-clock="end" aria-label={tx('agent:turn-tail.completed-turn')} data-turn-tail={attemptOwnerKey(descriptor.completed_response.origin)}>
         {descriptor.completed_response.usage && <TurnUsage usage={descriptor.completed_response.usage} models={descriptor.completed_response.models??[]}/>}
         <MessageTime time={descriptor.completed_response.completed_at}/>
       </div></div>;

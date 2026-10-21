@@ -12,6 +12,7 @@ import {
 } from './screenshot-comparator';
 import manifest from './fixtures/rasterizer-noise.json';
 import frozenManifest from './fixtures/screenshot-comparator/noise.json';
+import previousStyleManifest from './fixtures/screenshot-comparator/pre-style-sync-noise.json';
 
 /** The screenshot acceptance contract, held to the pure comparator.
  *
@@ -32,7 +33,7 @@ const snapshotDirectories = readdirSync(e2e)
 /** The comparator's own contract is proven against frozen fixtures: earlier
  * Settings and Composer references and their measured rasterizer noise. They are copies, not live references, so a product change to a live
  * screenshot never silently rewrites the comparator's evidence. */
-const comparatorPolicy = frozenManifest as unknown as NoisePolicy;
+const comparatorPolicy = [...frozenManifest, ...previousStyleManifest] as unknown as NoisePolicy;
 const frozen = new URL('./fixtures/screenshot-comparator/', import.meta.url);
 const fixture = (name: string): RgbaImage => decodePng(readFileSync(new URL(name, frozen)));
 const NARROW = 'settings-agent-narrow-dark-linux.png';
@@ -75,7 +76,8 @@ it.each([
   ['live', noisePolicy, reference],
   ['frozen comparator', comparatorPolicy, fixture],
 ] as const)('the %s noise manifest is measured evidence bound to bounded, disjoint regions', (_label, policy, image_) => {
-  expect(policy.length).toBeGreaterThan(0);
+  if (_label === 'live') expect(policy).toEqual([]);
+  else expect(policy.length).toBeGreaterThan(0);
   for (const entry of policy) {
     expect(entry.evidence).toBeTruthy();
     expect(entry.regions.length).toBeGreaterThan(0);
@@ -438,9 +440,7 @@ it('K: a dimension change fails, for strict and noise-policy references alike', 
 // Composer references without measured rasterizer evidence remain strict.
 it.each([
   ...['idle-empty', 'idle-draft', 'running-empty', 'running-draft', 'attachment', 'context']
-    .flatMap(state => ['light', 'dark'].map(theme => `composer-${state}-${theme}-390-linux.png`))
-    .filter(name => !['composer-context-dark-390-linux.png'].includes(name))
-    .filter(name => !['running-empty', 'running-draft', 'context'].some(state => name === `composer-${state}-light-390-linux.png`)),
+    .flatMap(state => ['light', 'dark'].map(theme => `composer-${state}-${theme}-390-linux.png`)),
   'mobile-expanded-dark-linux.png',
 ])('%s is strict', name => {
   expect(noisePolicy.some(entry => entry.reference === name)).toBe(false);
@@ -453,9 +453,9 @@ it.each([
   }
 });
 
-it.each([...['running-empty', 'running-draft', 'context'].map(state => [state, 'light']), ['context', 'dark']])('Composer %s %s noise rejects every adjacent unmeasured pixel', (state, theme) => {
-  const name = `composer-${state}-${theme}-390-linux.png`, expected = reference(name);
-  const entry = noisePolicy.find(entry => entry.reference === name)!;
+it.each([...['running-empty', 'running-draft', 'context'].map(state => [state, 'light']), ['context', 'dark']])('frozen Composer %s %s noise rejects every adjacent unmeasured pixel', (state, theme) => {
+  const name = `pre-style-sync-composer-${state}-${theme}-390-linux.png`, expected = fixture(name);
+  const entry = entryOf(name);
   const measured = new Set(entry.pixels!.map(([x, y]) => `${x},${y}`));
   for (const region of entry.regions) for (const [x, y] of cells(region)) expect(measured.has(`${x},${y}`)).toBe(true);
   const neighbours = new Set<string>();
@@ -465,7 +465,7 @@ it.each([...['running-empty', 'running-draft', 'context'].map(state => [state, '
   expect(neighbours.size).toBeGreaterThan(0);
   const changed = copy(expected);
   for (const key of neighbours) { const [x, y] = key.split(',').map(Number); nudge(changed, x, y, 1); }
-  const result = compare(changed, name, expected, noisePolicy);
+  const result = compare(changed, name, expected, comparatorPolicy);
   expect(result.ok).toBe(false); expect(result.changedOutsideRegions).toBe(neighbours.size);
 });
 

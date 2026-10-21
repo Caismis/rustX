@@ -64,7 +64,7 @@ export function CopyMessage({ text, messageId, publication }: { text: string; me
 }
 export function TurnTail({ text, response, onHistorical, disabled, lineageSwitchSafe, latest = false, forking = false, children }: { text: string; response: CompletedResponseView; onHistorical?: (action: ResponseAction, response: CompletedResponseView) => void; disabled?: boolean; lineageSwitchSafe: boolean; latest?: boolean; forking?: boolean; children?: ReactNode }) {
   const tx = useTranslation();
-  const actions = <div className={css.actions} aria-label={tx('agent:turn-tail.completed-turn')} data-chat-turn-owner={turnAnchor(response.origin)} data-response-reveal={latest || forking ? 'always' : 'hover'} data-turn-tail={attemptOwnerKey(response.origin)}>
+  const actions = <div className={css.actions} data-clock="end" aria-label={tx('agent:turn-tail.completed-turn')} data-chat-turn-owner={turnAnchor(response.origin)} data-response-reveal={latest || forking ? 'always' : 'hover'} data-turn-tail={attemptOwnerKey(response.origin)}>
     <CopyMessage text={text} messageId={response.closing_message_id}/>
     {onHistorical && <>
       {/* rustX's Retry replays the original input on a sibling branch; it sits

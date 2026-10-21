@@ -1071,7 +1071,15 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "625906a540169de753412568be0b8ec2e867a9794568c4f57a77a663dbc13174"
+      "local_sha256": "be22cd95ea8cf40fdb992f1242abb4808d55962e52bd566402684e4405f2bfb1",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-approval/src/client/ApprovalPanel.module.css",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "c7946195e6e30360e2b33de81074b4893d06ec7e8b4bc5b616eb8144f9c28317",
+          "treatment": "Synchronize existing Sidebar and conversation presentation: current radii, typography, focus, hover and activity styling; native owners, accessibility targets and product callbacks remain local."
+        }
+      ]
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -1135,7 +1143,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "ae2b36bfe4babc87a2d51f0febfeb3be780517a731e24cf4a927f2d76d925840",
+      "local_sha256": "a481aafb123bd5f1615b749bada8aa3687bbcaff640a533b6dbaba5ca260b355",
       "additional_sources": [
         {
           "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
@@ -1166,7 +1174,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "9139bddea132c0461d7f658a19a4e4863e4f1099f43db6f31c92185c40d902ff",
+      "local_sha256": "79913b1544ae5113d7563ab652997451adef985b71109bde2b13c1b241294835",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css",
@@ -1185,6 +1193,12 @@
           "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
           "upstream_sha256": "d4c36e6e304067a820c3ff4873f26f85bc55c6af8341f89a4802f53766bcb599",
           "treatment": "Compact 28px icon control and mirrored panel glyph adapted."
+        },
+        {
+          "upstream": "packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "db3f29845e6cefa877737683e18d6b7e790be48d0c6510939ab4d18ab56a72fe",
+          "treatment": "Synchronize existing Sidebar and conversation presentation: current radii, typography, focus, hover and activity styling; native owners, accessibility targets and product callbacks remain local."
         }
       ]
     },
@@ -1203,7 +1217,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "378904386da5e2a93947a321fc21962f307a72917e94412e91b9d4c5919bc3cc",
+      "local_sha256": "073776db936c4122c90e88d7fc57d899b624b5674d9fe6f80c5393737e7b6df3",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/AssistantMarkdown.module.css",
@@ -1352,13 +1366,21 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "d780866760410dab5ef684496953dcd59750e1d4337f500a657f3afa154c249f"
+      "local_sha256": "bb7aeea23a8215e502b53b9cb7decdb6d0a7ef7dcd3a0d66b84ded8b5a632ee9",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-user-questions/src/client/QuestionComposer.module.css",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "b1d33fe590bbc7d17ccadda6bfa63dfc6c0b01a87b2f3b7230f821041785b1d7",
+          "treatment": "Synchronize existing Sidebar and conversation presentation: current radii, typography, focus, hover and activity styling; native owners, accessibility targets and product callbacks remain local."
+        }
+      ]
     },
     {
-      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
       "upstream": "packages/client/ui-chat/src/client/chat/ReasoningRow.module.css",
       "destination": "web-console/src/presentation/agent/Reasoning.module.css",
-      "upstream_sha256": "de90c417934f43f7c10386ee9e60f551eedc85f7462ee72bf876a138cd379e19",
+      "upstream_sha256": "5c28a61623c3bda67513c728422141921909d5227dbfb6c2e8a1a2e7e59079b1",
       "classification": "A",
       "treatment": "Pinned Harness styles; native textarea environment adaptation where required.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
@@ -1369,7 +1391,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "467385accfa63e949a164afe92c56aaf2bdaef51a0ba5d36caae14baa3b93a10"
+      "local_sha256": "cbcbb675e6c4780e5d1ea712ee4f1f873ea744375177b2574ca0d54a0a773a7c"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -1383,6 +1405,7 @@
         "../../locale/react",
         "../markdown/MarkdownText",
         "../primitives/DisclosureRow",
+        "../primitives/TextShimmer",
         "../primitives/icons",
         "./Reasoning.module.css",
         "react"
@@ -1393,7 +1416,15 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "d367dc5c2ce4409a53ada0ded50098b9248205cfd308507cc2c937ffdfc3d84a"
+      "local_sha256": "32b4de98eed3bf88945890a030a04b2a50333dd1b2e550f65324b5eb2aa1b713",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-chat/src/client/chat/ReasoningRow.tsx",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "5bf98dd0c28c7ef48795fda2b714cc32b36bb2d6e86b78add02d89590a884612",
+          "treatment": "Synchronize existing Sidebar and conversation presentation: current radii, typography, focus, hover and activity styling; native owners, accessibility targets and product callbacks remain local."
+        }
+      ]
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -1410,7 +1441,15 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "bfa4065c1ad7a77e2db29335b4dba0376e41dc246df11fc0a578a73f6bb8db94"
+      "local_sha256": "ac2625e8d76892916436ef6e1ba131cda305a3154244d96a1fb2e18f23770259",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-tool/src/client/tool/components/ToolRow.module.css",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "943c0b6205ba9eb922e1ced7223dcf6d908d3012dfbd58ccaa73b65c2ef99313",
+          "treatment": "Synchronize existing Sidebar and conversation presentation: current radii, typography, focus, hover and activity styling; native owners, accessibility targets and product callbacks remain local."
+        }
+      ]
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -1427,6 +1466,7 @@
         "../primitives/ReadBlock",
         "../primitives/SearchBlock",
         "../primitives/TerminalBlock",
+        "../primitives/TextShimmer",
         "../primitives/icons",
         "./Tool.module.css",
         "./ToolDetails",
@@ -1439,13 +1479,19 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "b2f10fd1dc7b06c0721acc692bf82cc5871d208087cc25b0a1d1a0d9881a2ddb",
+      "local_sha256": "5143baedb4f50cd8c545a0cd385de96fdfbd4346569b8a119484d5564c3f13c1",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-tool/src/client/tool/components/ToolRow.tsx",
           "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
           "upstream_sha256": "df1dbc9771459eb5160a42d28fd284a54ff66b306562a2a3528bd717e42454f4",
           "treatment": "Issue #402 presentation adaptation; native execution/configuration replaces upstream ownership."
+        },
+        {
+          "upstream": "packages/client/ui-tool/src/client/tool/components/ToolRow.tsx",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "5964bcc53166cfe7458b9b91b5e0ac75eed36bd8ea8dfcc9d0bf0886273ff487",
+          "treatment": "Synchronize existing Sidebar and conversation presentation: current radii, typography, focus, hover and activity styling; native owners, accessibility targets and product callbacks remain local."
         }
       ]
     },
@@ -1464,7 +1510,15 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "b169958274b2a0cb6e031d9c7bb1504ea3ecf1604aadff689cc0eed70b6025f6"
+      "local_sha256": "974362fce6c614d56af7a517ee809f906bff100c6a03ba74f320f9d865d386be",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-tool/src/client/tool/ToolCallTree.module.css",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "7247f04ee77725aa59ed3621634fd4ac7b4ea63ae35cd5e647fdc8a6ae374dbb",
+          "treatment": "Synchronize existing Sidebar and conversation presentation: current radii, typography, focus, hover and activity styling; native owners, accessibility targets and product callbacks remain local."
+        }
+      ]
     },
     {
       "upstream": "packages/client/ui-attachment/src/MessageImage.module.css",
@@ -1923,15 +1977,15 @@
       "upstream": "packages/client/ui-primitives/src/DisclosureRow.module.css",
       "destination": "web-console/src/presentation/primitives/DisclosureRow.module.css",
       "treatment": "retained mostly intact",
-      "upstream_sha256": "40cdcab1f8821760ba2a59ff859b4c4fb894ea373b27083076c0e4f995373712",
+      "upstream_sha256": "4f153362045d4d374b5f52f21a39373e9c8d41cfab06978130e588dede447b91",
       "retained_dependencies": [
         "CSS modules",
         "existing theme tokens"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [],
-      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "f8dafcda07dd1744bd0f2e3724ab1b17ab8cdde6f6eb82dec8a7ffdbc78a624d"
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "local_sha256": "beb6f5801b164f90f48ee52e25b94b3973d27d076f8e50e672525138693dccce"
     },
     {
       "upstream": "packages/client/ui-primitives/src/DisclosureRow.tsx",
@@ -1940,6 +1994,7 @@
       "upstream_sha256": "0c65c0f0f14f9fdaf4dda6aeea6c73bf803c4591d64f53784928aaa559cc9b96",
       "retained_dependencies": [
         "./DisclosureRow.module.css",
+        "./TextShimmer",
         "./icons/index.tsx",
         "clsx",
         "react"
@@ -1947,7 +2002,15 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "c0085205ef3c8ab34b6c860fcb6f129d78d575764b6e85ac2ed65c0f38d2e113"
+      "local_sha256": "e73ec24b331d021bc57db3036ab33154e5a8c0c5d665fae28eebb06e4eb4e201",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-primitives/src/DisclosureRow.tsx",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "000d8193ebed80b6ac1d9ff8f8b7ce76e596532065b08003d0033c0ab040501d",
+          "treatment": "Synchronize existing Sidebar and conversation presentation: current radii, typography, focus, hover and activity styling; native owners, accessibility targets and product callbacks remain local."
+        }
+      ]
     },
     {
       "destination": "web-console/src/presentation/primitives/HoverCard.module.css",
@@ -2565,9 +2628,9 @@
     {
       "destination": "web-console/src/presentation/sidebar/SidebarRoot.module.css",
       "upstream": "packages/client/ui-sidebar/src/client/SidebarRoot.module.css",
-      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
       "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
-      "upstream_sha256": "59783ec45c5813e01b70daee1630e595d21239611aeb8f0305e045c1c2a38dbc",
+      "upstream_sha256": "6eaadd716ab135e0d08696f11e979449c14734b38b94ae65408601bdf5ff8393",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
         "Cordis/slot registry",
@@ -2575,7 +2638,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "446233dd35047559ff79c1e88252a89802395da836f4665701a581ae1c8477fe",
+      "local_sha256": "da44af031e265eb6210d420ee85fc4eb70bc239cabeeff82108725dfb11efa13",
       "retained_dependencies": [],
       "classification": "B"
     },
@@ -2601,8 +2664,16 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "de44256887482cccf66fec300941f90307600300fbf75b40362ec77b7d61c320",
-      "classification": "B"
+      "local_sha256": "1900cff12c303b8d5c652cada5fa1601f45a6ecfb0cd5419c2de28e876ea6014",
+      "classification": "B",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-sidebar/src/client/SidebarRoot.tsx",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "51d95e300ed74cdfdeb2c7f7daa8b32324af95071787c0e6d3905b450c9e4951",
+          "treatment": "Synchronize existing Sidebar and conversation presentation: current radii, typography, focus, hover and activity styling; native owners, accessibility targets and product callbacks remain local."
+        }
+      ]
     },
     {
       "upstream": "packages/client/ui-theme/src/styles/base.css",
@@ -2747,7 +2818,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "b67b7dd590beb9825a6f15b464fe7ae747ed1e08d80189a2bef832c9141f8a45",
+      "local_sha256": "21548f2d70312ca09cb56742393159019460511f30a1474c62ed165903fd934f",
       "retained_dependencies": [],
       "classification": "B",
       "additional_sources": [
@@ -2792,7 +2863,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "f63cfaa300814e301b00a40aedbef458cde10045f8d14faac4e47e96585f5fef",
+      "local_sha256": "33f2bba3bc9b1760bd00642da17688f28a095393f655475d92a101a6f05b3ce8",
       "classification": "B",
       "additional_sources": [
         {
@@ -2834,7 +2905,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "0437a094dbd357cf62c3b31d87a698866a72f7e8ab44097f7644b035defbe42b",
+      "local_sha256": "23fb45142ac6f65dc85604fb059d01b83f7b6d9389283ea25383f679cd8f429a",
       "retained_dependencies": [],
       "classification": "B",
       "additional_sources": [
@@ -2870,7 +2941,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "856d1a04a604e8aa1f0519551aaf9788fd53c24981530e50e24f4d7f3a2f6501",
+      "local_sha256": "d8f1292967d08cae438ea3aed094553ddbcecb4b8c38b3786775f9908b19104a",
       "classification": "B",
       "additional_sources": [
         {
@@ -2878,6 +2949,12 @@
           "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
           "upstream_sha256": "b02a9b6c9d8c5a019a09bcd5e5bcf10a6f703c11765f191bcee714f381f57ed8",
           "treatment": "Current blank pinning and visibility adapted to the browser-owned pre-submit draft; no upstream runtime or session store retained."
+        },
+        {
+          "upstream": "packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "0cec4cb11595b46d84f7d2ee49c5b73d45ab0303e31aa293cb00d92e4c699527",
+          "treatment": "Synchronize existing Sidebar and conversation presentation: current radii, typography, focus, hover and activity styling; native owners, accessibility targets and product callbacks remain local."
         }
       ]
     },
@@ -3036,6 +3113,12 @@
           "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
           "upstream_sha256": "4b493845e7d28b93a2db2198e70deffcf4b290c31218923fc7c945af737b56d1",
           "treatment": "Turn-owned direct actions, usage and end clock; native response boundary and origin identities retained."
+        },
+        {
+          "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.tsx",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "57bbf290748e848503b92d8659b4197c6cc62293cd2301bbe95bec43c8626fb5",
+          "treatment": "Synchronize existing Sidebar and conversation presentation: current radii, typography, focus, hover and activity styling; native owners, accessibility targets and product callbacks remain local."
         }
       ],
       "retained_dependencies": [
@@ -3062,7 +3145,7 @@
         "Cordis/plugin slots"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "bb22586759bbc1b3157fbf8645fa51d48a9f8bb59b4f012be2eb37e5ac50e2d9"
+      "local_sha256": "ba1c636711e3c58f0fbe9d451386a603bec085313022a8752a5509e18deb4078"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.module.css",
@@ -3086,6 +3169,12 @@
           "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
           "upstream_sha256": "9a40577b0c47199b8c9f2801ad484b1947e9b53f57182b4176badf03bbbc113f",
           "treatment": "Turn-tail stack gap and action spacing for delivered files before the action row; rustX native Turn ownership retained."
+        },
+        {
+          "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.module.css",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "b5e3ced5112bb676345eaa7d1bf7ec291b87f56ffa87579b6ece7b6ca6c72902",
+          "treatment": "Synchronize existing Sidebar and conversation presentation: current radii, typography, focus, hover and activity styling; native owners, accessibility targets and product callbacks remain local."
         }
       ],
       "retained_dependencies": [],
@@ -3096,7 +3185,7 @@
         "Cordis/plugin slots"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "f466769cacf7b4bc0bf28210af7fa8ba86146ec5f1e1d496de53148af8321fcd"
+      "local_sha256": "b65828eb1c810bb765475a34631efc20f6528cbde455c094c6839fe29f0578d0"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
@@ -3208,13 +3297,19 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "3470894ade7d37c9780adb1bee62b0b2fcae0a7319ddf4a069a549d1210d7e45",
+      "local_sha256": "3a1cc4b5569f577cbb6237bea275f527abfb17880a0a216bb3c1de9bf24b4ec1",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css",
           "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
           "upstream_sha256": "d9d856868adfdc8a300600e060e6262afa42fc3bfc8019b5a597dec326b0c59c",
           "treatment": "Workspace context shares the resident composer column width."
+        },
+        {
+          "upstream": "packages/client/ui-conversation/src/client/skeleton/HeroShell.module.css",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "38a98b030dc643553bbbfaffeb8e98ca4668c59e55165da57aca31e89ee92f44",
+          "treatment": "Synchronize existing Sidebar and conversation presentation: current radii, typography, focus, hover and activity styling; native owners, accessibility targets and product callbacks remain local."
         }
       ]
     },
@@ -3266,7 +3361,15 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "ecf3e1836d86f68e50b917b1307edf188c080fbc6c380b1fb2e0d0bb7bcabdc9"
+      "local_sha256": "df8b24ac01d7f98e24529cff9f218360cf7acf5b20f144e9e640e79c21efe8bd",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-permission-presets/src/client/PermissionSelect.module.css",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "479464c75eb3f4ed6e2fd1d8e41632fed6c9a0e7a48f0287094195ae0524d51d",
+          "treatment": "Synchronize existing Sidebar and conversation presentation: current radii, typography, focus, hover and activity styling; native owners, accessibility targets and product callbacks remain local."
+        }
+      ]
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -6215,7 +6318,15 @@
       "retained_dependencies": [],
       "excluded_dependencies": [],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "local_sha256": "bea48bcb577da465ad98e8ec666f7dfd8912c3cdae433afe08bb440857b07ad2"
+      "local_sha256": "8cdb79f2c27796d996702bf42a194360f3ed26736451703164857e3498337395",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-subagent/src/client/SubagentHeaderLineage.module.css",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "936d891e1c6dcf680b5d0e741cda2008a77f1282e5a713606c25c596722de87f",
+          "treatment": "Synchronize existing Sidebar and conversation presentation: current radii, typography, focus, hover and activity styling; native owners, accessibility targets and product callbacks remain local."
+        }
+      ]
     },
     {
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",

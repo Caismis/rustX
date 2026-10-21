@@ -1,7 +1,7 @@
 /* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 .root {
   --dsh-session-list-edge-inset: var(--dsh-sidebar-inline-padding);
-  --dsh-session-list-scrollbar-width: 8px;
+  --dsh-session-list-scrollbar-width: 5px;
   --dsh-session-list-scrollbar-offset: 2px;
   flex: 1;
   min-height: 0;
@@ -23,8 +23,7 @@
   width: 28px;
   height: 28px;
   border: none;
-  border-radius: 50%;
-  corner-shape: round;
+  border-radius: var(--dsw-radius-sm);
   padding: 0;
   background: transparent;
   cursor: pointer;
@@ -33,6 +32,18 @@
 
 .iconButton:hover {
   background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* Keep focus inside controls clipped by the search and action seats. */
+.iconButton:focus-visible,
+.searchButton:focus-visible,
+.clearButton:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: -2px;
+}
+
+.viewOptionsMenu {
+  min-width: 200px;
 }
 
 /* Section header: title, an inline search control, and the two trailing
@@ -47,7 +58,7 @@
   padding-left: 4px;
   margin-bottom: 4px;
   box-sizing: border-box;
-  border-radius: 12px;
+  border-radius: var(--dsw-radius-md);
   overflow: hidden;
   color: var(--dsw-alias-label-tertiary);
 }
@@ -140,8 +151,7 @@
   padding: 0;
   box-sizing: border-box;
   border: none;
-  border-radius: 50%;
-  corner-shape: round;
+  border-radius: var(--dsw-radius-sm);
   background: transparent;
   cursor: text;
   color: var(--dsw-alias-label-secondary);
@@ -159,7 +169,7 @@
   margin-inline: -2px;
   padding: 0 4px 0 0;
   border: 0.5px solid var(--dsw-alias-border-l4);
-  border-radius: 10px;
+  border-radius: var(--dsw-radius-md);
   background: transparent;
   color: var(--dsw-alias-label-caption);
 }
@@ -172,8 +182,7 @@
   width: 28px;
   height: 28px;
   border: none;
-  border-radius: 50%;
-  corner-shape: round;
+  border-radius: var(--dsw-radius-sm);
   padding: 0;
   background: transparent;
   cursor: pointer;
@@ -226,8 +235,7 @@
   width: 24px;
   height: 24px;
   border: none;
-  border-radius: 50%;
-  corner-shape: round;
+  border-radius: var(--dsw-radius-sm);
   padding: 0;
   background: transparent;
   cursor: pointer;
@@ -257,7 +265,7 @@
   width: 36px;
   height: 36px;
   /* Rail hovers share the shell rail's 12px rounding. */
-  border-radius: 12px;
+  border-radius: var(--dsw-radius-md);
   color: var(--dsw-alias-label-primary);
 }
 
@@ -269,7 +277,7 @@
   gap: 0;
   /* The collapsed search frame clips its button's hover, so it must carry the
      rail's 12px rounding itself. */
-  border-radius: 12px;
+  border-radius: var(--dsw-radius-md);
   border-color: transparent;
   background: transparent;
 }
@@ -277,7 +285,7 @@
 .rail .searchButton {
   width: 36px;
   height: 36px;
-  border-radius: 12px;
+  border-radius: var(--dsw-radius-md);
   color: var(--dsw-alias-label-primary);
 }
 
@@ -442,7 +450,7 @@
   width: 100%;
   height: 28px;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--dsw-radius-sm);
   padding: 0 12px 0 calc(28px + var(--dsh-workspace-indent, 0px));
   background: transparent;
   cursor: pointer;
@@ -461,9 +469,12 @@
 }
 
 .empty {
-  padding: 16px 12px;
+  margin-top: 80px;
+  padding: 0 12px;
+  text-align: center;
   color: var(--dsw-alias-label-tertiary);
   font-size: 13px;
+  line-height: 20px;
 }
 
 /* Rename dialog form (same figma dialog family as the create modals). */
