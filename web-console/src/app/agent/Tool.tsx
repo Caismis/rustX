@@ -1,23 +1,20 @@
-import { JournalValue, ToolMetadataValue } from './JournalValue';
 import { useToolInspection } from './tool-inspection';
 import { useTranslation } from '../../locale/react';
-import type { ForegroundToolExecution } from '../../../../protocol/app-server/v50';
+import type { ForegroundToolExecution } from '../../../../protocol/app-server/v51';
+import { useToolInput } from './tool-source';
 import { toolCard } from '../../bindings/tools';
 import { askUserRow } from '../../bindings/ask-user';
 import { QuestionRow } from '../../presentation/agent/QuestionRow';
 import { PresentRow } from '../../presentation/agent/PresentRow';
 import { presentRow } from '../../bindings/present';
+import { recordedToolDetails } from '../../bindings/recorded-tool-details';
+import { IconChecklistOutline14 } from '../../presentation/primitives/icons';
 import { ToolCard } from '../../presentation/agent/ToolCard';
 import { ToolArtifacts } from '../components/Artifact';
 import { DomainActivity, domainActivity } from './DomainActivity';
 import { GoalActivity, goalActivityLabel } from './GoalActivity';
-export function Tool({ tool }: { tool: ForegroundToolExecution }) {
-  const tx = useTranslation(), result = tool.committed_result;
-  const saved = result?.status.type;
-  const label = saved === 'outcome_unknown' ? 'uncertain' : saved === 'success' ? 'success' : saved === 'cancelled' ? 'cancelled' : 'failure';
-  return <><ToolBody tool={tool}/>{result && tool.state.type !== 'settled' && <p data-tool-result-committed>{tx('common:activity.saved-tool-result', {status:tx(`common:state.${label}`)})}</p>}<JournalValue field={tool.result_source ?? undefined}/>{tool.committed_result_deferred && <ToolMetadataValue reference={tool.result_metadata_ref}/>}</>;
-}
-function ToolBody({ tool }: { tool: ForegroundToolExecution }) {
+export function Tool({ tool: original }: { tool: ForegroundToolExecution }) {
+  const input = useToolInput(original), tool = input.tool;
   const tx = useTranslation(), inspect = useToolInspection(tool);
   if (domainActivity(tool)) return <DomainActivity tool={tool}/>;
   const question = tool.tool_id === 'tool-ask-user' ? askUserRow(tool) : undefined;
@@ -27,5 +24,7 @@ function ToolBody({ tool }: { tool: ForegroundToolExecution }) {
   const goal = goalActivityLabel(tx, tool);
   if (goal !== undefined) return <GoalActivity inspect={inspect} tool={tool} label={goal}/>;
   const body = tool.committed_result ?? (tool.state.type === 'settled' ? tool.state.result : undefined);
-  return <ToolCard inspect={inspect} tool={{ ...toolCard(tool), artifacts: body ? <ToolArtifacts result={body}/> : undefined }}/>;
+  const view = toolCard(tool);
+  const details = view.state === 'success' && body?.status.type === 'success' ? recordedToolDetails(tool.tool_id, body.content, tx) : undefined;
+  return <ToolCard onExpand={input.expand} body={input.pending ? <p role="status">{tx('common:activity.loading')}</p> : input.error ? <p role="alert">{input.error} <button type="button" onClick={input.retry}>{tx('agent:message.retry-tool')}</button></p> : undefined} inspect={inspect} tool={{ ...view, ...(tool.tool_id === 'tool-todo' ? { title: tx('tools:todo.title'), icon: <IconChecklistOutline14/> } : {}), details, summary: details?.summary ?? details?.empty ?? view.summary, artifacts: body ? <ToolArtifacts result={body}/> : undefined }}/>;
 }

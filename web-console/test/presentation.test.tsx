@@ -78,10 +78,10 @@ it('native Review preserves instance and subject digest and waits for authoritat
   server.snapshots.get('A')!.pending_interactions = [review]; await server.attached('A');
   localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
   render(<App client={server.client} workspaceHost={server.workspaceHost} />);
-  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Accept review' })); await server.waitFor('interaction/respond', 1); await server.client.refresh('A'); });
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Submit' })); await server.waitFor('interaction/respond', 1); await server.client.refresh('A'); });
   const request = server.requests.find(item => item.request.method === 'interaction/respond')!.request;
   expect(request.params).toMatchObject({ interaction: review.interaction, response: { type: 'review', response: { instance, subject_digest: 'native-subject-digest', decision: { type: 'accepted' } } } });
-  expect(screen.queryByRole('button', { name: 'Accept review' })).toBeNull();
+  expect(screen.queryByRole('region', { name: 'Review' })).toBeNull();
 });
 
 it('closing A immediately emits exactly its detach, preserving B, runtime work and pending facts', async () => {
@@ -91,8 +91,9 @@ it('closing A immediately emits exactly its detach, preserving B, runtime work a
   render(<App client={server.client} workspaceHost={server.workspaceHost} />);
   const target = server.client.target('A'), beforeA = server.client.getSnapshot().views.A.snapshot, beforeB = server.client.getSnapshot().views.B;
   const baseline = server.requests.length;
-  fireEvent.click(screen.getByRole('button', { name: 'Session actions for Session A' }));
-  fireEvent.click(screen.getByRole('menuitem', { name: 'Close Session A view' }));
+  fireEvent.click(screen.getByRole('button', { name: 'View options' }));
+  fireEvent.mouseEnter(screen.getByRole('menuitem', { name: 'Close view' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Session A' }));
   expect(screen.getByLabelText('Session title').textContent).toBe('Session B');
   expect(server.client.getSnapshot().views.A.attachmentIntent).toBe('released');
   const detach = await server.waitFor('session/detach', 1);
@@ -116,8 +117,9 @@ it('lost close-view acknowledgement leaves intent released across reconnect and 
   await server.attached('A', 'B'); server.held.add('session/detach');
   localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A', 'B'] }));
   render(<App client={server.client} workspaceHost={server.workspaceHost} />);
-  fireEvent.click(screen.getByRole('button', { name: 'Session actions for Session A' }));
-  fireEvent.click(screen.getByRole('menuitem', { name: 'Close Session A view' }));
+  fireEvent.click(screen.getByRole('button', { name: 'View options' }));
+  fireEvent.mouseEnter(screen.getByRole('menuitem', { name: 'Close view' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Session A' }));
   const detach = await server.waitFor('session/detach', 1); server.commit(detach);
   await act(async () => { server.socket.close(); await server.connect(); });
   expect(screen.getByLabelText('Session title').textContent).toBe('Session B');

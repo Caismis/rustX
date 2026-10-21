@@ -1,5 +1,5 @@
 //! The single root/Parallel/Loop block executor. Native children settle inline.
-use super::read_model::WorkflowState;
+use super::read_model::{WorkflowInstanceView, WorkflowState};
 use super::{
     BTreeMap, MAX_VALUE_BYTES, MAX_WORKFLOW_AGENTS, MAX_WORKFLOW_STEPS, RuntimeEvent, Value,
     WorkflowBlockInstance, WorkflowBlockProgram, WorkflowDefinitionPath, WorkflowExecutionOutcome,
@@ -248,7 +248,7 @@ impl WorkflowRuntime {
                 },
                 invocations,
             };
-            self.read_model.block(&run.run_id, block, &instance);
+            self.read_model.block(&run.run_id, &instance);
             self.emit_observability(
                 run,
                 RuntimeEvent::WorkflowBlockStarted {
@@ -336,9 +336,10 @@ impl WorkflowRuntime {
                     self.read_model.update(&run.run_id, |view| {
                         view.steps_consumed = budgets.steps;
                         view.agents_consumed = budgets.agents;
-                        if let Some(row) = view.instances.iter_mut().find(|row| row.block == node_instance.block && row.node.as_ref() == Some(&node_instance.node)) {
-                            row.state = WorkflowState::Running;
-                        }
+                        // Append only after admission, under the same lock that
+                        // orders parallel starts. Later state updates keep this
+                        // position, including across nested blocks and loops.
+                        view.instances.push(WorkflowInstanceView::started(&node_instance, node));
                     });
                 }
                 self.emit_observability(

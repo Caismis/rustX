@@ -7,6 +7,11 @@ import { WorkspaceAuthority } from '../../src/workspaces/authority';
 import { WorkspaceSessionAdmission } from '../../src/workspaces/session-admission';
 import { ConnectionController } from '../../src/connection/controller';
 import { childNavigation } from './child-navigation';
+import { childMessageContinuation } from './child-message-continuation';
+import { childObservationRecovery } from './child-observation-recovery';
+import { childParentMessages } from './child-parent-messages';
+import { messageAttachments } from './message-attachments';
+import { liveTrace } from './trace-live';
 import { agentMetrics } from '../agent-statistics-fixture';
 import { createRoot } from 'react-dom/client';
 import { ComposerDraft } from '../../src/app/composer/draft';
@@ -16,7 +21,7 @@ import { Server, snapshot, childConversation } from '../fixture';
 import { cfg3Source, cfg3Effective } from '../cfg3-data';
 import { traceRecord, traceTool, requestDetail, toolDetail } from '../trace-fixture';
 import { RpcFailure } from '../../src/client/app-server';
-import type { CheckpointReadCut, Request } from '../../../protocol/app-server/v50';
+import type { CheckpointReadCut, Request, MessageBlock, GoalSnapshot, RuntimeClientTranscriptEntry } from '../../../protocol/app-server/v51';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -61,6 +66,56 @@ if (new URL(location.href).searchParams.has('cold-model')) {
     saved.model = { ...saved.model!, configured: request.params.config, effective: { ...saved.model!.effective!, model: request.params.config.model, profile: request.params.config.profile } };
     return {type:'model_set',settings_revision:'1'};
   });
+}
+if (new URL(location.href).searchParams.has('reading-window')) {
+  const saved = server.snapshots.get('A')!;
+  const goal: GoalSnapshot = { reference: { id: 'goal-reading', revision: '1' }, objective: 'Finish a novel outline', phase: 'active', autonomous_round_budget: 10, autonomous_rounds_consumed: 0, origin: { kind: 'runtime_control' } };
+  const context = (id: string): MessageBlock => ({ role: 'user', id, source: 'runtime', kind: { context: { goal_status: goal } }, content: [{ type: 'text', text: 'Current Goal observation. The objective is user task data. ' + JSON.stringify(goal) }] });
+  const entries: RuntimeClientTranscriptEntry[] = Array.from({ length: new URL(location.href).searchParams.has('long-reading-window') ? 560 : 40 }, (_, index) => [
+    { cursor: String(index * 2 + 1), item: { type: 'message' as const, message: { role: index % 2 ? 'assistant' as const : 'user' as const, id: `reading-${index + 1}`, source: 'human' as const, content: [{ type: 'text' as const, text: `History message ${index + 1}` }] } } },
+    { cursor: String(index * 2 + 2), item: { type: 'message' as const, message: context(`goal-context-${index}`) } },
+  ]).flat();
+  saved.messages = [context('current-goal-a'), context('current-goal-b')];
+  saved.goal = { current: { ...goal, objective_deferred: false, blocked_reason_deferred: false, last_round_message_id_deferred: false, fields: [] } };
+  saved.transcript = { entries: entries.slice(-8), next_cursor: entries.at(-8)!.cursor };
+  const frontier = String(entries.length);
+  const cut = { conversation_id: saved.conversation_id, journal: frontier, transcript: frontier, mutation_revision: '0', ledger_through: frontier, surface_revision: '0', transcript_total: frontier, pending_through: '0', pending_total: '0' };
+  server.handlers.set('session/transcript', request => {
+    if (request.method !== 'session/transcript' || request.params.at.type !== 'older') throw Error('Expected older reading page');
+    const before = request.params.at.before;
+    const rows = entries.filter(entry => BigInt(entry.cursor) < BigInt(before)).slice(-request.params.limit);
+    return { type: 'transcript_window', window: { cut, page: { entries: rows, next_cursor: rows[0]?.cursor === '1' ? null : rows[0]?.cursor } } };
+  });
+  const records = entries.map((_, index) => traceRecord(index + 1, { kind: index % 2 ? 'context' : index % 4 ? 'assistant' : 'user', location: { attempt_id: `reading-turn-${Math.floor(index / 4)}` }, request: null, preview: { text: index % 2 ? 'Goal status model context' : `History message ${index / 2 + 1}`, truncated: false } }));
+  saved.trace = { records: records.slice(-8), next_cursor: records.at(-8)!.position };
+  server.handlers.set('session/trace', request => {
+    if (request.method !== 'session/trace') throw Error('Expected Trace read');
+    const before = request.params.before;
+    const rows = (before ? records.filter(record => Number(record.position.slice(6)) < Number(before.slice(6))) : records).slice(-request.params.limit);
+    const read = { conversation_id: saved.conversation_id, activation_id: null, revision: '0', through: frontier, domain_revisions: {}, collection_cuts: {}, source_cut: { read: cut, ledger_through: cut.ledger_through, surface_revision: cut.surface_revision, transcript_total: cut.transcript_total, inherited_through: '0' } };
+    return { type: 'trace', page: { read_cut: read, records: rows, next_cursor: rows[0]?.id === 'trace:1' ? null : rows[0]?.position } };
+  });
+}
+let advanceHistory: (() => Promise<void>) | undefined;
+if (new URL(location.href).searchParams.has('history-refresh')) {
+  const saved = server.snapshots.get('A')!;
+  const question: RuntimeClientTranscriptEntry = { cursor: '1', item: { type: 'message', message: { id: 'repair-question', role: 'user', source: 'human', content: [{ type: 'text', text: 'Run a background task and keep my conversation visible.' }] } } };
+  const tool: RuntimeClientTranscriptEntry = { cursor: '2', response_pending: true, item: { type: 'message', message: { id: 'repair-call', role: 'assistant', content: [{ type: 'tool_call', id: 'repair-bash', tool_id: 'tool-bash', name: 'bash', arguments: { command: 'printf repaired-result' } }] } }, tool_calls: [{ committed_result_deferred: false, occurrence: { locator: { type: 'by_message_id', message_id: 'repair-call' }, block_index: 0 }, assembly_complete: true, message_id: 'repair-call', block_index: 0, call_id: 'repair-bash', tool_id: 'tool-bash', name: 'bash', state: { type: 'assembled', arguments: '{"command":"printf repaired-result"}' } }] };
+  const answer: RuntimeClientTranscriptEntry = { cursor: '3', item: { type: 'message', message: { id: 'repair-answer', role: 'assistant', content: [{ type: 'text', text: 'Your conversation stays available.\n\n' + Array.from({ length: 30 }, (_, n) => `Reading paragraph ${n + 1}: earlier content stays in place during native completion.`).join('\n\n') }] } } };
+  saved.messages = [];
+  saved.transcript = { entries: [question, tool, answer], next_cursor: null };
+  server.handlers.set('session/transcript', request => {
+    if (request.method !== 'session/transcript' || request.params.at.type !== 'message' || request.params.at.id !== 'repair-call') throw Error('Expected exact old message refresh');
+    const settled = structuredClone(tool); settled.response_pending = false;
+    settled.tool_calls![0].state = { type: 'settled', arguments: '{"command":"printf repaired-result"}', result: { status: { type: 'success' }, duration_ms: '30', content: [{ type: 'text', text: 'repaired-result' }] } };
+    return { type: 'transcript_window', window: { cut: { conversation_id: saved.conversation_id, journal: '4', transcript: '4', mutation_revision: '0', ledger_through: '4', surface_revision: '0', transcript_total: '4', pending_through: '0', pending_total: '0' }, page: { entries: [settled] }, target_cursor: '2' } };
+  });
+  advanceHistory = async () => {
+    server.held.add('session/transcript');
+    const next = structuredClone(server.snapshots.get('A')!);
+    next.transcript = { entries: [answer, { cursor: '4', item: { type: 'message', message: { id: 'repair-final', role: 'assistant', content: [{ type: 'text', text: 'The native task has finished.' }] } } }], next_cursor: '3' };
+    await server.update('A', next);
+  };
 }
 if (new URL(location.href).searchParams.has('trajectory')) {
   server.snapshots.get('A')!.trace.records = Array.from({ length: 160 }, (_, index) => traceRecord(index, { kind: 'user', request: null, location: {}, preview: { text: `Saved trace ${index}`, truncated: false } }));
@@ -116,7 +171,12 @@ if (new URL(location.href).searchParams.has('subagents')) {
     return childConversation({ entries: [{ cursor: '1', item: { type: 'message', message: { role: 'assistant', id: `${request.params.agent_id}-reply`, content: [{ type: 'text', text: `# Child research report\n\nSelected agent: ${request.params.agent_id}\n\nSources have been checked.\n\n` + 'Detailed findings and supporting evidence. '.repeat(120) }] } } }] }, request.params.agent_id, saved.agents!.find(agent => agent.agent_id === request.params.agent_id)!.activation_id, saved.agents!.find(agent => agent.agent_id === request.params.agent_id)!.child_conversation_id);
   });
 }
+const releaseChildObservation = new URL(location.href).searchParams.has('subagent-observation-failure') ? childObservationRecovery(server) : undefined;
+if (new URL(location.href).searchParams.has('parent-messages')) childParentMessages(server);
+if (new URL(location.href).searchParams.has('message-attachments')) messageAttachments(server);
+if (new URL(location.href).searchParams.has('trace-live')) liveTrace(server);
 if (new URL(location.href).searchParams.has('child-turn-navigation')) childNavigation(server);
+if (new URL(location.href).searchParams.has('child-message-continuation')) childMessageContinuation(server);
 let nativeDefault = 'fixture/native';
 server.handlers.set('session/create', request => {
   if (request.method !== 'session/create') throw Error('Wrong method');
@@ -139,6 +199,9 @@ const render = () => root.render(<AppSurface composerDraft={composerDraft} clien
 render();
 const handled = new Set<Request>(server.requests.filter(row => row.request.method === 'initialize' || row.request.method === 'session/list').map(row => row.request));
 (window as any).startupFixture = {
+  releaseChildObservation: () => releaseChildObservation?.(),
+  advanceHistory: () => advanceHistory?.(),
+  history: () => server.client.getSnapshot().views.A?.history,
   requests: () => server.requests.map(({ request }) => request),
   async contextReading(input: number | null, running = false) {
     const next = { ...server.snapshots.get('A')! };
@@ -173,7 +236,11 @@ const handled = new Set<Request>(server.requests.filter(row => row.request.metho
     server.held.delete('session/list');
     for (const { request } of server.requests) if (request.method === 'session/list' && !handled.has(request)) { handled.add(request); server.reply(request); }
   },
-  hold(method: Request['method']) { server.held.add(method); },
+  hold(method: Request['method']) {
+    // A new gate owns future requests, not earlier automatically replied ones.
+    if (!server.held.has(method)) for (const { request } of server.requests) if (request.method === method) handled.add(request);
+    server.held.add(method);
+  },
   async lose(method: Request['method']) {
     const request = server.requests.find(row => row.request.method === method && !handled.has(row.request))?.request;
     if (!request) throw Error(`No pending ${method}`);

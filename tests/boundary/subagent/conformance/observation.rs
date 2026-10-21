@@ -167,6 +167,218 @@ async fn t18_live_durable_only_and_reactivation_preserve_source_and_execution_id
     parent.runtime.shutdown().await.unwrap();
 }
 
+/// The physical inspection read starts while the child is live. A real Registry
+/// settlement before the socket closes authorizes a source transition; the same
+/// closed socket while execution remains active must stay unavailable.
+async fn closing_inspection_case(settle: bool, following: bool, trace_detail: bool) {
+    let directory = inspection_tempdir().unwrap();
+    let (parent, host) = parent_runtime_host_plane(
+        &directory,
+        "conv_01900000-0000-7000-8000-000000000461",
+        Vec::new(),
+    )
+    .await;
+    let conversation = ConversationId::new("conv_01900000-0000-7000-8000-000000000462");
+    let store_path = crate::runtime::subagent::child_conversation_store_path(
+        &parent.plane.runtime_root,
+        &crate::runtime::identity::SessionId::new("ses_01900000-0000-7000-8000-000000000001"),
+        &conversation,
+    );
+    let (release, released) = support::fake::model_release();
+    let child = child_fixture_scoped_at(
+        &directory,
+        &conversation,
+        vec![parking_answer_script("retained closing answer", released)],
+        ToolRegistry::new(),
+        Vec::new(),
+        store_path.parent().unwrap().to_path_buf(),
+        Some(SubagentId::for_conversation(
+            parent.runtime.conversation_id(),
+            1,
+        )),
+    )
+    .await;
+    let wired = launch_wired_child(&parent.plane, &child, "closing inspection").await;
+    await_model_parks(&child.model, 1).await;
+    child.host.projection_settled().await;
+    let agent = wired.accepted.child_agent_id.clone();
+    let activation = wired.accepted.subagent_id.clone();
+    let path = parent.plane.registry.agent_inspection_path(&agent).unwrap();
+    let listener = tokio::net::UnixListener::bind(path).unwrap();
+    let (attachment, _) = host
+        .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .unwrap();
+    let after =
+        following.then(
+            || crate::runtime_client::agent_observation::AgentObservationCursor {
+                agent_id: agent.clone(),
+                conversation_id: conversation.clone(),
+                activation_id: activation.clone(),
+                cursor: child.host.checkpoint().unwrap().cursor,
+            },
+        );
+    let mut release = Some(release);
+    let mut serve = Some(wired.serve);
+    let record_id = child
+        .host
+        .checkpoint()
+        .unwrap()
+        .snapshot
+        .trace
+        .records
+        .iter()
+        .find(|record| record.kind == crate::runtime_client::trace::TraceKind::Request)
+        .expect("parked child has a native request record")
+        .id
+        .clone();
+    let request = if trace_detail {
+        RuntimeClientRequest::AgentTraceDetail {
+            id: crate::runtime_client::RequestId::new(461),
+            agent_id: agent.clone(),
+            record_id: record_id.clone(),
+        }
+    } else {
+        RuntimeClientRequest::AgentObserve {
+            id: crate::runtime_client::RequestId::new(461),
+            agent_id: agent.clone(),
+            after,
+        }
+    };
+    let read = attachment.handle_request_async(request);
+    let close = async {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut stream = tokio::io::BufReader::new(stream);
+        let mut line = String::new();
+        stream.read_line(&mut line).await.unwrap();
+        let request: RuntimeClientRequest = serde_json::from_str(&line).unwrap();
+        assert!(matches!(request, RuntimeClientRequest::Initialize { .. }));
+        let response = crate::runtime_client::RuntimeClientResponse {
+            id: request.id(),
+            error: None,
+            result: Some(RuntimeClientResult::Initialized {
+                attachment_id: crate::runtime_client::types::AttachmentId::new(
+                    "closing-inspection",
+                ),
+                conversation_id: conversation.clone(),
+                agent_id: agent.clone(),
+                activation_id: Some(activation.clone()),
+                protocol_version: crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
+                read_only: true,
+                capabilities: vec!["checkpoint".into()],
+            }),
+        };
+        let mut bytes = serde_json::to_vec(&response).unwrap();
+        bytes.push(b'\n');
+        stream.get_mut().write_all(&bytes).await.unwrap();
+        line.clear();
+        stream.read_line(&mut line).await.unwrap();
+        let request: RuntimeClientRequest = serde_json::from_str(&line).unwrap();
+        assert!(if following {
+            matches!(request, RuntimeClientRequest::ObserveEvents { .. })
+        } else {
+            matches!(request, RuntimeClientRequest::CheckpointGet { .. })
+        });
+        if settle {
+            release.take().unwrap().send(true).unwrap();
+            await_serve(serve.take().unwrap()).await;
+            parent
+                .plane
+                .registry
+                .wait_until_settled(&activation)
+                .await
+                .unwrap();
+        }
+        // This is a physical IPC failure, not a fabricated Runtime Client error.
+        drop(stream);
+    };
+    let (response, ()) = tokio::time::timeout(LIVENESS, async { tokio::join!(read, close) })
+        .await
+        .unwrap();
+    if trace_detail && settle {
+        let Some(RuntimeClientResult::DomainPage { page }) = &response.result else {
+            panic!("Trace detail must consume the terminal handoff: {response:?}")
+        };
+        assert_eq!(page.read_cut.conversation_id, conversation);
+        assert_eq!(page.read_cut.activation_id.as_ref(), Some(&activation));
+        assert_eq!(page.read_cut.revision, 0, "detail uses the retained source");
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].identity, record_id);
+    } else if settle {
+        assert!(
+            matches!(
+                response.result,
+                Some(RuntimeClientResult::AgentObserve {
+                    observation: AgentObservation::ResyncRequired {
+                        source: ObservationSource::DurableOnly,
+                        ..
+                    }
+                })
+            ),
+            "terminal handoff is not a failed read: {response:?}"
+        );
+        let AgentObservation::Checkpoint {
+            source: ObservationSource::DurableOnly,
+            checkpoint,
+            cursor: None,
+            ..
+        } = observe(&attachment, &agent, None).await
+        else {
+            panic!("next read must own retained authoritative history")
+        };
+        assert!(
+            checkpoint
+                .snapshot
+                .messages
+                .iter()
+                .any(|message| format!("{message:?}").contains("retained closing answer"))
+        );
+    } else {
+        assert!(
+            matches!(
+                response.error,
+                Some(crate::runtime_client::RuntimeClientError::ObservationUnavailable { .. })
+            ),
+            "a socket failure cannot fabricate settlement: {response:?}"
+        );
+        assert!(response.result.is_none());
+        release.take().unwrap().send(true).unwrap();
+        await_serve(serve.take().unwrap()).await;
+        parent
+            .plane
+            .registry
+            .wait_until_settled(&activation)
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        child.model.requests().len(),
+        1,
+        "observation does not start model work"
+    );
+    child.runtime.shutdown().await.unwrap();
+    parent.runtime.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_inspection_close_after_settlement_requires_retained_source_for_initial_and_following_reads()
+ {
+    for following in [false, true] {
+        closing_inspection_case(true, following, false).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn trace_detail_read_started_live_recovers_the_same_child_after_settlement() {
+    closing_inspection_case(true, false, true).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_inspection_close_while_active_does_not_invent_retained_source_or_execution_outcome() {
+    for following in [false, true] {
+        closing_inspection_case(false, following, false).await;
+    }
+}
+
 struct RetainedTraceField {
     cut: crate::runtime_client::checkpoint::CheckpointReadCut,
     domain: String,
@@ -1369,4 +1581,187 @@ async fn t20_real_unix_shutdown_retires_the_exact_pending_observe_before_its_dea
     assert!(child.model.requests().is_empty());
     drop(unpark);
     child.runtime.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn frozen_child_message_continuation_survives_live_admission_and_binds_registry_owner() {
+    use crate::durable::reading::ConversationWindowAt;
+    use crate::runtime_client::RuntimeClientError;
+    use crate::runtime_client::checkpoint::CheckpointReadCut;
+    use base64::Engine as _;
+
+    let directory = inspection_tempdir().unwrap();
+    let (parent, host) = parent_runtime_host_plane(
+        &directory,
+        "conv_01900000-0000-7000-8000-000000000601",
+        Vec::new(),
+    )
+    .await;
+    let conversation = ConversationId::new("conv_01900000-0000-7000-8000-000000000602");
+    let path = crate::runtime::subagent::child_conversation_store_path(
+        &parent.plane.runtime_root,
+        &crate::runtime::identity::SessionId::new("ses_01900000-0000-7000-8000-000000000001"),
+        &conversation,
+    );
+    let suffix = "Original frozen child instruction. ".repeat(4096);
+    let mut message = support::fake::inbound_message("frozen-instruction", "", UserSource::Human);
+    message.content = (0..32)
+        .map(|n| {
+            UserContentBlock::Text(crate::message::content::TextBlock {
+                text: format!("Instruction part {n}"),
+            })
+        })
+        .collect();
+    message
+        .content
+        .push(UserContentBlock::Text(crate::message::content::TextBlock {
+            text: suffix.clone(),
+        }));
+    let (release, released) = support::fake::model_release();
+    let child = child_fixture_scoped_at(
+        &directory,
+        &conversation,
+        vec![
+            parking_answer_script("first answer", released),
+            answer_script("follow-up answer"),
+        ],
+        ToolRegistry::new(),
+        vec![MessageBlock::User(message)],
+        path.parent().unwrap().to_path_buf(),
+        Some(SubagentId::for_conversation(
+            parent.runtime.conversation_id(),
+            1,
+        )),
+    )
+    .await;
+    let wired = launch_wired_child(&parent.plane, &child, "inspect the frozen instruction").await;
+    await_model_parks(&child.model, 1).await;
+    let agent = &wired.accepted.child_agent_id;
+    // No live inspection server: frozen pages and immutable canonical bytes
+    // belong to the Registry-bound Child store even during live execution.
+    let original = host
+        .inner
+        .agent_transcript_window(agent, &ConversationWindowAt::Latest, 32)
+        .unwrap();
+    let source = original.page.source_cut.clone().unwrap();
+    let cut = CheckpointReadCut {
+        conversation_id: conversation.clone(),
+        activation_id: Some(wired.accepted.subagent_id.clone()),
+        revision: 0,
+        through: source.read.journal,
+        source_cut: Some(source.clone()),
+        canonical_foreground: None,
+        live_publication: None,
+        domain_revisions: std::collections::BTreeMap::new(),
+        collection_cuts: std::collections::BTreeMap::new(),
+    };
+    let domain = "messages.message:frozen-instruction.blocks";
+    let before = host
+        .inner
+        .agent_checkpoint_page(agent, &cut, domain, 32, 32)
+        .await
+        .unwrap();
+    assert_eq!(before.read_cut, cut);
+    assert_eq!(before.total, 33);
+    assert_eq!(before.items.len(), 1);
+    let reference = before.items[0]
+        .content
+        .iter()
+        .find(|binding| {
+            matches!(
+                binding.content_ref.source,
+                crate::runtime_client::content::ContentSource::CanonicalMessageBlock {
+                    component: crate::runtime_client::content::CanonicalContentComponent::Payload,
+                    ..
+                }
+            )
+        })
+        .unwrap()
+        .content_ref
+        .clone();
+    host.inner
+        .agent_send_message(
+            agent,
+            "Append guidance while the child is still running".into(),
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    let current = child.store.observation_read_cut().unwrap();
+    assert!(source.read.reconstructible_from(&current.read));
+    assert_ne!(
+        current, source,
+        "live admission advances the pending/source frontier"
+    );
+    assert_eq!(
+        child.model.requests().len(),
+        1,
+        "the live Child remains parked"
+    );
+    child.host.inner.projection_settled().await;
+    let after = host
+        .inner
+        .agent_checkpoint_page(agent, &cut, domain, 32, 32)
+        .await
+        .unwrap();
+    assert_eq!(
+        after, before,
+        "the same C0 window survives independent C1 admission"
+    );
+    let mut bytes = Vec::new();
+    let mut offset = 0;
+    loop {
+        let chunk = host
+            .inner
+            .agent_content_read(agent, &reference, offset, 65_536)
+            .await
+            .unwrap();
+        bytes.extend(
+            base64::engine::general_purpose::STANDARD
+                .decode(chunk.data_base64)
+                .unwrap(),
+        );
+        if let Some(next) = chunk.next_offset {
+            offset = next;
+        } else {
+            break;
+        }
+    }
+    assert_eq!(String::from_utf8(bytes).unwrap(), suffix);
+    for foreign in [
+        CheckpointReadCut {
+            activation_id: Some(SubagentId::new("foreign-activation")),
+            ..cut.clone()
+        },
+        CheckpointReadCut {
+            conversation_id: parent.runtime.conversation_id().clone(),
+            ..cut.clone()
+        },
+        CheckpointReadCut {
+            through: cut.through + 1,
+            ..cut.clone()
+        },
+    ] {
+        assert!(matches!(
+            host.inner
+                .agent_checkpoint_page(agent, &foreign, domain, 32, 32)
+                .await,
+            Err(RuntimeClientError::ReadCutExpired)
+        ));
+    }
+    assert_eq!(
+        child.store.observation_read_cut().unwrap(),
+        current,
+        "inspection is read-only"
+    );
+    release.send(true).unwrap();
+    await_serve(wired.serve).await;
+    parent
+        .plane
+        .registry
+        .wait_until_settled(&wired.accepted.subagent_id)
+        .await
+        .unwrap();
+    child.runtime.shutdown().await.unwrap();
+    parent.runtime.shutdown().await.unwrap();
 }

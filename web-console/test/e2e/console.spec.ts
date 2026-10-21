@@ -1,9 +1,9 @@
+import { selectedSessionId, selectedTarget, selectedCheckpoint } from './shell-actions';
 import { openQuestionnaire } from './source-reading';
 import { expandModelAuthoring } from './shell-actions';
 import { openEmptySession } from './shell-actions';
 import { connectRemote } from './shell-actions';
 import { closeSessionView } from './shell-actions';
-import { showInspector } from './shell-actions';
 import {
   choose, closeSettings, confirmSettingsAction, connectionAction, openSettingsPage, openWorkspaceSettings, selectedSettingsPage,
 } from './shell-actions';
@@ -26,7 +26,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   const connect = async () => {
     await connectRemote(page, `${fixture.endpoint}/`, fixture.token);
-    await expect(page.getByLabel('Transport token')).toHaveCount(0); await showInspector(page);
+    await expect(page.getByLabel('Transport token')).toHaveCount(0);
   };
   const openSession = async (id: string) => {
     await page.locator(`button[data-session-id="${id}"]`).click();
@@ -44,10 +44,10 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await connect();
     await openEmptySession(page, fixture, 'Workspace A');
     await expect(page.getByLabel('Session location', { exact: true })).toHaveCount(0);
-    const idA = JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).SessionId as string;
+    const idA = await selectedSessionId(page);
     await openEmptySession(page, fixture, 'Workspace B');
     await expect(page.getByLabel('Session location', { exact: true })).toHaveCount(0);
-    const idB = JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).SessionId as string;
+    const idB = await selectedSessionId(page);
     await expect(page.getByRole('tree', { name: 'Session browser' })).toHaveCount(1);
     await expect(page.getByRole('tablist', { name: 'Open Session views' })).toHaveCount(0);
     await openSession(idA);
@@ -91,13 +91,13 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await connectionAction(page, 'Disconnect');
     await expect(page.getByLabel('Session status')).toContainText(/Connection interrupted|Needs verification/);
     await connectionAction(page, 'Reconnect');
-    await expect(page.getByLabel('Transport token')).toHaveCount(0); await showInspector(page);
+    await expect(page.getByLabel('Transport token')).toHaveCount(0);
     await expect(page.getByText('A is running.', { exact: true })).toBeVisible();
     await reload(); await expect(page.getByText('A is running.', { exact: true })).toBeVisible();
-    await expect.poll(async () => JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText())).toMatchObject({
-      SessionId: idA, attachment: 'attached', runtime_incarnation: expect.any(String),
+    await expect.poll(() => selectedTarget(page, wire)).toMatchObject({
+      session_id: idA, runtime_incarnation: expect.any(String),
     });
-    const incarnationA = JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).runtime_incarnation;
+    const incarnationA = (await selectedTarget(page, wire)).runtime_incarnation;
     await closeView(idA);
     await expect(page.locator(`button[data-session-id="${idA}"]`)).toBeVisible();
     await expect(page.locator(`button[data-session-id="${idA}"]`)).toHaveAttribute('title', '');
@@ -107,8 +107,8 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await openSession(idA);
     await expect(page.getByText('A is running. A finished.', { exact: true })).toBeVisible();
     // Cached transcript text can paint before the native attachment completes.
-    await expect.poll(async () => JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText())).toMatchObject({
-      SessionId: idA, attachment: 'attached', runtime_incarnation: incarnationA,
+    await expect.poll(() => selectedTarget(page, wire)).toMatchObject({
+      session_id: idA, runtime_incarnation: incarnationA,
     });
     // Alternate more than the native 32-attachment capacity on one connection.
     // Every close is acknowledged as detached, and every reopen keeps residency.
@@ -118,14 +118,14 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
       await expect(page.locator(`button[data-session-id="${id}"]`)).toHaveAttribute('title', '');
       await page.locator(`button[data-session-id="${id}"]`).click();
       await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();
-      await expect.poll(async () => JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).SessionId).toBe(id);
+      await expect.poll(() => selectedSessionId(page)).toBe(id);
     }
     await openSession(idA);
     await send('Approval please'); await expect(page.getByRole('button', { name: 'Allow once' })).toBeEnabled();
-    const pendingApproval = JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).pending_interactions[0].interaction;
+    const pendingApproval = (await selectedCheckpoint(page, wire)).snapshot.pending_interactions![0].interaction;
     await connectionAction(page, 'Disconnect'); await reload();
     await expect(page.getByRole('button', { name: 'Allow once' })).toBeEnabled();
-    expect(JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).pending_interactions[0].interaction).toEqual(pendingApproval);
+    expect((await selectedCheckpoint(page, wire)).snapshot.pending_interactions![0].interaction).toEqual(pendingApproval);
     await page.getByRole('button', { name: 'Allow once' }).click();
     // Observe the real provider continuation before asserting its presentation.
     // Native Tool completion and provider response completion are separate boundaries.
@@ -145,21 +145,21 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await fixture.control('observations/await?kind=response_completed&count=7&timeoutMs=30000');
     await remote.shutdown(); remote = undefined;
     await connectionAction(page, 'Reconnect');
-    await expect(page.getByLabel('Transport token')).toHaveCount(0); await showInspector(page);
+    await expect(page.getByLabel('Transport token')).toHaveCount(0);
     await openQuestionnaire(page);
     await page.getByRole('radio', { name: 'Keep native', exact: true }).click(); await page.getByRole('button', { name: 'Submit', exact: true }).click();
     await expect(page.getByText('Detached question completed.', { exact: true })).toBeVisible();
-    await expect(page.getByLabel('Native diagnostic JSON')).toContainText('console-model');
+    await expect.poll(async () => (await selectedCheckpoint(page, wire)).snapshot.model?.configured.model).toBe('fixture/console-model');
     fixture.writeSettings('second-model');
     await openSession(idA);
-    await expect(page.getByLabel('Native diagnostic JSON')).toContainText('console-model');
+    await expect.poll(async () => (await selectedCheckpoint(page, wire)).snapshot.model?.configured.model).toBe('fixture/console-model');
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     expect(await selectedSettingsPage(page)).toBe('General');
     await openSettingsPage(page, 'Advanced');
     await settings.getByRole('button', { name: 'Rescan configuration files', exact: true }).click();
     await expect(settings.getByText(/Revision:/)).toBeVisible();
     await closeSettings(page);
-    await expect(page.getByLabel('Native diagnostic JSON')).toContainText('console-model');
+    await expect.poll(async () => (await selectedCheckpoint(page, wire)).snapshot.model?.configured.model).toBe('fixture/console-model');
     // The fixed 32-row native tail excludes A's earliest response after the
     // intervening interaction audits. Load its advancing historical page.
     if (await page.getByText('A is running. A finished.', { exact: true }).count() === 0)
@@ -167,10 +167,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await expect(page.getByText('A is running. A finished.', { exact: true })).toBeVisible();
     await expect(page.getByLabel('Session location', { exact: true })).toHaveCount(0);
     expect(readFileSync(fixture.settings, 'utf8')).toContain('second-model');
-    await page.getByLabel('Method filter').fill('session/attach');
-    await expect(page.locator('.protocol-log')).toContainText('session/attach');
-    await page.getByRole('button', { name: 'Pause log' }).click(); await expect(page.getByRole('button', { name: 'Resume log' })).toBeVisible();
-    await page.getByRole('button', { name: 'Resume log' }).click();
+    expect(wire.requests.some(request => request.method === 'session/attach')).toBe(true);
     await page.screenshot({ path: 'test-results/console-desktop.png', fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 }); await page.screenshot({ path: 'test-results/console-mobile.png', fullPage: true });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
@@ -181,16 +178,16 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await page.locator(`button[data-session-id="${idB}"]`).hover();
     await page.locator(`button[data-session-actions="${idB}"]`).click();
     await page.getByRole('menuitem', { name: 'Delete Session', exact: true }).click();
-    await expect(page.getByRole('dialog', { name: 'Confirm Session deletion' })).toBeVisible();
-    await page.getByRole('button', { name: 'Confirm delete', exact: true }).click();
-    await expect(page.getByRole('dialog', { name: 'Confirm Session deletion' })).toHaveCount(0);
+    await expect(page.getByRole('dialog', { name: 'Delete this session?' })).toBeVisible();
+    await page.getByRole('button', { name: 'Delete', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: 'Delete this session?' })).toHaveCount(0);
     await expect(page.getByText('Session deleted.', { exact: true })).toHaveCount(0);
     await expect(page.locator(`button[data-session-id="${idB}"]`)).toHaveCount(0);
     await expect(page.getByLabel('Session title')).toHaveText('Long action in A');
-    await expect.poll(async () => JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).SessionId).toBe(idA);
+    await expect.poll(() => selectedSessionId(page)).toBe(idA);
     expect(readFileSync(`${fixture.workspaceA}/console-effect`, 'utf8')).toBe('x');
     expect((await fixture.control('requests')).requests).toHaveLength(8);
     expect(errors).toEqual([]); passed = true;
-  } catch (error) { console.error(fixture.diagnostics(), await page.locator('.notice').allTextContents(), await page.locator('.protocol-log pre').allTextContents()); throw error; }
+  } catch (error) { console.error(fixture.diagnostics(), await page.locator('.notice').allTextContents(), wire.responses); throw error; }
   finally { await remote?.shutdown(); await page.close(); await fixture.stop(passed); }
 });

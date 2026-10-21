@@ -35,8 +35,9 @@ test('HTML, image, PDF and spreadsheets use specialized viewers',async({page},in
   expect(await panel.frameLocator('iframe').getByRole('heading').evaluate(el=>getComputedStyle(el).color)).toBe('rgb(200, 0, 0)');
   await open('diagram.svg');await expect(panel.locator('[data-document-zoom-frame] img')).toBeVisible();
   await page.screenshot({path:info.outputPath('image-preview.png')});
-  await open('sample.pdf');await expect(panel.locator('canvas')).toBeVisible();
-  await expect(panel.getByRole('button',{name:'Next',exact:true})).toBeVisible();
+  await open('sample.pdf');await expect(panel.locator('canvas').first()).toBeVisible();
+  await expect(panel.locator('[data-pdf-page]')).toHaveCount(3);
+  await expect(panel.getByRole('button',{name:'Next',exact:true})).toHaveCount(0);
   await open('table.csv');await expect(panel.locator('[data-excel-preview]')).toBeVisible();
   await expect(panel.locator('.fortune-sheet-container')).toBeVisible();
   await open('sample.xlsx');await expect(panel.locator('.fortune-sheet-container')).toBeVisible();

@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { RuntimeClientGoalSnapshot, RuntimeClientSnapshot, TodoTask } from '../../protocol/app-server/v50';
+import type { RuntimeClientGoalSnapshot, RuntimeClientSnapshot, TodoTask } from '../../protocol/app-server/v51';
 import { App } from '../src/app/App';
 import { ComposerContextStack } from '../src/app/composer/ComposerContextStack';
 import { GoalDock } from '../src/app/composer/GoalDock';
@@ -46,7 +46,7 @@ const withStatusHistory = (base = snapshot()): RuntimeClientSnapshot => {
 const withTodoHistory = (base = snapshot()): RuntimeClientSnapshot => {
   const call = { role: 'assistant' as const, id: 'history-call', content: [{ type: 'tool_call' as const, id: 'call-todo', tool_id: 'tool-todo', name: 'todo', arguments: { action: 'create', subject: 'Historical task' } }] };
   const result = { role: 'tool' as const, occurrence: { assistant_message_id: 'history-call', block_index: 0 }, id: 'history-result', tool_call_id: 'call-todo', tool_id: 'tool-todo', result: { status: { type: 'success' as const }, duration_ms: '1' } };
-  return { ...base, transcript: { entries: [call, result].map((message, index) => ({ cursor: String(index + 1), item: { type: 'message' as const, message } })) } };
+  return { ...base, transcript: { entries: [call, result].map((message, index) => ({ cursor: String(index + 1), item: { type: 'message' as const, message }, tool_calls: message.role === 'assistant' ? [{ message_id: call.id, occurrence: { locator: { type: 'by_message_id' as const, message_id: call.id }, block_index: 0 }, block_index: 0, call_id: 'call-todo', tool_id: 'tool-todo', name: 'todo', assembly_complete: true, committed_result_deferred: false, committed_result: result.result, state: { type: 'assembled' as const, arguments: JSON.stringify(call.content[0].arguments) } }] : [] })) } };
 };
 
 let server: Server;
@@ -82,9 +82,9 @@ describe('Todo dock binds only the composed native Todo projection', () => {
     const state = todoDock(withTodos([]), { domain: 'todos.tasks', revision: '7', total: '1000', loaded: '0', next_offset: '0' });
     expect(state).toEqual({ kind: 'current', tasks: [], deferred: true });
     render(<TodoDock state={state}/>);
-    expect(dock('To-dos').textContent).toContain('Content deferred');
+    expect(dock('To-dos').textContent).toContain('Loading…');
     fireEvent.click(within(dock('To-dos')).getByRole('button'));
-    expect(within(dock('To-dos')).getByRole('status').textContent).toBe('Content deferred');
+    expect(within(dock('To-dos')).getByRole('status').textContent).toBe('Loading…');
     expect(within(dock('To-dos')).queryAllByRole('listitem')).toHaveLength(0);
     expect(todoDock(snapshot(), { domain: 'todos.tasks', revision: '7', total: '1000', loaded: '0', next_offset: '0' })).toEqual({ kind: 'absent' });
   });
@@ -182,7 +182,7 @@ describe('Todo dock binds only the composed native Todo projection', () => {
   it('follows native projection changes and never reconstructs from historical todo Tool facts', async () => {
     await mount(withTodoHistory(snapshot()));
     // History is visible as execution fact, yet no Todo extension means no current dock.
-    expect(screen.getByText('Assembling todo…')).toBeTruthy();
+    expect(document.querySelector('[data-tool-call-id="call-todo"]')).not.toBeNull();
     expect(region('To-dos')).toBeNull();
     await update(withTodoHistory(withTodos([])));
     expect(region('To-dos')).toBeNull();
@@ -211,7 +211,7 @@ describe('Todo dock binds only the composed native Todo projection', () => {
     for (const key of ['message:a1', 'message:u2']) {
       expect(within(document.querySelector(`[data-chat-anchor-key="${key}"]`) as HTMLElement).queryByRole('note')).toBeNull();
     }
-    expect(screen.getByText('Assembling todo…')).toBeTruthy();
+    expect(document.querySelector('[data-tool-call-id="call-todo"]')).not.toBeNull();
     // The historical annotation still carries the historical Todo section, and no
     // current Todo selector ever reads an Agent Status section.
     fireEvent.click(within(notes[0]).getByRole('button', { expanded: false }));

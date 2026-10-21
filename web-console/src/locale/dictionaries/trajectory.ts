@@ -1,7 +1,7 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
   "source.byte-count": "{bytes} bytes",
-  "source.cut-unavailable": "Original Trace field cut is unavailable.",
+  "source.cut-unavailable": "Details are unavailable. Reopen this event.",
   "trajectory.trace-ledger": "Trace ledger",
   "trajectory.no-loaded-item-matches-this-search": "No loaded item matches this search.",
   "trajectory.no-records-in-the-loaded-window": "No records in the loaded window.",
@@ -33,7 +33,6 @@ export const en = {
   "copy.prompt-preview-unavailable": "Prompt preview unavailable",
   "copy.turn-value": "Turn {p0}",
   "short.background": "JOB",
-  "short.subagent": "ACTIVATION",
   "short.workflow": "WORKFLOW",
   "short.interaction": "INTERACT",
   "group.message": "Message",
@@ -211,7 +210,7 @@ export const en = {
 export type TrajectoryKey = keyof typeof en;
 export const zh = {
   "source.byte-count": "{bytes} 字节",
-  "source.cut-unavailable": "原始轨迹字段的读取切面不可用。",
+  "source.cut-unavailable": "暂时无法读取详情，请重新打开此事件。",
   "trajectory.trace-ledger": "追踪明细",
   "trajectory.no-loaded-item-matches-this-search": "已加载内容中无匹配项。",
   "trajectory.no-records-in-the-loaded-window": "已加载窗口中无记录。",
@@ -243,7 +242,6 @@ export const zh = {
   "copy.prompt-preview-unavailable": "提示词预览不可用",
   "copy.turn-value": "第 {p0} 轮",
   "short.background": "作业",
-  "short.subagent": "激活",
   "short.workflow": "工作流",
   "short.interaction": "交互",
   "group.message": "消息",

@@ -70,6 +70,35 @@ def web_commands() -> Scenario:
 SCENARIOS["web_commands"] = web_commands
 
 
+def web_response_retry() -> Scenario:
+    """Keep an earlier turn while a native sibling replay replaces this response."""
+    def expected(prompt: str, **kwargs) -> Expect:
+        return Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=(prompt,), **kwargs)
+    return Scenario("web_response_retry",
+                    Step(expected("Earlier question"), Stream(Text("Earlier answer stays."), Finish())),
+                    Step(expected("Retry this question"), Stream(Text("## Original response\n\nOld reply to replace."), Finish())),
+                    Step(expected("Retry this question", body_excludes=("Original response", "Old reply to replace.")),
+                         Stream(Gate("replay-request"), Text("## New response\n\nGenerating the replacement."),
+                                Gate("replay-streaming"), Text("\n\nReplacement complete."), Finish())))
+
+
+SCENARIOS["web_response_retry"] = web_response_retry
+
+
+def web_sidebar_actions() -> Scenario:
+    """Sidebar fork retains a native completion while its source keeps running."""
+    def expected(prompt: str, **kwargs) -> Expect:
+        return Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=(prompt,), **kwargs)
+    return Scenario("web_sidebar_actions",
+                    Step(expected("Sidebar source"), Stream(Text("Completed sidebar answer."), Finish())),
+                    Step(expected("Keep source running"), Stream(Text("Unfinished source output."), Gate("sidebar-source-running"), Text(" Source finished."), Finish())),
+                    Step(expected("Fork follow-up", body_excludes=("Keep source running", "Unfinished source output.")),
+                         Stream(Text("Fork kept the completed answer."), Finish())))
+
+
+SCENARIOS["web_sidebar_actions"] = web_sidebar_actions
+
+
 def web_composer_context() -> Scenario:
     """Native Todo and Goal owners feed the composer docks; one Human input waits in the mailbox.
 
@@ -137,6 +166,28 @@ def web_workflow_conformance() -> Scenario:
         for step in workflow_output().steps
     ))
 
+
+def web_workflow_observation() -> Scenario:
+    # Ordinary child Tool execution, then a separate reserved result commit.
+    return Scenario(
+        "web_workflow_observation",
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
+                    body_contains=("workflow conformance request",), tools_include=("review_pr",)),
+             Stream(ToolCall("call-review-pr", "review_pr", '{"task":"workflow conformance request"}'), Finish("tool_calls"))),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
+                    body_contains=("Review the request",), tools_include=("read", "workflow_output")),
+             Stream(Gate("workflow-child-admitted"), Text("Inspecting the review profile."),
+                    ToolCall("call-child-read", "read", '{"path":".agents/agents/reviewer.toml"}', pieces=2), Finish("tool_calls"))),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
+                    body_contains=("Workflow-only reviewer", "call-child-read"), tools_include=("workflow_output",)),
+             Stream(Gate("workflow-child-read"), ToolCall("call-workflow-output", "workflow_output",
+                    '{"passed":true,"summary":"native workflow child committed"}'), Finish("tool_calls"))),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
+                    body_contains=("native workflow child committed",), body_excludes=("workflow_output",)),
+             Stream(Text("workflow conformance complete"), Finish())),
+    )
+
+SCENARIOS["web_workflow_observation"] = web_workflow_observation
 
 SCENARIOS["web_workflow_conformance"] = web_workflow_conformance
 
@@ -323,6 +374,31 @@ def web_compaction() -> Scenario:
 SCENARIOS["web_compaction"] = web_compaction
 
 
+def web_stop() -> Scenario:
+    """Provider gates cover real cancellation before/during output and Tools."""
+    import hashlib
+    from fake_provider.scenario import Reasoning
+
+    long_body = "\n".join(f"Record {index:04d}: {hashlib.sha256(str(index).encode()).hexdigest()}" for index in range(512))
+
+    def expected(prompt: str) -> Expect:
+        return Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=(prompt,))
+
+    return Scenario("web_stop",
+        Step(expected("Stop before output"), Stream(Gate("stop-empty"), Text("Abandoned empty response."), Finish()), allow_disconnect=True),
+        Step(expected("Stop during reasoning"), Stream(Reasoning("Preserved reasoning before Stop."), Gate("stop-reasoning"), Text("Abandoned reasoning response."), Finish()), allow_disconnect=True),
+        Step(expected("Stop during text"), Stream(Reasoning("Preserved reasoning beside text."), Text("## Preserved partial answer\n\nAlready delivered text.\n\n```rust\nfn unfinished() {"), Gate("stop-text"), Text("Abandoned text response."), Finish()), allow_disconnect=True),
+        Step(expected("Stop during long text"), Stream(Text("## Long partial answer\n\n"), Text(long_body + "\n\nPreserved long tail.", pieces=16), Gate("stop-long"), Text("Abandoned long response."), Finish()), allow_disconnect=True),
+        Step(expected("Stop during proposal"), Stream(Text("Preparing a file without executing it."),
+            Raw(b'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"stopped-write","type":"function","function":{"name":"write","arguments":"{\\\"path\\\":"}}]},"finish_reason":null}]}\n\n'),
+            Gate("stop-proposal"), Finish("tool_calls")), allow_disconnect=True),
+        Step(expected("Stop running tool"), Stream(ToolCall("stopped-bash", "bash", json.dumps({"command": "sleep 30; printf must-not-run", "execution_mode": "foreground"})), Finish("tool_calls"))),
+        Step(expected("Continue after all stops"), Stream(Text("The conversation continued after all stops."), Finish())))
+
+
+SCENARIOS["web_stop"] = web_stop
+
+
 def web_advanced_documents() -> Scenario:
     expected = Expect(protocol=OPENAI_CHAT_COMPLETIONS, model='console-model', body_contains=('Preview advanced files',))
     files = [{'path': name} for name in ['sample.pdf', 'sample.docx', 'sample.pptx', 'sample.xlsx', 'benign.html', 'hostile.html', 'malformed.pdf', 'encrypted.pdf']]
@@ -435,3 +511,37 @@ def web_fork_source_reading() -> Scenario:
 
 
 SCENARIOS["web_fork_source_reading"] = web_fork_source_reading
+
+
+def web_large_write() -> Scenario:
+    """A real write with deferred arguments followed by native file delivery."""
+    content = "# Native write report\n\n" + "\n".join(
+        f"Row {i}: preserve original content 水 and native tool identity." for i in range(300)
+    )
+    expected = Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model")
+    return Scenario("web_large_write",
+        Step(expected, Stream(ToolCall("large-write", "write", json.dumps({
+            "path": "large-write.md", "content": content,
+        }, ensure_ascii=False)), Finish("tool_calls"))),
+        Step(expected, Stream(ToolCall("large-write-present", "present", json.dumps({
+            "files": [{"path": "large-write.md", "description": "Native write report"}],
+        })), Finish("tool_calls"))),
+        Step(expected, Stream(Text("Large write finished."), Finish())),
+    )
+
+
+SCENARIOS["web_large_write"] = web_large_write
+
+
+def web_workflow_review() -> Scenario:
+    from dataclasses import replace
+    original = web_workflow_conformance()
+    steps = list(original.steps)
+    report = {"overview": "## Review report\n\nThe workflow read the request and completed its analysis.",
+              "issues": ["Check the release version before publishing."], "candidate": None}
+    steps[0] = replace(steps[0], respond=Stream(ToolCall("call-review-pr", "review_pr", json.dumps({"task": "workflow conformance request", "report": report})), Finish("tool_calls")))
+    steps[-1] = replace(steps[-1], expect=replace(steps[-1].expect, body_contains=("workflow conformance request",)))
+    return Scenario("web_workflow_review", *steps)
+
+
+SCENARIOS["web_workflow_review"] = web_workflow_review

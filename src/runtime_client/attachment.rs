@@ -420,9 +420,7 @@ impl RuntimeAttachment {
             RuntimeClientRequest::ModelSet { config, .. } => inner.model_set(*config),
             RuntimeClientRequest::JobStatus { job_id, .. } => inner.job_status_page(&job_id),
             RuntimeClientRequest::JobList { .. } => inner.domain_page("jobs", 0, 32),
-            RuntimeClientRequest::AgentStatus { agent_id, .. } => {
-                inner.domain_page(&format!("agents.{agent_id}"), 0, 32)
-            }
+            RuntimeClientRequest::AgentStatus { agent_id, .. } => inner.agent_status(&agent_id),
             RuntimeClientRequest::AgentList { .. } => inner.domain_page("agents", 0, 32),
             RuntimeClientRequest::ObserveEvents { .. }
             | RuntimeClientRequest::AgentObserve { .. }

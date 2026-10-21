@@ -12,9 +12,10 @@ import { useRef, useState, type RefObject } from 'react'
 import clsx from 'clsx'
 import { HoverCard } from '../primitives/HoverCard';
 import { Menu } from '../primitives/Menu';
+import { Tooltip } from '../primitives/Tooltip';
 import { StateDot, type StateDotState } from '../primitives/StateDot';
 import { relativeTime } from '../primitives/relative-time';
-import { IconForkOutline16, IconEditOutline16, IconEllipsisOutline16,
+import { IconBranchOutline16, IconPinOutline16, IconPinFill16, IconCopyOutline16, IconEditOutline16, IconEllipsisOutline16,
   IconFolderClose16, IconFolderOpen16, IconPlusOutline16, IconTrashOutline16, IconTriangleRightFill14 } from '../primitives/icons';
 import type { GroupNode, SearchResultNode, SessionNode } from './types';
 import type { Translate } from '../../locale/translation';
@@ -368,7 +369,7 @@ export function DraftConversationRow({ focus, flat = false }: { focus: () => voi
 }
 
 export function SessionNodeItem({
-  node, currentId, now, onOpen, onRename, onFork, onDelete, onClose, flat = false, menuFocusOwner, t,
+  node, currentId, now, onOpen, onRename, onFork, onDelete, onPin, onCopyId, flat = false, menuFocusOwner, t,
 }: {
   node: SessionNode
   currentId: string | undefined
@@ -380,7 +381,8 @@ export function SessionNodeItem({
   onFork: (id: SessionNode['id']) => void
   /** Open the native revision-checked deletion preview. */
   onDelete: (id: SessionNode['id']) => void
-  onClose?: (id: SessionNode['id']) => void
+  onPin?: (id: string) => void
+  onCopyId?: (id: string) => void
   /** The row is rendered without a parent Workspace header. */
   flat?: boolean | undefined
   menuFocusOwner: RefObject<HTMLElement | null>
@@ -395,13 +397,17 @@ export function SessionNodeItem({
   const showStatus = primaryStatus.state !== 'done'
   const [menuOpen, setMenuOpen] = useState(false)
   const titleRef = useRef<HTMLSpanElement>(null)
+  const titleButton = useRef<HTMLButtonElement>(null)
+  const pinLabel = t(node.pinned ? 'workspace:menu.unpinSession' : 'workspace:menu.pinSession');
+  const pinIcon = node.pinned ? <IconPinFill16/> : <IconPinOutline16/>;
   // The adapter opens native revision-checked deletion preview; never archive locally.
   const sessionMenuItems = [
-    ...(onClose ? [{ id: 'close', label: tx('workspace:rows.close-value-view', { p0: title }) }] : []),
+    ...(onPin ? [{ id: 'pin', label: pinLabel, icon: pinIcon }] : []),
     { id: 'rename', label: t('workspace:rename'), icon: <IconEditOutline16 /> },
-    { id: 'fork', label: t('workspace:menu.fork'), icon: <IconForkOutline16 /> },
+    { id: 'fork', label: t('workspace:menu.fork'), icon: <IconBranchOutline16 /> },
     // 20-native glyph in the menu's 16px icon slot (Menu.module.css .itemIcon).
     { id: 'delete', label: t('workspace:menu.deleteSession'), icon: <IconTrashOutline16 />, danger: true },
+    ...(onCopyId ? [{ id: 'copy-id', label: t('workspace:menu.sessionId'), icon: <IconCopyOutline16/> }] : []),
   ]
   // Figma session cell: pad 8, status slot 16, then a 4px title gap.
   const ownRow = (
@@ -415,6 +421,7 @@ export function SessionNodeItem({
       onClick={() => { onOpen(node.id) }}
       onPointerEnter={() => { revealClippedTitle(titleRef.current, true) }}
       onPointerLeave={() => { revealClippedTitle(titleRef.current, false) }}
+      onDoubleClick={event => { if (!(event.target as HTMLElement).closest('button:not([data-session-id])')) onRename(node.id); }}
 
     >
       {/* Pending interaction and own or descendant activity outrank the
@@ -425,19 +432,24 @@ export function SessionNodeItem({
           {showStatus && <SessionStatusDots statuses={statuses} />}
         </span>
       )}
-<button type="button" className={clsx(css.title, css.titleButton)} data-session-id={node.id} aria-label={tx('workspace:rows.open-value', { p0: title })} aria-current={selected ? "page" : undefined} title={node.observation}><span ref={titleRef}>{title}</span>{node.observation && <small className={css.observation}>{node.observation}</small>}</button>
+<button ref={titleButton} type="button" className={clsx(css.title, css.titleButton)} data-session-id={node.id} aria-label={tx('workspace:rows.open-value', { p0: title })} aria-current={selected ? "page" : undefined} title={node.observation}><span ref={titleRef}>{title}</span>{node.observation && <small className={css.observation}>{node.observation}</small>}</button>
       <span className={css.time}>{timeLabel(row.updatedAt, now, t)}</span>
-        <span className={css.rowActions}>
+      {node.pinned && <span className={css.pinIndicator} role="img" aria-label={t('workspace:row.pinned')}><IconPinFill16 size={14}/></span>}
+        <span className={css.rowActions} onClick={event => event.stopPropagation()}>
           <Menu
             open={menuOpen}
+            listClassName={css.sessionMenu}
             onClose={() => { setMenuOpen(false) }}
             items={sessionMenuItems}
             onSelect={(id) => {
               setMenuOpen(false)
+              // Dialog return focus needs a control that stays visible without hover.
+              if (id === 'rename' || id === 'delete') titleButton.current?.focus({ preventScroll: true });
               if (id === 'rename') onRename(node.id)
               if (id === 'fork') onFork(node.id)
               if (id === 'delete') onDelete(node.id)
-              if (id === 'close') onClose?.(node.id)
+              if (id === 'pin') onPin?.(node.id)
+              if (id === 'copy-id') onCopyId?.(node.id)
             }}
             closeOnPointerLeave
             focusOwner={menuFocusOwner}
@@ -454,6 +466,8 @@ export function SessionNodeItem({
               </button>
             )}
           />
+          <Tooltip label={t('workspace:menu.deleteSession')} side="bottom" delayMs={500}><button type="button" className={css.iconButton} aria-label={t('workspace:menu.deleteSession')} onClick={() => { titleButton.current?.focus({ preventScroll: true }); onDelete(node.id); }}><IconTrashOutline16 size={14}/></button></Tooltip>
+          {onPin && <Tooltip label={pinLabel} side="bottom" delayMs={500}><button type="button" className={css.iconButton} aria-label={pinLabel} onClick={() => onPin(node.id)}>{node.pinned ? <IconPinFill16 size={14}/> : <IconPinOutline16 size={14}/>}</button></Tooltip>}
         </span>
     </div>
   )

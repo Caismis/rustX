@@ -1,6 +1,6 @@
 import {act,cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
 import {afterEach,expect,it,vi} from 'vitest';
-import type {CheckpointPage,CheckpointReadCut,TraceRecord,TraceToolDefinitionSelection,TraceInspectionHead} from '../../protocol/app-server/v50';
+import type {CheckpointPage,CheckpointReadCut,TraceRecord,TraceToolDefinitionSelection,TraceInspectionHead} from '../../protocol/app-server/v51';
 import {TrajectoryInspector,type TrajectoryInspectorProps} from '../src/app/trajectory/TrajectoryInspector';
 import {ArtifactContext} from '../src/app/components/Artifact';
 import {PreviewContext} from '../src/app/components/ArtifactPreview';
@@ -79,7 +79,7 @@ it.each(['root','child','historical'] as const)('%s opens only the original sele
  const method=kind==='historical'?'session/traceValueRead':'conversation/checkpointValueRead';
  server.handlers.set(method,request=>{if(request.method!=='conversation/checkpointValueRead'&&request.method!=='session/traceValueRead')throw Error('field method');return {type:'checkpoint_value_chunk',chunk:{cut:request.params.cut,domain:request.params.domain,item_offset:request.params.item_offset,path:request.params.path,offset:0,readable_end:new TextEncoder().encode(schemaOriginal).length,next_offset:null,representation:'canonical_json_v1',bytes_base64:btoa(schemaOriginal)}};});
  render(<TrajectoryInspector {...props(record)} facet="schema" detailPage={entry.page} detailReader={entry.reader}/>);
- expect(server.requests.filter(row=>row.request.method===method)).toHaveLength(0);fireEvent.click(screen.getByRole('button',{name:'Read original value'}));await screen.findByText(schemaOriginal);
+ await screen.findByText('ORIGINAL_FROZEN_SCHEMA');expect(screen.getByRole('tree',{name:'render_image parameters JSON'})).toBeTruthy();expect(screen.getByText('18446744073709551615')).toBeTruthy();
  const read=server.requests.filter(row=>row.request.method===method);expect(read).toHaveLength(1);expect(read[0].request.params).toMatchObject({cut,domain:'trace.records.2.detail.request.tools',item_offset:3,path:[],offset:0,max_bytes:65536});
  if(kind==='child')expect(read[0].request.params).toMatchObject({agent_id:'agent-child'});expect(document.body.textContent).not.toContain('18446744073709552000');
  expect(server.requests.filter(row=>row.request.method==='session/traceDetail'||row.request.method==='agent/traceDetail'||row.request.method==='session/traceHistoryDetail')).toHaveLength(1);
@@ -87,13 +87,13 @@ it.each(['root','child','historical'] as const)('%s opens only the original sele
 });
 it.each(['root','child','historical'] as const)('%s rejects a late frozen-schema reply after its real read owner retires',async kind=>{
  const {server,record,cut,entry,retire}=await selected(kind),method=kind==='historical'?'session/traceValueRead':'conversation/checkpointValueRead';server.held.add(method);
- render(<TrajectoryInspector {...props(record)} facet="schema" detailPage={entry.page} detailReader={entry.reader}/>);fireEvent.click(screen.getByRole('button',{name:'Read original value'}));const read=await server.waitFor(method,1);
+ render(<TrajectoryInspector {...props(record)} facet="schema" detailPage={entry.page} detailReader={entry.reader}/>);const read=await server.waitFor(method,1);
  await act(retire);await act(async()=>server.socket.success(read,{type:'checkpoint_value_chunk',chunk:{cut,domain:'trace.records.2.detail.request.tools',item_offset:3,path:[],offset:0,readable_end:schemaOriginal.length,next_offset:null,representation:'canonical_json_v1',bytes_base64:btoa(schemaOriginal)}}));
- expect(screen.queryByText(schemaOriginal)).toBeNull();expect(server.requests.filter(row=>row.request.method===method)).toHaveLength(1);
+ expect(screen.queryByText('ORIGINAL_FROZEN_SCHEMA')).toBeNull();expect(server.requests.filter(row=>row.request.method===method)).toHaveLength(1);
 });
 it.each(['absent','unavailable'] as const)('keeps proven Schema %s distinct without inventing a selected source',type=>{
  const record=row(),page=toolPage(checkpoint(snapshot()).read_cut,record,{type});render(<TrajectoryInspector {...props(record)} facet="schema" detailPage={page}/>);
- expect(screen.getByRole('status').textContent).toBe(type==='absent'?'Original request has no matching Tool definition.':'Schema unavailable');expect(screen.queryByRole('button',{name:'Read original value'})).toBeNull();
+ expect(screen.getByText(type==='absent'?'Original request has no matching Tool definition.':'Schema unavailable')).toBeTruthy();expect(screen.queryByRole('button',{name:'Read original value'})).toBeNull();
 });
 it('does not overwrite current live lifecycle with durable-only content-head state',()=>{
  const record=row();record.state='running';const durable={...record,state:'incomplete' as const};const page=toolPage(checkpoint(snapshot()).read_cut,durable);
@@ -115,12 +115,9 @@ it('Tool Payload reads bounded original RawJsonUtf8 windows without parsing opaq
  server.handlers.set('session/traceDetail',()=>({type:'domain_page',page:toolPage(cut,record,{type:'absent'})}));
  server.handlers.set('conversation/contentRead',request=>{if(request.method!=='conversation/contentRead')throw Error('content');const start=request.params.offset,end=Math.min(start+request.params.max_bytes,bytes.length);return {type:'content_chunk',chunk:{content_ref:reference,offset:start,data_base64:btoa(String.fromCharCode(...bytes.slice(start,end))),end_offset:end,readable_end:bytes.length,next_offset:end<bytes.length?end:null,complete:end===bytes.length}};});
  await server.client.loadTraceDetail('A',record.id);const entry=server.client.getSnapshot().views.A.trace!.details[record.id];
- render(<TrajectoryInspector {...props(record)} facet="input" detailPage={entry.page} detailReader={entry.reader}/>);expect(server.requests.filter(row=>row.request.method==='conversation/contentRead')).toHaveLength(0);
- fireEvent.click(screen.getByRole('button',{name:/^Read content/}));await screen.findByRole('button',{name:'Read next chunk'});
- const first=[...document.querySelectorAll('pre')].find(element=>element.textContent?.startsWith(prefix))!.textContent!;expect(new TextEncoder().encode(first)).toHaveLength(65535);
- fireEvent.click(screen.getByRole('button',{name:'Read next chunk'}));await screen.findByText('🙂","opaque":18446744073709551615}');
- const last=[...document.querySelectorAll('pre')].find(element=>element.textContent?.startsWith('🙂'))!.textContent!;
- expect(first+last).toBe(raw);expect([...document.querySelectorAll('pre')].some(element=>element.textContent===first)).toBe(false);expect(document.body.textContent).not.toContain('18446744073709552000');
+ render(<TrajectoryInspector {...props(record)} facet="input" detailPage={entry.page} detailReader={entry.reader}/>);
+ await screen.findByText('18446744073709551615');expect(screen.getByRole('tree',{name:'Payload JSON'})).toBeTruthy();expect(document.body.textContent).toContain('🙂');
+ expect(screen.queryByRole('button',{name:/Read content|Read next chunk/})).toBeNull();expect(document.body.textContent).not.toContain('18446744073709552000');
  const reads=server.requests.filter(row=>row.request.method==='conversation/contentRead');expect(reads).toHaveLength(2);expect(reads.map(row=>'offset' in row.request.params?row.request.params.offset:null)).toEqual([0,65536]);
  for(const {request} of reads)expect(request.params).toMatchObject({target:server.client.target('A'),content_ref:reference,max_bytes:65536});
 });

@@ -6,12 +6,16 @@ import { IconChevronDownOutline14 } from '../primitives/icons/index.tsx';
 interface Anchor { key: string; top: number }
 interface ReadingPosition { anchors: Anchor[]; top: number }
 interface ViewportProps {
+  /** Native reading scope changes reset intent without destroying the surface. */
+  resetKey?: string;
   children: ReactNode;
   overlay?: ReactNode;
   latestLabel?: string;
   /** Resident hidden chats must not portal floating chrome into a visible sibling. */
   chromeVisible?: boolean;
   historical?: boolean;
+  /** Loading the initial reading window is passive; it does not detach a following reader. */
+  initialHistoryLoading?: boolean;
   onLatest?: () => void;
   latestTurn?: string;
   /** null means observed detached reading with no native owner; undefined is
@@ -35,6 +39,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
   private retireGesture?: () => void;
   private retireNavigation = () => {
     const retire = this.retireGesture; this.retireGesture = undefined;
+    this.explicitLatest = false;
     this.intent++; this.navigation = undefined; this.landed = undefined; retire?.();
   };
   private navigation?: { intent: number; anchor: string; current: () => boolean };
@@ -98,7 +103,6 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
     if (Math.abs(el.scrollTop - desired) > 0.5) el.scrollTop = desired;
     this.writtenTop = el.scrollTop;
     this.reading = this.following ? undefined : this.position();
-    this.explicitLatest = false;
     this.publishActive();
   };
   private publishActive = () => {
@@ -148,12 +152,12 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
   };
   /** Explicit action changes intent; positioning still belongs to the frame. */
   returnToBottom = () => {
-    this.props.onLatest?.();
     this.writtenTop = this.scroller()?.scrollTop ?? this.writtenTop;
     this.retireNavigation();
     this.explicitLatest = true;
     this.following = true; this.reading = undefined;
     this.setState({ detached: false }); this.markLayoutDirty();
+    this.props.onLatest?.();
   };
   beginNavigation = (retired?: () => void) => {
     this.retireNavigation();
@@ -197,8 +201,15 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
   }
   componentDidUpdate(_previous: Readonly<ViewportProps>, _state: unknown, before: { first?: string; position?: ReadingPosition }) {
     if (this.scroller()?.closest('[hidden]')) return;
+    if (_previous.resetKey !== this.props.resetKey) {
+      this.retireNavigation();
+      this.following = true; this.reading = undefined;
+      this.writtenTop = this.scroller()?.scrollTop ?? 0;
+      if (this.state.detached) this.setState({ detached: false });
+      this.markLayoutDirty(); return;
+    }
     const rows = this.rows();
-    if (!this.explicitLatest && before.first && rows[0]?.dataset.chatAnchorKey !== before.first && rows.some(row => row.dataset.chatAnchorKey === before.first)) {
+    if (!_previous.initialHistoryLoading && !this.explicitLatest && before.first && rows[0]?.dataset.chatAnchorKey !== before.first && rows.some(row => row.dataset.chatAnchorKey === before.first)) {
       if (this.following) this.reading = before.position;
       this.following = false;
       if (!this.state.detached) this.setState({ detached: true });

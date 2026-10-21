@@ -831,6 +831,9 @@ pub struct RuntimeClientContextView {
 pub struct RuntimeClientProjectionHeadView {
     pub checkpoint_id: crate::runtime::identity::CheckpointId,
     pub activation_id: crate::context::checkpoint::ProjectionActivationId,
+    /// Insert the historical marker after this native transcript position.
+    /// Captured at activation; independent of Ledger and Journal coordinates.
+    pub transcript_anchor: RuntimeClientTranscriptCursor,
     pub base_frontier: crate::context::resources::LedgerFrontier,
     pub activation_ledger: crate::context::resources::LedgerFrontier,
     pub origin: crate::context::checkpoint::OriginActivation,

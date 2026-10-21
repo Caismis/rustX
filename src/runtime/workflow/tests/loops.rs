@@ -1,6 +1,31 @@
 //! WF-05: fixed bodies, exact admission gates, native settlement and typed exits.
 use super::*;
 
+fn assert_native_path(run: &read_model::WorkflowRunView, events: &[RuntimeEvent]) {
+    let displayed: Vec<_> = run
+        .instances
+        .iter()
+        .filter_map(|row| {
+            row.node.as_ref().map(|node| WorkflowNodeInstance {
+                block: row.block.clone(),
+                node: node.clone(),
+                visit: row.visit.unwrap(),
+            })
+        })
+        .collect();
+    let started: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            RuntimeEvent::WorkflowNodeStarted { instance } => Some(instance.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        displayed, started,
+        "nested execution retains native start order"
+    );
+}
+
 fn distinct_outcomes(mut definition: WorkflowDefinition) -> WorkflowDefinition {
     let successor = definition.block.nodes.remove("done").unwrap();
     definition
@@ -210,6 +235,7 @@ async fn explicit_outcomes_select_only_the_matching_successor_with_the_full_valu
         );
         assert_eq!(checker.starts.load(Ordering::SeqCst), count);
         let events = observations.borrow();
+        assert_native_path(run, &events);
         let selected: Vec<_> = events
             .iter()
             .filter_map(|event| match event {
@@ -812,6 +838,7 @@ async fn nested_loops_inside_parallel_have_bounded_counts_and_inherited_identity
         .collect::<Vec<_>>();
     assert_eq!(instances.len(), 18);
     let native = runtime.read_model.snapshot();
+    assert_native_path(&native.runs[0], &events);
     let blocks: BTreeSet<_> = native.runs[0]
         .instances
         .iter()

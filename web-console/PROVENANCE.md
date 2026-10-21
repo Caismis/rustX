@@ -1,3 +1,35 @@
+## Background task presentation
+
+Reference inspected read-only: local `../deepseek-harness` at immutable commit
+`687f282e8625c6b8d11ff58211a90524be2e4317`, especially
+`packages/client/ui-jobs/src/client/JobListAction.{tsx,module.css}` and
+`packages/client/ui-tool/src/client/tool/models/terminal-card-model.ts`.
+The header entry, viewport-fixed popup, active/ended groups and client-only Clear
+follow that reference. The task row now follows its two-line live card, compact
+settled row, square expansion/stop controls and command-copy terminal panel,
+including the translucent MenuSurface material and the current tertiary-grey
+ring loader (scoped to Jobs). Generic status/wait/cancel cards
+and the retained-output path disclosure were removed from this menu. Only one
+output panel expands at a time; expanding reads deferred native details, and
+stopping uses the reference's two-press confirmation with a three-second expiry.
+An accepted cancellation stays pending until native state publication. Settled
+rows open by default when no live work remains; explicit folding wins. Native
+Trace timing orders the groups and supplies elapsed time; absent starts produce
+no synthetic timing. The native Jobs contract currently supplies bounded progress
+and terminal result content, not Harness's live-output observation stream; progress
+remains in the row and is never presented as shell stdout. TerminalBlock retains
+explicit native lifecycle, with the reference's copyText and runStateDot options
+for the menu's command-copy panel. No Harness job transport is introduced.
+
+Chat background launches now follow the command-only settled presentation:
+dispatch acceptance has its own label, command copy remains available, and no
+exit outcome or output placeholder is invented. Failed launches retain their
+ordinary diagnostic presentation. Historical Job controls and runtime terminal
+notices share the native Job state labels and output formatting. Trace displays
+acceptance separately from task settlement, retains the full native background
+state vocabulary, and links a background record to its unique same-Step launch.
+Harness job services, transport, event folding and model tools are excluded.
+
 ## Local Harness desktop presentation alignment
 
 The installed DeepSeek Harness Windows desktop UI was visually inspected on
@@ -28,7 +60,8 @@ baseline; no brand assets, runtime code or new dependencies are imported.
   File selection keeps the existing upload owner and slash discovery remains
   command-only; the separate attachment toolbar button is removed.
 - Chat/trajectory, Session actions, history navigation, attachment and command
-  controls, approvals, settings and the developer inspector retain their owners.
+  controls, approvals and settings retain their owners. The developer inspector
+  and generic conversation collection browser have been removed.
 
 The local hashes for adapted presentation files are updated in the
 source inventory. The independent-session fork glyph additionally reuses Harness
@@ -84,19 +117,71 @@ Native ownership, grouping, tool status and disclosure state remain rustX-owned.
 ## Interrupted Assistant presentation
 
 Behavioral reference: local `../deepseek-harness` at
-`5badb15009ae1756c3afe0ae0cef1faafc290ccc`, specifically
+`687f282e8625c6b8d11ff58211a90524be2e4317`, specifically
 `packages/client/ui-chat/src/client/chat/{AssistantNodeView,AssistantMarkdown,TurnProcessNodeView,TurnTailNodeView}.tsx`.
 Harness freezes released prose/reasoning on interruption, uses the stopped
-process label, and does not replace it with a diagnostic JSON disclosure.
+process label and a quiet 11px/18px stopped tag after the partial content.
+Stopped/failed whole-Turn processes stay open. They have no diagnostic JSON disclosure.
 The rustX adapter renders typed publication-audit text, reasoning and refusal
-through the existing Assistant/Markdown components. Empty audits and unexecuted
+through the same keyed Assistant/Markdown segments as streaming output, preserving
+the rendered Markdown and open reasoning disclosures. Sparse native block indices
+survive removal of Tool proposals. Empty audits and unexecuted
 Tool proposals have no Chat body. Audits retain their native cursor; their
 message identity suppresses stale streaming duplicates. Native terminal facts
 continue to own stopped/failed labels. Copy and the native settlement time are
 available for partial prose; completed-response actions are not fabricated.
-Native audit data remains available through existing Inspector/Trajectory reads.
+Native audit data remains available through native protocol and Trajectory reads.
 The adapter and grouping changes are rustX-authored; no Harness runtime or
 interruption state machine is copied.
+
+Stop mismatch ledger: the previous native audit path preserved the output but
+omitted the content-level stopped tag and remounted the streamed message.
+Both are repaired against the reference above. Web retains the native bounded
+publication-settlement event header until its independently cut transcript row
+arrives, avoiding an empty intermediate frame. The native settlement head owns
+retention; attachment replacement clears these headers and historical windows
+exclude them. This stores released audit facts, not expired live bytes. Explicit
+native Attempt ownership seats the stopped process above its partial output,
+without borrowing membership across conversations. The protocol audit retains its
+own native reading anchor; only its React renderer uses the released message ID.
+An unexecuted proposal without visible text/reasoning still creates no Tool row.
+The native cancellation acknowledgement, terminal outcome, Tool settlement and
+durable audit remain authoritative. TUI Stop behavior is unchanged.
+
+Deferred prose, reasoning and refusal use their exact immutable audit content
+references, including after reload. The browser compares actual inline UTF-8
+length with the native readable range: a native inline header does not claim
+that the browser's smaller live cache contains all its bytes. Already loaded
+payload bytes survive the live-to-audit handoff only when the conversation,
+stream, message, Attempt, Turn, request, block, representation, version and byte
+end all match. Changed streams or ranges reread their own source; expired live
+locators are never reread for a frozen response. Copy reads the audit's complete
+text/refusal blocks, without introducing completed-response actions.
+The current settled partial keeps its Copy/time footer visible, matching the
+reference's latest-response action reveal policy.
+Unloaded historical receipts create no placeholder Chat rows; ordinary native
+history loading recovers their bodies. Explicit native message identities take
+precedence over local cache paths, preventing a moved row from borrowing another
+message's payload.
+
+Browser validation uses the repository's pinned Playwright workflow because
+Browser plugin not available. Flow under test: native conversation -> Stop before
+output, during reasoning/text/proposal or a running foreground Tool -> retained
+partial content and stopped markers -> continue and reload the same conversation.
+
+Stop QA (2026-10-20): Web typecheck/build, i18n and source/notice checks passed;
+2,960 Web tests passed (four existing skips) and 55 provider tests passed.
+The pinned browser passed the seven unchanged Agent screenshot references and
+both compaction flows, then both new native Stop flows after correcting their
+history-loading synchronization. Stop covered empty output, reasoning, text,
+39,981-byte text, proposed Tool arguments and a real running Bash process.
+Both locales/themes retained partial Markdown and disclosure DOM through Stop,
+discarded abandoned provider output, continued normally, and recovered the same
+records and deferred body after reload plus the ordinary Load earlier gesture.
+Page identity, meaningful content, no framework overlay, no application console
+errors, screenshot evidence and interaction checks passed at
+`http://127.0.0.1:5273`, 1440x1000 light English and 390x844 dark Chinese.
+No screenshot baseline or comparison allowance was changed.
 
 ## Compaction continuation and checkpoint UI
 
@@ -1431,6 +1516,23 @@ chooser's response-anchored rows and their copy are removed. `TurnTail.tsx`,
 
 ## Turn-rail reading window (UI/UX alignment)
 
+The rustX-only history-window explanation above Chat has been removed, including
+its English and Chinese copy. Read-only inspection of Harness
+`687f282e8625c6b8d11ff58211a90524be2e4317`, `ui-chat/src/client/chat/ChatView.tsx`,
+confirms that its reading surface has history loading and a return-to-bottom
+control without this persistent banner. Native bounded reading, loaded-window
+paging and latest-tail ownership are unchanged for parent and child Chat.
+
+The visible history controls now follow the same Harness ChatView reference:
+only its compact, centered Load earlier control appears at the top, with matching
+Chinese wording. The rustX-only Load later action and copy have been removed.
+Native bounded newer-page reads continue when downward reading reaches the end
+of the loaded historical window, before the separately observed live tail. This
+continuation has no visible row, performs no eager history traversal, coalesces
+pending reads, ignores programmatic scroll/anchor corrections and releases its listeners on return to latest or view disposal.
+Main Chat, child Chat and immutable source history share this presentation;
+native read cuts, source ownership and viewport anchoring remain authoritative.
+
 Reference: `/home/caismis/Documents/codes/deepseek-harness@5badb15009ae1756c3afe0ae0cef1faafc290ccc`,
 read-only. `ui-chat` `ChatView.tsx` and `use-chat-navigation.ts`, and
 `session-controller` `Session.loadOlder`/`loadThrough`, were consulted; no new
@@ -1666,10 +1768,10 @@ remain separate, and a window containing no native region still has no selection
 
 ## Unified canonical compaction summary presentation
 
-CompactionMessage is the sole checkpoint disclosure. The adapter retains a bounded
-plain-text preview while collapsed, and the explanation and original Markdown
-while expanded. Trajectory and compaction share the existing GFM preview projection
-in src/presentation/markdown/preview.ts; the former app-local preview module and
+CompactionMessage is the sole checkpoint disclosure. The collapsed row retains
+only the Harness label and expansion hint; its expanded body shows original
+Markdown. Trajectory retains the existing GFM preview projection in
+src/presentation/markdown/preview.ts; the former app-local preview module and
 CompactionSummary component/styles are removed. Native transcript identity, fork
 boundaries and explicit source navigation remain unchanged. Both local presentation
 notes and the upstream interruption/continuation references are retained.
@@ -2453,6 +2555,1390 @@ Issue #467 retry disclosures read the advertised original failure field at its r
 
 Issue #467 retains finite successful Trace detail descriptors separately from complete detail values. The existing Inspector exposes explicit original field pages and byte windows for Options, prompts, tools and Diff, using captured native cuts and exact predecessor evidence. Its presentation and localized labels retain their Harness attribution; the changed local hashes and actual import closures are recorded without changing upstream pins or license notices.
 
-PR #478 compaction inspection retains the matched original Completed-J summary preview. The Harness-derived Inspector keeps its existing Summary and Raw Output views and marks truncated previews as deferred; original checkpoint inspection stays with ProjectionHistory. The reviewed local hash and treatment are updated for this presentation change; upstream pins, imports and license attribution are unchanged.
+PR #478 compaction inspection retains the matched original Completed-J summary preview. The Harness-derived Inspector keeps its existing Summary and Raw Output views and marks truncated previews as deferred; the Chat marker now reads its original checkpoint summary on expansion. The reviewed local hash and treatment are updated for this presentation change; upstream pins, imports and license attribution are unchanged.
 
 PR #478 cancellation review preserves the pinned Harness composer and submission-policy sources. The resident Root explicitly supplies a cancellation-only presentation mode when its exact live attachment remains authorized but observation is unavailable. The editor remains focusable for Escape while read-only; normal Send, draft editing, Child controls and unsupported content retain their existing rules. A new Conversation has no inferred cancellation authority. Reviewed local hashes and treatment notes for `AgentComposer.tsx` and `submission-policy.ts` are updated; upstream hashes, import closure, copyright, license notices and screenshot policies remain unchanged.
+
+## Native Tool detail audit
+
+Read-only reference: `deepseek-harness@687f282e8625c6b8d11ff58211a90524be2e4317`,
+`ui-tool/src/client/tool/{components/ToolRow,components/ToolDetails,toolviews/details-row}`,
+`models/{control-details-model,details-card-model,diff-card-model,read-card-model}`,
+and the existing question, terminal, image and deliverable presentations.
+The native inventory is checked against `src/tools/native` registrations: 21
+fixed Tools, the optional native Todo implementation and the discovered Workflow
+family (23 representative call shapes). No Harness runtime or tool contract is imported.
+
+| Native capability | Presentation and audit outcome |
+| --- | --- |
+| `bash` | Existing terminal card, native command/output, copy and background acceptance distinction retained. |
+| `read` | Existing bounded read card retained; failed/cancelled/uncertain calls now use diagnostic IN/OUT. |
+| `write`, `edit` | Existing intended-change diffs retained and explicitly labeled; rejected/interrupted calls show diagnostics instead of suggesting applied changes. Native results do not contain Harness applied-diff metadata. |
+| `glob`, `grep` | Existing bounded opaque-text search cards retained, with original recovery notices and copy. No total-match count is invented from a bounded search. Errors use diagnostic IN/OUT. |
+| `read_image` | Path and existing managed-image preview share the image body; redundant arguments JSON is removed. Native artifact loading remains explicit. |
+| `present` | Existing delivery row retained; delivery cards still come only from committed successful delivery facts. |
+| `ask_user` | Existing question/answer presentation retained; answered results now have the same Inspect action as cancelled/interrupted results and use committed result content. |
+| `job_list` | Standard row plus compact recorded list, state badges and native truncation caption. |
+| `job_status`, `job_wait`, `job_cancel` | Standard row plus recorded state and copyable output; expanded row omits the repeated status. RustX-only “Recorded task result” and “Full task record” removed. Tool success does not imply Job success. |
+| `subagent`, `list_agents`, `send_message`, `wait_agent`, `interrupt_agent` | Standard Tool row/details replace a separate row layout; historical receipt titles/states come from the recorded result. Current child catalog supplies navigation authority only. Acceptance never implies child completion. |
+| `create_goal`, `get_goal`, `update_goal` | Compact objective, phase, recorded round count and blocked reason replace the complete execution JSON disclosure. Empty Goal is explicit. |
+| `todo` | Recorded post-call tasks, statuses, dependencies and owners replace generic snapshot JSON; the Composer dock still owns current state. |
+| discovered Workflow Tools | Declared output has no fixed entity schema; existing IN/OUT and Inspect remain appropriate, preserving arbitrary workflow-defined results. |
+
+Job, Goal and Todo previews in the trajectory overview share Chat's recorded
+result adapter. The existing Result tab retains original JSON/text content,
+without a second raw-record disclosure. All Tools retain exact native occurrence
+navigation; unavailable/unknown result formats use the existing generic view.
+Copyable Job output uses the existing CodeBlock. The shared details geometry,
+badges, dividers, field grid and scroll caps are adapted from the above reference;
+obsolete separate Agent/Job/Goal detail styles are removed.
+
+The inventory records the shared ToolDetails source and stylesheet, exact hashes
+and imports. Browser plugin is not available in this session; rendered checks use
+the repository's pinned Playwright container. Unit coverage enumerates native
+registration names and exercises each disclosure/Inspect path. Browser coverage
+checks English/Chinese, desktop/narrow layouts, clipboard, trajectory navigation,
+framework overlays and console health; the real native Goal flow is also retained.
+
+
+### Compaction Chat and trajectory alignment
+
+The pinned Harness `ui-chat` CompactionItem, CompactionCommandCard,
+GenericCommandCard and MessageItem styles provide the compact command/checkpoint
+row, running shimmer, neutral completed label and summary-only disclosure.
+The marker now belongs to the conversation column; the separate projection dock,
+historical projection list, duplicated summaries and internal frontier/provenance
+copy are removed. Summary reads remain lazy and bound to the exact native
+checkpoint, activation and current attachment. A bounded summary stays explicitly
+truncated when its native detail is incomplete.
+
+Trajectory checkpoint summaries and unscoped reused history display the Harness
+“Between turns” gutter label. This is presentation metadata only: original
+Attempt/Step locations, record selections, native request ownership and timing
+remain authoritative. Scoped summaries retain their native evidence but do not
+acquire a Turn label or disappear when the Turn is folded.
+
+Retention was checked against Harness compaction-basic config/region selection
+and rustX context planning/execution. Both use token budgets rather than a fixed
+message count. rustX defaults to a 4096-token recent-content target, preserving
+complete call/result boundaries subject to hard request fit. The integration
+regression verifies a nonzero recent target against both actual provider input
+and the reconstructed frozen request: derived summary followed by the exact
+original recent message. The zero-retention browser maintenance fixture does
+not establish default retention behavior. No retention policy is changed by
+this presentation repair.
+
+
+The explicit Return to latest intent now survives delayed native history backfill,
+rather than expiring after one animation frame. Reader scrolling, Turn navigation
+and explicit older-history reads retire that intent. This keeps compaction
+settlement and subsequent replies visible while preserving detached reading.
+
+Large native Tool inputs retain the existing Harness ToolCard disclosure and
+DiffBlock presentation. Expansion reads deferred original arguments through the
+native occurrence's one-item Tool page and 64 KiB content windows, without changing
+execution state. Accepted canonical calls whose execution descriptor exceeded the
+inline budget read their native descriptor in place; only an actual streaming
+proposal uses assembling copy. Optional display IDs do not replace the native
+block occurrence. Unknown/unavailable sources remain explicit, with late reads
+fenced by the original Conversation/attachment or frozen history cut.
+
+## Workflow run and in-workflow review alignment
+
+Reference: DeepSeek Harness `687f282e8625c6b8d11ff58211a90524be2e4317`,
+`ui-workflow-run/WorkflowRunPanel` and `ui-user-questions/QuestionComposer`.
+The compact module header, nested disclosure rows, status dots, clean-completion
+collapse, abnormal-state expansion and focus-preserving transitions are adapted
+from those surfaces. Review reuses the existing derived Question card styles,
+numbered choices, explicit Submit, minimize and dismissal actions.
+
+| Evidence mismatch | rustX presentation and native boundary |
+| --- | --- |
+| Full-width Current activity cards outside the reading column; no node visibility | One run panel inside the transcript column, beside its exact native Tool call when Attempt/call ownership is present; otherwise an independent native activity seat. Root and continuable Child transcripts share the renderer. |
+| `Steps 9 / 10` reads as unfinished progress | Counts say **Steps used / Limit / Agent calls**. Only the native run state determines completion. A native pending Review annotates only its exact run/block/node/visit with an attention label; the underlying running execution state is unchanged. All native node kinds are shown within their exact block definition/invocation groups. A pending node in a settled run says **Not run**, without inventing a skipped/successful state. |
+| Native finite headers hide nodes after the first 32 | The existing immutable Workflow source restores retained nodes at the same checkpoint cut; the browser fences replacement views. Runtime retention omissions are explicitly labeled. |
+| Review subject and historical interaction envelopes shown as raw JSON | Workflow-authored values render as Markdown, fields and lists. Review submits the original instance and subject digest through `interaction/respond`; rejection requires feedback. Durable receipt rows match request/settlement only by native Attempt and interaction identity. Inspect in Trajectory retains native details. |
+
+DSH's phases and navigable member Sessions are deliberately not imported:
+rustX owns block/branch/parallel/loop/return nodes, finite Workflow activations and
+reviews that pause **inside** a run. Finite activations gain no message, resume
+or invented Session navigation controls. No workflow events, timestamps,
+completion state or graph order are reconstructed from neighboring messages.
+No workflow-definition authoring or protocol changes are introduced.
+
+Validation flow: native Workflow Tool -> finite Agent analysis -> native Review
+wait -> reload -> Accept/Reject with feedback -> native branch/return -> settled
+run disclosure. Browser plugin not available; the repository's pinned Docker
+Playwright runner validates desktop light English and narrow dark Chinese,
+with screenshots outside the repository under `/tmp/rustx-workflow-*.png`.
+
+## Web model and thinking effort selector alignment
+
+Reference: DeepSeek Harness `687f282e8625c6b8d11ff58211a90524be2e4317`,
+`ui-model-selection/ModelSelect`, `ui-primitives/MenuGroup` and `rank-by-name`.
+The Web selector now uses the reference's single-card Model / Thinking effort
+panes, compact dimensions, shared translucent menu surface, provider groups,
+search above four models, keyboard return paths and selection focus treatment.
+
+| Evidence mismatch | Repair or intentional native boundary |
+| --- | --- |
+| Model/Profile sideways submenus and missing current values | Two root cells show Model and Thinking effort with their current values; drilling replaces the contents of the same card. Escape/Shift+Tab return to the opening cell, then to the trigger. |
+| Duplicate “Model default profile (high)” and “high” choices | The named native default appears once in both the dropdown and `/model`. Choosing that strength follows the native Model default; other strengths pin their exact native Profile. An unnamed native default or a removed Profile still has one explicit default/recovery action. No strength IDs are fabricated. |
+| Binding revisions close/rebuild the menu and clear its catalog | A write keeps its pane/rows, confirmed label and fixed-size progress indicator until native acknowledgement plus authoritative reread. Revisions fence selection while retaining the last catalog for display; replacement attachments clear it. Cached refreshes add no loading paragraph to the card or Composer. The pending trigger keeps focus while native checkpoint reads temporarily revoke control admission; its option rows and dependent sends remain locked. |
+| Selection failures mixed with catalog diagnostics | Selection failures use the Composer toast. A refused native mutation retains an explicit reread action before a further write; rustX requires authoritative repair rather than replay. Catalog failures retain their in-card Retry. |
+
+The Web adapter continues to carry the complete native Summary policy and
+independent overrides, and preserves native explicit same-Model selection and
+NoOp acknowledgement semantics. Frozen running Attempt configurations are not
+rewritten. Native Profile authoring remains in Settings. **TUI continues to
+follow pi and has no changes in this work.**
+
+Validation flow: saved Chat -> Model/Thinking effort panes -> held selection ->
+held native checkpoint -> confirmed label/focus, plus actual native live profile
+switching and lost-acknowledgement recovery. Browser plugin not available; the
+repository's pinned Docker Playwright runner checks English desktop light and
+Chinese narrow dark. Frame samples verify card/row identity and unchanged
+Composer geometry and Chat scroll while each write/read is pending. Evidence
+screenshots are outside the repository at `/tmp/rustx-model-*.png`.
+
+Final visual QA also scopes the host reset's focus outline away from model menu
+rows: DSH's row highlight and the trigger's own focus shadow are retained, with
+no extra blue outline after a selection. The complete 19-case browser regression
+passed, followed by four focused desktop/narrow rechecks after that outline
+repair. The updated non-popup references change only the centered chevron;
+registered dark-390 attachment/context noise pixels were compared with the old
+references and are unchanged. No noise regions or tolerances were widened.
+
+## File picker, page drop and attachment rail alignment
+
+Reference: DeepSeek Harness `687f282e8625c6b8d11ff58211a90524be2e4317`:
+`ui-conversation/skeleton/InputBar.tsx`, `ui-attachment/ComposerAttachments`,
+`drop-events`, `DropOverlay`, `AttachmentRail`, `FileCard`, and the shared
+`ImageLightbox`/`file-size` primitives. The reference checkout was read only.
+
+| Reference evidence / previous mismatch | Result and native boundary |
+| --- | --- |
+| DSH opens the multi-file picker from the plus menu and resets its input; rustX advertised raw byte/count budgets in that row | Retain the same picker entry, editor selection and repeat-pick behavior; show the normal attachment description. |
+| DSH listens across the document and shows the illustrated, blurred viewport mask; rustX listened only near the composer | Reuse the DSH document enter/leave counter, copy/blocked drop effect, viewport exit/dragend cleanup, and body-portal mask. Text-only drags remain native. |
+| DSH uses a scrollbar-free paged rail, 240×64 file cards and 64×64 image thumbnails; rustX stacked a generic card, status line and separate retry controls | Reuse rail geometry, edge arrows, wheel panning, new-item reveal, file glyph/size, hover/touch removal, card-body retry and original-image lightbox. |
+| DSH refuses invalid additions with a toast rather than a rejected placeholder | One intake path for picker/drop/paste refuses an invalid addition atomically and preserves the existing draft. Native safe-basename and directory admission remain authoritative. |
+| DSH's InputBar explicitly applies no count/size cap to generic files; rustX imposed 8 files / 2 MiB each / 4 MiB aggregate | Remove those product limits from native preparation, receipt collection, persisted allocation validation, generated capability and clients. Transport concurrency and 64 KiB frames remain independent flow control. The server spools verified frames to anonymous temporary files rather than buffering entire large selections. |
+| DSH separately projects provider-native image limits (reference defaults: 20 images, 20 MiB each, 200 MiB aggregate) | rustX uploads all selected files, including images, into the workspace and does not create provider-native image input. No unrelated image-message limit or image-limit caption is invented for this file path. Image thumbnails retain native upload indication. |
+| Native transport response loss cannot prove failure | Keep Check status inside the same card; only Absent/Failed evidence permits explicit Retry with a fresh operation. No implicit retransmission or browser receipt fabrication. First-submit sealing, native authority fences and TUI's pi interaction remain intact. |
+
+Browser plugin not available; rendered verification uses the repository's pinned
+Playwright 1.63.0 Chromium container. Target flow: composer plus-menu selection or
+a file drag anywhere on the page → native intake/upload → DSH rail, pending/error
+feedback, explicit recovery and preserved editor text/selection. Desktop English
+light and narrow Chinese dark cover the same flow; real native upload scenarios
+exercise workspace bytes, source/fork ownership and more than the old file limits.
+
+
+The upload capability change is mandatory App Server v51. All current Web/TUI
+DTO imports and the binary carrier's control negotiation use v51; v50 artifacts
+are removed and old peers are rejected. This is a native protocol update only
+for other derived presentation files. Runtime Client v71 and TUI interactions
+remain unchanged. The two old narrow attachment-card rasterizer-noise entries
+were removed along with that card. All four new attachment references compare
+exactly; no screenshot tolerance was expanded.
+
+
+Final verification: 2,943 Web unit tests plus the real native Web/TUI parity
+case passed (four existing skips); 87 focused attachment/comparator checks passed
+after the final action-label update. The 72 focused TUI client/upload checks and
+Web/TUI/protocol typechecks passed. Native upload, child input admission, App Server
+and old-version refusal checks passed, as did Clippy, formatting, i18n, source
+provenance and the production build. Shared child task/guidance admission now
+accepts 32 files while preserving its separate text budget and cancellation fence.
+
+The normal pinned-browser run passed all 18 selected regressions under v51. It
+covered desktop English/light, narrow Chinese/dark, all four theme/width Composer
+references, picker caret preservation, document drop, mixed attachment rail,
+image preview/focus restoration, invalid-addition toast, named retry/status
+actions, committed-control fences, read-only navigation, native retry/Fork, source
+deletion/reload, and 24 files including a 6 MiB Markdown document. Target-flow
+console/error-overlay and horizontal-overflow checks were clean. Only the four
+intentional attachment baselines changed; both old attachment noise exceptions
+were removed. Screenshots were inspected from `/tmp/rustx-upload-drop-1440.png`,
+`/tmp/rustx-upload-drop-390.png`, `/tmp/rustx-upload-rail-1440.png`,
+`/tmp/rustx-upload-rail-390.png`, `/tmp/rustx-upload-pending.png`, and
+`/tmp/rustx-upload-failed.png`. The existing bundle-size build warning remains.
+
+## Message Regenerate reading handoff (2026-10-20)
+
+Reference inspection: DeepSeek Harness `687f282e8625c6b8d11ff58211a90524be2e4317`,
+`ui-chat/src/client/chat/TurnTailNodeView.tsx`, `MessageIconActions.tsx` and
+`ChatView.tsx`. The current Harness built-in message strip exposes Copy and Fork;
+its model-request retry assembler is not a user Regenerate action. rustX retains
+its native sibling-branch replay while following the user's explicit interaction
+contract: click Regenerate → remove the selected response and later output from
+the reading surface immediately → show the existing Harness generation chrome →
+replace it with the newly accepted native replay and its streaming response.
+
+| Mismatch | Local treatment |
+| --- | --- |
+| The old response stayed visible until Branch/Switch/Attach completed | Capture a finite reading prefix synchronously with the Shell intent, retaining the exact adopted User input and earlier rows. Native response/process metadata defines the cut; an unloaded input never borrows its neighbour. |
+| Attachment replacement destroyed the Chat viewport and briefly exposed an empty shell | Keep the Session's viewport mounted. A new native attachment resets reading intent through the existing single-frame scroll owner, without reconstructing the surface. |
+| Acknowledgement and canonical observation can arrive in either order | The Shell owns the disposable prefix through the native accepted MessageId and exact target handoff. Only that input's observed native message/descriptor retires the prefix. Failure, route replacement and authority changes retire it independently; no native effect is rolled back or replayed. |
+| Send and response actions could race the native lineage preparation | Disable their existing controls while the prefix owns the reading handoff. Input replay still uses only the native returned editor content, once. |
+
+No protocol, native execution or TUI interaction changes. The original lineage
+remains accessible from Session tree. Browser plugin not available in this
+session; rendered QA uses the repository's pinned Playwright Chromium container.
+The flow under test is: completed response → Regenerate → hold each real native
+Branch/Switch/Attach/turn-start acknowledgement → retained prompt and earlier
+reading with no old response → new native streaming and settled reply.
+Desktop English/light and 390px Chinese/dark runs record animation-frame checks
+and screenshots outside the repository. Existing screenshot references and
+comparison tolerances are unchanged.
+
+Verification: the full Web suite passed 2,966 tests (four existing skips), then
+117 focused command/retry/scroll checks passed after adding acknowledgement-order
+and deferred-descriptor coverage. Typecheck, build, i18n, source/notice checks and
+all 55 provider tests passed. All 23 existing Agent browser checks passed; the
+final eight native/browser checks passed for upload-bearing and inherited Retry,
+original lineage/Fork, both localized Regenerate frame probes, both Stop flows,
+both compaction flows and turn navigation. Page identity, meaningful content,
+error-overlay/console health and horizontal-overflow checks passed. Screenshots
+`/tmp/rustx-retry-pending-{1440,390}.png` and
+`/tmp/rustx-retry-streaming-{1440,390}.png` were visually inspected. No reference
+pixels or comparator tolerances changed. The existing bundle-size warning remains.
+
+## Session list operations (2026-10-20)
+
+Reference: DeepSeek Harness `687f282e8625c6b8d11ff58211a90524be2e4317`,
+`ui-workspace/session-actions/{PinSession,RenameSession,ForkSession,SessionId}.tsx`,
+`rows/Rows{.tsx,.module.css}`, `ui-primitives/{Menu,Modal,useModalLayer}`,
+`ui-workspace/navigation.ts` and `session-controller/sessions/service.ts`.
+Archive is explicitly outside the user's requested scope. Permanent deletion is
+rustX's native operation, not an upstream Archive action.
+
+| Reference / rendered mismatch | Treatment |
+| --- | --- |
+| Row actions lacked Pin and Copy ID; extra Close view displaced the reference menu | Match Pin, Rename, Fork, Delete, Copy ID order, hover buttons and resting pin marker. Close view moves into the existing View options submenu. Pin and Copy ID do not select or attach an inactive Session. |
+| Current upstream Session menu uses 144px minimum width and 34px rows; the older shared menu uses 218px and 40px | Reuse upstream `listClassName` to scope current 13px text, 14px icons, spacing and 16px radius to Session menus; other menus retain their geometry. |
+| Rename had a generic Workspace form, no explicit Cancel footer and a list-refresh barrier | Adapt upstream Session dialog: selected draft, trimmed submit, composition-aware Enter, Cancel/Rename footer, inline error and native summary settlement. Focus returns to the opening control. |
+| Sidebar Fork selected its source and opened an explicit boundary picker | Use the latest completed native response, paging backward at its retained read cut when necessary. Publish the child in the catalog without switching the current Session or editor. Increment an existing durable title using upstream half/full-width parenthesis numbering. Explicit `/fork` and response Fork retain their native boundary pickers. |
+| Delete confirmation showed low-level native inventory instead of a concise product dialog | Use the shared modal and Cancel/red-outline Delete footer with the Session title, irreversible history removal and active-work termination explanation. Native delete preview, revision check, failure and uncertain-outcome ownership remain intact. |
+
+Intentional native difference: DSH pins are Host metadata. rustX has no native
+pin API, so pins are a Web list preference, persisted per service endpoint and
+native authority and shared by browser storage events. No pin authority is added
+to Session execution or the TUI. A confirmed deletion removes its local pin.
+The native protocol and TUI interactions are unchanged.
+
+Browser plugin not available; rendered QA uses the repository's pinned
+Playwright 1.63.0 Chromium container. The flow under test is: open the Session list
+→ pin/copy without navigation → rename and cancel/confirm → inspect/cancel native
+delete confirmation → Fork a running source at its last completed response while
+preserving the current editor → explicitly open the child and permanently delete
+it. Desktop English/light and narrow Chinese/dark screenshots are kept outside
+the repository. Existing screenshot tolerances are not expanded.
+
+Rendered review caught a browser-only focus failure: the modal could not restore
+focus to a hover-only ellipsis after the mask removed hover/focus from its row.
+Menu and quick-delete dialog entry now capture the always-visible title button
+instead. Both cancellation paths return the keyboard to that Session row.
+Double-click rename is checked on desktop; the narrow overlay uses the menu,
+since selecting a title deliberately closes the overlay on its first click.
+
+Reference updates are limited to the deletion dialog, the background row's new
+hover controls, and twelve existing references with a stale model-chevron color.
+The latter each differ by exactly 36 pixels; an isolated archive of pre-change
+commit `fa04e72a` rendered the identical chevron as the modified tree, including
+its `rgb(173, 178, 184)` computed color. This is reference repair, with no model
+UI source change. No comparator or rasterizer-noise allowances changed. Stable
+updated captures were reviewed before a normal comparison run.
+
+The Sidebar completion scan also reads native deferred-message descriptors via
+the existing `messageDescriptor` parser. It compares their ledger cursors with
+materialized entries before selecting a boundary, so a newer completed large
+body cannot be silently skipped in favor of an older short reply. No body bytes
+or editor input are reconstructed, and no source/child attachment is needed.
+
+Verification: 2,980 Web tests passed (four existing skips). After the deferred
+completion fix, all 77 focused Session/Fork/navigation checks and the Web
+TypeScript check passed. Production build, i18n, 301 source records, notices for
+264 production packages and all 55 provider checks passed. The existing bundle
+size warning remains.
+
+Across the normal comparison and native runs, all 17 selected browser scenarios
+passed: four keyboard viewports (390/820/1280/1600), six Sidebar product states,
+Shell references in both themes, clipped-menu keyboard settlement, grouped/flat/
+search recency, native upload-bearing Retry/explicit Fork, the two-real-Session
+close-view/controller flow, and the new desktop/narrow Session action flows.
+The last two native flows were rerun successfully after the deferred completion
+fix. Tested URLs were `http://127.0.0.1:5273` (production preview) and
+`http://127.0.0.1:5274` (isolated presentation fixtures). Page identity, meaningful
+content, console/error-overlay health, actual clipboard content, modal focus,
+source execution preservation and horizontal-overflow assertions passed.
+Screenshots `/tmp/rustx-session-{menu,rename,delete}-{1440,390}.png` were visually
+inspected. Chromium is the rendered browser authority; other engines were not
+exercised for this change.
+
+## Text-field focus paint (2026-10-20)
+
+Reference: Harness `687f282e8625c6b8d11ff58211a90524be2e4317`,
+`ui-theme/src/styles/focus.css`, `ui-primitives/src/Input.module.css`,
+`ui-primitives/src/settings-form/fields.module.css`, and
+`ui-workspace/src/client/rows/WorkspaceBrowser.module.css`.
+The local reset forced a solid blue outline after input components had disabled
+it; Settings also repeated that forced outline for text fields and React Aria
+search. Use the DSH color/width-only focus defaults, preserve component-owned
+outline style, and remove the two Settings text-field overrides. Editable text
+controls default to no external outline; existing field/card borders, invalid
+states, text selection and non-text keyboard controls remain independent.
+No React, native protocol or TUI logic changes.
+
+Browser plugin not available; QA uses the repository's pinned Playwright browser.
+The flow under test is: pointer/keyboard focus of Sidebar search and Rename →
+edit/cancel with stable geometry and focus → Settings provider search, endpoint
+and multiline fields → Trajectory search. Desktop/light and narrow/dark evidence
+is kept outside the repository. Existing screenshot tolerances are unchanged.
+
+The Sidebar search reference is updated to its outline-free rendering. Two
+Trajectory references also contained stale missing “Between turns” labels from
+existing commit `faa11646`; the labels are already present in HEAD's
+`TrajectoryRow.tsx`. Their refreshed differences are confined to the label/rail
+column. No Trajectory source, comparison policy or noise tolerance changed.
+
+Verification: the two outside-repository focus flows passed at 1440px/light and
+390px/dark, checking pointer and Tab/Shift+Tab focus, outline paint, stable field
+geometry, filtering, draft edits, cancel/return focus, endpoint and multiline
+fields, and a retained action-button keyboard outline. All nine selected
+existing browser regressions passed across the four keyboard viewports, Settings
+pages, native desktop/narrow Session actions, Shell references and Trajectory
+search/detail. The two refreshed reference cases passed a subsequent normal
+strict comparison. Page identity, meaningful content, console/error-overlay
+health and overflow checks passed. Screenshots
+`/tmp/rustx-focus-{search,rename,provider-search,trajectory}-{1440,390}.png` and
+the localized native Rename captures were inspected. Build, Web typecheck, i18n,
+302 source records and 264 package notices passed; the existing large-chunk
+build warning remains. URLs were `http://127.0.0.1:5273` and
+`http://127.0.0.1:5274`; Chromium was the rendered browser authority.
+
+## Model menu material (2026-10-20)
+
+Reference: Harness `687f282e8625c6b8d11ff58211a90524be2e4317`,
+`ui-theme/src/styles/design-platform.css` and
+`ui-theme/src/styles/gradient-shadow-text.css`. `MenuSurface` already consumes
+DSH menu fill and blur tokens, but the older local theme lacks their global
+values. This leaves the ModelSelect material transparent. Port the light/dark
+menu material tokens at their theme owner, keeping native model-selection
+behavior and the TUI unchanged.
+
+Browser plugin not available; use the repository's pinned Playwright browser.
+Flow under test: new-conversation workspace selection → open ModelSelect root →
+model and thinking-effort panes → select effort/model → retain draft and focus.
+Check actual material paint, viewport containment and stable Composer geometry
+in both themes at desktop/narrow widths. Existing attached-Session model-menu
+checks cover pending native confirmation, keyboard navigation and geometry.
+
+Mismatch evidence: the initial root/model/effort material computed to
+`rgba(0, 0, 0, 0)` with `backdrop-filter: none`, reproducing the supplied image.
+After the theme fix, all three panes consume the reference's 58% light / 45%
+dark fill and `blur(40px) saturate(150%)`. The menu remains inside the viewport,
+Composer geometry and draft text are unchanged, and both choices restore focus.
+The workspace tab context menu also receives the same shared material and
+continues to dismiss with Escape; the task-menu checks remain green.
+
+Only `agent-selectors-light-linux.png` changed. Enabling the reference's blur
+also changes Chromium's compositing and text rasterization outside the menu.
+A controlled browser check disabled just the two new material tokens before
+opening the same pane: its decoded RGBA screenshot exactly matched the original
+checked-in reference. This proves the extra text pixels follow the restored
+material, without a typography/layout change. The refreshed stable screenshot
+passed the subsequent normal strict comparison. No comparator, tolerances or
+noise allowances changed; the two closed-menu dark references are identical.
+
+Verification: 20 existing model-selection unit checks, the four new-conversation
+rendered flows (1440/390px, light/dark), the material/control + tab-menu flow, and
+all six selected existing browser regressions passed. Those regressions cover
+pending native selection, keyboard/return focus, narrow ModelSelect, reference
+screenshots and task menus. Build, TypeScript, i18n, 302 source records and 264
+package notices passed. The existing large-chunk build warning remains. Page
+identity, meaningful content, console/error-overlay health, actual selection
+and overflow checks passed. Browser URLs were `http://127.0.0.1:5273` and
+`http://127.0.0.1:5274`; Chromium was the rendered authority. Evidence lives at
+`/tmp/rustx-model-surface-{before,after}-<pane>-<theme>-<width>.png` and
+`/tmp/rustx-model-surface-control-{old,new}.png`. Other engines and macOS were
+not exercised. No protocol, React behavior or TUI changes.
+
+## Goal diagnostics, history windows and confirmed model display (2026-10-20)
+
+Reference: DSH `687f282e8625c6b8d11ff58211a90524be2e4317`,
+`api/session-controller/src/client/sessions/session.ts` (`PAGE_MESSAGES`,
+`HISTORY_PAGE_OPTIONS`, `loadOlder`, `doOpen`) and the existing Chat/Trajectory
+views using that Session history. DSH requests at least 50 messages and two
+Turns rather than exposing each small transport page as a reading window.
+The rustX Web client now assembles initial and older reading windows from its
+unchanged native bounded pages. Transcript storage retains at most 500 records
+and its existing byte ceiling; Trace keeps its existing count/byte ceilings.
+Metadata, cuts, body references, live updates and explicit jump ownership remain
+native. Root and child reading surfaces share the threshold policy; ordinary
+contiguous initial history retains live presentation.
+
+Goal observations are model context, not ordinary Chat content. Suppress their
+native typed `goal_status` messages in the current-context fallback, loaded
+transcript and Message component. Goal state remains in the existing Goal dock,
+and Trace diagnostics retain their context data. No matching on rendered prose.
+
+The model-picker regression is a deferred body transition: the checkpoint can
+publish model status without its growing configuration body, and AgentControls
+then fell back to Workspace settings or "Choose model" before the body reread.
+Retain the last confirmed display within the same attachment while the exact
+new binding is read, and reconcile native mutation before reading that body.
+Unconfirmed/stale configuration still cannot authorize a selection. Native
+configuration, execution, persistence, and TUI behavior are unchanged.
+
+Browser plugin not available; use the pinned repository Playwright browser.
+The target flows are: open a short history with many Goal context entries → all
+Chat messages load without a manual action and Goal JSON stays out of Chat →
+Trajectory loads the same short conversation automatically with context rows →
+return to Chat with its draft intact. Also switch to a different model in a real
+native Session, observe confirmed labels across painted frames/checkpoints and
+reopen its menu. Validate desktop/light and narrow/dark, page identity, content,
+console/overlay health, overflow, focus, scroll and existing lifecycle guards.
+
+Initial hydration carries an explicit presentation flag into ChatViewport. A
+passive prepend keeps a following reader at the newest message; a user-owned
+scroll/jump still keeps its anchor and cancels obsolete work. Automatic loading
+starts on opening the reading scope and on an explicit return to latest, not on
+every cache epoch. This avoids a repeated hydration loop during child observation
+replacement or a live-cut rebase. The existing scroll/navigation checks and a
+new hydration-following check cover that distinction.
+
+Native model confirmation now verifies the chosen model/profile at the current
+binding revision, including its deferred body, before the menu reports success.
+The deferred-body regression holds those reads and checks that the menu remains
+busy, the Workspace default never replaces the confirmed label, and exactly one
+model mutation is dispatched. The command fixture now reflects its acknowledged
+model in the native checkpoint as well as the model domain; an ACK-only fixture
+cannot stand in for confirmed selection.
+
+The existing native Chat regression is updated to expect short history to load
+automatically rather than require clicks per wire chunk. The retained image
+component also retains its explicit load intent through reconnect: the browser
+asserts a replacement object URL under fresh authority, a single live lease,
+successful decode/lightbox and the existing preview/upload checks. No attachment
+implementation or screenshot/noise policy changed.
+
+Browser verification passed all nine selected scenarios: two short Chat/Trace +
+Goal flows, two real native different-model selections, two pending model/effort
+flows, two child Turn-navigation flows and the native history/rich-response/
+reconnect/image/lightbox/upload workflow. Real different-model tests also prove
+zero provider requests: changing configuration does not generate a response.
+URLs were `http://127.0.0.1:5273` (production) and
+`http://127.0.0.1:5274` (fixtures), using pinned Linux Chromium at 1440px/390px,
+with light/dark and English/Chinese coverage across those scenarios. Page
+identity, meaningful content, console/error-overlay health, viewport bounds,
+selection/checkpoint identity, focus, scrolling, drafts and reference decoding
+passed. Evidence is `/tmp/rustx-goal-history-{chat,trace}-{1440,390}.png` and
+`/tmp/rustx-model-confirmed-{1440,390}.png`. Other browser engines and macOS were
+not exercised; the existing large-chunk build warning remains.
+
+Final verification: all 191 active Web test files passed, with 2,987 tests passed
+and four existing skips. The 77 command checks passed again with the complete
+native model DTO in their checkpoint fixture. Production build, final Web
+TypeScript check, i18n ownership, all 303 source records and notices for 264
+production packages passed. The nine browser scenarios above passed with the
+same production implementation. No native protocol, runtime or TUI source changed.
+
+### Plain source preview uses the full sidebar reading area (2026-10-20)
+
+Reference: Harness `ui-sidebar-documentpreview/src/client/TextPreview.module.css`
+and `text/TextBody.tsx` at `687f282e8625c6b8d11ff58211a90524be2e4317`.
+Harness gives the pane body the remaining height and scrolling responsibility;
+plain source pages flow inside it. The local plain-text `pre` inherited the
+global 360px cap and `overflow: auto`, so the actual text scroller occupied only
+the top of the pane. A real-file browser reproduction measured a 924px body
+containing a 360px inner scroller for 3,097px of source. The component now removes
+that cap and inner overflow and resets unwrapped source breaking. The same
+3,097px document flows through the full 924px/768px desktop/narrow scrollport.
+The existing text inset, font, toolbar and tab state remain component-owned.
+
+The Browser plugin/skill is unavailable in this session; QA used the repository's
+pinned Playwright 1.63 Linux Chromium container against the local workspace Host
+fixture at `http://127.0.0.1:5274/test/fixtures/workbench.html` (production preview
+at port 5273). An external temporary script first reproduced the old geometry,
+then passed the fixed flow at 1440x1000 and 390x844: open a real Markdown file,
+choose Text, read long lines and the final line, restore both scroll coordinates
+after switching tabs, toggle wrapping, and resize the viewport. Page identity,
+meaningful source content, console/error-overlay health, panel bounds and no
+page-level horizontal overflow passed. Evidence:
+`/tmp/rustx-plain-text-before-1440.png`,
+`/tmp/rustx-plain-text-after-{1440,390}.png`, and
+`/tmp/rustx-plain-text-wrap-{1440,390}.png`.
+
+All three existing browser regressions for source toolbar/tab state, Markdown
+viewer selection and conversation file-link/source-line navigation also passed.
+The focused document/view-lifetime/workspace-Host suite passed all 45 tests;
+TypeScript, production build, all 303 provenance records and 264 package notices
+passed. No screenshot reference/tolerance or native/TUI source changed. Other
+browser engines were not exercised; the existing large-chunk build warning remains.
+
+### History refresh stays inside the reader (2026-10-20)
+
+Reference: Harness `session-controller/src/client/sessions/session.ts` and
+`session-controller/src/history.ts` at
+`687f282e8625c6b8d11ff58211a90524be2e4317`: 50 conversational messages/two
+Turns per ordinary reading window, a 500-message fetch ceiling, and accumulation
+through `prependWindow`. Harness Chat retains an earlier-history button for a
+real omitted prefix; normal lifecycle repair does not replace history with an
+internal "History was refreshed" notice.
+
+The local mismatch was a destructive cache rebase when an unresolved response or
+Tool left the latest native head, followed by a manual reload error. Root and
+child readers now retain those rows and reread exact native message identities
+silently. Fresh results preserve native content bindings, row identities and the
+current live cursor. In-flight rereads coalesce newer observations and are fenced
+by attachment, Conversation, history epoch and navigation intent. Existing rows
+remain mounted while a result is pending. Passive initial hydration does not show
+its older-page button. Genuine native read failures still retain the last valid
+presentation and expose the existing recovery path.
+
+Chat's global 500-row/8 MiB retention limit and Trace's global 512-row/4 MiB
+retention limit were removed. Limits remain on individual native responses,
+content/field reads, eight-interest lifecycle batches and the heavy detail cache.
+The 500-message ceiling now measures conversational user/assistant messages per
+fetch; Context and Tool-result rows do not exhaust it. Continuation progress and
+opaque-cursor cycle checks replace arbitrary page-count termination. Reading
+mechanism documentation now distinguishes native page admission from retained
+history instead of documenting obsolete 256-row eviction.
+
+The Browser plugin/skill is unavailable; verification used pinned Playwright 1.63
+Linux Chromium at `http://127.0.0.1:5274/test/fixtures/startup.html` and production
+preview at port 5273. Tested flow: open Chat, hold an older Tool/response reread,
+advance the native head, keep the original User node and scroll position, release
+the result, expand its successful output and edit a retained draft. Desktop
+1440x1000 and narrow 390x844 passed page identity, meaningful content, error-overlay
+and console health, viewport bounds, stable DOM/reading position and absence of
+the internal notice/manual-recovery button. Evidence:
+`/tmp/rustx-history-repair-{1440,390}.png`.
+
+The long-history case passed with 1,000 records in its initial 500-message fetch
+and all 1,120 retained after the next real history action; earliest and latest
+messages remained available together. Returning to latest also preserves all
+1,120 ordinary-history rows and does not reintroduce the earlier-history button;
+only explicit historical navigation releases its frozen window. Root and child
+unit regressions cover that distinction. Its fixture cut now reflects the actual
+frontier instead of the original 80-row case. Evidence:
+`/tmp/rustx-history-long-reading.png`. All eight selected browser scenarios passed,
+including short Chat/Trace hydration at both widths, child navigation at both
+widths, and the real native history/rich-response/reconnect/image/lightbox/upload
+workflow. No screenshot reference or comparison policy changed.
+
+The full Web suite passed 2,992 tests with four existing skips. The final focused
+run passed 39 tests, including the added opaque-cursor cycle case and retention
+of 669 child records; root historical navigation also retains 1,312 rows and
+Trace retention exceeds 1,024 records without eviction. TypeScript, production
+build, i18n ownership, all 303 source records and notices for 264 packages passed.
+No native protocol, runtime or TUI source changed. Other browser engines were not
+exercised; the existing large-chunk build warning remains.
+
+After the final ordinary-return-to-latest correction, all 78 focused transcript,
+history-policy, child-reader and navigation tests passed again. The correction
+preserves accumulated ordinary history while explicit historical jumps still
+return to their independently current live head.
+All eight browser scenarios then passed again against the final production build,
+including the no-reload/no-eviction assertion after returning to the latest of
+1,120 loaded records. The final TypeScript and provenance checks also passed.
+
+### Between-turn labels follow semantic membership (2026-10-20)
+
+Reference: Harness `ui-trajectory/src/client/layout.ts`, `TrajectoryTable.tsx`
+and `trajectory-search-index.ts` at
+`687f282e8625c6b8d11ff58211a90524be2e4317`. Harness explicitly models standalone
+compaction sections with a null Turn. The local ledger instead marked every
+unowned native record between Turns, and the Inspector used the same label as a
+fallback whenever a Turn was absent. This mislabeled native child activations.
+
+One shared semantic classifier now serves the ledger, Inspector and bilingual
+search. Compaction checkpoints and unscoped reused conversation material retain
+the requested between-turn label. Native Subagent, Background, Workflow and Tool
+activities keep their actual ownership, including absent ownership; no nearby
+Turn is inferred from position or Tool-call IDs. Native records, row identities,
+selection and timing are unchanged. Tests cover scoped child Turn/Step ownership,
+fold/unfold selection, unscoped activities, and both search vocabularies.
+
+The Browser plugin/skill is unavailable; QA used pinned Playwright 1.63 Linux
+Chromium at `http://127.0.0.1:5274/test/fixtures/trajectory.html` and the startup
+fixture, with the production preview on port 5273. Desktop 1440x844 English/dark
+and narrow 390x844 Chinese/light passed semantic labels, selection, close/focus
+restoration, search without extra detail reads, meaningful page identity,
+console/error-overlay health and viewport bounds. Evidence:
+`/tmp/rustx-trajectory-child-section-{1440,390}.png` and
+`/tmp/rustx-trajectory-between-section-{1440,390}.png`.
+
+Before-edit screenshot runs exposed stale references that omitted even the
+already-requested User/compaction gutter labels. Comparing the before-edit actual
+with the fixed actual changed only x=0..71, y=583..624: 1,560 pixels at 1440 and
+1,379 at 390, removing the two incorrect native activity labels. After visual
+inspection, eight ledger/Inspector references were refreshed for the legitimate
+User/compaction labels. Their reference changes are confined to x=0..71,
+y=153..564 (x=0..30 for the narrow Inspector overlay). All four strict screenshot
+replays passed without changing comparison tolerances. The existing child
+navigation regression now checks automatic history hydration instead of waiting
+for the obsolete manual earlier-page action; it still verifies child-owned
+trace/detail reads, draft retention and parent/child switching at both widths.
+
+All 138 focused trajectory/timing tests and ten selected browser scenarios passed,
+including English/light and Chinese/dark native compaction continuation. TypeScript,
+production build, i18n ownership, all 303 source records and notices for 264
+packages passed. No native protocol, runtime or TUI source changed. Other browser
+engines were not exercised; the existing large-chunk build warning remains.
+
+### Agent interactions use Tool and Context instead of activation activity (2026-10-20)
+
+Reference: Harness `ui-trajectory/src/client/index.ts` and
+`trajectory-message-definitions.ts` at
+`687f282e8625c6b8d11ff58211a90524be2e4317`. Its registered trajectory definitions
+publish messages, requests, Tools and compaction; messages from an Agent enter as
+Context. There is no separate Agent activation activity row. The prior local fix
+removed an incorrect between-turn label but still exposed this extra native
+lifecycle dimension as a selectable row and Tools-lane span.
+
+The shared Web projection now excludes native `subagent` activation records
+before constructing sections, as it already excludes interaction lifecycle
+audits. Ledger rows, Inspector targets, bilingual search, both timeline modes
+and Turn/Step membership therefore agree, including activation-only pages.
+Obsolete activation-specific narrow labels and the timeline style were removed.
+Actual delegation/control Tool calls and delivered Context messages retain their
+native identities, scope and detail reads. Trace cache facts and Agent controls
+remain intact; records are not relabeled as invented Context.
+
+Browser plugin not available: QA used the pinned Playwright 1.63 Linux Chromium
+container, fixture origin `http://127.0.0.1:5274` and production preview origin
+`http://127.0.0.1:5273`. The dedicated `/test/fixtures/trajectory.html?agent-interactions`
+flow includes running/completed/cancelled/failed activations with and without
+scope: open trajectory, search the actual Tool, inspect its recorded result,
+close and restore keyboard focus, search the delivered Context, then apply a
+lifecycle refresh. Desktop 1440x844 English/dark and narrow 390x844 Chinese/light
+passed meaningful page identity, console/error-overlay health, viewport bounds,
+unchanged native record count and absence of activation rows/spans/search hits.
+Evidence: `/tmp/rustx-agent-trajectory-{1440,390}.png`.
+
+The real native continuation scenario also passed: create a child, wait and
+interrupt its initial activation, resume the same Agent, wait for success, return
+to the parent and inspect the original delegation Tool result. Parent trajectory
+retains the Tool and delivered Context without the two activation audit rows.
+Evidence: `/tmp/rustx-agent-native-trajectory.png`. Existing child navigation,
+draft retention, receipts, independent child trajectory and native compaction
+continuation passed alongside the full trajectory browser suite: 56 scenarios.
+
+All four before-edit ledger/Inspector screenshot scenarios passed. After visual
+review of the intended row removal and timeline redistribution, 13 affected
+references were refreshed, with no comparison tolerance/noise-policy changes.
+Pixel differences are confined to timeline y=72..121, removed/moved activity rows
+and their old bottom boundary at y=573..642; the two resize references also
+receive the existing User/compaction between-turn gutter labels at x=0..71.
+All strict screenshot replays passed as part of the 56-scenario run.
+
+All 139 focused trajectory/timing tests, TypeScript, production build, i18n
+ownership, 303 source records and notices for 264 packages passed. No native
+protocol, runtime or TUI source changed. Other browser engines were not exercised;
+the existing large-chunk build warning remains.
+
+### Composer editor focus keeps the neutral Harness card edge (2026-10-20)
+
+Reference: Harness `ui-conversation/src/client/skeleton/InputBar.module.css` at
+`687f282e8625c6b8d11ff58211a90524be2e4317`. Its card retains the neutral border-l2
+elevation stroke while editing. The local textarea outline was already removed,
+but a separate `card:has(input:focus-visible)` override recolored the whole card
+blue. That override is removed from the shared composer stylesheet; new, parent
+and child editors keep the same card edge and shadow before and after focus.
+
+Browser plugin not available: an outside-repository Playwright script used the
+pinned 1.63 Linux Chromium container at the startup fixture on port 5274 (production
+preview on port 5273). All four before/after scenarios passed at 1440x844 and
+390x844 in light and dark themes, exercising new-conversation, parent and child
+editors. The flow is workspace selection or child navigation, pointer focus,
+draft editing, Tab/Shift+Tab focus return and action-button keyboard focus.
+After the fix, computed card paint and geometry remain unchanged by editor
+focus, the draft survives, and action buttons keep their keyboard outlines.
+Page identity, meaningful content, console/error-overlay health and viewport
+bounds passed. Evidence: `/tmp/rustx-composer-focus-{before,after}-{hero,root,child}-{1440,390}-{light,dark}.png`.
+
+The existing Agent browser suite passed all 23 scenarios, including strict
+screenshots, growth/scrolling, restored drafts, send/queue/steer, uploads, model
+menus, both locales' keyboard policies and preference reload. Sixteen focused
+composer references were updated after visual review: only the rounded card
+edge changes, dimensions are identical and the central interior has zero changed
+pixels. Screenshot tolerance and noise policies are unchanged. TypeScript,
+production build, all 303 source records and notices for 264 packages passed.
+No native protocol, runtime or TUI source changed. Other browser engines were
+not exercised; the existing large-chunk build warning remains.
+
+### Child observation recovery and continuable composer parity (2026-10-20)
+
+Reference: Harness `ui-conversation/src/client/skeleton/InputBar.tsx`,
+`ui-subagent/src/client/SubagentReadOnlyComposer{.tsx,.module.css}` and
+`ui-primitives/src/ConnectionIndicator{.tsx,.module.css}` at
+`687f282e8625c6b8d11ff58211a90524be2e4317`. Continuable children retain Send as
+the primary action and expose an independent Stop immediately before it. The
+shared rustX composer now follows that rule for child views, including empty or
+admission-blocked editors; root primary behavior is unchanged. Double Escape is
+fenced to the exact child activation and root attachment. Model/permission seats
+use the exact child checkpoint and are read-only under the current native child
+API; no parent model/catalog is substituted. Unavailable children use the compact
+neutral read-only frame and localized title/body.
+
+A failed live child read previously bypassed the post-read registry check and
+printed the raw RPC exception in the chat flow. Runtime Client now rechecks the
+same activation even after a live read fails. Only a proven registry transition
+to Inactive or Unavailable authorizes `resync_required` to retained native
+history. An IPC failure while still Active remains `observation_unavailable`;
+it cannot fabricate completion, trigger execution, or substitute a historical
+answer. The original total read budget and inspection capacity remain intact.
+Real Unix tests close the inspection connection during initial and following
+reads both before and after actual child settlement, then verify canonical
+retained content and exactly one model execution.
+
+Web observation failures use compact amber connection feedback above the child
+composer, adapted from Harness ConnectionIndicator. Localized retry/connecting
+states retain coherent content, the resident editor and its draft. Technical
+diagnostics remain available in an explicit Details disclosure. Retrying resets
+only the child read cursor under the existing validated source owner; it never
+replays Send, Stop or model work. Error ownership is invalidated with the view,
+activation or attachment. Existing native header controls remain available.
+Four newly attributed source records distinguish the small adapted presentation
+from rustX-owned lifecycle, observation and mutation authority; historical pins
+remain unchanged.
+
+All 10 native child-observation boundary tests (including four physical close
+cases), 107 focused frontend checks, Rust formatting, TypeScript, production
+build, i18n ownership, 307 source records and notices for 264 packages passed.
+No protocol shape or TUI presentation changed. The existing large-chunk build
+warning remains.
+
+Browser plugin not available: QA used the repository's pinned Playwright 1.63
+Linux Chromium container at fixture origin `http://127.0.0.1:5274` and production
+preview origin `http://127.0.0.1:5273`. All 40 scenarios passed, including the real
+native interrupt/wait/resume workflow, existing root strict screenshots and
+keyboard policies, child breadcrumbs/aside navigation, retained drafts,
+independent child trajectory and four controlled read-failure/recovery flows.
+The recovery flows cover 1440x900 English and 390x900 Chinese in both themes:
+enter child, retain evidence and draft, fail an actual typed read, disclose and
+close diagnostics, retry one cursor-free read while preserving the same editor
+node, then receive fresh canonical content without execution/control replay.
+Page identity, error-overlay/console health and viewport bounds passed.
+Visually inspected desktop dark and narrow light failure states and narrow dark
+recovered state: the compact warning sits above the card, Send and Stop fit the
+same row, and the native model/permission seats collapse on narrow layouts.
+Evidence: `/tmp/rustx-child-{recovery,reconnecting,recovered}-{dark,light}-{1440,390}.png`.
+No screenshot references or comparison policies changed. Other browser engines
+were not exercised.
+
+### Direct-parent tasks use the child UserMessage seat (2026-10-20)
+
+Reference: the supplied DSH child-view screenshot and Harness
+`ui-chat/src/client/chat/MessageItem.tsx` (`UserMessageNodeView` /
+`UserStyleBubble`) at `687f282e8625c6b8d11ff58211a90524be2e4317`. The reference
+shows the parent task as an expanded, right-aligned user bubble with ordinary
+timestamp/copy actions. The local predicate admitted only Human sources, so a
+child's actual `Agent(parent)` task and follow-up guidance instead became folded
+Context rows. The shared native adapter now uses the exact receiver's direct
+parent identity for this presentation decision. Body, whitespace, flow spacing,
+actions and current-message visibility reuse the existing UserMessage seat.
+No canonical source, native role, turn ownership or trajectory classification is
+rewritten. Sibling/child reports and injected Context keep their own presentation.
+Nested-child tests require a match to the direct parent, and canonical-head to
+journal settlement retains the same bubble and Copy button nodes.
+
+The child model selector introduced in the previous change is removed at the
+user's explicit request, including when a native child checkpoint contains model
+settings. The shared ordinary composer placeholder replaces the extra inactive
+resume prompt; its obsolete bilingual dictionary entries are removed. The exact
+native permission label and independent Send/Stop behavior remain in the child
+seat. These changes apply to both the main conversation and sidebar child view.
+
+TypeScript, i18n ownership, production build, all 81 focused frontend checks,
+307 source records and notices for 264 packages passed. Historical source pins
+and screenshot comparison policies are unchanged. No native or TUI source changed.
+
+Browser plugin not available: QA used the pinned Playwright 1.63 Linux Chromium
+container, fixture origin `http://127.0.0.1:5274`, production preview origin
+`http://127.0.0.1:5273`. All 44 browser scenarios passed. The real native child
+launch/interrupt/wait/resume workflow now asserts that its delegated task uses
+the parent-message UserMessage article and has Copy, with no child model control.
+Four new reference-driven flows cover 1440x1000 English and 390x1000 Chinese in
+both themes: enter a child, read initial task and follow-up guidance, verify
+right alignment/wrapping/native timestamps, copy the exact original multiline
+text to the clipboard, switch to trajectory and back with the draft preserved,
+return to the parent with its draft preserved, then open the same child in the
+sidebar. Both child mounts have user bubbles and no model selector, while the
+parent's returned Agent report remains contextual. Page identity, meaningful
+content, console/error-overlay health and viewport bounds passed.
+
+Visually inspected main desktop dark, main narrow light and sidebar desktop
+dark screenshots against the supplied reference: shared rounded user bubble,
+ordinary message footer, preserved line breaks and neutral composer. Evidence:
+`/tmp/rustx-parent-bubbles-{main,aside}-{dark,light}-{1440,390}.png`.
+Existing root strict references, child recovery and child trajectory checks also
+passed; no screenshot baselines changed. Other browser engines were not tested.
+The existing large-chunk build warning remains.
+
+### Chat file attachments use the Harness user-content stack (2026-10-20)
+
+Reference: the supplied `compose.yml` comparison and Harness
+`ui-chat/src/client/chat/UserContent.tsx` / `MessageItem.module.css` at
+`687f282e8625c6b8d11ff58211a90524be2e4317`. The old native adapter rendered every
+user block through the text bubble, including a generic AttachmentCard with a
+bold filename and generic File attachment label. User content now separates an
+ordered attachment row above ordinary text, reusing the existing rounded file
+tile, 28px FileTypeIcon, filename, uppercase extension and 8px stack gap. Empty
+text bodies are omitted for attachment-only messages. Multiple file tiles wrap
+and long names retain their full title while truncating visually.
+
+The native adapter partitions by original block indices rather than filtering
+the underlying content array: deferred text after attachments still reads its
+advertised exact field. This applies to Human and direct-parent child messages
+in both conversation mounts. Managed file artifacts use the same tile and open
+the existing original-source preview from the card without eager byte reads;
+the preview retains its native download path. Tool artifact presentations retain
+their existing resource controls. First-submit pending files use the same tile
+and actual local File size. Historical uploaded-file references currently expose
+only batch identity and filename, so their card omits size rather than inventing
+0B, deriving a host path or retaining a browser-only historical size cache.
+
+All 94 focused frontend checks, TypeScript, i18n ownership, production build,
+307 source records and notices for 264 packages passed. No native protocol,
+message source, runtime or TUI source changed. Historical source pins remain
+intact; the two shared presentation records add the exact UserContent baseline.
+
+Browser plugin not available: validation used the pinned Playwright 1.63 Linux
+Chromium container, fixture origin `http://127.0.0.1:5274` and production preview
+origin `http://127.0.0.1:5273`. All 51 final scenarios passed. The new flows cover
+1440x1000 English and 390x1000 Chinese in both themes: open the conversation,
+verify 240x64 file cards with 28px icons above the independent text bubble,
+copy only the original text, inspect file-only wrapping/long names, preserve the
+root draft while entering a child, then open that child in the sidebar. Page
+identity, meaningful content, error-overlay/console health, geometry and viewport
+bounds passed. Visual review covered desktop dark, narrow light and narrow dark
+sidebar states. Evidence: `/tmp/rustx-message-files-{dark,light}-{1440,390}.png`
+and `/tmp/rustx-message-files-{child,aside}-{dark,light}-{1440,390}.png`.
+
+Existing picker/drop/rail, uncertain upload recovery, first-submit ACK loss and
+remount ownership, native child execution and parent-message flows also passed.
+Two stale startup test locators were updated from the removed global Check status
+button to the existing filename-specific card action; their original operation,
+receipt, no-replay and explicit continuation assertions remain intact.
+
+Seven before-update Agent comparisons rejected the intentional layout change.
+After reviewing actual/diff evidence against Harness, nine affected references
+were refreshed and every strict comparison passed in the final replay. All PNG
+dimensions are unchanged; pixel differences stay inside the conversation content
+region (desktop x=436..1276, narrow x=123..362), with zero changed pixels in the
+sidebar or top chrome. The input/toolbar screenshots remain unchanged. No noise
+allowances or comparison tolerances changed. Other browser engines were not
+exercised; the existing large-chunk build warning remains.
+
+### Compaction markers retain their historical positions (2026-10-20)
+
+Reference: Harness `ui-chat/src/client/conversation-nodes/compaction.ts` and
+`command.ts` at `687f282e8625c6b8d11ff58211a90524be2e4317`. The automatic marker
+uses the committed checkpoint event's sequence, and manual compaction shares the
+conversation node sequence. The native adapter previously appended ContextSeat
+below every transcript node, so the latest checkpoint followed every later reply.
+
+The original native activation now captures a typed transcript anchor in its
+finite, integrity-checked display header. It observes pending inputs, publication
+audits and terminal controls as well as canonical messages. Inherited activations
+use the destination's translated canonical prefix, not the source's transcript
+coordinate. Projection directory/detail reads retain the same original anchor;
+Ledger frontiers and Journal sequences never become browser ordering guesses.
+This is display metadata; it does not create a canonical message or alter the
+model's compacted history, compaction admission, or TUI interaction logic.
+
+Chat reads checkpoint metadata from the existing native projection directory,
+scoped to the exact attached observation. Each checkpoint has its own stable
+historical seat after the corresponding response tail. Later replies and later
+compactions preserve earlier markers and open summary state. Markers outside a
+loaded window, or inside its unloaded gap, do not attach to unrelated content.
+Process groups split at the marker boundary so later reasoning/Tools remain below
+it. ContextSeat now renders only live operation/receipt feedback; completed
+checkpoint summaries no longer occupy the permanent bottom seat. Summary styling
+and lazy full-summary inspection use the existing Harness presentation primitives.
+
+Validation passed: 57 focused frontend checks; 17 native anchor, original-head,
+receipt, integrity and observation-boundary checks; WebUI and protocol TypeScript;
+i18n ownership; production build; 307 source records and notices for 264 packages.
+The native tests explicitly distinguish accepted-but-not-canonical T positions
+from Ledger positions, retain the first anchor after a later commit, and translate
+an inherited activation into a different destination T position.
+
+Browser plugin not available: visual/interaction QA used the pinned Playwright
+1.63 Linux Chromium container at fixture origin `http://127.0.0.1:5274` and
+production preview origin `http://127.0.0.1:5273`. All 33 scenarios passed,
+including the existing strict Agent/Composer references without baseline changes.
+The compaction matrix covers English/Chinese, light/dark and 1440/390 widths:
+collapsed/expanded summaries, subsequent prompts/replies, a second checkpoint,
+preserved historical ordering and usable disclosure without horizontal overflow.
+The real native flow covers manual and automatic compaction, continuation,
+questionnaires, reconnect, full page reload and interrupted output. It verifies
+both checkpoints survive and the automatic marker remains before the subsequent
+answer after reload. Desktop dark and narrow light captures were visually
+reviewed; the native narrow dark flow was also reviewed. Evidence:
+`/tmp/rustx-compaction-position-{en,zh}-{light,dark}-{1440,390}.png` and
+`/tmp/rustx-compaction-zh-dark.png`. Other browser engines were not exercised.
+The existing large-chunk build warning remains.
+
+### Live trajectory inspection keeps its resident content (2026-10-20)
+
+Reference: Harness `ui-trajectory/src/client/TrajectoryTable.tsx` at
+`687f282e8625c6b8d11ff58211a90524be2e4317` keeps the selected record/detail pane
+resident while its semantic cells update. The rustX adapter instead superseded
+all reader-owned detail on each native checkpoint/domain event, then invalidated
+cached bodies for changes to timing, status, usage or Turn placement. The detail
+hook also hid its loaded body while reading a replacement cut. Together these
+paths repeatedly removed the right-hand content and its interactive state.
+
+Ordinary overlapping live updates now preserve the original native detail page,
+reader and content cut when its content selectors are unchanged. Native payload
+changes mark the detail stale and cause one background read; the old content
+remains displayed until the new descriptor and all required fields are ready.
+A per-read token lets native changes queue one successor read without repeatedly
+cancelling the in-flight read. Root and child readers share this cache behavior.
+The Inspector keeps its tab, JSON tree, reasoning disclosure, focus and scroll
+position. Failed replacement reads preserve content and expose the existing
+error presentation. New selections, native interval epochs, attachment changes,
+explicit resynchronization and child retirement still fence obsolete readers.
+
+Native summary reads have a separate freshness check: a response launched before
+a newer native Trace head cannot overwrite that head, and one coalesced read
+repairs its interests. This does not revoke the resident detail's immutable
+source merely because the live summary advanced. No runtime execution, provider,
+native protocol, or TUI interaction logic changed.
+
+Validation passed: 245 focused tests covering root/child live inspection, finite
+cache limits, delayed response ordering, deferred native fields, original Tool
+and message sources, cut replacement, resync, attachment replacement and child
+retirement; TypeScript, i18n ownership, production build, 307 source records and
+notices for 264 production packages also passed. A new delayed-summary regression
+failed against the intermediate implementation before the ordering guard was
+added, then passed with the rest of the final checks.
+
+Browser plugin not available: rendered QA used pinned Playwright 1.63 Linux
+Chromium, fixture origin `http://127.0.0.1:5274` and production preview origin
+`http://127.0.0.1:5273`. All 14 final browser scenarios passed. The new flow opens
+Session A at `test/fixtures/startup.html?existing&models&trace-live`, selects the
+Trajectory request and Options, runs 50 native updates while summary/header/field
+replies are held, then completes the new source. The body stays readable until
+the replacement is ready. A MutationObserver saw zero panel/tree detachments and
+zero loading-state appearances; tab focus, scrollTop=80 and the original tree DOM
+survived. Detail reads stayed at one for lifecycle changes and two for one actual
+body update; stale summary replies coalesced one follow-up read. Tests cover both
+themes at 1440x1000 and 390x1000, with English desktop and Chinese narrow UI.
+
+The existing eight native/Harness visual-parity combinations and desktop/narrow
+child trajectory navigation also passed, with no screenshot baseline changes.
+Page identity, meaningful content, error overlays, console health, interaction
+state and horizontal viewport bounds passed. Desktop dark and narrow light
+captures were visually reviewed. Evidence:
+`/tmp/rustx-trace-live-{before,after}-{dark,light}-{1440,390}.png`; these show the
+resident view before and after the stress flow, not a before-fix capture. Other
+browser engines were not exercised. The existing large-chunk build warning
+remains.
+
+The real native `trajectory-integration.spec.ts` workflow also passed: Settings
+save/reread, busy admission, exact adoption and immutable historical Trace
+inspection through a running App Server. This brings the final browser validation
+to 15 passing scenarios, including the 14 presentation/stress/child scenarios.
+
+## Office sidebar admission regression
+
+The reported PPTX failed before conversion: its ordinary binary printer-settings
+part was rejected as executable binary content, and its web hyperlinks were
+rejected as external resources. Admission now distinguishes the standard OOXML
+printer-settings location and inert HTTP/HTTPS/mailto hyperlinks. Other binary
+parts, macros, ActiveX, embedded packages, external images/templates/workbooks,
+dangerous link schemes, ZIP traversal, expansion and CRC violations remain
+rejected. Both default and per-part active content declarations are checked, so
+active MIME declarations cannot hide behind a printer-settings filename. The
+existing isolated converter and PDF viewer still have no network/link-action
+authority. Source bytes and document sizes are unchanged.
+
+The Files sidebar now shares the document preview's classified, localized failure
+mapping instead of showing a raw WorkspaceHostError. The existing toolbar refresh
+retries the read. DSH's Office provider and OfficeBody at
+`687f282e8625c6b8d11ff58211a90524be2e4317` were inspected; the existing Host
+authorization/conversion boundary and shared PDF presentation remain the owners.
+The original reported file was read without modification and successfully
+converted to a complete 10-page PDF. Its bytes are not committed. New DOCX/PPTX
+fixtures are original MIT content generated by the existing Python fixture tool.
+
+Validation passed: 116 focused tests, with four macOS-only cases skipped on Linux;
+TypeScript, i18n, production build, 307 source records and 264 production package
+notices. Six existing advanced-document/workbench browser scenarios passed. The
+new Office tests initially used an incomplete accessible button name; the test
+selector was corrected, and both final English and Chinese scenarios passed.
+They render DOCX/PPTX through real Host conversion, check selectable PDF text and
+canvas output, force a classified failure, refresh back to a rendered document,
+and verify zero external requests and zero uncaught page errors.
+
+Browser plugin not available: rendered verification used pinned Playwright 1.63
+Linux Chromium with fixture origin `http://127.0.0.1:5274` and production preview
+origin `http://127.0.0.1:5273`. Both 1440x1000 screenshots were visually reviewed:
+`/tmp/rustx-office-sidebar-{en,zh}.png`. No screenshot references or comparison
+tolerances changed. Other browser engines and macOS conversion were not exercised
+on this Linux host. The existing large-chunk build warning remains.
+
+## Office and PDF continuous-reader alignment
+
+The Office screenshot reference uses a continuous PDF scrollport, fit-width pages,
+12 px page gaps and floating zoom controls. The previous rustX viewer instead had
+native form controls and one selected page. `PdfPreview` now adapts DSH's PDF page
+presentation and CSS at `687f282e8625c6b8d11ff58211a90524be2e4317`, reusing the
+existing source-derived `ZoomViewport` and `ZoomControls`. PDF and converted Office
+share this surface. Single-viewer files no longer show an empty viewer choice;
+the extra derived-preview paragraph and obsolete single-page/text-layer paths
+were removed. Tab-local fit/fixed zoom and scroll metadata replace the page picker.
+Geometry uses the source's 96/72 CSS scale while admission remains in PDF points.
+
+Native Worker ownership, serial render settlement, finite page/text/pixel limits,
+source authorization and converter isolation remain rustX-owned. Page geometry is
+held independently from viewport-local bitmaps. Zoom replacements publish their
+complete bitmap and matching text together. Leaving the reading window releases
+backing stores; closing a preview retires every owned page and Worker.
+
+Rendered QA found and fixed three integration mismatches:
+
+- The zoom menu's minimum width was applied to its anchor. It now uses Menu's
+  `listClassName`; source-sized buttons override the native Button padding. The
+  floating toolbar measures 132 px in pinned DPR=1 Chromium (28/58/28 px controls),
+  including device-rounded hairline borders. The menu keeps its compact 112 px
+  width token without widening the trigger.
+- Standard-font rendering requested resources that were not supplied. The lazy
+  reader now bundles exact-version PDF.js standard fonts and CMaps through the
+  source-derived binary resource factory, without network fallback. The Adobe,
+  Foxit and Liberation data licenses are included in generated production notices.
+- The original presentation's normal knockout text/card groups needed more than
+  eight temporary canvases; the ninth request was only 12x8 px. The count budget
+  is now 128 while the 16M aggregate scratch pixels and 4M per-canvas pixels stay
+  enforced. Completed page renders also clear their temporary surfaces. An
+  intermittent rapid-switch failure was separately traced to `reader.cancel()`
+  without the Error reason required by PDF.js 6. Cancellation now marks the
+  SDK controller closed before late Worker chunks arrive, with a regression
+  assertion for the Error reason. No global error suppression was added.
+
+Validation passed: 131 tests across 13 focused files; TypeScript, i18n ownership,
+production build, 311 source records and notices for 267 production entries. All
+13 final browser scenarios passed, including real native dual-PDF/Office workspace
+lifetime, rapid tab/pane changes, narrow layouts, original downloads, selection
+and copy after zoom, localized failure/refresh, continuous page scrolling,
+fit-width/fixed zoom and restored reading positions. The copy check waits for the
+matching completed bitmap/text replacement. No screenshot references or comparison
+tolerances changed. The lazy PDF chunk includes the font/CMap data; the existing
+large-chunk build warning remains.
+
+Browser plugin not available: rendered QA used pinned Playwright 1.63 Linux
+Chromium, fixture origin `http://127.0.0.1:5274` and production preview origin
+`http://127.0.0.1:5273`. The Office matrix covers English/Chinese, light/dark and
+1440x1000/390x1000. Desktop light and narrow dark captures were visually reviewed:
+`/tmp/rustx-office-continuous-zh-{light-1440,dark-390}.png`.
+
+The user's original PPTX was copied only into the ephemeral, authorized fixture
+workspace and opened through the real Workbench Host conversion. All 10 pages
+were scrolled and rendered without alerts, uncaught errors or external requests.
+At 1900x1000 the pages fit at about 65%, with a measured 12 px gap; offscreen
+backing stores were released while geometry remained. The reference capture was
+visually reviewed: `/tmp/rustx-office-reference-aligned.png`. The user's bytes
+were not changed or committed. Other browser engines and macOS conversion were
+not exercised here. No native protocol, Agent execution or TUI logic changed.
+
+### Workflow one-shot child observability (2026-10-20)
+
+Reference: DSH `687f282e8625c6b8d11ff58211a90524be2e4317`,
+`ui-workflow-run/WorkflowRunPanel` and `ui-subagent/SubagentReadOnlyComposer`.
+The target flow is: invoke a native Workflow -> open a running Agent node ->
+inspect that child's Chat/Trajectory -> retain the record on settlement ->
+return to the original parent conversation. Browser plugin not available;
+rendered checks use the repository's pinned Playwright 1.63 Linux Chromium,
+production preview at `http://127.0.0.1:5273`, and fixture origin at port 5274.
+
+Mismatch ledger:
+- Workflow nodes previously rendered only text/status. DSH's running member
+  link is now adapted to the exact native `child_agent_id` + activation pair.
+  It becomes non-navigable on settlement, retaining an already-focused button
+  until blur. Parent conversations and visited child records remain resident.
+- Native read routing previously admitted only durable, continuable Agents.
+  Inspection now resolves Workflow-owned executions from their real Registry
+  ownership for observation, content, history, Trace, delivery and statistics.
+  No durable Agent record is created; message, resume and interrupt admission
+  still reject these finite executions. They remain outside the native Agent
+  inventory and do not create synthetic parent Trace lifecycle activities.
+- Child input is displayed in the existing user bubble; adjacent canonical
+  text blocks now have a paragraph boundary, retaining original block indices.
+  DSH's localized one-shot record title/body replaces the composer. No model
+  selector or follow-up input is added. Narrow breadcrumbs reserve space for
+  the selected child title instead of allowing the parent title to consume it.
+- rustX keeps native block/node topology, review gates and execution budgets.
+  DSH Session ownership, event assembly and executable workflow semantics are
+  excluded; the TUI interaction logic is unchanged.
+
+Initial verification: 110 focused WebUI tests, a native Registry ownership/
+control regression, WebUI and protocol TypeScript, i18n, production build,
+311 source records and 267 notice entries passed. The first three real native
+browser cases passed at 1440x1000/light and 390x1000/dark in English/Chinese;
+source-driven final settlement and existing child regression checks follow.
+No screenshot reference or comparator tolerance was changed.
+
+Final rendered validation passed: all 12 browser cases, including the existing
+four-theme/viewport parent-message and observation-recovery matrices. The new
+real native `web_workflow_observation` case executes a permitted `read`, opens
+its Result detail from the child-owned Trace, then commits `workflow_output`.
+The selected inspector DOM, Result tab and contents remain resident across
+native settlement; the header becomes Completed. The Trace reader now follows
+its exact observation cursor and is not replaced by a lifecycle-only change.
+`workflow_output` remains a reserved terminal protocol, never a fabricated Tool
+execution. The initial settlement probe incorrectly assumed an ordinary Tool
+row for that protocol; it was replaced by the actual native `read` scenario.
+The browser selector also uses the Tool inspector's existing Result tab.
+
+Final page identity, meaningful content, no framework overlay, relevant console
+health, real interaction and screenshot checks passed. Screenshots reviewed:
+`/tmp/rustx-workflow-child-{chat,trace,completed}.png` and
+`/tmp/rustx-workflow-child-zh.png`. The desktop screenshot shows the real read
+result; the narrow dark screenshot shows the selected breadcrumb, ordinary
+user bubble and localized read-only record frame without horizontal overflow.
+Verification commands: focused eight-file Vitest run (110 tests), native
+`a_workflow_child_closes_native_lifecycle_without_parent_inbound`, WebUI/protocol
+TypeScript, i18n, provenance/notices, production build and the repository pinned
+browser runner. No reference baselines, comparison tolerances or TUI interaction
+logic changed. Other browser engines and operating systems were not exercised.
+
+### Workflow execution path (2026-10-20)
+
+Reference: the same DSH revision's `ui-workflow-run/workflow-definition.ts`
+adds members only on actual Agent start. rustX now appends its own typed node
+records only after native cancellation/budget admission, under the same lock
+that orders parallel admissions. Block entry no longer pre-registers graph
+nodes. Unselected branches and nodes cancelled before admission have no row;
+the existing native cut preserves start order through waits, settlement and
+reconnect without browser clocks or Journal reconstruction.
+
+Chat displays one chronological list across concrete blocks and Loop iterations,
+with scoped paths/instance markers on nested nodes. Definition-block grouping
+and the unused "Not run" labels were removed. Exact native identities keep rows
+and focused one-shot links stable during updates; review state and consumed
+execution budgets retain their independent meaning. TUI formatting, expansion,
+focus and navigation code is unchanged.
+
+The rendered target flow is: start Workflow -> see only its admitted child ->
+wait at Review -> reconnect with the same ordered path -> accept/reject -> see
+only the chosen successor in start order. Browser plugin not available; use the
+repository's pinned Playwright Linux Chromium with production preview at
+`http://127.0.0.1:5273` and fixture origin at port 5274.
+
+Validation passed: 124 native Workflow/read-source tests, 72 WebUI tests across
+five focused files, 56 TUI projection tests, WebUI TypeScript, i18n, production
+build, 311 source records and notices for 267 production entries. The native
+tests compare real nested Loop/Parallel start facts against display order, test
+both branch choices and reject phantom rows before/cancelled admission. The
+React checks cover interleaved/repeated identities and focused child settlement.
+Edited Rust files pass rustfmt; the repository-wide formatting check still
+reports the existing unrelated signature in `runtime_client/projection.rs`.
+
+All three real native browser cases passed, including English/light desktop
+(1440x1000), Chinese/dark narrow (390x1000), accept/reject, reconnect, child Chat
+and Trace inspection, and terminal collapse. Page identity, meaningful content,
+absence of framework overlays, relevant console health and user interactions
+passed. Completed screenshots were visually reviewed:
+`/tmp/rustx-workflow-completed-en.png` and
+`/tmp/rustx-workflow-completed-zh.png`. No screenshot baselines or comparator
+tolerances changed. Other browser engines and operating systems were not tested.
+
+### Pre-PR self-review (2026-10-20)
+
+The complete branch was reviewed against `origin/main`, including native child
+inspection/control separation, compaction transcript anchors, history repair,
+model confirmation, response retry, upload settlement and document lifetimes.
+The review found that every retained Composer registered document drag listeners,
+including hidden parent/child views. A failing reproduction produced two portal
+overlays for one drag. Document drops now belong to the visible targeted or
+focused Composer; otherwise the first visible owner claims the event once.
+Hidden/inert owners and already-handled events cannot upload or render a mask.
+Native upload admission, receipts and uncertain settlement are unchanged.
+
+The regression checks actual parent/child resident switching and exact upload
+preparation counts, as well as direct target/focus selection in the unit suite.
+The full unit pass also exposed outdated Workflow disclosure, retained Trace-cut
+and PDF owner fixtures. They now assert the current single ordered node list,
+coherent immutable read cut and page-size loading contract. Native inspection
+checks and nested-path assertions were separated to satisfy strict lint without
+disabling rules; immutable checkpoint display conversion borrows its input.
+
+Office acceptance now waits for the real Host conversion response before checking
+rendered pages. This fixes the cold-start race without increasing assertion
+timeouts or altering screenshot comparators. All four locale/theme/viewport
+Office cases passed after this change. The other 25 selected browser cases
+passed, including attachment intake, resident child navigation, Stop, retry,
+session actions, model confirmation, compaction, history refresh and live Trace.
+
+Browser plugin not available: validation uses the same pinned Playwright 1.63
+Linux image, fonts and read-only Node modules as `scripts/browser-tests.sh`,
+preview origin `http://127.0.0.1:5273` and fixture origin at port 5274. The current
+all-feature Rust executables were reused while the complete native test command
+owned Cargo's lock, avoiding a feature-changing rebuild during its execution.
+The drop-ownership screenshot was visually reviewed:
+`/tmp/rustx-review-drop-owner.png`. No reference image changed.
+
+Verified: 3050 WebUI tests (4 existing skips), 1180 TUI tests (1 existing skip),
+41 dev-launcher tests, all four TypeScript surfaces, production build, i18n,
+311 source records, 267 dependency notice entries, repository-wide rustfmt and
+all-target/all-feature Clippy. Full native results are recorded in the PR.
+
+The affected native module pass completed with 324 tests passing and one existing
+skip, including Workflow ordering/inspection, App Server transport, Runtime Client
+projection and the shared Workflow wire round-trip. Its shared JSON sample now
+includes the nullable `child_agent_id` field, matching native serialization; the
+six TUI Workflow projection tests passed against that updated sample.
+
+The local all-target/all-feature safety-net run was not a clean pass: 4389 tests
+passed, four were ignored, the stale sample failed, and two outer liveness guards
+expired. The sample was repaired and passed; the unchanged model-selection and
+large-write progress cases passed individually. A repeated combined run again
+expired the model-selection guard and a delivery-access guard, and was stopped.
+The unchanged delivery-access case passed individually as well. No product
+deadline or test assertion was weakened. Per `tests/README.md`, outer watchdog
+expiry is a harness failure rather than a semantic verdict; the final PR is
+promoted to FULL verification on its committed head.
+
+The final protocol regeneration/check passed with no generated-file drift;
+all-target/all-feature Clippy and repository-wide formatting also passed after
+the shared fixture correction.
+
+### PR #488 review corrections (R1–R7)
+
+The retained Harness references above remain unchanged (read-only checkout
+`687f282e8625c6b8d11ff58211a90524be2e4317`). These changes repair rustX adapters:
+Workflow inspection now keeps ended children navigable and routes abandoned
+terminal publication to retained evidence without claiming success; retry prefixes
+truncate inline and deferred history consistently; fork receipts survive naming
+failure and generated titles respect native Unicode scalar bounds. The product
+`/tools` directory automatically hydrates native collection/value continuations
+at one attachment/read cut. PDF render deadlines begin when the serialized slot
+actually starts, and queued cancellation stays independent. Compaction preview
+truncation remains explicit in Summary and Raw output.
+
+Regression coverage includes publication-failure injection through native
+inspection, settled/failed/cancelled child navigation, deferred replay inputs and
+outputs, bounded/deferred tool directories with attachment replacement, Unicode
+fork naming and post-commit refusal, controlled PDF queue timing/cancellation, and
+truncated historical summaries. Browser plugin not available; rendered verification
+uses the repository's pinned Linux Playwright runner. No upstream checkout or
+screenshot tolerance is changed by these review corrections.
+
+Review validation: full WebUI **3071 passed, 4 skipped**; affected native modules
+**319 passed, 1 ignored**; pinned Chromium **12 passed** (Workflow/Review,
+settled-child close/reopen/reload, retry/Fork/tools, compaction, continuous
+Office/PDF pages). The native publication-failure inspection and protocol prose
+contract tests pass. TypeScript, i18n, production build, provenance/notices,
+formatting and strict all-target/all-feature Clippy pass. Full CI remains an
+independent exact-head merge gate; the preceding head's broader CI was not green.
+
+### PR #488 acceptance review closeout (V1–V2)
+
+The Harness reference pins and execution boundaries above remain unchanged.
+Acceptance now follows the click-to-drill Model menu and `menuitemradio` choices,
+and closes a Session using its exact native identity, including duplicate titles.
+The shared menu exposes each existing item identity as a data attribute without
+changing its role, label, styling or action. Keyboard acceptance retains actual
+focus, editor/caret reachability and the approved neutral composer edge.
+
+Native distant-reading acceptance accounts separately for the two initial,
+bounded older pages and the direct Turn windows; it still forbids intervening
+prefix traversal. Source cancellation is measured after an explicitly selected
+Session finishes its initial reading window, rather than mistaking that passive
+fill for a stale source landing. Request logs and canceled-source geometry are
+attached to the browser report. The Trace file-reference fixture now serves the
+finite native inspection head and original bounded content instead of the
+obsolete raw-detail response. Background-task resize acceptance observes Floating
+UI's settled bounds, and the add-menu test constrains its height enough to prove
+real keyboard scrolling rather than assuming padding overflow requires it. This
+stronger test exposed a genuine short-viewport clipping issue: the menu fit used
+the window top and could hide its first row behind the conversation header.
+Following the inspected Harness MenuView header-clearance convention at
+`687f282e8625c6b8d11ff58211a90524be2e4317`, it now fits to the actual conversation
+scrollport top and remeasures on resize/scroll. Keyboard wrapping must reveal
+both the first and last options in the visible conversation area.
+
+Browser plugin not available; verification uses the immutable Linux Playwright
+image and fonts recorded above. Eight stable screenshot references were reviewed
+against their prior captures: seven contain only the intended ModelSelect chevron
+paint change, and the Workspace override reference removes the previously
+rejected blue text-input outline. No comparator, noise allowance, timeout or
+product behavior is weakened. The full Web suite passes 3071 tests with four
+existing skips; TypeScript and strict native Clippy pass. Ordinary native
+delegation passes locally and in the preceding exact-head Linux boundary job;
+its failure path now records the last authoritative snapshot and all three
+completion predicates. Final rendered acceptance and the final exact-head FULL
+CI result are recorded in PR #488.
+
+## PR #488: deferred history, message blocks, terminal Trace and upload receipts
+
+The four follow-up review boundaries retain rustX's native owners and the existing
+Harness presentation pins. Transcript aggregation now keeps both native inline and
+deferred positions, their exact content bindings and collection frontiers. A newer
+representation replaces its former representation at the same transcript position.
+Normal Chat seats consume canonical message block continuation before segmenting
+assistant replies; the first 32 attachments no longer hide their following text.
+Reads use bounded native pages at their captured live/retained cut, including child
+activation scope, and reuse the existing canonical collection/content validation.
+Live continuations stay on the live checkpoint owner; frozen readers keep their
+retained cut. A failed live cut retries after the native checkpoint advances,
+without rereading already successful immutable blocks. They do not add generic
+pagination controls or transport metadata to normal Chat.
+
+Child Trace detail consumes only an owner-confirmed live-to-durable resync, with
+one original absolute deadline and the same child/activation. Resident inspectors
+keep successful immutable content while lifecycle changes, terminal child refresh
+(including already-completed records) or explicit selection allow failed reads to recover. Wire upload preparation admits exactly one file per
+operation (also reflected in the generated v51 schema); Composer multi-selection
+continues through independent queued operations. Native Session allocation and
+receipt authority are unchanged, and a lost acknowledgment remains read-repairable.
+The catalog/SQLite documentation versions are corrected to 16/74.
+
+Regression coverage uses the production AppServerClient, AgentReading, AgentTranscript,
+AgentTraceReader and Trajectory components; native tests cover the actual child
+TraceDetail read across settlement and reject an under-budget 2,400-file prepare
+whose complete Ready record would exceed the wire budget before allocation. The
+existing real commit/lost-ACK test also checks the complete single-file response
+with maximum admitted filename and request ID. Browser plugin not available;
+rendered verification uses the repository's pinned Playwright 1.63 Linux container,
+including a real native 32-file/33-block submission and reload, desktop/mobile Chat
+reading, upload interactions and resident Trace inspection. Screenshot tolerances
+and Harness source pins are unchanged.
+
+## Child message continuation ownership
+
+Native-backed Chat continuation now restarts unfinished reads when a resident
+Child view regains visibility, while retaining successful immutable blocks and
+rejecting late results from its former effect lifetime. Frozen Child messages
+and Tool descriptors use their original durable window cut with the Registry's
+conversation/activation identity; the live observation advances independently.
+The Registry serves those historical pages from the Child's own durable store.
+No Harness state owner, protocol, loading surface or visual styling is added.
+
+QA uses the production transcript/provider/client with controlled native reads,
+a real Registry/Child boundary test and the existing pinned Playwright browser
+for Chat/Trace switching at desktop and narrow widths. Browser plugin not available.
+
+Read-cut identity includes every native owner, source frontier, publication and
+collection generation. Comparisons use closed field identities rather than JSON
+property order, and normalize omitted/`null` optional native selectors. Regression
+responses include the native serialized selector fields instead of echoing only
+the client request shape.
+
+A combined frozen window/live tail selects its source per canonical message.
+Historical membership comes from the selected native inline/deferred positions;
+new tail messages retain their live checkpoint and revision-based error recovery.
+Live canonical block counts discover tail continuations without borrowing live
+Tool lifecycle state for historical rows. Regressions cover both short/long old
+messages alongside a long new message, and expired live reads inside a frozen view.
+
+The native Chat acceptance waits for post-reconnect Trace history to create an
+actual scrolling range before asserting detached reading during settlement.
+A short native head at scrollTop zero is still following the tail; passive
+history assembly may correctly move that viewport. The assertion after an
+explicit detached gesture remains exactly scrollTop zero.

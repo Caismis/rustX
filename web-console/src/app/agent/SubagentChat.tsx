@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
-import type { RuntimeClientAgent, RuntimeClientSnapshot } from '../../../../protocol/app-server/v50';
+import type { RuntimeClientAgent, RuntimeClientSnapshot } from '../../../../protocol/app-server/v51';
 import type { AppServerClient } from '../../client/app-server';
 import type { Observation } from '../../client/session-lifecycle/port';
 import { AgentReading, type AgentReadingState } from '../../client/agent-reading';
-import { turnAnchor } from '../../client/transcript';
+import { turnAnchor, transcriptContent } from '../../client/transcript';
 import { useTranslation } from '../../locale/react';
 import { ChatViewport } from '../../presentation/layout/ChatViewport';
 import { AgentTranscript } from './AgentTranscript';
-import { DeferredContent } from './DeferredContent';
+import { JournalSourceProvider, useObservationSource } from './ObservationSource';
 import chatCss from '../../presentation/agent/Chat.module.css';
 import { currentTurnLocation } from './turn-rail-items';
 import { TurnNavigation } from './TurnNavigator';
@@ -16,9 +16,9 @@ const empty: AgentReadingState = {};
 const noopSubscribe = () => () => {};
 
 /** A child owns its reading window; the watch remains a separate live tail. */
-export function SubagentChat({ client, sessionId, admission, agent, snapshot, visible, children }: {
+export function SubagentChat({ client, sessionId, admission, agent, snapshot, workflows, visible, children }: {
   client?: AppServerClient; sessionId?: string; admission?: Observation; agent: RuntimeClientAgent;
-  snapshot?: RuntimeClientSnapshot; visible: boolean; children?: ReactNode;
+  snapshot?: RuntimeClientSnapshot; workflows?: RuntimeClientSnapshot['workflows']; visible: boolean; children?: ReactNode;
 }) {
   const tx = useTranslation(), viewport = useRef<ChatViewport>(null);
   const [active, setActive] = useState<string | null>();
@@ -34,12 +34,13 @@ export function SubagentChat({ client, sessionId, admission, agent, snapshot, vi
   useEffect(() => () => reader?.dispose(), [reader]);
   useEffect(() => { if (!visible) reader?.suspend(); else if (snapshot) reader?.observe(snapshot); }, [reader, snapshot, visible]);
   const reading = useSyncExternalStore(reader?.subscribe ?? noopSubscribe, reader?.getSnapshot ?? (() => empty));
-  const ownsContent = useMemo(() => () => visible && currentView.current === view && !!client && !!sessionId && !!admission && client.isAttachmentObservationCurrent(sessionId, admission), [visible, view, client, sessionId, admission]);
+  useEffect(() => { if (visible && snapshot) void reader?.loadInitial(); }, [reader, visible, !!snapshot]);
   const currentId = useMemo(() => snapshot?.attempt && ['admitted','running'].includes(snapshot.attempt.phase.type) ? {
     conversation_id: snapshot.conversation_id, attempt_id: snapshot.attempt.attempt_id,attempt_id_source:snapshot.attempt.attempt_id_source,
   } : undefined, [snapshot?.conversation_id, snapshot?.attempt?.attempt_id,snapshot?.attempt?.attempt_id_source, snapshot?.attempt?.phase.type]);
+  const source = useObservationSource();
   return <ChatViewport chromeVisible={visible} ref={viewport} latestLabel={tx('agent:agent-transcript.return-to-latest')}
-    historical={!!reading.history?.window} onLatest={() => reader?.returnToLatest()} onActiveTurn={setActive}
+    initialHistoryLoading={reading.history?.initialLoading} historical={!!reading.history?.window} onLatest={() => { reader?.returnToLatest(); void reader?.loadInitial(); }} onActiveTurn={setActive}
     latestTurn={currentId && turnAnchor(currentId)}
     overlay={reader && <TurnNavigation page={reading.outline} currentId={currentId} location={currentTurnLocation(snapshot)}
       loading={reading.outlineLoading} pending={reading.pending} error={reading.navigationError ?? reading.outlineError}
@@ -50,8 +51,7 @@ export function SubagentChat({ client, sessionId, admission, agent, snapshot, vi
         if (intent) void reader.navigate(selection, intent.current).then(turn => { if (turn) intent.commit(turnAnchor(turn.id), intent.current); });
       }}/>}
   >
-    {snapshot && <AgentTranscript snapshot={snapshot} history={reading.history} loadEarlier={() => void reader?.loadEarlier()} loadLater={() => void reader?.loadLater()} historicalDisabled/>}
-    {client && admission && <DeferredContent client={client} target={admission.target} agentId={agent.agent_id} bindings={reading.history?.page.content ?? []} owned={ownsContent}/>}
+    {snapshot && <JournalSourceProvider historical={!!reading.history?.window} source={source} content={transcriptContent(reading.history, source?.content ?? [])} messages={snapshot.messages} transcript={snapshot.transcript} history={reading.history?.page}><AgentTranscript snapshot={snapshot} workflows={!reading.history?.window ? workflows ?? snapshot.workflows : undefined} history={reading.history} loadEarlier={() => { viewport.current?.beginNavigation(); void reader?.loadEarlier(); }} loadLater={() => reader?.loadLater()} historicalDisabled/></JournalSourceProvider>}
     <div className={chatCss.column}>{children}</div>
   </ChatViewport>;
 }

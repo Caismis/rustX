@@ -1,0 +1,53 @@
+import { expect, test } from '@playwright/test';
+import { nativeToolCases, jobResult } from '../native-tool-cases';
+const origin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
+for (const locale of ['en', 'zh'] as const) test(`all native tools use the shared disclosure and Inspect; Job output copy and Trace original remain accessible (${locale})`, async ({ page, context }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (['error', 'warning'].includes(message.type())) errors.push(message.text()); });
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  await page.goto(`${origin}/test/fixtures/native-tool-details.html?locale=${locale}`);
+  await expect(page).toHaveTitle('rustX Native Tool details');
+  await expect(page).toHaveURL(new RegExp(`native-tool-details.html\\?locale=${locale}$`));
+  await page.evaluate(() => { document.body.setAttribute('data-ds-dark-theme', ''); document.documentElement.style.colorScheme = 'dark'; });
+  const tools = page.getByRole('region', { name: 'Native tools' });
+  await expect(tools.locator('[data-tool-call-id]')).toHaveCount(nativeToolCases.length);
+  for (const tool of nativeToolCases) {
+    const row = tools.locator(`[data-tool-call-id="${tool.call_id}"]`);
+    const toggle = row.locator('[data-disclosure-row]');
+    await toggle.focus(); await page.keyboard.press('Enter');
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    await row.hover();
+    await expect(row.getByRole('button', { name: locale === 'zh' ? '查看' : 'Inspect', exact: true })).toBeVisible();
+    await expect(row).not.toContainText(/完整任务记录|任务结果记录|执行详情|Full task record|Recorded task result|"tool_id"/);
+    await toggle.focus(); await page.keyboard.press('Space');
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  }
+  const wait = tools.locator('[data-tool-call-id="job_wait"]');
+  await wait.getByRole('button', { expanded: false }).click();
+  const copy = wait.getByRole('button', { name: locale === 'zh' ? '复制' : 'Copy', exact: true });
+  await copy.click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(jobResult.result.content[0].value.combined.replace(/\n$/, '')); // Harness CodeBlock copies its displayed text.
+  expect(await wait.locator('[data-tool-details]').evaluate(node => ({ font: getComputedStyle(node).fontSize, radius: getComputedStyle(node).borderRadius }))).toEqual({ font: '13px', radius: '16px' });
+  await wait.screenshot({ path: `/tmp/rustx-native-job-wait-${locale}.png` });
+  await wait.getByRole('button', { name: locale === 'zh' ? '查看' : 'Inspect', exact: true }).click();
+  const inspection = page.getByRole('complementary', { name: 'Native tool inspection' });
+  await expect(inspection.locator('[data-tool-details]')).toContainText('23:03:43');
+  await inspection.getByRole('tab', { name: locale === 'zh' ? '结果' : 'Result', exact: true }).click();
+  await expect(inspection.getByRole('tree')).toContainText('exec-native-sleep');
+  await expect(inspection.locator('[data-tool-details]')).toHaveCount(0);
+  await inspection.getByRole('button', { name: locale === 'zh' ? '关闭详情' : 'Close details' }).click();
+  await expect(inspection).toHaveCount(0);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await wait.scrollIntoViewIfNeeded();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await wait.screenshot({ path: `/tmp/rustx-native-job-wait-${locale}-390.png` });
+  await page.evaluate(() => { document.body.removeAttribute('data-ds-dark-theme'); document.documentElement.style.colorScheme = 'light'; });
+  const goal = tools.locator('[data-tool-call-id="get_goal"]');
+  await goal.getByRole('button', { expanded: false }).click();
+  await expect(goal.locator('[data-tool-details]')).toContainText('3 / 10');
+  await expect(goal.locator('[data-tool-details]')).toContainText('等待构建环境恢复');
+  await goal.screenshot({ path: `/tmp/rustx-native-goal-${locale}-390.png` });
+  await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});

@@ -1,6 +1,19 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Focus paint adapted from ui-theme/styles/focus.css; see PROVENANCE.md. */
 html, body, #root { width: 100%; height: 100%; margin: 0; }
 body { font: 14px/1.5 var(--dsw-font-family); color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-base); }
 * { box-sizing: border-box; }
 button, input, textarea, select { font: inherit; }
 button { color: inherit; }
-:where(button, input, textarea, select, summary, [tabindex]):focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }
+:root { --dsw-focus-ring-width: 2px; }
+/* DSH supplies paint defaults, never a style that overrides a component's
+   outline: none. Text editors use their field/card border for focus. */
+:focus-visible {
+  outline-color: var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-width: var(--dsw-focus-ring-width);
+}
+:where(input:read-write, textarea, [contenteditable='true']) { outline: none; }
+/* Keep the existing keyboard geometry for non-text controls. */
+:where(button, select, summary, [tabindex]):where(:not(input, textarea, [contenteditable])):focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary);
+  outline-offset: 2px;
+}

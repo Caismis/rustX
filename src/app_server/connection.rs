@@ -1983,7 +1983,7 @@ impl AppServerConnection {
     pub(crate) fn next_source_repair(&self) -> Option<NotificationMethod> {
         use crate::local_runtime::configuration::repair::{SourceChange, SourceKey};
         use crate::local_runtime::configuration::settings::SourceTarget;
-        // A v50 notice reaches only a connection that negotiated v50.
+        // A v51 notice reaches only a connection that negotiated v51.
         if self.initialized.lock().expect("initialize mutex").is_none() {
             return None;
         }
@@ -2572,9 +2572,11 @@ async fn dispatch_runtime(
                 }
             }
         }
-        Method::AgentStatus { agent_id, .. } => {
-            read_domain(authority, format!("agents.{}", agent_id.as_str())).await
-        }
+        Method::AgentStatus { agent_id, .. } => native_result(
+            tokio::task::spawn_blocking(move || authority.agent_status(&agent_id))
+                .await
+                .map_err(|_| domain(ErrorData::OperationFailed))?,
+        ),
         Method::AgentList { .. } => read_domain(authority, "agents".into()).await,
         Method::AgentSendMessage {
             target,

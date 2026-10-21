@@ -1,5 +1,36 @@
 import { test, expect } from '@playwright/test';
 
+test('file drops belong only to the visible resident conversation', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+  await page.goto(`http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}/test/fixtures/startup.html?existing&models&subagents`);
+  await expect(page).toHaveTitle(/rustX/);
+  await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.allow('session/attach'); f.resumeCatalog(); f.hold('session/uploadPrepare'); });
+  await page.locator('button[data-session-id="A"]').click();
+  await page.getByRole('button', { name: 'Subagents', exact: true }).click();
+  await page.getByRole('treeitem', { name: /Verify findings/ }).click();
+  const child = page.locator('[data-agent-id="child-1"]');
+  await expect(page.getByRole('textbox', { name: 'Message Agent Verify findings', exact: true })).toBeVisible();
+  const data = await page.evaluateHandle(() => { const transfer = new DataTransfer(); transfer.items.add(new File(['one'], 'child-only.txt', { type: 'text/plain' })); return transfer; });
+  await page.locator('body').dispatchEvent('dragenter', { dataTransfer: data });
+  await expect(page.getByRole('status').filter({ hasText: 'Drag files or images here to add them' })).toHaveCount(1);
+  await page.locator('body').dispatchEvent('drop', { dataTransfer: data });
+  await expect(child.locator('[data-attachment-state]')).toHaveCount(1);
+  const uploads = () => page.evaluate(() => (window as any).startupFixture.requests().filter((request: any) => request.method === 'session/uploadPrepare').length);
+  await expect.poll(uploads).toBe(1);
+  await page.getByRole('button', { name: 'Session A', exact: true }).click();
+  await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeVisible();
+  await expect(page.locator('[data-attachment-state]:visible')).toHaveCount(0);
+  await page.locator('body').dispatchEvent('drop', { dataTransfer: data });
+  await expect.poll(uploads).toBe(2);
+  await expect(child.locator('[data-attachment-state]')).toHaveCount(1);
+  await expect(page.locator('[data-attachment-state]:visible')).toHaveCount(1);
+  await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+  await page.screenshot({ path: '/tmp/rustx-review-drop-owner.png' });
+  expect(errors).toEqual([]);
+});
+
 test('header child navigation preserves the parent draft and renders agent returns as context', async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await page.addInitScript(() => localStorage.setItem('rustx-locale-v1', 'en'));

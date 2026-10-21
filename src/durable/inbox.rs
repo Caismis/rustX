@@ -2817,6 +2817,14 @@ pub trait ConversationStore: Send + Sync + 'static {
         Option<crate::runtime_client::snapshot::RuntimeClientProjectionHeadView>,
         ConversationStoreError,
     >;
+    /// Finite immutable display evidence for one exact activation.
+    fn observation_projection_activation(
+        &self,
+        activation: crate::context::checkpoint::ProjectionActivationId,
+    ) -> Result<
+        crate::runtime_client::snapshot::RuntimeClientProjectionHeadView,
+        ConversationStoreError,
+    >;
     fn projection_at_journal_cut(
         &self,
         through: u64,

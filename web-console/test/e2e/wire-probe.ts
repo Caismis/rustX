@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test';
-import type { AttachmentTarget, CheckpointPage, EffectiveFieldRef, MethodResult, TraceDetail } from '../../../protocol/app-server/v50';
+import type { AttachmentTarget, CheckpointPage, EffectiveFieldRef, MethodResult, TraceDetail } from '../../../protocol/app-server/v51';
 import { domainOriginalValue } from '../../../protocol/app-server/domain-observation';
 
 type NativeRead = 'session/checkpoint' | 'session/effectiveConfiguration';
@@ -14,6 +14,8 @@ export async function wireProbe(page: Page) {
   let lose: string | undefined;
   let lost = 0;
   let nextRead = 0;
+  let hold: string | undefined;
+  const held: (() => void)[] = [];
   let nativeRead: ((method: NativeRead | 'session/effectiveConfigurationValueRead' | 'conversation/checkpointValueRead', params: object) => Promise<MethodResult>) | undefined;
   await page.routeWebSocket(/^wss?:\/\/[^/]+\/?$/, socket => {
     const server = socket.connectToServer();
@@ -58,6 +60,11 @@ export async function wireProbe(page: Page) {
       if (method) {
         methods.delete(response.id);
         responses.push({ method, result: response.result });
+        if (method === hold && response.result) {
+          hold = undefined;
+          held.push(() => { if (!retired) socket.send(message); });
+          return;
+        }
         if (method === lose && response.result) {
           lose = undefined; lost++;
           retire();
@@ -71,6 +78,8 @@ export async function wireProbe(page: Page) {
     });
   });
   return { requests, responses, notifications, loseNext: (method: string) => { lose = method; }, lost: () => lost,
+    holdNext: (method: string) => { hold = method; }, held: () => held.length,
+    releaseHeld: () => { held.shift()?.(); },
     /** Existing native read RPCs use the browser's one controller connection.
      * Probe IDs never enter its client; no authority or result is manufactured. */
     async read<M extends NativeRead>(method: M, target: AttachmentTarget): Promise<NativeReadResult<M>> {

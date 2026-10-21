@@ -5,7 +5,7 @@ export interface DraftConversation {
 export interface SessionNode {
   id: string; title: string; pendingInteraction?: 'approval' | 'plan-review' | 'question';
   running: boolean; runningSubagentCount: number;
-  updatedAt: number; observation?: string; viewOpen?: boolean;
+  updatedAt: number; observation?: string; viewOpen?: boolean; pinned?: boolean;
 }
 export interface GroupNode {
   key: string; workspaceId: string | undefined; cwd: string | undefined; createdAt: number | undefined;

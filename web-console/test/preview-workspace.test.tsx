@@ -62,8 +62,8 @@ it('duplicate opens reveal the existing other-pane occurrence; close and reopen 
 it('eight tabs reject overflow without loss and retain metadata without hidden leases', () => {
   const ids = Array.from({ length: PREVIEW_POLICY.tabsPerSession }, (_, index) => owner.openPreview(artifact(String(index)))!);
   const before = workspace(); expect(owner.openPreview(artifact('overflow'))).toBeUndefined(); expect(owner.getSnapshot().problem).toBe('tabs'); expect(workspace()).toBe(before);
-  owner.updateView(ids[0], { bodyScrollTop: 83, wrap: false, pdfPage: 7, workbookOffset: 200, htmlMode: 'source' });
-  owner.selectTab(ids[0]); expect(workspace().tabs[0].view).toMatchObject({ bodyScrollTop: 83, wrap: false, pdfPage: 7 }); expect(live()).toHaveLength(1);
+  owner.updateView(ids[0], { bodyScrollTop: 83, wrap: false, pdfScrollTop: 7, workbookOffset: 200, htmlMode: 'source' });
+  owner.selectTab(ids[0]); expect(workspace().tabs[0].view).toMatchObject({ bodyScrollTop: 83, wrap: false, pdfScrollTop: 7 }); expect(live()).toHaveLength(1);
   owner.selectTab(ids[1]); expect(live()).toHaveLength(1); owner.selectTab(ids[0]); expect(workspace().tabs[0].view.bodyScrollTop).toBe(83);
 });
 it('selected close prefers right then left; unselected close preserves selection; final pane has no default document', () => {
@@ -86,15 +86,15 @@ it('fullscreen preserves leases; narrow presents active pane and wide restores s
   owner.measure(1000, owner.getSnapshot().geometryEpoch); expect(live()).toHaveLength(2); expect(workspace().tabs.map(tab => tab.id)).toEqual(ids);
   owner.collapse(); owner.measure(390, owner.getSnapshot().geometryEpoch); owner.measure(1200, owner.getSnapshot().geometryEpoch); expect(owner.getSnapshot().mode).toBe('collapsed'); expect(live()).toHaveLength(0);
 });
-it('Inspector retains logical state and reacquires only selected visible bodies', () => {
+it('Workbench retains logical state and reacquires only selected visible bodies', () => {
   const id = owner.openPreview(artifact('a'))!; owner.updateView(id, { bodyScrollTop: 44 }); const lease = owner.getSnapshot().leases.get(id)!;
-  owner.toggleInspector(); expect(lease.signal.aborted).toBe(true); expect(workspace().tabs[0].view.bodyScrollTop).toBe(44); expect(live()).toHaveLength(0);
-  owner.toggleInspector(); expect(owner.getSnapshot().mode).toBe('preview'); expect(owner.getSnapshot().leases.get(id)).not.toBe(lease);
+  owner.showWorkbench(); expect(lease.signal.aborted).toBe(true); expect(workspace().tabs[0].view.bodyScrollTop).toBe(44); expect(live()).toHaveLength(0);
+  owner.reveal(); expect(owner.getSnapshot().mode).toBe('preview'); expect(owner.getSnapshot().leases.get(id)).not.toBe(lease);
 });
 it('Session A to B retains only metadata and restores exact tab state; scope replacement retires immediately', async () => {
-  const a = owner.openPreview(artifact('a'))!; owner.updateView(a, { pdfPage: 7 }); const lease = owner.getSnapshot().leases.get(a)!;
+  const a = owner.openPreview(artifact('a'))!; owner.updateView(a, { pdfScrollTop: 7 }); const lease = owner.getSnapshot().leases.get(a)!;
   owner.selectSession('B'); expect(live()).toHaveLength(0); expect(lease.signal.aborted).toBe(true); owner.openPreview(artifact('b'));
-  owner.selectSession('A'); expect(workspace().tabs[0].id).toBe(a); expect(workspace().tabs[0].view.pdfPage).toBe(7);
+  owner.selectSession('A'); expect(workspace().tabs[0].id).toBe(a); expect(workspace().tabs[0].view.pdfScrollTop).toBe(7);
   const active = owner.getSnapshot().leases.get(a)!; await server.client.release('A'); await server.client.attach('A');
   expect(active.signal.aborted).toBe(true); expect(owner.getSnapshot().workspace).toBeUndefined();
 });
@@ -195,14 +195,14 @@ it('tab and divider navigation leave IME and modified keys alone, and held Delet
   fireEvent.keyDown(a, { key: 'Delete', repeat: true }); expect(workspace().tabs).toHaveLength(1);
 });
 
-it.each(['Inspector', 'collapse'] as const)('hiding a captured divider via %s retires its frame and capture before hidden input can commit', mode => {
+it.each(['workbench', 'collapse'] as const)('hiding a captured divider via %s retires its frame and capture before hidden input can commit', mode => {
   owner.openPreview(artifact('a')); owner.openPreview(artifact('b')); owner.measure(1000, owner.getSnapshot().geometryEpoch); owner.split(); const ui = render(<Shell/>);
   const divider = ui.getByRole('separator'); let frame: FrameRequestCallback | undefined; const release = vi.fn();
   divider.setPointerCapture = vi.fn(); divider.hasPointerCapture = () => true; divider.releasePointerCapture = release;
   vi.stubGlobal('PointerEvent', MouseEvent); vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { frame = cb; return 1; });
   vi.stubGlobal('cancelAnimationFrame', () => { frame = undefined; });
   fireEvent.pointerDown(divider, { button: 0, clientX: 500 }); fireEvent.pointerMove(divider, { clientX: 600 });
-  const oldFrame = frame; act(() => mode === 'Inspector' ? owner.toggleInspector() : owner.collapse());
+  const oldFrame = frame; act(() => mode === 'workbench' ? owner.showWorkbench() : owner.collapse());
   expect(release).toHaveBeenCalledOnce(); expect(frame).toBeUndefined(); expect(ui.queryByRole('separator')).toBeNull();
   act(() => oldFrame?.(0)); fireEvent.pointerUp(divider, { clientX: 700 }); expect(workspace().ratio).toBe(.5);
 });
@@ -223,17 +223,17 @@ it('Download inside an inactive pane leaves pane activation and tab selection un
   expect(workspace().activePane).not.toBe(before.activePane);
 });
 
-it.each(['collapse', 'Inspector'] as const)('%s invalidates hidden wide geometry before reveal can admit the second pane', mode => {
+it.each(['collapse', 'workbench'] as const)('%s invalidates hidden wide geometry before reveal can admit the second pane', mode => {
   owner.openPreview(artifact('a')); owner.openPreview(artifact('b'));
   const ui = render(<Shell/>);
   act(() => owner.split()); expect(live()).toHaveLength(2);
   const retained = workspace(), oldDelivery = resize;
-  act(() => mode === 'collapse' ? owner.collapse() : owner.toggleInspector());
+  act(() => mode === 'collapse' ? owner.collapse() : owner.showWorkbench());
   expect(live()).toHaveLength(0);
   width = 390; // external layout changes while hidden; no positive hidden measurement
   const createdBeforeReveal = leases.created.length;
   act(() => {
-    mode === 'collapse' ? owner.reveal() : owner.toggleInspector();
+    owner.reveal();
     expect(live().map(lease => lease.id)).toEqual([retained.panes.find(p => p.id === retained.activePane)!.selected]);
     expect(leases.created.slice(createdBeforeReveal)).toHaveLength(1);
     // Even a queued callback from the old visible presentation cannot authorize it.
@@ -247,19 +247,18 @@ it.each(['collapse', 'Inspector'] as const)('%s invalidates hidden wide geometry
   expect(ui.container.querySelectorAll('[data-live-document]')).toHaveLength(2);
 });
 
-it('explicit Inspector Close persists closed intent across refresh, Session round-trip and widening', async () => {
+it('explicit Workbench Close persists closed intent across refresh, Session round-trip and widening', async () => {
   const id = owner.openPreview(artifact('a'))!; owner.updateView(id, { bodyScrollTop: 83, wrap: false });
   expect(workspace().expanded).toBe(true);
-  owner.toggleInspector(); owner.collapse();
+  owner.showWorkbench(); owner.collapse();
   expect(owner.getSnapshot().mode).toBe('collapsed'); expect(workspace().expanded).toBe(false);
   await server.client.refresh('A');
   owner.selectSession('B'); owner.selectSession('A');
   owner.measure(1200, owner.getSnapshot().geometryEpoch);
   expect(owner.getSnapshot().mode).toBe('collapsed'); expect(live()).toHaveLength(0);
-  owner.toggleInspector(); owner.toggleInspector(); expect(owner.getSnapshot().mode).toBe('collapsed');
   owner.reveal(); expect(owner.getSnapshot().mode).toBe('preview'); expect(workspace().expanded).toBe(true);
   expect(workspace().tabs[0].view).toEqual({ bodyScrollTop: 83, wrap: false });
-  owner.toggleInspector(); owner.toggleInspector(); expect(owner.getSnapshot().mode).toBe('preview');
+  owner.showWorkbench(); owner.reveal(); expect(owner.getSnapshot().mode).toBe('preview');
 });
 
 it('Session epochs reject old measurements and fullscreen without a layout witness cannot retain a second lease', () => {

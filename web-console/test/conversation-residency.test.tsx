@@ -14,7 +14,7 @@ import { modelPreferences, NewSessionModelPreference, selectSessionModel } from 
 import { inputTrigger } from '../src/app/composer/input-trigger';
 import { cfg3Source, cfg3Effective } from './cfg3-data';
 import { Server, snapshot, endpoint } from './fixture';
-import type { CatalogModelView, RuntimeClientEvent, RuntimeClientSnapshot, SessionModelConfig, SourceSettings } from '../../protocol/app-server/v50';
+import type { CatalogModelView, RuntimeClientEvent, RuntimeClientSnapshot, SessionModelConfig, SourceSettings } from '../../protocol/app-server/v51';
 
 // These spies execute the actual functions, including their hooks. Calls count
 // render invocations, not merely DOM mutation or wrapper/parent renders.
@@ -178,11 +178,11 @@ it.each([false, true])('a confirmed native model selection seeds the next Sessio
   await server.attached('A', 'B');
   localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A', 'B'] }));
   await act(async () => { render(<App client={server.client} workspaceHost={host()}/>); });
-  fireEvent.click(screen.getByRole('button', { name: 'Model and profile' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Model and thinking effort' }));
   await waitFor(() => expect(screen.queryByText('Reading native models…')).toBeNull());
   fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
   if (navigate) server.held.add('session/setModel');
-  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'fixture/chosen' })));
+  await act(async () => fireEvent.click(screen.getByRole('menuitemradio', { name: 'fixture/chosen' })));
   if (navigate) {
     const request = await server.waitFor('session/setModel', 1);
     await act(async () => fireEvent.click(screen.getAllByRole('button', { name: 'New Conversation' })[0]));
@@ -191,7 +191,7 @@ it.each([false, true])('a confirmed native model selection seeds the next Sessio
   expect(modelPreferences().read(endpoint)).toEqual({ model: 'fixture/chosen' });
   expect(server.client.getSnapshot().views.B.snapshot!.model!.configured).toEqual({ model: 'fixture/root' });
   if (!navigate) await act(async () => fireEvent.click(screen.getAllByRole('button', { name: 'New Conversation' })[0]));
-  await waitFor(() => expect(screen.getByRole('button', { name: 'Model and profile' }).textContent).toContain('fixture/chosen'));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Model and thinking effort' }).textContent).toContain('fixture/chosen'));
   expect(server.requests.filter(row => row.request.method === 'session/setModel')).toHaveLength(1);
   expect(server.requests.some(row => row.request.method === 'configuration/sourceWrite')).toBe(false);
 });
@@ -203,8 +203,8 @@ it('an unavailable saved selection remains visibly invalid and cannot submit a s
   fireEvent.click(screen.getByRole('button', { name: 'Choose Workspace' }));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Workspace A' })));
   fireEvent.change(input(), { target: { value: 'must not substitute' } });
-  expect(screen.getByRole('button', { name: 'Model and profile' }).textContent).toContain('removed/provider-model');
-  fireEvent.click(screen.getByRole('button', { name: 'Model and profile' }));
+  expect(screen.getByRole('button', { name: 'Model and thinking effort' }).textContent).toContain('removed/provider-model');
+  fireEvent.click(screen.getByRole('button', { name: 'Model and thinking effort' }));
   expect(screen.getByText(/removed\/provider-model is unavailable/)).toBeTruthy();
   expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', true);
   fireEvent.keyDown(input(), { key: 'Enter' });

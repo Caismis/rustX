@@ -11,21 +11,22 @@ import { SessionLifecycles } from './session-lifecycle/system';
 import { emptyFacts, type Observation, type LifecycleFacts, type SessionLifecyclePort } from './session-lifecycle/port';
 import { lifecycleAvailability, type LifecycleContext } from './session-lifecycle/machine';
 import { AgentMeters } from './agent-meters';
+import { publicationHeads, type PublicationHead } from './publication-heads';
 import { UploadFailure, AttachmentIntakes } from './uploads';
 import { checkpointSnapshot, foldRuntimeEvent, observationCheckpoint, transitionFacts } from '../../../protocol/app-server/projection';
 import { FirstSubmissions } from '../app/new-conversation/first-submit';
 import { SessionExportController } from "./session-export";
-import { standaloneTraceCut,inlineTraceDetail,retainedTraceDetailPage,bindTraceDetailReader,TRACE_LIMIT, TRACE_PAGE_SIZE, beginTraceDetail, completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterestBatches,traceInterests, type TraceCache,type TraceFieldReader } from './trace';
+import { standaloneTraceCut,inlineTraceDetail,retainedTraceDetailPage,bindTraceDetailReader,TRACE_PAGE_SIZE, beginTraceDetail, completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterestBatches,traceInterests, type TraceCache,type TraceFieldReader } from './trace';
 import type {
   TraceToolLocator, ConfigurationApplication, PendingInboundRef, PendingMutationOutcome, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request, Request1, Response, RuntimeClientCursor, RuntimeClientSnapshot, RuntimeClientEvent,
   SessionPersistentState, SessionSummary, ServerCapabilities, UserInputBlock, UploadReceipt, UploadedFile,
   ConfigRepairReceipt, SourceTarget,
-} from '../../../protocol/app-server/v50';
+} from '../../../protocol/app-server/v51';
 import { transferUpload, uploadOperationId } from '../../../protocol/app-server/upload';
-import { HISTORY_PAGE_SIZE, TURN_PAGE_SIZE, sameReadCut, extendTranscriptWindow, installTranscriptWindow, prependTranscript, refreshTranscript, replaceTranscript, turnKey, turnPageCount, type TranscriptCache, type TurnSelection } from './transcript';
-import type { ObservedTurn, ObservedTurnPage } from '../../../protocol/app-server/v50';
-import { ProtocolLog, type WireContext } from './protocol-log';
+import { HISTORY_PAGE_SIZE, TURN_PAGE_SIZE, sameReadCut, extendTranscriptWindow, installTranscriptWindow, prependTranscript, refreshTranscript, replaceTranscript, transcriptRepairs, repairTranscript, turnKey, turnPageCount, type TranscriptCache, type TurnSelection } from './transcript';
+import { transcriptWindowReady, traceWindowReady } from './history-policy';
+import type { ObservedTurn, ObservedTurnPage } from '../../../protocol/app-server/v51';
 
 
 interface OutlineDemand {
@@ -79,16 +80,17 @@ export interface SessionView extends Omit<LifecycleFacts, 'error' | 'attachmentI
   /** Last native catalog row, retained when the Sidebar reads a different page. */
   summary?: SessionSummary;
   snapshot?: RuntimeClientSnapshot;
-  checkpoint?: import('../../../protocol/app-server/v50').RuntimeClientCheckpoint;
+  publicationHeads?: readonly PublicationHead[];
+  checkpoint?: import('../../../protocol/app-server/v51').RuntimeClientCheckpoint;
   observationState?: import('../../../protocol/app-server/observation').ObservationPhase;
-  interactionDetail?:{target:AttachmentTarget;cut:import('../../../protocol/app-server/v50').CheckpointReadCut;body:import('../../../protocol/app-server/v50').RoutedInteraction};
-  interactionPage?:{target:AttachmentTarget;page:import('../../../protocol/app-server/v50').CheckpointPage;rows:import('../../../protocol/app-server/v50').RuntimeClientInteractionHeader[];offset:number};
+  interactionDetail?:{target:AttachmentTarget;cut:import('../../../protocol/app-server/v51').CheckpointReadCut;body:import('../../../protocol/app-server/v51').RoutedInteraction};
+  interactionPage?:{target:AttachmentTarget;page:import('../../../protocol/app-server/v51').CheckpointPage;rows:import('../../../protocol/app-server/v51').RuntimeClientInteractionHeader[];offset:number};
   trace?: TraceCache;
   cursor?: RuntimeClientCursor;
   history?: TranscriptCache;
   /** Read-only durable history, never an execution snapshot or control claim. */
   preview?: { conversationId: string; history: TranscriptCache };
-  statisticsPreview?: { conversationId: string; nodeId?: string; cut: import('../../../protocol/app-server/v50').CheckpointReadCut; statistics: import('../../../protocol/app-server/v50').ConversationStatistics; occupancy?: import('../../../protocol/app-server/v50').RuntimeClientContextOccupancy | null };
+  statisticsPreview?: { conversationId: string; nodeId?: string; cut: import('../../../protocol/app-server/v51').CheckpointReadCut; statistics: import('../../../protocol/app-server/v51').ConversationStatistics; occupancy?: import('../../../protocol/app-server/v51').RuntimeClientContextOccupancy | null };
   tracePreview?: { conversationId: string; cache: TraceCache };
   turnOutline?: { paging: OutlinePagingIntent; page?: ObservedTurnPage; loading?: boolean; error?: string };
   turnNavigation?: { intent: number; pending?: string; error?: string };
@@ -98,7 +100,7 @@ export interface SessionView extends Omit<LifecycleFacts, 'error' | 'attachmentI
   /** Current-generation turn/start or turn/steer requests awaiting an outcome.
    * Transport ownership only, including unsent requests in the bounded pipeline. */
   inboundRequests?: number;
-  modelIntent?: { config: import('../../../protocol/app-server/v50').SessionModelConfig; phase: 'waiting' | 'applying' | 'failed'; error?: string };
+  modelIntent?: { config: import('../../../protocol/app-server/v51').SessionModelConfig; phase: 'waiting' | 'applying' | 'failed'; error?: string };
   modelMutation?: { generation: number; status: 'in-flight' | 'acknowledged' | 'uncertain' };
   cancellation?: { attemptId?: string; status: 'in-flight' | 'acknowledged' | 'uncertain' };
   error?: string;
@@ -240,7 +242,7 @@ interface Pending {
   validation?: AbortController;
   acknowledged?: (result: MethodResult) => void;
   request: Request;
-  context: WireContext;
+  sessionId?: string;
   mutation: boolean;
   sent: boolean;
   expected: MethodResult['type'];
@@ -347,7 +349,6 @@ export class AppServerClient {
     }
   });
   readonly attachmentIntakes = new AttachmentIntakes();
-  readonly log = new ProtocolLog();
   readonly firstSubmissions = new FirstSubmissions();
   /** Final client lifetime ends only explicitly, never on a component unmount. */
   dispose() { this.attachmentIntakes.dispose(); this.firstSubmissions.dispose(); return this.disconnect(); }
@@ -383,7 +384,7 @@ export class AppServerClient {
   private acquiring = new Set<string>();
   private resubscribe = new Set<string>();
   private observationChains = new Map<string, ObservationChain<RuntimeClientEvent>>();
-  private resumeSeeds = new Map<string,{target:AttachmentTarget;snapshot:RuntimeClientSnapshot;checkpoint:import('../../../protocol/app-server/v50').RuntimeClientCheckpoint;cursor:string;bytes:number}>();
+  private resumeSeeds = new Map<string,{target:AttachmentTarget;snapshot:RuntimeClientSnapshot;checkpoint:import('../../../protocol/app-server/v51').RuntimeClientCheckpoint;cursor:string;bytes:number}>();
   private retainAppliedObservations() {
     for(const [id,chain] of this.observationChains) {
       const view=this.state.views[id];
@@ -476,10 +477,10 @@ export class AppServerClient {
         turnOutline: view.turnOutline && { ...view.turnOutline, loading: false },
         turnNavigation: view.turnNavigation && { intent: view.turnNavigation.intent },
       } : {}),
-      ...(changedNode ? { snapshot: undefined, cursor: undefined, history: undefined, trace: undefined, preview: undefined, statisticsPreview: undefined, tracePreview: undefined } : {}),
+      ...(changedNode ? { snapshot: undefined, publicationHeads: undefined, cursor: undefined, history: undefined, trace: undefined, preview: undefined, statisticsPreview: undefined, tracePreview: undefined } : {}),
       ...(opening ? { modelIntent: undefined, cancellation: undefined, preview: undefined, statisticsPreview: undefined, tracePreview: undefined } : {}),
       ...(facts.attachmentIntent === 'released' ? { modelIntent: undefined, cancellation: undefined } : {}),
-      ...(attached && result ? { snapshot: undefined, cursor: undefined, observationState: 'attached' as const, preview: undefined, statisticsPreview: undefined, tracePreview: undefined,
+      ...(attached && result ? { snapshot: undefined, publicationHeads: undefined, cursor: undefined, observationState: 'attached' as const, preview: undefined, statisticsPreview: undefined, tracePreview: undefined,
         turnOutline: undefined, turnNavigation: undefined } : {}),
     };
     if (context.deleted) {
@@ -541,7 +542,7 @@ export class AppServerClient {
         this.resumeSeeds.delete(id);
         const resumable=previous&&previous.target.conversation_id===result.target.conversation_id
           &&previous.target.runtime_incarnation===result.target.runtime_incarnation;
-        let checkpoint:import('../../../protocol/app-server/v50').RuntimeClientCheckpoint;
+        let checkpoint:import('../../../protocol/app-server/v51').RuntimeClientCheckpoint;
         let observed:RuntimeClientSnapshot;
         if(resumable){checkpoint={...previous.checkpoint,cursor:previous.cursor};observed=previous.snapshot;}
         else {
@@ -630,7 +631,6 @@ export class AppServerClient {
     if (this.state.uncertain.length || sessions.length) detached.push({ authority: this.state.endpoint!, authorityId: this.state.authorityId, operations: this.state.uncertain, sessions });
     this.lifecycles.replaceAuthority(); this.readingAuthorities.clear(); for (const id of this.outlineReads.keys()) this.retireOutline(id); this.readingIntents.clear(); this.summarySettled.clear(); this.summaryInvalidations.clear(); this.summaryObservedEpoch.clear(); this.summaryInFlight.clear(); this.summaryReads.clear(); this.summaryObservations.clear();
     this.listEpoch++; this.listOffset = 0; this.listQuery = '';
-    this.log.clear();
     this.publish({ authorityId: undefined, views: {}, sessions: [], nextOffset: undefined, uncertain: [], interactionOperations: {}, detached,
       authorityRevision: (this.state.authorityRevision ?? 0) + 1 });
   }
@@ -662,7 +662,7 @@ export class AppServerClient {
     // Ownership commits after close/retirement, before attempting the new transport.
     committed?.();
     try {
-      const socket = this.socketFactory(url.href, ['rustx.app-server.v50', `rustx-token.${token}`]);
+      const socket = this.socketFactory(url.href, ['rustx.app-server.v51', `rustx-token.${token}`]);
       this.socket = socket;
       await new Promise<void>((resolve, reject) => {
         const fail = (message: string) => {
@@ -680,12 +680,12 @@ export class AppServerClient {
         socket.onerror = () => { clearTimeout(timer); fail('WebSocket failed. Check endpoint and transport token.'); };
       });
       const hello = await this.request({ method: 'initialize', params: {
-        protocol_version: 50, client: { name: 'rustx-web-console', version: '0.1.0' },
+        protocol_version: 51, client: { name: 'rustx-web-console', version: '0.1.0' },
         presentation: { images: true, questionnaires: true, reviews: true },
       } }, 'initialized');
       if (!this.current(generation)) return;
-      if (!hello.authority_id || hello.protocol_version !== 50 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
-        throw new Error('Incompatible App Server protocol or capabilities. Protocol v50 with native multi-Session, headless interactions, and single-controller admission is required.');
+      if (!hello.authority_id || hello.protocol_version !== 51 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
+        throw new Error('Incompatible App Server protocol or capabilities. Protocol v51 with native multi-Session, headless interactions, and single-controller admission is required.');
       }
       if (this.state.authorityId && this.state.authorityId !== hello.authority_id) {
         try { this.admitAuthorityReplacement(); }
@@ -727,7 +727,7 @@ export class AppServerClient {
     const views = Object.values(this.state.views);
     if ((this.state.detached?.length ?? 0) >= 8) throw new Error('Review and acknowledge detached authority diagnostics before replacing another App Server.');
     const sessions = new Set(views.filter(view => view.deleting || view.error || view.modelMutation || view.cancellation).map(view => view.id));
-    for (const pending of this.pending.values()) if (pending.context.sessionId) sessions.add(pending.context.sessionId);
+    for (const pending of this.pending.values()) if (pending.sessionId) sessions.add(pending.sessionId);
     if (sessions.size > 64) throw new Error('Too many unresolved Session diagnostics. Review the current authority before replacing it.');
   }
   private current(generation: number) { return generation === this.state.generation && !!this.socket; }
@@ -855,7 +855,7 @@ export class AppServerClient {
       clearTimeout(pending.timer); pending.validation?.abort(); pending.validation = undefined;
       if (pending.sent && pending.mutation) {
         const params = pending.request.params;
-        uncertain.push({ id, method: pending.request.method, sessionId: pending.context.sessionId,
+        uncertain.push({ id, method: pending.request.method, sessionId: pending.sessionId,
           generation: this.state.generation,
           ...(pending.request.method === 'session/uploadPrepare' ? { uploadOperationId: pending.request.params.operation_id } : {}),
           ...(pending.request.method === 'context/compact' ? { compactionRequestId: pending.request.params.request_id } : {}),
@@ -870,7 +870,7 @@ export class AppServerClient {
     for (const pending of this.modelPreparations.values()) pending.retire();
     this.modelPreparations.clear();
     for (const chain of this.observationChains.values()) chain.retire(); this.observationChains.clear();
-    this.refreshes.clear(); this.traceReads.clear(); this.traceAuthorities.clear(); this.acquiring.clear(); this.dirty.clear(); this.resubscribe.clear();
+    this.refreshes.clear(); this.traceReads.clear(); this.transcriptReads.clear(); this.traceAuthorities.clear(); this.acquiring.clear(); this.dirty.clear(); this.resubscribe.clear();
     const operations = { ...this.state.interactionOperations };
     for (const [key, operation] of Object.entries(operations)) if (operation.status === 'in-flight') delete operations[key];
     for (const item of uncertain) if (item.interactionKey) operations[item.interactionKey] = { sessionId: item.sessionId!, status: 'uncertain' };
@@ -927,9 +927,8 @@ export class AppServerClient {
     let abortObservation = () => {};
     const work = new Promise<MethodResult>((resolve, reject) => {
       const params = operation.params;
-      const context = { method: operation.method,
-        sessionId: 'target' in params && 'session_id' in params.target ? params.target.session_id : 'session_id' in params ? params.session_id : undefined };
-      this.pending.set(id, { request, context, mutation: mayCommit(operation), sent: false, expected, resolve, reject, dispatchCurrent, authority, acknowledged: result => acknowledged?.(result as Extract<MethodResult, { type: T }>) });
+      const sessionId = 'target' in params && 'session_id' in params.target ? params.target.session_id : 'session_id' in params ? params.session_id : undefined;
+      this.pending.set(id, { request, sessionId, mutation: mayCommit(operation), sent: false, expected, resolve, reject, dispatchCurrent, authority, acknowledged: result => acknowledged?.(result as Extract<MethodResult, { type: T }>) });
       abortObservation = () => {
         if (operation.method !== 'agent/observe') return;
         const pending = this.pending.get(id);
@@ -1030,7 +1029,6 @@ export class AppServerClient {
     // No external observer runs between this final proof and send invocation.
     // sent means transmission attempted, never native acceptance.
     pending.sent = true;
-    this.log.observe('out', generation, raw, pending.context);
     if (requestLane(pending.request.method) === 'rpc' && !longWait(pending.request.method)) pending.timer = setTimeout(() => this.lose(generation), this.timeoutMs);
     try { socket.send(raw); } catch { this.lose(generation); }
     try { if (typeof pending.dispatchCurrent === 'object') pending.dispatchCurrent.sent?.(); }
@@ -1040,14 +1038,13 @@ export class AppServerClient {
     if (typeof data !== 'string' || data.length > 1_048_576 || new TextEncoder().encode(data).length > 1_048_576) { this.lose(generation); return; }
     let parsed: unknown;
     try { parsed = JSON.parse(data); } catch {
-      this.log.observe('in', generation, data); this.lose(generation); return;
+      this.lose(generation); return;
     }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      this.log.observe('in', generation, data); this.lose(generation); return;
+      this.lose(generation); return;
     }
     const value = parsed as Response | Notification;
     const pending = 'id' in value && value.id !== null ? this.pending.get(String(value.id)) : undefined;
-    this.log.observe('in', generation, data, pending?.context);
     if (value.jsonrpc !== '2.0') { this.lose(generation); return; }
     if ('result' in value || 'error' in value || 'id' in value) {
       if (!pending || !pending.sent) return;
@@ -1060,7 +1057,7 @@ export class AppServerClient {
       this.pending.delete(String(value.id)); clearTimeout(pending.timer);
       this.capacityReleased();
       if ('result' in value && value.result?.type === 'session_transition' && value.result.durability_diagnostic) {
-        this.publish({ uncertain: [...this.state.uncertain, { id: String(value.id), method: pending.request.method, sessionId: pending.context.sessionId, generation,
+        this.publish({ uncertain: [...this.state.uncertain, { id: String(value.id), method: pending.request.method, sessionId: pending.sessionId, generation,
           committedNode: { sessionId: value.result.session.id, nodeId: value.result.session.active_node }, diagnostic: value.result.durability_diagnostic }] });
       }
       // Evidence observers run at decode time, before continuation authority
@@ -1195,7 +1192,8 @@ export class AppServerClient {
     const snapshot = foldRuntimeEvent(view.snapshot, event);
     const checkpointAdvanced = transitionFacts(event).some(fact => fact.type === 'checkpoint_advanced');
     const traceAdvanced = checkpointAdvanced || transitionFacts(event).some(fact => fact.type === 'read_domains_updated');
-    this.setSession(id, { snapshot, ...(traceAdvanced ? {trace:this.supersedeTrace(id,refreshTrace(view.trace,snapshot.trace,snapshot.trace_updates,observationCheckpoint(snapshot,cursor)?.read_cut))} : {}), checkpoint: observationCheckpoint(snapshot, cursor) ?? view.checkpoint, cursor, observationState: 'following',
+    const trace = traceAdvanced ? refreshTrace(view.trace, snapshot.trace, snapshot.trace_updates, observationCheckpoint(snapshot, cursor)?.read_cut) : undefined;
+    this.setSession(id, { snapshot, publicationHeads: publicationHeads(view.publicationHeads, event, snapshot), ...(trace ? { trace: trace.epoch === view.trace?.epoch ? trace : this.supersedeTrace(id, trace) } : {}), checkpoint: observationCheckpoint(snapshot, cursor) ?? view.checkpoint, cursor, observationState: 'following',
       history: snapshot.transcript === view.snapshot.transcript ? this.state.views[id].history : refreshTranscript(this.state.views[id].history, snapshot.transcript) });
     const settled=transitionFacts(event).filter(fact=>fact.type==='interaction_settled'||fact.type==='interaction_removed');
     if(settled.length){
@@ -1204,6 +1202,7 @@ export class AppServerClient {
         uncertain:this.state.uncertain.filter(value=>!value.interactionKey||!keys.has(value.interactionKey))});
     }
     this.reconcileInteractions(id); this.settleSubmissions(id);
+    if (snapshot.transcript !== view.snapshot.transcript) void this.refreshTranscriptDomain(id);
     if (checkpointAdvanced) void this.refreshDisplaySummary(id);
     if (transitionFacts(event).some(fact=>fact.type==='trace_changed')) void this.refreshTraceDomain(id).catch(() => {});
   }
@@ -1215,9 +1214,9 @@ export class AppServerClient {
   }
   async modelRead(target: AttachmentTarget, current: () => boolean) {
     const {page}=await this.request({method:'session/model',params:{target}},'domain_page',undefined,current);
-    return domainValue<import('../../../protocol/app-server/v50').SessionModelView>(page,this.domainReader(target,current));
+    return domainValue<import('../../../protocol/app-server/v51').SessionModelView>(page,this.domainReader(target,current));
   }
-  async modelCatalogRead(target: AttachmentTarget, current: () => boolean, previous?: import('../../../protocol/app-server/v50').CheckpointPage) {
+  async modelCatalogRead(target: AttachmentTarget, current: () => boolean, previous?: import('../../../protocol/app-server/v51').CheckpointPage) {
     const reader=this.domainReader(target,current);
     const page=previous?.next_offset!=null ? await reader.page(previous,Number(previous.next_offset)) : (await this.request({method:'session/models',params:{target}},'domain_page',undefined,current)).page;
     if (!current() || page.items.length > 32) throw new Error('Model catalog observation was replaced or exceeded its bound.');
@@ -1225,7 +1224,7 @@ export class AppServerClient {
     // and profile collections remain explicitly readable through their page;
     // opening this menu never downloads every growing catalog row.
     const models = page.items.flatMap(item => {
-      const row = item.value as import('../../../protocol/app-server/v50').CatalogModelView | null;
+      const row = item.value as import('../../../protocol/app-server/v51').CatalogModelView | null;
       return row && typeof row.model === 'string' && row.model.length <= 256
         && (row.profiles?.length ?? 0) <= 32
         && (row.profiles ?? []).every(profile => typeof profile.id === 'string' && profile.id.length <= 256)
@@ -1233,15 +1232,15 @@ export class AppServerClient {
     });
     return {catalog:{models},page};
   }
-  async sourceModelCatalogRead(source: import('../../../protocol/app-server/v50').SourceSettings, current: () => boolean, offset = 0) {
+  async sourceModelCatalogRead(source: import('../../../protocol/app-server/v51').SourceSettings, current: () => boolean, offset = 0) {
     const cut = sourceObservation(source);
     if (!cut || !current()) throw new Error('Model source observation is unavailable.');
     const {page} = await this.request({method:'configuration/sourcePage',params:{target:cut.target,revision:cut.revision,field:'session_models',offset,limit:32}},'source_page',undefined,current);
     if (page.revision !== cut.revision || page.field !== 'session_models' || page.items.length > 32) throw new Error('Model source page cut changed.');
-    const models: import('../../../protocol/app-server/v50').CatalogModelView[] = [];
+    const models: import('../../../protocol/app-server/v51').CatalogModelView[] = [];
     for (const [index,item] of page.items.entries()) {
       if (Number(item.index) !== offset + index || !current()) throw new Error('Model source page failed to advance.');
-      const value = await materializeFields<{model:import('../../../protocol/app-server/v50').CatalogModelView},import('../../../protocol/app-server/v50').SourceFieldRef>(
+      const value = await materializeFields<{model:import('../../../protocol/app-server/v51').CatalogModelView},import('../../../protocol/app-server/v51').SourceFieldRef>(
         {revision:cut.revision,fields:[{name:'model',value:item.value,reference:item.reference}]},
         async(reference,offset)=>(await this.request({method:'configuration/sourceValueRead',params:{target:cut.target,reference,offset,max_bytes:65536}},'source_value_chunk',undefined,current)).chunk,current);
       models.push(value.model);
@@ -1253,7 +1252,7 @@ export class AppServerClient {
     const {projection}=await this.request({method:'session/effectiveConfiguration',params:{target}},'effective_configuration',undefined,current);
     return materializeEffective(projection,async(reference,offset)=>(await this.request({method:'session/effectiveConfigurationValueRead',params:{target,reference,offset,max_bytes:65536}},'configuration_value_chunk',undefined,current)).chunk,current);
   }
-  private readonly configurationCuts=new Map<string,import('../../../protocol/app-server/v50').BoundedSessionApplication>();
+  private readonly configurationCuts=new Map<string,import('../../../protocol/app-server/v51').BoundedSessionApplication>();
   private readonly configurationReads=new Map<string,Promise<void>>();
   private readonly configurationWeights=new Map<string,number>();
   private retainConfiguration(application:ConfigurationApplication) {
@@ -1276,14 +1275,14 @@ export class AppServerClient {
     this.publish({configuration,configurationObservation:diagnostics});
   }
 
-  private loadApplication(cut:import('../../../protocol/app-server/v50').BoundedSessionApplication,generation:number) {
+  private loadApplication(cut:import('../../../protocol/app-server/v51').BoundedSessionApplication,generation:number) {
     if(this.configurationReads.has(cut.scope))return;
     const current=()=>this.current(generation)&&this.configurationCuts.get(cut.scope)===cut;
     const load=async()=>{
       if(this.state.views[cut.scope])return materializeApplication(cut,async(reference,offset)=>(await this.request({method:'session/configurationValueRead',params:{session_id:cut.scope,reference,offset,max_bytes:65536}},'session_application_value_chunk',undefined,current)).chunk,current);
       const target=cut.sources[0];if(!target)throw new Error('Configuration source is unavailable.');
       const {projection}=await this.request({method:'configuration/sourcesRead',params:{target}},'source_settings',undefined,current);
-      const application=projection.inline?.application ?? (await materializeFields<{application:ConfigurationApplication},import('../../../protocol/app-server/v50').SourceFieldRef>({revision:projection.revision,fields:projection.fields.filter(field=>field.name==='application')},async(reference,offset)=>(await this.request({method:'configuration/sourceValueRead',params:{target,reference,offset,max_bytes:65536}},'source_value_chunk',undefined,current)).chunk,current)).application;
+      const application=projection.inline?.application ?? (await materializeFields<{application:ConfigurationApplication},import('../../../protocol/app-server/v51').SourceFieldRef>({revision:projection.revision,fields:projection.fields.filter(field=>field.name==='application')},async(reference,offset)=>(await this.request({method:'configuration/sourceValueRead',params:{target,reference,offset,max_bytes:65536}},'source_value_chunk',undefined,current)).chunk,current)).application;
       if(application?.version!==cut.version||application.scope!==cut.scope)throw new Error('Configuration source cut changed.');return application;
     };
     this.publish({configurationObservation:{...this.state.configurationObservation,[cut.scope]:{version:cut.version,phase:'loading'}}});
@@ -1302,7 +1301,7 @@ export class AppServerClient {
     const settings = await materializeSettings(projection, async(reference,offset)=>(await this.request({method:'session/settingsValueRead',params:{session_id:id,reference,offset,max_bytes:65_536}},'settings_value_chunk',undefined,current)).chunk, current);
     return {revision:projection.revision,settings};
   }
-  async readContent(target: AttachmentTarget, agentId: string | undefined, content_ref: import('../../../protocol/app-server/v50').ContentRef, offset: number, current: () => boolean) {
+  async readContent(target: AttachmentTarget, agentId: string | undefined, content_ref: import('../../../protocol/app-server/v51').ContentRef, offset: number, current: () => boolean) {
     return (await this.request({ method: 'conversation/contentRead', params: { target, agent_id: agentId ?? null, content_ref, offset, max_bytes: 65_536 } }, 'content_chunk', undefined, current)).chunk;
   }
   private listEpoch = 0;
@@ -1536,8 +1535,8 @@ export class AppServerClient {
     const { node, conversation, current } = scope;
     if (previous && previous.conversationId !== conversation) return;
     const cache = previous?.cache ?? replaceTrace({ records: [], next_cursor: null });
-    const limit = Math.min(TRACE_PAGE_SIZE, TRACE_LIMIT - cache.page.records.length);
-    if (limit < 1 || !current()) return;
+    const limit = TRACE_PAGE_SIZE;
+    if (!current()) return;
     if (previous) this.setSession(id, { tracePreview: { ...previous, cache: { ...cache, loading: true, error: undefined } } });
     try {
       const admission = older ? await this.admitSessionOperation(id, current) : current;
@@ -1661,7 +1660,7 @@ export class AppServerClient {
             this.resubscribe.add(id); this.dirty.add(id);
           } else throw error;
         }
-        if (current() && !this.dirty.has(id)) {this.lifecycles.event(id, { type: 'OBSERVATION', proof, status: 'attached' });void this.refreshDisplaySummary(id);
+        if (current() && !this.dirty.has(id)) {this.lifecycles.event(id, { type: 'OBSERVATION', proof, status: 'attached' });void this.refreshDisplaySummary(id);void this.refreshTranscriptDomain(id);
           if(traceInterestBatches(this.state.views[id]?.trace).length>1)void this.refreshTraceDomain(id).catch(error=>{if(current()&&this.state.views[id]?.trace)this.setSession(id,{trace:{...this.state.views[id].trace!,error:String(error)}});});
         }
       }
@@ -1685,7 +1684,7 @@ export class AppServerClient {
     if(existing&&scope?.generation===this.state.generation&&sameTarget(scope.target,target))return existing;
     const generation=this.state.generation;
     const current=()=>generation===this.state.generation&&sameTarget(this.lifecycles.observe(target.session_id)?.target,target);
-    const valid=(cut:import('../../../protocol/app-server/v50').CheckpointReadCut,owns:()=>boolean)=>{
+    const valid=(cut:import('../../../protocol/app-server/v51').CheckpointReadCut,owns:()=>boolean)=>{
       if(!current()||!owns()||cut.conversation_id!==target.conversation_id||cut.activation_id!=null)throw new Error('Trace field source was replaced.');
     };
     const reader:TraceFieldReader={
@@ -1697,7 +1696,7 @@ export class AppServerClient {
     return reader;
   }
   private coldTraceFields(id:string,node:string|null|undefined,conversation:string,current:()=>boolean):TraceFieldReader {
-    const valid=(cut:import('../../../protocol/app-server/v50').CheckpointReadCut,owns:()=>boolean)=>{
+    const valid=(cut:import('../../../protocol/app-server/v51').CheckpointReadCut,owns:()=>boolean)=>{
       if(!current()||!owns()||cut.conversation_id!==conversation||cut.activation_id!=null)throw new Error('Historical Trace field source was replaced.');
     };
     return {
@@ -1730,6 +1729,7 @@ export class AppServerClient {
           // while it awaits owns a separate, coalesced follow-up obligation.
           read.dirty = false;
           const authority = this.traceAuthorities.get(id);
+          const observed = this.state.views[id]?.snapshot;
           const batches=traceInterestBatches(this.state.views[id]?.trace);
           for(const [index,records] of batches.entries()) {
             if(!current()||this.traceAuthorities.get(id)!==authority)break;
@@ -1738,7 +1738,15 @@ export class AppServerClient {
               result=await this.request({method:'session/trace',params:{target,before:null,limit:index?1:TRACE_PAGE_SIZE,records}},'trace',undefined,current);
             }catch(error){if(!read.dirty||!current())throw error;break;}
             standaloneTraceCut(result.page,target.conversation_id);
-            if(current()&&this.traceAuthorities.get(id)===authority)this.setSession(id,{trace:{...refreshTrace(this.state.views[id]?.trace,result.page,result.page.updates??[],undefined,index>0),fields:this.liveTraceFields(target)}});
+            if(current()&&this.traceAuthorities.get(id)===authority) {
+              const latest = this.state.views[id]?.snapshot;
+              if (latest?.trace !== observed?.trace || latest?.trace_updates !== observed?.trace_updates) {
+                // A newer native head already landed. Keep its rows and the
+                // resident detail, then coalesce one read for the new head.
+                read.dirty = true; break;
+              }
+              this.setSession(id,{trace:{...refreshTrace(this.state.views[id]?.trace,result.page,result.page.updates??[],undefined,index>0),fields:this.liveTraceFields(target)}});
+            }
           }
         }
       } finally {
@@ -1752,9 +1760,53 @@ export class AppServerClient {
   }
   /** Older reads are fenced by attachment, connection and read-window epoch.
    * Ordinary live refreshes preserve the epoch only with a durable overlap. */
-  /** One older page, as Harness's loadOlder. */
+  /** One Turn-aligned reading window, assembled from bounded native pages. */
   loadEarlier(id: string) { return this.pageOlder(id); }
-  async loadEarlierTrace(id: string) {
+  private transcriptReads = new Map<string, { current: () => boolean; dirty: boolean; work: Promise<void> }>();
+  /** Native completion can update a row after it leaves the live head. Reread
+   * that exact message without clearing history, detaching scrolling or asking
+   * the reader to load it again. One later observation coalesces one fresh pass. */
+  private refreshTranscriptDomain(id: string): Promise<void> {
+    const existing = this.transcriptReads.get(id);
+    if (existing?.current()) { existing.dirty = true; return existing.work; }
+    const observation = this.lifecycles.observe(id), history = this.state.views[id]?.history;
+    if (!observation || !history || history.window) return Promise.resolve();
+    const authority = this.readingAuthority(id), intent = this.readingIntents.get(id);
+    const current = () => authority() && this.readingIntents.get(id) === intent
+      && this.state.views[id]?.history?.epoch === history.epoch && !this.state.views[id]?.history?.window;
+    const read = { current, dirty: true, work: Promise.resolve() };
+    this.transcriptReads.set(id, read);
+    read.work = (async () => {
+      try {
+        while (read.dirty && current()) {
+          read.dirty = false;
+          const view = this.state.views[id];
+          for (const entry of transcriptRepairs(view.history, view.snapshot!.transcript)) {
+            if (!current() || entry.item.type !== 'message') return;
+            const result = await this.request({ method: 'session/transcript', params: { target: observation.target, at: { type: 'message', id: entry.item.message.id, cut: null }, limit: 1 } }, 'transcript_window', undefined, current);
+            if (!current()) return;
+            if (result.window.cut.conversation_id !== observation.target.conversation_id) throw new Error('Native transcript refresh changed Conversation.');
+            const latest = this.state.views[id];
+            this.setSession(id, { history: refreshTranscript(repairTranscript(latest.history!, result.window, entry), latest.snapshot!.transcript) });
+          }
+        }
+      } catch (error) {
+        if (current()) this.setSession(id, { history: { ...this.state.views[id].history!, error: String(error) } });
+      } finally { if (this.transcriptReads.get(id) === read) this.transcriptReads.delete(id); }
+    })();
+    return read.work;
+  }
+  loadInitialHistory(id: string) {
+    const history = this.state.views[id]?.history;
+    if (!history || history.window || history.loading || history.error || history.page.next_cursor == null || transcriptWindowReady(history.page.entries ?? [])) return Promise.resolve();
+    return this.readHistoryPage(id, { type: 'older', before: history.page.next_cursor, cut: null }, true);
+  }
+  loadInitialTrace(id: string) {
+    const trace = this.state.views[id]?.trace;
+    if (!trace || trace.located || trace.loading || trace.error || trace.page.next_cursor == null || traceWindowReady(trace.page.records)) return Promise.resolve();
+    return this.loadEarlierTrace(id, true);
+  }
+  async loadEarlierTrace(id: string, initial = false) {
     if (this.state.views[id]?.attachment === 'attaching') return this.readTracePreview(id, () => true, true);
     const observation = this.lifecycles.observe(id);
     if (!observation) return;
@@ -1762,17 +1814,28 @@ export class AppServerClient {
     const cache = this.state.views[id].trace;
     const authority = this.traceAuthorities.get(id);
     if (!cache || cache.loading || cache.page.next_cursor == null) return;
-    const limit = Math.min(TRACE_PAGE_SIZE, TRACE_LIMIT - cache.page.records.length);
-    if (limit < 1) throw new Error('Trace window is full. Return to latest first.');
     const current = () => observation.current()
       && this.traceAuthorities.get(id) === authority
       && this.state.views[id]?.trace?.epoch === cache.epoch;
     this.setSession(id, { trace: { ...cache, loading: true, error: undefined } });
     try {
-      const result = await this.request({ method: 'session/trace', params: { target, before: cache.page.next_cursor, limit } }, 'trace', undefined, current);
-      standaloneTraceCut(result.page,target.conversation_id);
+      let next = cache;
+      const visited = new Set<string>();
+      const added: import('../../../protocol/app-server/v51').TraceRecord[] = [];
+      do {
+        const before = next.page.next_cursor!;
+        if (visited.has(before)) throw new Error('Native Trace history did not advance.');
+        visited.add(before);
+        const result = await this.request({ method: 'session/trace', params: { target, before, limit: TRACE_PAGE_SIZE } }, 'trace', undefined, current);
+        if (!current()) return;
+        standaloneTraceCut(result.page,target.conversation_id);
+        if (result.page.next_cursor != null && result.page.next_cursor === before) throw new Error('Native Trace history did not advance.');
+        added.push(...result.page.records);
+        next = prependTrace(next, result.page);
+      } while (next.page.next_cursor != null && !traceWindowReady(initial ? next.page.records : added));
       if (current()) {
-        this.setSession(id, { trace: prependTrace(this.state.views[id].trace!, result.page) });
+        const live = this.state.views[id].trace!;
+        this.setSession(id, { trace: { ...prependTrace(live, next.page), readCuts: { ...next.readCuts, ...live.readCuts }, loading: false } });
         // Include newly loaded identities in a repair even if their terminal
         // notification raced this pending historical read.
         await this.refreshTraceDomain(id);
@@ -1832,12 +1895,12 @@ export class AppServerClient {
     const epoch = cache.epoch;
     const authority = this.traceAuthorities.get(id);
     const existing = cache.details[record];
-    if (existing && (existing.loading || existing.detail || existing.page)) return;
+    if (existing?.loading || existing && !existing.stale && !existing.error && (existing.detail || existing.page)) return;
     const pending = beginTraceDetail(cache, record);
     const current = () => observation.current()
       && this.traceAuthorities.get(id) === authority
       && this.state.views[id]?.trace?.epoch === epoch
-      && this.state.views[id]?.trace?.details[record] === pending.details[record];
+      && this.state.views[id]?.trace?.details[record]?.read === pending.details[record].read;
     this.setSession(id, { trace: pending });
     try {
       const result = await this.request({ method: 'session/traceDetail', params: { target, record_id: record } }, 'domain_page', undefined, current);
@@ -2037,7 +2100,8 @@ export class AppServerClient {
     if (!this.lifecycles.observe(id)) return;
     this.invalidateReading(id);
     const view = this.state.views[id];
-    if (view?.snapshot) this.setSession(id, { history: replaceTranscript(view.snapshot.transcript, view.history) });
+    if (view?.snapshot && view.history?.window) this.setSession(id, { history: replaceTranscript(view.snapshot.transcript, view.history) });
+    void this.refreshTranscriptDomain(id);
   }
   async loadLater(id: string) {
     const history = this.state.views[id]?.history, window = history?.window;
@@ -2049,24 +2113,38 @@ export class AppServerClient {
     if (!history || history.page.next_cursor == null || history.loading) return Promise.resolve();
     return this.readHistoryPage(id, { type: 'older', before: history.page.next_cursor, cut: history.window?.cut ?? null });
   }
-  /** One gesture, one read. Navigation intent fences both page and anchor reads. */
-  private async readHistoryPage(id: string, at: import('../../../protocol/app-server/v50').ConversationWindowAt) {
+  /** Navigation intent fences the whole reading window, including every wire page. */
+  private async readHistoryPage(id: string, at: import('../../../protocol/app-server/v51').ConversationWindowAt, initial = false) {
     const history = this.state.views[id]?.history;
     const observation = this.lifecycles.observe(id);
     if (!history || !observation) return;
     const target = observation.target, authority = this.readingAuthority(id), intent = this.invalidateReading(id);
     const current = () => authority() && this.readingIntents.get(id) === intent && this.state.views[id]?.history?.epoch === history.epoch;
-    this.setSession(id, { history: { ...history, loading: true, error: undefined } });
+    this.setSession(id, { history: { ...history, loading: true, initialLoading: initial, error: undefined } });
     try {
-      const result = await this.request({ method: 'session/transcript', params: { target, at, limit: HISTORY_PAGE_SIZE } }, 'transcript_window', undefined, current);
+      let pageAt = at, next = history;
+      const added: import('../../../protocol/app-server/v51').RuntimeClientTranscriptEntry[] = [];
+      do {
+        const result = await this.request({ method: 'session/transcript', params: { target, at: pageAt, limit: HISTORY_PAGE_SIZE } }, 'transcript_window', undefined, current);
+        if (!current()) return;
+        if (result.window.cut.conversation_id !== target.conversation_id || ('cut' in pageAt && pageAt.cut && !sameReadCut(result.window.cut, pageAt.cut))) throw new Error('Invalid native history cut.');
+        if (pageAt.type === 'older' && result.window.page.next_cursor != null && BigInt(result.window.page.next_cursor) >= BigInt(pageAt.before)) throw new Error('Invalid native history page.');
+        added.push(...result.window.page.entries ?? []);
+        next = extendTranscriptWindow(result.window, next, at.type === 'older');
+        if (at.type !== 'older' || next.page.next_cursor == null || transcriptWindowReady(initial ? next.page.entries! : added)) break;
+        pageAt = { type: 'older', before: next.page.next_cursor, cut: result.window.cut };
+      } while (current());
       if (!current()) return;
-      if (result.window.cut.conversation_id !== target.conversation_id || ('cut' in at && at.cut && !sameReadCut(result.window.cut, at.cut))) throw new Error('Invalid native history cut.');
-      // Extend only the finite presentation window, trimming its opposite end.
-      if (at.type === 'older' && result.window.page.next_cursor != null && BigInt(result.window.page.next_cursor) >= BigInt(at.before)) throw new Error('Invalid native history page.');
-      const next = extendTranscriptWindow(result.window, this.state.views[id].history!, at.type === 'older');
-      this.setSession(id, { history: next });
+      // Ordinary pagination remains a live conversation. Only an explicit Turn
+      // or message jump owns a frozen historical window and its continuation.
+      if (!history.window && at.type === 'older' && next.window?.newer_cursor == null) {
+        const { window: _, ...following } = next;
+        next = refreshTranscript(following, this.state.views[id].snapshot!.transcript);
+      }
+      this.setSession(id, { history: { ...next, loading: false, initialLoading: false } });
+      void this.refreshTranscriptDomain(id);
     } catch (error) {
-      if (current()) this.setSession(id, { history: { ...this.state.views[id].history!, loading: false, error: String(error) } });
+      if (current()) this.setSession(id, { history: { ...this.state.views[id].history!, loading: false, initialLoading: false, error: String(error) } });
     }
   }
   private reconcileInteractions(id: string) {
@@ -2120,8 +2198,8 @@ export class AppServerClient {
     if (!observation) throw new Error('Session is not attached.');
     return (await this.request({ method: 'session/projections', params: { target: observation.target, after, limit: 16 } }, 'projections', undefined, () => observation.current())).page;
   }
-  private readonly projectionReaders = new WeakMap<import('../../../protocol/app-server/v50').ProjectionDetail, TraceFieldReader>();
-  projectionDetailReader(detail: import('../../../protocol/app-server/v50').ProjectionDetail) { return this.projectionReaders.get(detail); }
+  private readonly projectionReaders = new WeakMap<import('../../../protocol/app-server/v51').ProjectionDetail, TraceFieldReader>();
+  projectionDetailReader(detail: import('../../../protocol/app-server/v51').ProjectionDetail) { return this.projectionReaders.get(detail); }
   async projectionDetail(id: string, checkpointId: string, offset = 0) {
     const observation = this.lifecycles.observe(id);
     if (!observation) throw new Error('Session is not attached.');
@@ -2153,7 +2231,7 @@ export class AppServerClient {
     try { target = this.target(id); } catch (error) { throw new UploadFailure('failed', error); }
     const policy = this.state.capabilities?.upload_policy;
     if (!policy) throw new UploadFailure('failed', 'Upload policy unavailable');
-    if (!files.length || files.length > policy.max_files_per_transfer || files.some(file => file.size > policy.max_file_bytes) || files.reduce((sum, file) => sum + file.size, 0) > policy.max_transfer_bytes) throw new UploadFailure('failed', 'Selection exceeds native upload policy');
+    if (files.length !== 1 || files.some(file => !Number.isSafeInteger(file.size) || file.size < 0)) throw new UploadFailure('failed', 'Invalid upload selection');
     const admission = this.state.views[id]?.attachmentObservation;
     const current = () => (!evidence || evidence.current()) && this.isAttachmentControlCurrent(id, admission) && sameTarget(admission?.target, target);
     if (!current()) throw new UploadFailure('failed', 'Upload authority changed');
@@ -2166,7 +2244,7 @@ export class AppServerClient {
     };
     let transfer;
     try {
-      ({ transfer } = await this.request({ method: 'session/uploadPrepare', params: { target, operation_id: operationId, files: files.map(file => ({ name: file.name, size: file.size })) } }, 'upload_prepared', undefined, current));
+      ({ transfer } = await this.request({ method: 'session/uploadPrepare', params: { target, operation_id: operationId, files: [{ name: files[0].name, size: files[0].size }] } }, 'upload_prepared', undefined, current));
     } catch (error) {
       if (error instanceof RequestNotDispatched) throw new UploadFailure('failed', error);
       // A server refusal published no new preparation, but the exact operation
@@ -2210,7 +2288,7 @@ export class AppServerClient {
     const view = this.state.views[id];
     if (!view) return;
     const inboundRequests = [...this.pending.values()].filter(item =>
-      (item.request.method === 'turn/start' || item.request.method === 'turn/steer') && item.context.sessionId === id).length;
+      (item.request.method === 'turn/start' || item.request.method === 'turn/steer') && item.sessionId === id).length;
     const submissions = view.submissions ?? [];
     this.setSession(id, { inboundRequests, submissions: accepted && !submissions.some(item => item.messageId === accepted.messageId)
       ? [...submissions, accepted] : submissions });
@@ -2312,10 +2390,10 @@ export class AppServerClient {
     if (observed && view?.snapshot) this.setSession(id, { history: replaceTranscript(view.snapshot.transcript, view.history) });
     return observed;
   }
-  private modelPreparations = new Map<string, { work: Promise<import('../../../protocol/app-server/v50').SessionModelConfig>; retire: () => void }>();
+  private modelPreparations = new Map<string, { work: Promise<import('../../../protocol/app-server/v51').SessionModelConfig>; retire: () => void }>();
   /** Client-owned selection while native resources initialize. Last unsent choice
    * wins; the existing native mutation and authoritative reread still own apply. */
-  prepareAgentModel(id: string, config: import('../../../protocol/app-server/v50').SessionModelConfig) {
+  prepareAgentModel(id: string, config: import('../../../protocol/app-server/v51').SessionModelConfig) {
     const view = this.state.views[id];
     if (view?.attachment !== 'attaching' || view.attachmentIntent !== 'wanted' || view.deleting)
       return Promise.reject(new Error('Conversation is no longer connecting.'));
@@ -2351,25 +2429,9 @@ export class AppServerClient {
     void work.finally(() => { if (this.modelPreparations.get(id)?.work === work) this.modelPreparations.delete(id); }).catch(() => {});
     return work;
   }
-  /** Native catalog defaults at the exact generation whose ordinals were read. */
-  async selectCatalogModel(id:string,choice:import('../../../protocol/app-server/v50').CatalogModelSelection,owned:()=>boolean=()=>true) {
-    const target=this.target(id),generation=this.state.generation;
-    if(this.state.views[id].modelMutation)throw new Error('Reread native model state before another mutation.');
-    const current=()=>owned()&&this.current(generation)&&sameTarget(this.state.views[id]?.target,target);
-    if(!current())return;
-    const operation={generation,status:'in-flight' as const};this.setSession(id,{modelMutation:operation});
-    try {
-      await this.request({method:'session/selectModel',params:{target,choice}},'model_set',undefined,current);
-      if(this.current(generation)&&sameTarget(this.state.views[id]?.target,target))this.setSession(id,{modelMutation:{generation,status:'acknowledged'}});
-    }catch(error){
-      if(this.state.views[id]?.modelMutation===operation)this.setSession(id,{modelMutation:error instanceof RequestNotDispatched?undefined:{generation,status:isOutcomeUncertain(error)?'uncertain':'acknowledged'}});
-      throw error;
-    }
-  }
-
   /** Transport continuation guard, not Session model authority. A successful
    * mutation response alone cannot enable a dependent Send. */
-  async setAgentModel(id: string, config: import('../../../protocol/app-server/v50').SessionModelConfig) {
+  async setAgentModel(id: string, config: import('../../../protocol/app-server/v51').SessionModelConfig) {
     const target = this.target(id), generation = this.state.generation;
     if (this.state.views[id].modelMutation) throw new Error('Reread native model state before another mutation.');
     const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);
@@ -2476,7 +2538,7 @@ export class AppServerClient {
     if(loaded&&sameTarget(view.target,loaded.target)&&this.interactionCutCurrent(view,loaded.page.read_cut))return loaded.rows;
     return view?.snapshot?.pending_interactions??[];
   }
-  interactionBody(id:string,header:import('../../../protocol/app-server/v50').RuntimeClientInteractionHeader) {
+  interactionBody(id:string,header:import('../../../protocol/app-server/v51').RuntimeClientInteractionHeader) {
     const view=this.state.views[id],detail=view?.interactionDetail;
     if(detail&&sameTarget(view.target,detail.target)&&this.interactionCutCurrent(view,detail.cut)&&interactionKey(detail.body.interaction)===interactionKey(header.interaction))return detail.body;
     return interactionBody(header);
@@ -2510,7 +2572,7 @@ export class AppServerClient {
     if(bytes.length>65536||!Number.isSafeInteger(chunk.readable_end)||offset+bytes.length>chunk.readable_end||offset<chunk.readable_end&&!bytes.length||(chunk.next_offset??null)!==(offset+bytes.length<chunk.readable_end?offset+bytes.length:null))throw new Error('Interaction range failed to advance exactly.');
     return {bytes,next:chunk.next_offset??undefined,readableEnd:chunk.readable_end};
   }
-  private interactionCutCurrent(view:SessionView,cut:import('../../../protocol/app-server/v50').CheckpointReadCut) {
+  private interactionCutCurrent(view:SessionView,cut:import('../../../protocol/app-server/v51').CheckpointReadCut) {
     const current=view.checkpoint?.read_cut;
     return !!current&&current.conversation_id===cut.conversation_id&&current.activation_id===cut.activation_id
       &&(cut.domain_revisions.pending_interactions!==undefined
@@ -2523,7 +2585,7 @@ export class AppServerClient {
     const current=()=>observation.current()&&!!this.state.views[id]&&this.interactionCutCurrent(this.state.views[id],cut);
     const {page}=await this.request({method:'conversation/checkpointPage',params:{target,agent_id:null,cut,domain:'pending_interactions',offset,limit:32}},'checkpoint_page',undefined,current);
     if(page.items.length>32)throw new Error('Interaction page exceeds its item bound.');
-    const rows=page.items.map(item=>{if(item.value==null)throw new Error('Interaction descriptor is missing.');return item.value as import('../../../protocol/app-server/v50').RuntimeClientInteractionHeader;});
+    const rows=page.items.map(item=>{if(item.value==null)throw new Error('Interaction descriptor is missing.');return item.value as import('../../../protocol/app-server/v51').RuntimeClientInteractionHeader;});
     if(!current())throw new Error('Interaction observation was replaced.');
     this.setSession(id,{interactionPage:{target,page,rows,offset}});
   }

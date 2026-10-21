@@ -120,14 +120,14 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     const step = page.locator('[data-step-process]').filter({ has: activity }).last().locator(':scope > button');
     if (await step.getAttribute('aria-expanded') === 'false') await step.click();
     await expect(activity).toBeVisible();
-    const details = activity.getByText('Execution details', { exact: true });
+    const details = activity.locator('[data-disclosure-row]');
     await expect(details).toBeVisible();
-    await expect(activity.locator('[data-tool-renderer]')).toHaveCount(0);
-    await page.screenshot({ path: test.info().outputPath('goal-activity.png') });
-    await expect(activity.locator('details')).not.toHaveAttribute('open', '');
     await details.click();
-    await expect(activity.locator('pre')).toContainText('native.create_goal');
-    await expect(activity.locator('pre')).toContainText('"name": "create_goal"');
+    await expect(activity.locator('[data-tool-details]')).toContainText('Verify the composer docks');
+    await expect(activity.locator('[data-tool-details]')).toContainText('0 / 1');
+    await expect(activity).not.toContainText('Execution details');
+    await expect(activity).not.toContainText('native.create_goal');
+    await page.screenshot({ path: '/tmp/rustx-native-goal-app.png' });
     await details.click();
     await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeVisible();
     await message.fill('Queued during the Goal round'); await page.getByRole('button', { name: 'Queue', exact: true }).click();
@@ -260,11 +260,7 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     const inspector = trajectory.getByRole('complementary', { name: 'Event details' });
     await inspector.getByRole('tab', { name: 'Options', exact: true }).click();
     await expect(inspector).toContainText(requestModel);
-    // The finite original model head is visible; reading original Options is explicit.
-    if (await inspector.getByRole('button', { name: 'Read original value', exact: true }).count()) {
-      await inspector.getByRole('button', { name: 'Read original value', exact: true }).click();
-      await expect(inspector.getByRole('tabpanel')).toContainText(JSON.stringify(requestModel));
-    }
+    await expect(inspector.getByRole('tabpanel')).toContainText(JSON.stringify(requestModel));
     await expect.poll(() => wire.responses.filter(row => row.method === 'session/traceDetail').length).toBeGreaterThan(0);
     const read = wire.responses.filter(row => row.method === 'session/traceDetail').at(-1)!;
     const detail = (await wire.traceDetail(wire.requests.filter(row => row.method === 'session/traceDetail').at(-1)!.params.target, read.result.page)).request!;

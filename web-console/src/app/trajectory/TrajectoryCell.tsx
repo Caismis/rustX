@@ -2,11 +2,12 @@ import type { Translate } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness TrajectoryTable.tsx semantic cells; see PROVENANCE.md. */
 import type { ReactNode } from 'react';
-import type { TraceKind, TraceRecord } from '../../../../protocol/app-server/v50';
+import type { TraceKind, TraceRecord } from '../../../../protocol/app-server/v51';
 import { IconSettingsOutline16, IconSparkle16, IconUserOutline16 } from '../../presentation/primitives/icons';
 import { Tooltip } from '../../presentation/primitives/Tooltip';
 import { recordLabel, type InspectableDisplayItem } from './layout';
 import { markdownPreviewText } from '../../presentation/markdown/preview';
+import { traceStateLabel } from '../../bindings/status-labels';
 import css from './Trajectory.module.css';
 
 /** The ledger's role vocabulary: native kinds plus the two input cells. */
@@ -29,14 +30,13 @@ export function isErrorRecord(record: TraceRecord): boolean {
 /**
  * Compact labels for the kinds that share no Harness glyph.
  *
- * `background`, `subagent`, `workflow` and `interaction` are rustX-specific
+ * `background` and `workflow` are rustX-specific
  * evidence with no distinct icon, so at narrow widths the icon alone cannot
  * tell them apart. They keep a short visible word instead.
  */
 function narrowLabel(tx: Translate, kind: CellKind): string | undefined {
   switch (kind) {
     case 'background': return tx('trajectory:short.background');
-    case 'subagent': return tx('trajectory:short.subagent');
     case 'workflow': return tx('trajectory:short.workflow');
     case 'interaction': return tx('trajectory:short.interaction');
     default: return undefined;
@@ -95,6 +95,7 @@ function compactionText(tx: Translate, record: TraceRecord): string {
 export function recordText(tx: Translate, record: TraceRecord): string {
   if (record.kind === 'compaction') return compactionText(tx, record);
   const preview = record.preview?.text ? markdownPreviewText(record.preview.text) : '';
+  if (record.kind === 'background' && preview === '') return `${tx('common:activity.background-jobs')} · ${traceStateLabel(tx, record.state)}`;
   const attachments = attachmentSummary(tx, record);
   return attachments === '' ? preview : preview === '' ? attachments : `${attachments} · ${preview}`;
 }

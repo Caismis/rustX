@@ -9,7 +9,7 @@ import { routeWorkspaceHost } from './workspace-host';
 import { closeSettings, connectRemote, openSettingsPage, openWorkspaceSettings } from './shell-actions';
 import { wireProbe } from './wire-probe';
 import { diagnosticCut } from './wire-diagnostics';
-import type { AttachmentTarget, TraceRequestDetail } from '../../../protocol/app-server/v50';
+import type { AttachmentTarget, TraceRequestDetail } from '../../../protocol/app-server/v51';
 
 function immutable(request: TraceRequestDetail) {
   const { usage: _usage, failure: _failure, generation: _generation, ...input } = request;
@@ -33,7 +33,7 @@ test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy gate, exact adoption 
     const trace = async () => (await remote.client.call('session/trace', { target: attachedA.target, limit: 32 }, 'trace')).page;
     const detail = async (record_id: string) => {
       const {page}=await remote.client.call('session/traceDetail',{target:attachedA.target,record_id},'domain_page');
-      const value=await domainOriginalValue<import('../../../protocol/app-server/v50').TraceDetail>(page,{
+      const value=await domainOriginalValue<import('../../../protocol/app-server/v51').TraceDetail>(page,{
         current:()=>!remote.client.closed,
         page:async(previous,offset)=>(await remote.client.call('conversation/checkpointPage',{target:attachedA.target,agent_id:null,cut:previous.read_cut,domain:previous.domain,offset,limit:32},'checkpoint_page')).page,
         value:async(previous,item,offset)=>(await remote.client.call('conversation/checkpointValueRead',{target:attachedA.target,agent_id:null,cut:previous.read_cut,domain:previous.domain,item_offset:Number(item.offset),path:[],offset,max_bytes:65536},'checkpoint_value_chunk')).chunk});
@@ -113,14 +113,8 @@ test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy gate, exact adoption 
     await boundary.click();
     await page.getByRole('tab', { name: 'Diff', exact: true }).click();
     const inspector = page.getByRole('complementary', { name: 'Event details' });
-    const selectedField = inspector.getByRole('combobox', { name: 'Request options JSON' });
-    // Detail admission is asynchronous; wait for its captured original-field
-    // selector before performing either explicit bounded read.
-    await expect(selectedField).toBeVisible();
-    await selectedField.selectOption('effective_system_prompt');
-    await inspector.getByRole('button', { name: 'Read original value', exact: true }).click();
-    await expect(inspector.getByRole('button', { name: 'Read original value', exact: true })).toHaveCount(3);
-    await inspector.getByRole('button', { name: 'Read original value', exact: true }).nth(1).click();
+    await expect(inspector.getByRole('combobox', { name: 'Request options JSON' })).toHaveCount(0);
+    await expect(inspector.getByRole('button', { name: 'Read original value', exact: true })).toHaveCount(0);
     await expect(page.getByRole('complementary', { name: 'Event details' }).getByRole('tabpanel')).toContainText('TRACE_NEW_INSTRUCTIONS');
     await page.screenshot({ path: 'test-results/trajectory-native-adoption.png' });
     passed = true;

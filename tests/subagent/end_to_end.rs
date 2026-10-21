@@ -635,6 +635,8 @@ async fn subagent_process_stack(alias_root: bool) {
     // the tool call committed, the child settled, its answer arrived as an
     // Agent-authored message, and the parent consumed it.
     let mut final_snapshot = None;
+    let mut last_snapshot = None;
+    let mut predicates = (false, false, false);
     for _ in 0..4_000 {
         let snapshot = process.snapshot().await;
         let child_answer = snapshot.messages.iter().any(|message| match message {
@@ -663,10 +665,12 @@ async fn subagent_process_stack(alias_root: bool) {
         let settled = snapshot.agents.iter().any(|subagent| {
             subagent.activation_state == rustx::runtime::subagent::SubagentState::Succeeded
         });
+        predicates = (child_answer, parent_consumed, settled);
         if child_answer && parent_consumed && settled {
             final_snapshot = Some(snapshot);
             break;
         }
+        last_snapshot = Some(snapshot);
         tokio::task::yield_now().await;
     }
     let Some(snapshot) = final_snapshot else {
@@ -675,7 +679,9 @@ async fn subagent_process_stack(alias_root: bool) {
             .collect::<Vec<_>>();
         let (status, stderr) = process.shutdown().await;
         panic!(
-            "the delegation chain must settle (exit: {status:?})\nstderr:\n{stderr}\n\
+            "the delegation chain must settle (exit: {status:?})\n\
+             predicates (child_answer, parent_consumed, succeeded): {predicates:?}\n\
+             last authoritative snapshot: {last_snapshot:#?}\nstderr:\n{stderr}\n\
              requests: {}\n{}",
             bodies.len(),
             bodies.join("\n---\n")

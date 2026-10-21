@@ -1,3 +1,5 @@
+import { selectedCheckpoint } from './shell-actions';
+import { wireProbe } from './wire-probe';
 import { connectRemote } from './shell-actions';
 import { connectionAction, closeSettings, expectSettled } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
@@ -5,10 +7,9 @@ import { test, expect, type Page } from '@playwright/test';
 import { startDogfood } from './dogfood-server';
 import { AppServerHost } from '../../../tui/src/app-server/host';
 
-/** One explicit gesture consumes one bounded native page, not all history. */
+/** Explicit older gestures assemble a reading window from bounded native pages. */
 async function loadOriginalHistory(page: Page) {
   const earlier = page.getByRole('button', { name: 'Load earlier', exact: true });
-  await expect(earlier).toBeVisible();
   for (let step = 0; step < 34; step++) {
     if (await earlier.count() === 0) return;
     const before = await page.locator('[data-chat-anchor-key]').count();
@@ -21,6 +22,7 @@ async function loadOriginalHistory(page: Page) {
 
 test('native history, rich settlement, real image decode/lightbox, reconnect and native upload receipts', async ({ page }) => {
   const fixture = await startDogfood('web_chat_history');
+  const wire = await wireProbe(page);
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.addInitScript(() => {
     const urls = new Set<string>();
@@ -56,20 +58,10 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token);
     await page.locator(`button[data-session-id="${id}"]`).click();
-    await expect(page.getByRole('button', { name: 'Load earlier', exact: true })).toBeVisible();
-    await page.getByRole('button', { name: 'Load earlier', exact: true }).scrollIntoViewIfNeeded();
-    const firstKey = await page.locator('[data-chat-anchor-key]').first().getAttribute('data-chat-anchor-key');
-    const anchor = page.locator(`[data-chat-anchor-key=${JSON.stringify(firstKey)}]`);
-    const anchorTop = await anchor.evaluate(el => el.getBoundingClientRect().top);
-    await expect(page.getByText('Answer 0', { exact: true })).toHaveCount(0);
-    const beforePrepend = await page.locator('[data-chat-anchor-key]').count();
-    await page.getByRole('button', { name: 'Load earlier', exact: true }).click();
-    await expect.poll(() => page.locator('[data-chat-anchor-key]').count()).toBeGreaterThan(beforePrepend);
-    // Row insertion commits before ChatViewport's animation-frame restoration.
-    // Check this prepend before the next click deliberately scrolls to its button.
-    await expect.poll(async () => Math.abs(await anchor.evaluate(el => el.getBoundingClientRect().top) - anchorTop)).toBeLessThan(2);
+    // The initial DSH reading window covers this short conversation, even
+    // though its native transcript needs more than one bounded wire page.
+    await expect(page.getByText('Answer 0', { exact: true })).toBeAttached();
     await loadOriginalHistory(page);
-    await expect(page.getByText('Answer 0', { exact: true })).toHaveCount(1);
     await expect(page.getByRole('button', { name: 'Load earlier', exact: true })).toHaveCount(0);
     // Historical tails retain native identity after paging; pointer reveal also
     // exposes equivalent keyboard controls without a permanent wide toolbar.
@@ -101,15 +93,16 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     // Compact summaries can fit the whole first page without scrolling. Load
     // one more page to establish a real scrolling viewport before asserting
     // prepend anchoring (a short viewport necessarily clamps scrollTop to 0).
-    await trajectory.getByRole('region', { name: 'Trajectory timeline' }).getByRole('button', { name: 'Load earlier history', exact: true }).click();
+    const olderTrace = trajectory.getByRole('region', { name: 'Trajectory timeline' }).getByRole('button', { name: 'Load earlier history', exact: true });
+    if (await ledger.evaluate(el => el.scrollHeight - el.clientHeight <= 200) && await olderTrace.count()) await olderTrace.click();
     await expect.poll(() => ledger.evaluate(el => el.scrollHeight - el.clientHeight)).toBeGreaterThan(200);
     await ledger.evaluate(el => { el.scrollTop = 100; el.dispatchEvent(new Event('scroll')); });
     const traceAnchorId = await ledger.evaluate(el => Array.from(el.querySelectorAll<HTMLElement>('[data-request-owner]')).find(marker => marker.getBoundingClientRect().top >= el.getBoundingClientRect().top)!.dataset.requestOwner!);
     const traceAnchor = trajectory.locator(`[data-request-owner="${traceAnchorId}"]`);
     const traceAnchorTop = await traceAnchor.evaluate(el => el.getBoundingClientRect().top);
-    for (let pageNumber = 0; pageNumber < 4; pageNumber++) {
+    for (let pageNumber = 0; pageNumber < 4 && await olderTrace.count(); pageNumber++) {
       const before = Number(await ledger.getAttribute('aria-rowcount'));
-      await trajectory.getByRole('region', { name: 'Trajectory timeline' }).getByRole('button', { name: 'Load earlier history', exact: true }).click();
+      await olderTrace.click();
       await expect.poll(async () => Number(await ledger.getAttribute('aria-rowcount'))).toBeGreaterThan(before);
     }
     const capacity = await ledger.evaluate(el => Math.ceil(el.clientHeight / 10) + 2 * 12 + 1);
@@ -148,16 +141,20 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await loadOriginalHistory(page);
     await expect(page.getByText('Answer 0', { exact: true })).toHaveCount(1);
     await expect(page.getByLabel('Session status')).toHaveCount(0);
-    await expect(page.getByRole('status').filter({ hasText: 'Reading a history window.' })).toBeVisible();
+    await expect(page.getByRole('status').filter({ hasText: 'Reading a history window.' })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
 
     await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
+    // Reconnection first exposes a short native head. Wait for initial history
+    // assembly to create a real reading range before testing detached intent.
+    await expect.poll(() => ledger.evaluate(el => el.scrollHeight - el.clientHeight)).toBeGreaterThan(200);
     await expect.poll(() => ledger.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(2);
     await expect(trajectory.locator('[data-request-owner][data-state="running"]').first()).toBeVisible();
     // A reader away from the tail owns their position while live repair runs.
     await ledger.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
     await connectionAction(page, 'Reconnect');
     await expect(page.getByLabel('Transport token')).toHaveCount(0);
+    await expect.poll(() => ledger.evaluate(el => el.scrollHeight - el.clientHeight)).toBeGreaterThan(200);
     await ledger.evaluate(el => { el.scrollTop = el.scrollHeight; el.dispatchEvent(new Event('scroll')); });
     await expect(trajectory.locator('[data-request-owner][data-state="running"]').first()).toBeVisible();
     await ledger.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
@@ -194,10 +191,9 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     const load = canonical.getByRole('button', { name: 'Load attachment' });
     // Text-only continuation keeps a useful artifact reference while durable
     // image content remains available to the managed preview.
-    await expectSettled(page);
-    await expect(page.getByLabel('Native diagnostic JSON')).toContainText('completed');
-    await page.getByRole('button', { name: 'Close Inspector' }).click();
     await expect(canonical.locator('[data-tool-call-id="chat-image"]')).toHaveCount(1);
+    await expectSettled(page, wire);
+    expect((await selectedCheckpoint(page, wire)).snapshot.attempt?.phase).toMatchObject({ type: 'settled', outcome: { type: 'completed' } });
     const expandImage = async () => {
       // A settled Turn is first drawn from its canonical head, its process
       // shown directly without a disclosure; the durable transcript entry then
@@ -220,7 +216,7 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await expandImage();
     await expect(load).toHaveCount(1);
     const decode = async () => {
-      await load.click();
+      if (await load.count()) await load.click();
       const image = canonical.locator('img');
       await expect(image).toBeVisible();
       await expect.poll(() => image.evaluate((node: HTMLImageElement) => node.complete && node.naturalWidth > 0 && node.naturalHeight > 0)).toBe(true);
@@ -232,11 +228,15 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     };
     await decode();
     expect(await urlCount()).toBe(1);
+    const previousImageUrl = await canonical.locator('img').getAttribute('src');
     await connectionAction(page, 'Reconnect');
     await expect(page.getByLabel('Transport token')).toHaveCount(0);
     await expandImage();
-    await expect(load).toHaveCount(1);
-    expect(await urlCount()).toBe(0);
+    // The hydrated history retains this component and its explicit load intent.
+    // Reconnection still replaces its byte lease and reads under fresh authority.
+    await expect(load).toHaveCount(0);
+    await expect(canonical.locator('img')).not.toHaveAttribute('src', previousImageUrl!);
+    await expect.poll(urlCount).toBe(1);
     await decode();
     expect(await urlCount()).toBe(1);
     await canonical.getByRole('button', { name: /^Preview / }).click();
@@ -259,35 +259,33 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     // identity, not human-facing Inspector labels.
     await expect(inspector).toContainText('render_image');
     await expect(inspector.getByRole('button', { name: 'Preview artifact_1', exact: true })).toBeVisible();
-    // Each original Tool field remains explicitly selected at the returned
-    // head cut. No whole detail or current Tool registry supplies these bytes.
+    // The actual canonical Assistant goes through the same Harness preview as the reference fixtures.
+    const originalAssistant=inspector.getByRole('button',{name:'Assistant Message',exact:true});
+    await expect(originalAssistant).toBeVisible();await originalAssistant.click();
+    await expect(inspector.getByRole('combobox')).toHaveCount(0);
+    const originalCall=inspector.getByRole('button',{name:/render_image/});
+    await expect(originalCall).toBeVisible();
+    await page.screenshot({path:'/tmp/rustx-dsh-native-assistant.png',fullPage:true});
+    await originalCall.click();
+    await expect(inspector).toContainText('render_image');
+    // Opening the normal detail tab owns automatic bounded reads at its retained cut.
     await inspector.getByRole('tab', { name: 'Payload', exact: true }).click();
     let selectedField = inspector.getByRole('tabpanel');
-    await selectedField.getByRole('button', { name: /^Read content/ }).click();
-    await expect(selectedField.locator('pre').last()).toHaveText('{}');
+    // Empty trees have no rows; their visible braces belong to the surrounding JSON view.
+    await expect(selectedField.getByRole('tree',{name:'Payload JSON'})).toBeAttached();
+    await expect(selectedField).toHaveText(/^\{\s*\}$/);
     await inspector.getByRole('tab', { name: 'Result', exact: true }).click();
     selectedField = inspector.getByRole('tabpanel');
-    await selectedField.getByRole('button', { name: /^Read content/ }).click();
-    await expect(selectedField.locator('pre').last()).toContainText('"tool_call_id":"chat-image"');
-    await expect(selectedField.locator('pre').last()).toContainText('"artifacts":[]');
-    await expect(selectedField.locator('pre').last()).toContainText('"type":"success"');
-    const resultCollections = selectedField.getByRole('combobox', { name: 'Collection', exact: true });
-    const resultDomains = await resultCollections.locator('option').evaluateAll(options => options.map(option => (option as HTMLOptionElement).value).filter(value => /^messages\.ledger:[1-9][0-9]*\.blocks$/.test(value)));
-    expect(resultDomains).toHaveLength(1);
-    await resultCollections.selectOption(resultDomains[0]!);
-    await selectedField.getByRole('button', { name: 'Read first page', exact: true }).click();
-    await expect(selectedField.locator('pre').last()).toContainText('"artifact_id":"artifact_1"');
-    // The image is original Tool content, separate from ResultMetadata.artifacts.
-    const blockSources = selectedField.getByRole('combobox', { name: 'Read original value', exact: true });
-    const binary = await blockSources.locator('option').evaluateAll(options => options.filter(option => option.textContent?.includes('binary_bytes')).map(option => (option as HTMLOptionElement).value));
-    expect(binary).toHaveLength(1);
-    await blockSources.selectOption(binary[0]!);
-    await selectedField.getByRole('button', { name: /^Read content/ }).click();
-    await expect(selectedField.locator('pre').last()).toContainText('iVBORw0KGgo');
+    await expect(selectedField.getByRole('button',{name:'Preview artifact_1',exact:true})).toBeVisible();
+    await expect(selectedField).not.toContainText('tool_call_id');
+    await expect(selectedField).not.toContainText('iVBORw0KGgo');
+    await expect(selectedField.getByRole('combobox', { name: 'Collection', exact: true })).toHaveCount(0);
     await inspector.getByRole('tab', { name: 'Schema', exact: true }).click();
     selectedField = inspector.getByRole('tabpanel');
-    await selectedField.getByRole('button', { name: 'Read original value', exact: true }).click();
-    await expect(selectedField.locator('pre').last()).toContainText('"name":"render_image"');
+    await expect(selectedField.getByRole('heading',{name:'render_image',exact:true})).toBeVisible();
+    await expect(selectedField.getByRole('tree',{name:'render_image parameters JSON'})).toBeVisible();
+    await expect(page.getByRole('button', { name: /Read content|Read original value|Read next chunk|Read first page/ })).toHaveCount(0);
+    await expect(page.getByText('Content deferred', { exact: true })).toHaveCount(0);
     await page.screenshot({ path: 'test-results/trajectory-inspector.png', fullPage: true });
     await connectionAction(page, 'Reconnect');
     await expect(page.getByLabel('Transport token')).toHaveCount(0);

@@ -3,7 +3,7 @@ import {canonicalLocatorKey} from '../../../../protocol/app-server/content-ident
 import { traceStateLabel } from '../../bindings/status-labels';
 import type { Translate } from '../../locale/translation';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/layout.ts; see PROVENANCE.md. */
-import type { TraceContextKind, TraceContextPresentation, TraceRecord } from '../../../../protocol/app-server/v50';
+import type { TraceContextKind, TraceContextPresentation, TraceRecord } from '../../../../protocol/app-server/v51';
 
 /** The Harness detail tab identities. Labels follow the locale; ids never do. */
 export type TrajectoryFacet = 'overview' | 'rendered' | 'raw' | 'source' | 'input' | 'output' | 'schema' | 'timing' | 'options' | 'usage' | 'system-prompt' | 'tools' | 'diff';
@@ -48,6 +48,14 @@ export interface CallsSummaryItem { type: 'CallsSummary'; display_key: string; o
 export type TrajectoryDisplayItem = InspectableDisplayItem | StructuralDisplayItem | CallsSummaryItem | { type: 'HistoryBoundary'; display_key: string; cursor: string };
 export function isInspectable(item: TrajectoryDisplayItem): item is InspectableDisplayItem {
   return item.type !== 'HistoryBoundary' && item.type !== 'GroupHeader' && item.type !== 'TurnHeader' && item.type !== 'CallsSummary';
+}
+/** Compaction checkpoints and reused conversation material are between Turns.
+ * Missing execution ownership alone does not give native activities that label. */
+export function isBetweenTurnsItem(item: InspectableDisplayItem): boolean {
+  if (item.record.kind === 'compaction') return true;
+  if (traceAttemptKey(item.record.location) != null) return false;
+  return item.type === 'ContextRow' || item.type === 'RecordRow'
+    && ['user', 'assistant', 'context'].includes(item.record.kind);
 }
 export const displayKey = (...parts: (string | number | null | undefined)[]) => JSON.stringify(parts);
 /** The only visible names of these closed domains. The native context kind and
@@ -122,7 +130,7 @@ function cellsOf(tx: Translate, record: TraceRecord): InspectableDisplayItem[] {
   for (const context of request.context_additions) {
     cells.push({ ...origin(record, 'context', contextKindLabel(tx, context.context_kind), context.preview?.text ?? tx('trajectory:trajectory-inspector.content-unavailable'), 'overview', record.id, canonicalLocatorKey(context.locator)), type: 'ContextRow', context, context_message_id: context.message_id??undefined });
   }
-  cells.push({ ...origin(record, 'request-boundary', tx('trajectory:copy.request'), request.model??tx('common:activity.content-deferred'), 'overview', record.id), type: 'RequestBoundary' });
+  cells.push({ ...origin(record, 'request-boundary', tx('trajectory:copy.request'), request.model??tx('common:activity.loading'), 'overview', record.id), type: 'RequestBoundary' });
   return cells;
 }
 
@@ -135,10 +143,10 @@ export function projectTrajectory(tx: Translate, records: readonly TraceRecord[]
   const turns = new Map<string, TrajectoryTurnModel>();
   const groups = new Map<string, TrajectoryGroupModel>();
   for (const record of records) {
-    // Questions and approvals are already represented by their Tool execution.
-    // Keep interaction lifecycle audits in Trace, not as duplicate trajectory
-    // rows or timeline spans (including when the owning Tool is on another page).
-    if (record.kind === 'interaction') continue;
+    // Harness shows Agent interactions as Tool calls and delivered Context.
+    // Native activation and interaction lifecycle audits remain in Trace, not
+    // as duplicate rows, spans or empty Turns when their Tool is on another page.
+    if (record.kind === 'interaction' || record.kind === 'subagent') continue;
     const attempt = traceAttemptKey(record.location), step = traceStepKey(record.location);
     if (attempt == null) {
       sections.push({ kind: 'outside', record, cells: cellsOf(tx, record) });
@@ -195,7 +203,7 @@ export function trajectoryItems(tx: Translate, projection: TrajectoryProjection,
 
 /** Never correlate incomplete scope, or ambiguous proposals. Session/Conversation
  * isolation is supplied by the native Trace cache, not reconstructed from IDs. */
-function callScope(record:TraceRecord,call:{occurrence?:import('../../../../protocol/app-server/v50').RuntimeClientToolOccurrence|null}):string|undefined {
+function callScope(record:TraceRecord,call:{occurrence?:import('../../../../protocol/app-server/v51').RuntimeClientToolOccurrence|null}):string|undefined {
  const owner=traceAttemptKey(record.location),step=traceStepKey(record.location);
  if(owner==null||step==null||!call.occurrence)return;
  return displayKey(owner,step,traceOccurrenceKey(call.occurrence));
@@ -295,6 +303,8 @@ export interface TrajectoryLedgerRow {
    * request-boundary runs: consecutive dots step right instead of stacking. */
   requestRun?: number;
   turnStart: boolean;
+  /** Presentation of unscoped history and checkpoint summaries, never execution ownership. */
+  betweenTurns?: boolean;
   summary?: string;
   /** The Assistant record whose folded Tool calls a summary row expands. */
   callsOwner?: string;
@@ -336,7 +346,7 @@ export function ledgerRows(tx: Translate, projection: TrajectoryProjection, item
     if (!isInspectable(item)) return [];
     if (item.type === 'RequestBoundary' && !markerSeats.has(item.display_key)) return [];
     return [{ display_key: item.type === 'RequestBoundary' ? displayKey('marker-seat', item.display_key) : item.display_key, kind: item.type === 'RequestBoundary' ? 'marker' : 'semantic', height: item.type === 'RequestBoundary' ? 10 : 30,
-      item, turn: turnOf(item.record), request: hosts.get(item.display_key), turnStart: false }];
+      item, betweenTurns: isBetweenTurnsItem(item), turn: turnOf(item.record), request: hosts.get(item.display_key), turnStart: false }];
   });
   const ownerOf = (row: TrajectoryLedgerRow) => row.item?.owner_record_id ?? row.callsOwner;
   const rows = seats.filter(row => row.kind === 'history');
@@ -353,7 +363,7 @@ export function ledgerRows(tx: Translate, projection: TrajectoryProjection, item
     const owned = seats.filter(row => row.turn === turn);
     // As in Harness, a Turn folds only when it has more than one content row;
     // its System cells and first content row stay visible above the summary.
-    const content = owned.filter(row => row.kind === 'semantic' && row.item?.type !== 'SystemPromptCell');
+    const content = owned.filter(row => row.kind === 'semantic' && row.item?.type !== 'SystemPromptCell' && !row.betweenTurns);
     const collapsed = !searching && folded.has(turn.ownerKey) && content.length > 1;
     const main = content[0];
     // Promotion changes presentation only; the native Request/Step stays intact.
@@ -365,7 +375,7 @@ export function ledgerRows(tx: Translate, projection: TrajectoryProjection, item
       // Attempt's message group; neither creates a synthetic Step.
       const members = new Set(group.records.map(record => record.id));
       const segment = owned.filter(row => members.has(ownerOf(row) ?? '') && !isInitial(row)
-        && (!collapsed || row.item?.type === 'SystemPromptCell' || row === main));
+        && (!collapsed || row.item?.type === 'SystemPromptCell' || row.betweenTurns || row === main));
       // As in Harness, a Step has no chrome of its own: a Step with no visible
       // content has no seat, and a folded Turn counts Steps in its summary.
       body.push(...segment);
@@ -378,9 +388,10 @@ export function ledgerRows(tx: Translate, projection: TrajectoryProjection, item
           tx(calls === 1 ? 'trajectory:summary.tool-calls.one' : 'trajectory:summary.tool-calls.other', { count: calls })].join(' · ') });
     }
     if (!body.length) body.push({ display_key: displayKey('structure-marker', turn.ownerKey), kind: 'structure', height: 20, turn, turnStart: false });
-    body[0]!.turnStart = true;
+    const firstTurnRow = body.find(row => !row.betweenTurns);
+    if (firstTurnRow) firstTurnRow.turnStart = true;
     // A tiny Request seat cannot carry the Turn label.
-    if (body[0]!.kind === 'marker') { body[0]!.kind = 'structure'; body[0]!.height = 20; }
+    if (firstTurnRow?.kind === 'marker') { firstTurnRow.kind = 'structure'; firstTurnRow.height = 20; }
     rows.push(...body);
   }
   let run = 0;

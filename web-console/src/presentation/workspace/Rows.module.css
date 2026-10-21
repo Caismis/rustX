@@ -397,3 +397,39 @@ button.chevron { border: 0; padding: 0; background: transparent; color: inherit;
 
 .projectRow:focus-within .chevron { display: inline-flex; }
 .projectRow:focus-within .folder, .sessionRow:focus-within .time { display: none; }
+
+/* DSH resting marker occupies the rightmost hover pin button's cell. */
+.pinIndicator {
+  display: inline-flex;
+  flex: none;
+  width: 16px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  margin-left: 6px;
+  color: var(--dsw-alias-label-tertiary);
+}
+.sessionRow:hover .pinIndicator,
+.sessionRow.menuOpen .pinIndicator,
+.sessionRow:focus-within .pinIndicator { display: none; }
+.sessionRow:focus-within .time { display: none; }
+@media (hover: none) {
+  .sessionRow .rowActions { display: inline-flex; }
+  .sessionRow .time, .sessionRow .pinIndicator { display: none; }
+}
+
+/* Current DSH workspace menu geometry, scoped to Session actions. */
+.sessionMenu[role='menu'] {
+  --menu-min-width: 144px;
+  border-radius: var(--dsw-radius-lg);
+}
+.sessionMenu [role='menuitem'] {
+  min-height: 34px;
+  padding: 6px 8px;
+  gap: 6px;
+  font-size: 13px;
+  line-height: 20px;
+  border-radius: var(--dsw-radius-md);
+}
+.sessionMenu [role='menuitem'] > span:first-child,
+.sessionMenu [role='menuitem'] > span:first-child svg { width: 14px; height: 14px; }

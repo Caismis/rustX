@@ -44,8 +44,8 @@ export function QuestionRow({ row, inspect }: { row: QuestionRowView; inspect?: 
           </dl> : <div className={card.card}>
             <p className={card.verdict}>{tx(`tools:ask.${row.verdict}-detail`)}</p>
             <ul className={card.questionList}>{row.questions.map((question, index) => <li className={card.unansweredQuestion} key={index}>{question}</li>)}</ul>
-            {inspect && <ToolInspectionButton inspect={inspect}/>}
         </div>}
+          {inspect && <ToolInspectionButton inspect={inspect}/>}
         </div>}
       </DisclosureRow>
     </div>

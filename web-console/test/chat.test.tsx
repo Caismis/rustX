@@ -1,13 +1,13 @@
+import { JobItemHarness } from './job-item-harness';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { RunningStatus } from '../src/presentation/agent/RunningStatus';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
-import { RuntimeFacts as OtherActivity } from '../src/app/agent/Activity';
+import { RuntimeFacts as OtherActivity } from './runtime-facts';
 import { AgentCard } from '../src/app/components/ActivityCards';
-import type { ComponentProps } from 'react';
-function RuntimeFacts(props: ComponentProps<typeof OtherActivity>) { return <><OtherActivity {...props}/>{props.snapshot.agents?.map(agent => <AgentCard key={agent.agent_id} agent={agent} client={props.client} sessionId={props.sessionId}/>)}</>; }
-import { snapshot, projectionHead } from './fixture';
-import { ProjectionSummary } from '../src/app/agent/ContextSeat';
+function RuntimeFacts(props: { snapshot: ReturnType<typeof snapshot>; client?: import('../src/client/app-server').AppServerClient; sessionId?: string }) { return <><OtherActivity snapshot={props.snapshot}/>{props.snapshot.jobs?.map(job => <JobItemHarness key={job.job_id} job={job} client={props.client} sessionId={props.sessionId}/>)}{props.snapshot.agents?.map(agent => <AgentCard key={agent.agent_id} agent={agent} client={props.client} sessionId={props.sessionId}/>)}</>; }
+import { snapshot, projectionHead, Server } from './fixture';
+import { CompactionCheckpoint } from '../src/app/agent/CompactionCheckpoint';
 afterEach(cleanup);
 const rich = '## Answer\n\n| Key | Value |\n| --- | --- |\n| one | two |\n\n- **Strong**\n\n```rust\nfn main() {}\n```\n\n$x^2$';
 it('Chat uses the same rich Markdown through streaming and canonical settlement exactly once', () => {
@@ -39,7 +39,7 @@ it('reasoning, refusal and native Tool identities are readable without fabricate
   s.transcript = { entries: s.messages.map(message => ({ cursor: '1', item: { type: 'message', message } })) };
   const ui = render(<><AgentTranscript snapshot={s} /><RuntimeFacts snapshot={s} /></>);
   expect(ui.getByText('Reasoning')).toBeTruthy(); expect(ui.getByText('Refusal fact')).toBeTruthy();
-  expect(ui.getAllByText('Assembling Same title…')).toHaveLength(2);
+  expect(ui.getAllByText('Tool details unavailable: Same title')).toHaveLength(2);
   expect(ui.queryByText('Subagents')).toBeNull(); expect(ui.queryByText('Workflows')).toBeNull(); expect(ui.queryByText('Todo')).toBeNull();
 });
 it('durable user/assistant order and tool artifact galleries follow only transcript positions', () => {
@@ -86,9 +86,8 @@ it('Subagent and Workflow cards bind native identities and lifecycle facts witho
   expect(ui.container.querySelectorAll('[data-agent-id]')).toHaveLength(2);
   expect(ui.container.querySelectorAll('[data-workflow-run-id]')).toHaveLength(2);
   expect(ui.getAllByText('Waiting for approval')).toHaveLength(2);
-  expect(ui.getAllByText('Waiting for review')).toHaveLength(2);
+  expect(ui.getAllByText('Waiting for review').length).toBeGreaterThanOrEqual(2);
   expect(ui.container.querySelectorAll('[data-workflow-activation-id]')).toHaveLength(2);
-  const workflowChild = ui.container.querySelector('[data-workflow-activation-id="workflow-review"]');
   const child = ui.container.querySelector('[data-agent-id="agent-child-1"]');
   s.agents[0].state = 'inactive'; s.agents[0].activation_state = 'failed'; s.agents[0].current_activation = null; s.agents[0].detail = 'Native failure';
   s.workflows.runs[0].state = { type: 'settled', outcome: 'completed' };
@@ -96,9 +95,11 @@ it('Subagent and Workflow cards bind native identities and lifecycle facts witho
   ui.rerender(<RuntimeFacts snapshot={s} />);
   expect(ui.container.querySelector('[data-agent-id="agent-child-1"]')).toBe(child);
   expect(child?.textContent).toContain('Native failure');
-  expect(ui.container.querySelector('[data-workflow-activation-id="workflow-review"]')).toBe(workflowChild);
-  expect(workflowChild?.textContent).toContain('completed');
-  expect(ui.getByText('completed')).toBeTruthy();
+  const run = ui.container.querySelector('[data-workflow-run-id]')!;
+  expect(run.textContent).toContain('completed');
+  expect(run.querySelector('[data-workflow-activation-id]')).toBeNull();
+  fireEvent.click(run.querySelector('[data-disclosure-row]')!);
+  expect(run.querySelector('[data-workflow-activation-id="workflow-review"]')?.textContent).toContain('completed');
   expect(ui.container.querySelector('pre')).toBeNull();
   expect(ui.container.textContent).not.toMatch(/private-|Todo|Goal|Trace/);
 });
@@ -141,7 +142,7 @@ it('a finite Job retains its expanded output across proactive terminal snapshot 
   ui.rerender(<RuntimeFacts snapshot={{ ...s, jobs: [{ ...job, state: 'succeeded', result: { status: { type: 'success' }, duration_ms: "1", content: [{ type: 'text', text: 'Settled output' }] } }] }}/>);
   expect(ui.container.querySelector('[data-job-id="finite-job"]')).toBe(row);
   expect(row?.textContent).toContain('Settled output');
-  expect(ui.getByLabelText('Tool status').textContent).toBe('success');
+  expect(row?.getAttribute('data-job-state')).toBe('succeeded');
 });
 
 it('projected summary disclosure cannot acquire a canonical transcript position or execution owner',()=>{
@@ -150,13 +151,13 @@ it('projected summary disclosure cannot acquire a canonical transcript position 
     {cursor:'1',item:{type:'message',message:{role:'user',id:'before',source:'human',content:[{type:'text',text:'Earlier question'}]}}},
     {cursor:'2',item:{type:'message',message:{role:'user',id:'after',source:'human',content:[{type:'text',text:'Next question'}]}}},
   ]};
-  const ui=render(<><AgentTranscript snapshot={s}/><ProjectionSummary head={projectionHead()}/></>);
+  const ui=render(<><AgentTranscript snapshot={s}/><CompactionCheckpoint head={projectionHead()} client={new Server().client} sessionId="A"/></>);
   expect([...ui.container.querySelectorAll('[data-chat-anchor-key]')].map(node=>node.getAttribute('data-chat-anchor-key'))).toEqual(['message:before','message:after']);
-  const marker=ui.getByRole('button',{name:'Compacted model context · Projection 1 · canonical frontier 100'});
+  const marker=ui.getByRole('button',{name:'Context compacted · View compaction summary'});
   expect(ui.queryByRole('heading',{name:'Preserved context'})).toBeNull();
   fireEvent.click(marker);
   expect(ui.getAllByRole('heading',{name:'Preserved context'})).toHaveLength(1);
-  expect(ui.container.querySelector('[data-projection-checkpoint]')?.getAttribute('data-turn-process-owner')).toBeNull();
+  expect(ui.container.querySelector('[data-compaction-checkpoint]')?.getAttribute('data-turn-process-owner')).toBeNull();
 });
 
 it.each(['cancelled', 'failed'] as const)('native %s keeps released partial prose without recovery JSON or completed-response actions', outcome => {

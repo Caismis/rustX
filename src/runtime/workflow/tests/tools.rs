@@ -210,6 +210,37 @@ fn context_with_registration(
 }
 
 #[tokio::test]
+async fn native_view_contains_only_the_selected_path_in_start_order() {
+    for passed in [true, false] {
+        let plane = workflow_test_plane(1);
+        let runtime = workflow_runtime(&plane);
+        let context = context(
+            &plane,
+            Probe::new(ToolExecutionStatus::Success),
+            crate::agent::AttemptLifecycle::default(),
+        );
+        let (_, cancellation) = workflow_cancellation();
+        runtime
+            .run_test_foreground(
+                program(),
+                ToolCallId::new("ordered-path"),
+                context,
+                json!({"passed": passed}),
+                cancellation,
+            )
+            .await
+            .unwrap();
+        let native = runtime.read_model.snapshot();
+        let path: Vec<_> = native.runs[0]
+            .instances
+            .iter()
+            .filter_map(|row| row.node.as_deref())
+            .collect();
+        assert_eq!(path, ["check", "branch", if passed { "yes" } else { "no" }]);
+    }
+}
+
+#[tokio::test]
 async fn goal84_workflow_completion_and_goal_completion_are_independent() {
     let plane = workflow_test_plane(1);
     let domain = crate::goal::GoalDomain::new(plane.store.clone());

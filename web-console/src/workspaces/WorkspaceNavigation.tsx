@@ -1,7 +1,7 @@
 import type { Translate } from '../locale/translation';
 import { useTranslation } from '../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from ui-workspace browser/rows/picker; see PROVENANCE.md. */
-import { useState, useRef, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, useRef, useSyncExternalStore, type ReactNode } from 'react';
 import type { AppServerClient, ClientView } from '../client/app-server';
 import { useClientSelector, sameValue, type ShellView } from '../client/selectors';
 import { sessionDisplayTitle } from '../bindings/session-title';
@@ -14,6 +14,11 @@ import { WorkspaceBrowser } from '../presentation/workspace/WorkspaceBrowser';
 import type { DraftConversation, SessionNode, GroupNode } from '../presentation/workspace/types';
 import { sameEndpoint } from './endpoint';
 import { WorkspaceHostError, type ProductHostWorkspaces, type WorkspaceCatalog } from './host';
+import { SessionPins } from './session-pins';
+import { RenameSession } from './RenameSession';
+import { writeClipboard } from '../presentation/primitives/clipboard';
+import { Toast } from '../presentation/primitives/Toast';
+import { IconCheckOutline16, IconWarningOutline16 } from '../presentation/primitives/icons';
 import type { WorkspaceAssociations, WorkspaceMutation } from './associations';
 
 
@@ -41,8 +46,13 @@ export function WorkspaceNavigation({ associations, host, client, state, endpoin
   const catalog = associationState.catalog;
   const [query, setQuery] = useState(''), [offset, setOffset] = useState(0);
   const [error, setError] = useState(''), [busy, setBusy] = useState(false);
-  const [dialog, setDialog] = useState<{ kind: 'session'; id: string; name: string }
-    | { kind: 'workspace' | 'remove' | 'add'; id: string; name: string; mutation: WorkspaceMutation; catalog: WorkspaceCatalog }>();
+  const [renaming, setRenaming] = useState<{ id: string; title: string }>();
+  const [toast, setToast] = useState<{ sequence: number; copied: boolean }>();
+  const pinScope = JSON.stringify([state.endpoint, state.authorityId]);
+  const pins = useMemo(() => { let storage: Storage | undefined; try { storage = globalThis.localStorage; } catch {} return new SessionPins(pinScope, storage); }, [pinScope]);
+  const pinned = useSyncExternalStore(pins.subscribe, pins.getSnapshot);
+  useEffect(() => client.subscribeSessionDeletion(id => pins.remove(id)), [client, pins]);
+  const [dialog, setDialog] = useState<{ kind: 'workspace' | 'remove' | 'add'; id: string; name: string; mutation: WorkspaceMutation; catalog: WorkspaceCatalog }>();
   const [name, setName] = useState('');
   const connected = state.connection === 'connected';
   const route = state.endpoint ?? endpoint;
@@ -60,7 +70,7 @@ export function WorkspaceNavigation({ associations, host, client, state, endpoin
   };
   const edit = (kind: 'workspace' | 'session' | 'remove' | 'add', id: string, title: string) => {
     setError(''); setName(title);
-    if (kind === 'session') { setDialog({ kind, id, name: title }); return; }
+    if (kind === 'session') { setRenaming({ id, title }); return; }
     const mutation = catalog ? associations.captureMutation(catalog) : undefined;
     if (!mutation || !catalog) { setError(String(new WorkspaceHostError('Workspace Host authority replaced', 'authority_replaced'))); return; }
     setDialog({ kind, id, name: title, mutation, catalog });
@@ -78,14 +88,16 @@ export function WorkspaceNavigation({ associations, host, client, state, endpoin
     catch (cause) { setError(String(cause)); }
     finally { setBusy(false); }
   };
-  const rows = state.sessions.map(session => {
+  const rank = new Map(pinned.map((id, index) => [id, index]));
+  const sessions = [...state.sessions].sort((a, b) => (rank.get(a.id) ?? pinned.length) - (rank.get(b.id) ?? pinned.length));
+  const rows = sessions.map(session => {
     const entry = associationState.entries.get(session.id);
     return { session, group: entry?.cwd === session.cwd ? entry.confirmed?.workspaceId : undefined };
   });
   const status = associationState.status;
 
   const toNode = (session: typeof state.sessions[number]): SessionNode => {
-    return { id: session.id, title: sessionDisplayTitle(tx, session), viewOpen: openViews.includes(session.id),
+    return { id: session.id, title: sessionDisplayTitle(tx, session), viewOpen: openViews.includes(session.id), pinned: pinned.includes(session.id),
       running: false, runningSubagentCount: 0, updatedAt: Date.parse(session.updated_at) || 0 };
 
   };
@@ -94,21 +106,22 @@ export function WorkspaceNavigation({ associations, host, client, state, endpoin
     containsCurrent: row.id === workspace,
     sessionCount: rows.filter(item => item.group === row.id).length, sessions: rows.filter(item => item.group === row.id).map(item => toNode(item.session)) }));
   return <>
-    <WorkspaceBrowser draft={bound && !selected && catalog?.workspaces.some(row => row.id === draft?.workspaceId) ? draft : undefined} renderSession={(node, render) => <LiveSessionNode key={node.id} client={client} node={node}>{render}</LiveSessionNode>} wide={wide} expand={expand} groups={groupNodes} sessions={state.sessions.map(toNode)} selected={selected} closeView={closeView} closeAllViews={openViews.length ? closeAllViews : undefined}
-      unclassified={state.sessions.filter(session => { const entry = associationState.entries.get(session.id); return !entry || entry.cwd !== session.cwd || (!entry.confirmed && entry.status !== 'revoked'); }).map(session => session.id)} query={query} search={text => connected && search(text)} open={id => connected && openSession(id)} rename={id => edit('session', id, state.sessions.find(session => session.id === id)?.name ?? '')} fork={forkSession} remove={deleteSession}
+    <WorkspaceBrowser draft={bound && !selected && catalog?.workspaces.some(row => row.id === draft?.workspaceId) ? draft : undefined} renderSession={(node, render) => <LiveSessionNode key={node.id} client={client} node={node}>{render}</LiveSessionNode>} wide={wide} expand={expand} groups={groupNodes} sessions={sessions.map(toNode)} selected={selected} closeView={closeView} closeAllViews={openViews.length ? closeAllViews : undefined}
+      unclassified={state.sessions.filter(session => { const entry = associationState.entries.get(session.id); return !entry || entry.cwd !== session.cwd || (!entry.confirmed && entry.status !== 'revoked'); }).map(session => session.id)} query={query} search={text => connected && search(text)} open={id => connected && openSession(id)} rename={id => edit('session', id, state.sessions.find(session => session.id === id)?.name ?? state.sessions.find(session => session.id === id)?.preview ?? '')} pin={id => pins.toggle(id)} copyId={id => { const generation = client.getSnapshot().generation; void writeClipboard(id).then(copied => { if (generation === client.getSnapshot().generation) setToast(previous => ({ sequence: (previous?.sequence ?? 0) + 1, copied })); }); }} fork={forkSession} remove={deleteSession}
       workspaceSettings={workspaceSettings} selectWorkspace={selectWorkspace} create={id => connected && createSession(id)} renameWorkspace={(id, title) => edit('workspace', id, title)} removeWorkspace={(id, title) => edit('remove', id, title)}
       addWorkspace={catalog?.picker.kind === 'configured' && bound ? () => edit('add', '', '') : undefined}
       refresh={() => { associations.refresh(); search(query, offset); }} previous={connected && offset > 0 ? () => search(query, Math.max(0, offset - 32)) : undefined}
       next={connected && state.nextOffset != null ? () => search(query, state.nextOffset!) : undefined}
       notices={<>{status && status !== 'ready' && <p role="status">{tx(status === 'disconnected' ? 'workspace:association.disconnected' : status === 'unavailable' ? 'workspace:association.unavailable' : 'workspace:association.refreshing')}</p>}{!dialog && error && <p role="alert">{error}</p>}{catalog && !bound && <p role="status">{tx('workspace:workspace-navigation.this-workspace-host-belongs-to')}{' '}{catalog.endpoint}.</p>}</>} />
-    {dialog && <Modal closeLabel={tx('workspace:workspace-navigation.close-dialog')} open title={dialog.kind === 'add' ? tx('workspace:workspace-navigation.add-workspace') : dialog.kind === 'remove' ? tx('workspace:workspace-navigation.unregister-value', { p0: dialog.name }) : tx(dialog.kind === 'workspace' ? 'workspace:rename.workspace' : 'workspace:rename.session')} onClose={() => { if (!busy) setDialog(undefined); }}>
+    {renaming && <RenameSession key={renaming.id} client={client} id={renaming.id} title={renaming.title} close={() => setRenaming(undefined)}/>}
+    {toast && <Toast key={toast.sequence} anchor={null} text={tx(toast.copied ? 'workspace:toast.sessionIdCopied' : 'workspace:toast.sessionIdCopyFailed')} icon={toast.copied ? <IconCheckOutline16/> : <IconWarningOutline16/>} onDone={() => setToast(undefined)}/>}
+    {dialog && <Modal closeLabel={tx('workspace:workspace-navigation.close-dialog')} open title={dialog.kind === 'add' ? tx('workspace:workspace-navigation.add-workspace') : dialog.kind === 'remove' ? tx('workspace:workspace-navigation.unregister-value', { p0: dialog.name }) : tx('workspace:rename.workspace')} onClose={() => { if (!busy) setDialog(undefined); }}>
       {error && <p role="alert">{error}</p>}
       {dialog.kind === 'add' ? <><p>{tx('workspace:workspace-navigation.choose-a-location-authorized-by-this-product-host')}</p>{dialog.catalog.picker.kind === 'configured' && dialog.catalog.picker.locations.map(location => <Button key={location.id} disabled={busy} onClick={() => void mutate(() => host.adoptWorkspace(dialog.mutation.scope, location.id), dialog.mutation)}>{location.displayName}</Button>)}</>
           : dialog.kind === 'remove' ? <><p>{tx('workspace:workspace-navigation.only-the-navigation-registration-is-removed-sessions-cwd-history')}</p><Button disabled={busy} onClick={() => void mutate(() => host.removeWorkspace(dialog.mutation.scope, dialog.id), dialog.mutation, dialog.id)}>{tx('workspace:workspace-navigation.unregister')}</Button></>
-            : <form onSubmit={event => { event.preventDefault(); const current = capture(); void mutate(async () => {
-              if (dialog.kind === 'workspace') await host.renameWorkspace(dialog.mutation.scope, dialog.id, name);
-              else { await client.renameSession(dialog.id, name); if (current()) await client.listSessions(offset, query, current); }
-            }, dialog.kind === 'workspace' ? dialog.mutation : undefined); }}><Input autoFocus disabled={busy} onKeyDown={event => { if (event.key === 'Enter' && (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229)) event.preventDefault(); }} aria-label={tx('workspace:workspace-navigation.name')} value={name} onChange={event => setName(event.target.value)} /><Button type="submit" disabled={busy || !name.trim()}>{tx('workspace:workspace-navigation.save-name')}</Button></form>}
+            : <form onSubmit={event => { event.preventDefault(); void mutate(async () => {
+              await host.renameWorkspace(dialog.mutation.scope, dialog.id, name);
+            }, dialog.mutation); }}><Input autoFocus disabled={busy} onKeyDown={event => { if (event.key === 'Enter' && (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229)) event.preventDefault(); }} aria-label={tx('workspace:workspace-navigation.name')} value={name} onChange={event => setName(event.target.value)} /><Button type="submit" disabled={busy || !name.trim()}>{tx('workspace:workspace-navigation.save-name')}</Button></form>}
     </Modal>}
   </>;
 }

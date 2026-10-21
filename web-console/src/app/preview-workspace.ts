@@ -1,4 +1,4 @@
-import type { AttachmentTarget } from '../../../protocol/app-server/v50';
+import type { AttachmentTarget } from '../../../protocol/app-server/v51';
 import { sameTarget, type AppServerClient } from '../client/app-server';
 import { FilePreviewCoordinator, samePreviewSource, type FilePreviewLease, type PreviewSource } from '../client/session-files';
 import { PREVIEW_POLICY } from '../client/preview-policy';
@@ -21,7 +21,7 @@ export interface SessionPreviewWorkspace {
 }
 export type PreviewProblem = 'tabs' | 'sessions' | 'unavailable';
 export interface PreviewWorkspaceSnapshot {
-  geometryEpoch: number; width: number; workspace?: SessionPreviewWorkspace; mode: 'collapsed' | 'preview' | 'inspector' | 'workbench';
+  geometryEpoch: number; width: number; workspace?: SessionPreviewWorkspace; mode: 'collapsed' | 'preview' | 'workbench';
   leases: ReadonlyMap<number, FilePreviewLease>; problem?: PreviewProblem; downloadError?: string;
 }
 export const splitBounds = (width: number) => {
@@ -115,7 +115,7 @@ export class PreviewWorkspaceOwner {
     if (this.selected === id) return;
     this.retireResources(); this.invalidateGeometry(); this.selected = id; this.problem = undefined; this.downloadError = undefined;
     this.invalidate();
-    if (this.mode !== 'inspector') this.mode = this.current()?.expanded ? 'preview' : 'collapsed'; this.publish();
+    this.mode = this.current()?.expanded ? 'preview' : 'collapsed'; this.publish();
   }
   measure(width: number, epoch: number) {
     if (epoch !== this.geometryEpoch || this.mode !== 'preview' || !this.current()) return;
@@ -199,7 +199,6 @@ export class PreviewWorkspaceOwner {
   collapse() { const w = this.current(); if (w) this.sessions.set(w.scope.sessionId, { ...w, expanded: false }); this.mode = 'collapsed'; this.publish(); }
   reveal() { const w = this.current(); if (!w) return; this.mode = 'preview'; this.replace({ ...w, expanded: true }); }
   showWorkbench() { this.mode = 'workbench'; this.publish(); }
-  toggleInspector() { this.mode = this.mode === 'inspector' ? this.current()?.expanded ? 'preview' : 'collapsed' : 'inspector'; this.publish(); }
   dismissProblem() { this.problem = undefined; this.downloadError = undefined; this.publish(); }
   async download(artifact: PreviewArtifact) {
     if (this.downloadError !== undefined) { this.downloadError = undefined; this.publish(); }

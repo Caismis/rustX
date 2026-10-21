@@ -2,17 +2,25 @@ import { test, expect, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { AppServerHost } from '../../../tui/src/app-server/host';
-import type { SessionModelConfig } from '../../../protocol/app-server/v50';
+import type { SessionModelConfig } from '../../../protocol/app-server/v51';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
-import { connectRemote, openEmptySession, showInspector } from './shell-actions';
+import { connectRemote, openEmptySession } from './shell-actions';
 import { wireProbe } from './wire-probe';
 import { materializeEffective } from '../../../protocol/app-server/effective-observation';
 
+async function sessionSnapshot(wire: Awaited<ReturnType<typeof wireProbe>>, sessionId: string) {
+  const target = wire.responses.filter(row => row.method === 'session/attach' && row.result?.target?.session_id === sessionId).at(-1)!.result.target;
+  return (await wire.read('session/checkpoint', target)).checkpoint.snapshot;
+}
+
 async function chooseCurrentModel(page: Page, model: string) {
-  await page.getByRole('button', { name: 'Model and profile', exact: true }).click();
+  await page.getByRole('button', { name: 'Model and thinking effort', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Model', exact: true }).click();
-  await page.getByRole('menuitem', { name: model, exact: true }).click();
+  await expect(page.locator('[data-model-menu]')).toHaveAttribute('aria-busy', 'false');
+  await page.getByRole('menuitemradio', { name: model, exact: true }).click();
+  await expect(page.locator('[data-model-select]')).toHaveAttribute('aria-busy', 'false');
+  await expect(page.locator('[data-model-menu]')).toHaveCount(0);
 }
 
 async function openExistingSession(page: Page, id: string, width: number) {
@@ -72,7 +80,7 @@ max_output_tokens = { mode = "limit", tokens = 333 }
         (await wire.read('session/effectiveConfiguration', attached.target)).projection,
         (reference, offset) => wire.effectiveValueRead(attached.target, reference, offset), () => true,
       );
-      const trigger = page.getByRole('button', { name: 'Model and profile', exact: true });
+      const trigger = page.getByRole('button', { name: 'Model and thinking effort', exact: true });
       await expect(trigger).toContainText('high');
       expect(wire.requests.filter(request => request.method === 'session/setModel')).toHaveLength(0);
 
@@ -122,9 +130,8 @@ max_output_tokens = { mode = "limit", tokens = 333 }
       await connectRemote(page, fixture.endpoint, fixture.token);
       await openExistingSession(page, id, width);
       await expect(trigger).toContainText('high');
-      await showInspector(page);
-      const facts = JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText());
-      expect(facts.model.configured).toEqual(complete);
+
+      expect((await sessionSnapshot(wire, id)).model!.configured).toEqual(complete);
       expect(await remote.readSettings(id)).toEqual(explicit);
       expect(wire.requests.filter(request => request.method === 'session/setModel')).toHaveLength(2);
       expect((await fixture.control('requests')).requests).toHaveLength(0);
@@ -167,49 +174,34 @@ for (const [width, acknowledgement] of [[1440, 'received'], [390, 'lost']] as co
       await input.fill('tui multi-session: session A long task');
       await input.press('Enter');
       await fixture.gate('session-a-holding');
-      const running = page.locator('[data-running-model]');
-      await expect(running).toHaveText('Running: fixture/integration-model / high');
-      const trigger = page.getByRole('button', { name: 'Model and profile', exact: true });
+      const trigger = page.getByRole('button', { name: 'Model and thinking effort', exact: true });
       await expect(trigger).toBeEnabled();
       const attached = wire.responses.filter(response => response.method === 'session/attach').at(-1)!.result;
       const original = (await wire.read('session/checkpoint', attached.target)).checkpoint.snapshot.model!.configured;
-      await running.click();
-      const admittedFrozen = JSON.parse(await page.locator('[data-running-model-details] pre').innerText());
-      await running.click();
+      const admittedFrozen = (await sessionSnapshot(wire, sessionId)).attempt!.model!;
       await chooseCurrentModel(page, original.model);
       await expect.poll(() => wire.responses.filter(response => response.method === 'session/setModel').length).toBe(1);
       expect(wire.requests.filter(request => request.method === 'session/setModel').map(request => request.params.config)).toEqual([original]);
       expect(wire.responses.filter(response => response.method === 'session/setModel')[0].result).toMatchObject({ type: 'model_set' });
-      await expect(running).toHaveText('Running: fixture/integration-model / high');
       if (acknowledgement === 'lost') wire.loseNext('session/setModel');
       await trigger.click();
-      await page.getByRole('menuitem', { name: 'Profile', exact: true }).click();
-      await page.getByRole('menuitem', { name: 'low', exact: true }).click();
+      await page.getByRole('menuitem', { name: 'Thinking effort', exact: true }).click();
+      await page.getByRole('menuitemradio', { name: 'low', exact: true }).click();
       if (acknowledgement === 'lost') {
         await expect.poll(wire.lost).toBe(1);
         await connectRemote(page, fixture.endpoint, fixture.token);
       }
       await expect(trigger).toContainText('low');
-      await expect(running).toHaveText('Running: fixture/integration-model / high');
-      await running.click();
-      const details = page.locator('[data-running-model-details]');
-      await expect(details.locator('[data-session-model]')).toHaveText('Session selection: fixture/integration-model / low');
-      await expect(details.getByText(/Frozen at admission/)).toBeVisible();
-      const bounds = await details.boundingBox();
-      expect(bounds).not.toBeNull();
-      expect(bounds!.x).toBeGreaterThanOrEqual(0);
-      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
       await expect(trigger).toBeVisible();
-      const frozen = JSON.parse(await details.locator('pre').innerText());
+      const frozen = (await sessionSnapshot(wire, sessionId)).attempt!.model!;
       expect(frozen).toEqual(admittedFrozen);
       expect(frozen.primary.profile).toBe('high');
       expect(frozen.primary.reasoningEnabled).toBe(true);
-      expect(frozen.primary.requestParams.reasoning_effort).toBe('high');
+      expect(frozen.primary.requestParams?.reasoning_effort).toBe('high');
       expect(frozen.primary.maxOutputTokens).toBe(4096);
       expect(frozen.summary.mode).toBe('session');
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       await page.screenshot({ path: `/tmp/rustx-471-live-model-${width}-${acknowledgement}.png` });
-      await running.click();
       expect(wire.requests.filter(request => request.method === 'session/setModel').map(request => request.params.config)).toEqual([original, { ...original, profile: 'low' }]);
 
       // Reload while the original request remains physically active. Native
@@ -224,17 +216,14 @@ for (const [width, acknowledgement] of [[1440, 'received'], [390, 'lost']] as co
       await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', 'session');
       if (width < 600 && await collapse.isVisible()) await collapse.click();
       await expect(trigger).toContainText('low');
-      await expect(running).toHaveText('Running: fixture/integration-model / high');
       expect(wire.requests.filter(request => request.method === 'session/setModel').map(request => request.params.config)).toEqual([original, { ...original, profile: 'low' }]);
-      await running.click();
-      expect(JSON.parse(await page.locator('[data-running-model-details] pre').innerText())).toEqual(admittedFrozen);
-      await running.click();
+      expect((await sessionSnapshot(wire, sessionId)).attempt!.model).toEqual(admittedFrozen);
       await fixture.release('session-a-holding');
-      await expect(running).toHaveCount(0);
+      await expect.poll(async () => (await sessionSnapshot(wire, sessionId)).attempt?.phase.type).toBe('settled');
       try { await expect(input).toBeEnabled(); }
       catch (cause) {
-        await showInspector(page);
-        await test.info().attach('recovery-authority', { body: await page.getByLabel('Native diagnostic JSON').innerText(), contentType: 'application/json' });
+
+        await test.info().attach('recovery-authority', { body: JSON.stringify(await sessionSnapshot(wire, sessionId)), contentType: 'application/json' });
         throw cause;
       }
       await input.fill('tui multi-session: session B quick task');
@@ -252,3 +241,35 @@ for (const [width, acknowledgement] of [[1440, 'received'], [390, 'lost']] as co
     } finally { await fixture.stop(passed); }
   });
 }
+
+for (const width of [1440, 390]) test(`a different model stays selected after native confirmation and subsequent checkpoints (${width})`, async ({ page }) => {
+  const fixture = await startDogfood('tui_multi_session');
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  const wire = await wireProbe(page);
+  try {
+    await page.setViewportSize({ width, height: 1000 });
+    await routeWorkspaceHost(page, fixture); await page.goto('/');
+    await expect(page).toHaveTitle(/rustX/);
+    await connectRemote(page, fixture.endpoint, fixture.token);
+    const id = await openEmptySession(page, fixture, 'Workspace A');
+    const collapse = page.getByRole('button', { name: 'Collapse Sidebar', exact: true });
+    if (width < 600 && await collapse.isVisible()) await collapse.click();
+    const trigger = page.locator('[data-model-select]');
+    await expect(trigger).toContainText('fixture/integration-model');
+    await chooseCurrentModel(page, 'fixture/second-model');
+    await expect(trigger).toContainText('fixture/second-model');
+    expect((await sessionSnapshot(wire, id)).model!.configured.model).toBe('fixture/second-model');
+    const labels = await trigger.evaluate(async element => {
+      const labels: string[] = [];
+      for (let i = 0; i < 30; i++) { await new Promise<void>(resolve => requestAnimationFrame(() => resolve())); labels.push(element.textContent ?? ''); }
+      return labels;
+    });
+    expect(labels.every(label => label.includes('fixture/second-model'))).toBe(true);
+    await trigger.click(); await page.getByRole('menuitem', { name: 'Model', exact: true }).click();
+    await expect(page.getByRole('menuitemradio', { name: 'fixture/second-model', exact: true })).toHaveAttribute('aria-checked', 'true');
+    await page.keyboard.press('Escape'); await page.keyboard.press('Escape');
+    await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Draft remains intact after switching models');
+    await page.screenshot({ path: `/tmp/rustx-model-confirmed-${width}.png` });
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
+  } finally { const report = await fixture.stop(false); expect(report.requestCount).toBe(0); }
+});
