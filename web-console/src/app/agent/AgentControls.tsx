@@ -93,14 +93,10 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
      if (!owns()) return false;
      if (client.getSnapshot().views[view!.id]?.modelMutation) await client.repairAgentModel(view!.id);
      if (!owns()) return false;
-     const observed = client.getSnapshot().views[view!.id].snapshot!;
-     const revision = observed.model_status?.binding_revision;
-     const confirmed = observed.model_status?.body_deferred ? await client.reads.modelRead(target!, owns) : observed.model;
-     if (!owns()) return false;
-     if (client.getSnapshot().views[view!.id].snapshot?.model_status?.binding_revision !== revision
-       || confirmed?.configured.model !== requested.model || (confirmed.configured.profile ?? undefined) !== (requested.profile ?? undefined))
-       throw new Error('Selected model has not been confirmed. Reread model configuration before sending.');
-     if (observed.model_status?.body_deferred) setOriginalModel({ scope, revision, value: confirmed });
+     const confirmed = await client.confirmAgentModel(view!.id, requested, owns);
+     if (!owns() || !confirmed) return false;
+     const status = client.getSnapshot().views[view!.id].snapshot?.model_status;
+     if (status?.body_deferred && status.binding_revision === confirmed.revision) setOriginalModel({ scope, revision: confirmed.revision, value: confirmed.model });
      return true;
    }
    catch (cause) { if (owns()) { const notice = isOutcomeUncertain(cause) ? message('agent:copy.outcome-uncertain-no-replay-reconnect-and-reread-authority-before-continuing') : message('agent:copy.value-reread-authority-before-continuing', { p0: String(cause) }); setError(notice); setSelectionError(notice); setToastSequence(sequence => sequence + 1); } }

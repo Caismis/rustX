@@ -898,3 +898,32 @@ it('a deferred configuration reread never replaces the selected model with the W
  await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
  expect(sent()).toEqual([{ model: 'other' }]);
 });
+
+it.each(['reply', 'expired'] as const)('revalidates a deferred selection when the native binding advances during confirmation (%s)', async outcome => {
+ modelFixture(); await server.attached('A'); render(<Control/>); await openModels();
+ const full = structuredClone(server.snapshots.get('A')!.model!);
+ full.configured = { model: 'other' }; full.effective!.model = 'other'; full.effective!.profile = null;
+ const apply = server.handlers.get('session/setModel')!;
+ server.handlers.set('session/setModel', request => {
+   const result = apply(request), next = server.snapshots.get('A')!;
+   next.model = undefined; next.model_status = { available: true, body_deferred: true, binding_revision: '2' };
+   return result;
+ });
+ server.handlers.set('session/model', () => domainReceipt('model', [full])); server.held.add('session/model');
+ fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
+ await act(async () => fireEvent.click(screen.getByRole('menuitemradio', { name: 'other' })));
+ await server.waitFor('session/model', 2);
+ const originalReads = server.requests.filter(row => row.request.method === 'session/model');
+ for (const row of originalReads) server.commit(row.request);
+ server.snapshots.get('A')!.model_status!.binding_revision = '3';
+ await act(() => server.client.refresh('A'));
+ await act(async () => { for (const row of originalReads) {
+   if (outcome === 'expired') server.socket.deliver({ jsonrpc: '2.0', id: row.request.id, error: { code: -32000, message: 'Original model read cut expired' } });
+   else server.reply(row.request);
+ } });
+ expect(screen.queryByRole('alert')).toBeNull();
+ await act(async () => { server.held.delete('session/model'); for (const row of server.requests.filter(row => row.request.method === 'session/model')) server.reply(row.request); });
+ await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+ expect(screen.getByRole('button', { name: 'Model and thinking effort' }).textContent).toContain('other');
+ expect(count('session/setModel')).toBe(1);
+});

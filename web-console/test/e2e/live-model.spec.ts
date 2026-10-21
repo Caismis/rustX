@@ -242,23 +242,39 @@ for (const [width, acknowledgement] of [[1440, 'received'], [390, 'lost']] as co
   });
 }
 
-for (const width of [1440, 390]) test(`a different model stays selected after native confirmation and subsequent checkpoints (${width})`, async ({ page }) => {
+for (const width of [1440, 390]) for (const deferred of [false, true]) test(`a different model stays selected after native confirmation and subsequent checkpoints (${width}, ${deferred ? 'deferred' : 'inline'})`, async ({ page }) => {
   const fixture = await startDogfood('tui_multi_session');
+  let remote: AppServerHost | undefined;
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   const wire = await wireProbe(page);
   try {
+    let existing: string | undefined;
+    if (deferred) {
+      remote = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
+      existing = (await remote.client.call('session/create', { settings: { cwd: fixture.workspaceA, model: {
+        model: 'fixture/integration-model', summaryModel: { mode: 'explicit', model: 'fixture/integration-model', request_params: { confirmation_fixture: 'x'.repeat(70_000) } },
+      } } }, 'session_transition')).session.id;
+    }
     await page.setViewportSize({ width, height: 1000 });
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await expect(page).toHaveTitle(/rustX/);
     await connectRemote(page, fixture.endpoint, fixture.token);
-    const id = await openEmptySession(page, fixture, 'Workspace A');
+    const id = existing ?? await openEmptySession(page, fixture, 'Workspace A');
+    if (existing) await openExistingSession(page, id, width);
     const collapse = page.getByRole('button', { name: 'Collapse Sidebar', exact: true });
     if (width < 600 && await collapse.isVisible()) await collapse.click();
     const trigger = page.locator('[data-model-select]');
     await expect(trigger).toContainText('fixture/integration-model');
+    const input = page.getByRole('textbox', { name: 'Message', exact: true });
+    await input.fill('Draft remains intact after switching models');
     await chooseCurrentModel(page, 'fixture/second-model');
     await expect(trigger).toContainText('fixture/second-model');
-    expect((await sessionSnapshot(wire, id)).model!.configured.model).toBe('fixture/second-model');
+    const observed = await sessionSnapshot(wire, id);
+    if (deferred) {
+      expect(observed.model_status?.body_deferred).toBe(true);
+      expect(wire.requests.some(request => request.method === 'session/model')).toBe(true);
+      expect((await remote!.readSettings(id)).settings.model!.model).toBe('fixture/second-model');
+    } else expect(observed.model!.configured.model).toBe('fixture/second-model');
     const labels = await trigger.evaluate(async element => {
       const labels: string[] = [];
       for (let i = 0; i < 30; i++) { await new Promise<void>(resolve => requestAnimationFrame(() => resolve())); labels.push(element.textContent ?? ''); }
@@ -268,8 +284,10 @@ for (const width of [1440, 390]) test(`a different model stays selected after na
     await trigger.click(); await page.getByRole('menuitem', { name: 'Model', exact: true }).click();
     await expect(page.getByRole('menuitemradio', { name: 'fixture/second-model', exact: true })).toHaveAttribute('aria-checked', 'true');
     await page.keyboard.press('Escape'); await page.keyboard.press('Escape');
-    await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Draft remains intact after switching models');
-    await page.screenshot({ path: `/tmp/rustx-model-confirmed-${width}.png` });
+    await expect(input).toHaveValue('Draft remains intact after switching models');
+    await expect(page.getByText(/Selected model has not been confirmed/)).toHaveCount(0);
+    expect(wire.requests.filter(request => request.method === 'session/setModel')).toHaveLength(1);
+    await page.screenshot({ path: `/tmp/rustx-model-confirmed-${width}-${deferred ? 'deferred' : 'inline'}.png` });
     await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
-  } finally { const report = await fixture.stop(false); expect(report.requestCount).toBe(0); }
+  } finally { await remote?.shutdown(); const report = await fixture.stop(false); expect(report.requestCount).toBe(0); }
 });

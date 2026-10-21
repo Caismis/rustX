@@ -6790,6 +6790,16 @@ contracts and provider protocols. These invariants are frozen by M2:
   typed uncertain outcome, never a successful acknowledgement. Clients recover
   through an authoritative read and never replay the selection automatically.
 
+- **Client confirmation follows the current native binding.** Model-selection
+  acknowledgement alone does not confirm the configured Model/Profile. Inline
+  and deferred model bodies use the same confirmation path, including choices
+  made during attachment. If the native binding advances while a deferred read
+  is pending, the client discards that read (or its expired-cut failure) and
+  reads the new revision; it neither reports an unconfirmed selection merely
+  because the binding advanced nor replays the model mutation. Actual selection
+  mismatches and failures at the current revision remain explicit failures.
+  Replacement attachments and connection generations retire confirmation.
+
 - **No-op detection includes durable intent.** An already-explicit identical
   selection still validates lifecycle, revisions and resources, then the durable
   owner confirms the stored selection and retained revision before skipping its

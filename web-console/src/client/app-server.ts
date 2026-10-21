@@ -635,10 +635,12 @@ export class AppServerClient {
     epoch: id => this.lifecycles.epoch(id),
     waitForAttachment: (id, current) => this.waitForAttachment(id, current),
     refresh: id => this.refresh(id),
+    modelRead: (target, current) => this.reads.modelRead(target, current),
   });
   prepareAgentModel(id: string, config: SessionModelConfig) { return this.models.prepareAgentModel(id, config); }
   setAgentModel(id: string, config: SessionModelConfig) { return this.models.setAgentModel(id, config); }
   repairAgentModel(id: string) { return this.models.repairAgentModel(id); }
+  confirmAgentModel(id: string, config: SessionModelConfig, current: () => boolean) { return this.models.confirmAgentModel(id, config, current); }
   private readonly interactions = new Interactions({
     request: (...args) => this.request(...args),
     state: () => this.state,
