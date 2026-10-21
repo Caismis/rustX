@@ -110,6 +110,71 @@ fn projection() -> RuntimeClientProjection {
     )
 }
 
+#[test]
+fn checkpoint_model_status_tracks_body_eviction_under_shared_capture_budget() {
+    let mut projection = projection();
+    let model = projection.snapshot.model.as_mut().unwrap();
+    model.configured.request_params = serde_json::from_value(serde_json::json!({
+        "capture_fixture": "x".repeat(12_000),
+    }))
+    .unwrap();
+    projection.snapshot.model_status =
+        Some(crate::runtime_client::snapshot::RuntimeClientModelStatus {
+            available: true,
+            body_deferred: false,
+            binding_revision: Some(7),
+        });
+    let inline = projection
+        .capture_working_seed()
+        .checkpoint_candidate()
+        .unwrap();
+    assert!(inline.snapshot.model.is_some());
+    assert!(!inline.snapshot.model_status.unwrap().body_deferred);
+
+    // Each status and the model fit individually. Together the retained
+    // conversation heads exhaust the checkpoint's shared inline allowance.
+    projection.snapshot.statuses = (0..8)
+        .map(|turn| AgentStatusView {
+            attempt_id: attempt(),
+            turn,
+            status_message_id: None,
+            source_locator: None,
+            request_id: None,
+            rendered_ref: None,
+            opportunities: AgentStatusOpportunityView {
+                fresh_inbound: None,
+                post_tool_batch: None,
+            },
+            sections: Vec::new(),
+            rendered: "s".repeat(12_000),
+        })
+        .collect();
+    let checkpoint = projection
+        .capture_working_seed()
+        .checkpoint_candidate()
+        .unwrap();
+    assert!(checkpoint.snapshot.model.is_none());
+    let status = checkpoint.snapshot.model_status.unwrap();
+    assert!(
+        status.body_deferred,
+        "an evicted model must remain explicitly readable"
+    );
+    assert!(status.available);
+    assert_eq!(status.binding_revision, Some(7));
+    let frontier = checkpoint
+        .collections
+        .iter()
+        .find(|row| row.domain == "model")
+        .unwrap();
+    assert_eq!(frontier.loaded, 0);
+    assert_eq!(frontier.next_offset, Some(0));
+    assert!(
+        projection.snapshot.model.is_some(),
+        "capture must not evict native authority"
+    );
+    assert!(!projection.snapshot.model_status.unwrap().body_deferred);
+}
+
 /// Adoption eligibility is runtime-domain projection state: a published
 /// change folds into the snapshot and publishes one event, and an
 /// unchanged value folds into nothing. It invalidates no derived read

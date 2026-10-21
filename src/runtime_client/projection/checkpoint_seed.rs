@@ -164,7 +164,7 @@ impl CheckpointSeed {
         let mut capture = Capture::new(self.cursor.get());
         let context = self.capture_context(&mut capture);
         let attempt = self.capture_attempt(&mut capture);
-        let snapshot = RuntimeClientSnapshot {
+        let mut snapshot = RuntimeClientSnapshot {
             settings_evidence: source.settings_evidence,
             effective_plugins: capture
                 .item("effective_plugins", &source.effective_plugins)
@@ -228,6 +228,12 @@ impl CheckpointSeed {
                 }),
             goal: capture.item("goal", &source.goal).flatten(),
         };
+        // The source body may fit on its own but be evicted by this cut's
+        // shared capture budget. Advertise the body actually sent, so clients
+        // read the model domain before confirming a selection.
+        if let Some(status) = &mut snapshot.model_status {
+            status.body_deferred = snapshot.model.is_none();
+        }
         self.capture_evidence(&snapshot, &mut capture);
         Ok((
             RuntimeClientCheckpoint {
