@@ -3,17 +3,20 @@
 
 Counting method (physical lines, comments and blanks included):
 
-* Rust: a file reached only through a `#[cfg(test)] mod x;` declaration (and
-  every module beneath it) is test code, as is everything under `tests/`.
+* Rust: a file reached only through a `#[cfg(test)] mod x;` declaration (or
+  a `#[path]` / `include!` inside a `#[cfg(test)]` item), and every module
+  beneath it, is test code, as is everything under `tests/`.
   Inside other files, every item annotated `#[cfg(test)]` (from the attribute
   to the item's closing brace or semicolon) is counted as test; all remaining
   lines are production.
 * TypeScript: files under `test/`, `tests/`, or named `*.test.ts(x)` /
-  `*.spec.ts(x)` are test; `*.generated.ts` and `generated/` are generated;
+  `*.spec.ts(x)` are test; the protocol generator outputs (`v50.ts`,
+  `fixtures.ts`), `*.generated.ts` and `generated/` are generated;
   everything else under `src/` is production.
 
-Usage: measure.py [--json] PATH...   (files or directories, relative to the
-repository root). Prints `production test generated path` per file.
+Usage: measure.py [--root DIR] [--json] PATH...   (files or directories,
+relative to the repository root, default the checkout holding this script).
+Prints `production test generated path` per file.
 """
 import json
 import os
@@ -93,6 +96,7 @@ def rust_split(path):
     code = [strip_code(line, state) for line in lines]
     test_lines = 0
     test_children = []
+    raw = lines
     i = 0
     pending_attr_start = None
     while i < len(lines):
@@ -120,6 +124,8 @@ def rust_split(path):
                 m = re.match(r"\s*(pub(\([^)]*\))?\s+)?mod\s+(\w+)\s*;", code[j])
                 if m and j >= start:
                     test_children.append(m.group(3))
+                for inc in re.findall(r'(?:include!\(|#\[path\s*=\s*)"([^"]+)"', raw[j]):
+                    test_children.append("@" + inc)
                 if item_started and depth <= 0:
                     break
                 j += 1
@@ -139,6 +145,16 @@ def rust_module_dir(path):
 
 
 def rust_child_file(path, name):
+    if name.startswith("@"):
+        # `include!` resolves beside the file; `#[path]` inside an inline
+        # `mod tests {}` resolves beneath the module directory and its inline
+        # module names. Take the first that exists.
+        rel = name[1:]
+        for base in (os.path.dirname(path), rust_module_dir(path), os.path.join(rust_module_dir(path), "tests")):
+            candidate = os.path.normpath(os.path.join(base, rel))
+            if os.path.exists(candidate):
+                return candidate
+        return None
     d = rust_module_dir(path)
     for candidate in (os.path.join(d, name + ".rs"), os.path.join(d, name, "mod.rs")):
         if os.path.exists(candidate):
@@ -146,8 +162,17 @@ def rust_child_file(path, name):
     return None
 
 
+_TEST_FILES = {}
+
+
 def rust_test_files():
     """Every src/ Rust file that is only compiled under cfg(test)."""
+    if ROOT not in _TEST_FILES:
+        _TEST_FILES[ROOT] = _rust_test_files()
+    return _TEST_FILES[ROOT]
+
+
+def _rust_test_files():
     result = set()
     for dirpath, _, files in os.walk(os.path.join(ROOT, "src")):
         for f in files:
@@ -176,10 +201,14 @@ def rust_test_files():
     return result
 
 
+# Outputs of protocol/app-server/generate.mjs (checked by its `pnpm check`).
+GENERATED = ("protocol/app-server/v50.ts", "protocol/app-server/fixtures.ts")
+
+
 def ts_kind(rel):
     parts = rel.split("/")
     base = parts[-1]
-    if "generated" in parts or ".generated." in base:
+    if rel in GENERATED or "generated" in parts or ".generated." in base:
         return "generated"
     if "test" in parts or "tests" in parts or re.search(r"\.(test|spec)\.tsx?$", base):
         return "test"
@@ -222,7 +251,12 @@ def measure(paths):
 
 
 def main():
+    global ROOT
     args = sys.argv[1:]
+    if "--root" in args:
+        i = args.index("--root")
+        ROOT = os.path.abspath(args[i + 1])
+        del args[i:i + 2]
     as_json = "--json" in args
     args = [a for a in args if a != "--json"]
     rows = measure(args)

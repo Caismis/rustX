@@ -1245,7 +1245,7 @@ fn falsely_named_indexes_are_rejected_without_schema_rewrite() {
 
 #[test]
 fn auxiliary_frontier_queries_use_bounded_index_seeks() {
-    use crate::durable::sqlite::auxiliary::{
+    use crate::durable::sqlite::auxiliary::audit::{
         AUXILIARY_AUDIT_FRONTIER_SQL, AUXILIARY_AUTHORITATIVE_FRONTIER_SQL,
     };
 

@@ -2245,7 +2245,7 @@ mod call_request_lookup {
             statement.get_status(rusqlite::StatementStatus::VmStep)
         };
         let bounded =
-            selected_steps(crate::durable::sqlite::auxiliary::AUXILIARY_CALL_REQUESTS_SQL);
+            selected_steps(crate::durable::sqlite::auxiliary::audit::AUXILIARY_CALL_REQUESTS_SQL);
         let unbounded = selected_steps(
             "SELECT sequence FROM auxiliary_audit_facts NOT INDEXED
              WHERE call_id=?1 AND sequence>?2 AND sequence<=?3 AND kind='request_started'
