@@ -183,6 +183,7 @@ pub(crate) async fn execute_compaction_in_operation(
         effective_system_prompt,
     );
     let mut budgets = context.compaction_budgets;
+    budgets.summary_input_limit = budget.summary_input_limit(budgets.summary_input_limit);
     let (retired_count, summary) = loop {
         budget.check(cancellation)?;
         let n = super::planning::summary_prefix(
@@ -251,9 +252,11 @@ pub(crate) async fn execute_compaction_in_operation(
                 if error.kind == ContextErrorKind::SummaryInputTooLarge
                     && budgets.summary_input_limit > MIN_SUMMARY_INPUT_LIMIT =>
             {
-                budget.take_shrink(cancellation)?;
-                budgets.summary_input_limit =
-                    (budgets.summary_input_limit / 2).max(MIN_SUMMARY_INPUT_LIMIT);
+                budgets.summary_input_limit = budget.shrink_summary_input_limit(
+                    budgets.summary_input_limit,
+                    MIN_SUMMARY_INPUT_LIMIT,
+                    cancellation,
+                )?;
                 prepared = Some(operation.prepare()?);
             }
             Err(error) => return Err(error.into()),

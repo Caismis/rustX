@@ -80,12 +80,28 @@ impl AgentExecution<'_> {
             ));
         }
         let budget = self.context_runtime.compaction_budget(operation_id.clone());
+        #[cfg(test)]
+        let admission_gate = self
+            .pauses
+            .compaction_admission
+            .lock()
+            .expect("compaction admission gate")
+            .take();
+        #[cfg(test)]
+        if let Some(gate) = admission_gate {
+            gate.enter();
+        }
         let operation = match self
             .context_runtime
             .summarizer
             .operation(budget.clone(), self.cancellation.signal().child())
         {
             Ok(operation) => operation,
+            Err(error) if error.kind == ContextErrorKind::Cancelled => {
+                return Err(Terminal::Cancelled {
+                    reason: self.cancellation.reason(),
+                });
+            }
             Err(error) => return Err(self.compaction_failure(&operation_id, &error, overflow)),
         };
         let result = async {

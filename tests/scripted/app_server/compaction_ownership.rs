@@ -1,6 +1,203 @@
 //! Manager lease transfer is independent of the native compaction reply.
 use super::*;
 
+/// The real terminal transaction commits before its acknowledgement is lost;
+/// exact confirmation then fails. The executor must join both native threads.
+async fn fail_summary_confirmation(
+    f: &Fixture,
+    live: &ConversationRuntime,
+    gates: crate::runtime::auxiliary::executor::AuxiliaryWriteTestGates,
+) {
+    f.gates[1].release();
+    gates.committed.await.unwrap();
+    drop(gates.release_ack);
+    gates.confirming.await.unwrap();
+    drop(gates.release_confirmation);
+    live.join_auxiliary_for_test().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn proven_auxiliary_exit_releases_failed_unload_for_exclusive_recovery() {
+    bounded(async {
+        let f = Fixture::with_summary_gate().await;
+        let _headers = ReleaseHeaders(f.gates.clone());
+        f.gates[0].release();
+        let loaded = f.load(0).await.unwrap().unwrap();
+        let id = loaded.conversation_id().clone();
+        let incarnation = loaded.incarnation_id();
+        let live = loaded.inspect_runtime().unwrap();
+        complete_history_turn(&live).await;
+        let compaction = tokio::spawn({
+            let live = live.clone();
+            async move { live.compact_context(None).await }
+        });
+        f.gates[1].wait_entered().await;
+        let gates = live.hold_auxiliary_settlement_for_test();
+        fail_summary_confirmation(&f, &live, gates).await;
+        assert!(
+            compaction.await.unwrap().is_err(),
+            "uncertainty is not success"
+        );
+        assert!(live.durability_failure().is_some());
+        let original = journal(&live);
+        assert_one_summary_chain(&original, true, false);
+        assert!(
+            !original
+                .iter()
+                .any(|fact| matches!(fact.event, RuntimeEvent::CompactionCompleted { .. }))
+        );
+        let weak = live.weak_inner();
+        drop(live);
+        assert!(
+            f.manager.unload(&id).await.is_err(),
+            "preserve logical failure"
+        );
+        assert_eq!(f.manager.residency(&id), ResidencyState::Unloaded);
+        assert!(
+            weak.upgrade().is_none(),
+            "native and projection owners exited"
+        );
+        let acquisitions = f.manager.probe(&id).acquisitions.load(Ordering::SeqCst);
+        let requests = f.provider.request_bodies().len();
+        let recovered = f.load(0).await.unwrap().unwrap();
+        assert_ne!(recovered.incarnation_id(), incarnation);
+        assert_eq!(
+            f.manager.probe(&id).acquisitions.load(Ordering::SeqCst),
+            acquisitions + 1
+        );
+        let reopened = recovered.inspect_runtime().unwrap();
+        assert_eq!(
+            journal(&reopened),
+            original,
+            "exclusive recovery never redispatches the old RequestId"
+        );
+        assert_eq!(f.provider.request_bodies().len(), requests);
+        assert!(
+            reopened
+                .tool_runtime()
+                .durable_store()
+                .projection_head()
+                .unwrap()
+                .is_none()
+        );
+        drop(reopened);
+        f.close().await;
+    })
+    .await;
+}
+
+async fn auxiliary_failure_orders_coordinator_mutation(
+    model_selection: bool,
+    mutation_first: bool,
+) {
+    let f = Fixture::with_summary_gate().await;
+    let _headers = ReleaseHeaders(f.gates.clone());
+    f.gates[0].release();
+    let loaded = f.load(0).await.unwrap().unwrap();
+    let id = loaded.conversation_id().clone();
+    let live = loaded.inspect_runtime().unwrap();
+    complete_history_turn(&live).await;
+    let compaction = tokio::spawn({
+        let live = live.clone();
+        async move { live.compact_context(None).await }
+    });
+    f.gates[1].wait_entered().await;
+    let writer = live.hold_auxiliary_settlement_for_test();
+    let gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
+    let release = mutation_first.then(|| gate.arm_scoped());
+    live.install_durability_mutation_probe(
+        (!model_selection).then(|| gate.clone()),
+        model_selection.then(|| gate.clone()),
+    );
+    let mut selection = live.model_config();
+    selection.max_output_tokens = Some(17);
+    let start_mutation = || {
+        if model_selection {
+            let manager = f.manager.clone();
+            let session = f.sessions[0].id.clone();
+            let selection = selection.clone();
+            tokio::spawn(async move {
+                manager
+                    .set_model(&session, selection)
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| format!("{e:?}"))
+            })
+        } else {
+            let live = live.clone();
+            tokio::task::spawn_blocking(move || {
+                live.submit_inbound(input("ordered inbound"))
+                    .map(|_| ())
+                    .map_err(|e| format!("{e:?}"))
+            })
+        }
+    };
+    let mutation = mutation_first.then(start_mutation);
+    if mutation_first {
+        let gate = gate.clone();
+        tokio::task::spawn_blocking(move || gate.wait_entered())
+            .await
+            .unwrap();
+    }
+    fail_summary_confirmation(&f, &live, writer).await;
+    if mutation_first {
+        assert!(
+            live.durability_failure().is_none(),
+            "the global reaper must finish without publishing ahead of durable acceptance"
+        );
+        drop(release);
+    } else {
+        assert!(live.durability_failure().is_some());
+    }
+    let mutation = mutation.unwrap_or_else(start_mutation).await.unwrap();
+    assert_eq!(mutation.is_ok(), mutation_first, "{mutation:?}");
+    assert!(live.durability_failure().is_some());
+    assert!(compaction.await.unwrap().is_err());
+    if model_selection {
+        let catalog = f.manager.sessions.catalog.lock().await;
+        let (_, settings) = catalog.lineage(&f.sessions[0].id, None).unwrap();
+        assert_eq!(
+            settings
+                .model
+                .and_then(|selection| selection.max_output_tokens),
+            mutation_first.then_some(17)
+        );
+    } else {
+        assert_eq!(
+            live.tool_runtime()
+                .durable_store()
+                .load_pending()
+                .unwrap()
+                .len(),
+            usize::from(mutation_first)
+        );
+    }
+    drop(live);
+    assert!(f.manager.unload(&id).await.is_err());
+    assert_eq!(f.manager.residency(&id), ResidencyState::Unloaded);
+    f.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn auxiliary_failure_and_inbound_acceptance_have_one_commit_order() {
+    bounded(async {
+        for mutation_first in [true, false] {
+            auxiliary_failure_orders_coordinator_mutation(false, mutation_first).await;
+        }
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn auxiliary_failure_and_model_selection_have_one_commit_order() {
+    bounded(async {
+        for mutation_first in [true, false] {
+            auxiliary_failure_orders_coordinator_mutation(true, mutation_first).await;
+        }
+    })
+    .await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn native_compaction_transfer_releases_its_lease_before_reply_or_waiter_loss() {
     bounded(async {
@@ -179,6 +376,7 @@ fn assert_compaction_snapshot(
 fn assert_one_summary_chain(
     journal: &[crate::events::types::RuntimeEventEnvelope],
     completed: bool,
+    checkpoint_committed: bool,
 ) -> crate::runtime::identity::CompactionOperationId {
     use crate::model::auxiliary::{
         AuxiliaryBusinessSource, AuxiliaryCallOutcome, AuxiliaryUsageCompleteness,
@@ -308,11 +506,11 @@ fn assert_one_summary_chain(
         RuntimeEvent::CompactionCompleted {
             operation_id: terminal_operation,
             ..
-        } if completed => assert_eq!(terminal_operation, operation_id),
+        } if checkpoint_committed => assert_eq!(terminal_operation, operation_id),
         RuntimeEvent::CompactionFailed {
             operation_id: terminal_operation,
             ..
-        } if !completed => assert_eq!(terminal_operation, operation_id),
+        } if !checkpoint_committed => assert_eq!(terminal_operation, operation_id),
         event => panic!("wrong business terminal: {event:?}"),
     }
     operation_id.clone()
@@ -373,7 +571,7 @@ async fn committed_summary_reply_loss_and_cold_successor_preserve_exact_receipt_
             let a = compaction_receipt(completed.await.unwrap());
             assert_eq!(a.generation, 1);
             let original = journal(&live);
-            let operation = assert_one_summary_chain(&original, true);
+            let operation = assert_one_summary_chain(&original, true, true);
             let store = live.tool_runtime().durable_store();
             let checkpoint = store.projection_head().unwrap().unwrap();
             assert_eq!(checkpoint.candidate.checkpoint_id, a.checkpoint_id);
@@ -462,7 +660,7 @@ async fn committed_summary_reply_loss_and_cold_successor_preserve_exact_receipt_
             assert_compaction_snapshot(&next_client, Some(&b), 2);
             let after_b = journal(&current);
             assert_eq!(&after_b[..original.len()], original.as_slice());
-            assert_one_summary_chain(&after_b[original.len()..], true);
+            assert_one_summary_chain(&after_b[original.len()..], true, true);
             release.send(()).unwrap();
             if let Some(reply) = reply {
                 assert_eq!(compaction_receipt(reply.await.unwrap()), a);
@@ -544,7 +742,7 @@ async fn lost_summary_reply_does_not_block_unload_cancellation_or_replay_after_c
         let current = successor.inspect_runtime().unwrap();
         let settled = journal(&current);
         assert_eq!(&settled[..started.len()], started.as_slice());
-        assert_one_summary_chain(&settled, false);
+        assert_one_summary_chain(&settled, false, false);
         assert!(
             current
                 .tool_runtime()

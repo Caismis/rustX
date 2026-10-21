@@ -1075,11 +1075,13 @@ impl ConversationRuntime {
             }
             ConversationLifecycleState::Running => {}
         }
-        if let Some(failure) = self.inner.durability_gate.admission_failure() {
-            return Err(InboundAdmissionError::DurabilityFailed {
+        let permission = self
+            .inner
+            .durability_gate
+            .enter_coordinator_commit()
+            .map_err(|failure| InboundAdmissionError::DurabilityFailed {
                 message: failure.diagnostic,
-            });
-        }
+            })?;
         // Explicit refusal, ordered with catalog publication and model
         // commits by this lock: nothing is accepted for a selection the
         // Session's published catalog does not admit.
@@ -1124,6 +1126,7 @@ impl ConversationRuntime {
                 correlation: None,
             })
             .map_err(InboundAdmissionError::Mailbox)?;
+        drop(permission);
         drop(state);
         Ok(InboundAdmission {
             message_id: accepted.message_id,

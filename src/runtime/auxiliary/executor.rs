@@ -27,6 +27,15 @@ use super::writer::JoinedAuxiliaryWriter;
 #[derive(Clone)]
 pub(crate) struct AuxiliaryExecutor(Arc<ExecutorInner>);
 
+/// Consumed gates around a real transaction and its exact-confirmation read.
+#[cfg(test)]
+pub(crate) struct AuxiliaryWriteTestGates {
+    pub(crate) committed: oneshot::Receiver<()>,
+    pub(crate) release_ack: mpsc::Sender<()>,
+    pub(crate) confirming: oneshot::Receiver<()>,
+    pub(crate) release_confirmation: mpsc::Sender<()>,
+}
+
 pub(super) struct ExecutorInner {
     resources: Arc<ExecutionResources>,
     capacity: ConversationCapacity,
@@ -139,6 +148,25 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 impl AuxiliaryExecutor {
+    #[cfg(test)]
+    pub(crate) fn hold_settlement_for_test(&self) -> AuxiliaryWriteTestGates {
+        let record = {
+            let state = lock(&self.0.state);
+            assert_eq!(state.calls.len(), 1, "one gated production Summary");
+            state.calls.values().next().unwrap().clone()
+        };
+        let writer = lock(&record.writer);
+        let writer = writer.as_ref().expect("provider entry has a native writer");
+        let (committed, release_ack) = writer.hold_next_commit_for_test();
+        let (confirming, release_confirmation) = writer.hold_confirmation_for_test();
+        AuxiliaryWriteTestGates {
+            committed,
+            release_ack,
+            confirming,
+            release_confirmation,
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn for_test(
         store: Arc<dyn ConversationStore>,

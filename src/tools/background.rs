@@ -197,7 +197,7 @@ use crate::runtime::identity::{
 };
 use crate::runtime::inbound::ConversationInboundMailbox;
 use crate::runtime::types::{
-    CancellationReason, ConversationLifecycle, DurabilityGate, OwnershipCommitGuard,
+    CancellationReason, ConversationLifecycle, DurabilityCommitGuard, DurabilityGate,
     OwnershipCommitRefused,
 };
 use serde::{Deserialize, Serialize};
@@ -1362,7 +1362,7 @@ impl ConversationBackgroundRegistry {
         &self,
         mut prepared: PreparedBackgroundDispatch,
         attempt_cancellation: &CancellationSignal,
-        ownership_permission: Option<&Result<OwnershipCommitGuard, OwnershipCommitRefused>>,
+        ownership_permission: Option<&Result<DurabilityCommitGuard, OwnershipCommitRefused>>,
     ) -> Result<BackgroundDispatchOutcome, BackgroundDispatchError> {
         // Hold the shared lifecycle admission guard across the prepared
         // registry transfer. This keeps a parked ownership attempt inside

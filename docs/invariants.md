@@ -322,7 +322,9 @@ join; a lost reply cannot release its permits or establish noncommit.
 
 One Compaction budget spans all input shrink and carryover re-entry: twelve
 confirmed or unresolved starts, three shrinks and one five-minute monotonic
-deadline. A matching Store receipt confirms a start; only Store-proven
+deadline. Its learned Summary input limit is retained across re-entry and
+reduced atomically with its shrink count; carryover degradation cannot restore
+the configured limit or charge again for the same reduction. A matching Store receipt confirms a start; only Store-proven
 noncommit refunds it. Dropping a reservation preserves logical uncertainty
 without retaining an execution permit. Capacity, deadline, supervision and
 required-durability failures retain typed distinctions from rejected Summary
@@ -360,7 +362,24 @@ state mutex. Coordinator idle probes treat a held lifecycle commit boundary as
 busy instead of waiting for its writer. A pending winner refuses later work
 while an earlier writer finishes. Permission exit commits/publishes that first winner exactly once,
 without holding the gate mutex or a SQL lease during the native callback.
+Inbound durable acceptance and model-selection persistence retain their own
+nonblocking gate permission throughout the coordinator's decision, write and
+publication. A failure requested by auxiliary cleanup waits for every earlier
+ownership/coordinator permission to exit before publication, without blocking
+the process reaper on coordinator SQL. The durable commit, not a preliminary
+health read or the later response delivery, determines the order.
 General work cannot select protected capacity by supplying a purpose string.
+
+A failed native drain may prove physical exit while retaining logical
+durability uncertainty. The manager must still join projection owners and
+release the old composition in that case, return the failure, and remove its
+writer-absent registry entry so a later load can attempt exclusive recovery.
+An unproven physical exit must retain isolation. Neither failure is promoted
+to successful quiescence, and recovery never redispatches an old RequestId.
+
+Cancellation winning Summary operation admission settles the Agent Attempt as
+cancelled with its native reason. It emits neither CompactionFailed nor
+AttemptFailed, including when compaction was recovering a provider overflow.
 
 One auxiliary generation folds the same canonical ordering as Agent output.
 It refuses tools and more than 4096 content blocks, discards validated native

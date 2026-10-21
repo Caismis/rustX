@@ -474,6 +474,9 @@ impl StartBoundaryPause {
 /// spawned across threads in tests.
 #[derive(Default)]
 pub(super) struct ExecutionPauses {
+    /// Parks after `CompactionStarted`, before native Summary admission.
+    pub(super) compaction_admission:
+        std::sync::Mutex<Option<std::sync::Arc<crate::runtime::conversation_runtime::Gate>>>,
     /// Test-only control point parked at the turn-continuation boundary:
     /// after a completed turn (and all its mailbox drain/append work)
     /// returned "continue", before the generic cancellation check of the
@@ -536,6 +539,13 @@ pub(super) struct ExecutionPauses {
 use super::AgentExecution;
 
 impl AgentExecution<'_> {
+    pub(crate) fn install_compaction_admission_gate(
+        &mut self,
+        gate: std::sync::Arc<crate::runtime::conversation_runtime::Gate>,
+    ) {
+        *self.pauses.compaction_admission.lock().unwrap() = Some(gate);
+    }
+
     /// Installs the test-only start-boundary pause (Issue #12, M9b
     /// deterministic race tests).
     #[cfg(test)]

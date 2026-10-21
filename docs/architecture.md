@@ -437,7 +437,9 @@ the crate-private protected admission path.
 
 `context::compaction_budget` owns cumulative business accounting independently
 of physical execution capacity. Its clones share the same operation identity,
-deadline, start reservations and shrink count. Request receipts and typed
+deadline, start reservations, shrink count and learned Summary input limit.
+Provider-driven reductions update the count and effective limit together;
+carryover re-entry never restores the configured upper bound. Request receipts and typed
 noncommit evidence resolve reservations; an unknown transaction remains a
 logical budget obligation rather than permission for another physical start.
 
@@ -478,13 +480,26 @@ DurabilityGate keeps a short state mutex and an owned ownership permission.
 A failure request immediately closes later admission without parking the
 coordinator behind SQL. An earlier permission retains its order through the
 write and native publication, then commits the pending absorbing failure on
-exit. The single failure publisher runs outside the gate mutex. Existing
+exit. Coordinator-owned inbound acceptance and model selection also retain a
+nonblocking commit permission under their existing coordinator lock. This
+permission can overlap an ownership writer; a pending failure is published
+only after both earlier commits exit. Neither permission holds the gate mutex
+across SQL, and the global auxiliary reaper never waits for coordinator SQL.
+The single failure publisher runs outside the gate mutex. Existing
 background and Subagent ownership writers await permission outside registry
 locks and perform their synchronous transaction/publication on blocking
 workers; already-owned settlement never reacquires healthy admission.
 Coordinator idle probes report busy immediately when the lifecycle commit
 boundary is held, so they cannot retain the coordinator while waiting for
 one of those writers.
+
+The runtime manager consumes the native drain's logical result and physical
+exit proof separately. A logical durability failure still fails unload, but
+proven native exit is followed by actual projection drain and release of the
+old composition. The failed flight reports writer absence and removes its
+residency claim, allowing a later exclusive recovery attempt. Unproven native
+or projection retirement retains the isolated old writer and its failure;
+neither path fabricates successful logical quiescence or replays a Request.
 
 `ConversationRuntime` owns one lifecycle authority:
 

@@ -20,10 +20,11 @@ pub const COMPACTION_START_LIMIT: u8 = 12;
 pub const COMPACTION_SHRINK_LIMIT: u8 = 3;
 
 #[derive(Debug, Default)]
-struct Counts {
+struct BudgetState {
     committed: u8,
     reserved: u8,
     shrinks: u8,
+    summary_input_limit: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -31,7 +32,7 @@ struct Operation {
     id: CompactionOperationId,
     deadline_millis: u64,
     clock: Arc<dyn MonotonicClock>,
-    counts: Mutex<Counts>,
+    state: Mutex<BudgetState>,
 }
 
 /// Shared budget frozen once before both Compaction re-planning loops.
@@ -57,7 +58,7 @@ impl CompactionBudget {
                 .now_millis()
                 .saturating_add(COMPACTION_DEADLINE_MILLIS),
             clock,
-            counts: Mutex::default(),
+            state: Mutex::default(),
         }))
     }
 
@@ -105,7 +106,7 @@ impl CompactionBudget {
         cancellation: &CancellationSignal,
     ) -> Result<CompactionStartReservation, ContextError> {
         self.check(cancellation)?;
-        let mut counts = self.0.counts.lock().expect("compaction budget lock");
+        let mut counts = self.0.state.lock().expect("compaction budget lock");
         if counts.committed + counts.reserved >= COMPACTION_START_LIMIT {
             return Err(exhausted(
                 "compaction exhausted its 12 physical request starts",
@@ -118,20 +119,49 @@ impl CompactionBudget {
         })
     }
 
-    /// Charges one input shrink to this operation, regardless of re-entry.
+    /// Initializes the effective input limit once; re-entry retains every
+    /// provider-driven reduction learned by this operation.
+    ///
+    /// # Panics
+    /// A poisoned budget mutex indicates an internal invariant violation.
+    #[must_use]
+    pub fn summary_input_limit(&self, configured: u64) -> u64 {
+        *self
+            .0
+            .state
+            .lock()
+            .expect("compaction budget lock")
+            .summary_input_limit
+            .get_or_insert(configured)
+    }
+
+    /// Charges and retains one input reduction atomically across all re-entry.
     ///
     /// # Errors
     /// Refuses cancellation, expiry or a fourth shrink.
     /// # Panics
     /// A poisoned accounting mutex indicates an internal invariant violation.
-    pub fn take_shrink(&self, cancellation: &CancellationSignal) -> Result<(), ContextError> {
+    pub fn shrink_summary_input_limit(
+        &self,
+        configured: u64,
+        minimum: u64,
+        cancellation: &CancellationSignal,
+    ) -> Result<u64, ContextError> {
         self.check(cancellation)?;
-        let mut counts = self.0.counts.lock().expect("compaction budget lock");
+        let mut counts = self.0.state.lock().expect("compaction budget lock");
         if counts.shrinks >= COMPACTION_SHRINK_LIMIT {
             return Err(exhausted("compaction exhausted its three input shrinks"));
         }
+        let limit = counts.summary_input_limit.unwrap_or(configured);
+        if limit <= minimum {
+            return Err(exhausted(
+                "compaction reached its minimum Summary input limit",
+            ));
+        }
         counts.shrinks += 1;
-        Ok(())
+        let reduced = (limit / 2).max(minimum);
+        counts.summary_input_limit = Some(reduced);
+        Ok(reduced)
     }
 }
 
@@ -158,7 +188,7 @@ impl CompactionStartReservation {
                 "start receipt request mismatch",
             ));
         }
-        let mut counts = self.budget.0.counts.lock().expect("compaction budget lock");
+        let mut counts = self.budget.0.state.lock().expect("compaction budget lock");
         counts.reserved -= 1;
         counts.committed += 1;
         Ok(())
@@ -179,7 +209,7 @@ impl CompactionStartReservation {
         }
         self.budget
             .0
-            .counts
+            .state
             .lock()
             .expect("compaction budget lock")
             .reserved -= 1;
@@ -219,7 +249,7 @@ mod tests {
     }
 
     fn counts(budget: &CompactionBudget) -> (u8, u8, u8) {
-        let counts = budget.0.counts.lock().unwrap();
+        let counts = budget.0.state.lock().unwrap();
         (counts.committed, counts.reserved, counts.shrinks)
     }
 
@@ -322,11 +352,25 @@ mod tests {
     #[test]
     fn shrink_and_absolute_deadline_survive_cloning() {
         let (budget, clock, cancellation) = budget();
-        for _ in 0..3 {
-            budget.clone().take_shrink(&cancellation).unwrap();
+        for expected in [32_000, 16_000, 8_000] {
+            assert_eq!(
+                budget
+                    .clone()
+                    .shrink_summary_input_limit(64_000, 4096, &cancellation)
+                    .unwrap(),
+                expected
+            );
+            assert_eq!(
+                budget.summary_input_limit(128_000),
+                expected,
+                "a newly supplied configuration cannot reset this operation's learned bound"
+            );
         }
         assert_eq!(
-            budget.take_shrink(&cancellation).unwrap_err().kind,
+            budget
+                .shrink_summary_input_limit(64_000, 4096, &cancellation)
+                .unwrap_err()
+                .kind,
             ContextErrorKind::CompactionBudgetExceeded
         );
         clock.advance(300_000);
@@ -349,7 +393,9 @@ mod tests {
             let child = budget.clone();
             assert!(child.same_operation(&budget));
             assert_eq!(child.deadline_millis(), 337_000);
-            child.take_shrink(&cancellation).unwrap();
+            child
+                .shrink_summary_input_limit(64_000, 4096, &cancellation)
+                .unwrap();
 
             // A structurally valid Request for an unstarted Call is rejected
             // inside the real SQLite transaction, not by a fabricated receipt.
@@ -431,7 +477,10 @@ mod tests {
             ContextErrorKind::CompactionBudgetExceeded
         );
         assert_eq!(
-            budget.take_shrink(&cancellation).unwrap_err().kind,
+            budget
+                .shrink_summary_input_limit(64_000, 4096, &cancellation)
+                .unwrap_err()
+                .kind,
             ContextErrorKind::CompactionBudgetExceeded
         );
         clock.advance(3);
@@ -462,7 +511,7 @@ mod tests {
                                     RequestId::new(format!("race-{index}")),
                                     &cancellation,
                                 ),
-                                child.take_shrink(&cancellation),
+                                child.shrink_summary_input_limit(64_000, 4096, &cancellation),
                             ))
                         })
                         .expect("spawn budget contender")
@@ -558,7 +607,9 @@ mod tests {
         assert!(futures_util::poll!(original_wait.as_mut()).is_pending());
         assert!(futures_util::poll!(reentry_wait.as_mut()).is_pending());
         child.check(&cancellation).unwrap();
-        child.take_shrink(&cancellation).unwrap();
+        child
+            .shrink_summary_input_limit(64_000, 4096, &cancellation)
+            .unwrap();
         drop(
             child
                 .reserve_start(RequestId::new("last-millisecond"), &cancellation)
@@ -581,7 +632,9 @@ mod tests {
             child
                 .reserve_start(RequestId::new("expired"), &cancellation)
                 .unwrap_err(),
-            child.take_shrink(&cancellation).unwrap_err(),
+            child
+                .shrink_summary_input_limit(64_000, 4096, &cancellation)
+                .unwrap_err(),
         ] {
             assert_eq!(error.kind, ContextErrorKind::AuxiliaryDeadlineExceeded);
         }

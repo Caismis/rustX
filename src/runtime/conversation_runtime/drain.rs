@@ -18,9 +18,9 @@ pub(super) struct DrainCompletion {
 /// owners have positively settled. The child's durable physical receipt must
 /// not lose that proof merely because logical publication failed.
 #[derive(Debug, Clone)]
-pub(super) struct NativeDrainOutcome {
-    pub(super) logical: Result<(), ShutdownError>,
-    pub(super) physical: Result<(), Vec<String>>,
+pub(crate) struct NativeDrainOutcome {
+    pub(crate) logical: Result<(), ShutdownError>,
+    pub(crate) physical: Result<(), Vec<String>>,
 }
 
 impl NativeDrainOutcome {
@@ -64,10 +64,6 @@ impl DrainCompletion {
         *self.result.lock().expect("drain completion lock poisoned") = Some(result);
         self.completed.store(true, Ordering::Release);
         self.notify.notify_waiters();
-    }
-
-    pub(super) async fn wait(&self) -> Result<(), ShutdownError> {
-        self.wait_outcome().await.logical
     }
 
     pub(super) async fn wait_outcome(&self) -> NativeDrainOutcome {
@@ -619,6 +615,14 @@ impl ConversationRuntime {
     /// Panics only if the test-only coordinator probe lock is poisoned,
     /// which would mean a previous test hook panicked while holding it.
     pub async fn shutdown(&self) -> Result<(), ShutdownError> {
+        self.shutdown_outcome().await?.logical?;
+        self.inner.lifecycle.wait_until_quiescent().await;
+        Ok(())
+    }
+
+    /// Retains physical-exit evidence for native writer retirement even when
+    /// logical settlement failed. This never turns a failed shutdown into success.
+    pub(crate) async fn shutdown_outcome(&self) -> Result<NativeDrainOutcome, ShutdownError> {
         // Test-only: signal that shutdown reached the point just before it
         // attempts the coordinator lock. Combined with the submit gate this
         // makes the submit-vs-shutdown ordering provable by mutex exclusion.
@@ -634,9 +638,7 @@ impl ConversationRuntime {
             arrival.notify_one();
         }
         let completion = self.inner.begin_drain()?;
-        completion.wait().await?;
-        self.inner.lifecycle.wait_until_quiescent().await;
-        Ok(())
+        Ok(completion.wait_outcome().await)
     }
 }
 
