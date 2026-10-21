@@ -134,6 +134,67 @@ fn take(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Barrier;
+
+    // Successful workers return their permits rather than releasing them. Every
+    // contender therefore observes the same admission wave, not serial reuse.
+    fn contend(
+        conversations: Vec<ConversationCapacity>,
+        compaction: bool,
+    ) -> (Vec<CallPermit>, Vec<CapacityDomain>) {
+        std::thread::scope(|scope| {
+            let mut releases = Vec::new();
+            let workers: Vec<_> = conversations
+                .into_iter()
+                .map(|conversation| {
+                    let (release, ready) = std::sync::mpsc::channel::<Arc<Barrier>>();
+                    releases.push(release);
+                    std::thread::Builder::new()
+                        .spawn_scoped(scope, move || {
+                            let start = ready.recv().ok()?;
+                            start.wait();
+                            Some(if compaction {
+                                conversation.reserve_compaction()
+                            } else {
+                                conversation.reserve_general()
+                            })
+                        })
+                        .expect("spawn capacity contender")
+                })
+                .collect();
+            // No worker enters the fixed-count barrier until every spawn has
+            // succeeded. A spawn panic drops these senders, so existing workers
+            // exit instead of deadlocking scoped-thread cleanup at the barrier.
+            let start = Arc::new(Barrier::new(workers.len() + 1));
+            for release in releases {
+                release.send(start.clone()).unwrap();
+            }
+            start.wait();
+            let mut admitted = Vec::new();
+            let mut refused = Vec::new();
+            for worker in workers {
+                match worker
+                    .join()
+                    .expect("capacity contender panicked")
+                    .expect("capacity contender was released")
+                {
+                    Ok(permit) => admitted.push(permit),
+                    Err(busy) => refused.push(busy.domain),
+                }
+            }
+            (admitted, refused)
+        })
+    }
+
+    fn available(conversation: &ConversationCapacity) -> [usize; 5] {
+        [
+            conversation.process.total.available_permits(),
+            conversation.process.general.available_permits(),
+            conversation.total.available_permits(),
+            conversation.general.available_permits(),
+            conversation.process.writers.available_permits(),
+        ]
+    }
 
     #[test]
     fn ordinary_work_leaves_one_local_compaction_slot() {
@@ -197,5 +258,123 @@ mod tests {
         }
         assert_eq!(permits.len(), 24);
         assert!(process.conversation().reserve_general().is_err());
+    }
+
+    #[test]
+    fn simultaneous_local_contenders_keep_the_fourth_call_and_writer_protected() {
+        let process = ProcessCapacity::new();
+        let conversation = process.conversation();
+        let (general, refused) = contend(vec![conversation.clone(); 16], false);
+        assert_eq!(general.len(), 3);
+        assert_eq!(refused.len(), 13);
+        // A losing general contender can briefly hold the fourth total slot,
+        // so another nonblocking contender may refuse at that earlier layer.
+        assert!(refused.iter().all(|domain| matches!(
+            domain,
+            CapacityDomain::ConversationTotal | CapacityDomain::ConversationGeneral
+        )));
+        assert_eq!(available(&conversation), [29, 21, 1, 0, 29]);
+
+        let (protected, refused) = contend(vec![conversation.clone(); 16], true);
+        assert_eq!(protected.len(), 1);
+        assert_eq!(refused, vec![CapacityDomain::ConversationTotal; 15]);
+        assert_eq!(available(&conversation), [28, 21, 0, 0, 28]);
+
+        drop(general);
+        assert_eq!(available(&conversation), [31, 24, 3, 3, 31]);
+        let (replacement, refused) = contend(vec![conversation.clone(); 3], false);
+        assert_eq!(replacement.len(), 3);
+        assert!(refused.is_empty());
+        drop(protected);
+        drop(replacement);
+        assert_eq!(available(&conversation), [32, 24, 4, 3, 32]);
+    }
+
+    #[test]
+    fn simultaneous_process_contenders_preserve_twenty_four_plus_eight_and_recover() {
+        let process = ProcessCapacity::new();
+        let conversations: Vec<_> = (0..40).map(|_| process.conversation()).collect();
+        let (general, refused) = contend(conversations.clone(), false);
+        assert_eq!(general.len(), 24);
+        assert_eq!(refused.len(), 16);
+        assert!(refused.iter().all(|domain| matches!(
+            domain,
+            CapacityDomain::ProcessTotal | CapacityDomain::ProcessGeneral
+        )));
+        assert_eq!(process.total.available_permits(), 8);
+        assert_eq!(process.general.available_permits(), 0);
+        assert_eq!(process.writers.available_permits(), 8);
+
+        let (protected, refused) = contend(conversations.clone(), true);
+        assert_eq!(protected.len(), 8);
+        assert_eq!(refused, vec![CapacityDomain::ProcessTotal; 32]);
+        assert_eq!(process.total.available_permits(), 0);
+        assert_eq!(process.writers.available_permits(), 0);
+
+        // Releasing only the protected class cannot refund a general permit.
+        drop(protected);
+        let (unexpected, refused) = contend(conversations.clone(), false);
+        assert!(unexpected.is_empty());
+        assert_eq!(refused.len(), 40);
+        assert!(refused.iter().all(|domain| matches!(
+            domain,
+            CapacityDomain::ProcessTotal | CapacityDomain::ProcessGeneral
+        )));
+        assert_eq!(process.total.available_permits(), 8);
+        assert_eq!(process.general.available_permits(), 0);
+        assert_eq!(process.writers.available_permits(), 8);
+
+        drop(general);
+        for conversation in &conversations {
+            assert_eq!(available(conversation), [32, 24, 4, 3, 32]);
+        }
+        let (recovered, refused) = contend(conversations, true);
+        assert_eq!(recovered.len(), 32);
+        assert_eq!(refused, vec![CapacityDomain::ProcessTotal; 8]);
+        drop(recovered);
+        assert_eq!(available(&process.conversation()), [32, 24, 4, 3, 32]);
+    }
+
+    #[test]
+    fn refusal_at_every_acquisition_layer_rolls_back_all_earlier_permits() {
+        for (domain, compaction) in [
+            (CapacityDomain::ProcessTotal, false),
+            (CapacityDomain::ProcessGeneral, false),
+            (CapacityDomain::ConversationTotal, false),
+            (CapacityDomain::ConversationGeneral, false),
+            (CapacityDomain::RequiredWriter, false),
+            (CapacityDomain::ProcessTotal, true),
+            (CapacityDomain::ConversationTotal, true),
+            (CapacityDomain::RequiredWriter, true),
+        ] {
+            let process = ProcessCapacity::new();
+            let conversation = process.conversation();
+            let (semaphore, limit) = match domain {
+                CapacityDomain::ProcessTotal => (&process.total, 32),
+                CapacityDomain::ProcessGeneral => (&process.general, 24),
+                CapacityDomain::ConversationTotal => (&conversation.total, 4),
+                CapacityDomain::ConversationGeneral => (&conversation.general, 3),
+                CapacityDomain::RequiredWriter => (&process.writers, 32),
+            };
+            // Isolate each layer, including the otherwise unreachable writer
+            // shortage, without replacing the production acquisition path.
+            let blocker = semaphore.clone().try_acquire_many_owned(limit).unwrap();
+            let before = available(&conversation);
+            let (admitted, refused) = contend(vec![conversation.clone(); 3], compaction);
+            assert!(admitted.is_empty(), "{domain:?}, protected={compaction}");
+            assert_eq!(refused, vec![domain; 3]);
+            assert_eq!(available(&conversation), before, "rollback at {domain:?}");
+
+            drop(blocker);
+            assert_eq!(available(&conversation), [32, 24, 4, 3, 32]);
+            let (general, refused) = contend(vec![conversation.clone(); 3], false);
+            assert_eq!(general.len(), 3);
+            assert!(refused.is_empty());
+            let protected = conversation.reserve_compaction().unwrap();
+            assert_eq!(available(&conversation), [28, 21, 0, 0, 28]);
+            drop(general);
+            drop(protected);
+            assert_eq!(available(&conversation), [32, 24, 4, 3, 32]);
+        }
     }
 }

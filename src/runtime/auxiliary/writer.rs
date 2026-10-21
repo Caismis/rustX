@@ -166,6 +166,29 @@ pub struct JoinedAuxiliaryWriter {
 }
 
 impl AuxiliaryWriter {
+    /// One-shot test rendezvous after a real transaction returns successfully.
+    /// Disconnecting its release simulates loss of the committed acknowledgement.
+    #[cfg(test)]
+    pub(super) fn hold_next_commit_for_test(&self) -> (oneshot::Receiver<()>, mpsc::Sender<()>) {
+        let (entered, observed) = oneshot::channel();
+        let (release, held) = mpsc::channel();
+        let mut state = self.state.lock().unwrap();
+        assert!(state.after_commit.is_none());
+        state.after_commit = Some((entered, held));
+        (observed, release)
+    }
+
+    /// Keeps the existing worker's exact-confirmation path active after SQL exit.
+    #[cfg(test)]
+    pub(super) fn hold_confirmation_for_test(&self) -> (oneshot::Receiver<()>, mpsc::Sender<()>) {
+        let (entered, observed) = oneshot::channel();
+        let (release, held) = mpsc::channel();
+        let mut state = self.state.lock().unwrap();
+        assert!(state.before_confirmation.is_none());
+        state.before_confirmation = Some((entered, held));
+        (observed, release)
+    }
+
     /// Starts at most one physical worker for an already-reserved Call.
     ///
     /// # Errors
