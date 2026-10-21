@@ -89,7 +89,8 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
   const canonical = conversation(snapshot);
   const original = transcriptPresentation(history, snapshot.transcript);
   const page = history?.page ?? snapshot.transcript;
-  const allDescriptors = deferredToolDescriptors(snapshot.message_descriptors ?? [], page, [], !!history?.window);
+  // Canonical block counts also discover new live messages alongside a frozen window.
+  const allDescriptors = deferredToolDescriptors(snapshot.message_descriptors ?? [], page, [], false);
   const candidates = new Map([...canonical.messages, ...original.flatMap(entry => entry.item.type === 'message' ? [entry.item.message] : [])].map(message => [message.id, message]));
   const requests = [...candidates.values()].flatMap(message => { const request = messageContinuation(message, allDescriptors, page); return request ? [request] : []; });
   const blockPages = useMessageBlocks(requests);

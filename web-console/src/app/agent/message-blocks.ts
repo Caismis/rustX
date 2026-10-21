@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { AssistantContentBlock, CanonicalContentLocator, CheckpointReadCut, ContentBinding, MessageBlock, RuntimeClientMessageDescriptor, RuntimeClientTranscriptPage, UserContentBlock } from '../../../../protocol/app-server/v51';
+import { messageDescriptor } from '../../../../protocol/app-server/message-descriptor';
 import { canonicalLocatorKey, checkpointReadCutKey, observationReadCutKey } from '../../../../protocol/app-server/content-identity';
 import { readBinding, readTraceCollection } from '../../client/trace-content';
 import { childHistoryReadCut, observationSourceIdentity, useObservationSource } from './ObservationSource';
@@ -10,12 +11,26 @@ type Request = { locator: CanonicalContentLocator; offset: number; total?: strin
 const requestKey = (request: Request) => JSON.stringify([canonicalLocatorKey(request.locator), request.offset, request.total]);
 const object = (value: unknown): Record<string, unknown> => value != null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 
+/** A frozen window and the live tail keep independent native read owners. */
+function messageHistoryCut(source: Source, locator: CanonicalContentLocator) {
+  if ('historyCut' in source) return source.historyCut;
+  if (!source.historyFrozen) return;
+  const page = source.history;
+  const inline = locator.type === 'by_message_id' && page?.entries?.some(entry => entry.item.type === 'message' && entry.item.message.id === locator.message_id);
+  const deferred = page?.deferred_entries?.some(item => {
+    const descriptor = messageDescriptor(item.value);
+    return descriptor && (canonicalLocatorKey(descriptor.locator) === canonicalLocatorKey(locator)
+      || locator.type === 'by_message_id' && descriptor.identity === locator.message_id);
+  });
+  return inline || deferred ? page?.source_cut : undefined;
+}
+
 /** Continue the canonical message, using the same bounded pages as Trace. */
 export async function readMessageBlocks(source: Source, request: Request, current: () => boolean) {
   const key = request.locator.type === 'by_message_id' ? `message:${request.locator.message_id}` : `ledger:${request.locator.position}`;
   const domain = `messages.${key}.blocks`;
-  const history = 'historyCut' in source ? source.historyCut : source.historyFrozen ? source.history?.source_cut : undefined;
-  if (source.historyFrozen && !history) throw Error('Original message history cut is unavailable.');
+  const history = messageHistoryCut(source, request.locator);
+  if (source.historyFrozen && !source.history?.source_cut && !('historyCut' in source && source.historyCut)) throw Error('Original message history cut is unavailable.');
   const childHistory = history && 'target' in source && source.agentId;
   const captured = childHistory ? childHistoryReadCut(source, history) : source.cut();
   const historical = history && !childHistory;
@@ -77,18 +92,22 @@ export function useMessageBlocks(requests: readonly Request[]) {
   const [retry, setRetry] = useState(0);
   const [state, setState] = useState<{ identity: string; blocks: Record<string, Block[]>; errors: Record<string, { error: string; revision?: string }> }>({ identity, blocks: {}, errors: {} });
   const loaded = state.identity === identity ? state : { identity, blocks: {}, errors: {} };
-  const revision = source?.historyFrozen || source && 'historyCut' in source && source.historyCut ? undefined : source?.cut()?.revision;
-  const activeKeys = new Set(requests.map(requestKey));
-  const errors = Object.entries(loaded.errors).filter(([key]) => activeKeys.has(key)).map(([,error])=>error);
-  const retryVersion = errors.length ? revision : undefined, active = !!source?.owned();
+  const revision = source?.cut()?.revision;
+  const requestRevision = (request: Request) => source && messageHistoryCut(source, request.locator) ? undefined : revision;
+  const activeRequests = new Map(requests.map(request => [requestKey(request), request]));
+  const errors = Object.entries(loaded.errors).flatMap(([key,error]) => {
+    const request = activeRequests.get(key);
+    return request ? [{ ...error, currentRevision: requestRevision(request) }] : [];
+  });
+  const retryVersion = errors.some(error => error.currentRevision !== undefined) ? revision : undefined, active = !!source?.owned();
   useEffect(() => {
     if (!source || !active) return;
     let mounted = true;
     const current = () => mounted && latest.current.identity === identity && latest.current.plan === plan && !!latest.current.source?.owned();
     void (async () => {
       for (const request of requests) {
-        const key = requestKey(request);
-        if (loaded.blocks[key] || loaded.errors[key] && loaded.errors[key].revision === revision) continue;
+        const key = requestKey(request), atRevision = requestRevision(request);
+        if (loaded.blocks[key] || loaded.errors[key] && loaded.errors[key].revision === atRevision) continue;
         try {
           const blocks = await readMessageBlocks(source, request, current);
           if (current()) setState(previous => {
@@ -96,14 +115,14 @@ export function useMessageBlocks(requests: readonly Request[]) {
             return { identity, blocks: { ...(previous.identity === identity ? previous.blocks : {}), [key]: blocks }, errors };
           });
         } catch (error) {
-          if (current()) setState(previous => ({ identity, blocks: previous.identity === identity ? previous.blocks : {}, errors: { ...(previous.identity === identity ? previous.errors : {}), [key]: { error: String(error), revision } } }));
+          if (current()) setState(previous => ({ identity, blocks: previous.identity === identity ? previous.blocks : {}, errors: { ...(previous.identity === identity ? previous.errors : {}), [key]: { error: String(error), revision: atRevision } } }));
         }
         if (!current()) return;
       }
     })();
     return () => { mounted = false; };
   }, [identity, plan, source?.client, retry, retryVersion, active]);
-  return { blocks: (request: Request) => loaded.blocks[requestKey(request)], errors: errors.filter(error => error.revision === revision).map(error => error.error), retry: () => { setState(previous => ({ ...previous, errors: {} })); setRetry(value => value + 1); } };
+  return { blocks: (request: Request) => loaded.blocks[requestKey(request)], errors: errors.filter(error => error.revision === error.currentRevision).map(error => error.error), retry: () => { setState(previous => ({ ...previous, errors: {} })); setRetry(value => value + 1); } };
 }
 export function messageContinuation(message: MessageBlock, descriptors: readonly RuntimeClientMessageDescriptor[], page: RuntimeClientTranscriptPage): Request | undefined {
   if (message.role === 'tool') return;

@@ -52,7 +52,7 @@ it.each(['live','history'] as const)('%s assistant blocks after the header conti
  expect(server.requests.filter(row=>row.request.method===method).map(row=>row.request.params)).toMatchObject([{offset:32},{offset:64},{offset:96}]);
 });
 
-it('an expired live cut retries on the next native checkpoint and retains the successful immutable body',async()=>{
+it.each([false,true])('an expired live cut retries on the next checkpoint and retains its body alongside frozen history: %s',async frozen=>{
  const {act,waitFor}=await import('@testing-library/react');
  server=new Server();await server.attached('A');const base=snapshot();let cut=checkpoint(base).read_cut;
  const message:MessageBlock={id:'admitted',role:'user',source:'human',content:Array.from({length:32},(_,n)=>({type:'uploaded_file' as const,batch_id:'batch',name:`file-${n}.txt`}))};
@@ -60,7 +60,8 @@ it('an expired live cut retries on the next native checkpoint and retains the su
  const current={...base,messages:[message],message_descriptors:[descriptor],transcript:{entries:[{cursor:'17',item:{type:'message' as const,message}}]}};
  server.held.add('conversation/checkpointPage');
  const source={client:server.client,target:server.target('A'),cut:()=>cut,owned:()=>true};
- const view=()=> <JournalSourceProvider source={source} messages={[message]} transcript={current.transcript}><AgentTranscript snapshot={current}/></JournalSourceProvider>;
+ const history={source_cut:{read:readingWindow({}).cut,ledger_through:'0',transcript_total:'0',surface_revision:'0',inherited_through:'0'},entries:[{cursor:'1',item:{type:'message' as const,message:{id:'older-frozen-message',role:'assistant' as const,content:[{type:'text' as const,text:'Preserved historical body'}]}}}]};
+ const view=()=> <JournalSourceProvider source={source} historical={frozen} messages={[message]} transcript={current.transcript} history={frozen?history:undefined}><AgentTranscript snapshot={current} history={frozen?{epoch:1,page:history,window:{cut:history.source_cut.read,page:history,newer_cursor:'1'}}:undefined}/></JournalSourceProvider>;
  const ui=render(view()),expired=await server.waitFor('conversation/checkpointPage',1);
  await act(async()=>server.socket.deliver({jsonrpc:'2.0',id:expired.id,error:{code:-32000,message:'read_cut_expired'}}));
  await ui.findByRole('alert');expect(server.requests.filter(row=>row.request.method==='conversation/checkpointPage')).toHaveLength(1);
@@ -115,4 +116,27 @@ it.each([false,true])('frozen child continuation keeps C0 when the independent l
  expect(ui.queryByRole('alert')).toBeNull();
  expect(server.requests.filter(row=>row.request.method==='conversation/checkpointPage')).toHaveLength(1);
  expect(server.requests.filter(row=>row.request.method==='session/historyPage')).toHaveLength(0);
+});
+
+it.each([1,33])('a frozen child window with %i old blocks keeps live-tail continuations on their own checkpoint',async oldCount=>{
+ server=new Server();await server.attached('A');const base=snapshot();
+ const native={read:{...readingWindow({}).cut,ledger_through:'70',transcript_total:'70'},ledger_through:'70',transcript_total:'70',surface_revision:'0',inherited_through:'0'};
+ const liveCut={...checkpoint(base).read_cut,conversation_id:native.read.conversation_id,activation_id:'worker-activation',revision:'2',through:'1001',source_cut:{...native,ledger_through:'71',transcript_total:'71',read:{...native.read,journal:'1001',transcript:'1001',ledger_through:'71',transcript_total:'71'}}};
+ const old:MessageBlock={id:'old-window-message',role:'assistant',content:Array.from({length:Math.min(32,oldCount)},(_,n)=>({type:'text',text:`Old paragraph ${n}`}))};
+ const recent:MessageBlock={id:'new-tail-message',role:'assistant',content:Array.from({length:32},(_,n)=>({type:'text',text:`Recent paragraph ${n}`}))};
+ const descriptor:RuntimeClientMessageDescriptor={identity:recent.id,locator:{type:'by_ledger_position',position:71},role:'assistant',kind:'message',block_count:'33',tool_call_count:'0',tool_calls:[],content:[],collections:[{domain:'messages.ledger:71.blocks',revision:'2',total:'33',loaded:'32',next_offset:'32'}]};
+ const page={source_cut:native,entries:[{cursor:'17',item:{type:'message' as const,message:old}}],collections:oldCount===33?[{domain:'messages.ledger:17.blocks',revision:'1',total:'33',loaded:'32',next_offset:'32'}]:[]};
+ server.handlers.set('conversation/checkpointPage',request=>{
+  if(request.method!=='conversation/checkpointPage')throw Error('page');const past=request.params.domain.includes(old.id);
+  const cut=past?{conversation_id:native.read.conversation_id,activation_id:'worker-activation',revision:'0',through:native.read.journal,source_cut:native,domain_revisions:{},collection_cuts:{}}:liveCut;
+  return {type:'checkpoint_page',page:{read_cut:{canonical_foreground:null,live_publication:null,...cut},cursor:cut.revision,domain:request.params.domain,total:'33',next_offset:null,collections:[],items:[{offset:'32',identity:'text',value:{type:'text',text:past?'Original historical ending':'Independent live ending'},content:[],deferred:false}]}};
+ });
+ const ui=render(<JournalSourceProvider historical source={{client:server.client,target:server.target('A'),agentId:'worker',cut:()=>liveCut,owned:()=>true}} messages={[recent]} transcript={{entries:[{cursor:'1001',item:{type:'message',message:recent}}]}} history={page}><AgentTranscript snapshot={{...base,messages:[recent],message_descriptors:[descriptor],transcript:{entries:[{cursor:'1001',item:{type:'message',message:recent}}]}}} history={{epoch:1,page,window:{cut:native.read,page,newer_cursor:'17'}}}/></JournalSourceProvider>);
+ await ui.findByText('Independent live ending');
+ if(oldCount===33)await ui.findByText('Original historical ending');
+ expect(ui.queryByRole('alert')).toBeNull();
+ const reads=server.requests.flatMap(({request})=>request.method==='conversation/checkpointPage'?[request]:[]);
+ expect(reads).toHaveLength(oldCount===33?2:1);
+ expect(reads.find(request=>request.params.domain.includes(recent.id))?.params.cut).toEqual(liveCut);
+ if(oldCount===33)expect(reads.find(request=>request.params.domain.includes(old.id))?.params.cut.source_cut).toEqual(native);
 });

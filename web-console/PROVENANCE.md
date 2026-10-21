@@ -3929,3 +3929,10 @@ collection generation. Comparisons use closed field identities rather than JSON
 property order, and normalize omitted/`null` optional native selectors. Regression
 responses include the native serialized selector fields instead of echoing only
 the client request shape.
+
+A combined frozen window/live tail selects its source per canonical message.
+Historical membership comes from the selected native inline/deferred positions;
+new tail messages retain their live checkpoint and revision-based error recovery.
+Live canonical block counts discover tail continuations without borrowing live
+Tool lifecycle state for historical rows. Regressions cover both short/long old
+messages alongside a long new message, and expired live reads inside a frozen view.
