@@ -1430,7 +1430,8 @@ durable/store.rs           ConversationStore: the one durable authority of a
                            conversation, the union of the domain Store
                            contracts (InboxStore, CanonicalStore,
                            RequestStore, JournalStore, PublicationStore,
-                           ProjectionStore, ObservationStore) declared in
+                           ProjectionStore, ObservationStore,
+                           AuxiliaryStore) declared in
                            durable/inbox.rs and durable/store/*.rs beside
                            their vocabulary; RequestStore owns the fused
                            `commit_model_turn_start` contract (canonical User
@@ -1445,7 +1446,8 @@ durable/sqlite.rs          SqliteConversationStore: the M8 SQLite backend and
                            its single connection/transaction owner; each
                            domain contract is implemented in durable/sqlite/
                            (schema, inbox, canonical, request, journal,
-                           publication, projection, observation) by helpers
+                           publication, projection, observation, auxiliary)
+                           by helpers
                            that run inside the caller's transaction
 runtime/continuation.rs   ProviderContinuationState boundary (OpenAI Responses
                            stored/stateless, Anthropic opaque state)

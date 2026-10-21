@@ -1,107 +1,174 @@
 # Issue #487 — layering refactor: requirement matrix
 
 Starting base: `origin/main` at `6771928953a9b2815a27fd784f6d39c5ccde8b56`
-(identical to the audit snapshot, so every audited finding applies).
+(identical to the audit snapshot, so every audited finding applied).
+Integrated main: `0f3d978e43e2174d5b26feff6bccefc1bf25f71d` (adds auxiliary
+request ownership, PR #486; its new code was ported into the refactored
+layout, see "Integration with main" below).
 
-Status legend: **done** (implemented, evidence below), **resolved on base**
-(already true at the base, with source evidence), **open**.
+Status: **done** = implemented with the evidence named; **resolved on base**
+= already true at the base. No requirement is deferred.
 
-Size numbers come from [`measure.py`](measure.py) (method in its docstring):
-physical lines, comments and blanks included; Rust `#[cfg(test)]` items and
-test-only module files counted as test; TypeScript test/generated files
-separated. See [size-report.md](size-report.md) for before/after tables.
+Sizes: [`measure.py`](measure.py) (method in its docstring) and the generated
+[size report](size-report.md). Shared-contract path moves:
+[contract-moves.md](contract-moves.md).
 
 ## A. Configuration and Runtime contracts
 
-| Requirement | Base finding | Old owner → final owner | Change / removed path | Evidence | Status |
+| Req | Base finding | Old owner → final owner | Change / removed path | Evidence | Status |
 | --- | --- | --- | --- | --- | --- |
-| A1 separate authored/source/provenance from prepared bindings and admission/adoption | | | | | open |
-| A2 `RuntimeConfiguration`, prepared configuration, adoption eligibility, resource loader owned natively | | | | | open |
-| A3 one pure cache-impact policy | | | | | open |
-| A4 configuration application split by capture/prepare/apply/publication | | | | | open |
-| A5 stale-owner/revision, lock order, atomic adoption, model-selection ownership preserved | | | | | open |
+| A1 authored/source/provenance vs prepared bindings and adoption | `RuntimeConfiguration` carried component/source revisions, redacted document and provenance; the native runtime redacted and copied them | `runtime::resources::RuntimeConfiguration` (mixed) → execution bindings stay in `RuntimeConfiguration`; authored record is `local_runtime::configuration::generation::AuthoredConfiguration`, carried inert as `authored` | runtime no longer calls `redact` or reads captures; Context/Provider/policy units arrive as a native `ContextBinding` or a closure over the base generation selected under the runtime lock | `src/runtime/adoption.rs`, `src/local_runtime/configuration/generation.rs`; `runtime::conversation_runtime::` 92 tests | done |
+| A2 ownership of prepared configuration, adoption eligibility, resource loader | `PreparedConfiguration`, `AdoptionEligibility`, `AdoptionError` in `local_runtime::configuration::application`; `AdmittedConfiguration` in `settings`; native `RuntimeResourceLoader` trait with filesystem and frozen-subagent impls | → `crate::runtime::adoption`; loader → application type `LocalRuntimeResourceLoader` owned by `LocalConversationCore` | removed `RuntimeResourceLoader`, `FilesystemRuntimeResourceLoader`, `FrozenSubagentResourceLoader`, `configuration_view()` (replaced by `EffectiveConfiguration::adopted`); native `local_runtime` references 54 → 9 (resolved config document and inert authored record, plus 3 test-only) | `SessionRuntimeManager::configuration_preparation` reads runtime + loader under one composition lock; stale-candidate rejection unchanged (`prepare_configuration` reads the binding baseline first) | done |
+| A3 one cache-impact policy | three copies in `ConversationRuntime` plus two `== Preserved` checks in the worker | → `runtime::adoption::configuration_cache_impact` + `PreparedConfiguration::adopts_implicitly` | duplicates removed | `src/runtime/adoption.rs` | done |
+| A4 configuration application split | `local_runtime/configuration.rs` 2,004 production lines | → root (193) + `capture`, `prospective`, `units`, `semantics`, `generation`; `application` stays the single publication worker | — | size report | done |
+| A5 stale-owner/revision, lock order, atomic adoption, model selection, frozen snapshots | — | unchanged owners | no new locks or tasks | configuration and residency suites (`local_runtime::session_runtime_manager::tests::`), `--test cfg3_catalog`, `--test cfg3_managed_output` | done |
 
 ## B. Native observation/read contracts and Runtime Client
 
-| Requirement | Base finding | Old owner → final owner | Change / removed path | Evidence | Status |
+| Req | Base finding | Old owner → final owner | Change / removed path | Evidence | Status |
 | --- | --- | --- | --- | --- | --- |
-| B1 shared bounded contracts move to a native boundary | | | | | open |
-| B2 no native calls into client display shaping (prepared status) | | | | | open |
-| B3 presentation/wire shaping stays in the adapter | | | | | open |
-| B4 projection/host split into read/subscription/projection/lifecycle | | | | | open |
-| B5 bounded descriptors/caches, exact cuts, content identity preserved | | | | | open |
+| B1 shared bounded contracts at a native boundary | ~600 native references into `runtime_client::{content, snapshot, checkpoint::bounded_*, trace, response, structural_json, …}` | → new crate-level `crate::observation` (`bounded`, `content`, `cut`, `capture`, `transcript`, `tool`, `interaction`, `status`, `turn`, `statistics`, `occupancy`, `delivery`, `goal`, `head`, `failure`, `trace::{types,bounds,content,frozen,request,generation}`, `capability_source`, `resource_source`, `workflow_source`, `preflight`, `structural_json`) | one definition per type, no re-export at the old path; mapping in [contract-moves.md](contract-moves.md) | native production code in `durable`, `runtime`, `agent`, `context`, `tools`, `capabilities`, `observation` has 0 `runtime_client` references (remaining hits are `#[cfg(test)]` consumers) | done |
+| B2 no native call into client display shaping | `conversation_runtime` and `durable/sqlite/observation_receipt` called `runtime_client::projection::prepared_status*`; `terminal_turn` built failures through the projection | prepared status is written into the request source encoding at commit, so it is a source-prepared descriptor → `observation::status`; failures → `observation::failure`; Tool descriptor preparation returns its own `ToolTerminalUnavailable` | dropped `runtime_client::response::TurnProcessOutcome` re-export and root re-exports of moved names | commit `6a441ccf` | done |
+| B3 presentation stays in the adapter | — | linearization, checkpoint/page assembly, cursors, subscriptions, `TraceProjection`, `*_observation` readers, host, endpoint stay in `runtime_client` | — | module map in `docs/architecture.md` | done |
+| B4 projection/host split | `projection.rs` 6,833 and `host.rs` 5,529 production lines | `projection/`: lifecycle, observe, fold, journal, canonical, publication, subscription, read, read_domains, checkpoint_seed, in_flight, views; `host/`: construction, bootstrap, durable_bootstrap, worker, sources, publication, read, checkpoint, history, agents, subscription, control | entry files 368 / 753; largest child `host/read.rs` 1,211 | `runtime_client::` tests | done |
+| B5 bounded descriptors, exact cuts, content identity | — | unchanged | no new rereads; `include!` Trace tests became modules | `runtime_client::response::`, `durable::sqlite::observation` tests | done |
 
 ## C. SQLite and Store
 
-| Requirement | Base finding | Old owner → final owner | Change / removed path | Evidence | Status |
+| Req | Base finding | Old owner → final owner | Change / removed path | Evidence | Status |
 | --- | --- | --- | --- | --- | --- |
-| C1 SQLite organized by schema/inbox/canonical/request/journal/publication/projection/observation | | | | | open |
-| C2 one read-cut transaction helper | | | | | open |
-| C3 narrower Store interfaces from real consumers | | | | | open |
-| C4 one transaction owner per semantic operation | | | | | open |
-| C5 domain tests relocated, rollback/corruption/cut/lineage/publication coverage kept | | | | | open |
+| C1 SQLite by domain | `sqlite.rs` 13,417 production lines, 22 `include!` fragments | `SqliteConversationStore` stays the one connection/transaction owner in `sqlite.rs` (736); domains in `sqlite/`: `schema` (+`shape`), `inbox`, `canonical` (+`ledger`, `transcript`), `request` (+`snapshot`, `contribution`), `journal` (+`reference`), `publication` (+`proposal`), `projection/store`, `observation/store` + `observation/index`, `auxiliary` (+9 children, from main) | no `include!` remains under `src/durable` | 395 `durable::sqlite::` tests before and after the split, identical names | done |
+| C2 one read-cut transaction helper | the lock / read transaction / cut validation / query sequence repeated across observation reads | → `read_at_cut` (10 reads) and `read_transaction` (26 reads) | 13 reads that validate the cut on the bare connection stay there on purpose: a transaction would arm the append-validation rollback hook on every read and add rereads on the next append | `durable::sqlite::observation` tests | done |
+| C3 narrower Store interfaces | one 202-method `ConversationStore` | union of `InboxStore` 12, `CanonicalStore` 32, `RequestStore` 10, `JournalStore` 10, `PublicationStore` 7, `ProjectionStore` 22, `ObservationStore` 106, `AuxiliaryStore` 14, plus 4 own methods | 11 single-domain consumers now take their domain trait (`ObservationStore`, `RequestStore`, `JournalStore`, `CanonicalStore`); `ObservationStore` stays whole because its runtime_client readers use its methods together | commit `6d627dd4`; `src/durable/store.rs` | done |
+| C4 one transaction owner per semantic operation | — | domain helpers take the caller's `Connection`/`Transaction`; compound operations (canonical publication, model-turn start, subagent terminal acceptance, auxiliary settlement) stay one method in one transaction | SQL unchanged | rollback/corruption suites | done |
+| C5 tests with their domains | inline tests and fragments in `sqlite.rs` | child test modules beside each domain, shared `sqlite::test_support` | rollback, corruption, read-cut, lineage, publication coverage kept | test inventory unchanged | done |
 
 ## D. Native Runtime, execution, Subagent, Session
 
-| Requirement | Base finding | Old owner → final owner | Change / removed path | Evidence | Status |
+| Req | Base finding | Old owner → final owner | Change / removed path | Evidence | Status |
 | --- | --- | --- | --- | --- | --- |
-| D1 ConversationRuntime split, single coordination owner | | | | | open |
-| D2 AgentExecution inherent impl split (step/request/tools/publication) | | | | | open |
-| D3 AgentExecution remains owner; state aggregates only on real lifetimes | | | | | open |
-| D4 Subagent registry, Session, configuration, composition, manager modularized | | | | | open |
-| D5 registration, drain, frozen input, settlement, ordering, terminal uniqueness intact | | | | | open |
+| D1 ConversationRuntime split | 7,305 production + 12,561 test lines in one file | one owner and one coordinator lock; `impl` blocks in `bootstrap`, `admission`, `attempt`, `child`, `compaction`, `drain`, `durability`, `configuration`, `model_selection`, `controls`, `history`, `observer`, `probe` | entry 1,079; tests in `<domain>/tests.rs`; two `include!` fragments became members | 92 `runtime::conversation_runtime::` tests keep the prefix (FAST requirement) | done |
+| D2 AgentExecution split | 5,783 production lines | `AgentExecution` and its run loop stay the owner; `impl` blocks in `construction`, `step`, `request`, `start`, `stream`, `recovery`, `compaction`, `tools`, `publication`, `terminal`, `test_sync` | entry 452; largest `tools.rs` 1,122 | `agent::`, `scripted_suites::` | done |
+| D3 state aggregates only on real lifetimes | — | `LogicalStep` (reset per logical step; retries reuse the latest frozen input), `RequestMeasurements` (provider-observed input that outlives a request; `withdraw()` where fields were cleared), `ExecutionPauses` (test-only) | pending continuation / owner / accepted source kept as separate fields so pending-before-commit and accepted-after-commit staging is unchanged; `SemanticGenerationRecovery::reset` removed (unused) | commit `a40199da` | done |
+| D4 Subagent registry, Session, composition, manager | registry 4,522; session 3,400; composition 2,113; manager 2,078 | each owner type keeps its state and mutex; responsibilities in `registry/` (preparation, ownership_commit, control, drain, settlement, interactions, observation), `session/` (creation, lineage, metadata, projection, catalog_commit, invalidations), `composition/` (resources, subagent_child, runtimes), `session_runtime_manager/` (client, lifecycle, drain, sessions, model_selection, configuration) | entries 686 / 889 / 911 / 522 | `runtime::subagent::`, `local_runtime::session::`, `--test subagent` | done |
+| D5 registration, drain, frozen input, settlement, ordering, terminal uniqueness | — | unchanged; terminal construction and `emit_terminal` now in one `terminal` module | no new executor, scheduler, locks, tasks or Drop cleanup | scripted execution/cancellation suites | done |
 
 ## E. Shared Web/TUI semantics
 
-| Requirement | Base finding | Old owner → final owner | Change / removed path | Evidence | Status |
+| Req | Base finding | Old owner → final owner | Change / removed path | Evidence | Status |
 | --- | --- | --- | --- | --- | --- |
-| E1 single native event fold; TUI duplicate folding removed | | | | | open |
-| E2 shared exact numeric parsing/encoding/validation reasons | | | | | open |
-| E3 one exhaustive method policy incl. parameter-sensitive cases | | | | | open |
-| E4 transports keep their queue/backpressure | | | | | open |
-| E5 shared Source repair rules and attachment identity | | | | | open |
-| E6 `AppServerSession.updateState` removed | | | | | open |
+| E1 one native event fold | TUI folded each `projection_transition` batch per inner event and again as a whole, folded content advances twice, and ran its own fold that the native result then overwrote | `protocol/app-server/projection.ts` `foldRuntimeEvent`, called once per event/batch | removed `reduceOrdinaryState` and helpers; TUI keeps an explicit transcript-display adapter | `tui/test/projection.test.ts` | done |
+| E2 exact numbers | Web used `Number(text)` (rounded `9007199254740993`, accepted `0x10`, `Infinity`); TUI integer input sent `007`, `-0` that native `ExactInteger::parse` refuses | → `protocol/app-server/number.ts` (binary64 wire codec, exact draft reading, native-aligned integer reading, machine-readable reasons) | removed `tui/src/protocol/number.ts`, Web `finiteNumber`/`displayNumber` | regressions for all five required inputs in both consumers | done |
+| E3 one exhaustive method policy | TUI `METHOD_RESPONSE_LOSS_CLASS` + lane switch; Web `READS`, lane switch, `longWait` | → `protocol/app-server/method-policy.ts` (`Record<MethodName, …>`, so a new generated method fails to typecheck until classified), incl. `goal/control` `action=show` | Web now treats `delivery/cancel`, `session/subscribe`, `session/exportPrepare` as connection-local like the TUI (they commit only connection-scoped state, which a lost response retires with the connection) | Web/TUI client tests | done |
+| E4 transports keep their queues | — | each transport keeps its own queue, backpressure and lifetime code | — | — | done |
+| E5 Source repair rules, attachment identity | copies in TUI host, client buffer, status line and Web client | → `protocol/app-server/source-repair.ts`, `attachment-identity.ts` | duplicates removed; notices/acknowledgement stay with each UI | — | done |
+| E6 `AppServerSession.updateState` | production mutation entry used only by tests | removed; the four tests drive real `session/event` notifications | — | `tui/test/*` | done |
 
 ## F. Web/TUI and App Server controllers
 
-| Requirement | Base finding | Old owner → final owner | Change / removed path | Evidence | Status |
+| Req | Base finding | Old owner → final owner | Change / removed path | Evidence | Status |
 | --- | --- | --- | --- | --- | --- |
-| F1 Web client split (transport/session/reads/upload/submission) | | | | | open |
-| F2 client ↔ first-submit cycle removed | | | | | open |
-| F3 established seams reused, no forwarding context | | | | | open |
-| F4 TUI app split | | | | | open |
-| F5 dispatcher helpers and Session readers separated | | | | | open |
-| F6 App Server handlers split by family, one admission/reply owner | | | | | open |
+| F1 Web client split | `app-server.ts` 2,584 lines | root (891) keeps connection lifecycle, the one published state and Session lifecycle projection; collaborators with narrow interfaces: `contracts`, `errors`, `request-pipeline`, `source-repairs`, `session-catalog`, `session-reads` (`client.reads`), `configuration-observations`, `reading`, `cold-reads`, `trace-reads`, `session-controls`, `model-selection`, `interactions`, `session-uploads` | XState ownership unchanged | `web-console` typecheck/test/build | done |
+| F2 client ↔ first-submit cycle | client imported `first-submit.ts` | application layer owns `firstSubmissions(client)` over new `onAuthorityRetired`/`onDispose` hooks; shared errors in `client/errors.ts` | cycle removed | `check:provenance` | done |
+| F3 established seams, no forwarding context | — | collaborators receive only what they read/write | — | — | done |
+| F4 TUI app split | `ui/app.ts` 2,376 | root (1,517) keeps global focus/exit, Session binding, draft/submit, the presentation lease; `presentation-lease`, `human-input`, `selectors`, `conversation-view` | 1,517 is just over the ~1,500 guideline: further splitting would separate run-loop key routing from Session binding, which share the app state | `tui` tests | done |
+| F5 dispatcher helpers, Session readers | dispatcher 1,464; session 1,296 | `commands/outcome.ts`, `commands/presentation.ts`; `app-server/session-readers.ts` (epoch-fenced bounded reads); `questionnaire-answers.ts`; shared `diagnostic-text.ts` | entries 831 / 886 / 861 | `tui` tests | done |
+| F6 App Server handler families | `connection.rs` 3,240 | `connection.rs` (974) keeps decoding, admission, runtime-operation admission under the route lock, attach reservation/commit, release, close, delivery registration and `Reply::commit`; `connection/{family, catalog, history, configuration, runtime, notifications}`; one error mapping in `app_server/rpc_error.rs` | `Family::of` replaces `runtime_target` with an exhaustive match | 4,252 lib tests before and after | done |
 
 ## G. MCP
 
-| Requirement | Base finding | Old owner → final owner | Change / removed path | Evidence | Status |
+| Req | Base finding | Old owner → final owner | Change / removed path | Evidence | Status |
 | --- | --- | --- | --- | --- | --- |
-| G1 generation/lease/retirement module | | | | | open |
-| G2 progress state/routing/subscriptions module | | | | | open |
-| G3 invocation/outcome/materialization modules | | | | | open |
-| G4 one tools-list-changed admission/invalidation/notification path | | | | | open |
-| G5 common `dispatch_owned_request` preserved | | | | | open |
+| G1 generation/lease/retirement | in `mod.rs` (5,676 production) | `McpServerRuntime` stays the owner; `generation.rs` | — | `tools::mcp::` | done |
+| G2 progress | — | `progress.rs` with its tests | — | `progress::tests` | done |
+| G3 invocation/outcome/result | — | `invocation.rs`, `request.rs`, `outcome.rs`, `task_driver.rs`, `result.rs`, `executor.rs`, `connect.rs`, `runtime.rs`, `handler.rs` | entry 430; largest new 740 | — | done |
+| G4 one tools-list-changed path | modern subscription loop and legacy callback each took the gate, checked closed, advanced the epoch, notified | → `invalidation::ToolListChangedSink` (`admit` → `invalidate`) fed by both entry points | duplicate removed | `invalidation::tests` (admission once; closed runtime refuses; close waits for an admitted notification) | done |
+| G5 `dispatch_owned_request` | — | unchanged single path in `request.rs` for tool calls and Task-control requests | protocol versions, negotiation, MRTR/Tasks, HTTP ownership, progress lifetimes unchanged | `boundary_suites::mcp`, `--test tools` | done |
 
 ## H. Obsolete entry points and tests
 
-| Requirement | Base finding | Old owner → final owner | Change / removed path | Evidence | Status |
+| Req | Base finding | Old owner → final owner | Change / removed path | Evidence | Status |
 | --- | --- | --- | --- | --- | --- |
-| H1 unused history façades removed | | | | | open |
-| H2 `runtime/transcript_history.rs` removed | | | | | open |
-| H3 App Server protocol/configuration tests split by contract | | | | | open |
-| H4 inline tests moved with their domain | | | | | open |
-| H5 repeated constructors/factories consolidated in existing support | | | | | open |
-| H6 zero/one/multiple-session fixture controls used accurately | | | | | open |
-| H7 Cargo discovery and module paths preserved | | | | | open |
+| H1 history façades | `transcript_history`, `historical_surface_snapshot`, `historical_surface_history`, `historical_user_message_boundaries`, `historical_user_message_boundaries_page`, `historical_head_revision` had no callers | — | removed with their exports | repository-wide caller check | done |
+| H2 `runtime/transcript_history.rs` | only the façade | — | file removed; `tests/durable/transcript_history.rs` kept (tests the Store's `load_transcript_page`) | `--test durable` | done |
+| H3 App Server test split | `protocol.rs` 10,375; `configuration.rs` 9,902; `mod.rs` 2,334 | `protocol/{admission, attachment, control, history, delivery, upload, configuration, model_catalog, catalog, projection}`; `configuration/{sources, adoption, preparation, available, desired_sources, session_creation, source_documents, catalog_publication, catalog_recovery, catalog_agents, catalog_generations}`; fixture in `fixture.rs`; residency tests in `load`, `replacement`, `deletion`, `session_claim` | parents 975 / 385 / 166 | test inventory identical | done |
+| H4 inline tests with their domain | — | every split moved its tests to child `tests` modules; no `include!` test fragments remain in the touched areas | no production visibility widened for tests | — | done |
+| H5 shared constructors/factories | duplicated `selection()`, `assert_authority`, `gate_entered`, tool-call SSE factories, request/runtime helpers, UUID-sequence fixtures | → existing support (`runtime_client_conformance::text`, `scripted_suites::common`, fixture helpers) | duplicates removed | — | done |
+| H6 session-count controls | fixtures prepared two Sessions by default | 160 tests ask `Fixture::with_session_count` for what they use (147 one, 13 none) | multi-Session tests unchanged | — | done |
+| H7 discovery and module paths | — | CI selector prefixes unchanged; self-re-running tests updated to new paths | — | `check_test_lanes` for rust-fast, rust-contracts, rust-boundaries, documentation-contracts | done |
 
 ## I. Documentation, structural checks, CI selection
 
-| Requirement | Base finding | Old owner → final owner | Change / removed path | Evidence | Status |
+| Req | Base finding | Old owner → final owner | Change / removed path | Evidence | Status |
 | --- | --- | --- | --- | --- | --- |
-| I1 documentation-contract selection | `DOCUMENTATION` paths had no surface, so a docs-only PR merged on FAST without running the `contracts` target that reads them | `verification.py` | `documentation` surface + FAST `documentation-contracts` job | `test_verification.py` (`test_contract_documentation_selects_only_the_documentation_contracts`) | done |
-| I2 structural tests and lane rules updated | | | | | open |
-| I3 ownership checks focus on contracts | | | | | open |
-| I4 fast/full CI design preserved | | | | | open |
-| I5 architecture/configuration/protocol docs updated | | | | | open |
-| I6 generated protocol artifacts regenerated where sources changed | | | | | open |
+| I1 documentation-contract selection | `DOCUMENTATION` paths had no surface, so a docs-only PR merged on FAST without running the `contracts` target that reads them | `verification.py` | `documentation` surface + FAST `documentation-contracts` job (FULL keeps it in rust-contracts) | `test_verification.py`; lane check for the new job | done |
+| I2 structural tests and lane rules | — | selectors and lane rules unchanged in prefix; test paths that tests re-run by name updated | — | lane checks | done |
+| I3 contract-focused ownership checks | — | the method policy is an exhaustive typed record; `Family::of` is an exhaustive match; Web `check:provenance` keeps the layer rules | — | — | done |
+| I4 fast/full CI design | — | unchanged; one light FAST job added | — | `test_verification.py` | done |
+| I5 docs | — | `docs/architecture.md` module maps (Store, SQLite, ConversationRuntime, Runtime Client, observation, MCP, App Server, Web/TUI), `docs/runtime-resources.md`, `docs/app-server-protocol.md`, `docs/invariants.md`, `tests/README.md` | stale paths removed | `cargo test --test contracts` | done |
+| I6 generated artifacts | — | wire type descriptions kept unchanged, so no regeneration was needed | — | `pnpm --dir protocol/app-server check` (no drift); `committed_rust_artifacts_are_current` | done |
+
+## Integration with main (`0f3d978e`)
+
+Main added auxiliary request ownership (#486) while this branch was in
+progress. Its changes were ported hunk by hunk into the refactored layout:
+
+- new Store methods → `RequestStore::load_request_owner` and a new
+  `AuxiliaryStore` domain contract (in the `ConversationStore` union);
+- `sqlite/auxiliary.rs` (4,355 lines as merged) → split by responsibility into
+  `schema`, `validation`, `authority`, `rows`, `index`, `audit`, `commit`,
+  `confirm`, `read` (largest 736), helpers still inside the caller's transaction;
+- its `include!`d SQLite tests → `sqlite/auxiliary/tests/*`,
+  `sqlite/request/tests/owner.rs`, `sqlite/observation/tests/trace/auxiliary.rs`;
+- execution, projection, host, session, schema, journal and request hunks were
+  applied at their moved locations.
+
+## Production modules above 2,000 lines
+
+None of the audited hotspots or their resulting modules exceeds 2,000
+production lines. The modules above 2,000 are outside the audit and unchanged
+here apart from imports, each one cohesive owner: `runtime/workflow.rs`
+(Workflow program runtime), `tools/background.rs` (background job supervisor),
+`capabilities/coordinator.rs` (capability snapshot coordinator),
+`runtime/recovery.rs` (startup recovery), `runtime/subagent/process.rs`
+(child process owner), `model/catalog.rs` (model catalog),
+`tools/native/bash/supervisor.rs` (bash supervisor).
+
+## Known limitations
+
+- Types moved into `crate::observation` keep their `RuntimeClient*` names so
+  every move stayed a pure path change; renaming is cosmetic.
+- `runtime_client/projection/tests.rs` and `host/tests.rs` were moved whole
+  beside their owners rather than split per child module.
+
+## Verification
+
+Run locally on `74f17445` (the final code; later commits change documentation
+only) with the CI commands of the FULL lanes and the client packages:
+
+| Check | Result |
+| --- | --- |
+| `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D warnings` | pass |
+| planner and benchmark-controller Python tests; provider emulator `uv sync --frozen` + `pytest` | pass |
+| `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::` | 4,144 passed, 1 failed (see below) |
+| `cargo test --test contracts --test provider --all-features` | pass (contracts rerun on the final docs: 31 passed) |
+| `cargo test --lib --all-features -- boundary_suites::` (emulator required) | pass |
+| external targets `durable process subagent tools conformance cfg3_catalog cfg3_managed_output` | pass |
+| `check_test_lanes` for rust-fast, rust-contracts, rust-boundaries, documentation-contracts | pass |
+| `generate_schemas` + `git diff --exit-code -- schemas`; `pnpm --dir protocol/app-server check` and `typecheck` | pass (no drift) |
+| `pnpm --dir tui typecheck` / `test` (real binary, emulator required) | pass |
+| `pnpm --dir web-console typecheck` / `test` / `check:i18n` / `check:provenance` / `build` | pass |
+| `pnpm --dir dev typecheck` / `test` | pass |
+| Playwright browser acceptance | not run locally (pinned browser image); runs in CI |
+
+The one failure is
+`scripted_suites::agent::tool_progress::parallel_calls_bound_progress_per_call_and_keep_canonical_order`
+hitting its 10 s wall-clock liveness guard when it shares the machine with
+the rest of the suite (execution stalls ~9–11 s after the tool batch; alone it
+takes 0.85 s on both builds, and ~1.3 s on both under 40 busy cores). It is
+pre-existing: `cargo test --lib --all-features -- scripted_suites::` on the
+integrated main `0f3d978e` failed it in 1 of 2 runs with the same stall, and
+the branch passed the same command in its next run.
+
+No runtime speed change is claimed; isolated and loaded timings of the paths
+exercised above are equal between the branch and main.
