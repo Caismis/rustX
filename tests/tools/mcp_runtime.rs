@@ -1743,3 +1743,56 @@ chat_reasoning_replay = "omit"
         host.shutdown().await;
     }
 }
+
+/// Opt-in external measurement; normal tests use only local fixtures.
+#[tokio::test]
+#[ignore = "requires RUSTX_MCP_PROFILE_ENDPOINT and a reachable external MCP server"]
+async fn measure_configured_http_mcp() {
+    use std::sync::Arc;
+    use std::time::Instant;
+
+    use rustx::runtime::identity::McpServerId;
+    use rustx::tools::mcp::{
+        McpInvalidationState, McpServerBinding, McpServerRuntime, McpTransportConfig,
+    };
+
+    let endpoint = std::env::var("RUSTX_MCP_PROFILE_ENDPOINT").expect("measurement endpoint");
+    let directory = tempfile::tempdir().expect("measurement workspace");
+    let workspace = rustx::tools::Workspace::new(directory.path()).expect("workspace");
+    let binding = McpServerBinding {
+        credentials: rustx::credentials::SourceCredentials::default(),
+        transport: McpTransportConfig::StreamableHttp {
+            endpoint,
+            headers: std::collections::BTreeMap::default(),
+        },
+        policy: rustx::tools::types::ToolInvocationPolicy::default(),
+    };
+    for sample in 1..=3 {
+        let started = Instant::now();
+        let runtime = McpServerRuntime::connect(
+            &McpServerId::new("measurement"),
+            &binding,
+            &workspace,
+            Arc::new(McpInvalidationState::new()),
+        )
+        .await
+        .expect("external MCP connection");
+        let connected = Instant::now();
+        let tools = runtime.list_tools().await;
+        let listed = Instant::now();
+        let count = tools.as_ref().map_or(0, Vec::len);
+        runtime.close().await.expect("measurement runtime close");
+        let closed = Instant::now();
+        println!(
+            "MCP_HTTP_MEASUREMENT {}",
+            serde_json::json!({
+                "sample": sample,
+                "connect_ms": connected.duration_since(started).as_secs_f64() * 1000.0,
+                "list_ms": listed.duration_since(connected).as_secs_f64() * 1000.0,
+                "close_ms": closed.duration_since(listed).as_secs_f64() * 1000.0,
+                "tools": count,
+            })
+        );
+        assert!(tools.is_ok(), "external tools/list failed");
+    }
+}

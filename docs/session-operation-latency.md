@@ -182,3 +182,8 @@ The final portable run passed both native browser measurements. It measured
 392.0 ms from Retry click to replacement `turn/start` dispatch before the
 provider's generation gates. TypeScript checking and provenance/notices checks
 also passed. Production source and runtime behavior remain unchanged.
+
+A subsequent change implements bounded HTTP transport reuse, parallel root
+MCP-source preparation and Pi-style best-effort remote cleanup; see
+[MCP startup optimization](mcp-startup-optimization.md). The measurements above
+describe the original implementation.

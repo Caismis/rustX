@@ -177,6 +177,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use futures_util::stream::BoxStream;
 use futures_util::{Stream, StreamExt as _};
@@ -187,6 +188,10 @@ use rmcp::transport::streamable_http_client::{
 };
 use sse_stream::Sse;
 use tokio_util::sync::{CancellationToken, WaitForCancellationFutureOwned};
+
+/// Remote session deletion is best effort, after local requests have stopped.
+/// Match Pi's cleanup bound without shortening any tool-call settlement proof.
+const REMOTE_SESSION_CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// The Server-Sent Events stream shape of rmcp's Streamable HTTP client.
 type SseStream = BoxStream<'static, Result<Sse, SseError>>;
@@ -1099,13 +1104,13 @@ impl McpHttpClient {
     /// together with the ownership registry its settlements terminate
     /// through.
     ///
-    /// The HTTP client configuration matches the one rmcp builds for its own
-    /// default transport, for the same two reasons rmcp documents: idle
-    /// connection pooling is disabled so an aborted response body cannot
-    /// leave a half-consumed connection in the pool (and so a terminated
-    /// request's socket closes at once, which is what a server observes as
-    /// the cancellation), and redirects are disabled so configured headers —
-    /// credentials included — can never be replayed to a redirect target.
+    /// Retain one idle connection within this generation so negotiation and
+    /// discovery do not each pay another TCP/TLS handshake. The pool belongs
+    /// to this client, never to another Conversation or credential binding.
+    /// Request cancellation still drops the exact tracked POST or SSE body;
+    /// reqwest does not return an unfinished response to its idle pool.
+    /// Redirects remain disabled so configured headers, including credentials,
+    /// can never be replayed to a redirect target.
     /// # Errors
     ///
     /// Returns an error when the HTTP client cannot be built. This is a
@@ -1116,7 +1121,7 @@ impl McpHttpClient {
     {
         let ownership = Arc::new(McpHttpRequestOwnership::default());
         let inner = reqwest::Client::builder()
-            .pool_max_idle_per_host(0)
+            .pool_max_idle_per_host(1)
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|error| {
@@ -1272,9 +1277,22 @@ impl StreamableHttpClient for McpHttpClient {
         auth_header: Option<String>,
         custom_headers: CustomHeaders,
     ) -> Result<(), StreamableHttpError<Self::Error>> {
-        self.inner
-            .delete_session(uri, session_id, auth_header, custom_headers)
-            .await
+        // rmcp has already stopped its POSTs/streams before this callback.
+        // A slow remote DELETE must not hold the old Conversation's local
+        // shutdown open for the SDK's full five-second cleanup allowance.
+        match tokio::time::timeout(
+            REMOTE_SESSION_CLEANUP_TIMEOUT,
+            self.inner
+                .delete_session(uri, session_id, auth_header, custom_headers),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => Err(StreamableHttpError::Io(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "MCP remote session cleanup exceeded one second",
+            ))),
+        }
     }
 
     async fn get_stream(
@@ -1333,6 +1351,142 @@ mod tests {
 
     fn id(value: i64) -> RequestId {
         RequestId::Number(value)
+    }
+
+    /// Remote cleanup is attempted, but a server withholding its DELETE
+    /// response cannot delay local close beyond the cleanup allowance.
+    #[tokio::test]
+    async fn remote_session_cleanup_is_attempted_and_bounded() {
+        use axum::extract::State;
+        use axum::http::StatusCode;
+        use rmcp::transport::streamable_http_client::{StreamableHttpClient, StreamableHttpError};
+
+        async fn withhold(State(entered): State<Arc<tokio::sync::Notify>>) -> StatusCode {
+            entered.notify_one();
+            std::future::pending().await
+        }
+
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let router = axum::Router::new()
+            .route(
+                "/fast",
+                axum::routing::delete(|| async { StatusCode::NO_CONTENT }),
+            )
+            .route("/slow", axum::routing::delete(withhold))
+            .with_state(entered.clone());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        let (client, _) = super::McpHttpClient::new().unwrap();
+        client
+            .delete_session(
+                format!("{endpoint}/fast").into(),
+                "fixture".into(),
+                None,
+                std::collections::HashMap::new(),
+            )
+            .await
+            .expect("successful remote cleanup");
+        let deletion = tokio::spawn(async move {
+            client
+                .delete_session(
+                    format!("{endpoint}/slow").into(),
+                    "fixture".into(),
+                    None,
+                    std::collections::HashMap::new(),
+                )
+                .await
+        });
+        // Advance time only after the real server has received the DELETE.
+        // No wall-clock speed assertion or timer race stands in for that proof.
+        entered.notified().await;
+        assert!(!deletion.is_finished());
+        tokio::time::pause();
+        tokio::time::advance(super::REMOTE_SESSION_CLEANUP_TIMEOUT).await;
+        let outcome = deletion.await.unwrap();
+        tokio::time::resume();
+        assert!(
+            matches!(outcome, Err(StreamableHttpError::Io(error)) if error.kind() == std::io::ErrorKind::TimedOut)
+        );
+        server.abort();
+        let _ = server.await;
+    }
+
+    /// A real HTTP/1 connection is reused only after the complete response
+    /// body is consumed. Observe peer addresses at the server, not a builder
+    /// setting or a timing threshold.
+    #[tokio::test]
+    async fn completed_http_requests_reuse_the_generation_connection() {
+        use axum::extract::{ConnectInfo, State};
+        use rmcp::transport::streamable_http_client::{
+            StreamableHttpClient, StreamableHttpPostResponse,
+        };
+        use std::collections::HashMap;
+        use std::net::SocketAddr;
+        use std::sync::Mutex;
+
+        type Peers = Arc<Mutex<Vec<SocketAddr>>>;
+        async fn echo(
+            ConnectInfo(peer): ConnectInfo<SocketAddr>,
+            State(peers): State<Peers>,
+            axum::Json(request): axum::Json<serde_json::Value>,
+        ) -> axum::Json<serde_json::Value> {
+            peers.lock().unwrap().push(peer);
+            axum::Json(serde_json::json!({"jsonrpc":"2.0", "id":request["id"], "result":{}}))
+        }
+
+        let peers = Peers::default();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint: Arc<str> = format!("http://{}/mcp", listener.local_addr().unwrap()).into();
+        let router = axum::Router::new()
+            .route("/mcp", axum::routing::post(echo))
+            .with_state(peers.clone());
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+        let (client, ownership) = super::McpHttpClient::new().unwrap();
+        for value in 1..=3 {
+            let _admission = ownership.admit(&id(value));
+            let _dispatch = dispatch(&ownership, value);
+            let message = serde_json::from_value(serde_json::json!({
+                "jsonrpc":"2.0", "id":value, "method":"ping"
+            }))
+            .unwrap();
+            let response = client
+                .post_message(endpoint.clone(), message, None, None, HashMap::new())
+                .await
+                .unwrap();
+            assert!(matches!(response, StreamableHttpPostResponse::Json(_, _)));
+        }
+        // A different generation/credential binding receives a different
+        // client and must not borrow this generation's idle connection.
+        let (other, _) = super::McpHttpClient::new().unwrap();
+        other
+            .inner
+            .post(endpoint.as_ref())
+            .json(&serde_json::json!({"id":4}))
+            .send()
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        server.abort();
+        let _ = server.await;
+        let observed = peers.lock().unwrap();
+        assert_eq!(observed.len(), 4);
+        assert!(
+            observed[..3].iter().all(|peer| *peer == observed[0]),
+            "completed responses must reuse one TCP connection: {observed:?}"
+        );
+        assert_ne!(observed[3], observed[0]);
     }
 
     /// Takes dispatch ownership, asserting it was not refused.

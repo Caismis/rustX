@@ -2,6 +2,7 @@
 //! leases (M6).
 
 use super::ToolSourceId;
+use futures_util::{StreamExt, stream};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
@@ -29,6 +30,10 @@ use crate::tools::mcp::{
 };
 use crate::tools::python::PythonToolStore;
 use crate::tools::workspace::Workspace;
+
+/// Bound simultaneous external-source startup without serializing independent
+/// network handshakes. Results retain configured identity order for publication.
+const MCP_PREPARATION_CONCURRENCY: usize = 8;
 
 /// The coordinator configuration of one conversation/capability owner.
 #[derive(Clone)]
@@ -1168,7 +1173,12 @@ impl CapabilityCoordinator {
         let mut mcp_tools = Vec::new();
         let mut mcp_epochs = BTreeMap::new();
         let mut mcp_runtimes = Vec::new();
-        // `BTreeMap` iteration is the deterministic identity order.
+        // Start independent selected sources concurrently. A completed source
+        // frees its slot even if an earlier source is still waiting; sort the
+        // complete results before composing the deterministic publication.
+        // Each connect retains the existing conversation-owned cancellation
+        // and physical-settlement lifecycle; this adds no detached owner.
+        let mut selected = Vec::new();
         for (server_id, binding) in &effective_mcp_servers {
             let source_id = python_source_bindings
                 .get(server_id)
@@ -1178,10 +1188,20 @@ impl CapabilityCoordinator {
                 availability.insert(source_id, CapabilitySourceState::Unprepared);
                 continue;
             }
-            match self
-                .prepare_mcp_server(server_id, binding, cancellation)
-                .await
-            {
+            selected.push(async move {
+                let result = self
+                    .prepare_mcp_server(server_id, binding, cancellation)
+                    .await;
+                (server_id, binding, source_id, result)
+            });
+        }
+        let mut preparations = stream::iter(selected)
+            .buffer_unordered(MCP_PREPARATION_CONCURRENCY)
+            .collect::<Vec<_>>()
+            .await;
+        preparations.sort_by(|left, right| left.0.cmp(right.0));
+        for (server_id, binding, source_id, result) in preparations {
+            match result {
                 Ok((epoch, generation, tools)) => {
                     mcp_epochs.insert(server_id.clone(), epoch);
                     mcp_tools.extend(crate::tools::mcp::definitions_owned_for_source(
@@ -3166,6 +3186,151 @@ mod mcp_race_tests {
     use crate::tools::mcp::fixture::{FixtureServer, fixture_spawn_args, serve_if_fixture_mode};
     use crate::tools::mcp::{McpInvalidationState, McpRuntimeGeneration, McpTransportConfig};
     use crate::tools::workspace::Workspace;
+
+    async fn http_preparation_fixture(
+        count: usize,
+    ) -> (
+        tempfile::TempDir,
+        CapabilityCoordinator,
+        Vec<crate::tools::mcp::fixture::streamable_http::HttpFixture>,
+        super::CapabilityResourceInputs,
+    ) {
+        use crate::capabilities::{ToolSourceId, selection::SourceToolSelection};
+        use crate::tools::mcp::fixture::streamable_http::{HttpFixture, HttpFixtureControl};
+
+        let dir = tempfile::tempdir().unwrap();
+        let (coordinator, _) = coordinator_with_fixture(&dir, "unused", "unused");
+        let mut inputs = coordinator.inner.resource_inputs.lock().unwrap().clone();
+        inputs.mcp_servers.clear();
+        inputs.source_demand.sources.clear();
+        inputs.agent_activation.profile.tools.sources.clear();
+        let mut servers = Vec::new();
+        for index in 0..count {
+            let server = HttpFixture::start(HttpFixtureControl::new()).await;
+            let id = McpServerId::new(format!("source-{index:02}"));
+            let source = ToolSourceId::Mcp(id.clone());
+            inputs.mcp_servers.insert(id, server.binding());
+            inputs.source_demand.sources.insert(source.clone());
+            inputs
+                .agent_activation
+                .profile
+                .tools
+                .sources
+                .insert(source, SourceToolSelection::All);
+            servers.push(server);
+        }
+        (dir, coordinator, servers, inputs)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn mcp_preparation_overlaps_sources_and_preserves_order_and_failure_isolation() {
+        use crate::capabilities::{CapabilitySourceState, ToolSourceId};
+        let (_dir, coordinator, servers, mut inputs) = http_preparation_fixture(2).await;
+        servers[0].control.hold_catalog();
+        let failed = McpServerId::new("failed");
+        let mut invalid = servers[0].binding();
+        invalid.transport = McpTransportConfig::StreamableHttp {
+            endpoint: String::new(),
+            headers: std::collections::BTreeMap::new(),
+        };
+        inputs.mcp_servers.insert(failed.clone(), invalid);
+        inputs
+            .source_demand
+            .sources
+            .insert(ToolSourceId::Mcp(failed.clone()));
+        let preparation = tokio::spawn({
+            let coordinator = coordinator.clone();
+            async move {
+                coordinator
+                    .prepare_candidate_with_inputs(inputs)
+                    .await
+                    .unwrap()
+            }
+        });
+        // Both real tools/list handlers must start while the first server
+        // cannot answer. A serial implementation cannot pass this barrier.
+        for server in &servers {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                server.control.wait_catalog(),
+            )
+            .await
+            .unwrap();
+        }
+        assert!(!preparation.is_finished());
+        servers[0].control.release_catalog();
+        let candidate = preparation.await.unwrap();
+        let ids: Vec<_> = candidate
+            .mcp_runtimes
+            .iter()
+            .map(|runtime| runtime.server_id().as_str())
+            .collect();
+        assert_eq!(ids, ["source-00", "source-01"]);
+        for id in ids {
+            assert_eq!(
+                candidate
+                    .availability
+                    .get(&ToolSourceId::Mcp(McpServerId::new(id))),
+                Some(&CapabilitySourceState::Ready)
+            );
+        }
+        assert!(matches!(
+            candidate.availability.get(&ToolSourceId::Mcp(failed)),
+            Some(CapabilitySourceState::Unavailable { .. })
+        ));
+        candidate.retire_uncommitted().await;
+        coordinator.settle_ready_mcp_runtimes().await.unwrap();
+        assert_eq!(coordinator.pending_mcp_retirements(), 0);
+        for server in servers {
+            server.shutdown().await;
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn mcp_preparation_limits_in_flight_sources() {
+        let limit = super::MCP_PREPARATION_CONCURRENCY;
+        let (_dir, coordinator, servers, inputs) = http_preparation_fixture(limit + 1).await;
+        for server in &servers {
+            server.control.hold_catalog();
+        }
+        let preparation = tokio::spawn({
+            let coordinator = coordinator.clone();
+            async move {
+                coordinator
+                    .prepare_candidate_with_inputs(inputs)
+                    .await
+                    .unwrap()
+            }
+        });
+        for server in &servers[..limit] {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                server.control.wait_catalog(),
+            )
+            .await
+            .unwrap();
+        }
+        assert_eq!(servers[limit].control.catalog_reads(), 0);
+        // Releasing a later source must free a slot while source-00 is held.
+        servers[limit - 1].control.release_catalog();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            servers[limit].control.wait_catalog(),
+        )
+        .await
+        .unwrap();
+        for server in &servers {
+            server.control.release_catalog();
+        }
+        let candidate = preparation.await.unwrap();
+        assert_eq!(candidate.mcp_runtimes.len(), limit + 1);
+        candidate.retire_uncommitted().await;
+        coordinator.settle_ready_mcp_runtimes().await.unwrap();
+        assert_eq!(coordinator.pending_mcp_retirements(), 0);
+        for server in servers {
+            server.shutdown().await;
+        }
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn unreferenced_mcp_is_inert_and_repeated_source_demand_materializes_once() {
