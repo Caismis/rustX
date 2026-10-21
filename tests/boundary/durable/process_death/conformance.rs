@@ -1634,6 +1634,77 @@ fn kill_during_the_compaction_summary_keeps_the_old_surface() {
     );
 }
 
+/// The shipped executor confirms starts before granting/entering the adapter.
+/// Death preserves unresolved historical facts; cold native recovery dispatches nothing.
+#[test]
+fn auxiliary_dispatch_crashes_preserve_uncertainty_without_cold_replay() {
+    use crate::model::ModelRequestOwner;
+    for gate in [
+        Some("after:auxiliary_request_start_confirmed"),
+        Some("after:auxiliary_dispatch_granted"),
+        None,
+    ] {
+        let lab = Lab::new();
+        let mut process = lab.spawn(child::COMPACTION, gate);
+        process.wait_note("settled");
+        process.resume();
+        if let Some(gate) = gate {
+            process.wait_reached(gate);
+        } else {
+            process.wait_note("summary-in-flight");
+        }
+        process.sigkill();
+        let original = {
+            let durable = lab.durable();
+            let journal = durable.journal();
+            let calls = journal
+                .iter()
+                .filter_map(|event| match &event.event {
+                    RuntimeEvent::AuxiliaryCallStarted { call_id, .. } => Some(call_id.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(calls.len(), 1);
+            let cut = durable.store().auxiliary_audit_cut().unwrap();
+            let call = durable
+                .store()
+                .load_auxiliary_call(&calls[0], cut)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                call.outcome, None,
+                "process death cannot invent a settled Call"
+            );
+            let requests = durable
+                .store()
+                .read_auxiliary_call_requests(&calls[0], cut, None, 32)
+                .unwrap();
+            assert_eq!(requests.len(), 1);
+            assert!(requests[0].terminal_sequence.is_none());
+            assert!(
+                requests[0].request_evidence.is_none(),
+                "Started alone cannot prove remote execution or completion"
+            );
+            assert_eq!(journal.iter().filter(|event| matches!(&event.event,
+                RuntimeEvent::ModelRequestStarted { owner: ModelRequestOwner::Auxiliary { call_id, .. }, request_id, .. }
+                    if call_id == &calls[0] && request_id == &requests[0].request_id)).count(), 1);
+            assert!(
+                !durable
+                    .has_event(|event| matches!(event, RuntimeEvent::CompactionCompleted { .. }))
+            );
+            journal
+        };
+        let mut reopened = lab.spawn(child::AUXILIARY_REOPEN, None);
+        reopened.wait_note("auxiliary-reopen:idle:shutdown-ok");
+        reopened.sigkill();
+        assert_eq!(
+            lab.durable().journal(),
+            original,
+            "recovery never re-enters the old RequestId or fabricates a terminal"
+        );
+    }
+}
+
 /// Killed inside the Surface Replace transaction, the compaction is entirely
 /// absent; killed just after it, checkpoint content, activation, receipt and
 /// local completion are present together, while canonical history is intact.

@@ -177,10 +177,16 @@ impl Execution {
             true,
         )
         .await?;
+        #[cfg(test)]
+        self.record.wait_dispatch_gate_for_test(false);
+        crate::runtime::process_death::reach("after:auxiliary_request_start_confirmed");
         if let Err(error) = self.record.grant_dispatch() {
             self.undispatched = Some(control_error(&error));
             return Err(error);
         }
+        #[cfg(test)]
+        self.record.wait_dispatch_gate_for_test(true);
+        crate::runtime::process_death::reach("after:auxiliary_dispatch_granted");
         let now = self.record.executor.monotonic.now_millis();
         self.fold = Some(AuxiliaryStreamFold::new(
             self.record.request_id.clone(),

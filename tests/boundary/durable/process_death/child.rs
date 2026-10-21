@@ -104,6 +104,8 @@ pub(crate) const REOPEN_SUBAGENT_RESUME: &str = "reopen_subagent_resume";
 /// One settled turn, an explicit manual compaction with a parked summary
 /// request, and one more settled turn afterwards.
 pub(crate) const COMPACTION: &str = "compaction";
+/// Reopen an incomplete auxiliary Call without admitting any new work.
+pub(crate) const AUXILIARY_REOPEN: &str = "auxiliary_reopen";
 /// One settled attempt, a rendezvous the parent edits resources in, and a
 /// second attempt whose continuation issues a native Read of the edited Skill.
 pub(crate) const LIVE_RESOURCE_EDIT: &str = "live_resource_edit";
@@ -1645,6 +1647,24 @@ async fn scenario_body(root: &Path, scenario: &str) {
             child.log.wait_settled(1).await;
             note("settled");
             park_owning((child, supervisor)).await;
+        }
+        AUXILIARY_REOPEN => {
+            let child = Child::require(root, Vec::new(), false, true).await;
+            assert!(matches!(
+                child.runtime().recovery().resume(),
+                crate::runtime::recovery::ResumeDisposition::PendingInboundOnly
+            ));
+            child
+                .headless
+                .shutdown()
+                .await
+                .expect("cold auxiliary recovery quiesces");
+            assert!(
+                child.model.requests().is_empty(),
+                "historical auxiliary work never enters an adapter after reopen"
+            );
+            note("auxiliary-reopen:idle:shutdown-ok");
+            park_owning(child).await;
         }
         RESUME_IDLE => {
             // Nothing is submitted here. A recovery-permitted continuation,

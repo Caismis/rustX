@@ -2630,9 +2630,20 @@ async fn no_progress_compaction_fails_without_retry() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[allow(clippy::too_many_lines)] // One matrix preserves the same native admission gate across trigger, reason and saturation.
+#[allow(clippy::too_many_lines)] // One native admission gate covers trigger, cancellation reason and each Busy source.
 async fn cancellation_winning_summary_admission_is_not_a_compaction_failure() {
-    for saturated in [false, true] {
+    #[derive(Clone, Copy)]
+    enum Pressure {
+        None,
+        Capacity,
+        Lifecycle,
+    }
+    for (pressure, cancel_attempt) in [
+        (Pressure::None, true),
+        (Pressure::Capacity, true),
+        (Pressure::Lifecycle, true),
+        (Pressure::Lifecycle, false),
+    ] {
         for (reason, overflow) in [
             (CancellationReason::UserRequested, false),
             (CancellationReason::UserRequested, true),
@@ -2675,7 +2686,7 @@ async fn cancellation_winning_summary_admission_is_not_a_compaction_failure() {
                 tool_runtime.durable_store().clone(),
                 Arc::new(crate::runtime::types::SystemClock),
                 policy.monotonic_clock.clone(),
-                lifecycle,
+                lifecycle.clone(),
                 Arc::new(crate::runtime::types::DurabilityGate::new()),
                 capacity.conversation(),
             )
@@ -2698,10 +2709,11 @@ async fn cancellation_winning_summary_admission_is_not_a_compaction_failure() {
             let _release = gate.arm_scoped();
             execution.install_compaction_admission_gate(gate.clone());
             let cancel = cancellation.clone();
+            let (finished, settled) = std::sync::mpsc::channel();
             let controller = tokio::task::spawn_blocking(move || {
                 gate.wait_entered();
                 let mut held = Vec::new();
-                if saturated {
+                if matches!(pressure, Pressure::Capacity) {
                     for _ in 0..8 {
                         let domain = capacity.conversation();
                         for _ in 0..4 {
@@ -2709,30 +2721,64 @@ async fn cancellation_winning_summary_admission_is_not_a_compaction_failure() {
                         }
                     }
                 }
-                cancel.cancel();
-                gate.release();
+                let resume = || {
+                    if cancel_attempt {
+                        cancel.cancel();
+                    }
+                    gate.release();
+                };
+                if matches!(pressure, Pressure::Lifecycle) {
+                    // This is the very same lifecycle used by the executor,
+                    // held independently of its cancellation gate. No Store
+                    // connection/SQL lease is held across terminal writes.
+                    lifecycle
+                        .with_running_commit(|| {
+                            resume();
+                            settled
+                                .recv_timeout(std::time::Duration::from_secs(10))
+                                .unwrap();
+                        })
+                        .unwrap();
+                } else {
+                    resume();
+                }
                 held
             });
+            let execution_result = execution.run().await;
+            let _ = finished.send(());
+            let _held = controller.await.unwrap();
             let result = common::durable_agent_result(
-                execution.run().await,
+                execution_result,
                 tool_runtime.durable_store().as_ref(),
             );
-            let _held = controller.await.unwrap();
-            assert_eq!(result.outcome, AttemptOutcome::Cancelled { reason });
+            if cancel_attempt {
+                assert_eq!(result.outcome, AttemptOutcome::Cancelled { reason });
+            } else {
+                assert!(matches!(result.outcome, AttemptOutcome::Failed { .. }));
+                assert!(
+                    result.event_history.iter().any(|event| matches!(
+                        event, RuntimeEvent::CompactionFailed { error, .. }
+                            if error.contains("native lifecycle ownership boundary is busy")
+                    )),
+                    "active lifecycle contention still reports Busy without waiting"
+                );
+            }
             assert!(
                 result
                     .event_history
                     .iter()
                     .any(|event| matches!(event, RuntimeEvent::CompactionStarted { .. }))
             );
-            assert!(!result.event_history.iter().any(|event| matches!(
-                event,
-                RuntimeEvent::CompactionFailed { .. } | RuntimeEvent::AttemptFailed { .. }
-            )));
-            assert!(matches!(
-                result.event_history.last(),
-                Some(RuntimeEvent::AttemptCancelled { .. })
-            ));
+            if cancel_attempt {
+                assert!(!result.event_history.iter().any(|event| matches!(
+                    event,
+                    RuntimeEvent::CompactionFailed { .. } | RuntimeEvent::AttemptFailed { .. }
+                )));
+                assert!(matches!(
+                    result.event_history.last(),
+                    Some(RuntimeEvent::AttemptCancelled { .. })
+                ));
+            }
             assert_eq!(
                 model.requests().len(),
                 usize::from(overflow),

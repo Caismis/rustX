@@ -361,11 +361,18 @@ impl ClientInner {
             .expect("a writable Runtime Client host has a runtime")
             .admit_compaction(request_id)
             .map_err(Self::compaction_error)?;
-        self.finish_compaction(handle).await
+        #[cfg(test)]
+        let gate = self.manual_compaction_response_gate.lock().unwrap().take();
+        Self::finish_compaction(
+            handle,
+            #[cfg(test)]
+            gate,
+        )
+        .await
     }
 
     pub(crate) fn admit_compaction_transfer(
-        self: &Arc<Self>,
+        &self,
         request_id: Option<crate::runtime::identity::ManualCompactionRequestId>,
     ) -> Result<
         futures_util::future::BoxFuture<'static, Result<RuntimeClientResult, RuntimeClientError>>,
@@ -378,10 +385,34 @@ impl ClientInner {
             .expect("writable runtime")
             .admit_compaction(request_id)
             .map_err(Self::compaction_error)?;
-        let owner = self.clone();
-        Ok(Box::pin(
-            async move { owner.finish_compaction(handle).await },
-        ))
+        // The transferred reply must not retain the host's Runtime or Store
+        // allocation after native retirement. Only the exact receipt travels.
+        Ok(Box::pin(Self::finish_compaction(
+            handle,
+            #[cfg(test)]
+            self.manual_compaction_response_gate.lock().unwrap().take(),
+        )))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn hold_compaction_response_for_test(
+        &self,
+    ) -> (
+        tokio::sync::oneshot::Receiver<
+            crate::runtime::conversation_runtime::ManualCompactionOutcome,
+        >,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (committed, receipt) = tokio::sync::oneshot::channel();
+        let (release, held) = tokio::sync::oneshot::channel();
+        assert!(
+            self.manual_compaction_response_gate
+                .lock()
+                .unwrap()
+                .replace((committed, held))
+                .is_none()
+        );
+        (receipt, release)
     }
 
     fn compaction_error(error: ManualCompactionError) -> RuntimeClientError {
@@ -420,17 +451,14 @@ impl ClientInner {
     }
 
     async fn finish_compaction(
-        &self,
         handle: crate::runtime::conversation_runtime::ManualCompactionHandle,
+        #[cfg(test)] gate: Option<super::ManualCompactionResponseGate>,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         let outcome = handle.wait().await.map_err(Self::compaction_error)?;
         #[cfg(test)]
-        {
-            let gate = self.manual_compaction_response_gate.lock().unwrap().take();
-            if let Some((committed, release)) = gate {
-                let _ = committed.send(outcome.clone());
-                let _ = release.await;
-            }
+        if let Some((committed, release)) = gate {
+            let _ = committed.send(outcome.clone());
+            let _ = release.await;
         }
         Ok(RuntimeClientResult::ContextCompacted {
             compaction: Some(crate::observation::head::RuntimeClientCompactionView {

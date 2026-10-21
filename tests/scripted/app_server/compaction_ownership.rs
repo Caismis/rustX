@@ -773,3 +773,64 @@ async fn lost_summary_reply_does_not_block_unload_cancellation_or_replay_after_c
     })
     .await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn parked_completed_compaction_reply_does_not_retain_the_deleted_allocation() {
+    bounded(async {
+        use crate::local_runtime::session::deletion::SessionDeleteResult;
+        let f = Fixture::with_summary_gate().await;
+        let _headers = ReleaseHeaders(f.gates.clone());
+        f.gates[0].release();
+        let loaded = f.load(0).await.unwrap().unwrap();
+        let live = loaded.inspect_runtime().unwrap();
+        complete_history_turn(&live).await;
+        let weak = live.weak_inner();
+        let client = loaded.client();
+        let (attachment, pin) = client.attach().unwrap();
+        let authority = attachment.operation_authority().unwrap();
+        let (completed, release) = authority.hold_compaction_response_for_test();
+        let reply = client
+            .start_compaction_operation(move |_| async move {
+                authority.admit_compaction_transfer(None)
+            })
+            .unwrap();
+        f.gates[1].wait_entered().await;
+        f.gates[1].release();
+        let original = completed.await.unwrap();
+        drop(attachment);
+        drop(pin);
+        drop(client);
+        drop(live);
+        drop(loaded);
+        let SessionDeleteResult::Preview { preview } =
+            f.manager.sessions.delete_preview(&f.sessions[0].id).await
+        else {
+            panic!("deletion preview");
+        };
+        let deleted = f
+            .manager
+            .delete_session(&f.sessions[0].id, &preview.target_revision)
+            .await
+            .unwrap();
+        assert!(
+            matches!(deleted, SessionDeleteResult::Deleted { .. }),
+            "completed parked reply must not retain allocation: {deleted:?}"
+        );
+        assert!(
+            weak.upgrade().is_none(),
+            "reply owns only the native receipt, not the retired Runtime"
+        );
+        release.send(()).unwrap();
+        let receipt = compaction_receipt(reply.await.unwrap());
+        assert_eq!(receipt.generation, original.generation);
+        assert_eq!(receipt.checkpoint_id, original.checkpoint_id);
+        assert_eq!(receipt.activation_id, original.activation_id);
+        assert_eq!(receipt.tokens_before, original.tokens_before);
+        assert_eq!(
+            receipt.estimated_tokens_after,
+            original.estimated_tokens_after
+        );
+        f.close().await;
+    })
+    .await;
+}

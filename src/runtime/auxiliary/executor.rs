@@ -79,8 +79,17 @@ struct ScopeState {
     children: BTreeSet<AuxiliaryCallId>,
 }
 
+#[cfg(test)]
+struct DispatchTestGate {
+    after_grant: bool,
+    entered: oneshot::Sender<()>,
+    release: mpsc::Receiver<()>,
+}
+
 #[derive(Default)]
 struct RecordState {
+    #[cfg(test)]
+    dispatch_gate: Option<DispatchTestGate>,
     submitted: bool,
     dispatched: bool,
     sealed: bool,
@@ -251,21 +260,7 @@ impl AuxiliaryExecutor {
             self.0.capacity.reserve_general()
         } {
             Ok(permit) => permit,
-            Err(busy) => {
-                // Refusal has the same cancellation ordering as successful
-                // registration. Saturation cannot turn an earlier cancellation
-                // into a business failure, and active callers still get Busy.
-                return scope
-                    .cancellation
-                    .with_active(|| {
-                        scope.budget.check(&scope.cancellation)?;
-                        Err(ContextError::new(
-                            ContextErrorKind::AuxiliaryBusy,
-                            busy.to_string(),
-                        ))
-                    })
-                    .unwrap_or_else(|| Err(closed()));
-            }
+            Err(busy) => return Err(admission_busy(scope, busy.to_string())),
         };
         self.0
             .resources
@@ -311,9 +306,9 @@ impl AuxiliaryExecutor {
                             .ok_or_else(closed)?
                     })
                     .map_err(|refused| match refused {
-                        crate::runtime::types::NativeAdmissionRefusal::Busy => ContextError::new(
-                            ContextErrorKind::AuxiliaryBusy,
-                            "native lifecycle ownership boundary is busy",
+                        crate::runtime::types::NativeAdmissionRefusal::Busy => admission_busy(
+                            scope,
+                            "native lifecycle ownership boundary is busy".to_owned(),
                         ),
                         crate::runtime::types::NativeAdmissionRefusal::Closed(state) => {
                             ContextError::new(
@@ -492,6 +487,28 @@ impl AuxiliaryReservation {
 }
 
 impl CallRecord {
+    #[cfg(test)]
+    pub(super) fn wait_dispatch_gate_for_test(&self, after_grant: bool) {
+        let gate = {
+            let mut state = lock(&self.state);
+            if state
+                .dispatch_gate
+                .as_ref()
+                .is_some_and(|gate| gate.after_grant == after_grant)
+            {
+                state.dispatch_gate.take()
+            } else {
+                None
+            }
+        };
+        if let Some(gate) = gate {
+            let _ = gate.entered.send(());
+            let _ = gate
+                .release
+                .recv_timeout(std::time::Duration::from_secs(10));
+        }
+    }
+
     pub(super) fn install_writer(&self, writer: super::writer::AuxiliaryWriter) {
         *lock(&self.writer) = Some(writer);
     }
@@ -703,6 +720,22 @@ fn process_reaper() -> Result<mpsc::SyncSender<Arc<CallRecord>>, ContextError> {
         _workers: workers,
     });
     Ok(sender)
+}
+
+/// A failed try-reservation must take the same cancellation grant as native
+/// registration. Neither capacity nor a busy lifecycle lock can turn an
+/// earlier cancellation into a business failure. No resource lock is held here.
+fn admission_busy(scope: &AuxiliaryScope, diagnostic: String) -> ContextError {
+    scope
+        .cancellation
+        .with_active(|| {
+            scope
+                .budget
+                .check(&scope.cancellation)
+                .err()
+                .unwrap_or_else(|| ContextError::new(ContextErrorKind::AuxiliaryBusy, diagnostic))
+        })
+        .unwrap_or_else(closed)
 }
 
 fn closed() -> ContextError {

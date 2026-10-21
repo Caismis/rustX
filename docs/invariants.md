@@ -385,9 +385,10 @@ to successful quiescence, and recovery never redispatches an old RequestId.
 Cancellation winning Summary operation admission settles the Agent Attempt as
 cancelled with its native reason. It emits neither CompactionFailed nor
 AttemptFailed, including when compaction was recovering a provider overflow.
-Capacity refusal also arbitrates under the cancellation grant: completed
-cancellation cannot become Busy when all shared Call slots are occupied.
-Active, uncancelled admission still returns Busy without waiting for capacity.
+Capacity and lifecycle-boundary refusals both arbitrate under the cancellation
+grant: completed cancellation cannot become Busy when Call slots are occupied
+or another native commit holds the lifecycle boundary. Active, uncancelled
+admission still returns Busy without waiting for capacity or the commit lock.
 
 One auxiliary generation folds the same canonical ordering as Agent output.
 It refuses tools and more than 4096 content blocks, discards validated native

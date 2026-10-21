@@ -919,3 +919,92 @@ async fn saturated_active_admission_remains_busy_until_cancellation_wins() {
         .expect("cancelled saturated admission refuses");
     assert_eq!(error.kind, ContextErrorKind::Cancelled);
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn production_dispatch_grant_arbitrates_cancellation_and_parent_close() {
+    for after_grant in [false, true] {
+        for close_parent in [false, true] {
+            let fixture = fixture(Script::AwaitCancellation);
+            let _close = CloseScopeOnDrop(fixture.scope.clone());
+            let record = fixture.reservation.record.clone();
+            let call_id = record.call_id.clone();
+            let (entered, ready) = oneshot::channel();
+            let (release, held) = mpsc::channel();
+            lock(&record.state).dispatch_gate = Some(DispatchTestGate {
+                after_grant,
+                entered,
+                release: held,
+            });
+            let reply = fixture.reservation.submit(fixture.frozen).unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(10), ready)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(fixture.adapter.entries.load(Ordering::SeqCst), 0);
+            assert_eq!(lock(&record.state).dispatched, after_grant);
+            let started = fixture.store.read_events(None, 32).unwrap().events;
+            assert_eq!(
+                started.len(),
+                2,
+                "both starts are confirmed before the real grant boundary"
+            );
+            if close_parent {
+                fixture.scope.close();
+            } else {
+                fixture.scope.cancellation.cancel();
+            }
+            release.send(()).unwrap();
+            let result = tokio::time::timeout(std::time::Duration::from_secs(10), reply)
+                .await
+                .unwrap()
+                .unwrap();
+            match result {
+                Ok(generation) => assert_eq!(
+                    generation.output.unwrap_err().kind,
+                    ModelErrorKind::Cancelled
+                ),
+                Err(error) => assert_eq!(error.kind, ContextErrorKind::Cancelled),
+            }
+            assert_eq!(
+                fixture.adapter.entries.load(Ordering::SeqCst),
+                usize::from(after_grant)
+            );
+            let cut = fixture.store.auxiliary_audit_cut().unwrap();
+            let call = fixture
+                .store
+                .load_auxiliary_call(&call_id, cut)
+                .unwrap()
+                .unwrap();
+            assert_eq!(call.outcome, Some(AuxiliaryCallOutcome::Cancelled));
+            let requests = fixture
+                .store
+                .read_auxiliary_call_requests(&call_id, cut, None, 32)
+                .unwrap();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].request_id, record.request_id);
+            assert!(requests[0].terminal_sequence.is_some());
+            assert_eq!(
+                requests[0].normalized_failure_kind,
+                Some(ModelErrorKind::Cancelled)
+            );
+            assert_eq!(
+                requests[0]
+                    .request_evidence
+                    .as_ref()
+                    .unwrap()
+                    .remote_execution_uncertainty,
+                after_grant
+            );
+            assert!(
+                record.grant_dispatch().is_err(),
+                "cancelled/consumed dispatch cannot be re-entered"
+            );
+            assert_eq!(
+                fixture.adapter.entries.load(Ordering::SeqCst),
+                usize::from(after_grant)
+            );
+            fixture.scope.wait_closed().await;
+            fixture.executor.drain().await;
+        }
+    }
+}

@@ -447,7 +447,10 @@ logical budget obligation rather than permission for another physical start.
 history/media work. A close-fenced native Scope owns the Compaction children;
 one Call consumes one RequestId-specific dispatch grant after both starts are
 confirmed. Call records keep lifecycle admission and capacity independently
-of the result receiver. Frozen invocation parameters, resource revision and
+of the result receiver. Capacity and lifecycle-lock Busy refusals share the
+native cancellation arbitration: an earlier cancellation cannot become a
+compaction failure, while active callers still receive nonblocking Busy.
+Frozen invocation parameters, resource revision and
 semantic input are checked before durable start. Context owns transcript
 construction, Summary acceptance and the checkpoint transaction.
 

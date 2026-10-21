@@ -71,7 +71,7 @@ Inspection archives keep requests.jsonl for actual primary Snapshots. Auxiliary 
 
 ## Verification boundary
 
-Real SQLite tests cover transaction atomicity, owner/index consistency, rollback and receipt-loss evidence, immutable cuts, pagination and corruption refusal. Mixed-history regressions compare primary behavior with auxiliary facts interleaved. Native execution tests exercise the production executor with a private second consumer, actual starts before adapter entry, panic after trusted usage, waiter loss and parent close. Writer boundary tests retain capacity through actual confirmation and joins after a real COMMIT. These are separate from Context deciding whether generated text is a usable Summary.
+Real SQLite tests cover transaction atomicity, owner/index consistency, rollback and receipt-loss evidence, immutable cuts, pagination and corruption refusal. Mixed-history regressions compare primary behavior with auxiliary facts interleaved. Native execution tests exercise the production executor with a private second consumer, actual starts before adapter entry, panic after trusted usage, waiter loss and parent close. Writer boundary tests retain capacity through actual confirmation and joins after a real COMMIT. Consumed production-executor barriers cover cancellation/parent-close on both sides of the single-use dispatch grant. Real child-process kills cover confirmed RequestStarted, granted dispatch and adapter entry; quiescent cold reopening preserves unresolved Call/Request facts and never redispatches their RequestId. A completed, parked manual-compaction reply permits manager deletion and then delivers the exact original receipt. These are separate from Context deciding whether generated text is a usable Summary.
 
 ## Native execution
 
@@ -79,7 +79,10 @@ Automatic and manual Summary use the Runtime-owned single-request executor.
 Native preparation reserves process total/general, Conversation total/general
 and write responsibility without waiting. Limits are 32/24 and 4/3; only
 native Compaction authority may omit the general reservations. A purpose or
-trigger string grants no execution or protected-capacity authority.
+trigger string grants no execution or protected-capacity authority. Both
+capacity and lifecycle-lock Busy refusals arbitrate under cancellation; an
+earlier cancellation remains cancellation, and active callers never wait for
+either resource.
 
 Each Call confirms CallStarted and RequestStarted before consuming its only
 dispatch grant. Unknown start never enters the adapter. The owner retains
@@ -113,6 +116,9 @@ shrinks and a five-minute absolute deadline across carryover and input replans.
 The model and resources remain frozen. Manual compaction transfers its native
 business tail before the manager lease is released, and a lost observer or
 later checkpoint cannot replace the exact result of the original invocation.
+The transferred reply owns only its native completion handle and receipt
+conversion inputs, never the Runtime Client, Runtime or Store allocation.
+A completed reply awaiting delivery cannot prevent manager deletion.
 Technical retries, Title, Classification/BTW and result retention remain
 outside this executor's shipped consumer scope.
 
