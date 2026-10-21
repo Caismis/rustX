@@ -3,6 +3,8 @@ import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { choose, connectRemote, openEmptySession } from './shell-actions';
 import { wireProbe } from './wire-probe';
+import { attemptOwnerKey } from '../../../protocol/app-server/attempt-identity';
+import type { CompletedResponseView } from '../../../protocol/app-server/v51';
 
 for (const [width, zh] of [[1440, false], [390, true]] as const) {
   test(`message Retry removes the old reply immediately and keeps a resident reading surface ${width}`, async ({ page }) => {
@@ -12,12 +14,24 @@ for (const [width, zh] of [[1440, false], [390, true]] as const) {
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
     const message = page.getByRole('textbox', { name: zh ? '消息' : 'Message', exact: true });
-    const settled = async () => {
+    const settled = async (previousAttempt?: string) => {
       // The narrow sidebar is unmounted. Read the exact native attached target,
       // independently of whether a sidebar Session button is in the DOM.
       const target = [...wire.responses].reverse().find(row => row.method === 'session/attach')?.result?.target;
       expect(target).toBeTruthy();
-      await expect.poll(async () => (await wire.read('session/checkpoint', target)).checkpoint.snapshot.attempt?.phase.type).toBe('settled');
+      let attemptId: string | undefined, response: CompletedResponseView | undefined;
+      await expect.poll(async () => {
+        const checkpoint = (await wire.read('session/checkpoint', target)).checkpoint;
+        const attempt = checkpoint.snapshot.attempt;
+        if (!attempt?.attempt_id || attempt.attempt_id === previousAttempt || attempt.phase.type !== 'settled') return false;
+        attemptId = attempt.attempt_id;
+        response = checkpoint.snapshot.transcript.entries?.find(entry =>
+          entry.completed_response?.origin.conversation_id === target.conversation_id
+          && entry.completed_response?.origin.attempt_id === attemptId)?.completed_response ?? undefined;
+        return !!response;
+      }).toBe(true);
+      if (!attemptId || !response) throw new Error('The settled response lacks its native action coordinates.');
+      return { attemptId, response };
     };
     const send = async (text: string) => { await message.fill(text); await page.getByRole('button', { name: zh ? '发送' : 'Send', exact: true }).click(); };
     try {
@@ -32,12 +46,24 @@ for (const [width, zh] of [[1440, false], [390, true]] as const) {
         await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文');
         await page.getByRole('button', { name: '关闭设置' }).click();
       }
-      await send('Earlier question'); await expect(page.getByText('Earlier answer stays.', { exact: true })).toBeVisible(); await settled();
-      await send('Retry this question'); await expect(page.getByRole('heading', { name: 'Original response' })).toBeVisible(); await settled();
+      await send('Earlier question'); await expect(page.getByText('Earlier answer stays.', { exact: true })).toBeVisible(); const earlier = await settled();
+      await send('Retry this question'); await expect(page.getByRole('heading', { name: 'Original response' })).toBeVisible(); const original = await settled(earlier.attemptId);
       const surface = await page.locator('.chat-reading-surface').elementHandle(), editor = await message.elementHandle();
+      // Settlement and the response action tail have separate publication frontiers.
+      const retry = page.locator(`[data-turn-tail=${JSON.stringify(attemptOwnerKey(original.response.origin))}]`)
+        .getByRole('button', { name: zh ? '重新生成' : 'Regenerate', exact: true });
+      expect(original.response.retry_locator).toBeTruthy();
+      await expect(retry).toBeVisible();
       wire.holdNext('session/branch');
-      await page.getByRole('button', { name: zh ? '重新生成' : 'Regenerate', exact: true }).last().click();
+      await retry.click();
       await expect.poll(wire.held).toBe(1);
+      const branches = wire.requests.filter(request => request.method === 'session/branch');
+      expect(branches).toHaveLength(1);
+      expect(branches[0].params).toMatchObject({
+        boundary: original.response.retry_locator,
+        surface_revision: original.response.surface_revision,
+        side: 'before',
+      });
       await expect(page.getByRole('heading', { name: 'Original response' })).toHaveCount(0);
       await expect(page.getByText('Retry this question', { exact: true })).toHaveCount(1);
       await expect(page.locator('[data-chat-running]')).toHaveCount(1);
@@ -69,7 +95,7 @@ for (const [width, zh] of [[1440, false], [390, true]] as const) {
       await expect(page.getByRole('heading', { name: 'New response' })).toBeVisible();
       await expect(page.getByText('Generating the replacement.', { exact: true })).toBeVisible();
       await page.screenshot({ path: `/tmp/rustx-retry-streaming-${width}.png` });
-      await fixture.release('replay-streaming'); await expect(page.getByText('Replacement complete.', { exact: true })).toBeVisible(); await settled();
+      await fixture.release('replay-streaming'); await expect(page.getByText('Replacement complete.', { exact: true })).toBeVisible(); await settled(original.attemptId);
       await expect(page.locator('[data-chat-running]')).toHaveCount(0);
       await expect(page.getByRole('heading', { name: 'Original response' })).toHaveCount(0);
       await expect(page.getByText('Retry this question', { exact: true })).toHaveCount(1);
