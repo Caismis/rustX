@@ -4068,6 +4068,9 @@ ZCode at `29628c9acdb81b703bbd4080c207a0e7ce5e276e`:
   disclosure, a scrolling body and a persistent title/action footer.
 - `ApiKeyInput.tsx` and `components/ui/dialog.tsx`: explicit secret visibility
   and bounded dialog geometry.
+- `ProviderModelReasoningLevelEditor.tsx` and `ProviderModelSettingsGroups.tsx`:
+  a wrapping strip of compact chips, inline addition through the plus button,
+  and a JSON parameter editor below the strip.
 
 ZCode is an inspected design reference; no ZCode implementation, assets,
 framework components or runtime are copied. The implementation uses rustX's
@@ -4085,9 +4088,17 @@ Scope ownership, exact revision writes, durable drafts and redacted credentials
 remain owned by the existing configuration actors.
 
 Intentional native differences: protocol/API format belongs to each Model,
-not a Provider; supported capabilities are text/image/file input and output,
-tool calls, reasoning, Model Profiles and native request parameters. Unsupported
-provider enablement, Smart configuration, ZCode service presets and capabilities
+not a Provider; input controls expose text and images; output type has no editor.
+The native output declaration stays intact, with new Models declaring text
+output. Other controls expose tool calls, reasoning, Model Profiles and native
+request parameters.
+Profiles use selectable chips with inline add/delete and a JSON editor for the
+selected profile. Default profile, explicit reasoning state and output budget
+remain separate native fields. The native map has no reasoning-strength order
+or parameter-mapping language; selecting a chip edits that profile's complete
+request object. Switching/adding validates the current panel before replacing
+it, so unfinished JSON cannot be lost or silently saved as its last valid value.
+Unsupported provider enablement, Smart configuration, ZCode service presets and capabilities
 are not presented. Add first chooses the stable configuration name, separately
 from the Model ID sent to a provider. Opening, filtering, inspecting, cancelling,
 resetting and revealing a newly entered API Key create no native configuration

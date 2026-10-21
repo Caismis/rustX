@@ -3848,7 +3848,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "7cdb99d3f205e457c57d906cf114e2fe321a19295bf7fb23407de1d3ee3ca517"
+      "local_sha256": "1911cf94bd4d666667ab73641852f1b80fff64dd97e91c6cb3c72b26ede4c9e2"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -7097,7 +7097,6 @@
         "../../../presentation/primitives/Button",
         "../../../presentation/settings/SettingsContent.module.css",
         "../forms/bridge",
-        "../forms/controls",
         "../forms/fields",
         "../primitives/aria",
         "./ModelsPage.module.css",
@@ -7129,7 +7128,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "57f066a1dc35d50eab1f80061f80929c5094ae46feb41ec101d4d978dfc639cb"
+      "local_sha256": "af6f4bbcd049e133c0817d9f4785b98f2111b4a45d637ddaafc080090f55a06d"
     }
   ],
   "inspected_only": [
