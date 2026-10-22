@@ -515,6 +515,8 @@ export function describeRpcError(error: RpcError): string {
       return `${data.scope} source changed (expected ${data.expected}, found ${data.actual})`;
     case "stale_settings":
       return `settings changed underneath this edit (expected revision ${data.expected}, found ${data.actual})`;
+    case "workflow_invalid":
+      return `the Workflow is invalid at ${data.diagnostic.path}: ${data.diagnostic.reason}; the file was not changed`;
     case "interaction_not_pending":
       return "that interaction is no longer pending";
     case "interaction_audit_failed":

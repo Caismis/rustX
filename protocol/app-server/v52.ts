@@ -870,6 +870,33 @@ export type Request1 =
       };
     }
   | {
+      method: 'workflow/list';
+      params: {
+        target: SourceTarget;
+      };
+    }
+  | {
+      method: 'workflow/read';
+      params: {
+        target: SourceTarget;
+        id: WorkflowId;
+      };
+    }
+  | {
+      method: 'workflow/check';
+      params: {
+        target: SourceTarget;
+        id: WorkflowId;
+        document: WorkflowDefinition;
+        /**
+         * A User (Global) file's explicit Workspace dependency context. A
+         * Workspace file is always checked in its own Workspace.
+         */
+        context?: string | null;
+        explain?: boolean;
+      };
+    }
+  | {
       method: 'configuration/sourceWrite';
       params: {
         target: SourceTarget;
@@ -1502,6 +1529,249 @@ export type SourceFieldName =
   | 'workspace_models'
   | 'resolved_models';
 /**
+ * One Workflow node in the authoring/domain layer.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowNodeDefinition".
+ */
+export type WorkflowNodeDefinition =
+  | {
+      input: WorkflowValue;
+      body: WorkflowBlock1;
+      until: WorkflowPredicate;
+      carry: WorkflowValue;
+      max_iterations: number;
+      type: 'loop';
+    }
+  | {
+      subject: WorkflowReviewSubject;
+      context: WorkflowValue[];
+      type: 'review';
+    }
+  | {
+      selector: ExactToolSelector;
+      arguments: WorkflowValue;
+      result: WorkflowToolResult;
+      type: 'tool';
+    }
+  | {
+      /**
+       * The native named profile to resolve at `AgentRun` admission.
+       */
+      profile: string;
+      /**
+       * The fixed task instruction for this `AgentRun`.
+       */
+      task: string;
+      /**
+       * Explicit input bindings from workflow-local values.
+       */
+      input?: {
+        [k: string]: WorkflowValue;
+      };
+      /**
+       * The frozen `AgentRun` output contract.
+       */
+      output: {
+        [k: string]: unknown;
+      };
+      override?: SubagentInvocationOverride;
+      type: 'agent';
+    }
+  | {
+      /**
+       * The sole boolean condition binding.
+       */
+      condition:
+        | {
+            value: WorkflowValue;
+            type: 'boolean';
+          }
+        | {
+            left: WorkflowValue;
+            right: WorkflowValue;
+            type: 'equal';
+          }
+        | {
+            left: WorkflowValue;
+            right: WorkflowValue;
+            type: 'not_equal';
+          }
+        | {
+            predicate: WorkflowPredicate;
+            type: 'not';
+          }
+        | {
+            predicates: WorkflowPredicate[];
+            type: 'and';
+          }
+        | {
+            predicates: WorkflowPredicate[];
+            type: 'or';
+          };
+      type: 'branch';
+    }
+  | {
+      /**
+       * Branches are keyed by definition identity, not completion order.
+       */
+      branches: {
+        [k: string]: WorkflowBranch;
+      };
+      type: 'parallel';
+    }
+  | {
+      /**
+       * Closed, explicitly tagged value syntax; no evaluation of expression strings.
+       */
+      output:
+        | {
+            path: string[];
+            type: 'reference';
+          }
+        | {
+            value: unknown;
+            type: 'literal';
+          }
+        | {
+            fields: {
+              [k: string]: WorkflowValue;
+            };
+            type: 'object';
+          }
+        | {
+            items: WorkflowValue[];
+            type: 'array';
+          };
+      type: 'return';
+    };
+/**
+ * Closed, explicitly tagged value syntax; no evaluation of expression strings.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowValue".
+ */
+export type WorkflowValue =
+  | {
+      path: string[];
+      type: 'reference';
+    }
+  | {
+      value: unknown;
+      type: 'literal';
+    }
+  | {
+      fields: {
+        [k: string]: WorkflowValue;
+      };
+      type: 'object';
+    }
+  | {
+      items: WorkflowValue[];
+      type: 'array';
+    };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowPort".
+ */
+export type WorkflowPort = boolean | ('true' | 'false' | 'satisfied' | 'exhausted' | 'next');
+/**
+ * Typed predicates. Equality requires matching scalar types; no coercion.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowPredicate".
+ */
+export type WorkflowPredicate =
+  | {
+      value: WorkflowValue;
+      type: 'boolean';
+    }
+  | {
+      left: WorkflowValue;
+      right: WorkflowValue;
+      type: 'equal';
+    }
+  | {
+      left: WorkflowValue;
+      right: WorkflowValue;
+      type: 'not_equal';
+    }
+  | {
+      predicate: WorkflowPredicate;
+      type: 'not';
+    }
+  | {
+      predicates: WorkflowPredicate[];
+      type: 'and';
+    }
+  | {
+      predicates: WorkflowPredicate[];
+      type: 'or';
+    };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowReviewSubject".
+ */
+export type WorkflowReviewSubject = {
+  value: WorkflowValue;
+  type: 'plan';
+};
+/**
+ * One exact executable identity, used by Workflow Tool leaves and allowlists.
+ * Source-wide Agent capability selection cannot be authored in this type.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ExactToolSelector".
+ */
+export type ExactToolSelector =
+  | {
+      name: string;
+      origin: 'builtin';
+    }
+  | {
+      source_id: ToolSourceId;
+      name: string;
+      origin: 'source';
+    };
+/**
+ * A configured MCP source or a canonical Managed Python package.
+ * Namespace parsing happens only at the authoring boundary; runtime dispatch
+ * matches these variants, never display strings.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ToolSourceId".
+ */
+export type ToolSourceId = string;
+/**
+ * Select exactly one native content part, never provider text or log heuristics.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowToolResult".
+ */
+export type WorkflowToolResult =
+  | {
+      part: number;
+      schema: unknown;
+      type: 'json';
+    }
+  | {
+      part: number;
+      type: 'text';
+    };
+/**
+ * Exactly two trust granularities for one source. This is also the authoring
+ * boundary: only the literal "all" or an exact array is accepted.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SourceToolSelection".
+ */
+export type SourceToolSelection = AllTools | string[];
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "AllTools".
+ */
+export type AllTools = 'all';
+/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "SourceMutation".
  */
@@ -1523,6 +1793,11 @@ export type SourceMutation =
       name: SubagentName;
       authored?: AgentProfileDocument | null;
       kind: 'agent';
+    }
+  | {
+      id: WorkflowId;
+      edit: WorkflowEdit;
+      kind: 'workflow';
     };
 /**
  * A validated reference, written as `$ENV_VAR` only in declared secret fields.
@@ -1571,7 +1846,7 @@ export type ConfigMutation =
       unit: 'skills';
     }
   | {
-      authored?: TodoExtensionDocument | null;
+      authored?: TodoExtensionDocument1 | null;
       unit: 'todo';
     }
   | {
@@ -1579,7 +1854,7 @@ export type ConfigMutation =
       unit: 'goal';
     }
   | {
-      authored?: AgentStatusExtensionDocument | null;
+      authored?: AgentStatusExtensionDocument1 | null;
       unit: 'agent_status';
     }
   | {
@@ -1766,28 +2041,6 @@ export type AuxiliaryModelAuthoring =
       mode: 'explicit';
     };
 /**
- * A configured MCP source or a canonical Managed Python package.
- * Namespace parsing happens only at the authoring boundary; runtime dispatch
- * matches these variants, never display strings.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ToolSourceId".
- */
-export type ToolSourceId = string;
-/**
- * Exactly two trust granularities for one source. This is also the authoring
- * boundary: only the literal "all" or an exact array is accepted.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "SourceToolSelection".
- */
-export type SourceToolSelection = AllTools | string[];
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "AllTools".
- */
-export type AllTools = 'all';
-/**
  * Prompt visibility within a frozen Skill catalog; never filesystem authority.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -1849,6 +2102,33 @@ export type ApprovalMode = 'policy' | 'full_access';
  * via the `definition` "NativeTool".
  */
 export type NativeTool = 'read' | 'write' | 'edit' | 'glob' | 'grep' | 'bash';
+/**
+ * One whole-file Workflow mutation of the exact file the mutation names.
+ *
+ * The surrounding source write carries the destination's expected
+ * revision: the absent revision for `create` and `copy`, the exact current
+ * revision for `replace` and `delete`.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowEdit".
+ */
+export type WorkflowEdit =
+  | {
+      description: string;
+      operation: 'create';
+    }
+  | {
+      document: WorkflowDefinition;
+      operation: 'replace';
+    }
+  | {
+      source: WorkflowId;
+      source_revision: string;
+      operation: 'copy';
+    }
+  | {
+      operation: 'delete';
+    };
 /**
  * Success and failure are exclusive, including on deserialization.
  *
@@ -2166,6 +2446,18 @@ export type MethodResult =
   | {
       projection: BoundedSourceSettings;
       type: 'source_settings';
+    }
+  | {
+      library: WorkflowLibrary;
+      type: 'workflow_library';
+    }
+  | {
+      source: WorkflowSource;
+      type: 'workflow_source';
+    }
+  | {
+      report: WorkflowCheckReport;
+      type: 'workflow_check';
     }
   | {
       projection?: BoundedSessionApplication | null;
@@ -3848,23 +4140,6 @@ export type WorkflowDependencyFailure =
       detail: ExactToolSelector;
     };
 /**
- * One exact executable identity, used by Workflow Tool leaves and allowlists.
- * Source-wide Agent capability selection cannot be authored in this type.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ExactToolSelector".
- */
-export type ExactToolSelector =
-  | {
-      name: string;
-      origin: 'builtin';
-    }
-  | {
-      source_id: ToolSourceId;
-      name: string;
-      origin: 'source';
-    };
-/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "SourceInspection".
  */
@@ -5155,6 +5430,49 @@ export type ConfigRepairChange =
  */
 export type NativeToolRemoval = 'unknown' | 'duplicate' | 'agent_control' | 'plugin_owned';
 /**
+ * Whether the native compiler admits the candidate's structure.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowStructure".
+ */
+export type WorkflowStructure =
+  | {
+      outputs: {
+        [k: string]: unknown;
+      };
+      revision: string;
+      status: 'valid';
+    }
+  | {
+      diagnostic: WorkflowDiagnostic;
+      status: 'invalid';
+    };
+/**
+ * Dependency admission of a structurally valid candidate in one explicit
+ * Workspace composition.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowDependencies".
+ */
+export type WorkflowDependencies =
+  | {
+      status: 'not_checked';
+    }
+  | {
+      context: string;
+      status: 'admitted';
+    }
+  | {
+      context: string;
+      diagnostics: WorkflowAdmissionDiagnostic[];
+      status: 'blocked';
+    }
+  | {
+      context: string;
+      reason: string;
+      status: 'unavailable';
+    };
+/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ErrorData".
  */
@@ -5273,6 +5591,10 @@ export type ErrorData =
       expected: string;
       actual: string;
       kind: 'stale_settings';
+    }
+  | {
+      diagnostic: WorkflowDiagnostic;
+      kind: 'workflow_invalid';
     }
   | {
       interaction: InteractionRef;
@@ -7864,6 +8186,276 @@ export interface SourceFieldRef {
   byte_length: number;
 }
 /**
+ * The canonical YAML/domain representation of one workflow.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowDefinition".
+ */
+export interface WorkflowDefinition {
+  /**
+   * The model-facing description of the workflow Tool.
+   */
+  description: string;
+  /**
+   * Trusted finite total foreground lifetime, including descendant waits.
+   */
+  timeout_ms?: string;
+  block: WorkflowBlock;
+}
+/**
+ * The root lexical execution scope.
+ */
+export interface WorkflowBlock {
+  /**
+   * The workflow input JSON Schema.
+   */
+  input: {
+    [k: string]: unknown;
+  };
+  /**
+   * The workflow output JSON Schema.
+   */
+  output: {
+    [k: string]: unknown;
+  };
+  /**
+   * The one explicit entry node.
+   */
+  entry: string;
+  /**
+   * Stable node definitions keyed by explicit node id.
+   */
+  nodes: {
+    [k: string]: WorkflowNodeDefinition;
+  };
+  /**
+   * Ordinary sequential control-flow edges.
+   */
+  edges?: WorkflowEdgeDefinition[];
+}
+/**
+ * A fixed lexical graph shared by root, Parallel branches and Loop bodies.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowBlock".
+ */
+export interface WorkflowBlock1 {
+  /**
+   * The workflow input JSON Schema.
+   */
+  input: {
+    [k: string]: unknown;
+  };
+  /**
+   * The workflow output JSON Schema.
+   */
+  output: {
+    [k: string]: unknown;
+  };
+  /**
+   * The one explicit entry node.
+   */
+  entry: string;
+  /**
+   * Stable node definitions keyed by explicit node id.
+   */
+  nodes: {
+    [k: string]: WorkflowNodeDefinition;
+  };
+  /**
+   * Ordinary sequential control-flow edges.
+   */
+  edges?: WorkflowEdgeDefinition[];
+}
+/**
+ * One explicit edge in the workflow graph.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowEdgeDefinition".
+ */
+export interface WorkflowEdgeDefinition {
+  /**
+   * Source node id.
+   */
+  from: string;
+  /**
+   * Destination node id.
+   */
+  to: string;
+  /**
+   * Required Branch/Loop outcome port. Ordinary nodes must omit it.
+   */
+  port?: WorkflowPort | null;
+}
+/**
+ * The optional invocation-scoped capability override of this node
+ * (Issue #258).
+ *
+ * This is **trusted static program data**: it is part of the
+ * compiled Workflow, is validated against the Workflow's own
+ * admitted generation, and is not reachable from model output, node
+ * input values, or task text. It may therefore legitimately replace
+ * the role's defaults with capabilities the invoking main model does
+ * not itself hold — never with capabilities the generation does not
+ * authorize.
+ */
+export interface SubagentInvocationOverride {
+  tools?: ToolSelectionDocument;
+  /**
+   * The complete replacement Skill selection, when this dimension is
+   * overridden. Absent uses the definition's selection.
+   */
+  skills?: string[];
+  plugins?: NativeAgentExtensionSelection;
+}
+/**
+ * The complete replacement Tool selection, when this dimension is
+ * overridden. Absent uses the definition's selection.
+ */
+export interface ToolSelectionDocument {
+  builtin?: string[];
+  sources?: {
+    [k: string]: SourceToolSelection;
+  };
+}
+/**
+ * The complete replacement Plugin composition, when this
+ * dimension is overridden. Absent uses the definition's composition.
+ */
+export interface NativeAgentExtensionSelection {
+  agentStatus?: AgentStatusExtensionDocument;
+  todo?: TodoExtensionDocument;
+  goal?: GoalExtensionDocument;
+}
+/**
+ * The requested Agent Status extension, when this selection composes it.
+ *
+ * `null` is not accepted: the field is either absent (not composed) or a
+ * complete authored configuration. Collapsing an explicit `null` into
+ * "absent" would give one wire spelling two meanings.
+ */
+export interface AgentStatusExtensionDocument {
+  /**
+   * Whether this composition includes the Agent Status extension at all.
+   *
+   * With `false` the runtime composes no status engine: the Agent Loop
+   * emits no Agent Status and is otherwise a completely ordinary
+   * `ConversationRuntime`.
+   */
+  enabled?: boolean;
+  time?: TimeStatusConfig;
+  background?: BackgroundStatusConfig;
+}
+/**
+ * The Time contributor configuration.
+ */
+export interface TimeStatusConfig {
+  /**
+   * Whether Time participates in an available Agent Status opportunity.
+   */
+  enabled?: boolean;
+  /**
+   * The optional IANA timezone used only by Time presentation. Omitting it
+   * renders UTC.
+   */
+  timezone?: string | null;
+}
+/**
+ * The Background contributor configuration.
+ */
+export interface BackgroundStatusConfig {
+  /**
+   * Whether Background participates in an available Agent Status opportunity.
+   */
+  enabled?: boolean;
+}
+/**
+ * The requested Todo extension, when this selection composes it
+ * (Issue #259).
+ *
+ * Absent means the child composes no Todo at all — no list authority, no
+ * `todo` Tool, no status contribution — never "whatever the role
+ * authored". `null` is refused for the same reason `agentStatus` refuses
+ * it: one wire spelling may not carry two meanings.
+ */
+export interface TodoExtensionDocument {
+  /**
+   * Whether this composition includes the Todo extension at all.
+   */
+  enabled?: boolean;
+}
+/**
+ * Authored opt-in Goal composition.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "GoalExtensionDocument".
+ */
+export interface GoalExtensionDocument {
+  enabled?: boolean;
+}
+/**
+ * One explicit input projection and fixed private Parallel block.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowBranch".
+ */
+export interface WorkflowBranch {
+  /**
+   * Closed, explicitly tagged value syntax; no evaluation of expression strings.
+   */
+  input:
+    | {
+        path: string[];
+        type: 'reference';
+      }
+    | {
+        value: unknown;
+        type: 'literal';
+      }
+    | {
+        fields: {
+          [k: string]: WorkflowValue;
+        };
+        type: 'object';
+      }
+    | {
+        items: WorkflowValue[];
+        type: 'array';
+      };
+  block: WorkflowBlock2;
+}
+/**
+ * The child's private graph and contracts.
+ */
+export interface WorkflowBlock2 {
+  /**
+   * The workflow input JSON Schema.
+   */
+  input: {
+    [k: string]: unknown;
+  };
+  /**
+   * The workflow output JSON Schema.
+   */
+  output: {
+    [k: string]: unknown;
+  };
+  /**
+   * The one explicit entry node.
+   */
+  entry: string;
+  /**
+   * Stable node definitions keyed by explicit node id.
+   */
+  nodes: {
+    [k: string]: WorkflowNodeDefinition;
+  };
+  /**
+   * Ordinary sequential control-flow edges.
+   */
+  edges?: WorkflowEdgeDefinition[];
+}
+/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "McpWrite".
  */
@@ -8022,19 +8614,10 @@ export interface ModelLayer {
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "TodoExtensionDocument".
  */
-export interface TodoExtensionDocument {
+export interface TodoExtensionDocument1 {
   /**
    * Whether this composition includes the Todo extension at all.
    */
-  enabled?: boolean;
-}
-/**
- * Authored opt-in Goal composition.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "GoalExtensionDocument".
- */
-export interface GoalExtensionDocument {
   enabled?: boolean;
 }
 /**
@@ -8047,7 +8630,7 @@ export interface GoalExtensionDocument {
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "AgentStatusExtensionDocument".
  */
-export interface AgentStatusExtensionDocument {
+export interface AgentStatusExtensionDocument1 {
   /**
    * Whether this composition includes the Agent Status extension at all.
    *
@@ -8058,29 +8641,6 @@ export interface AgentStatusExtensionDocument {
   enabled?: boolean;
   time?: TimeStatusConfig;
   background?: BackgroundStatusConfig;
-}
-/**
- * The Time contributor configuration.
- */
-export interface TimeStatusConfig {
-  /**
-   * Whether Time participates in an available Agent Status opportunity.
-   */
-  enabled?: boolean;
-  /**
-   * The optional IANA timezone used only by Time presentation. Omitting it
-   * renders UTC.
-   */
-  timezone?: string | null;
-}
-/**
- * The Background contributor configuration.
- */
-export interface BackgroundStatusConfig {
-  /**
-   * Whether Background participates in an available Agent Status opportunity.
-   */
-  enabled?: boolean;
 }
 /**
  * Project-instruction selection from admitted workspace resources.
@@ -8218,7 +8778,7 @@ export interface AgentProfileDocument {
    * lifecycle, in milliseconds. The model cannot override or extend it.
    */
   timeout_ms?: string | null;
-  tools?: ToolSelectionDocument;
+  tools?: ToolSelectionDocument1;
   /**
    * Skill descriptions advertised in the prompt: "all", exact names, or [].
    */
@@ -8229,7 +8789,7 @@ export interface AgentProfileDocument {
 /**
  * The exact source-qualified capability selection.
  */
-export interface ToolSelectionDocument {
+export interface ToolSelectionDocument1 {
   builtin?: string[];
   sources?: {
     [k: string]: SourceToolSelection;
@@ -8257,8 +8817,8 @@ export interface AgentProjectInstructionsDocument1 {
  * independent of this complete document's semantics.
  */
 export interface NativeAgentExtensionsDocument {
-  agent_status?: AgentStatusExtensionDocument1;
-  todo?: TodoExtensionDocument1;
+  agent_status?: AgentStatusExtensionDocument2;
+  todo?: TodoExtensionDocument2;
   goal?: GoalExtensionDocument1;
 }
 /**
@@ -8268,7 +8828,7 @@ export interface NativeAgentExtensionsDocument {
  * `time` and `background` remain the two bounded status contributors, with
  * exactly the semantics they had before the migration.
  */
-export interface AgentStatusExtensionDocument1 {
+export interface AgentStatusExtensionDocument2 {
   /**
    * Whether this composition includes the Agent Status extension at all.
    *
@@ -8302,7 +8862,7 @@ export interface AgentStatusExtensionDocument1 {
  * [`ConversationTodoList`](crate::tools::todo::ConversationTodoList) and are
  * not launch configuration.
  */
-export interface TodoExtensionDocument1 {
+export interface TodoExtensionDocument2 {
   /**
    * Whether this composition includes the Todo extension at all.
    */
@@ -15538,8 +16098,8 @@ export interface ToolsLayer {
  * via the `definition` "PluginsLayer".
  */
 export interface PluginsLayer {
-  agent_status?: AgentStatusExtensionDocument | null;
-  todo?: TodoExtensionDocument | null;
+  agent_status?: AgentStatusExtensionDocument1 | null;
+  todo?: TodoExtensionDocument1 | null;
   goal?: GoalExtensionDocument | null;
 }
 /**
@@ -16122,6 +16682,232 @@ export interface SourceCollection {
   field: SourceFieldName;
   total: number;
   kind: string;
+}
+/**
+ * The Workflow files physically owned by one source scope.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowLibrary".
+ */
+export interface WorkflowLibrary {
+  target: SourceTarget;
+  /**
+   * The canonical directory owning this scope's Workflow files.
+   */
+  directory: string;
+  /**
+   * The CAS token of an absent file: the expected revision of a create or
+   * copy destination.
+   */
+  absent_revision: string;
+  /**
+   * Files in deterministic byte order of their basenames.
+   */
+  files: WorkflowFileSummary[];
+  /**
+   * A directory-level failure; `files` is then empty, never partial.
+   */
+  diagnostic?: WorkflowDiagnostic | null;
+}
+/**
+ * One file physically owned by the listed scope.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowFileSummary".
+ */
+export interface WorkflowFileSummary {
+  /**
+   * The file's basename, lossily decoded for presentation.
+   */
+  file_name: string;
+  /**
+   * The native identity; absent when the filename is not a Workflow id.
+   */
+  id?: WorkflowId | null;
+  /**
+   * The location relative to the scope's owning directory, e.g.
+   * `.agents/workflows/<id>.yaml`.
+   */
+  relative_path: string;
+  /**
+   * Exact byte revision, the CAS token of edits, copies and deletion.
+   */
+  revision: string;
+  byte_length: string;
+  /**
+   * Last modification in milliseconds since the Unix epoch, when known.
+   */
+  modified_ms?: number | null;
+  /**
+   * The bounded authored description of a parseable document.
+   */
+  description?: string | null;
+  /**
+   * Root-block node count of a parseable document.
+   */
+  nodes?: number | null;
+  /**
+   * Why this file is not a valid Workflow program.
+   */
+  diagnostic?: WorkflowDiagnostic | null;
+  /**
+   * Informational: a Workspace file whose id also names a User (Global)
+   * file, which it shadows in this Workspace. Edits never redirect.
+   */
+  shadows_global: boolean;
+}
+/**
+ * One bounded native diagnostic of a Workflow file or candidate.
+ *
+ * `path` is the native authored field path (`block.nodes.<id>.…`, `$` for the
+ * document) so a client can select the owning block, node and field. Reasons
+ * and corrections are static native text; `detail` is the bounded compiler
+ * rejection. Parser messages, unknown field names and authored values are
+ * never copied here.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowDiagnostic".
+ */
+export interface WorkflowDiagnostic {
+  path: string;
+  category: string;
+  reason: string;
+  correction?: string | null;
+  detail?: string | null;
+  line?: number | null;
+  column?: number | null;
+}
+/**
+ * The complete authorized source of one exact Workflow file.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowSource".
+ */
+export interface WorkflowSource {
+  target: SourceTarget;
+  id: WorkflowId;
+  path: string;
+  relative_path: string;
+  /**
+   * The exact byte revision; the absent revision when the file is missing.
+   */
+  revision: string;
+  present: boolean;
+  modified_ms?: number | null;
+  /**
+   * The parsed native definition. Absent for a missing, unparseable or
+   * browser-unrepresentable file, whose bytes stay untouched on disk.
+   */
+  document?: WorkflowDefinition | null;
+  /**
+   * The first structural (parse or compile) or representability failure.
+   */
+  diagnostic?: WorkflowDiagnostic | null;
+  vocabulary: WorkflowVocabulary;
+}
+/**
+ * The native names an author can choose from in this scope: discovered
+ * named Agent profiles and the builtin Tools a Tool node can select.
+ * Choices, never admission: the native check decides.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowVocabulary".
+ */
+export interface WorkflowVocabulary {
+  profiles: SubagentName[];
+  builtin_tools: string[];
+}
+/**
+ * One offline check of one exact candidate document.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowCheckReport".
+ */
+export interface WorkflowCheckReport {
+  structure: WorkflowStructure;
+  dependencies: WorkflowDependencies;
+  /**
+   * The redacted static explanation, when requested of a valid candidate.
+   */
+  explanation?: WorkflowInspection2 | null;
+}
+/**
+ * Static program facts. Literals and task text are deliberately not exported.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowInspection2".
+ */
+export interface WorkflowInspection2 {
+  identity: WorkflowToolIdentity;
+  stage: string;
+  input_schema: unknown;
+  output_schema: unknown;
+  configured_timeout_ms: string;
+  conservative_steps: number;
+  conservative_agent_runs: number;
+  conservative_retained_bytes: number;
+  caps: {
+    [k: string]: number;
+  };
+  blocks: {
+    [k: string]: BlockInspection;
+  };
+  tools: ExactToolSelector[];
+  profiles: SubagentName[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "BlockInspection".
+ */
+export interface BlockInspection {
+  entry: string;
+  input_schema: unknown;
+  output_schema: unknown;
+  nodes: {
+    [k: string]: NodeInspection;
+  };
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "NodeInspection".
+ */
+export interface NodeInspection {
+  kind: string;
+  edges: [unknown, unknown][];
+  bindings: {
+    [k: string]: unknown;
+  };
+  profile?: SubagentName | null;
+  /**
+   * The node's invocation override, when it carries one.
+   */
+  invocation_override?: AgentOverrideInspection | null;
+  selector?: ExactToolSelector | null;
+  output_schema?: unknown;
+  result_part?: number | null;
+  result_kind?: string | null;
+  branches: string[];
+  max_iterations?: number | null;
+  review_subject?: string | null;
+}
+/**
+ * The bounded projection of one Agent node's trusted static invocation
+ * override.
+ *
+ * Presence is the fact this projection has to carry, so each dimension stays
+ * an `Option`: `None` is "this dimension keeps the role's default" and
+ * `Some` is "this dimension is replaced by exactly this". Only identities
+ * are exported — capability selectors, Skill names, and the composed
+ * extension names — never a Skill body, a prompt, a credential, or a
+ * materialization secret.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "AgentOverrideInspection".
+ */
+export interface AgentOverrideInspection {
+  tools?: AgentToolSelection[] | null;
+  skills?: string[] | null;
+  extensions?: string[] | null;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -16801,6 +17587,61 @@ export interface QuestionnaireSpecification2 {
   questions: QuestionSpecification[];
 }
 /**
+ * One invocation-scoped replacement of selected child capability
+ * dimensions.
+ *
+ * The same value is produced by model-generated `subagent` arguments and by
+ * trusted static Workflow program data. The launch boundary determines
+ * authority; both share this vocabulary and the `AgentProfile` resolver.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SubagentInvocationOverride".
+ */
+export interface SubagentInvocationOverride1 {
+  tools?: ToolSelectionDocument;
+  /**
+   * The complete replacement Skill selection, when this dimension is
+   * overridden. Absent uses the definition's selection.
+   */
+  skills?: string[];
+  plugins?: NativeAgentExtensionSelection;
+}
+/**
+ * Shared Agent and Workflow Agent override selection. Extensions are composed
+ * by their native owner and never enter this ordinary capability vocabulary.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ToolSelectionDocument".
+ */
+export interface ToolSelectionDocument2 {
+  builtin?: string[];
+  sources?: {
+    [k: string]: SourceToolSelection;
+  };
+}
+/**
+ * The **presence-aware** closed selection an invocation override expresses.
+ *
+ * Complete profiles and invocation selections share omission semantics:
+ * omitted members compose no extension. The outer invocation dimension is
+ * presence-aware: absent retains the named default; present replaces it.
+ * This wire record preserves the invocation protocol's camelCase spelling
+ * and rejects explicit null members.
+ *
+ * The record stays closed exactly like the authored document: an unknown
+ * extension name is rejected by `deny_unknown_fields`, so a misspelled or
+ * not-yet-implemented extension fails deterministically instead of being
+ * silently ignored.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "NativeAgentExtensionSelection".
+ */
+export interface NativeAgentExtensionSelection1 {
+  agentStatus?: AgentStatusExtensionDocument;
+  todo?: TodoExtensionDocument;
+  goal?: GoalExtensionDocument;
+}
+/**
  * Configuration of the bounded Time status contributor.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -16830,19 +17671,6 @@ export interface BackgroundStatusConfig1 {
   enabled?: boolean;
 }
 /**
- * Shared Agent and Workflow Agent override selection. Extensions are composed
- * by their native owner and never enter this ordinary capability vocabulary.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ToolSelectionDocument".
- */
-export interface ToolSelectionDocument1 {
-  builtin?: string[];
-  sources?: {
-    [k: string]: SourceToolSelection;
-  };
-}
-/**
  * The closed authored composition surface of native Agent Extensions.
  *
  * Every member is a concrete named extension in a closed record.
@@ -16854,8 +17682,8 @@ export interface ToolSelectionDocument1 {
  * via the `definition` "NativeAgentExtensionsDocument".
  */
 export interface NativeAgentExtensionsDocument1 {
-  agent_status?: AgentStatusExtensionDocument1;
-  todo?: TodoExtensionDocument1;
+  agent_status?: AgentStatusExtensionDocument2;
+  todo?: TodoExtensionDocument2;
   goal?: GoalExtensionDocument1;
 }
 /**

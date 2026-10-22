@@ -8282,6 +8282,108 @@
           ]
         },
         {
+          "description": "The Workflow files physically owned by exactly one source scope\n(Issue #491); never the merged effective catalog.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "workflow/list"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/SourceTarget"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "The complete authorized source of one exact Workflow file.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "workflow/read"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/SourceTarget"
+                },
+                "id": {
+                  "$ref": "#/$defs/WorkflowId"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Offline structural check, optional explanation, and dependency\nadmission in an explicit Workspace context of one candidate document.\nExecutes nothing; writes nothing.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "workflow/check"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/SourceTarget"
+                },
+                "id": {
+                  "$ref": "#/$defs/WorkflowId"
+                },
+                "document": {
+                  "$ref": "#/$defs/WorkflowDefinition"
+                },
+                "context": {
+                  "description": "A User (Global) file's explicit Workspace dependency context. A\nWorkspace file is always checked in its own Workspace.",
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "default": null
+                },
+                "explain": {
+                  "type": "boolean",
+                  "default": false
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "id",
+                "document"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
           "type": "object",
           "properties": {
             "method": {
@@ -10303,6 +10405,817 @@
         "byte_length"
       ]
     },
+    "WorkflowDefinition": {
+      "description": "The canonical YAML/domain representation of one workflow.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "The model-facing description of the workflow Tool.",
+          "type": "string"
+        },
+        "timeout_ms": {
+          "description": "Trusted finite total foreground lifetime, including descendant waits.",
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])",
+          "default": "600000"
+        },
+        "block": {
+          "description": "The root lexical execution scope.",
+          "$ref": "#/$defs/WorkflowBlock"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "description",
+        "block"
+      ]
+    },
+    "WorkflowBlock": {
+      "description": "A fixed lexical graph shared by root, Parallel branches and Loop bodies.",
+      "type": "object",
+      "properties": {
+        "input": {
+          "description": "The workflow input JSON Schema."
+        },
+        "output": {
+          "description": "The workflow output JSON Schema."
+        },
+        "entry": {
+          "description": "The one explicit entry node.",
+          "type": "string"
+        },
+        "nodes": {
+          "description": "Stable node definitions keyed by explicit node id.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/WorkflowNodeDefinition"
+          }
+        },
+        "edges": {
+          "description": "Ordinary sequential control-flow edges.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WorkflowEdgeDefinition"
+          },
+          "default": []
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "input",
+        "output",
+        "entry",
+        "nodes"
+      ]
+    },
+    "WorkflowNodeDefinition": {
+      "description": "One Workflow node in the authoring/domain layer.",
+      "oneOf": [
+        {
+          "description": "Repeat one fixed typed body until its committed result satisfies `until`.",
+          "type": "object",
+          "properties": {
+            "input": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "body": {
+              "$ref": "#/$defs/WorkflowBlock"
+            },
+            "until": {
+              "$ref": "#/$defs/WorkflowPredicate"
+            },
+            "carry": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "max_iterations": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            "type": {
+              "type": "string",
+              "const": "loop"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "input",
+            "body",
+            "until",
+            "carry",
+            "max_iterations"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "subject": {
+              "$ref": "#/$defs/WorkflowReviewSubject"
+            },
+            "context": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/WorkflowValue"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "review"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "subject",
+            "context"
+          ]
+        },
+        {
+          "description": "One statically selected, explicitly admitted foreground capability.",
+          "type": "object",
+          "properties": {
+            "selector": {
+              "$ref": "#/$defs/ExactToolSelector"
+            },
+            "arguments": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "result": {
+              "$ref": "#/$defs/WorkflowToolResult"
+            },
+            "type": {
+              "type": "string",
+              "const": "tool"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "selector",
+            "arguments",
+            "result"
+          ]
+        },
+        {
+          "description": "One execution of an admitted named Subagent profile.",
+          "type": "object",
+          "properties": {
+            "profile": {
+              "description": "The native named profile to resolve at `AgentRun` admission.",
+              "$ref": "#/$defs/SubagentName"
+            },
+            "task": {
+              "description": "The fixed task instruction for this `AgentRun`.",
+              "type": "string"
+            },
+            "input": {
+              "description": "Explicit input bindings from workflow-local values.",
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/WorkflowValue"
+              },
+              "default": {}
+            },
+            "output": {
+              "description": "The frozen `AgentRun` output contract."
+            },
+            "override": {
+              "description": "The optional invocation-scoped capability override of this node\n(Issue #258).\n\nThis is **trusted static program data**: it is part of the\ncompiled Workflow, is validated against the Workflow's own\nadmitted generation, and is not reachable from model output, node\ninput values, or task text. It may therefore legitimately replace\nthe role's defaults with capabilities the invoking main model does\nnot itself hold — never with capabilities the generation does not\nauthorize.",
+              "$ref": "#/$defs/SubagentInvocationOverride"
+            },
+            "type": {
+              "type": "string",
+              "const": "agent"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "profile",
+            "task",
+            "output"
+          ]
+        },
+        {
+          "description": "Deterministic selection from one committed boolean value.",
+          "type": "object",
+          "properties": {
+            "condition": {
+              "description": "The sole boolean condition binding.",
+              "$ref": "#/$defs/WorkflowPredicate"
+            },
+            "type": {
+              "type": "string",
+              "const": "branch"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "condition"
+          ]
+        },
+        {
+          "description": "A finite keyed set of private lexical blocks.",
+          "type": "object",
+          "properties": {
+            "branches": {
+              "description": "Branches are keyed by definition identity, not completion order.",
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/WorkflowBranch"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "parallel"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "branches"
+          ]
+        },
+        {
+          "description": "Constructs a value and completes exactly this owning block.",
+          "type": "object",
+          "properties": {
+            "output": {
+              "description": "The owning block's declared result.",
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "type": {
+              "type": "string",
+              "const": "return"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "output"
+          ]
+        }
+      ]
+    },
+    "WorkflowValue": {
+      "description": "Closed, explicitly tagged value syntax; no evaluation of expression strings.",
+      "oneOf": [
+        {
+          "description": "First component is `args` or a local producer; remaining components are fields.",
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "reference"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "path"
+          ]
+        },
+        {
+          "description": "Literal JSON, including objects and arrays, never interpreted as syntax.",
+          "type": "object",
+          "properties": {
+            "value": true,
+            "type": {
+              "type": "string",
+              "const": "literal"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "value"
+          ]
+        },
+        {
+          "description": "Construct an object atomically.",
+          "type": "object",
+          "properties": {
+            "fields": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/WorkflowValue"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "object"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "fields"
+          ]
+        },
+        {
+          "description": "Construct an array atomically.",
+          "type": "object",
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/WorkflowValue"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "array"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "items"
+          ]
+        }
+      ]
+    },
+    "WorkflowPredicate": {
+      "description": "Typed predicates. Equality requires matching scalar types; no coercion.",
+      "oneOf": [
+        {
+          "description": "A boolean value.",
+          "type": "object",
+          "properties": {
+            "value": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "type": {
+              "type": "string",
+              "const": "boolean"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "value"
+          ]
+        },
+        {
+          "description": "Equal scalar operands of the same static type.",
+          "type": "object",
+          "properties": {
+            "left": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "right": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "type": {
+              "type": "string",
+              "const": "equal"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "left",
+            "right"
+          ]
+        },
+        {
+          "description": "Unequal scalar operands of the same static type.",
+          "type": "object",
+          "properties": {
+            "left": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "right": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "type": {
+              "type": "string",
+              "const": "not_equal"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "left",
+            "right"
+          ]
+        },
+        {
+          "description": "Boolean negation.",
+          "type": "object",
+          "properties": {
+            "predicate": {
+              "$ref": "#/$defs/WorkflowPredicate"
+            },
+            "type": {
+              "type": "string",
+              "const": "not"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "predicate"
+          ]
+        },
+        {
+          "description": "Conjunction of a nonempty fixed list.",
+          "type": "object",
+          "properties": {
+            "predicates": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/WorkflowPredicate"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "and"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "predicates"
+          ]
+        },
+        {
+          "description": "Disjunction of a nonempty fixed list.",
+          "type": "object",
+          "properties": {
+            "predicates": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/WorkflowPredicate"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "or"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "predicates"
+          ]
+        }
+      ]
+    },
+    "WorkflowReviewSubject": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "value": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "type": {
+              "type": "string",
+              "const": "plan"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "value"
+          ]
+        }
+      ]
+    },
+    "ExactToolSelector": {
+      "description": "One exact executable identity, used by Workflow Tool leaves and allowlists.\nSource-wide Agent capability selection cannot be authored in this type.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "origin": {
+              "type": "string",
+              "const": "builtin"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "origin",
+            "name"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "source_id": {
+              "$ref": "#/$defs/ToolSourceId"
+            },
+            "name": {
+              "type": "string"
+            },
+            "origin": {
+              "type": "string",
+              "const": "source"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "origin",
+            "source_id",
+            "name"
+          ]
+        }
+      ]
+    },
+    "ToolSourceId": {
+      "description": "A configured MCP source or a canonical Managed Python package.\nNamespace parsing happens only at the authoring boundary; runtime dispatch\nmatches these variants, never display strings.",
+      "type": "string"
+    },
+    "WorkflowToolResult": {
+      "description": "Select exactly one native content part, never provider text or log heuristics.",
+      "oneOf": [
+        {
+          "description": "The indexed part must be native structured JSON satisfying this schema.",
+          "type": "object",
+          "properties": {
+            "part": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "schema": true,
+            "type": {
+              "type": "string",
+              "const": "json"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "part",
+            "schema"
+          ]
+        },
+        {
+          "description": "The indexed part must be native text; retain it as a typed JSON string.",
+          "type": "object",
+          "properties": {
+            "part": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "part"
+          ]
+        }
+      ]
+    },
+    "SubagentInvocationOverride": {
+      "description": "One invocation-scoped replacement of selected child capability\ndimensions.\n\nThe same value is produced by model-generated `subagent` arguments and by\ntrusted static Workflow program data. The launch boundary determines\nauthority; both share this vocabulary and the `AgentProfile` resolver.",
+      "type": "object",
+      "properties": {
+        "tools": {
+          "description": "The complete replacement Tool selection, when this dimension is\noverridden. Absent uses the definition's selection.",
+          "$ref": "#/$defs/ToolSelectionDocument"
+        },
+        "skills": {
+          "description": "The complete replacement Skill selection, when this dimension is\noverridden. Absent uses the definition's selection.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "plugins": {
+          "description": "The complete replacement Plugin composition, when this\ndimension is overridden. Absent uses the definition's composition.",
+          "$ref": "#/$defs/NativeAgentExtensionSelection"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ToolSelectionDocument": {
+      "description": "Shared Agent and Workflow Agent override selection. Extensions are composed\nby their native owner and never enter this ordinary capability vocabulary.",
+      "type": "object",
+      "properties": {
+        "builtin": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "sources": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/SourceToolSelection"
+          },
+          "default": {}
+        }
+      },
+      "additionalProperties": false
+    },
+    "SourceToolSelection": {
+      "description": "Exactly two trust granularities for one source. This is also the authoring\nboundary: only the literal \"all\" or an exact array is accepted.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AllTools"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    "AllTools": {
+      "type": "string",
+      "enum": [
+        "all"
+      ]
+    },
+    "NativeAgentExtensionSelection": {
+      "description": "The **presence-aware** closed selection an invocation override expresses.\n\nComplete profiles and invocation selections share omission semantics:\nomitted members compose no extension. The outer invocation dimension is\npresence-aware: absent retains the named default; present replaces it.\nThis wire record preserves the invocation protocol's camelCase spelling\nand rejects explicit null members.\n\nThe record stays closed exactly like the authored document: an unknown\nextension name is rejected by `deny_unknown_fields`, so a misspelled or\nnot-yet-implemented extension fails deterministically instead of being\nsilently ignored.",
+      "type": "object",
+      "properties": {
+        "agentStatus": {
+          "description": "The requested Agent Status extension, when this selection composes it.\n\n`null` is not accepted: the field is either absent (not composed) or a\ncomplete authored configuration. Collapsing an explicit `null` into\n\"absent\" would give one wire spelling two meanings.",
+          "$ref": "#/$defs/AgentStatusExtensionDocument"
+        },
+        "todo": {
+          "description": "The requested Todo extension, when this selection composes it\n(Issue #259).\n\nAbsent means the child composes no Todo at all — no list authority, no\n`todo` Tool, no status contribution — never \"whatever the role\nauthored\". `null` is refused for the same reason `agentStatus` refuses\nit: one wire spelling may not carry two meanings.",
+          "$ref": "#/$defs/TodoExtensionDocument"
+        },
+        "goal": {
+          "$ref": "#/$defs/GoalExtensionDocument"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentStatusExtensionDocument": {
+      "description": "The authored Agent Status extension.\n\n`enabled` composes the extension in or out of the runtime as a whole;\n`time` and `background` remain the two bounded status contributors, with\nexactly the semantics they had before the migration.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Whether this composition includes the Agent Status extension at all.\n\nWith `false` the runtime composes no status engine: the Agent Loop\nemits no Agent Status and is otherwise a completely ordinary\n`ConversationRuntime`.",
+          "type": "boolean",
+          "default": false
+        },
+        "time": {
+          "description": "The Time contributor configuration.",
+          "$ref": "#/$defs/TimeStatusConfig",
+          "default": {
+            "enabled": true
+          }
+        },
+        "background": {
+          "description": "The Background contributor configuration.",
+          "$ref": "#/$defs/BackgroundStatusConfig",
+          "default": {
+            "enabled": true
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "TimeStatusConfig": {
+      "description": "Configuration of the bounded Time status contributor.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Whether Time participates in an available Agent Status opportunity.",
+          "type": "boolean",
+          "default": true
+        },
+        "timezone": {
+          "description": "The optional IANA timezone used only by Time presentation. Omitting it\nrenders UTC.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "BackgroundStatusConfig": {
+      "description": "Configuration of the bounded Background status contributor.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Whether Background participates in an available Agent Status opportunity.",
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "TodoExtensionDocument": {
+      "description": "The authored Todo extension (Issue #259).\n\nTodo is *one* capability with several faces, and `enabled` composes all\nof them together or none of them:\n\n```text\nenabled = true    conversation-owned ConversationTodoList authority\n                  the model-facing `todo` Tool\n                  the bounded read-only Todo status presentation\n                  the Runtime Client / TUI Todo projection\n\nenabled = false   none of the above for this runtime; canonical history\n                  keeps every Todo ToolCall/ToolResult it already holds\n```\n\nIt carries no contributor settings today. That is a statement about the\nextension, not a placeholder: the list's bounds, transitions, and\ndependency rules are owned by\n[`ConversationTodoList`](crate::tools::todo::ConversationTodoList) and are\nnot launch configuration.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Whether this composition includes the Todo extension at all.",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "GoalExtensionDocument": {
+      "description": "Authored opt-in Goal composition.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "WorkflowBranch": {
+      "description": "One explicit input projection and fixed private Parallel block.",
+      "type": "object",
+      "properties": {
+        "input": {
+          "description": "Evaluated in the parent scope and checked against the child input schema.",
+          "$ref": "#/$defs/WorkflowValue"
+        },
+        "block": {
+          "description": "The child's private graph and contracts.",
+          "$ref": "#/$defs/WorkflowBlock"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "input",
+        "block"
+      ]
+    },
+    "WorkflowEdgeDefinition": {
+      "description": "One explicit edge in the workflow graph.",
+      "type": "object",
+      "properties": {
+        "from": {
+          "description": "Source node id.",
+          "type": "string"
+        },
+        "to": {
+          "description": "Destination node id.",
+          "type": "string"
+        },
+        "port": {
+          "description": "Required Branch/Loop outcome port. Ordinary nodes must omit it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkflowPort"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "from",
+        "to"
+      ]
+    },
+    "WorkflowPort": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "string",
+          "enum": [
+            "true",
+            "false",
+            "satisfied",
+            "exhausted",
+            "next"
+          ]
+        }
+      ]
+    },
     "SourceMutation": {
       "oneOf": [
         {
@@ -10392,6 +11305,28 @@
           "required": [
             "kind",
             "name"
+          ]
+        },
+        {
+          "description": "One whole-file edit of exactly `<scope>/.agents/workflows/<id>.yaml`\n(Issue #491). The expected revision is that file's.",
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/WorkflowId"
+            },
+            "edit": {
+              "$ref": "#/$defs/WorkflowEdit"
+            },
+            "kind": {
+              "type": "string",
+              "const": "workflow"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "id",
+            "edit"
           ]
         }
       ]
@@ -11627,30 +12562,6 @@
         }
       ]
     },
-    "ToolSourceId": {
-      "description": "A configured MCP source or a canonical Managed Python package.\nNamespace parsing happens only at the authoring boundary; runtime dispatch\nmatches these variants, never display strings.",
-      "type": "string"
-    },
-    "SourceToolSelection": {
-      "description": "Exactly two trust granularities for one source. This is also the authoring\nboundary: only the literal \"all\" or an exact array is accepted.",
-      "anyOf": [
-        {
-          "$ref": "#/$defs/AllTools"
-        },
-        {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
-      ]
-    },
-    "AllTools": {
-      "type": "string",
-      "enum": [
-        "all"
-      ]
-    },
     "AgentSkillSelection": {
       "description": "Prompt visibility within a frozen Skill catalog; never filesystem authority.",
       "anyOf": [
@@ -11664,86 +12575,6 @@
           }
         }
       ]
-    },
-    "TodoExtensionDocument": {
-      "description": "The authored Todo extension (Issue #259).\n\nTodo is *one* capability with several faces, and `enabled` composes all\nof them together or none of them:\n\n```text\nenabled = true    conversation-owned ConversationTodoList authority\n                  the model-facing `todo` Tool\n                  the bounded read-only Todo status presentation\n                  the Runtime Client / TUI Todo projection\n\nenabled = false   none of the above for this runtime; canonical history\n                  keeps every Todo ToolCall/ToolResult it already holds\n```\n\nIt carries no contributor settings today. That is a statement about the\nextension, not a placeholder: the list's bounds, transitions, and\ndependency rules are owned by\n[`ConversationTodoList`](crate::tools::todo::ConversationTodoList) and are\nnot launch configuration.",
-      "type": "object",
-      "properties": {
-        "enabled": {
-          "description": "Whether this composition includes the Todo extension at all.",
-          "type": "boolean",
-          "default": false
-        }
-      },
-      "additionalProperties": false
-    },
-    "GoalExtensionDocument": {
-      "description": "Authored opt-in Goal composition.",
-      "type": "object",
-      "properties": {
-        "enabled": {
-          "type": "boolean",
-          "default": false
-        }
-      },
-      "additionalProperties": false
-    },
-    "AgentStatusExtensionDocument": {
-      "description": "The authored Agent Status extension.\n\n`enabled` composes the extension in or out of the runtime as a whole;\n`time` and `background` remain the two bounded status contributors, with\nexactly the semantics they had before the migration.",
-      "type": "object",
-      "properties": {
-        "enabled": {
-          "description": "Whether this composition includes the Agent Status extension at all.\n\nWith `false` the runtime composes no status engine: the Agent Loop\nemits no Agent Status and is otherwise a completely ordinary\n`ConversationRuntime`.",
-          "type": "boolean",
-          "default": false
-        },
-        "time": {
-          "description": "The Time contributor configuration.",
-          "$ref": "#/$defs/TimeStatusConfig",
-          "default": {
-            "enabled": true
-          }
-        },
-        "background": {
-          "description": "The Background contributor configuration.",
-          "$ref": "#/$defs/BackgroundStatusConfig",
-          "default": {
-            "enabled": true
-          }
-        }
-      },
-      "additionalProperties": false
-    },
-    "TimeStatusConfig": {
-      "description": "Configuration of the bounded Time status contributor.",
-      "type": "object",
-      "properties": {
-        "enabled": {
-          "description": "Whether Time participates in an available Agent Status opportunity.",
-          "type": "boolean",
-          "default": true
-        },
-        "timezone": {
-          "description": "The optional IANA timezone used only by Time presentation. Omitting it\nrenders UTC.",
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "BackgroundStatusConfig": {
-      "description": "Configuration of the bounded Background status contributor.",
-      "type": "object",
-      "properties": {
-        "enabled": {
-          "description": "Whether Background participates in an available Agent Status opportunity.",
-          "type": "boolean",
-          "default": true
-        }
-      },
-      "additionalProperties": false
     },
     "AgentProjectInstructionsDocument": {
       "description": "Project-instruction selection from admitted workspace resources.",
@@ -12179,27 +13010,6 @@
       },
       "additionalProperties": false
     },
-    "ToolSelectionDocument": {
-      "description": "Shared Agent and Workflow Agent override selection. Extensions are composed\nby their native owner and never enter this ordinary capability vocabulary.",
-      "type": "object",
-      "properties": {
-        "builtin": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": []
-        },
-        "sources": {
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/$defs/SourceToolSelection"
-          },
-          "default": {}
-        }
-      },
-      "additionalProperties": false
-    },
     "NativeAgentExtensionsDocument": {
       "description": "The closed authored composition surface of native Agent Extensions.\n\nEvery member is a concrete named extension in a closed record.\nUnknown extension names are rejected. Runtime TOML layers use the separate\n`snake_case` authoring boundary; resource and wire documents retain their\nown serialization contract.",
       "type": "object",
@@ -12233,6 +13043,83 @@
         }
       },
       "additionalProperties": false
+    },
+    "WorkflowEdit": {
+      "description": "One whole-file Workflow mutation of the exact file the mutation names.\n\nThe surrounding source write carries the destination's expected\nrevision: the absent revision for `create` and `copy`, the exact current\nrevision for `replace` and `delete`.",
+      "oneOf": [
+        {
+          "description": "Create the native minimal valid program: an entry Return of an empty\nobject, with matching empty object input and output contracts.",
+          "type": "object",
+          "properties": {
+            "description": {
+              "type": "string"
+            },
+            "operation": {
+              "type": "string",
+              "const": "create"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "operation",
+            "description"
+          ]
+        },
+        {
+          "description": "Replace the whole file with one native-validated definition.",
+          "type": "object",
+          "properties": {
+            "document": {
+              "$ref": "#/$defs/WorkflowDefinition"
+            },
+            "operation": {
+              "type": "string",
+              "const": "replace"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "operation",
+            "document"
+          ]
+        },
+        {
+          "description": "Copy another file of the same scope at exactly `source_revision`.",
+          "type": "object",
+          "properties": {
+            "source": {
+              "$ref": "#/$defs/WorkflowId"
+            },
+            "source_revision": {
+              "type": "string"
+            },
+            "operation": {
+              "type": "string",
+              "const": "copy"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "operation",
+            "source",
+            "source_revision"
+          ]
+        },
+        {
+          "description": "Remove exactly this file.",
+          "type": "object",
+          "properties": {
+            "operation": {
+              "type": "string",
+              "const": "delete"
+            }
+          },
+          "required": [
+            "operation"
+          ],
+          "additionalProperties": false
+        }
+      ]
     },
     "SessionSettingsRef": {
       "type": "object",
@@ -13626,6 +14513,57 @@
           "required": [
             "type",
             "projection"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "library": {
+              "$ref": "#/$defs/WorkflowLibrary"
+            },
+            "type": {
+              "type": "string",
+              "const": "workflow_library"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "library"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "source": {
+              "$ref": "#/$defs/WorkflowSource"
+            },
+            "type": {
+              "type": "string",
+              "const": "workflow_source"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "source"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "report": {
+              "$ref": "#/$defs/WorkflowCheckReport"
+            },
+            "type": {
+              "type": "string",
+              "const": "workflow_check"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "report"
           ]
         },
         {
@@ -21921,49 +22859,6 @@
         }
       ]
     },
-    "ExactToolSelector": {
-      "description": "One exact executable identity, used by Workflow Tool leaves and allowlists.\nSource-wide Agent capability selection cannot be authored in this type.",
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "name": {
-              "type": "string"
-            },
-            "origin": {
-              "type": "string",
-              "const": "builtin"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "origin",
-            "name"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "source_id": {
-              "$ref": "#/$defs/ToolSourceId"
-            },
-            "name": {
-              "type": "string"
-            },
-            "origin": {
-              "type": "string",
-              "const": "source"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "origin",
-            "source_id",
-            "name"
-          ]
-        }
-      ]
-    },
     "SourceInspection": {
       "oneOf": [
         {
@@ -27543,6 +28438,668 @@
         "kind"
       ]
     },
+    "WorkflowLibrary": {
+      "description": "The Workflow files physically owned by one source scope.",
+      "type": "object",
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/SourceTarget"
+        },
+        "directory": {
+          "description": "The canonical directory owning this scope's Workflow files.",
+          "type": "string"
+        },
+        "absent_revision": {
+          "description": "The CAS token of an absent file: the expected revision of a create or\ncopy destination.",
+          "type": "string"
+        },
+        "files": {
+          "description": "Files in deterministic byte order of their basenames.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WorkflowFileSummary"
+          }
+        },
+        "diagnostic": {
+          "description": "A directory-level failure; `files` is then empty, never partial.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkflowDiagnostic"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "target",
+        "directory",
+        "absent_revision",
+        "files"
+      ]
+    },
+    "WorkflowFileSummary": {
+      "description": "One file physically owned by the listed scope.",
+      "type": "object",
+      "properties": {
+        "file_name": {
+          "description": "The file's basename, lossily decoded for presentation.",
+          "type": "string"
+        },
+        "id": {
+          "description": "The native identity; absent when the filename is not a Workflow id.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkflowId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "relative_path": {
+          "description": "The location relative to the scope's owning directory, e.g.\n`.agents/workflows/<id>.yaml`.",
+          "type": "string"
+        },
+        "revision": {
+          "description": "Exact byte revision, the CAS token of edits, copies and deletion.",
+          "type": "string"
+        },
+        "byte_length": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "modified_ms": {
+          "description": "Last modification in milliseconds since the Unix epoch, when known.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "description": {
+          "description": "The bounded authored description of a parseable document.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "nodes": {
+          "description": "Root-block node count of a parseable document.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "diagnostic": {
+          "description": "Why this file is not a valid Workflow program.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkflowDiagnostic"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "shadows_global": {
+          "description": "Informational: a Workspace file whose id also names a User (Global)\nfile, which it shadows in this Workspace. Edits never redirect.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "file_name",
+        "relative_path",
+        "revision",
+        "byte_length",
+        "shadows_global"
+      ]
+    },
+    "WorkflowDiagnostic": {
+      "description": "One bounded native diagnostic of a Workflow file or candidate.\n\n`path` is the native authored field path (`block.nodes.<id>.…`, `$` for the\ndocument) so a client can select the owning block, node and field. Reasons\nand corrections are static native text; `detail` is the bounded compiler\nrejection. Parser messages, unknown field names and authored values are\nnever copied here.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "category": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "correction": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "line": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "column": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "category",
+        "reason"
+      ]
+    },
+    "WorkflowSource": {
+      "description": "The complete authorized source of one exact Workflow file.",
+      "type": "object",
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/SourceTarget"
+        },
+        "id": {
+          "$ref": "#/$defs/WorkflowId"
+        },
+        "path": {
+          "type": "string"
+        },
+        "relative_path": {
+          "type": "string"
+        },
+        "revision": {
+          "description": "The exact byte revision; the absent revision when the file is missing.",
+          "type": "string"
+        },
+        "present": {
+          "type": "boolean"
+        },
+        "modified_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "document": {
+          "description": "The parsed native definition. Absent for a missing, unparseable or\nbrowser-unrepresentable file, whose bytes stay untouched on disk.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkflowDefinition"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "diagnostic": {
+          "description": "The first structural (parse or compile) or representability failure.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkflowDiagnostic"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "vocabulary": {
+          "$ref": "#/$defs/WorkflowVocabulary"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "target",
+        "id",
+        "path",
+        "relative_path",
+        "revision",
+        "present",
+        "vocabulary"
+      ]
+    },
+    "WorkflowVocabulary": {
+      "description": "The native names an author can choose from in this scope: discovered\nnamed Agent profiles and the builtin Tools a Tool node can select.\nChoices, never admission: the native check decides.",
+      "type": "object",
+      "properties": {
+        "profiles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SubagentName"
+          }
+        },
+        "builtin_tools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "profiles",
+        "builtin_tools"
+      ]
+    },
+    "WorkflowCheckReport": {
+      "description": "One offline check of one exact candidate document.",
+      "type": "object",
+      "properties": {
+        "structure": {
+          "$ref": "#/$defs/WorkflowStructure"
+        },
+        "dependencies": {
+          "$ref": "#/$defs/WorkflowDependencies"
+        },
+        "explanation": {
+          "description": "The redacted static explanation, when requested of a valid candidate.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkflowInspection2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "structure",
+        "dependencies"
+      ]
+    },
+    "WorkflowStructure": {
+      "description": "Whether the native compiler admits the candidate's structure.",
+      "oneOf": [
+        {
+          "description": "Compiled. `outputs` are the compiled output contracts of every node\nby authored path, including derived Parallel and Loop results.\n`revision` is the file revision a `replace` with this candidate\ncommits: the native identity of its canonical serialization, so a\nclient recognizes its own normalized commit on reread.",
+          "type": "object",
+          "properties": {
+            "outputs": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "revision": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "const": "valid"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "outputs",
+            "revision"
+          ]
+        },
+        {
+          "description": "The first native compiler rejection.",
+          "type": "object",
+          "properties": {
+            "diagnostic": {
+              "$ref": "#/$defs/WorkflowDiagnostic"
+            },
+            "status": {
+              "type": "string",
+              "const": "invalid"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "diagnostic"
+          ]
+        }
+      ]
+    },
+    "WorkflowDependencies": {
+      "description": "Dependency admission of a structurally valid candidate in one explicit\nWorkspace composition.",
+      "oneOf": [
+        {
+          "description": "No context was named, or the structure is invalid.",
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "not_checked"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "Every named Agent and Tool admits in `context`.",
+          "type": "object",
+          "properties": {
+            "context": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "const": "admitted"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "context"
+          ]
+        },
+        {
+          "description": "Native admission diagnostics in `context`.",
+          "type": "object",
+          "properties": {
+            "context": {
+              "type": "string"
+            },
+            "diagnostics": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/WorkflowAdmissionDiagnostic"
+              }
+            },
+            "status": {
+              "type": "string",
+              "const": "blocked"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "context",
+            "diagnostics"
+          ]
+        },
+        {
+          "description": "`context` cannot be composed offline; readiness stays unknown.",
+          "type": "object",
+          "properties": {
+            "context": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "const": "unavailable"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "context",
+            "reason"
+          ]
+        }
+      ]
+    },
+    "WorkflowInspection2": {
+      "description": "Static program facts. Literals and task text are deliberately not exported.",
+      "type": "object",
+      "properties": {
+        "identity": {
+          "$ref": "#/$defs/WorkflowToolIdentity"
+        },
+        "stage": {
+          "type": "string"
+        },
+        "input_schema": true,
+        "output_schema": true,
+        "configured_timeout_ms": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "conservative_steps": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "conservative_agent_runs": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "conservative_retained_bytes": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "caps": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "blocks": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/BlockInspection"
+          }
+        },
+        "tools": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/ExactToolSelector"
+          }
+        },
+        "profiles": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/SubagentName"
+          }
+        }
+      },
+      "required": [
+        "identity",
+        "stage",
+        "input_schema",
+        "output_schema",
+        "configured_timeout_ms",
+        "conservative_steps",
+        "conservative_agent_runs",
+        "conservative_retained_bytes",
+        "caps",
+        "blocks",
+        "tools",
+        "profiles"
+      ]
+    },
+    "BlockInspection": {
+      "type": "object",
+      "properties": {
+        "entry": {
+          "type": "string"
+        },
+        "input_schema": true,
+        "output_schema": true,
+        "nodes": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/NodeInspection"
+          }
+        }
+      },
+      "required": [
+        "entry",
+        "input_schema",
+        "output_schema",
+        "nodes"
+      ]
+    },
+    "NodeInspection": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "prefixItems": [
+              {
+                "$ref": "#/$defs/WorkflowPort"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "minItems": 2,
+            "maxItems": 2
+          }
+        },
+        "bindings": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "profile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubagentName"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "invocation_override": {
+          "description": "The node's invocation override, when it carries one.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentOverrideInspection"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "selector": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExactToolSelector"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "output_schema": true,
+        "result_part": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "result_kind": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "branches": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "max_iterations": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "review_subject": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "edges",
+        "bindings",
+        "branches"
+      ]
+    },
+    "AgentOverrideInspection": {
+      "description": "The bounded projection of one Agent node's trusted static invocation\noverride.\n\nPresence is the fact this projection has to carry, so each dimension stays\nan `Option`: `None` is \"this dimension keeps the role's default\" and\n`Some` is \"this dimension is replaced by exactly this\". Only identities\nare exported — capability selectors, Skill names, and the composed\nextension names — never a Skill body, a prompt, a credential, or a\nmaterialization secret.",
+      "type": "object",
+      "properties": {
+        "tools": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/AgentToolSelection"
+          }
+        },
+        "skills": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "extensions": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
     "BoundedSessionApplication": {
       "type": "object",
       "properties": {
@@ -28254,6 +29811,24 @@
             "kind",
             "expected",
             "actual"
+          ]
+        },
+        {
+          "description": "The native parser or compiler rejected a Workflow candidate; the file\nis unchanged.",
+          "type": "object",
+          "properties": {
+            "diagnostic": {
+              "$ref": "#/$defs/WorkflowDiagnostic"
+            },
+            "kind": {
+              "type": "string",
+              "const": "workflow_invalid"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "diagnostic"
           ]
         },
         {

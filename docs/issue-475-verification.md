@@ -233,3 +233,19 @@ libclang/Office/sandbox dependency set (228 MB in 81 seconds). The existing
 workflow checker passed all 24 tests, whitespace checks passed, and independent
 subagent review reported no actionable findings. Full GitHub verification of
 the final source remains required.
+
+## Synchronization with Workflow authoring
+
+The branch merges `origin/main@5fb1f596f49ce9b0c58869a7c5367f24d4af86b8`
+(#492) without rewriting the existing review history. Workflow authoring's Host,
+editor and test imports now use the current v52 protocol, whose regenerated
+schema and fixtures retain both Workflow methods and auxiliary/Title evidence.
+The shared Ubuntu package installer from main replaces the duplicate inline
+mirror setup while retaining the same official HTTPS archive. The empty-sidebar
+reference was regenerated in the pinned browser with both the Workflows entry
+and exact Session identity `A` visible.
+
+Initial synchronization checks passed: native protocol generation, Protocol/TUI/
+Web typechecking, Rust formatting, the four Ubuntu-installer tests and the
+stable empty-sidebar browser capture. Independent review must cover the entire
+PR against this synchronized main, followed by final-head FULL verification.

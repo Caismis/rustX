@@ -16,6 +16,8 @@ import { agentMetrics } from '../agent-statistics-fixture';
 import { createRoot } from 'react-dom/client';
 import { ComposerDraft } from '../../src/app/composer/draft';
 import { AppSurface } from '../../src/app/App';
+import { workflowSurfaceMachine } from '../../src/app/workflows/machines/surface';
+import { createWorkflowPort } from '../../src/app/workflows/port';
 import { inspectionAcknowledger, RepairAcknowledgements } from '../../src/app/repair-notices';
 import { Server, snapshot, childConversation } from '../fixture';
 import { cfg3Source, cfg3Effective } from '../cfg3-data';
@@ -196,7 +198,8 @@ const navigation = createActor(shellNavigationMachine, { input: { client: server
 const connection = new ConnectionController(server.client);
 let root = createRoot(document.getElementById('root')!);
 const composerDraft = new ComposerDraft();
-const render = () => root.render(<AppSurface composerDraft={composerDraft} client={server.client} workspaceHost={server.workspaceHost} workspaceAuthority={workspaceAuthority} connection={connection} navigation={navigation} repairAcknowledgements={repairAcknowledgements}/>);
+const workflows = createActor(workflowSurfaceMachine, { input: { ports: scope => createWorkflowPort({ client: server.client, host: () => server.workspaceHost, hostAuthority: workspaceAuthority.capture(), scope }) } }).start();
+const render = () => root.render(<AppSurface composerDraft={composerDraft} client={server.client} workspaceHost={server.workspaceHost} workspaceAuthority={workspaceAuthority} connection={connection} navigation={navigation} repairAcknowledgements={repairAcknowledgements} workflows={workflows}/>);
 render();
 const handled = new Set<Request>(server.requests.filter(row => row.request.method === 'initialize' || row.request.method === 'session/list').map(row => row.request));
 (window as any).startupFixture = {

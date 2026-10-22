@@ -29,6 +29,25 @@ pub(super) fn eligible(definition: &ToolDefinition) -> bool {
                 || crate::tools::native::is_domain_control(&definition.name)))
 }
 
+/// The builtin Tools a Workflow Tool node can select at all, by name, in the
+/// native order. Authoring presents these as choices; admission against the
+/// adopted generation remains the only authority.
+#[must_use]
+pub fn selectable_builtin_tools() -> Vec<String> {
+    crate::tools::native::definitions(
+        crate::tools::native::NativeToolPolicies::default(),
+        &crate::runtime::subagent::AgentCatalog::default(),
+    )
+    .into_iter()
+    .filter(|(definition, policy)| {
+        definition.origin == crate::tools::types::ToolOrigin::Builtin
+            && *policy == crate::tools::deadline::ForegroundPolicy::Leaf
+            && eligible(definition)
+    })
+    .map(|(definition, _)| definition.name)
+    .collect()
+}
+
 impl WorkflowRuntime {
     /// One exact admitted registration through the standard native
     /// invocation path and the invoking Session's execution binding.

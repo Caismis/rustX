@@ -68,6 +68,9 @@ pub const FIXTURE_MODE_ENV: &str = "RUSTX_M7_MCP_FIXTURE";
 /// the moment its server-side cancellation context fires (self-spawned
 /// stdio fixtures, where the fixture state lives in another process).
 pub const CANCEL_FILE_ENV: &str = "RUSTX_M7_FIXTURE_CANCEL_FILE";
+/// The marker releasing the `mutate` response after the parent observed its
+/// progress. The notification and response have independent SDK handlers.
+pub const MUTATE_RELEASE_FILE_ENV: &str = "RUSTX_M7_FIXTURE_MUTATE_RELEASE_FILE";
 /// The environment variable selecting the paginated `tools/list` catalog
 /// page size (self-spawned stdio fixtures).
 pub const PAGE_SIZE_ENV: &str = "RUSTX_M7_FIXTURE_PAGE_SIZE";
@@ -200,6 +203,7 @@ impl FixtureServer {
         Self {
             list_changed_supported: true,
             cancel_observed_file: std::env::var_os(CANCEL_FILE_ENV).map(PathBuf::from),
+            mutate_release_file: std::env::var_os(MUTATE_RELEASE_FILE_ENV).map(PathBuf::from),
             page_size: std::env::var(PAGE_SIZE_ENV)
                 .ok()
                 .and_then(|value| value.parse::<usize>().ok()),
@@ -324,6 +328,9 @@ pub struct FixtureServer {
     /// moment its cancellation context fires (for self-spawned stdio
     /// fixtures, where the fixture state lives in another process).
     pub cancel_observed_file: Option<PathBuf>,
+    /// When set, `mutate` holds its response until the parent creates this
+    /// file after observing progress through the real executor.
+    pub mutate_release_file: Option<PathBuf>,
     /// Whether the server advertises and accepts `tools/list_changed`.
     pub list_changed_supported: bool,
     /// When set, `tools/list` paginates its catalog with this page size.
@@ -969,6 +976,7 @@ impl ServerHandler for FixtureServer {
         let slow_started = self.slow_started.clone();
         let cancel_observed = self.cancel_observed.clone();
         let cancel_observed_file = self.cancel_observed_file.clone();
+        let mutate_release_file = self.mutate_release_file.clone();
         let result_bytes = self.result_bytes;
         let result_block_bytes = self.result_block_bytes.clone();
         let echo_call_count_file = self.echo_call_count_file.clone();
@@ -1041,6 +1049,20 @@ impl ServerHandler for FixtureServer {
                                 None,
                             )
                         })?;
+                }
+                if let Some(marker) = mutate_release_file {
+                    // A cross-process rendezvous, not a timing assumption:
+                    // the parent releases only after its ProgressReporter ran.
+                    tokio::select! {
+                        () = async {
+                            while !marker.exists() {
+                                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                            }
+                        } => {}
+                        () = context.ct.cancelled() => return Err(rmcp::ErrorData::internal_error(
+                            "fixture mutate cancelled before parent release", None,
+                        )),
+                    }
                 }
                 // Inline-lifecycle clients open a `subscriptions/listen`
                 // stream; legacy clients get the plain

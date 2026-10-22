@@ -10,6 +10,27 @@ their full before/after commit matrix. Local TUI child death is exercised in
 `tui/test/integration.test.ts` and remains a process failure/uncertain response,
 never a fabricated runtime outcome.
 
+Both process roots, Sessions and cross-user catalog checks are prepared before
+either turn starts. The other user's provider gate is held through the killed
+process's observed disconnect and the unchanged live attempt check, then
+released before process restart and cold Session reconstruction. The test
+requires a completed outcome and the exact answer, and verifies that subsequent
+recovery leaves that settled attempt unchanged. Holding a provider response
+across unrelated recovery work would instead spend its normal finite
+response-start deadline on test
+orchestration; neither model deadlines nor the outer test deadline are extended.
+
+The WebSocket process-drain fixture releases its held SQLite writer lock after
+observing `Draining` for graceful settlement and exit zero; the forced case
+retains that lock until the exact exit code 3. Admission refusal while settlement
+is pending belongs to
+`a_draining_host_refuses_attach_before_waiting_for_the_session_catalog` in
+`tests/scripted/app_server/protocol/admission.rs`: a held catalog and the
+`before_shutdown` barrier establish the ordering without a network round trip
+racing SQLite's five-second busy budget or the two-second forced-shutdown
+deadline. Those production budgets and the process test's outer deadline remain
+unchanged.
+
 ## Session ownership and local lifecycle exclusion (Issue #254)
 
 Session deletion cascades along durable ownership, never provenance. `/tree`

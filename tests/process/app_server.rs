@@ -27,6 +27,9 @@ use tokio_tungstenite::tungstenite::protocol::frame::{
 use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
 #[path = "../support/app_server_conformance.rs"]
 mod app_server_conformance;
+#[cfg(target_os = "macos")]
+#[path = "../support/case_insensitive_volume.rs"]
+mod case_insensitive_volume;
 #[path = "../support/app_server_driver.rs"]
 mod driver;
 
@@ -726,8 +729,10 @@ async fn app_server_websocket_drain_supervises_active_root_and_cold_resume() {
                 request.read(&mut bytes).await.unwrap() > 0,
                 "provider request really started"
             );
-            // Hold durable terminal publication at a real boundary. Native drain
-            // still owns the attempt; refusing new input needs no storage lock.
+            // Hold durable terminal publication at a real boundary. Admission
+            // refusal while another owner holds the catalog is covered by the
+            // deterministic protocol test; a websocket round trip here would
+            // have to race SQLite's finite busy budget (or the forced deadline).
             let database = rusqlite::Connection::open(database).unwrap();
             database.execute_batch("BEGIN IMMEDIATE").unwrap();
             terminate(&child);
@@ -736,23 +741,6 @@ async fn app_server_websocket_drain_supervises_active_root_and_cold_resume() {
             assert!(
                 line.contains("Draining; new semantic admission closed"),
                 "{line}"
-            );
-            let Response::Failure(response) = rpc(
-                &client,
-                5,
-                Method::SessionAttach {
-                    session_id: f.sessions[0].clone(),
-                    node_id: None,
-                },
-            )
-            .await
-            else {
-                panic!("post-drain admission")
-            };
-            assert_eq!(response.error.data, Some(ErrorData::ServerDraining));
-            assert!(
-                child.try_wait().unwrap().is_none(),
-                "settlement not yet proven"
             );
             if forced {
                 // Startup transferred stderr to this persistent reader. Drain
@@ -769,6 +757,8 @@ async fn app_server_websocket_drain_supervises_active_root_and_cold_resume() {
                 assert!(diagnostics.contains("runtime settlement unproven"));
                 database.execute_batch("ROLLBACK").unwrap();
             } else {
+                // Release as soon as the process proves admission is closed;
+                // successful native settlement must still precede exit zero.
                 database.execute_batch("ROLLBACK").unwrap();
                 assert!(child.wait().await.unwrap().success());
             }
@@ -1413,21 +1403,9 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
             }).await else { panic!("created") };
             result(&client, Method::SessionName { session_id: session.id.clone(), name: format!("user-{identity}-private") }).await;
             let target = attach(&client, session.id, 2).await;
-            start_turn(&client, &target, &format!("host user {identity}")).await;
-            provider.await_gate("host-result").await;
-            assert!(provider.requests().await.iter().all(|request| request["credentialHeaders"].as_array().unwrap().iter().any(|header| header == "authorization")));
-            let requests = provider.requests().await;
-            assert!(requests[0]["body"].to_string().contains(&format!("host-{identity}-only resource")));
-            assert!(!requests[0]["body"].to_string().contains(if *identity == "a" { "host-b-only" } else { "host-a-only" }));
-            assert_eq!(std::fs::read(user.root.path().join("a/host-effect")).unwrap(), b"x");
-            let projected = checkpoint_state(&client, &target).await;
-            assert!(projected["messages"].to_string().contains(&format!("{identity}:unset")));
-            assert!(projected["messages"].to_string().contains(user.root.path().join("a").to_str().unwrap()));
             processes.push(child); clients.push(client); targets.push(target);
         }
         assert_ne!(processes[0].id(), processes[1].id());
-        // IDs are scoped to a user's root (and may have identical spellings).
-        // Even that spelling on the other process reads only its own metadata.
         // IDs are scoped to a user's root (and may have identical spellings).
         // Even that spelling on the other process reads only its own metadata.
         for (index, client) in clients.iter().enumerate() {
@@ -1449,6 +1427,23 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
             }
             let Response::Failure(failure) = rpc(&clients[1 - index], 12, Method::SessionRead { session_id: id.clone() }).await else { panic!("foreign Session readable") };
             assert_eq!(failure.error.data, Some(ErrorData::UnknownSession { session_id: id }));
+        }
+        // Prepare both process roots and catalog checks before either finite
+        // model response is parked. Only the live-attempt assertions below
+        // belong between provider admission and the crash/release barriers.
+        for (index, (identity, _, _)) in users.iter().enumerate() {
+            start_turn(&clients[index], &targets[index], &format!("host user {identity}")).await;
+        }
+        for (index, (identity, user, provider)) in users.iter().enumerate() {
+            provider.await_gate("host-result").await;
+            assert!(provider.requests().await.iter().all(|request| request["credentialHeaders"].as_array().unwrap().iter().any(|header| header == "authorization")));
+            let requests = provider.requests().await;
+            assert!(requests[0]["body"].to_string().contains(&format!("host-{identity}-only resource")));
+            assert!(!requests[0]["body"].to_string().contains(if *identity == "a" { "host-b-only" } else { "host-a-only" }));
+            assert_eq!(std::fs::read(user.root.path().join("a/host-effect")).unwrap(), b"x");
+            let projected = checkpoint_state(&clients[index], &targets[index]).await;
+            assert!(projected["messages"].to_string().contains(&format!("{identity}:unset")));
+            assert!(projected["messages"].to_string().contains(user.root.path().join("a").to_str().unwrap()));
         }
         let mut selections = Vec::new();
         for (index, client) in clients.iter().enumerate() {
@@ -1474,6 +1469,7 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
         }
         let a_pid = processes[0].id();
         let a_before = checkpoint_state(&clients[0], &targets[0]).await;
+        assert_eq!(a_before["attempt"]["phase"]["type"], "running", "A must remain gated before B dies: {}", a_before["attempt"]["phase"]);
         // B dies after its tool result has entered the second provider request.
         // It cannot have received that request's gated answer, and restarting
         // must neither replay the command nor start the untouched Sessions.
@@ -1482,6 +1478,19 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
         pb.release_gate("host-result").await;
         assert!(processes[0].try_wait().unwrap().is_none());
         assert_eq!(processes[0].id(), a_pid);
+        // A remains the same running attempt across B's death. Release its
+        // provider barrier after proving that boundary: B's later process
+        // restart and cold reconstruction must not consume A's finite
+        // response-start deadline while this fixture withholds its answer.
+        assert_eq!(checkpoint_state(&clients[0], &targets[0]).await["attempt"], a_before["attempt"]);
+        pa.release_gate("host-result").await;
+        let completed = settled(&clients[0], &targets[0]).await;
+        assert_eq!(completed["attempt"]["phase"]["outcome"]["type"], "completed", "A's independent attempt must succeed: {}", completed["attempt"]["phase"]);
+        assert_eq!(completed["model"]["configured"], serde_json::to_value(&selections[0]).unwrap());
+        assert_eq!(completed["attempt"]["model"], a_before["attempt"]["model"]);
+        assert!(completed["messages"].to_string().contains("result-a"), "completed A checkpoint: {completed:#}");
+        assert!(!completed["messages"].to_string().contains("result-b"));
+        assert_eq!(pa.requests().await.len(), 2);
         let (mut replacement, url, _stderr) = users[1].1.ws().await;
         let recovered = driver::websocket(&url).await;
         initialize_client(&recovered).await;
@@ -1496,7 +1505,7 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
         assert!(!after["messages"].to_string().contains("result-b"));
         assert_eq!(std::fs::read(users[1].1.root.path().join("a/host-effect")).unwrap(), b"x");
         assert_eq!(pb.requests().await.len(), 2);
-        assert_eq!(checkpoint_state(&clients[0], &targets[0]).await["attempt"], a_before["attempt"]);
+        assert_eq!(checkpoint_state(&clients[0], &targets[0]).await["attempt"], completed["attempt"], "B's cold recovery cannot change A's completed attempt");
         // Changing A's source is confined to A; B's admitted composition stays.
         let authored = users[0].1.root.path().join("home/rustx/rustx.toml");
         let mut source: toml::Value = toml::from_str(&std::fs::read_to_string(&authored).unwrap()).unwrap();
@@ -1505,12 +1514,6 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
         assert_eq!(checkpoint_state(&recovered, &cold).await["effective_plugins"], after["effective_plugins"]);
         assert_eq!(checkpoint_state(&recovered, &cold).await["model"], after["model"]);
         assert_eq!(pb.requests().await.len(), 2, "source edits in A cannot trigger B replay");
-        pa.release_gate("host-result").await;
-        let completed = settled(&clients[0], &targets[0]).await;
-        assert_eq!(completed["model"]["configured"], serde_json::to_value(&selections[0]).unwrap());
-        assert_eq!(completed["attempt"]["model"], a_before["attempt"]["model"]);
-        assert!(completed["messages"].to_string().contains("result-a"));
-        assert!(!completed["messages"].to_string().contains("result-b"));
         assert_eq!(pa.requests().await.len(), 2);
         recovered.close().await;
         terminate(&replacement); assert!(replacement.wait().await.unwrap().success());
@@ -2314,6 +2317,174 @@ async fn app_server_startup_repairs_the_user_source_before_process_policy() {
         driver.close().await;
         detach_then_shutdown(&mut child).await;
         assert!(child.wait().await.unwrap().success());
+    })
+    .await;
+}
+
+/// An explicit `--config` whose basename rustX reserves for writer metadata
+/// is refused at startup with its own diagnostic, never accepted and then
+/// failing every source read; the same document as `user.toml` serves.
+#[tokio::test]
+async fn app_server_refuses_an_explicit_config_named_like_writer_metadata() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let document = std::fs::read(f.root.path().join("home/rustx/rustx.toml")).unwrap();
+        let select = |name: &str| {
+            let directory = f
+                .root
+                .path()
+                .join(format!("selected-{}", name.trim_start_matches('.')));
+            std::fs::create_dir_all(&directory).unwrap();
+            let path = directory.join(name);
+            std::fs::write(&path, &document).unwrap();
+            path
+        };
+        let reserved = select(".rustx-locks");
+        let output = f
+            .command("stdio")
+            .arg("--config")
+            .arg(&reserved)
+            .output()
+            .await
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains("reserves for writer metadata"), "{stderr}");
+        assert!(std::fs::symlink_metadata(&reserved).unwrap().is_file());
+        assert_eq!(std::fs::read(&reserved).unwrap(), document);
+        assert_eq!(
+            std::fs::read_dir(reserved.parent().unwrap())
+                .unwrap()
+                .count(),
+            1
+        );
+
+        let ordinary = select("user.toml");
+        let mut child = f
+            .command("ws://127.0.0.1:0")
+            .arg("--token-file")
+            .arg(f.root.path().join("token"))
+            .arg("--config")
+            .arg(&ordinary)
+            .spawn()
+            .unwrap();
+        let (_endpoint, _stderr) = websocket_startup(&mut child).await;
+        child.kill().await.unwrap();
+        child.wait().await.unwrap();
+    })
+    .await;
+}
+
+async fn assert_reserved_config_rejected_before_startup(
+    root: &std::path::Path,
+    name: &str,
+    verify_metadata_alias: bool,
+) {
+    use std::os::unix::fs::MetadataExt;
+
+    let document = include_bytes!("../../examples/local-runtime/minimal/rustx.toml");
+    let selected = root.join(name);
+    std::fs::write(&selected, document).unwrap();
+    // An uppercase argument naming a lowercase stored file is insufficient:
+    // canonicalization can recover the lowercase name before the guard runs.
+    assert_eq!(
+        std::fs::read_dir(root)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .file_name(),
+        name
+    );
+    let before = std::fs::symlink_metadata(&selected).unwrap();
+    assert!(before.is_file());
+    if verify_metadata_alias {
+        let metadata_spelling = std::fs::metadata(root.join(".rustx-locks"))
+            .expect("the lowercase metadata spelling must resolve to the selected file");
+        assert_eq!(
+            (metadata_spelling.dev(), metadata_spelling.ino()),
+            (before.dev(), before.ino()),
+            "the fixture must exercise a real filesystem alias for {name}"
+        );
+    }
+    let output = Command::new(env!("CARGO_BIN_EXE_rustx"))
+        .current_dir(root)
+        .env_clear()
+        .env("HOME", root.join("home"))
+        .args(["app-server", "--listen", "stdio", "--config"])
+        .arg(&selected)
+        .arg("--runtime-root")
+        .arg(root.join("runtime"))
+        .kill_on_drop(true)
+        .output()
+        .await
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "reserved source {name} was accepted"
+    );
+    assert!(output.stdout.is_empty(), "no protocol service may start");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("reserves for writer metadata"), "{stderr}");
+    assert!(stderr.contains("rename the file"), "{stderr}");
+    let after = std::fs::symlink_metadata(&selected).unwrap();
+    assert!(after.is_file());
+    assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+    assert_eq!(std::fs::read(&selected).unwrap(), document);
+    assert!(
+        !root.join("runtime").exists(),
+        "no runtime or repair backup"
+    );
+    assert!(!root.join("home").exists(), "no default runtime storage");
+    assert_eq!(
+        std::fs::read_dir(root)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>(),
+        vec![selected],
+        "rejection must not create writer metadata, staging files or backups"
+    );
+}
+
+#[tokio::test]
+async fn app_server_reserves_writer_names_before_any_startup_side_effects() {
+    bounded(async {
+        for name in [
+            ".rustx-locks",
+            ".RUSTX-LOCKS",
+            ".RuStX-LoCkS",
+            ".rustx-loc\u{212a}s",
+            ".ruſtx-locks",
+            ".rustx-stage-candidate",
+            ".RUSTX-STAGE-candidate",
+            ".RuStX-StAgE-candidate",
+            ".rustx-ﬆage-candidate",
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            assert_reserved_config_rejected_before_startup(root.path(), name, false).await;
+        }
+    })
+    .await;
+}
+
+/// This is an executing test in both macOS external-boundary lanes. Its
+/// fixture verifies case insensitivity and creates an APFS image when the
+/// runner's temporary volume is case sensitive; it never silently skips.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn app_server_refuses_actual_reserved_aliases_on_case_insensitive_macos() {
+    let volume = case_insensitive_volume::CaseInsensitiveVolume::new();
+    bounded(async {
+        for name in [
+            ".RUSTX-LOCKS",
+            ".RuStX-LoCkS",
+            ".rustx-loc\u{212a}s",
+            ".ruſtx-locks",
+        ] {
+            let root = tempfile::tempdir_in(volume.path()).unwrap();
+            assert_reserved_config_rejected_before_startup(root.path(), name, true).await;
+        }
     })
     .await;
 }

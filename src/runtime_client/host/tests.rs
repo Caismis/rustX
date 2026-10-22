@@ -114,6 +114,8 @@ fn request_snapshots(history: &RequestHistory) -> Vec<crate::model::RequestSnaps
 enum GatedStep {
     /// Yield one canonical model event.
     Emit(ModelEvent),
+    /// Acknowledge that the consumer finished the preceding stream item.
+    Signal(tokio::sync::oneshot::Sender<()>),
     /// Wait until the shared watch releases, then continue without
     /// yielding; if the attempt cancellation fires first, fail with a
     /// cancelled model error like a real adapter.
@@ -176,6 +178,11 @@ impl ModelAdapter for GatedAdapter {
                                 crate::model::adapter::ModelStreamItem::Event(event),
                                 (script, cancellation),
                             ));
+                        }
+                        Some(GatedStep::Signal(reached)) => {
+                            reached
+                                .send(())
+                                .expect("script boundary receiver stays open");
                         }
                         Some(GatedStep::ParkUntilReleased(mut release)) => {
                             tokio::select! {
