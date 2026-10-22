@@ -282,6 +282,16 @@ meaningful domain/boundary/dependency topology:
 | `cfg3_managed_output` | managed Tool output storage | execution-identity locators, collision refusal without overwrite, spill reconstruction |
 | `contracts` | none (pure) | serialization fixture round-trips, committed configuration examples |
 
+The stdio MCP canonical-executor test holds the fixture's `mutate` response
+behind a parent-created marker until the real `ProgressReporter` has observed
+its fractional progress. rmcp schedules notification handlers independently of
+response delivery: receiving a result does not prove its preceding wire
+notification reached rustX before the caller released progress ownership
+([MCP liveness invariant](../docs/invariants.md#mcp-liveness-connection-generations-and-recovery-issue-205)).
+The marker establishes ordering; its polling interval does not. The existing
+progress deadline, exact fractional values, result, invalidation and physical
+cancellation assertions remain in force.
+
 ## Verification profiles
 
 Fast feedback for ordinary development; complete verification at deliberate

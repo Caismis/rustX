@@ -39,6 +39,7 @@ mod unix_tests {
         let workspace_dir = tempfile::tempdir().expect("workspace");
         let artifacts_dir = tempfile::tempdir().expect("artifacts");
         let cancel_marker = workspace_dir.path().join("fixture-cancel-observed");
+        let mutate_release = workspace_dir.path().join("mutate.release");
         let workspace = rustx::tools::Workspace::new(workspace_dir.path()).expect("workspace");
         let invalidation = Arc::new(rustx::tools::mcp::McpInvalidationState::new());
         let server_id = rustx::runtime::identity::McpServerId::new("fixture");
@@ -61,6 +62,10 @@ mod unix_tests {
                     (
                         rustx::tools::mcp::fixture::CANCEL_FILE_ENV.to_owned(),
                         cancel_marker.display().to_string(),
+                    ),
+                    (
+                        rustx::tools::mcp::fixture::MUTATE_RELEASE_FILE_ENV.to_owned(),
+                        mutate_release.display().to_string(),
                     ),
                 ]),
             },
@@ -99,7 +104,7 @@ mod unix_tests {
         .expect("tool runtime");
         let progress = RecordingProgress::default();
         let initial_epoch = runtime.change_epoch();
-        let result = rustx::tools::executor::ToolExecutor::start(
+        let mutate = rustx::tools::executor::ToolExecutor::start(
             executor.as_ref(),
             rustx::tools::types::ToolInvocation {
                 id: rustx::tools::types::ToolInvocationId::Agent {
@@ -124,25 +129,18 @@ mod unix_tests {
                 runtime_bundle.environment(),
             ),
         )
-        .completion
-        .await;
-        assert!(matches!(
-            result.status,
-            rustx::tools::types::ToolExecutionStatus::Success
-        ));
-        assert!(matches!(
-            result.content.first(),
-            Some(rustx::tools::types::ToolResultContent::Text(text)) if text.text == "fixture changed"
-        ));
-        // The MCP server sends progress and the final tools/call response on
-        // independent protocol messages. Wait for the client handler's
-        // acknowledgement before inspecting the recorded value; receiving
-        // the result does not linearize delivery of the preceding progress
-        // notification.
-        tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            progress.notified.notified(),
-        )
+        .completion;
+        tokio::pin!(mutate);
+        // rmcp dispatches notification handlers independently of responses.
+        // A response can settle the call before its earlier wire notification
+        // reaches rustX, so progress is asserted while this caller still owns
+        // it. The fixture cannot answer until this explicit acknowledgement.
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            tokio::select! {
+                () = progress.notified.notified() => {}
+                result = &mut mutate => panic!("mutate answered before parent release: {result:?}"),
+            }
+        })
         .await
         .expect("mutate progress notification must be delivered");
         let progress_values = progress.values.lock().expect("progress lock").clone();
@@ -151,6 +149,17 @@ mod unix_tests {
                 .iter()
                 .any(|progress| { progress.completed == Some(0.5) && progress.total == Some(3.5) })
         );
+        assert!(!mutate_release.exists());
+        std::fs::write(&mutate_release, "progress observed").expect("release mutate response");
+        let result = mutate.await;
+        assert!(matches!(
+            result.status,
+            rustx::tools::types::ToolExecutionStatus::Success
+        ));
+        assert!(matches!(
+            result.content.first(),
+            Some(rustx::tools::types::ToolResultContent::Text(text)) if text.text == "fixture changed"
+        ));
         let slow_index = definitions
             .iter()
             .position(|(definition, _)| definition.name == "slow")
