@@ -354,7 +354,10 @@ jobs:
     needs: plan
     if: fromJSON(needs.plan.outputs.run)['rust-boundaries']
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # Cold libclang setup and both native builds exhausted 25 minutes in
+    # runs 39798438811 and 39811600857. Budget the complete test and coverage
+    # tail as well as preparation, with the same ceiling as rust-contracts.
+    timeout-minutes: 45
 
     env:
       VERIFICATION_PROFILE: full

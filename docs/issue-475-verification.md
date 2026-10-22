@@ -155,3 +155,19 @@ its audit after test corrections; both passes reported no actionable findings.
 The 100 focused owner tests passed with no failures or ignored tests, including
 all three regressions above, auxiliary execution/writer/stream contracts, model
 policy, lifecycle, cancellation and Catalog Title modules.
+
+## Linux boundary job budget
+
+[FULL #1474](https://github.com/Caismis/rustX/actions/runs/39811600857)
+reached the Linux job's 25-minute ceiling after all 810 selected boundary
+tests passed (three existing conformance cases ignored), before its final
+lane-coverage check. The prior #1472 run hit the same ceiling during external
+targets. The check annotation confirms a 25m0s job timeout. In #1474, the
+libclang download took 7m43s, external targets compiled in 5m37s, and the lib
+harness compiled in 6m13s before 115.18 seconds of boundary execution. The Linux boundary job now has the same finite
+45-minute ceiling as rust-contracts, covering preparation, complete execution
+and final coverage validation. Its selected targets and individual test
+liveness limits are unchanged. A complete final-head FULL run remains required.
+
+The existing workflow checker passed all 24 tests, and native Linux discovery
+for `rust-boundaries` passed with all selected targets covered.
