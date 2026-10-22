@@ -29,7 +29,9 @@ noncommit refunds a start allowance, while a genuine required Store failure
 still closes native durability admission. A confirmed Call can settle Failed
 after its RequestStarted transaction rolls back; successful cleanup does not
 erase the storage failure. Typed Store cancellation and benign start validation
-refusals remain distinct. SQLite-proven automatic rollback before any COMMIT
+refusals remain distinct. Shared request-start probes and Journal frontier
+lookups preserve the raw SQLite interrupt cause before formatting diagnostics.
+SQLite-proven automatic rollback before any COMMIT
 is direct noncommit evidence ([SQLite transaction state](https://www.sqlite.org/c3ref/get_autocommit.html));
 absence observed later is not. Failed COMMIT or unproven rollback starts as
 Unknown; exact confirmation may establish the matching committed intent.

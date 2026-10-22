@@ -5,7 +5,9 @@ use crate::durable::ConversationStoreError;
 use crate::durable::sqlite::canonical::ledger::load_message;
 use crate::durable::sqlite::journal::validate_event_identity;
 use crate::durable::sqlite::request::contribution::validate_carryover_snapshot;
-use crate::durable::sqlite::{decode, manifest, seq_to_i64, sequence_from_i64, storage};
+use crate::durable::sqlite::{
+    decode, manifest, seq_to_i64, sequence_from_i64, sqlite_error, storage,
+};
 use crate::events::EVENT_SCHEMA_VERSION;
 use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
 use crate::model::snapshot::RequestSnapshot;
@@ -129,7 +131,7 @@ pub(in crate::durable::sqlite) fn load_request_snapshot_bounded(
     });
     let (stored_canonical_frontier, json, started_sequence, digest, native_oversized): (i64, Option<String>, Option<i64>, String, bool) = connection
         .query_row("SELECT canonical_frontier,CASE WHEN octet_length(snapshot_json)<=?2 THEN snapshot_json END,started_sequence,CASE WHEN typeof(manifest_digest)='text' AND octet_length(manifest_digest)=64 THEN manifest_digest ELSE '' END,octet_length(snapshot_json)>67108864 FROM request_snapshots WHERE request_id=?1", params![request_id.as_str(),metadata_limit], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, read_manifest_digest(row, 3)?,row.get(4)?)))
-        .optional().map_err(|error| storage(format!("request snapshot lookup: {error}")))?
+        .optional().map_err(|error| sqlite_error(&error, format!("request snapshot lookup: {error}")))?
         .ok_or_else(|| ConversationStoreError::RequestNotFound(request_id.clone()))?;
     let json = json.ok_or_else(|| {
         if native_oversized {
@@ -175,7 +177,7 @@ pub(in crate::durable::sqlite) fn load_request_snapshot_bounded(
             |row| row.get(0),
         )
         .optional()
-        .map_err(|error| storage(format!("request start event lookup: {error}")))?
+        .map_err(|error| sqlite_error(&error, format!("request start event lookup: {error}")))?
         .ok_or_else(|| {
             ConversationStoreError::InvalidReference(format!(
                 "request snapshot {request_id} start event is unavailable"
@@ -255,6 +257,12 @@ pub(in crate::durable::sqlite) fn has_request_journal_fact_tx(
     transaction: &Transaction<'_>,
     request_id: &RequestId,
 ) -> Result<bool, ConversationStoreError> {
+    #[cfg(test)]
+    let _probe = crate::durable::sqlite::request_probe::activate(
+        request_id,
+        crate::durable::sqlite::RequestJournalProbe::Orphan,
+    );
+
     transaction
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_request_id_kind_idx
@@ -262,16 +270,22 @@ pub(in crate::durable::sqlite) fn has_request_journal_fact_tx(
             [request_id.as_str()],
             |row| row.get(0),
         )
-        .map_err(|error| storage(format!("request owner orphan probe: {error}")))
+        .map_err(|error| sqlite_error(&error, format!("request owner orphan probe: {error}")))
 }
 
 pub(in crate::durable::sqlite) fn find_request_start_event(
     transaction: &Transaction<'_>,
     request_id: &RequestId,
 ) -> Result<Option<RuntimeEventEnvelope>, ConversationStoreError> {
+    #[cfg(test)]
+    let _probe = crate::durable::sqlite::request_probe::activate(
+        request_id,
+        crate::durable::sqlite::RequestJournalProbe::StartEvent,
+    );
+
     let mut statement = transaction
         .prepare_cached(REQUEST_START_PROBE_SQL)
-        .map_err(|error| storage(format!("request-start event probe: {error}")))?;
+        .map_err(|error| sqlite_error(&error, format!("request-start event probe: {error}")))?;
     let rows = statement
         .query_map([request_id.as_str()], |row| {
             Ok((
@@ -284,11 +298,11 @@ pub(in crate::durable::sqlite) fn find_request_start_event(
                 row.get::<_, String>(6)?,
             ))
         })
-        .map_err(|error| storage(format!("request-start event query: {error}")))?;
+        .map_err(|error| sqlite_error(&error, format!("request-start event query: {error}")))?;
     let mut found = None;
     for row in rows {
         let (sequence, event_id, schema_version, conversation_id, attempt_id, turn_id, json) =
-            row.map_err(|error| storage(format!("request-start event row: {error}")))?;
+            row.map_err(|error| sqlite_error(&error, format!("request-start event row: {error}")))?;
         #[cfg(test)]
         record_request_probe_work(&json);
         if found.is_some() {
@@ -393,7 +407,7 @@ pub(in crate::durable::sqlite) fn read_request_snapshot_tx(
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, read_manifest_digest(row, 4)?)),
         )
         .optional()
-        .map_err(|error| storage(format!("request snapshot transaction lookup: {error}")))?;
+        .map_err(|error| sqlite_error(&error, format!("request snapshot transaction lookup: {error}")))?;
     let Some((stored_canonical_frontier, json, started_sequence, completed_sequence, digest)) = row
     else {
         return Ok(None);
@@ -530,12 +544,13 @@ pub(in crate::durable::sqlite) fn find_request_outcome_event(
 ) -> Result<Option<RuntimeEventEnvelope>, ConversationStoreError> {
     let mut statement = transaction
         .prepare_cached(REQUEST_OUTCOME_PROBE_SQL)
-        .map_err(|error| storage(format!("request outcome probe: {error}")))?;
+        .map_err(|error| sqlite_error(&error, format!("request outcome probe: {error}")))?;
     let rows = statement
         .query_map([request_id.as_str()], |row| row.get::<_, String>(0))
-        .map_err(|error| storage(format!("request outcome query: {error}")))?;
+        .map_err(|error| sqlite_error(&error, format!("request outcome query: {error}")))?;
     for row in rows {
-        let json = row.map_err(|error| storage(format!("request outcome row: {error}")))?;
+        let json =
+            row.map_err(|error| sqlite_error(&error, format!("request outcome row: {error}")))?;
         #[cfg(test)]
         record_request_probe_work(&json);
         let event: RuntimeEventEnvelope = decode(&json, "request outcome")?;
@@ -608,9 +623,9 @@ pub(in crate::durable::sqlite) fn read_stored_snapshot_root(
     let row: Option<RootRow> = connection.prepare_cached(
         "SELECT r.input_root,CASE WHEN length(r.input_root_digest)=32 THEN r.input_root_digest END,r.input_count,n.height,r.input_root_digest IS NULL
          FROM request_snapshots r LEFT JOIN native_input_nodes n ON n.id=r.input_root WHERE r.request_id=?1",
-    ).map_err(|error| storage(format!("request input root lookup: {error}")))?
+    ).map_err(|error| sqlite_error(&error, format!("request input root lookup: {error}")))?
         .query_row([request.as_str()], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)))
-        .optional().map_err(|error| storage(format!("request input root row: {error}")))?;
+        .optional().map_err(|error| sqlite_error(&error, format!("request input root row: {error}")))?;
     let row = row.ok_or_else(|| ConversationStoreError::RequestNotFound(request.clone()))?;
     match row {
         (None, None, 0, None, true) => Ok(None),

@@ -1177,3 +1177,97 @@ async fn cancelled_request_start_rollback_refunds_budget_without_failing_durabil
     );
     fixture.executor.drain().await;
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn cancellation_during_shared_start_probes_refunds_budget_without_durability_failure() {
+    use crate::durable::sqlite::RequestJournalProbe;
+    for probe in [RequestJournalProbe::Orphan, RequestJournalProbe::StartEvent] {
+        let fixture = fixture(Script::Complete);
+        let _close = CloseScopeOnDrop(fixture.scope.clone());
+        let record = fixture.reservation.record.clone();
+        let (entered, release) = SqliteConversationStore::hold_request_journal_probe_for_test(
+            record.request_id.clone(),
+            probe,
+        );
+        let reply = fixture.reservation.submit(fixture.frozen).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(10), entered)
+            .await
+            .unwrap()
+            .unwrap();
+        let cancelled = lock(&record.writer)
+            .as_ref()
+            .unwrap()
+            .observe_start_cancellation_for_test();
+        fixture.scope.cancellation.cancel();
+        tokio::time::timeout(std::time::Duration::from_secs(10), cancelled)
+            .await
+            .unwrap()
+            .unwrap();
+        // The native cancellation reached this exact active connection lease
+        // while its real SELECT/progress callback remained parked.
+        drop(release);
+        let result = tokio::time::timeout(std::time::Duration::from_secs(10), reply)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(fixture.adapter.entries.load(Ordering::SeqCst), 0);
+        let cut = fixture.store.auxiliary_audit_cut().unwrap();
+        assert_eq!(
+            fixture
+                .store
+                .load_auxiliary_call(&record.call_id, cut)
+                .unwrap()
+                .unwrap()
+                .outcome,
+            Some(AuxiliaryCallOutcome::Cancelled)
+        );
+        assert!(
+            fixture
+                .store
+                .read_auxiliary_call_requests(&record.call_id, cut, None, 32)
+                .unwrap()
+                .is_empty()
+        );
+        let fresh = CancellationSignal::new();
+        let allowances = (0..12)
+            .map(|_| {
+                fixture
+                    .scope
+                    .budget
+                    .reserve_start(
+                        crate::runtime::identity::RequestId::new(uuid::Uuid::now_v7().to_string()),
+                        &fresh,
+                    )
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            allowances.len(),
+            12,
+            "real SELECT rollback restores the full start allowance: {probe:?}"
+        );
+        assert_eq!(
+            result.unwrap_err().kind,
+            ContextErrorKind::Cancelled,
+            "interruption retains its control cause: {probe:?}"
+        );
+        assert!(
+            fixture.executor.0.resources.durability.failure().is_none(),
+            "normal probe cancellation must not poison native admission: {probe:?}"
+        );
+        let next = AuxiliaryExecutor::scope(
+            CompactionBudget::new(
+                CompactionOperationId::new(uuid::Uuid::now_v7().to_string()),
+                fixture.clock.clone(),
+            ),
+            &fresh,
+        );
+        drop(
+            fixture
+                .executor
+                .reserve_general(&next)
+                .expect("later active admission remains usable"),
+        );
+        fixture.executor.drain().await;
+    }
+}

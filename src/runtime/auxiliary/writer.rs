@@ -124,6 +124,8 @@ struct WriterState {
     intent: Option<Arc<RequiredWrite>>,
     completed: Option<WriteEvidence>,
     #[cfg(test)]
+    start_cancelled: Option<oneshot::Sender<()>>,
+    #[cfg(test)]
     after_commit: Option<(oneshot::Sender<()>, mpsc::Receiver<()>)>,
     #[cfg(test)]
     before_confirmation: Option<(oneshot::Sender<()>, mpsc::Receiver<()>)>,
@@ -166,6 +168,20 @@ pub struct JoinedAuxiliaryWriter {
 }
 
 impl AuxiliaryWriter {
+    #[cfg(test)]
+    pub(super) fn observe_start_cancellation_for_test(&self) -> oneshot::Receiver<()> {
+        let (observed, cancelled) = oneshot::channel();
+        assert!(
+            self.state
+                .lock()
+                .unwrap()
+                .start_cancelled
+                .replace(observed)
+                .is_none()
+        );
+        cancelled
+    }
+
     /// One-shot test rendezvous after a real transaction returns successfully.
     /// Disconnecting its release simulates loss of the committed acknowledgement.
     #[cfg(test)]
@@ -435,6 +451,16 @@ impl AuxiliaryWriterClient {
     /// Cancels only preparation/start writes; existing settlement stays usable.
     pub fn cancel_start(&self) {
         self.start_store.cancel_auxiliary_writer();
+        #[cfg(test)]
+        if let Some(observed) = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .start_cancelled
+            .take()
+        {
+            let _ = observed.send(());
+        }
     }
 }
 

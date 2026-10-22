@@ -665,7 +665,7 @@ fn journal_prefix(connection: &Connection) -> Result<u64, ConversationStoreError
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| sqlite_error(&error, error.to_string()))?;
     sequence_from_i64(through)
 }
 impl Drop for StoreGuard<'_> {
@@ -792,10 +792,30 @@ impl SqliteConversationStore {
             }
             #[cfg(test)]
             let mut entered = self.read_progress_entered.lock().unwrap().take();
+            #[cfg(test)]
+            let progress_interval = if request_probe::pending() { 1 } else { 1000 };
+            #[cfg(not(test))]
+            let progress_interval = 1000;
+            #[cfg(test)]
+            let mut probe_ticks = 0;
             connection
                 .progress_handler(
-                    1000,
+                    progress_interval,
                     Some(move || {
+                        #[cfg(test)]
+                        if progress_interval == 1 {
+                            if request_probe::progress() {
+                                // Reset the ordinary cadence after the consumed
+                                // probe so rollback retains its production policy.
+                                probe_ticks = 0;
+                            } else {
+                                probe_ticks += 1;
+                                if probe_ticks < 1000 {
+                                    return false;
+                                }
+                                probe_ticks = 0;
+                            }
+                        }
                         #[cfg(test)]
                         if let Some(entered) = entered.take() {
                             let _ = entered.send(());
@@ -805,7 +825,7 @@ impl SqliteConversationStore {
                 )
                 .map_err(|error| {
                     writer_busy_policy(&connection).expect("restore SQLite busy policy");
-                    storage(format!("install SQLite cancellation: {error}"))
+                    sqlite_error(&error, format!("install SQLite cancellation: {error}"))
                 })?;
         }
         let changes = connection.total_changes();
@@ -1153,7 +1173,11 @@ mod publication;
 mod reading;
 pub(crate) mod request;
 mod request_owner_shape;
+#[cfg(test)]
+mod request_probe;
 mod schema;
+#[cfg(test)]
+pub(crate) use request_probe::RequestJournalProbe;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]
