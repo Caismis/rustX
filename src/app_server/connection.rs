@@ -794,7 +794,6 @@ impl AppServerConnection {
                 snapshot: self.host.diagnostics(),
             });
         }
-        self.observe_repair_source(&method).await;
         if let Method::AgentObserveCancel { request_id } = method {
             return Ok(MethodResult::AgentObserveCancelled {
                 accepted: self.associations.cancel_observation(&request_id),
@@ -827,6 +826,9 @@ impl AppServerConnection {
             .host
             .admit_request(request_lane, std::convert::identity)
             .map_err(host_error)?;
+        // Source observation may await the Session catalog. Only an admitted
+        // request owns that work; a draining host must refuse without it.
+        self.observe_repair_source(&method).await;
         match family {
             Family::Connection => match method {
                 Method::ServerInfo {} => Ok(MethodResult::ServerInfo {

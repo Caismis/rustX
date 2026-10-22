@@ -6987,6 +6987,12 @@ contracts and provider protocols. These invariants are frozen by M2:
   shutdown or an Agent Loop cancellation; the owning process ends the server
   with an explicit signal, whose drain proves or refuses runtime settlement.
 
+- App Server host admission precedes request-scoped source-repair observation
+  and its Session catalog lookup. A draining host refuses a new attachment
+  without awaiting catalog publication or runtime settlement and without
+  adding source observation interest. An admitted request retains its host
+  operation while establishing that interest, before executing the request.
+
 ## TypeScript reference terminal client (Issue #39)
 
 - **Pi TUI is presentation only.** `@earendil-works/pi-tui` supplies terminal

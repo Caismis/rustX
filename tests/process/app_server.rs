@@ -727,8 +727,10 @@ async fn app_server_websocket_drain_supervises_active_root_and_cold_resume() {
                 request.read(&mut bytes).await.unwrap() > 0,
                 "provider request really started"
             );
-            // Hold durable terminal publication at a real boundary. Native drain
-            // still owns the attempt; refusing new input needs no storage lock.
+            // Hold durable terminal publication at a real boundary. Admission
+            // refusal while another owner holds the catalog is covered by the
+            // deterministic protocol test; a websocket round trip here would
+            // have to race SQLite's finite busy budget (or the forced deadline).
             let database = rusqlite::Connection::open(database).unwrap();
             database.execute_batch("BEGIN IMMEDIATE").unwrap();
             terminate(&child);
@@ -737,23 +739,6 @@ async fn app_server_websocket_drain_supervises_active_root_and_cold_resume() {
             assert!(
                 line.contains("Draining; new semantic admission closed"),
                 "{line}"
-            );
-            let Response::Failure(response) = rpc(
-                &client,
-                5,
-                Method::SessionAttach {
-                    session_id: f.sessions[0].clone(),
-                    node_id: None,
-                },
-            )
-            .await
-            else {
-                panic!("post-drain admission")
-            };
-            assert_eq!(response.error.data, Some(ErrorData::ServerDraining));
-            assert!(
-                child.try_wait().unwrap().is_none(),
-                "settlement not yet proven"
             );
             if forced {
                 // Startup transferred stderr to this persistent reader. Drain
@@ -770,6 +755,8 @@ async fn app_server_websocket_drain_supervises_active_root_and_cold_resume() {
                 assert!(diagnostics.contains("runtime settlement unproven"));
                 database.execute_batch("ROLLBACK").unwrap();
             } else {
+                // Release as soon as the process proves admission is closed;
+                // successful native settlement must still precede exit zero.
                 database.execute_batch("ROLLBACK").unwrap();
                 assert!(child.wait().await.unwrap().success());
             }
@@ -1347,21 +1334,9 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
             }).await else { panic!("created") };
             result(&client, Method::SessionName { session_id: session.id.clone(), name: format!("user-{identity}-private") }).await;
             let target = attach(&client, session.id, 2).await;
-            start_turn(&client, &target, &format!("host user {identity}")).await;
-            provider.await_gate("host-result").await;
-            assert!(provider.requests().await.iter().all(|request| request["credentialHeaders"].as_array().unwrap().iter().any(|header| header == "authorization")));
-            let requests = provider.requests().await;
-            assert!(requests[0]["body"].to_string().contains(&format!("host-{identity}-only resource")));
-            assert!(!requests[0]["body"].to_string().contains(if *identity == "a" { "host-b-only" } else { "host-a-only" }));
-            assert_eq!(std::fs::read(user.root.path().join("a/host-effect")).unwrap(), b"x");
-            let projected = checkpoint_state(&client, &target).await;
-            assert!(projected["messages"].to_string().contains(&format!("{identity}:unset")));
-            assert!(projected["messages"].to_string().contains(user.root.path().join("a").to_str().unwrap()));
             processes.push(child); clients.push(client); targets.push(target);
         }
         assert_ne!(processes[0].id(), processes[1].id());
-        // IDs are scoped to a user's root (and may have identical spellings).
-        // Even that spelling on the other process reads only its own metadata.
         // IDs are scoped to a user's root (and may have identical spellings).
         // Even that spelling on the other process reads only its own metadata.
         for (index, client) in clients.iter().enumerate() {
@@ -1383,6 +1358,23 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
             }
             let Response::Failure(failure) = rpc(&clients[1 - index], 12, Method::SessionRead { session_id: id.clone() }).await else { panic!("foreign Session readable") };
             assert_eq!(failure.error.data, Some(ErrorData::UnknownSession { session_id: id }));
+        }
+        // Prepare both process roots and catalog checks before either finite
+        // model response is parked. Only the live-attempt assertions below
+        // belong between provider admission and the crash/release barriers.
+        for (index, (identity, _, _)) in users.iter().enumerate() {
+            start_turn(&clients[index], &targets[index], &format!("host user {identity}")).await;
+        }
+        for (index, (identity, user, provider)) in users.iter().enumerate() {
+            provider.await_gate("host-result").await;
+            assert!(provider.requests().await.iter().all(|request| request["credentialHeaders"].as_array().unwrap().iter().any(|header| header == "authorization")));
+            let requests = provider.requests().await;
+            assert!(requests[0]["body"].to_string().contains(&format!("host-{identity}-only resource")));
+            assert!(!requests[0]["body"].to_string().contains(if *identity == "a" { "host-b-only" } else { "host-a-only" }));
+            assert_eq!(std::fs::read(user.root.path().join("a/host-effect")).unwrap(), b"x");
+            let projected = checkpoint_state(&clients[index], &targets[index]).await;
+            assert!(projected["messages"].to_string().contains(&format!("{identity}:unset")));
+            assert!(projected["messages"].to_string().contains(user.root.path().join("a").to_str().unwrap()));
         }
         let mut selections = Vec::new();
         for (index, client) in clients.iter().enumerate() {
@@ -1408,6 +1400,7 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
         }
         let a_pid = processes[0].id();
         let a_before = checkpoint_state(&clients[0], &targets[0]).await;
+        assert_eq!(a_before["attempt"]["phase"]["type"], "running", "A must remain gated before B dies: {}", a_before["attempt"]["phase"]);
         // B dies after its tool result has entered the second provider request.
         // It cannot have received that request's gated answer, and restarting
         // must neither replay the command nor start the untouched Sessions.
@@ -1416,6 +1409,19 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
         pb.release_gate("host-result").await;
         assert!(processes[0].try_wait().unwrap().is_none());
         assert_eq!(processes[0].id(), a_pid);
+        // A remains the same running attempt across B's death. Release its
+        // provider barrier after proving that boundary: B's later process
+        // restart and cold reconstruction must not consume A's finite
+        // response-start deadline while this fixture withholds its answer.
+        assert_eq!(checkpoint_state(&clients[0], &targets[0]).await["attempt"], a_before["attempt"]);
+        pa.release_gate("host-result").await;
+        let completed = settled(&clients[0], &targets[0]).await;
+        assert_eq!(completed["attempt"]["phase"]["outcome"]["type"], "completed", "A's independent attempt must succeed: {}", completed["attempt"]["phase"]);
+        assert_eq!(completed["model"]["configured"], serde_json::to_value(&selections[0]).unwrap());
+        assert_eq!(completed["attempt"]["model"], a_before["attempt"]["model"]);
+        assert!(completed["messages"].to_string().contains("result-a"), "completed A checkpoint: {completed:#}");
+        assert!(!completed["messages"].to_string().contains("result-b"));
+        assert_eq!(pa.requests().await.len(), 2);
         let (mut replacement, url, _stderr) = users[1].1.ws().await;
         let recovered = driver::websocket(&url).await;
         initialize_client(&recovered).await;
@@ -1430,7 +1436,7 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
         assert!(!after["messages"].to_string().contains("result-b"));
         assert_eq!(std::fs::read(users[1].1.root.path().join("a/host-effect")).unwrap(), b"x");
         assert_eq!(pb.requests().await.len(), 2);
-        assert_eq!(checkpoint_state(&clients[0], &targets[0]).await["attempt"], a_before["attempt"]);
+        assert_eq!(checkpoint_state(&clients[0], &targets[0]).await["attempt"], completed["attempt"], "B's cold recovery cannot change A's completed attempt");
         // Changing A's source is confined to A; B's admitted composition stays.
         let authored = users[0].1.root.path().join("home/rustx/rustx.toml");
         let mut source: toml::Value = toml::from_str(&std::fs::read_to_string(&authored).unwrap()).unwrap();
@@ -1439,12 +1445,6 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
         assert_eq!(checkpoint_state(&recovered, &cold).await["effective_plugins"], after["effective_plugins"]);
         assert_eq!(checkpoint_state(&recovered, &cold).await["model"], after["model"]);
         assert_eq!(pb.requests().await.len(), 2, "source edits in A cannot trigger B replay");
-        pa.release_gate("host-result").await;
-        let completed = settled(&clients[0], &targets[0]).await;
-        assert_eq!(completed["model"]["configured"], serde_json::to_value(&selections[0]).unwrap());
-        assert_eq!(completed["attempt"]["model"], a_before["attempt"]["model"]);
-        assert!(completed["messages"].to_string().contains("result-a"));
-        assert!(!completed["messages"].to_string().contains("result-b"));
         assert_eq!(pa.requests().await.len(), 2);
         recovered.close().await;
         terminate(&replacement); assert!(replacement.wait().await.unwrap().success());

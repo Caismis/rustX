@@ -771,6 +771,12 @@ For race/cancellation/order tests — in *both* in-crate trees:
 - wall-clock timeouts are outer liveness guards only — their expiry is a
   harness failure, never a verdict.
 
+Provider request arrival does not prove that the runtime has consumed a
+stream item. Before choosing a quiet observation baseline or injecting a
+source fault, synchronize with the scripted producer's relevant boundary,
+then wait for the projection to settle. Projection settlement drains current
+input; it cannot fence an event the producer has not emitted yet.
+
 Boundary suites are not exempt: the process-death harness freezes the child
 at instrumented durable transitions or a control rendezvous before the
 kill; it never infers a race from timing.
