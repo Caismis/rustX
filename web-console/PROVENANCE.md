@@ -3942,3 +3942,26 @@ actual scrolling range before asserting detached reading during settlement.
 A short native head at scrollTop zero is still following the tail; passive
 history assembly may correctly move that viewport. The assertion after an
 explicit detached gesture remains exactly scrollTop zero.
+
+## Issue #491 — Workflow library and editor
+
+The Workflows library and editor are original rustX code built from existing
+theme tokens and primitives (Button, Menu, Modal, icons); no Harness source was
+copied. Their layout follows the two approved Issue #491 design references
+(`rustx_harness_workflows_list.png`, `rustx_harness_workflows_editor.png`).
+
+Canvas interaction uses `@xyflow/react` **12.12.0** (MIT, © webkid GmbH), pinned
+exactly. It adds this production closure, each MIT/ISC licensed and inventoried
+in `public/THIRD-PARTY-NOTICES.txt`: `@xyflow/system` 0.0.83, `classcat` 5.0.5,
+`zustand` 4.4.0, `use-sync-external-store` 1.2.0 and the `d3-color`,
+`d3-dispatch`, `d3-drag`, `d3-ease`, `d3-interpolate`, `d3-selection`,
+`d3-timer`, `d3-transition` and `d3-zoom` 3.x modules (their `@types/*`
+packages are type-only). The library loads only in the lazily imported editor
+chunk. The canvas hides React Flow's on-canvas attribution badge through
+`proOptions.hideAttribution`; the MIT license permits this, and attribution is
+retained in the shipped notices instead.
+
+React Flow owns only viewport, selection, dragging and connection gestures.
+Program state, validation, serialization and file I/O remain native; no React
+Flow JSON is persisted, and the browser-local view store holds only node
+coordinates and viewports.

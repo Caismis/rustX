@@ -21,6 +21,7 @@ The shell decision from #345 remains in force. #346 completes the Agent seats;
 | SettingsRoot | B Harness UI + rustX binding | Modal/nav/content seats; existing CFG3 editors; no Settings Controller |
 | Conversation/composer/tools/interactions/model/permission | B Harness UI + rustX binding | Pinned Agent presentation, bounded native adapters; see AGENT-ARCHITECTURE.md |
 | Connection/CFG3 scopes | C rustX extension | Harness primitives/panel seats; native product semantics |
+| Workflows library and editor (#491) | C rustX extension | One Sidebar global-panel entry; content seat beside the unchanged Sidebar; React Flow canvas only, native file semantics |
 
 ## Boundary
 

@@ -2381,3 +2381,50 @@ Web and TUI negotiate only `rustx.app-server.v51`; v50 and older peers are
 rejected explicitly. Runtime Client v71, Session catalog schema 16 and SQLite
 schema 74 are unchanged. There are no old policy fields, alternate upload paths
 or compatibility handlers. See [Session-owned workspace uploads](session-uploads.md).
+
+## Workflow file authoring (Issue #491)
+
+Three read-only methods expose native Workflow files of one exact scope; the
+semantics are specified in [Workflow authoring](workflow-authoring.md#file-authoring-app-server-and-web).
+
+| Method | Params | Result |
+| --- | --- | --- |
+| `workflow/list` | `target` | `workflow_library`: `target`, `directory`, `absent_revision`, bounded `files[]` and an optional directory `diagnostic` |
+| `workflow/read` | `target`, `id` | `workflow_source`: `revision`, `present`, the strictly parsed `document` (absent for a malformed file), `diagnostic` and the editor `vocabulary` |
+| `workflow/check` | `target`, `id`, `document`, optional `context`, `explain` | `workflow_check`: separate `structure` and `dependencies` facts and an optional compiled `explanation`; a valid structure carries the `revision` a `replace` with this candidate commits as |
+
+Writes add no method: `configuration/sourceWrite` accepts the mutation
+`{kind: "workflow", id, edit}` with `edit.operation` one of `create`,
+`replace`, `copy` or `delete`, under the ordinary `expected_revision` fence. The
+acknowledgement is the existing `sources_written` receipt (file `revision` and
+`configuration_revision`). A rejected candidate returns the error data
+`{kind: "workflow_invalid", diagnostic}` and leaves the file unchanged; a
+changed revision is the ordinary revision conflict.
+
+All three reads are side-effect free (`may_commit` is false): they start no
+node, connect to no provider or MCP endpoint and read no credential. Diagnostic
+paths are bounded to 512 bytes and details to 1 KiB, and each listing entry to a
+7 KiB serialized share, so a scope's at most 128 files always list within the
+message bound. Document numbers follow the Workflow number contract: a file or
+candidate holding a number a browser would round, retype or re-sign (an integer beyond ±(2^53 − 1), an integral float such as `1.0` below 1e21, or negative zero) is `unsupported_number`; see [the number contract](workflow-authoring.md#number-contract). Numbers
+travel in the existing exact wire domains, so `u64` fields such as `timeout_ms`
+are decimal strings in TypeScript. Documents are bounded by the native 512 KiB
+Workflow limit and the 1 MiB message limit.
+
+A `create` or `copy` that would pass a discovery bound (1024 authored entries or 128
+`.yaml` entries in the directory, or 64 composed Workflow IDs: User alone for a
+User target, User with the Workspace for a Workspace target) is refused before publication with
+`workflow_invalid`, diagnostic category `capacity`; see
+[Capacity](workflow-authoring.md#capacity).
+
+Workspace targets reach the App Server through the Product Host, which maps a
+registration ID to its directory on its per-registration lane
+(`/product-host/workflow`); browsers never send Workspace paths. Each request
+carries the Product Host authority scope the browser transaction was bound to,
+validated in the lane immediately before native dispatch, and, separately, the
+native App Server identity (`native`, the `authority_id` the browser observed at
+`initialize`), which the Host compares with the connection it initialized before
+sending any Workflow request (`native_replaced` otherwise). User-scope
+calls use the browser's App Server connection directly. A lost write
+acknowledgement on either path is reported as uncertain and reconciled by
+rereading, never by replaying the write.

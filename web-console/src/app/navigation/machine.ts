@@ -18,10 +18,13 @@ export interface HistoryRoute {
   kind: 'history'; sessionId: string; nodeId: string; messageId?: string;
   conversationId: string; window: ConversationWindow; returnTo: ConversationRoute;
 }
-export type ShellRoute = ConversationRoute | HistoryRoute;
+/** The Workflows content area (Issue #491). It owns no Session or
+ * conversation: its file targets live in the Workflows surface actor. */
+export interface WorkflowsRoute { kind: 'workflows' }
+export type ShellRoute = ConversationRoute | HistoryRoute | WorkflowsRoute;
 /** History changes the visible surface, not its originating editor destination.
  * Native Conversation/receipt authority is reconciled separately by Composer. */
-function editorDestination(route: ShellRoute): ConversationRoute {
+function editorDestination(route: ShellRoute): Exclude<ShellRoute, HistoryRoute> {
   return route.kind === 'history' ? route.returnTo : route;
 }
 function sameEditorDestination(a: ShellRoute, b: ShellRoute) {
@@ -64,6 +67,7 @@ export type ShellNavigationEvent =
   | { type: 'COMMAND'; request: CommandRequest }
   | { type: 'COMMAND.CLOSE'; command: NonNullable<ShellNavigationContext['command']> }
   | { type: 'SETTINGS'; destination: Extract<SettingsNavigationEvent, { type: 'OPEN' | 'OPEN.CONNECTION' | 'OPEN.OWNER' | 'OPEN.REPAIRS' }> }
+  | { type: 'WORKFLOWS' }
   | { type: 'SIDEBAR.DISMISS' | 'DISMISS.ERROR' }
   | { type: 'CANCEL'; pending?: Pending }
   | { type: 'AUTHORITY'; generation: number; authority: number | undefined };
@@ -111,6 +115,8 @@ async function prepare(input: { client: AppServerClient; pending: Pending; paren
     const exact = window.page.entries?.find(entry => entry.cursor === window.target_cursor);
     if (conversation_id !== node.conversation_id || window.cut.conversation_id !== conversation_id || (origin.source_message!=null?(exact?.item.type !== 'message'||exact.item.message.id!==origin.source_message):window.target_cursor==null)) throw new Error('History read did not resolve the exact source Message.');
     const returnTo = pending.route.kind === 'history' ? pending.route.returnTo : pending.route;
+    // A Fork source opens from a conversation, never from the Workflows area.
+    if (returnTo.kind === 'workflows') throw new RetiredPreparation();
     return { pending, route: { kind: 'history', sessionId: origin.source_session, nodeId: node.id, messageId: origin.source_message??undefined, conversationId: conversation_id, window, returnTo } };
   }
   let sessionId = destination.sessionId, content: UserInputBlock[] | undefined, replay: ResponseRetry['replay'];
@@ -276,6 +282,9 @@ export const shellNavigationMachine = setup({
     COMMAND: { guard: 'commandRoute', target: '.idle', actions: 'command' },
     'COMMAND.CLOSE': { guard: 'commandOwner', actions: assign({ command: () => undefined }) },
     SETTINGS: { target: '.idle', actions: ['retire', 'settings'] },
+    // Leaving a conversation for Workflows retires its pending intent and
+    // its committed controls; it cancels no native work.
+    WORKFLOWS: { target: '.idle', actions: ['retire', assign({ route: () => ({ kind: 'workflows' as const }), control: () => ({}) })] },
     'SIDEBAR.DISMISS': { guard: 'sidebar', target: '.idle', actions: 'retire' },
     CANCEL: { guard: 'cancelling', target: '.idle', actions: 'retire' },
     AUTHORITY: { guard: 'changedAuthority', target: '.idle', actions: ['retireSettings', 'authority'] },

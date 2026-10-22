@@ -98,7 +98,7 @@ export function authoredUnit(document: RuntimeLayer | null | undefined, mutation
  * definitions carry a `mcp_servers.<id>` default origin. */
 export function unitProvenancePath(mutation: SourceMutation): string | undefined {
   if (mutation.kind === 'mcp') return `mcp_servers.${mutation.id}`;
-  if (mutation.kind === 'agent' || mutation.kind === 'repair_config') return undefined;
+  if (mutation.kind === 'agent' || mutation.kind === 'repair_config' || mutation.kind === 'workflow') return undefined;
   const unit = mutation.mutation;
   switch (unit.unit) {
     case 'provider': return `providers.${unit.id}`;

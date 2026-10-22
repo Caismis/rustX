@@ -1,6 +1,6 @@
 /** Browser HTTP adapter. Never imported by the Node Product Host. */
 import { carrierFetch } from '../carrier/http.ts';
-import { WorkspaceHostError, settlementFailureKind, validateLocations, type ProductHostWorkspaces, type WorkspaceAuthorityScope, type WorkspaceCatalog, type WorkspaceConfigurationOperation, type WorkspaceConfigurationResult, type DeliveryRead, type DeliveryBytes } from './host.ts';
+import { WorkspaceHostError, settlementFailureKind, validateLocations, type ProductHostWorkspaces, type WorkspaceAuthorityScope, type WorkspaceCatalog, type WorkspaceConfigurationOperation, type WorkspaceConfigurationResult, type DeliveryRead, type DeliveryBytes, type WorkflowHostOperation, type WorkflowHostResult } from './host.ts';
 
 export class HttpWorkspaceHost implements ProductHostWorkspaces {
   constructor(private readonly base = '/product-host') {}
@@ -62,6 +62,14 @@ export class HttpWorkspaceHost implements ProductHostWorkspaces {
   readDelivery = (scope: WorkspaceAuthorityScope, read: DeliveryRead, signal?: AbortSignal) =>
     this.settledFileCall<DeliveryBytes>('file', scope, read, signal);
   configureWorkspace = (id: string, endpoint: string, operation: WorkspaceConfigurationOperation) => this.call<WorkspaceConfigurationResult>('configuration', { id, endpoint, operation });
+  workflowWorkspace = async (scope: WorkspaceAuthorityScope, native: string, id: string, operation: WorkflowHostOperation) => {
+    try { return await this.call<WorkflowHostResult>('workflow', { scope, native, id, operation }); }
+    catch (cause) {
+      // A lost write carrier conceals whether native committed it.
+      if (cause instanceof WorkspaceHostError || operation.kind !== 'write') throw cause;
+      throw new WorkspaceHostError('Workflow write acknowledgement lost; reread the file before editing.', undefined, true);
+    }
+  };
   adoptWorkspace = (scope: WorkspaceAuthorityScope, location: string) => this.call<void>('adopt', { scope, location });
   renameWorkspace = (scope: WorkspaceAuthorityScope, id: string, displayName: string) => this.call<void>('rename', { scope, id, displayName });
   reorderWorkspace = (scope: WorkspaceAuthorityScope, id: string, before?: string) => this.call<void>('reorder', { scope, id, before });
@@ -74,13 +82,13 @@ export class HttpWorkspaceHost implements ProductHostWorkspaces {
   };
 }
 
-interface HostFailure { message?: unknown; kind?: string; uncertain?: boolean; nativeError?: { message?: string; data?: { kind?: string } } }
+interface HostFailure { message?: unknown; kind?: string; uncertain?: boolean; nativeError?: { message?: string; data?: import('../../../protocol/app-server/v51.ts').ErrorData } }
 function hostFailure(failure: HostFailure) {
   const nativeError = failure.nativeError ?? (() => {
     if (typeof failure.message !== 'string') return undefined;
     try { return JSON.parse(failure.message).nativeError; } catch { return undefined; }
   })();
-  if (nativeError) return new WorkspaceHostError(nativeError.message ?? String(nativeError), nativeError.data?.kind);
+  if (nativeError) return new WorkspaceHostError(nativeError.message ?? String(nativeError), nativeError.data?.kind, false, nativeError.data);
   if (failure.uncertain) return new WorkspaceHostError(String(failure.message), undefined, true);
   return new WorkspaceHostError(`Workspace Host: ${failure.message}`, failure.kind);
 }

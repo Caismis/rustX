@@ -126,11 +126,13 @@ not observed — never as "no". Opening the page probes and connects nothing.
 
 What a resource kind supports comes from a single native capability matrix
 (`app/settings/capability.ts`). MCP definitions and named-Agent profiles have
-structured editors. Skills, Workflows and Managed Python have no authoring
-operation on this protocol, so their details show inventory, diagnostics and the
-supported root selection with no Edit, Save or Delete for the definition itself.
-Full Workflow program, Skill-package and Python-source editing are outside this
-Settings scope.
+structured editors. Skills and Managed Python have no authoring operation on
+this protocol, so their details show inventory, diagnostics and the supported
+root selection with no Edit, Save or Delete for the definition itself. Workflow
+files are authored in the dedicated **Workflows** area of the sidebar (see
+[Workflow authoring](workflow-authoring.md#file-authoring-app-server-and-web));
+Settings keeps their inventory and root selection only. Skill-package and
+Python-source editing are outside this Settings scope.
 
 A resource's definition and its root availability are two native mutations with
 two outcomes. The resource detail edits the root selection through the same

@@ -399,6 +399,65 @@ impl SessionRuntimeManager {
         })?
     }
 
+    /// The Workflow files physically owned by one source scope. A pure read:
+    /// it takes no application lock and publishes nothing.
+    /// # Errors
+    /// Rejects a redirected target.
+    pub async fn workflow_library(
+        &self,
+        target: super::super::configuration::settings::SourceTarget,
+    ) -> Result<super::super::workflow_authoring::WorkflowLibrary, SourceSettingsError> {
+        let owner = self.clone();
+        Self::blocking(move || owner.configuration.workflow_library(&target)).await
+    }
+
+    /// The complete authorized source of one exact Workflow file.
+    /// # Errors
+    /// Rejects a redirected target and an unreadable file.
+    pub async fn workflow_source(
+        &self,
+        target: super::super::configuration::settings::SourceTarget,
+        id: crate::runtime::workflow::WorkflowId,
+    ) -> Result<super::super::workflow_authoring::WorkflowSource, SourceSettingsError> {
+        let owner = self.clone();
+        Self::blocking(move || owner.configuration.workflow_source(&target, &id)).await
+    }
+
+    /// Check one candidate Workflow document offline.
+    /// # Errors
+    /// Rejects a redirected target or context.
+    pub async fn check_workflow(
+        &self,
+        target: super::super::configuration::settings::SourceTarget,
+        id: crate::runtime::workflow::WorkflowId,
+        document: crate::runtime::workflow::WorkflowDefinition,
+        context: Option<std::path::PathBuf>,
+        explain: bool,
+    ) -> Result<super::super::workflow_authoring::WorkflowCheckReport, SourceSettingsError> {
+        let owner = self.clone();
+        Self::blocking(move || {
+            owner
+                .configuration
+                .check_workflow(&target, &id, document, context.as_deref(), explain)
+        })
+        .await
+    }
+
+    async fn blocking<T: Send + 'static>(
+        read: impl FnOnce() -> Result<T, super::super::configuration::settings::SettingsError>
+        + Send
+        + 'static,
+    ) -> Result<T, SourceSettingsError> {
+        tokio::task::spawn_blocking(read)
+            .await
+            .map_err(|_| {
+                SourceSettingsError::Source(
+                    super::super::configuration::settings::SettingsError::Io,
+                )
+            })?
+            .map_err(SourceSettingsError::Source)
+    }
+
     /// Commit one source edit and transfer its application responsibility.
     /// The revision is captured from candidate bytes at native publication,
     /// never from a subsequent current-state read.
