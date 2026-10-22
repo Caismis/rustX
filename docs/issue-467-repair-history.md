@@ -865,7 +865,7 @@ all-target reruns remain required; this partial pass is not full validation.
 Conformance26 passed all three repaired selectors and its full 29-test target.
 External27 then exposed a documentation-guard prefix bug: matching obsolete v5
 also rejected current v50. The guard now requires a version-number boundary;
-its tests retain exact v5 rejection and add v50/v51 acceptance. Contracts28
+its tests retain exact v5 rejection and add v50/v52 acceptance. Contracts28
 passed all 31 tests. No documentation exception or obsolete-protocol allowance
 was added.
 

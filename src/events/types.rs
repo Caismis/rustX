@@ -345,6 +345,16 @@ pub enum RuntimeEvent {
         invocation_fingerprint: AuxiliaryFingerprint,
         selected_message_ids: Vec<MessageId>,
     },
+    /// Committed with the preceding failed physical request. Delay is audit evidence;
+    /// the live owner retains the absolute monotonic eligibility time.
+    AuxiliaryRetryScheduled {
+        call_id: AuxiliaryCallId,
+        request_id: RequestId,
+        next_ordinal: u32,
+        delay_ms: u64,
+        request_evidence: AuxiliaryRequestEvidence,
+    },
+
     /// Absorbing terminal of one auxiliary Call.
     AuxiliaryCallSettled {
         call_id: AuxiliaryCallId,
@@ -923,7 +933,8 @@ impl RuntimeEvent {
     pub fn auxiliary_call_id(&self) -> Option<&AuxiliaryCallId> {
         match self {
             Self::AuxiliaryCallStarted { call_id, .. }
-            | Self::AuxiliaryCallSettled { call_id, .. } => Some(call_id),
+            | Self::AuxiliaryCallSettled { call_id, .. }
+            | Self::AuxiliaryRetryScheduled { call_id, .. } => Some(call_id),
             Self::ModelRequestStarted { owner, .. }
             | Self::ModelRequestCompleted { owner, .. }
             | Self::ModelRequestFailed { owner, .. } => match owner {

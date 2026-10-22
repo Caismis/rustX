@@ -65,8 +65,7 @@ pub(crate) fn normalize_usage(
 ) -> ModelUsage {
     let input_base = latest_delta_usage
         .and_then(|u| u.input_tokens)
-        .or_else(|| message_start_usage.and_then(|u| u.input_tokens))
-        .unwrap_or(0);
+        .or_else(|| message_start_usage.and_then(|u| u.input_tokens));
     let cache_creation = latest_delta_usage
         .and_then(|u| u.cache_creation_input_tokens)
         .or_else(|| message_start_usage.and_then(|u| u.cache_creation_input_tokens))
@@ -76,8 +75,7 @@ pub(crate) fn normalize_usage(
         .or_else(|| message_start_usage.and_then(|u| u.cache_read_input_tokens));
     let output_tokens = latest_delta_usage
         .and_then(|u| u.output_tokens)
-        .or_else(|| message_start_usage.and_then(|u| u.output_tokens))
-        .unwrap_or(0);
+        .or_else(|| message_start_usage.and_then(|u| u.output_tokens));
     let reasoning_tokens = latest_delta_usage
         .and_then(|u| {
             u.output_tokens_details
@@ -89,7 +87,10 @@ pub(crate) fn normalize_usage(
                 .and_then(|u| u.output_tokens_details.as_ref())
                 .and_then(|d| d.thinking_tokens)
         });
-    let input_tokens = input_base + cache_creation + cache_read.unwrap_or(0);
+    let input_tokens = input_base.and_then(|base| {
+        base.checked_add(cache_creation)?
+            .checked_add(cache_read.unwrap_or(0))
+    });
     let details = (reasoning_tokens.is_some() || cache_read.is_some()).then_some(UsageDetails {
         reasoning_tokens,
         cached_input_tokens: cache_read,
@@ -97,7 +98,9 @@ pub(crate) fn normalize_usage(
     ModelUsage {
         input_tokens,
         output_tokens,
-        total_tokens: input_tokens + output_tokens,
+        total_tokens: input_tokens
+            .zip(output_tokens)
+            .and_then(|(input, output)| input.checked_add(output)),
         details,
     }
 }
@@ -110,11 +113,7 @@ pub(crate) fn normalize_http_error(
 ) -> ModelError {
     let (provider_code, message) = parse_error_body(body);
     let message = message.unwrap_or_else(|| String::from_utf8_lossy(body).into_owned());
-    let retry_after_ms = headers
-        .get(reqwest::header::RETRY_AFTER)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u64>().ok())
-        .map(|seconds| seconds.saturating_mul(1000));
+    let retry_after_ms = crate::model::adapter::retry::retry_after(headers);
     let kind = match status.as_u16() {
         400 | 413 => {
             if is_context_window_error(&message, provider_code.as_deref()) {
@@ -155,6 +154,11 @@ fn http_retry_disposition(
     message: &str,
     kind: &ModelErrorKind,
 ) -> ModelRetryDisposition {
+    if is_permanent_quota(provider_code, message)
+        || crate::model::adapter::openai::mapping::permanently_invalid_code(provider_code)
+    {
+        return ModelRetryDisposition::Never;
+    }
     match kind {
         ModelErrorKind::RateLimit => {
             if is_permanent_quota(provider_code, message) || status != StatusCode::TOO_MANY_REQUESTS
@@ -170,7 +174,8 @@ fn http_retry_disposition(
                 ModelRetryDisposition::Transient
             }),
         ModelErrorKind::ProviderError => {
-            if !is_permanent_quota(provider_code, message)
+            if !crate::model::adapter::openai::mapping::permanently_invalid_code(provider_code)
+                && !is_permanent_quota(provider_code, message)
                 && (retryable_server_status(status) || explicitly_retryable_code(provider_code))
             {
                 ModelRetryDisposition::Transient
@@ -262,22 +267,31 @@ fn parse_error_body(body: &[u8]) -> (Option<String>, Option<String>) {
         .get("error")
         .filter(|error| error.is_object())
         .unwrap_or(&root);
-    let provider_code = detail
-        .get("code")
+    let permanent_type = detail
+        .get("type")
         .and_then(serde_json::Value::as_str)
-        .map(str::to_owned)
-        .or_else(|| {
-            detail
-                .get("type")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned)
-        })
-        .or_else(|| {
-            detail
-                .get("code")
-                .and_then(serde_json::Value::as_u64)
-                .map(|code| code.to_string())
+        .filter(|value| {
+            crate::model::adapter::openai::mapping::permanently_invalid_code(Some(value))
+                || is_permanent_quota(Some(value), "")
         });
+    let provider_code = permanent_type.map(str::to_owned).or_else(|| {
+        detail
+            .get("code")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| {
+                detail
+                    .get("type")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            })
+            .or_else(|| {
+                detail
+                    .get("code")
+                    .and_then(serde_json::Value::as_u64)
+                    .map(|code| code.to_string())
+            })
+    });
     let message = detail
         .get("message")
         .and_then(serde_json::Value::as_str)
@@ -1042,6 +1056,42 @@ mod tests {
     }
 
     #[test]
+    fn permanent_structured_failures_override_retryable_http_status() {
+        for code in [
+            "insufficient_quota",
+            "quota_exceeded",
+            "billing_hard_limit_reached",
+            "billing_not_active",
+            "payment_required",
+            "account_deactivated",
+            "authentication_error",
+            "invalid_api_key",
+            "permission_error",
+            "invalid_request_error",
+            "invalid_parameters",
+            "model_not_found",
+        ] {
+            for status in [408, 429, 500, 503] {
+                let body = serde_json::to_vec(&serde_json::json!({"error": {"type": code, "code": "server_error", "message": "rejected"}})).unwrap();
+                let error = normalize_http_error(
+                    reqwest::StatusCode::from_u16(status).unwrap(),
+                    &reqwest::header::HeaderMap::new(),
+                    &body,
+                );
+                assert_eq!(
+                    error.retry_disposition,
+                    ModelRetryDisposition::Never,
+                    "{code} / {status}"
+                );
+            }
+            assert_eq!(
+                stream_retry_disposition(Some(code), Some("rejected")),
+                ModelRetryDisposition::Never
+            );
+        }
+    }
+
+    #[test]
     fn provider_looking_cancellation_is_not_runtime_cancellation() {
         assert_eq!(
             stream_retry_disposition(Some("request_cancelled"), Some("cancelled")),
@@ -1125,9 +1175,13 @@ mod tests {
             }),
         };
         let usage = normalize_usage(Some(&start), Some(&delta));
-        assert_eq!(usage.input_tokens, 120, "100 base + 8 creation + 12 read");
-        assert_eq!(usage.output_tokens, 42);
-        assert_eq!(usage.total_tokens, 162);
+        assert_eq!(
+            usage.input_tokens,
+            Some(120),
+            "100 base + 8 creation + 12 read"
+        );
+        assert_eq!(usage.output_tokens, Some(42));
+        assert_eq!(usage.total_tokens, Some(162));
         let details = usage.details.expect("details present");
         assert_eq!(details.cached_input_tokens, Some(12));
         assert_eq!(details.reasoning_tokens, Some(7));
@@ -1153,8 +1207,12 @@ mod tests {
             output_tokens_details: None,
         };
         let usage = normalize_usage(Some(&start), Some(&delta));
-        assert_eq!(usage.input_tokens, 47, "40 base + 2 creation + 5 read");
-        assert_eq!(usage.total_tokens, 56);
+        assert_eq!(
+            usage.input_tokens,
+            Some(47),
+            "40 base + 2 creation + 5 read"
+        );
+        assert_eq!(usage.total_tokens, Some(56));
         assert_eq!(
             usage.details.as_ref().and_then(|d| d.cached_input_tokens),
             Some(5)
@@ -1174,8 +1232,31 @@ mod tests {
             output_tokens_details: None,
         };
         let usage = normalize_usage(Some(&plain), None);
-        assert_eq!(usage.input_tokens, 10);
-        assert_eq!(usage.total_tokens, 13);
+        assert_eq!(usage.input_tokens, Some(10));
+        assert_eq!(usage.total_tokens, Some(13));
         assert!(usage.details.is_none(), "no details without provider data");
+    }
+    #[test]
+    fn partial_usage_preserves_missing_input_and_output_without_fabricated_zero() {
+        let output_only: super::WireUsage = serde_json::from_value(
+            serde_json::json!({"output_tokens":0,"cache_read_input_tokens":4}),
+        )
+        .unwrap();
+        let usage = super::normalize_usage(None, Some(&output_only));
+        assert_eq!(usage.input_tokens, None);
+        assert_eq!(usage.output_tokens, Some(0));
+        assert_eq!(usage.total_tokens, None);
+        assert_eq!(usage.details.as_ref().unwrap().cached_input_tokens, Some(4));
+        assert!(!usage.is_complete());
+        let input_only: super::WireUsage =
+            serde_json::from_value(serde_json::json!({"input_tokens":10})).unwrap();
+        let usage = super::normalize_usage(Some(&input_only), None);
+        assert_eq!(usage.input_tokens, Some(10));
+        assert_eq!(usage.output_tokens, None);
+        assert_eq!(usage.total_tokens, None);
+        let combined = super::normalize_usage(Some(&input_only), Some(&output_only));
+        assert_eq!(combined.input_tokens, Some(14));
+        assert_eq!(combined.output_tokens, Some(0));
+        assert_eq!(combined.total_tokens, Some(14));
     }
 }

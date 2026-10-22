@@ -111,16 +111,8 @@ impl HttpFailure {
     }
 }
 
-/// Parses the `Retry-After` header as whole seconds, matching `OpenAI`'s
-/// documented response format.
 fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<u64> {
-    headers
-        .get(reqwest::header::RETRY_AFTER)?
-        .to_str()
-        .ok()?
-        .parse::<u64>()
-        .ok()
-        .map(|seconds| seconds.saturating_mul(1000))
+    crate::model::adapter::retry::retry_after(headers)
 }
 
 fn parse_error_body(body: &[u8], status: StatusCode) -> (String, Option<String>) {
@@ -147,17 +139,26 @@ fn parse_error_body(body: &[u8], status: StatusCode) -> (String, Option<String>)
             },
             str::to_owned,
         );
-    let provider_code = detail
-        .get("code")
+    let permanent_type = detail
+        .get("type")
         .and_then(serde_json::Value::as_str)
-        .map(str::to_owned)
-        .or_else(|| {
-            detail
-                .get("type")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned)
-        })
-        .or_else(|| detail.get("code").and_then(provider_code_value));
+        .filter(|value| {
+            super::mapping::permanently_invalid_code(Some(value))
+                || super::mapping::is_permanent_quota(Some(value), "")
+        });
+    let provider_code = permanent_type.map(str::to_owned).or_else(|| {
+        detail
+            .get("code")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| {
+                detail
+                    .get("type")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            })
+            .or_else(|| detail.get("code").and_then(provider_code_value))
+    });
     (message, provider_code)
 }
 

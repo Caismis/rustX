@@ -146,9 +146,9 @@ pub(super) fn terminal(
             request_id: snapshot.request_id,
             finish_reason: ModelFinishReason::Stop,
             usage: measured.then_some(crate::model::types::ModelUsage {
-                input_tokens: 12,
-                output_tokens: 3,
-                total_tokens: 15,
+                input_tokens: Some(12),
+                output_tokens: Some(3),
+                total_tokens: Some(15),
                 details: None,
             }),
             generation: None,
@@ -873,9 +873,9 @@ pub(super) fn response_seed(count: usize) -> LineageSeed {
                 completed_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
                 retry_message_id: None,
                 usage: Some(crate::model::ModelUsage {
-                    input_tokens: 12,
-                    output_tokens: 3,
-                    total_tokens: 15,
+                    input_tokens: Some(12),
+                    output_tokens: Some(3),
+                    total_tokens: Some(15),
                     details: None,
                 }),
                 timing: Some(CompletedResponseTiming {

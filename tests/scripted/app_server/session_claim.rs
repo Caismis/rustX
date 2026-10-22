@@ -341,7 +341,7 @@ async fn retained_client_and_identity_cannot_keep_unloaded_allocation_alive() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stale_attachment_subscription_and_endpoint_do_not_own_residency() {
-    bounded(async {
+    Box::pin(bounded(async {
         use crate::runtime_client::host::EventDelivery;
         use crate::runtime_client::{RequestId, RuntimeClientError, RuntimeClientRequest};
         let f = Fixture::with_session_count(None, 1).await;
@@ -404,7 +404,7 @@ async fn stale_attachment_subscription_and_endpoint_do_not_own_residency() {
             .await
             .unwrap();
         f.close().await;
-    })
+    }))
     .await;
 }
 

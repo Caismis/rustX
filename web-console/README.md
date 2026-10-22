@@ -73,7 +73,7 @@ an independently managed runtime/Host. The [Host contract](WORKSPACES.md) descri
 that operator-owned integration. Use the launcher for complete local composition.
 
 Native authentication remains #36's **local/trusted, single writable controller** boundary.
-The browser sends subprotocols `rustx.app-server.v51` and `rustx-token.<token>` in its
+The browser sends subprotocols `rustx.app-server.v52` and `rustx-token.<token>` in its
 WebSocket handshake. No arbitrary authorization header, native URL credential,
 OAuth, tenancy, BFF or production hosting layer is introduced. Use the matching
 App Server transport token, never a provider key. Provider/MCP credentials are
@@ -134,7 +134,7 @@ and never rewrites an unsaved draft's base outside the explicit review workflow.
   come from `snapshot.messages`; current activity comes from `snapshot.attempt`.
   An in-flight message with an already committed ID is suppressed. No Harness
   event model, fake V3 Session log, optimistic conversation or event reducer exists.
-- `src/client/`: one WebSocket, generated `protocol/app-server/v51.ts` unions,
+- `src/client/`: one WebSocket, generated `protocol/app-server/v52.ts` unions,
   correlation IDs, initialize/capabilities, bounded requests, native routing,
   replaceable snapshots, connection/attachment fences and wire observer. Rust DTOs
   remain authoritative. The shared generator normalizes schema `$ref` siblings
@@ -174,7 +174,7 @@ missing catalog entries cannot strand capacity. This is explicit, never eviction
 server-owned work continues exactly as for closing one view.
 
 Every ordinary Session label uses `sessionDisplayTitle`: explicit native name >
-native `SessionSummary.preview` > **New session**. Session IDs remain internal.
+native `SessionSummary.generated_title.text` > native `SessionSummary.preview` > exact Session identity. Before a Session exists, the shell shows **New session**.
 The server owns a persisted display projection: `preview` is computed from the
 canonical root user message after its commit and stored in the session catalog,
 never derived by the client or at list time. Canonical commitment and projection

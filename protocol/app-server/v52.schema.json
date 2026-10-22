@@ -2188,22 +2188,31 @@
       ]
     },
     "ModelUsage": {
-      "description": "Normalized token accounting for one generation.\n\nProviders do not expose identical token metrics; this is the stable\ncommon core. Provider SDK usage objects never appear here.\nThese are native u64 quantities, not byte offsets. Observation transports\nuse the existing exact decimal codec without narrowing provider evidence.",
+      "description": "Normalized token accounting for one generation.\n\nProviders do not expose identical token metrics; this is the stable\ncommon core. Provider SDK usage objects never appear here.\nMissing provider metrics remain absent; a reported zero is `Some(0)`.\nThese are native u64 quantities, not byte offsets. Observation transports\nuse the existing exact decimal codec without narrowing provider evidence.",
       "type": "object",
       "properties": {
         "input_tokens": {
           "description": "Input tokens consumed by the request.",
-          "type": "string",
+          "type": [
+            "string",
+            "null"
+          ],
           "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
         },
         "output_tokens": {
           "description": "Output tokens produced by the response.",
-          "type": "string",
+          "type": [
+            "string",
+            "null"
+          ],
           "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
         },
         "total_tokens": {
           "description": "Total tokens, where the provider reports or can derive them.",
-          "type": "string",
+          "type": [
+            "string",
+            "null"
+          ],
           "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
         },
         "details": {
@@ -2217,12 +2226,7 @@
             }
           ]
         }
-      },
-      "required": [
-        "input_tokens",
-        "output_tokens",
-        "total_tokens"
-      ]
+      }
     },
     "UsageDetails": {
       "description": "Optional normalized token details where providers expose them.",
@@ -8916,7 +8920,14 @@
         },
         "summaryModel": {
           "description": "The compaction summary model policy.",
-          "$ref": "#/$defs/SummaryModelPolicy",
+          "$ref": "#/$defs/AuxiliaryModelPolicy",
+          "default": {
+            "mode": "session"
+          }
+        },
+        "titleModel": {
+          "description": "The independent automatic title model policy.",
+          "$ref": "#/$defs/AuxiliaryModelPolicy",
           "default": {
             "mode": "session"
           }
@@ -8935,11 +8946,11 @@
       "description": "The identity of one Model Profile declared by a model.\n\nThe runtime assigns no meaning to the name: `fast`, `precise`, `creative`,\n`thinking-32k`, and `deep` are all just names whose behaviour is exactly\nthe profile's declared reasoning state, output default, and\n`request_params`.",
       "type": "string"
     },
-    "SummaryModelPolicy": {
-      "description": "The compaction summary model policy of a session.",
+    "AuxiliaryModelPolicy": {
+      "description": "A Session auxiliary invocation follows primary or selects a catalog model.",
       "oneOf": [
         {
-          "description": "Summary generation follows the admitted attempt's primary model.",
+          "description": "Generation follows the primary invocation captured by the consumer.",
           "type": "object",
           "properties": {
             "mode": {
@@ -8953,7 +8964,7 @@
           "additionalProperties": false
         },
         {
-          "description": "Summary generation uses an explicitly configured catalog model.",
+          "description": "Generation uses an explicitly configured catalog model.",
           "type": "object",
           "properties": {
             "model": {
@@ -8972,13 +8983,13 @@
               ]
             },
             "request_params": {
-              "description": "The explicit summary request-parameter overrides.",
+              "description": "The explicit auxiliary request-parameter overrides.",
               "type": "object",
               "additionalProperties": true,
               "default": {}
             },
             "max_output_tokens": {
-              "description": "The explicit summary output-budget override.",
+              "description": "The explicit auxiliary output-budget override.",
               "type": [
                 "integer",
                 "null"
@@ -11501,7 +11512,17 @@
         "summary_model": {
           "anyOf": [
             {
-              "$ref": "#/$defs/SummaryAuthoring"
+              "$ref": "#/$defs/AuxiliaryModelAuthoring"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "title_model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuxiliaryModelAuthoring"
             },
             {
               "type": "null"
@@ -11548,7 +11569,7 @@
         }
       ]
     },
-    "SummaryAuthoring": {
+    "AuxiliaryModelAuthoring": {
       "oneOf": [
         {
           "type": "object",
@@ -19445,7 +19466,7 @@
         },
         "summary": {
           "description": "The attempt's frozen summary policy.",
-          "$ref": "#/$defs/SummaryModelView"
+          "$ref": "#/$defs/AuxiliaryModelView"
         }
       },
       "additionalProperties": false,
@@ -19566,11 +19587,11 @@
         "reasoning"
       ]
     },
-    "SummaryModelView": {
-      "description": "The redacted client-facing projection of a summary policy.",
+    "AuxiliaryModelView": {
+      "description": "The redacted client-facing projection of an auxiliary policy.",
       "oneOf": [
         {
-          "description": "The summary follows the primary model.",
+          "description": "The auxiliary invocation follows the primary model.",
           "type": "object",
           "properties": {
             "mode": {
@@ -19584,7 +19605,7 @@
           "additionalProperties": false
         },
         {
-          "description": "The summary uses this resolved explicit invocation.",
+          "description": "The auxiliary invocation uses this resolved explicit invocation.",
           "type": "object",
           "properties": {
             "model": {
@@ -22455,7 +22476,18 @@
           "description": "The summary policy last resolved for `configured`, absent exactly\nwhen `effective` is.",
           "anyOf": [
             {
-              "$ref": "#/$defs/SummaryModelView"
+              "$ref": "#/$defs/AuxiliaryModelView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "title": {
+          "description": "The independent Title policy last resolved for this configuration.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuxiliaryModelView"
             },
             {
               "type": "null"
@@ -24713,6 +24745,17 @@
             "null"
           ]
         },
+        "generated_title": {
+          "description": "Automatic label, with local or inherited generation provenance.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionGeneratedTitle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "created_at": {
           "description": "Creation instant.",
           "type": "string",
@@ -24747,6 +24790,74 @@
         "active_conversation_id",
         "node_count"
       ]
+    },
+    "SessionGeneratedTitle": {
+      "description": "Saved automatic display metadata, independent of a user's chosen name.",
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "provenance": {
+          "$ref": "#/$defs/SessionTitleProvenance"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "text",
+        "provenance"
+      ]
+    },
+    "SessionTitleProvenance": {
+      "description": "A copied label never claims that generation ran in the destination.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "conversation_id": {
+              "$ref": "#/$defs/ConversationId"
+            },
+            "message_id": {
+              "$ref": "#/$defs/MessageId"
+            },
+            "call_id": {
+              "$ref": "#/$defs/AuxiliaryCallId"
+            },
+            "type": {
+              "type": "string",
+              "const": "local"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "conversation_id",
+            "message_id",
+            "call_id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "source_session": {
+              "$ref": "#/$defs/SessionId"
+            },
+            "type": {
+              "type": "string",
+              "const": "inherited"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "source_session"
+          ]
+        }
+      ]
+    },
+    "AuxiliaryCallId": {
+      "type": "string",
+      "pattern": "^aux_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
     },
     "EditorPage": {
       "type": "object",
@@ -24869,8 +24980,19 @@
             "null"
           ]
         },
+        "generated_title": {
+          "description": "Automatic label; manual name takes precedence when both are present.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionGeneratedTitle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "preview": {
-          "description": "The first ordinary user message of this Session's root lineage,\nbounded to one line. It is what an unnamed row is recognized by, and\nit is the client-facing projection of the persisted\n`display_preview`: the catalog stores the derived line so listing,\npagination, and search never open a conversation store. `None` is\nlegitimate — no ordinary user message exists yet, or the first one\nhas no renderable text — and yields the client-side identity\nfallback.",
+          "description": "The first ordinary user message of this Session's root lineage,\nbounded to one line. It labels a row without a saved name/title, and\nit is the client-facing projection of the persisted\n`display_preview`: the catalog stores the derived line so listing,\npagination, and search never open a conversation store. `None` is\nlegitimate — no ordinary user message exists yet, or the first one\nhas no renderable text — and yields the client-side identity\nfallback.",
           "type": [
             "string",
             "null"

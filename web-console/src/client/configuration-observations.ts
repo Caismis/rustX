@@ -1,6 +1,6 @@
 import { materializeApplication } from '../../../protocol/app-server/application-observation';
 import { materializeFields } from '../../../protocol/app-server/field-observation';
-import type { BoundedSessionApplication, ConfigurationApplication, SourceFieldRef } from '../../../protocol/app-server/v51';
+import type { BoundedSessionApplication, ConfigurationApplication, SourceFieldRef } from '../../../protocol/app-server/v52';
 import type { ClientView, ConnectionRequest } from './contracts';
 
 /** What the configuration observations read from and write to their client. */

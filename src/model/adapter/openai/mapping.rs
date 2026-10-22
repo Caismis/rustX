@@ -2,7 +2,6 @@
 //! adapters: errors, usage, finish reasons, and tool resolution.
 
 use async_openai::error::OpenAIError;
-use async_openai::types::chat::CompletionUsage;
 
 #[cfg(test)]
 use async_openai::types::chat::FinishReason;
@@ -66,10 +65,12 @@ fn normalize_sdk_error(error: OpenAIError) -> ModelError {
         }
         OpenAIError::ApiError(api_error) => {
             let message = api_error.api_error.message.clone();
-            let provider_code = api_error
-                .api_error
-                .code
-                .clone()
+            let permanent_type = api_error.api_error.r#type.as_deref().filter(|value| {
+                permanently_invalid_code(Some(value)) || is_permanent_quota(Some(value), "")
+            });
+            let provider_code = permanent_type
+                .map(str::to_owned)
+                .or_else(|| api_error.api_error.code.clone())
                 .or_else(|| api_error.api_error.r#type.clone());
             let kind = match api_error.status_code.as_u16() {
                 400 => context_or_invalid_kind(&message, provider_code.as_deref()),
@@ -261,11 +262,13 @@ fn timeout(failure: &super::client::HttpFailure) -> ModelError {
     ModelError {
         kind: ModelErrorKind::Timeout,
         message: failure.message.clone(),
-        retry_disposition: if failure.status == reqwest::StatusCode::REQUEST_TIMEOUT
-            || failure
-                .provider_code
-                .as_deref()
-                .is_some_and(|code| code.eq_ignore_ascii_case("timeout"))
+        retry_disposition: if !permanently_invalid_code(failure.provider_code.as_deref())
+            && !is_permanent_quota(failure.provider_code.as_deref(), &failure.message)
+            && (failure.status == reqwest::StatusCode::REQUEST_TIMEOUT
+                || failure
+                    .provider_code
+                    .as_deref()
+                    .is_some_and(|code| code.eq_ignore_ascii_case("timeout")))
         {
             crate::model::error::ModelRetryDisposition::Transient
         } else {
@@ -284,7 +287,8 @@ fn rate_limit(failure: &super::client::HttpFailure) -> ModelError {
     ModelError {
         kind: ModelErrorKind::RateLimit,
         message: failure.message.clone(),
-        retry_disposition: if is_permanent_quota(failure.provider_code.as_deref(), &failure.message)
+        retry_disposition: if permanently_invalid_code(failure.provider_code.as_deref())
+            || is_permanent_quota(failure.provider_code.as_deref(), &failure.message)
         {
             crate::model::error::ModelRetryDisposition::Never
         } else {
@@ -303,11 +307,10 @@ fn provider_error(failure: &super::client::HttpFailure) -> ModelError {
     ModelError {
         kind: ModelErrorKind::ProviderError,
         message: failure.message.clone(),
-        retry_disposition: if !is_permanent_quota(
-            failure.provider_code.as_deref(),
-            &failure.message,
-        ) && (retryable_server_status(failure.status)
-            || explicitly_retryable_provider_code(failure.provider_code.as_deref()))
+        retry_disposition: if !permanently_invalid_code(failure.provider_code.as_deref())
+            && !is_permanent_quota(failure.provider_code.as_deref(), &failure.message)
+            && (retryable_server_status(failure.status)
+                || explicitly_retryable_provider_code(failure.provider_code.as_deref()))
         {
             crate::model::error::ModelRetryDisposition::Transient
         } else {
@@ -354,6 +357,31 @@ pub(crate) fn explicitly_retryable_provider_code(code: Option<&str>) -> bool {
     })
 }
 
+/// Explicit permanent structured evidence takes precedence over a generic
+/// server status or a second transient field in a provider envelope.
+pub(crate) fn permanently_invalid_code(code: Option<&str>) -> bool {
+    code.is_some_and(|code| {
+        matches!(
+            code.to_ascii_lowercase().as_str(),
+            "authentication_error"
+                | "invalid_api_key"
+                | "permission_denied"
+                | "permission_error"
+                | "invalid_request_error"
+                | "invalid_parameter"
+                | "invalid_parameters"
+                | "model_not_found"
+                | "account_deactivated"
+                | "400"
+                | "401"
+                | "402"
+                | "403"
+                | "404"
+                | "422"
+        )
+    })
+}
+
 /// Codes and messages that prove a rate-limit response is permanent quota or
 /// billing exhaustion rather than temporary throttling.
 pub(crate) fn is_permanent_quota(code: Option<&str>, message: &str) -> bool {
@@ -381,6 +409,9 @@ fn sdk_status_disposition(
     message: &str,
     kind: &ModelErrorKind,
 ) -> ModelRetryDisposition {
+    if permanently_invalid_code(provider_code) || is_permanent_quota(provider_code, message) {
+        return ModelRetryDisposition::Never;
+    }
     match kind {
         ModelErrorKind::RateLimit => {
             if is_permanent_quota(provider_code, message) || status != 429 {
@@ -399,7 +430,7 @@ fn sdk_status_disposition(
             }
         }
         ModelErrorKind::ProviderError => {
-            if !is_permanent_quota(provider_code, message)
+            if !permanently_invalid_code(provider_code) && !is_permanent_quota(provider_code, message)
                 && (retryable_server_status(
                     reqwest::StatusCode::from_u16(status).unwrap_or_default(),
                 ) || explicitly_retryable_provider_code(provider_code))
@@ -436,7 +467,12 @@ pub(crate) fn stream_retry_disposition(
     numeric_code: Option<u64>,
     message: &str,
 ) -> ModelRetryDisposition {
-    if is_permanent_quota(provider_code.or(error_type), message) {
+    if is_permanent_quota(provider_code, message)
+        || is_permanent_quota(error_type, message)
+        || permanently_invalid_code(provider_code)
+        || permanently_invalid_code(error_type)
+        || matches!(numeric_code, Some(400 | 401 | 402 | 403 | 404 | 422))
+    {
         return ModelRetryDisposition::Never;
     }
     if matches!(numeric_code, Some(408))
@@ -503,38 +539,58 @@ fn map_sdk_chat_finish_reason(reason: FinishReason) -> ModelFinishReason {
     }
 }
 
-/// Normalizes Chat Completions usage.
-pub(crate) fn normalize_chat_usage(usage: &CompletionUsage) -> ModelUsage {
-    let input_tokens = u64::from(usage.prompt_tokens);
-    let output_tokens = u64::from(usage.completion_tokens);
-    ModelUsage {
-        input_tokens,
-        output_tokens,
-        total_tokens: u64::from(usage.total_tokens),
-        details: usage_details(
-            usage
-                .completion_tokens_details
-                .as_ref()
-                .and_then(|d| d.reasoning_tokens),
-            usage
-                .prompt_tokens_details
-                .as_ref()
-                .and_then(|d| d.cached_tokens),
-        ),
-    }
+/// Normalizes Chat Completions usage without requiring every provider metric.
+pub(crate) fn normalize_chat_usage(usage: &serde_json::Value) -> Option<ModelUsage> {
+    normalize_usage(
+        usage,
+        "prompt_tokens",
+        "completion_tokens",
+        "prompt_tokens_details",
+        "completion_tokens_details",
+    )
 }
 
-/// Builds optional usage details, mapping only semantically equivalent
-/// provider metrics into the canonical fields.
-fn usage_details(
-    reasoning_tokens: Option<u32>,
-    cached_input_tokens: Option<u32>,
-) -> Option<UsageDetails> {
-    let details = UsageDetails {
-        reasoning_tokens: reasoning_tokens.map(u64::from),
-        cached_input_tokens: cached_input_tokens.map(u64::from),
-    };
-    (details.reasoning_tokens.is_some() || details.cached_input_tokens.is_some()).then_some(details)
+/// Shared `OpenAI` usage normalization. A partial report remains a partial report.
+pub(crate) fn normalize_usage(
+    usage: &serde_json::Value,
+    input_field: &str,
+    output_field: &str,
+    input_details: &str,
+    output_details: &str,
+) -> Option<ModelUsage> {
+    let input_tokens = usage.get(input_field).and_then(serde_json::Value::as_u64);
+    let output_tokens = usage.get(output_field).and_then(serde_json::Value::as_u64);
+    let total_tokens = usage
+        .get("total_tokens")
+        .and_then(serde_json::Value::as_u64)
+        .or_else(|| {
+            input_tokens
+                .zip(output_tokens)
+                .and_then(|(input, output)| input.checked_add(output))
+        });
+    let reasoning_tokens = usage
+        .get(output_details)
+        .and_then(|details| details.get("reasoning_tokens"))
+        .and_then(serde_json::Value::as_u64);
+    let cached_input_tokens = usage
+        .get(input_details)
+        .and_then(|details| details.get("cached_tokens"))
+        .and_then(serde_json::Value::as_u64);
+    let details =
+        (reasoning_tokens.is_some() || cached_input_tokens.is_some()).then_some(UsageDetails {
+            reasoning_tokens,
+            cached_input_tokens,
+        });
+    (input_tokens.is_some()
+        || output_tokens.is_some()
+        || total_tokens.is_some()
+        || details.is_some())
+    .then_some(ModelUsage {
+        input_tokens,
+        output_tokens,
+        total_tokens,
+        details,
+    })
 }
 
 #[cfg(test)]
@@ -602,6 +658,60 @@ mod tests {
             Some("billing_hard_limit_reached"),
             "billing"
         ));
+    }
+
+    #[test]
+    fn permanent_structured_failures_override_transient_status_and_other_fields() {
+        for code in [
+            "insufficient_quota",
+            "quota_exceeded",
+            "billing_hard_limit_reached",
+            "billing_not_active",
+            "payment_required",
+            "account_deactivated",
+            "authentication_error",
+            "invalid_api_key",
+            "permission_denied",
+            "invalid_request_error",
+            "invalid_parameters",
+            "model_not_found",
+        ] {
+            for status in [408, 429, 500, 503] {
+                let failure = http_failure(status, Some(code), "provider rejected request");
+                assert_eq!(
+                    provider_error(&failure).retry_disposition,
+                    ModelRetryDisposition::Never,
+                    "{code} / {status}"
+                );
+                assert_eq!(
+                    rate_limit(&failure).retry_disposition,
+                    ModelRetryDisposition::Never
+                );
+                assert_eq!(
+                    super::timeout(&failure).retry_disposition,
+                    ModelRetryDisposition::Never
+                );
+            }
+            assert_eq!(
+                stream_retry_disposition(Some(code), Some("server_error"), Some(503), "rejected"),
+                ModelRetryDisposition::Never
+            );
+            assert_eq!(
+                stream_retry_disposition(Some("server_error"), Some(code), Some(429), "rejected"),
+                ModelRetryDisposition::Never
+            );
+        }
+        for status in [400, 401, 402, 403, 404, 422] {
+            assert_eq!(
+                stream_retry_disposition(
+                    Some("server_error"),
+                    Some("overloaded"),
+                    Some(status),
+                    "rejected"
+                ),
+                ModelRetryDisposition::Never
+            );
+        }
     }
 
     #[test]
@@ -698,5 +808,46 @@ mod tests {
         let normalized = normalize_error(error);
         assert_eq!(normalized.kind, ModelErrorKind::Transport);
         let _: &ModelError = &normalized;
+    }
+    #[test]
+    fn chat_and_responses_preserve_partial_usage_without_invented_zeros() {
+        for (input, output, input_details, output_details) in [
+            (
+                "prompt_tokens",
+                "completion_tokens",
+                "prompt_tokens_details",
+                "completion_tokens_details",
+            ),
+            (
+                "input_tokens",
+                "output_tokens",
+                "input_tokens_details",
+                "output_tokens_details",
+            ),
+        ] {
+            let mut wire = serde_json::json!({});
+            wire[output] = serde_json::json!(0);
+            wire[output_details] = serde_json::json!({"reasoning_tokens": 3});
+            let partial =
+                super::normalize_usage(&wire, input, output, input_details, output_details)
+                    .unwrap();
+            assert_eq!(partial.input_tokens, None);
+            assert_eq!(partial.output_tokens, Some(0));
+            assert_eq!(partial.total_tokens, None);
+            assert_eq!(partial.details.as_ref().unwrap().reasoning_tokens, Some(3));
+            assert!(!partial.is_complete());
+            wire[input] = serde_json::json!(u64::MAX);
+            let complete =
+                super::normalize_usage(&wire, input, output, input_details, output_details)
+                    .unwrap();
+            assert_eq!(complete.total_tokens, Some(u64::MAX));
+            assert!(complete.is_complete());
+            wire[output] = serde_json::json!(1);
+            let overflow =
+                super::normalize_usage(&wire, input, output, input_details, output_details)
+                    .unwrap();
+            assert_eq!(overflow.total_tokens, None);
+        }
+        assert!(super::normalize_chat_usage(&serde_json::json!({})).is_none());
     }
 }

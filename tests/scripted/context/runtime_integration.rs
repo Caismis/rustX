@@ -88,9 +88,9 @@ fn done_with_usage(reason: ModelFinishReason, input_tokens: u64) -> ModelEvent {
     ModelEvent::Completed {
         finish_reason: reason,
         usage: Some(ModelUsage {
-            input_tokens,
-            output_tokens: 4,
-            total_tokens: input_tokens + 4,
+            input_tokens: Some(input_tokens),
+            output_tokens: Some(4),
+            total_tokens: Some(input_tokens + 4),
             details: None,
         }),
     }
@@ -791,9 +791,9 @@ async fn proactive_compaction_before_the_next_turn() {
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             finish_reason: ModelFinishReason::ToolCalls,
             usage: Some(ModelUsage {
-                input_tokens: 100,
-                output_tokens: 4,
-                total_tokens: 104,
+                input_tokens: Some(100),
+                output_tokens: Some(4),
+                total_tokens: Some(104),
                 details: None,
             }),
             generation: None,
@@ -1093,9 +1093,9 @@ async fn overflow_compact_and_retry_succeeds() {
             request_id: RequestId::new("request:9:attempt-1:1:1:1"),
             finish_reason: ModelFinishReason::Stop,
             usage: Some(ModelUsage {
-                input_tokens: 4,
-                output_tokens: 4,
-                total_tokens: 8,
+                input_tokens: Some(4),
+                output_tokens: Some(4),
+                total_tokens: Some(8),
                 details: None,
             }),
             generation: None,

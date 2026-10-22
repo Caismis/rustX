@@ -1752,9 +1752,9 @@ export type ModelOutput =
     };
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "SummaryAuthoring".
+ * via the `definition` "AuxiliaryModelAuthoring".
  */
-export type SummaryAuthoring =
+export type AuxiliaryModelAuthoring =
   | {
       mode: 'session';
     }
@@ -4047,12 +4047,12 @@ export type SkillDiagnostic =
       kind: 'shadowed';
     };
 /**
- * The redacted client-facing projection of a summary policy.
+ * The redacted client-facing projection of an auxiliary policy.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "SummaryModelView".
+ * via the `definition` "AuxiliaryModelView".
  */
-export type SummaryModelView =
+export type AuxiliaryModelView =
   | {
       mode: 'session';
     }
@@ -4876,6 +4876,28 @@ export type AdoptionEligibility =
   | {
       status: 'unavailable';
     };
+/**
+ * A copied label never claims that generation ran in the destination.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SessionTitleProvenance".
+ */
+export type SessionTitleProvenance =
+  | {
+      conversation_id: ConversationId;
+      message_id: MessageId;
+      call_id: AuxiliaryCallId;
+      type: 'local';
+    }
+  | {
+      source_session: SessionId;
+      type: 'inherited';
+    };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "AuxiliaryCallId".
+ */
+export type AuxiliaryCallId = string;
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "SessionNodeOriginObservation".
@@ -5737,12 +5759,12 @@ export type AnswerSpecification =
       type: 'multi_choice';
     };
 /**
- * The compaction summary model policy of a session.
+ * A Session auxiliary invocation follows primary or selects a catalog model.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "SummaryModelPolicy".
+ * via the `definition` "AuxiliaryModelPolicy".
  */
-export type SummaryModelPolicy =
+export type AuxiliaryModelPolicy =
   | {
       mode: 'session';
     }
@@ -5757,13 +5779,13 @@ export type SummaryModelPolicy =
        */
       profile?: ModelProfileId | null;
       /**
-       * The explicit summary request-parameter overrides.
+       * The explicit auxiliary request-parameter overrides.
        */
       request_params?: {
         [k: string]: unknown;
       };
       /**
-       * The explicit summary output-budget override.
+       * The explicit auxiliary output-budget override.
        */
       max_output_tokens?: number | null;
       mode: 'explicit';
@@ -7342,13 +7364,42 @@ export interface SessionModelConfig {
          */
         profile?: ModelProfileId | null;
         /**
-         * The explicit summary request-parameter overrides.
+         * The explicit auxiliary request-parameter overrides.
          */
         request_params?: {
           [k: string]: unknown;
         };
         /**
-         * The explicit summary output-budget override.
+         * The explicit auxiliary output-budget override.
+         */
+        max_output_tokens?: number | null;
+        mode: 'explicit';
+      };
+  /**
+   * The independent automatic title model policy.
+   */
+  titleModel?:
+    | {
+        mode: 'session';
+      }
+    | {
+        /**
+         * The catalog model reference.
+         */
+        model: string;
+        /**
+         * The selected Model Profile; the model's `default_profile` is used
+         * when absent.
+         */
+        profile?: ModelProfileId | null;
+        /**
+         * The explicit auxiliary request-parameter overrides.
+         */
+        request_params?: {
+          [k: string]: unknown;
+        };
+        /**
+         * The explicit auxiliary output-budget override.
          */
         max_output_tokens?: number | null;
         mode: 'explicit';
@@ -7943,7 +7994,8 @@ export interface ModelLayer {
   profile?: ModelProfileId | null;
   request_params?: RequestParams | null;
   max_output_tokens?: ModelOutput | null;
-  summary_model?: SummaryAuthoring | null;
+  summary_model?: AuxiliaryModelAuthoring | null;
+  title_model?: AuxiliaryModelAuthoring | null;
 }
 /**
  * The authored Todo extension (Issue #259).
@@ -8784,6 +8836,7 @@ export interface TraceRequestOutcome {
  *
  * Providers do not expose identical token metrics; this is the stable
  * common core. Provider SDK usage objects never appear here.
+ * Missing provider metrics remain absent; a reported zero is `Some(0)`.
  * These are native u64 quantities, not byte offsets. Observation transports
  * use the existing exact decimal codec without narrowing provider evidence.
  *
@@ -8794,15 +8847,15 @@ export interface ModelUsage {
   /**
    * Input tokens consumed by the request.
    */
-  input_tokens: string;
+  input_tokens?: string | null;
   /**
    * Output tokens produced by the response.
    */
-  output_tokens: string;
+  output_tokens?: string | null;
   /**
    * Total tokens, where the provider reports or can derive them.
    */
-  total_tokens: string;
+  total_tokens?: string | null;
   /**
    * Optional normalized usage details.
    */
@@ -12958,7 +13011,11 @@ export interface SessionModelView {
    * The summary policy last resolved for `configured`, absent exactly
    * when `effective` is.
    */
-  summary?: SummaryModelView | null;
+  summary?: AuxiliaryModelView | null;
+  /**
+   * The independent Title policy last resolved for this configuration.
+   */
+  title?: AuxiliaryModelView | null;
   /**
    * Why the Session's published Model Catalog does not admit
    * `configured`. While present, `effective` and `summary` are display
@@ -13014,13 +13071,42 @@ export interface SessionModelConfig1 {
          */
         profile?: ModelProfileId | null;
         /**
-         * The explicit summary request-parameter overrides.
+         * The explicit auxiliary request-parameter overrides.
          */
         request_params?: {
           [k: string]: unknown;
         };
         /**
-         * The explicit summary output-budget override.
+         * The explicit auxiliary output-budget override.
+         */
+        max_output_tokens?: number | null;
+        mode: 'explicit';
+      };
+  /**
+   * The independent automatic title model policy.
+   */
+  titleModel?:
+    | {
+        mode: 'session';
+      }
+    | {
+        /**
+         * The catalog model reference.
+         */
+        model: string;
+        /**
+         * The selected Model Profile; the model's `default_profile` is used
+         * when absent.
+         */
+        profile?: ModelProfileId | null;
+        /**
+         * The explicit auxiliary request-parameter overrides.
+         */
+        request_params?: {
+          [k: string]: unknown;
+        };
+        /**
+         * The explicit auxiliary output-budget override.
          */
         max_output_tokens?: number | null;
         mode: 'explicit';
@@ -13982,6 +14068,7 @@ export interface WorkflowSnapshot1 {
  *
  * Providers do not expose identical token metrics; this is the stable
  * common core. Provider SDK usage objects never appear here.
+ * Missing provider metrics remain absent; a reported zero is `Some(0)`.
  * These are native u64 quantities, not byte offsets. Observation transports
  * use the existing exact decimal codec without narrowing provider evidence.
  */
@@ -13989,15 +14076,15 @@ export interface ModelUsage1 {
   /**
    * Input tokens consumed by the request.
    */
-  input_tokens: string;
+  input_tokens?: string | null;
   /**
    * Output tokens produced by the response.
    */
-  output_tokens: string;
+  output_tokens?: string | null;
   /**
    * Total tokens, where the provider reports or can derive them.
    */
-  total_tokens: string;
+  total_tokens?: string | null;
   /**
    * Optional normalized usage details.
    */
@@ -15088,6 +15175,10 @@ export interface SessionSnapshot {
    */
   name?: string | null;
   /**
+   * Automatic label, with local or inherited generation provenance.
+   */
+  generated_title?: SessionGeneratedTitle | null;
+  /**
    * Creation instant.
    */
   created_at: string;
@@ -15107,6 +15198,16 @@ export interface SessionSnapshot {
    * Number of persisted nodes, useful metadata for a bounded tree view.
    */
   node_count: number;
+}
+/**
+ * Saved automatic display metadata, independent of a user's chosen name.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SessionGeneratedTitle".
+ */
+export interface SessionGeneratedTitle {
+  text: string;
+  provenance: SessionTitleProvenance;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -15157,8 +15258,12 @@ export interface SessionSummary {
    */
   name?: string | null;
   /**
+   * Automatic label; manual name takes precedence when both are present.
+   */
+  generated_title?: SessionGeneratedTitle | null;
+  /**
    * The first ordinary user message of this Session's root lineage,
-   * bounded to one line. It is what an unnamed row is recognized by, and
+   * bounded to one line. It labels a row without a saved name/title, and
    * it is the client-facing projection of the persisted
    * `display_preview`: the catalog stores the derived line so listing,
    * pagination, and search never open a conversation store. `None` is

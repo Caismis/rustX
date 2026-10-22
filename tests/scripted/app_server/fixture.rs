@@ -84,6 +84,10 @@ impl Fixture {
         Self::with_provider_gating(None, 1, true).await
     }
 
+    pub(super) async fn with_titles() -> Self {
+        Self::with_provider_gating(Some("title"), 1, false).await
+    }
+
     async fn with_provider_gating(
         tool: Option<&'static str>,
         count: usize,
@@ -95,7 +99,7 @@ impl Fixture {
         let server_gates = gates.clone();
         let provider = FixtureServer::start_with_body(move |_, _, body| {
             let request: serde_json::Value = serde_json::from_str(body).unwrap();
-            let index = if gate_summary {
+            let index = if tool == Some("title") || gate_summary {
                 usize::from(request["tools"].as_array().is_none_or(Vec::is_empty))
             } else if tool == Some("delivery-child") {
                 delivery_child_input_index(&request)
@@ -118,7 +122,7 @@ impl Fixture {
                 }
             }
             if let Some(name) = tool
-                && !matches!(name, "review" | "delivery-child")
+                && !matches!(name, "review" | "delivery-child" | "title")
                 && !request["messages"].as_array().unwrap().iter().any(|m| m["role"] == "tool") {
                 let arguments = if name == "ask_user" {
                     serde_json::json!({"questions":[{"question":"Continue?", "header":"Decision", "options":[
@@ -220,6 +224,15 @@ impl Fixture {
                     .unwrap()
                     .session,
             );
+            if tool != Some("title") {
+                // These fixtures prove primary execution/transport contracts.
+                // A saved manual label suppresses independent optional inference.
+                let session = sessions.last_mut().expect("created Session");
+                *session = controller
+                    .rename_session(&session.id, &format!("Fixture {ordinal}"))
+                    .await
+                    .unwrap();
+            }
         }
         if tool == Some("delivery-child") {
             eprintln!("ChildDelivery Fixture: Sessions created; manager wiring");
@@ -281,6 +294,9 @@ impl Fixture {
         tokio::spawn(async move { manager.load(&id, None).await })
     }
     pub(super) async fn close(&self) {
+        for gate in &self.gates {
+            gate.release();
+        }
         for i in 0..self.sessions.len() {
             self.gates[i].release();
             if let Ok(access) = self

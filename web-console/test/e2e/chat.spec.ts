@@ -40,6 +40,7 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     const remote = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
     const created = await remote.client.call('session/create', { settings: { cwd: fixture.workspaceA } }, 'session_transition');
     const id = created.session.id;
+    await remote.renameSession(id, 'New session');
     const attached = await remote.client.call('session/attach', { session_id: id }, 'attached');
     await expect(remote.client.call('artifact/read', { target: attached.target, artifact_id: 'artifact_999' }, 'artifact_bytes')).rejects.toThrow();
     for (let i = 0; i < 34; i++) {

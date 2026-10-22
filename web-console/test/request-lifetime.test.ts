@@ -1,6 +1,6 @@
 import { jobReceipt, compactReceipt } from './fixture';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { MethodResult, Request1 } from '../../protocol/app-server/v51';
+import type { MethodResult, Request1 } from '../../protocol/app-server/v52';
 import { OutcomeUncertain, RequestNotDispatched } from '../src/client/errors';
 import { Server } from './fixture';
 const servers: Server[] = [];

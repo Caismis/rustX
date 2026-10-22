@@ -961,9 +961,9 @@ fn t08_t14_t15_native_attempt_summary_matches_timing_oracle_and_pages_giant_mode
     );
     let giant = "model-λ🙂".repeat(300_000);
     let usage = ModelUsage {
-        input_tokens: 11,
-        output_tokens: 7,
-        total_tokens: 18,
+        input_tokens: Some(11),
+        output_tokens: Some(7),
+        total_tokens: Some(18),
         details: None,
     };
     let mut oracle = crate::durable::response::timing::TimingFold::default();
@@ -1022,7 +1022,7 @@ fn t08_t14_t15_native_attempt_summary_matches_timing_oracle_and_pages_giant_mode
     assert_eq!(summary.timing, expected);
     assert_eq!(summary.requests, 41);
     assert_eq!(summary.reports, 41);
-    assert_eq!(summary.usage.as_ref().unwrap().output_tokens, 287);
+    assert_eq!(summary.usage.as_ref().unwrap().output_tokens, Some(287));
     assert_eq!(summary.models_total, 41);
     assert!(
         summary.models.is_empty(),

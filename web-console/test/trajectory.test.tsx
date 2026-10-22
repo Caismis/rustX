@@ -13,7 +13,7 @@ import { prependTrace, beginTraceDetail, completeTraceDetail, refreshTrace, repl
 import { ledgerFocusTargets, ledgerRows, matchedRecordIds, isInspectable, projectTrajectory, trajectoryItems as flattenTrajectory, visibleItems, matchingCalls, preferredItem, systemPresentation, type InspectableDisplayItem, type TurnStructure } from '../src/app/trajectory/layout';
 import { searchItems } from '../src/app/trajectory/search';
 import { stepLessRecords, manyStepRecords, orderedStepRecords, structuralSearchRecords, requestDetail, toolDetail, traceRecord, traceTool } from './trace-fixture';
-import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v51';
+import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v52';
 
 beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(360);
@@ -1693,4 +1693,21 @@ it('a request after a between-turn summary keeps a full-height Turn label seat',
   expect(rows.find(row => row.request)?.height).toBe(20);
   expect(rows.find(row => row.request)?.turnStart).toBe(true);
   expect(rows.find(row => row.item?.record.kind === 'compaction')?.turnStart).toBe(false);
+});
+
+it('partial usage keeps unknown input absent in request and cumulative accounting', () => {
+  const earlier = traceRecord(0), later = traceRecord(1);
+  earlier.request!.usage = { input_tokens: '100', output_tokens: '10', total_tokens: '110' };
+  later.request!.usage = { output_tokens: '9', details: { cached_input_tokens: '3' } };
+  show(cacheOf([earlier, later]));
+  fireEvent.click(row('RequestBoundary', later.id));
+  fireEvent.click(screen.getByRole('tab', { name: 'Usage' }));
+  const current = screen.getByRole('heading', { name: 'This request' }).parentElement!;
+  const cumulative = screen.getByRole('heading', { name: 'Session cumulative' }).parentElement!;
+  expect(current.textContent).toContain('Output9 tok');
+  expect(current.textContent).toContain('Cached3 tok');
+  expect(within(current).queryByText('Input', { exact: true })).toBeNull();
+  expect(cumulative.textContent).toContain('Output19 tok');
+  expect(within(cumulative).queryByText('Input', { exact: true })).toBeNull();
+  expect(cumulative.textContent).not.toContain('0 tok');
 });

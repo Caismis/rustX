@@ -620,3 +620,16 @@ ends a valid partial page; a first non-fitting record fails explicitly. Noncanon
 encoding lengths fail integrity validation. Fingerprints are admitted as exactly 64
 lowercase hexadecimal text bytes before owned Rust materialization, including parent
 provenance and operation receipts. Existing payload and cumulative limits remain in force.
+
+### Auxiliary Summary retry allowance
+
+Summary input replanning, carryover degradation and physical technical retries
+share the Compaction owner's original twelve-start allowance, three total input
+shrinks and five-minute deadline. Automatic Compactions admitted in one logical
+Agent step share this finite allowance across `perform_compaction` entries;
+separate checkpoint operation identities and exact per-invocation receipts remain
+independent. Manual Compaction freezes its own invocation and allowance at
+admission. A technical retry retains the same selected-input roots, ranges and
+captured media, whereas semantic input changes admit a new Call under remaining
+authority. SearchIncomplete remains unresolved planning feasibility, never a
+transient provider error or a new allowance. See [auxiliary execution](auxiliary-execution.md).

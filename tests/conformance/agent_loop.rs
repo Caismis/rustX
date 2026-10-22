@@ -52,7 +52,7 @@ use rustx::local_runtime::session_runtime_manager::{
 use rustx::message::content::TextBlock;
 use rustx::message::types::{MessageBlock, UserContentBlock};
 use rustx::model::catalog::{MapCredentialEnvironment, ModelRef};
-use rustx::model::session::{SessionModelConfig, SummaryModelPolicy};
+use rustx::model::session::{AuxiliaryModelPolicy, SessionModelConfig};
 use rustx::observation::failure::RuntimeClientAttemptFailure;
 use rustx::runtime::recovery::{AttemptRecoveryClass, ResumeDisposition};
 use rustx::runtime_client::snapshot::RuntimeClientAttemptPhase;
@@ -259,6 +259,12 @@ impl Driver {
             .await
             .expect("durable Session")
             .session;
+        // These strict scripts exercise primary/Summary execution. Their saved
+        // fixture label suppresses independent automatic Title inference.
+        sessions
+            .rename_session(&session.id, "Provider conformance fixture")
+            .await
+            .expect("fixture manual name");
         let manager = SessionRuntimeManager::new(
             sessions.clone(),
             configuration,
@@ -1412,6 +1418,64 @@ async fn compaction_invokes_the_real_provider_on_both_summary_policies() {
     }
 }
 
+/// A transient failure crosses the real HTTP adapter, auxiliary retry writer,
+/// new physical request and normal checkpoint commit with byte-identical input.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn summary_retry_reuses_frozen_wire_input_and_commits_one_checkpoint() {
+    let Some(emulator) = ProviderEmulator::start("compaction_transient_summary").await else {
+        return;
+    };
+    let setup = Setup {
+        context_window: COMPACTION_CONTEXT_WINDOW,
+        reserve_tokens: COMPACTION_RESERVE_TOKENS,
+        keep_recent_tokens: 256,
+        summary_model: Some(format!("emulator/{SUMMARY_MODEL}")),
+        ..Setup::new(&format!("emulator/{CHAT_MODEL}"))
+    };
+    let driver = Driver::start(&emulator, &setup).await;
+    driver.submit(TURN_ONE);
+    assert!(matches!(
+        driver.settle().await.1,
+        RuntimeClientOutcome::Completed { .. }
+    ));
+    driver.submit(TURN_TWO);
+    assert!(matches!(
+        driver.settle().await.1,
+        RuntimeClientOutcome::Completed { .. }
+    ));
+    assert_eq!(driver.snapshot().unwrap().0.context.compaction_count, 1);
+    let requests = emulator.requests().await;
+    assert_eq!(requests.len(), 4);
+    assert_eq!(
+        requests[1]["body"], requests[2]["body"],
+        "retry sends the frozen invocation and selected input exactly"
+    );
+    let journal = driver.store.read_events(None, 256).unwrap().events;
+    let retry = journal
+        .iter()
+        .find(|event| {
+            matches!(
+                event.event,
+                rustx::events::types::RuntimeEvent::AuxiliaryRetryScheduled { .. }
+            )
+        })
+        .unwrap();
+    let rustx::events::types::RuntimeEvent::AuxiliaryRetryScheduled {
+        call_id,
+        request_id,
+        next_ordinal,
+        delay_ms,
+        ..
+    } = &retry.event
+    else {
+        unreachable!()
+    };
+    assert_eq!((*next_ordinal, *delay_ms), (1, 2_000));
+    assert!(journal.iter().any(|event| event.sequence < retry.sequence && matches!(&event.event, rustx::events::types::RuntimeEvent::ModelRequestFailed { request_id: failed, .. } if failed == request_id)));
+    assert_eq!(journal.iter().filter(|event| matches!(&event.event, rustx::events::types::RuntimeEvent::ModelRequestStarted { owner: rustx::model::ModelRequestOwner::Auxiliary { call_id: actual, .. }, .. } if actual == call_id)).count(), 2);
+    emulator.finish().await;
+}
+
 // ---------------------------------------------------------------------------
 // Scenario F2 — repeated compaction through the real provider boundary
 // ---------------------------------------------------------------------------
@@ -1654,7 +1718,8 @@ async fn a_running_attempt_keeps_its_frozen_model_while_the_session_moves_on() {
     // The first attempt is provably in flight and has already been billed
     // its provider request.
     let next_model = SessionModelConfig {
-        summary_model: SummaryModelPolicy::Session,
+        title_model: AuxiliaryModelPolicy::Session,
+        summary_model: AuxiliaryModelPolicy::Session,
         ..SessionModelConfig::of(
             ModelRef::parse(&format!("emulator/{SECOND_MODEL}"))
                 .expect("the second model reference parses"),

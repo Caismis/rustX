@@ -8,12 +8,12 @@ use super::{
     AuxiliaryRequestAudit, AuxiliaryRequestEvidence, AuxiliaryRequestStart,
     AuxiliaryRequestTerminal, Connection, ConversationId, ConversationStoreError,
     ModelRequestOwner, OptionalExtension, RequestId, RequestRow, RuntimeEvent,
-    RuntimeEventEnvelope, Transaction, bounded_encoded_len, call_has_requests_query,
-    call_outcome_for_terminal, call_row_query, call_started_event_id, event_at_connection,
-    journal_prefix, open_request_query, owner_row_query, params, request_row_query,
-    request_start_matches, require_audit_fact, seq_to_i64, sequence_from_i64, terminal_kind,
-    validate_call_start_authority_tx, validate_call_start_input, validate_owner_row_tx,
-    validate_request_evidence, validate_request_start_input, validate_request_terminal_for_row,
+    RuntimeEventEnvelope, Transaction, bounded_encoded_len, call_outcome_for_terminal,
+    call_row_query, call_started_event_id, event_at_connection, journal_prefix, open_request_query,
+    owner_row_query, params, request_row_query, request_start_matches, require_audit_fact,
+    seq_to_i64, sequence_from_i64, terminal_kind, validate_call_start_authority_tx,
+    validate_call_start_input, validate_owner_row_tx, validate_request_evidence,
+    validate_request_start_input, validate_request_terminal_for_row,
     validate_terminal_envelope_shape,
 };
 
@@ -28,7 +28,7 @@ pub(super) fn has_call_journal_fact_through_tx(
                SELECT 1 FROM events INDEXED BY events_auxiliary_call_id_kind_idx
                WHERE json_extract(event_json,'$.event.call_id')=?1
                  AND json_extract(event_json,'$.event.type') IN
-                     ('auxiliary_call_started','auxiliary_call_settled')
+                     ('auxiliary_call_started','auxiliary_call_settled','auxiliary_retry_scheduled')
                  AND sequence<=?2
              )",
             params![call_id.as_str(), seq_to_i64(through)?],
@@ -229,10 +229,8 @@ pub(super) fn call_audit_at_tx(
                 "a settled auxiliary Call cannot retain an open request".into(),
             ));
         }
-        if request_evidence.is_none() && call_has_requests_query(connection, call_id)? {
-            return Err(ConversationStoreError::InvalidReference(
-                "a settled auxiliary Call with requests requires exact request evidence".into(),
-            ));
+        if request_evidence.is_none() {
+            super::retry::validate_call_only(connection, call_id, *event_outcome, Some(sequence))?;
         }
         if let Some(evidence) = request_evidence {
             let request =
@@ -334,6 +332,11 @@ pub(super) fn request_evidence_at_tx(
     cut: AuxiliaryAuditCut,
     request_terminal: Option<&RuntimeEventEnvelope>,
 ) -> Result<Option<AuxiliaryRequestEvidence>, ConversationStoreError> {
+    if let Some(evidence) =
+        super::retry::request_evidence(connection, conversation_id, request, cut, request_terminal)?
+    {
+        return Ok(Some(evidence));
+    }
     let Some(call) = call_row_query(connection, &request.call_id)? else {
         return Err(ConversationStoreError::InvalidReference(
             "auxiliary request has no Call index".into(),
@@ -376,6 +379,9 @@ pub(super) fn request_evidence_at_tx(
     let Some(evidence) = request_evidence else {
         return Ok(None);
     };
+    if evidence.request_id != request.request_id {
+        return Ok(None);
+    }
     let terminal = request_terminal.ok_or_else(|| {
         ConversationStoreError::InvalidReference(
             "auxiliary Call carries request evidence while its request has no terminal".into(),
@@ -611,7 +617,7 @@ SELECT max(sequence) FROM (
               ('model_request_started','model_request_completed','model_request_failed')
            AND json_extract(event_json,'$.event.owner.type')='auxiliary')
           OR json_extract(event_json,'$.event.type') IN
-              ('auxiliary_call_started','auxiliary_call_settled')
+              ('auxiliary_call_started','auxiliary_call_settled','auxiliary_retry_scheduled')
       )
     UNION ALL
     SELECT max(sequence) AS sequence
@@ -623,7 +629,7 @@ SELECT max(sequence) FROM (
               ('model_request_started','model_request_completed','model_request_failed')
            AND json_extract(event_json,'$.event.owner.type')='auxiliary')
           OR json_extract(event_json,'$.event.type') IN
-              ('auxiliary_call_started','auxiliary_call_settled')
+              ('auxiliary_call_started','auxiliary_call_settled','auxiliary_retry_scheduled')
       )
     UNION ALL
     SELECT max(sequence) AS sequence
@@ -635,7 +641,7 @@ SELECT max(sequence) FROM (
               ('model_request_started','model_request_completed','model_request_failed')
            AND json_extract(event_json,'$.event.owner.type')='auxiliary')
           OR json_extract(event_json,'$.event.type') IN
-              ('auxiliary_call_started','auxiliary_call_settled')
+              ('auxiliary_call_started','auxiliary_call_settled','auxiliary_retry_scheduled')
       )
     UNION ALL
     SELECT max(sequence) AS sequence
@@ -647,19 +653,19 @@ SELECT max(sequence) FROM (
               ('model_request_started','model_request_completed','model_request_failed')
            AND json_extract(event_json,'$.event.owner.type')='auxiliary')
           OR json_extract(event_json,'$.event.type') IN
-              ('auxiliary_call_started','auxiliary_call_settled')
+              ('auxiliary_call_started','auxiliary_call_settled','auxiliary_retry_scheduled')
       )
     UNION ALL
     SELECT max(sequence) AS sequence
     FROM events INDEXED BY events_auxiliary_fact_type_idx
     WHERE sequence<=?1
-      AND json_extract(event_json,'$.event.type')='auxiliary_call_settled'
+      AND json_extract(event_json,'$.event.type') IN ('auxiliary_call_settled','auxiliary_retry_scheduled')
       AND (
           (json_extract(event_json,'$.event.type') IN
               ('model_request_started','model_request_completed','model_request_failed')
            AND json_extract(event_json,'$.event.owner.type')='auxiliary')
           OR json_extract(event_json,'$.event.type') IN
-              ('auxiliary_call_started','auxiliary_call_settled')
+              ('auxiliary_call_started','auxiliary_call_settled','auxiliary_retry_scheduled')
       )
 )";
 

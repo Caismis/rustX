@@ -917,6 +917,7 @@ impl ConversationRuntime {
             durability_gate: durability_gate.clone(),
             auxiliary,
             manual_tail: Mutex::new(None),
+            session_title_task: Mutex::new(None),
             recovery,
             executor,
             state: Mutex::new(CoordinatorState {

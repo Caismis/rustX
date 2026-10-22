@@ -147,7 +147,7 @@ pub(crate) async fn execute_compaction_in_operation(
         )
         .into());
     }
-    budget.check(cancellation)?;
+    budget.check_start(cancellation)?;
     let mut prepared = Some(operation.prepare()?);
     let owner = store
         .projection_owner(attribution.attempt_id.as_ref())
@@ -185,7 +185,7 @@ pub(crate) async fn execute_compaction_in_operation(
     let mut budgets = context.compaction_budgets;
     budgets.summary_input_limit = budget.summary_input_limit(budgets.summary_input_limit);
     let (retired_count, summary) = loop {
-        budget.check(cancellation)?;
+        budget.check_start(cancellation)?;
         let n = super::planning::summary_prefix(
             &engine,
             &projection.messages,

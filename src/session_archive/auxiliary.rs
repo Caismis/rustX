@@ -44,6 +44,33 @@ impl ConversationCut {
         Ok(())
     }
 
+    fn valid_retry_fact(
+        &self,
+        envelope: &RuntimeEventEnvelope,
+        request_id: &crate::runtime::identity::RequestId,
+        cut: AuxiliaryAuditCut,
+    ) -> io::Result<bool> {
+        use crate::durable::JournalStore;
+        let request = self
+            .store
+            .load_auxiliary_request(request_id, cut)
+            .map_err(super::error)?
+            .ok_or_else(|| super::error("retry archive request is missing"))?;
+        let sequence = request
+            .terminal_sequence
+            .ok_or_else(|| super::error("retry archive terminal is missing"))?;
+        let terminal = self
+            .store
+            .read_events(Some(sequence.saturating_sub(1)), 1)
+            .map_err(super::error)?
+            .events
+            .into_iter()
+            .next()
+            .ok_or_else(|| super::error("retry archive terminal event is missing"))?;
+        Ok(sequence < envelope.sequence
+            && matches!(self.store.confirm_auxiliary_retry_settlement(&terminal,envelope).map_err(super::error)?,crate::model::auxiliary::AuxiliaryCommitConfirmation::ConfirmedCommitted(receipt) if receipt.retry_scheduled.sequence == envelope.sequence))
+    }
+
     /// Validate original facts against mandatory native indexes at the archive cut.
     /// Optional observation headers and current post-cut state are not evidence.
     pub(super) fn validate_auxiliary_fact(
@@ -77,6 +104,9 @@ impl ConversationCut {
                         && call.invocation_fingerprint == *invocation_fingerprint
                         && call.selected_message_ids == *selected_message_ids
                 }),
+            RuntimeEvent::AuxiliaryRetryScheduled { request_id, .. } => {
+                self.valid_retry_fact(envelope, request_id, cut)?
+            }
             RuntimeEvent::AuxiliaryCallSettled {
                 call_id, outcome, ..
             } => self
@@ -216,9 +246,9 @@ mod tests {
         request_id: &RequestId,
     ) -> (RuntimeEventEnvelope, RuntimeEventEnvelope) {
         let usage = ModelUsage {
-            input_tokens: 41,
-            output_tokens: 7,
-            total_tokens: 48,
+            input_tokens: Some(41),
+            output_tokens: Some(7),
+            total_tokens: Some(48),
             details: None,
         };
         let request_terminal = auxiliary_settlement_envelope(

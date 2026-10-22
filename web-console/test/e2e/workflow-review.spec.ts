@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
-import { connectRemote, chooseWorkspace, choose, selectedSessionId } from './shell-actions';
+import { connectRemote, openEmptySession, choose, selectedSessionId } from './shell-actions';
 
 for (const locale of ['en', 'zh'] as const) test(`native workflow review and node lifecycle ${locale}`, async ({ page }) => {
   page.setDefaultTimeout(15_000);
@@ -16,7 +16,7 @@ for (const locale of ['en', 'zh'] as const) test(`native workflow review and nod
     await page.addInitScript(theme => localStorage.setItem('rustx-appearance-v1', theme), locale === 'zh' ? 'dark' : 'light');
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token);
-    await chooseWorkspace(page, 'Workspace A');
+    await openEmptySession(page, fixture, 'Workspace A');
     if (locale === 'zh') {
       await page.getByRole('button', { name: 'Settings', exact: true }).click();
       await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文');

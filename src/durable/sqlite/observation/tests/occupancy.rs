@@ -40,9 +40,9 @@ fn t08_t14_t19_occupancy_reads_fixed_original_request_scalars_and_model_ranges()
         .unwrap();
     let mut snapshot = occupancy_original_snapshot(&store);
     let usage = crate::model::types::ModelUsage {
-        input_tokens: 3_000_000,
-        output_tokens: 1,
-        total_tokens: 3_000_001,
+        input_tokens: Some(3_000_000),
+        output_tokens: Some(1),
+        total_tokens: Some(3_000_001),
         details: None,
     };
     let expected = crate::context::occupancy::measure(&usage, &snapshot)
@@ -234,9 +234,9 @@ fn t10_t14_occupancy_derived_header_failure_preserves_original_provider_terminal
             request_id: snapshot.request_id.clone(),
             finish_reason: ModelFinishReason::Stop,
             usage: Some(crate::model::types::ModelUsage {
-                input_tokens: 10,
-                output_tokens: 1,
-                total_tokens: 11,
+                input_tokens: Some(10),
+                output_tokens: Some(1),
+                total_tokens: Some(11),
                 details: None,
             }),
             generation: None,
@@ -280,9 +280,9 @@ fn mixed_auxiliary_terminal_never_replaces_primary_occupancy_statistics_or_trace
         .commit_model_turn_start(&[], &snapshot, Utc::now())
         .unwrap();
     let primary_usage = crate::model::types::ModelUsage {
-        input_tokens: 321,
-        output_tokens: 12,
-        total_tokens: 333,
+        input_tokens: Some(321),
+        output_tokens: Some(12),
+        total_tokens: Some(333),
         details: None,
     };
     let mut primary = envelope(
@@ -371,9 +371,9 @@ fn mixed_auxiliary_terminal_never_replaces_primary_occupancy_statistics_or_trace
             request_id,
             finish_reason: ModelFinishReason::Stop,
             usage: Some(crate::model::types::ModelUsage {
-                input_tokens: 9_999_999,
-                output_tokens: 9_999,
-                total_tokens: 10_009_998,
+                input_tokens: Some(9_999_999),
+                output_tokens: Some(9_999),
+                total_tokens: Some(10_009_998),
                 details: None,
             }),
             generation: None,
@@ -497,9 +497,9 @@ fn commit_primary_occupancy_terminal(
             request_id: snapshot.request_id.clone(),
             finish_reason: ModelFinishReason::Stop,
             usage: Some(crate::model::types::ModelUsage {
-                input_tokens,
-                output_tokens: 1,
-                total_tokens: input_tokens + 1,
+                input_tokens: Some(input_tokens),
+                output_tokens: Some(1),
+                total_tokens: Some(input_tokens + 1),
                 details: None,
             }),
             generation: None,
@@ -656,4 +656,63 @@ fn occupancy_compaction_lookup_work_is_bounded_across_history_growth() {
             }
         }
     }
+}
+
+#[test]
+fn partial_usage_without_input_retains_report_but_cannot_manufacture_occupancy() {
+    let store = store();
+    store
+        .initialize(&[user_message("partial-input", "original")])
+        .unwrap();
+    let mut snapshot = progress_request_snapshot(
+        "partial-usage",
+        "1",
+        0,
+        store.load_head().unwrap().revision,
+        Vec::new(),
+    );
+    let usage = crate::model::ModelUsage {
+        input_tokens: None,
+        output_tokens: Some(7),
+        total_tokens: None,
+        details: None,
+    };
+    assert!(
+        crate::context::occupancy::measure(&usage, &snapshot)
+            .unwrap()
+            .is_none()
+    );
+    freeze_test_input(&store, &mut snapshot, &[]);
+    store
+        .commit_model_turn_start(&[], &snapshot, Utc::now())
+        .unwrap();
+    let mut terminal = envelope(
+        store.conversation_id(),
+        "partial-terminal",
+        Some(snapshot.identity.attempt_id.clone()),
+        RuntimeEvent::ModelRequestCompleted {
+            owner: crate::model::ModelRequestOwner::Agent {
+                identity: snapshot.identity.clone(),
+            },
+            request_id: snapshot.request_id.clone(),
+            finish_reason: ModelFinishReason::Stop,
+            usage: Some(usage.clone()),
+            generation: None,
+        },
+    );
+    terminal.turn_id = Some(snapshot.identity.turn.clone());
+    let terminal = store.append_event(terminal).unwrap();
+    assert!(
+        store
+            .observation_occupancy(terminal.sequence)
+            .unwrap()
+            .is_none()
+    );
+    let RuntimeEvent::ModelRequestCompleted {
+        usage: retained, ..
+    } = terminal.event
+    else {
+        panic!("completed fact")
+    };
+    assert_eq!(retained, Some(usage));
 }

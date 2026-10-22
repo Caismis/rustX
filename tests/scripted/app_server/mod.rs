@@ -27,6 +27,7 @@ mod fixture;
 mod load;
 mod replacement;
 mod session_claim;
+mod session_title;
 /// One user text block, from the shared scripted-suite constructors.
 use crate::scripted_suites::support::runtime_client_conformance::text as input;
 use fixture::{Fixture, FixturePhase, bounded, events, gate_entered};

@@ -1,6 +1,8 @@
 use super::*;
 #[path = "executor_tests/optional_writes.rs"]
 mod optional_writes;
+#[path = "executor_tests/retries.rs"]
+mod retries;
 use crate::durable::{AuxiliaryStore, CanonicalStore, JournalStore};
 use futures_util::StreamExt as _;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -43,9 +45,9 @@ fn event(event: ModelEvent) -> ModelStreamItem {
 }
 fn usage(tokens: u64) -> ModelUsage {
     ModelUsage {
-        input_tokens: 5,
-        output_tokens: tokens,
-        total_tokens: 5 + tokens,
+        input_tokens: Some(5),
+        output_tokens: Some(tokens),
+        total_tokens: Some(5 + tokens),
         details: None,
     }
 }
@@ -167,6 +169,7 @@ impl Drop for TrackedStream {
 struct Fixture {
     executor: AuxiliaryExecutor,
     scope: Arc<AuxiliaryScope>,
+    budget: CompactionBudget,
     reservation: AuxiliaryReservation,
     frozen: FrozenCall,
     adapter: Arc<ConsumerAdapter>,
@@ -196,13 +199,11 @@ fn fixture_in_process(
         process.conversation(),
     )
     .unwrap();
-    let scope = AuxiliaryExecutor::scope(
-        CompactionBudget::new(
-            CompactionOperationId::new(uuid::Uuid::now_v7().to_string()),
-            clock.clone(),
-        ),
-        &CancellationSignal::new(),
+    let budget = CompactionBudget::new(
+        CompactionOperationId::new(uuid::Uuid::now_v7().to_string()),
+        clock.clone(),
     );
+    let scope = AuxiliaryExecutor::scope(&budget, &CancellationSignal::new());
     let reservation = executor.reserve_general(&scope).unwrap();
     let adapter = Arc::new(ConsumerAdapter {
         store: store.clone(),
@@ -256,6 +257,7 @@ fn fixture_in_process(
     Fixture {
         executor,
         scope,
+        budget,
         reservation,
         frozen: FrozenCall {
             start,
@@ -263,6 +265,9 @@ fn fixture_in_process(
             invocation,
             timeout: ModelTimeoutPolicy::default(),
             resource_revision: 7,
+            dispatch_check: None,
+            output_bytes_limit: None,
+            title_source: None,
         },
         adapter,
         store,
@@ -390,7 +395,7 @@ async fn waiter_loss_and_parent_close_leave_cleanup_under_the_native_owner() {
             .remote_execution_uncertainty
     );
     let other_scope = AuxiliaryExecutor::scope(
-        CompactionBudget::new(
+        &CompactionBudget::new(
             CompactionOperationId::new(uuid::Uuid::now_v7().to_string()),
             fixture.executor.0.resources.monotonic.clone(),
         ),
@@ -740,7 +745,7 @@ async fn rejected_frozen_authority_never_starts_a_call_or_leaks_native_reservati
         assert!(lock(&fixture.scope.state).children.is_empty());
         fixture
             .scope
-            .authorize_commit()
+            .authorize_commit(&fixture.budget)
             .expect("failed preparation left no live child");
         let mut permits = Vec::new();
         for _ in 0..8 {
@@ -1121,7 +1126,7 @@ async fn required_request_start_rollback_refunds_budget_but_fails_native_durabil
             .map(|_| {
                 fixture
                     .scope
-                    .budget
+                    .authority
                     .reserve_start(
                         crate::runtime::identity::RequestId::new(uuid::Uuid::now_v7().to_string()),
                         &fresh,
@@ -1143,7 +1148,7 @@ async fn required_request_start_rollback_refunds_budget_but_fails_native_durabil
             ContextErrorKind::AuxiliaryDurabilityFailed
         );
         let scope = AuxiliaryExecutor::scope(
-            CompactionBudget::new(
+            &CompactionBudget::new(
                 CompactionOperationId::new(uuid::Uuid::now_v7().to_string()),
                 fixture.clock.clone(),
             ),
@@ -1205,7 +1210,7 @@ async fn cancelled_request_start_rollback_refunds_budget_without_failing_durabil
         .map(|_| {
             fixture
                 .scope
-                .budget
+                .authority
                 .reserve_start(
                     crate::runtime::identity::RequestId::new(uuid::Uuid::now_v7().to_string()),
                     &fresh,
@@ -1219,7 +1224,7 @@ async fn cancelled_request_start_rollback_refunds_budget_without_failing_durabil
         "confirmed cancellation rollback does not poison native authority"
     );
     let scope = AuxiliaryExecutor::scope(
-        CompactionBudget::new(
+        &CompactionBudget::new(
             CompactionOperationId::new(uuid::Uuid::now_v7().to_string()),
             fixture.clock.clone(),
         ),
@@ -1289,7 +1294,7 @@ async fn cancellation_during_shared_start_probes_refunds_budget_without_durabili
             .map(|_| {
                 fixture
                     .scope
-                    .budget
+                    .authority
                     .reserve_start(
                         crate::runtime::identity::RequestId::new(uuid::Uuid::now_v7().to_string()),
                         &fresh,
@@ -1312,7 +1317,7 @@ async fn cancellation_during_shared_start_probes_refunds_budget_without_durabili
             "normal probe cancellation must not poison native admission: {probe:?}"
         );
         let next = AuxiliaryExecutor::scope(
-            CompactionBudget::new(
+            &CompactionBudget::new(
                 CompactionOperationId::new(uuid::Uuid::now_v7().to_string()),
                 fixture.clock.clone(),
             ),
@@ -1359,7 +1364,7 @@ fn historical_summary_input(
             observation: None,
             timestamp: chrono::Utc::now(),
             event: RuntimeEvent::CompactionStarted {
-                operation_id: fixture.scope.budget.operation_id().clone(),
+                operation_id: fixture.budget.operation_id().clone(),
             },
         })
         .unwrap();
@@ -1392,7 +1397,7 @@ async fn historical_summary_call_start_cancellation_preserves_native_health() {
                 fixture.frozen.invocation,
                 ModelTimeoutPolicy::default(),
                 7,
-                fixture.scope.budget.clone(),
+                fixture.budget.clone(),
                 signal.clone(),
             )
             .unwrap();
@@ -1450,7 +1455,7 @@ async fn historical_summary_call_start_cancellation_preserves_native_health() {
         assert!(fixture.executor.0.resources.durability.failure().is_none());
         let fresh = CancellationSignal::new();
         let next = AuxiliaryExecutor::scope(
-            CompactionBudget::new(
+            &CompactionBudget::new(
                 CompactionOperationId::new(uuid::Uuid::now_v7().to_string()),
                 fixture.clock.clone(),
             ),

@@ -192,6 +192,7 @@ impl SessionCatalog {
                 ordinal: 1,
                 id: session_id.clone(),
                 name: None,
+                generated_title: None,
                 display_preview: None,
                 created_at: now,
                 last_prompt_at: None,

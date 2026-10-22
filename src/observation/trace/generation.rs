@@ -16,7 +16,8 @@ pub(crate) fn generation_metrics(
         // Throughput needs both a measured decode span and reported output
         // tokens. Missing usage leaves it unavailable rather than zero.
         output_tokens_per_second: usage
-            .and_then(|usage| evidence.throughput_tokens_per_second(usage.output_tokens)),
+            .and_then(|usage| usage.output_tokens)
+            .and_then(|output_tokens| evidence.throughput_tokens_per_second(output_tokens)),
     }
 }
 /// Positions require the runtime's bridge; numeric TTFT alone is insufficient.

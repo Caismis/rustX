@@ -58,7 +58,7 @@ Primary occupancy, statistics, recovery answer obligations, request predecessors
 
 ## Lifetime, lineage and export
 
-Local Call/request facts and their confirmation basis live for the Conversation lifetime. Future Title consumption and submission correlation remain tied to those facts; output expiry will not erase them. Active-capacity limits and bounded pages do not bound lifetime disk growth.
+Local Call/request facts and their confirmation basis live for the Conversation lifetime. Title source consumption and submission correlation remain tied to those facts; output expiry will not erase them. Active-capacity limits and bounded pages do not bound lifetime disk growth.
 
 A completed one-request Call appends four Journal facts and four audit-offset rows,
 plus one row each in `auxiliary_calls`, `auxiliary_requests` and `request_owners`.
@@ -81,7 +81,7 @@ physical delta includes the existing Source and observation layouts, all indexes
 and page allocation; it is not solely auxiliary metadata overhead. This is a
 reproducible representative workload, not a maximum or a retention budget. Larger
 bounded metadata, different page packing and inherited dependencies change the
-cost. These measurements are not a schema-74 cost baseline. No history is pruned to meet them.
+cost. These measurements are not a schema-75 cost baseline. No history is pruned to meet them.
 
 Clone/Fork canonical overlap never creates target-local auxiliary execution or reserves a local correlation. Only an explicitly retained Summary-generation dependency may carry source audit, with original source identity and the exact eligible prerequisite closure. Source audit remains distinct from target-local request ownership, quota and admission. Independent retained dependencies must survive source deletion.
 
@@ -95,7 +95,7 @@ Real SQLite tests cover transaction atomicity, owner/index consistency, rollback
 
 ## Native execution
 
-Automatic and manual Summary use the Runtime-owned single-request executor.
+Automatic and manual Summary and independent automatic Title use the same Runtime-owned bounded-retry executor.
 Native preparation reserves process total/general, Conversation total/general
 and write responsibility without waiting. Limits are 32/24 and 4/3; only
 native Compaction authority may omit the general reservations. A purpose or
@@ -104,8 +104,8 @@ capacity and lifecycle-lock Busy refusals arbitrate under cancellation; an
 earlier cancellation remains cancellation, and active callers never wait for
 either resource.
 
-Each Call confirms CallStarted and RequestStarted before consuming its only
-dispatch grant. Unknown start never enters the adapter. The owner retains
+Each Call confirms CallStarted and RequestStarted before consuming a single-use
+dispatch grant for that physical request. Unknown start never enters the adapter. The owner retains
 execution state outside the polled future, so panic cannot discard trusted
 usage or cause reentry. Required terminal Request and Call facts settle
 atomically. Already-owned settlement and exact confirmation remain available
@@ -134,15 +134,101 @@ no Store allocation. Unresolved exact intent moves to the native failed-durabili
 owner only after physical exit; historical uncertainty does not pin global
 capacity indefinitely. Live/unproven cleanup retains its old allocation.
 
-One Compaction shares twelve confirmed/unresolved starts, three total input
-shrinks and a five-minute absolute deadline across carryover and input replans.
+Compaction shares twelve confirmed/unresolved starts, three total input
+shrinks and a five-minute absolute deadline across carryover, input replans and
+technical retries. Automatic Compactions in one logical Agent step share that
+allowance from the first Compaction admission, including later entries into
+`perform_compaction`; each checkpoint still has its own operation identity and
+exact receipt. An independent manual Compaction gets a new business allowance.
 The model and resources remain frozen. Manual compaction transfers its native
 business tail before the manager lease is released, and a lost observer or
 later checkpoint cannot replace the exact result of the original invocation.
 The transferred reply owns only its native completion handle and receipt
 conversion inputs, never the Runtime Client, Runtime or Store allocation.
 A completed reply awaiting delivery cannot prevent manager deletion.
-Technical retries, Title, Classification/BTW and result retention remain
-outside this executor's shipped consumer scope.
+Classification/BTW and result retention remain outside this executor's shipped
+consumer scope. Bounded synthetic repair and fan-out consumers exercise the
+same ordinary admission and shared parent capabilities without shipping a
+scheduler or another lifecycle owner.
 
 Changes to stored facts or read layouts advance the affected development-format gates. Unsupported or falsely current layouts are rejected without migrations, fallback readers, data deletion or database reconstruction.
+
+## Technical retries and observed usage
+
+A Call may start at most three physical requests, with fresh RequestId, timing,
+stream fold, usage accumulator and generation guard each time. A typed transient
+service/rate-limit/timeout/connection error may retry after local execution stops;
+remote inference or billing may remain unknown. Authentication, permanent quota,
+invalid parameters, stream-integrity failures and domain rejection do not retry.
+The provider adapters never retry or reconnect internally. Agent retry policy is
+unchanged.
+
+The local delays are two then four seconds. The absolute next eligibility time is
+`failure_observed_at + max(local_delay, valid_provider_retry_after)`. The maximum
+acceptable single wait is 60 seconds; a larger Retry-After is refused, never
+shortened. Settlement latency consumes this delay. A next start must precede the
+original five-minute Call/parent deadline. Cancellation during backoff settles
+only the Call; it neither repeats the failed request terminal nor creates a start.
+
+The failed request and AuxiliaryRetryScheduled commit in one Store transaction.
+Only exact confirmed settlement permits another RequestStarted. Every start
+reserves the original shared allowance first; confirmed noncommit refunds it,
+unknown retains it and exact replay cannot charge twice. The per-Call three-start
+bound is also enforced transactionally. Backoff retains ordinary/protected
+capacity already reserved at Call admission. All retries retain frozen selected
+input/media and invocation; changed semantic input requires a new Call.
+
+Observed usage aggregates once per RequestId across explicitly associated Calls.
+Unknown fields remain unknown, incomplete observations remain incomplete, and a
+final success cannot erase an earlier remote-execution uncertainty. This is an
+observed subtotal, never a complete Operation or Session bill.
+
+`ModelUsage` input/output/total token fields are independently optional. Adapters
+retain partial fields and distinguish a reported zero from absence; a derived
+total requires both input and output. A request retains the latest observed
+cumulative snapshot rather than summing snapshots or filling its missing fields
+from older reports. A successful
+terminal with incomplete core metrics still has Partial usage evidence.
+Cross-request aggregation deduplicates RequestId and marks mixed missing detail
+metrics or arithmetic overflow incomplete. Primary occupancy and throughput
+require observed input and output respectively; absent metrics cannot create a
+zero occupancy or throughput measurement.
+
+## Automatic Title ownership
+
+`local_runtime/session_title.rs` installs one root-local task before activation.
+It subscribes before reading the native finite first-Human/model metadata and
+process capacity release signals. No body queue, periodic polling or primary
+Agent permit is involved. `runtime/conversation_runtime/title.rs` freezes the
+current Title invocation and resource generation at the coordinator boundary;
+Title reserves ordinary capacity and cannot claim Compaction reserves. Native
+shutdown joins the owner through execution settlement and its Catalog tail.
+
+The indexed first ordinary Human selector includes absent timestamps, preserves
+exact Conversation/message identity, and records an unusable first-text outcome.
+Earlier Runtime messages do not qualify; pending input and inherited history do
+not grant local permission. Input is at most 4,096 UTF-8 bytes; larger or empty
+first text keeps the preview instead of selecting a later Human. The Title model
+output budget is capped at 128 tokens and generated bytes at 480. Acceptance
+requires one nonempty line, at most 120 characters and 480 UTF-8 bytes; rejected
+output does not trigger a corrective generation. Diagnostics do not retain input
+or generated output.
+
+Title source admission is a native typed Store operation, independent of purpose
+strings. It atomically associates one current Call with the exact local source.
+Zero-request terminal settlement releases only that association; first committed
+RequestStarted permanently consumes eligibility and only that live Call may use
+its remaining three-start allowance. Restart never replays a Call. With the old
+owner excluded, startup may settle and release a stranded zero-request association.
+Unknown writes cannot grant eligibility. No separate Title quota table/counter is
+needed in addition to these source facts and the Call start bound.
+
+After confirmed execution settlement, the native business owner validates the
+candidate and conditionally publishes separate generated-title metadata. Catalog
+publication verifies the root and absence of saved names; it never invokes manual
+rename. A manual rename before dispatch suppresses optional inference, and one
+after dispatch wins publication without erasing start cost. A visible Catalog
+commit followed by a durability error keeps the exact title and sends summary
+invalidation. Settings revision and latest-Human activity do not change. Clone
+and independent Fork copy saved labels with inherited provenance independently
+of the history cut, without copying execution facts or quota.

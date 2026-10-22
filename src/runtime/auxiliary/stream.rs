@@ -72,11 +72,13 @@ pub(super) async fn poll_stream_owned(
         let next = tokio::select! {
             biased;
             () = cancellation.cancelled() => {
+                fold.failure_observed_millis.get_or_insert(clock.now_millis());
                 return Err(local_error(ModelErrorKind::Cancelled, "auxiliary generation cancelled"));
             }
             () = clock.wait_until_millis(fold.deadline_millis()) => {
                 let now = clock.now_millis();
                 if let Some(error) = fold.expiration(now) {
+                    fold.failure_observed_millis.get_or_insert(now);
                     return Err(error);
                 }
                 continue;
@@ -87,7 +89,10 @@ pub(super) async fn poll_stream_owned(
             return Ok(());
         };
         let now = clock.now_millis();
-        fold.accept(&item, now)?;
+        if let Err(error) = fold.accept(&item, now) {
+            fold.failure_observed_millis.get_or_insert(now);
+            return Err(error);
+        }
     }
 }
 
@@ -101,12 +106,18 @@ pub struct AuxiliaryStreamFold {
     absolute_deadline_millis: u64,
     started: bool,
     failure: Option<ModelError>,
+    failure_observed_millis: Option<u64>,
     usage: Option<ModelUsage>,
     usage_completeness: AuxiliaryUsageCompleteness,
     provider_terminal: Option<AuxiliaryObservedProviderTerminal>,
 }
 
 impl AuxiliaryStreamFold {
+    /// First local failure observation, before dropping the owned stream.
+    pub(super) const fn failure_observed_millis(&self) -> Option<u64> {
+        self.failure_observed_millis
+    }
+
     /// Starts at the one consumed native dispatch grant, after confirmed start.
     #[must_use]
     pub fn new(
@@ -126,6 +137,7 @@ impl AuxiliaryStreamFold {
             absolute_deadline_millis,
             started: false,
             failure: None,
+            failure_observed_millis: None,
             usage: None,
             usage_completeness: AuxiliaryUsageCompleteness::Unreported,
             provider_terminal: None,
@@ -249,7 +261,11 @@ impl AuxiliaryStreamFold {
                 });
                 if let Some(usage) = usage {
                     self.usage = Some(usage.clone());
-                    self.usage_completeness = AuxiliaryUsageCompleteness::Complete;
+                    self.usage_completeness = if usage.is_complete() {
+                        AuxiliaryUsageCompleteness::Complete
+                    } else {
+                        AuxiliaryUsageCompleteness::Partial
+                    };
                 }
             }
             ModelEvent::Failed { error } => {

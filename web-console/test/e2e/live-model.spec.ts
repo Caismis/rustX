@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { AppServerHost } from '../../../tui/src/app-server/host';
-import type { SessionModelConfig } from '../../../protocol/app-server/v51';
+import type { SessionModelConfig } from '../../../protocol/app-server/v52';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openEmptySession } from './shell-actions';
@@ -48,6 +48,8 @@ for (const width of [1440, 390]) {
       requestParams: { temperature: 0.2, seed: 17 }, maxOutputTokens: 777,
       summaryModel: { mode: 'explicit', model: 'fixture/integration-model', profile: 'low',
         request_params: { temperature: 0.4, seed: 19 }, max_output_tokens: 333 },
+      titleModel: { mode: 'explicit', model: 'fixture/integration-model', profile: 'low',
+        request_params: { temperature: 0.5, seed: 23 }, max_output_tokens: 111 },
     };
     try {
       // Creation normally persists the default. Only the stopped native fixture
@@ -61,6 +63,12 @@ model = "fixture/integration-model"
 profile = "low"
 request_params = '{"temperature":0.4,"seed":19}'
 max_output_tokens = { mode = "limit", tokens = 333 }
+[agent.model.title_model]
+mode = "explicit"
+model = "fixture/integration-model"
+profile = "low"
+request_params = '{"temperature":0.5,"seed":23}'
+max_output_tokens = { mode = "limit", tokens = 111 }
 `);
       remote = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
       const before = await remote.readSettings(id);

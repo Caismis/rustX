@@ -86,6 +86,10 @@ impl SessionCatalog {
                         .as_ref()
                         .is_some_and(|name| name.to_lowercase().contains(query))
                     || summary
+                        .generated_title
+                        .as_ref()
+                        .is_some_and(|title| title.text.to_lowercase().contains(query))
+                    || summary
                         .preview
                         .as_ref()
                         .is_some_and(|preview| preview.to_lowercase().contains(query))
@@ -414,6 +418,7 @@ fn project_summary(session: &PersistedSession) -> SessionSummary {
         cwd: session.state.cwd.clone(),
         id: session.id.clone(),
         name: session.name.clone(),
+        generated_title: session.generated_title.clone(),
         // The persisted derived projection. A missing value is legitimate
         // (no ordinary user message yet, or none with renderable text) and
         // is projected as `None`; repair is explicit, never list-time.
@@ -435,6 +440,7 @@ fn snapshot_of(session: &PersistedSession) -> Result<SessionSnapshot, SessionErr
     Ok(SessionSnapshot {
         id: session.id.clone(),
         name: session.name.clone(),
+        generated_title: session.generated_title.clone(),
         created_at: session.created_at,
         updated_at: session.updated_at,
         active_node: session.active_node.clone(),

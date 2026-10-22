@@ -2,7 +2,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type KeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { autoUpdate, flip, offset, shift, size, useFloating } from '@floating-ui/react-dom';
-import type { RuntimeClientAgent } from '../../../../protocol/app-server/v51';
+import type { RuntimeClientAgent } from '../../../../protocol/app-server/v52';
 import { useTranslation } from '../../locale/react';
 import { StateDot } from '../../presentation/primitives/StateDot';
 import { Tooltip } from '../../presentation/primitives/Tooltip';
@@ -76,7 +76,7 @@ export function SubagentMenu({ agents, selected, label, openChild, openTitle }: 
         <div className={css.clickarea}>
           <span className={css.rowActivitySlot}><StateDot state={agentDot(agent)} size={7}/></span>
           <span className={css.content}><span className={`${css.label} ${current ? css.currentLabel : ''}`}>{agent.title}</span><span className={css.summary}>{agent.agent} · {agentStatus(agent, tx)}</span></span>
-          {metrics && <span className={css.metrics}>{usage && <span className={css.metricToken}>{tx('agent:usage.count', { count: formatTokens(usage.total_tokens, tx) })}</span>}<span className={css.metricDuration} title={duration}>{duration}</span></span>}
+          {metrics && <span className={css.metrics}>{usage?.total_tokens != null && <span className={css.metricToken}>{tx('agent:usage.count', { count: formatTokens(usage.total_tokens, tx) })}</span>}<span className={css.metricDuration} title={duration}>{duration}</span></span>}
           {!current && scope.openAside && <Tooltip label={tx('common:subagents.open-aside', { name: agent.title })} side="bottom" delayMs={500}><button type="button" className={css.sidebarButton} aria-label={tx('common:subagents.open-aside', { name: agent.title })} onKeyDown={event => event.stopPropagation()} onClick={event => { event.stopPropagation(); scope.openAside?.(agent.agent_id); close(); }}><span aria-hidden="true"><IconChevronRightOutline14/></span></button></Tooltip>}
         </div>
       </div>

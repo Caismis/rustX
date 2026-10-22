@@ -1,3 +1,4 @@
+import { AppServerHost } from '../../../tui/src/app-server/host';
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import { startDogfood } from './dogfood-server';
@@ -95,7 +96,15 @@ test('Harness New Conversation, permission, model, native process and Models con
     await page.getByRole('menuitemradio', { name: 'fixture/second-model', exact: true }).click();
     expect(wire.requests.filter(r => r.method === 'session/create')).toHaveLength(0);
     expect(wire.requests.filter(r => r.method === 'configuration/sourceWrite' && r.params.mutation?.unit === 'default_model')).toHaveLength(0);
+    // Hold the real creation acknowledgement until the fixture's native manual
+    // label commits. The browser still performs all creation/admission work.
+    wire.holdNext('session/create');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
+    await expect.poll(() => wire.held()).toBe(1);
+    const named = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
+    try { await named.renameSession(wire.responses.find(row => row.method === 'session/create')!.result.session.id, 'New session'); }
+    finally { await named.shutdown(); }
+    wire.releaseHeld();
     await expect(page.getByRole('heading', { name: 'Workspace ready' })).toBeVisible();
     expect(await residentInput!.evaluate(node => node === document.querySelector('textarea[aria-label="Message"]'))).toBe(true);
     expect(await residentSeat!.evaluate(node => node === document.querySelector('[data-resident-composer]'))).toBe(true);

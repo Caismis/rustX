@@ -354,11 +354,14 @@ impl AgentExecution<'_> {
     /// only while its structural anchor and request identity remain
     /// compatible; no estimate is promoted here.
     pub(super) fn record_provider_observation(&mut self, usage: &ModelUsage) {
+        let Some(input_tokens) = usage.input_tokens else {
+            return;
+        };
         let Some(anchor) = self.measurements.last_request_anchor.take() else {
             return;
         };
         self.measurements.observed = Some(ProviderObservedInput {
-            input_tokens: usage.input_tokens,
+            input_tokens,
             anchor,
         });
         // The measurement travels with the request identity it was taken

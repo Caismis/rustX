@@ -4,7 +4,7 @@ use crate::conversation::{SurfaceOp, SurfaceRevision};
 use crate::events::types::RuntimeEventEnvelope;
 use crate::message::types::{MessageBlock, UserMessageBlock};
 use crate::publication::PublicationAudit;
-use crate::runtime::identity::{EventId, MessageId, PublicationStreamId};
+use crate::runtime::identity::{ConversationId, EventId, MessageId, PublicationStreamId};
 use serde::{Deserialize, Serialize};
 
 use crate::durable::ConversationStoreError;
@@ -89,7 +89,20 @@ pub struct CanonicalObservationBatch {
     pub head: Vec<crate::durable::observation::MessageHeader>,
     pub human_activity_at: Option<chrono::DateTime<chrono::Utc>>,
     pub has_opening_user: bool,
+    pub first_human_position: Option<u64>,
     pub opening_preview: Option<String>,
+}
+
+/// The first committed ordinary Human occurrence, read from native canonical metadata.
+/// A missing text outcome is permanent for this occurrence; later messages never replace it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FirstHumanSource {
+    pub conversation_id: ConversationId,
+    pub message_id: MessageId,
+    pub position: u64,
+    pub text: Option<String>,
+    pub local: bool,
+    pub eligible: bool,
 }
 
 /// Finite display head of one canonical Todo publication; the original list
@@ -684,6 +697,10 @@ pub struct TranscriptSnapshotCut {
 /// transcript spine reference Ledger facts and never copy their bodies.
 #[allow(clippy::missing_errors_doc)]
 pub trait CanonicalStore: Send + Sync + 'static {
+    /// Reads one indexed native Human boundary including timestamp-less messages.
+    /// Text is bounded to 4096 bytes at canonical commit, independent of preview.
+    fn first_human_source(&self) -> Result<Option<FirstHumanSource>, ConversationStoreError>;
+
     /// Reads the native initialization marker paired with its immutable bootstrap identity.
     /// An initialized empty or inherited lineage is initialized; this never infers
     /// readiness from current Ledger/Surface emptiness or hydrates bootstrap payloads.

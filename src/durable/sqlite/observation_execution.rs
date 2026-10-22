@@ -344,11 +344,14 @@ fn request_settled(
                     .generation_ms
                     .checked_add(span)
                     .ok_or_else(|| storage("request timing exhausted"))?;
-                match usage.filter(|_| span > 0) {
-                    Some(usage) => {
+                match usage
+                    .and_then(|usage| usage.output_tokens)
+                    .filter(|_| span > 0)
+                {
+                    Some(output_tokens) => {
                         state.output_tokens = state
                             .output_tokens
-                            .checked_add(usage.output_tokens)
+                            .checked_add(output_tokens)
                             .ok_or_else(|| storage("output count exhausted"))?;
                     }
                     None => state.output_invalid = true,
@@ -360,7 +363,7 @@ fn request_settled(
         } else if generation.last_output_ms.is_some() {
             state.duration_invalid = true;
             state.output_invalid = true;
-        } else if usage.map(|usage| usage.output_tokens) != Some(0) {
+        } else if usage.and_then(|usage| usage.output_tokens) != Some(0) {
             state.output_invalid = true;
         }
     } else {

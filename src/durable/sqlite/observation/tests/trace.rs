@@ -595,9 +595,9 @@ pub(super) fn trace_large_request(store: &SqliteConversationStore) -> (RequestSn
             request_id: snapshot.request_id.clone(),
             finish_reason: ModelFinishReason::Stop,
             usage: Some(crate::model::types::ModelUsage {
-                input_tokens: 7,
-                output_tokens: 3,
-                total_tokens: 10,
+                input_tokens: Some(7),
+                output_tokens: Some(3),
+                total_tokens: Some(10),
                 details: None,
             }),
             generation: None,
@@ -643,7 +643,7 @@ fn t08_t14_t15_t19_trace_headers_and_scalar_ranges_never_read_growing_original_b
     let TraceFactData::Terminal(outcome) = &facts[0].fact else {
         panic!("original terminal header expected")
     };
-    assert_eq!(outcome.usage.as_ref().unwrap().total_tokens, 10);
+    assert_eq!(outcome.usage.as_ref().unwrap().total_tokens, Some(10));
     let summary = store
         .observation_request_summary_at(start, terminal)
         .unwrap()
@@ -735,7 +735,7 @@ fn t10_t14_t19_trace_optional_request_relationship_faults_preserve_original_star
         let TraceFactData::Terminal(outcome) = fact.fact else {
             panic!("original terminal expected")
         };
-        assert_eq!(outcome.usage.unwrap().total_tokens, 10);
+        assert_eq!(outcome.usage.unwrap().total_tokens, Some(10));
         let error = if column == "observation_summary" {
             store
                 .observation_request_summary_at(start, terminal)

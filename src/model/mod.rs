@@ -89,8 +89,8 @@ pub use invocation::{
     RequestParams, ResolvedModelInvocation, runtime_fallback_generation_safety_policy,
 };
 pub use session::{
-    AttemptModelSnapshot, AttemptModelView, AttemptSummaryModel, SessionModelConfig,
-    SessionModelState, SessionModelView, SummaryModelPolicy, SummaryModelView,
+    AttemptModelSnapshot, AttemptModelView, AttemptSummaryModel, AuxiliaryModelPolicy,
+    AuxiliaryModelView, SessionModelConfig, SessionModelState, SessionModelView,
 };
 pub use snapshot::{
     ContributionStart, ModelRequestOwner, RequestIdentity, RequestReconstructionError,

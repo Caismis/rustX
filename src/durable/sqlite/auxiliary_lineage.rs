@@ -573,6 +573,42 @@ fn local_snapshot(
                 }
             }
         }
+        let retry_sequence: Option<i64> = connection
+            .query_row(
+                "SELECT sequence FROM auxiliary_retries WHERE request_id=?1 AND sequence<=?2",
+                params![request_id.as_str(), seq_to_i64(cut.journal)?],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| storage(error.to_string()))?;
+        let retry_evidence = if let Some(sequence) = retry_sequence {
+            let retry = event_at(connection, sequence_from_i64(sequence)?)?;
+            let RuntimeEvent::AuxiliaryRetryScheduled {
+                call_id,
+                request_id: retry_request,
+                next_ordinal,
+                delay_ms,
+                request_evidence,
+            } = retry.event
+            else {
+                return Err(invalid("retry index names another event"));
+            };
+            if call_id != reference.call_id
+                || retry_request != request_id
+                || ordinal.checked_add(1) != Some(next_ordinal)
+                || next_ordinal >= 3
+                || delay_ms > 60_000
+                || request_evidence.request_id != request_id
+                || request_evidence.usage != usage
+                || local_terminal != Some(AuxiliaryRequestTerminal::Failed)
+                || terminal_sequence.is_none_or(|terminal| terminal >= retry.sequence)
+            {
+                return Err(invalid("retry evidence disagrees with physical request"));
+            }
+            Some(request_evidence)
+        } else {
+            None
+        };
         requests.insert(
             ordinal,
             AuxiliaryRequestAudit {
@@ -586,7 +622,8 @@ fn local_snapshot(
                 normalized_failure_kind,
                 generation,
                 usage,
-                request_evidence: complete_request_evidence(settlement.as_ref(), &request_id),
+                request_evidence: retry_evidence
+                    .or_else(|| complete_request_evidence(settlement.as_ref(), &request_id)),
             },
         );
     }
@@ -625,6 +662,13 @@ fn local_snapshot(
             "auxiliary Summary audit closure exceeds its item bound".into(),
         ));
     }
+    let retry_count: usize = connection
+        .query_row(
+            "SELECT count(*) FROM auxiliary_retries WHERE call_id=?1 AND sequence<=?2",
+            params![reference.call_id.as_str(), seq_to_i64(cut.journal)?],
+            |row| row.get(0),
+        )
+        .map_err(|error| storage(error.to_string()))?;
     let expected_records = 1_usize
         .checked_add(
             requests
@@ -633,6 +677,7 @@ fn local_snapshot(
                 .sum::<usize>(),
         )
         .and_then(|count| count.checked_add(usize::from(settlement.is_some())))
+        .and_then(|count| count.checked_add(retry_count))
         .ok_or_else(|| storage("auxiliary Summary record count overflow"))?;
     if audit_rows.len() != expected_records {
         return Err(invalid(
@@ -671,7 +716,7 @@ fn local_snapshot(
                 }
                 AuxiliaryAuditFact::CallSettled(call_audit.clone())
             }
-            "request_started" | "request_settled" => {
+            "request_started" | "request_settled" | "retry_scheduled" => {
                 let request_id =
                     request_id.ok_or_else(|| invalid("auxiliary request audit lacks RequestId"))?;
                 let ordinal =
@@ -685,6 +730,9 @@ fn local_snapshot(
                     || match kind.as_str() {
                         "request_started" => request.started_sequence != sequence,
                         "request_settled" => request.terminal_sequence != Some(sequence),
+                        "retry_scheduled" => {
+                            !matches!(&event.event,RuntimeEvent::AuxiliaryRetryScheduled {call_id,request_id:retry_id,next_ordinal,request_evidence,..} if call_id == &request.call_id && retry_id == &request.request_id && ordinal.checked_add(1)==Some(*next_ordinal) && request.request_evidence.as_ref()==Some(request_evidence))
+                        }
                         _ => unreachable!(),
                     }
                 {
@@ -694,6 +742,8 @@ fn local_snapshot(
                 }
                 if kind == "request_started" {
                     AuxiliaryAuditFact::RequestStarted(request.clone())
+                } else if kind == "retry_scheduled" {
+                    AuxiliaryAuditFact::RetryScheduled(request.clone())
                 } else {
                     AuxiliaryAuditFact::RequestSettled(request.clone())
                 }
@@ -1022,7 +1072,8 @@ pub(super) fn validate_snapshot_facts(
                 (&call.call_id, call.purpose.as_str())
             }
             AuxiliaryAuditFact::RequestStarted(request)
-            | AuxiliaryAuditFact::RequestSettled(request) => (&request.call_id, "summary"),
+            | AuxiliaryAuditFact::RequestSettled(request)
+            | AuxiliaryAuditFact::RetryScheduled(request) => (&request.call_id, "summary"),
         };
         if call_id != &snapshot.call_id || purpose != "summary" {
             return Err(invalid(
@@ -1048,7 +1099,9 @@ pub(super) fn validate_snapshot_facts(
                     return Err(invalid("inherited Summary settlement position changed"));
                 }
             }
-            AuxiliaryAuditFact::RequestStarted(_) | AuxiliaryAuditFact::RequestSettled(_) => {}
+            AuxiliaryAuditFact::RequestStarted(_)
+            | AuxiliaryAuditFact::RequestSettled(_)
+            | AuxiliaryAuditFact::RetryScheduled(_) => {}
         }
     }
     let first = snapshot
@@ -1077,7 +1130,9 @@ pub(super) fn validate_snapshot_facts(
         || !snapshot.records.iter().any(|record| {
             matches!(
                 &record.fact,
-                AuxiliaryAuditFact::RequestStarted(_) | AuxiliaryAuditFact::RequestSettled(_)
+                AuxiliaryAuditFact::RequestStarted(_)
+                    | AuxiliaryAuditFact::RequestSettled(_)
+                    | AuxiliaryAuditFact::RetryScheduled(_)
             )
         })
     {
@@ -1094,7 +1149,11 @@ pub(super) fn validate_snapshot_facts(
             ),
             (
                 false,
-                Some(AuxiliaryAuditFact::RequestStarted(_) | AuxiliaryAuditFact::RequestSettled(_))
+                Some(
+                    AuxiliaryAuditFact::RequestStarted(_)
+                        | AuxiliaryAuditFact::RequestSettled(_)
+                        | AuxiliaryAuditFact::RetryScheduled(_)
+                )
             ) | (true, Some(AuxiliaryAuditFact::CallSettled(_)))
         )
     {
@@ -1121,6 +1180,7 @@ pub(super) fn validate_snapshot_facts(
     let mut request_starts = BTreeMap::new();
     let mut request_terminals = BTreeMap::new();
     let mut request_ids = BTreeSet::new();
+    let mut request_retries = BTreeMap::new();
     for record in &snapshot.records {
         match &record.fact {
             AuxiliaryAuditFact::RequestStarted(request) => {
@@ -1138,6 +1198,23 @@ pub(super) fn validate_snapshot_facts(
                     || request.terminal_sequence != Some(record.journal_sequence)
                 {
                     return Err(invalid("inherited Summary repeats a request terminal"));
+                }
+            }
+            AuxiliaryAuditFact::RetryScheduled(request) => {
+                validate_request_audit(request)?;
+                if request_retries
+                    .insert(request.ordinal, (request, record.journal_sequence))
+                    .is_some()
+                    || request.ordinal >= 2
+                    || request.local_terminal != Some(AuxiliaryRequestTerminal::Failed)
+                    || request.request_evidence.is_none()
+                    || request
+                        .terminal_sequence
+                        .is_none_or(|sequence| sequence >= record.journal_sequence)
+                {
+                    return Err(invalid(
+                        "inherited retry lacks its preceding failed request",
+                    ));
                 }
             }
             AuxiliaryAuditFact::CallStarted(_) | AuxiliaryAuditFact::CallSettled(_) => {}
@@ -1188,22 +1265,35 @@ pub(super) fn validate_snapshot_facts(
         let final_request = request_terminals
             .get(&final_ordinal)
             .ok_or_else(|| invalid("final inherited Summary physical request has no terminal"))?;
-        if request_terminals.iter().any(|(ordinal, request)| {
-            *ordinal != final_ordinal && request.request_evidence.is_some()
-        }) || final_request.request_evidence.is_none()
-        {
-            return Err(invalid(
-                "inherited Summary request evidence must name the final physical request",
-            ));
+        if final_request.request_evidence.is_none() {
+            return Err(invalid("final settled request lacks request evidence"));
         }
         validate_final_request(outcome, final_request)?;
-    } else if request_starts
-        .values()
-        .any(|request| request.request_evidence.is_some())
-    {
-        return Err(invalid(
-            "open inherited Summary audit cannot contain settlement evidence",
-        ));
+    }
+    if request_starts.len() > 3 {
+        return Err(invalid("inherited Call exceeds three starts"));
+    }
+    for (ordinal, request) in &request_starts {
+        if let Some((retry, retry_sequence)) = request_retries.get(ordinal) {
+            if retry != request
+                || request
+                    .terminal_sequence
+                    .is_none_or(|terminal| terminal >= *retry_sequence)
+                || request_starts
+                    .get(&(ordinal + 1))
+                    .is_some_and(|next| next.started_sequence <= *retry_sequence)
+            {
+                return Err(invalid(
+                    "inherited retry ordering or request evidence conflicts",
+                ));
+            }
+        } else if *ordinal < final_ordinal
+            || (!settled_visible && request.request_evidence.is_some())
+        {
+            return Err(invalid(
+                "inherited next request lacks preceding retry evidence",
+            ));
+        }
     }
     Ok(())
 }

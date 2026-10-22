@@ -7,7 +7,7 @@ import { AgentPage } from '../src/app/settings/agent/AgentPage';
 import { ToolsPage } from '../src/app/settings/tools/ToolsPage';
 import { ExtensionDetail } from '../src/app/settings/extensions/ExtensionDetail';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
-import type { ModelLayer, RuntimeLayer, SourceScope, SourceSettings } from '../../protocol/app-server/v51';
+import type { ModelLayer, RuntimeLayer, SourceScope, SourceSettings } from '../../protocol/app-server/v52';
 import { chooseOption, confirmAction, renderEditor, sameRevision } from './settings-harness';
 import type { WriteOutcome } from '../src/app/settings/machines/port';
 import { act } from '@testing-library/react';
@@ -255,6 +255,52 @@ it.each(['default', 'named Agent'] as const)('%s preserves and edits the complet
   expect(screen.queryByRole('group', { name: 'Explicit Summary Model settings' })).toBeNull();
   await chooseOption('Summary model', 'summary-a');
   await commit({ ...model, summary_model: { mode: 'explicit', model: 'summary-a' } });
+});
+
+it.each(['default', 'named Agent'] as const)('%s preserves and edits the complete explicit Title Model independently', async owner => {
+  const title = { mode: 'explicit' as const, model: 'title-a', profile: 'deep', max_output_tokens: { mode: 'limit' as const, tokens: 2048 }, request_params: { temperature: .2 } };
+  const model = { model: 'main', profile: 'fast', request_params: { temperature: .7 }, title_model: title };
+  const models = ['main', 'title-a', 'title-b'];
+  const profiles = { main: ['fast'], 'title-a': ['deep'], 'title-b': ['deep', 'quick'] };
+  let write!: Awaited<ReturnType<typeof renderEditor>>['writes'];
+  if (owner === 'default') {
+    const source = catalogSource('workspace', { agent: { model } });
+    ({ writes: write } = await renderEditor(<ModelsPage source={source} scope="workspace" revision="r1" models={models} profiles={profiles} onFocus={noop} />, { source, context: source }));
+  } else {
+    const source = cfg3Source();
+    source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/agent.toml', revision: 'r1', authored: { model } } }];
+    ({ writes: write } = await renderEditor(<ExtensionDetail source={source} scope="workspace" revision="r1" models={models} profiles={profiles} family="agent" name="reviewer" onFocus={noop} />, { source, context: source }));
+  }
+  if (owner === 'default') fireEvent.click(screen.getByRole('button', { name: 'Default model for new Sessions' }));
+  const formName = owner === 'default' ? 'Default model' : 'Agent reviewer';
+  const saveName = owner === 'default' ? 'Save Default model' : 'Save Agent reviewer';
+  const commit = async (expected: ModelLayer) => {
+    const before = write.mock.calls.length;
+    const form = screen.getByRole('form', { name: formName }) as HTMLFormElement;
+    expect(form.checkValidity()).toBe(true);
+    fireEvent.click(within(form).getByRole('button', { name: saveName }));
+    await waitFor(() => expect(write).toHaveBeenCalledTimes(before + 1));
+    expect(write.mock.calls.at(-1)).toEqual([owner === 'default'
+      ? { kind: 'config', mutation: { unit: 'root_model', authored: expected } }
+      : { kind: 'agent', name: 'reviewer', authored: { model: expected } }, 'r1']);
+  };
+  // Changing identity must not discard any nested authored intent.
+  await chooseOption('Title model', 'title-b');
+  await commit({ ...model, title_model: { ...title, model: 'title-b' } });
+  const nested = within(screen.getByRole('group', { name: 'Explicit Title Model settings' }));
+  await chooseOption('Profile (Title)', 'quick', nested);
+  fireEvent.change(nested.getByLabelText('Output limit (Title)'), { target: { value: '1024' } });
+  fireEvent.change(nested.getByLabelText('Request parameter overrides (Title)'), { target: { value: '{"temperature": 0.4, "seed": null}' } });
+  await commit({ ...model, title_model: { ...title, model: 'title-b', profile: 'quick', max_output_tokens: { mode: 'limit', tokens: 1024 }, request_params: { temperature: .4, seed: null } } });
+  await chooseOption('Profile (Title)', 'Model default profile', nested);
+  fireEvent.change(nested.getByLabelText('Output limit (Title)'), { target: { value: '' } });
+  const { profile: _, ...withoutProfile } = title;
+  await commit({ ...model, title_model: { ...withoutProfile, model: 'title-b', max_output_tokens: { mode: 'catalog_default' }, request_params: { temperature: .4, seed: null } } });
+  await chooseOption('Title model', 'Follow selected model');
+  await commit({ ...model, title_model: { mode: 'session' } });
+  expect(screen.queryByRole('group', { name: 'Explicit Title Model settings' })).toBeNull();
+  await chooseOption('Title model', 'title-a');
+  await commit({ ...model, title_model: { mode: 'explicit', model: 'title-a' } });
 });
 
 it('the explicit Summary Model variant owns complete labels in each locale without changing native payloads', async () => {

@@ -551,6 +551,7 @@ mod tests {
                     cwd: PathBuf::from("/workspace"),
                     id: row.id.clone(),
                     name: row.name.clone(),
+                    generated_title: None,
                     preview: Some(row.preview.clone()),
                     updated_at: chrono::DateTime::UNIX_EPOCH,
                     active_node: SessionNodeId::new("node_00000000-0000-7000-8000-000000000000"),

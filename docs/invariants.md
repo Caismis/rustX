@@ -312,6 +312,17 @@ Every admitted Call also reserves its serialized required-write responsibility.
 Native owners retain these resources through physical work and confirmation;
 reply receivers and observers never own their release.
 
+Each Call has at most three physical request starts. Technical retries retain
+the same frozen semantic input, invocation, selected occurrences and captured
+media; they never renew the original five-minute authority. Retry-After is never
+shortened: a required delay over 60 seconds or beyond the original deadline
+declines retry. Failure observation precedes local stream teardown, and both
+teardown and confirmed settlement consume the same absolute backoff. A fresh
+RequestId, fold, guard, Timing and Usage accumulator belong to every request.
+Unresolved local persistence forbids another dispatch. Observed Usage aggregates
+once per RequestId while retaining missing metrics and remote uncertainty; a
+successful last request cannot turn that subtotal into a complete remote bill.
+
 An auxiliary required-write scope shares the existing ConnectionOwner and its
 native manifest/append-certificate ownership. Cancellation wakes its connection
 waiter and interrupts SQL only while that exact lease generation remains
@@ -320,7 +331,8 @@ settlement and confirmation use uncancelled Store authority. The Call's writer
 owner retains the exact submitted intent, completion evidence and real thread
 join; a lost reply cannot release its permits or establish noncommit.
 
-One Compaction budget spans all input shrink and carryover re-entry: twelve
+One Compaction budget spans all input shrink, technical retry and carryover
+re-entry, including repeated entry in one logical Agent step: twelve
 confirmed or unresolved starts, three shrinks and one five-minute monotonic
 deadline. Its learned Summary input limit is retained across re-entry and
 reduced atomically with its shrink count; carryover degradation cannot restore
@@ -336,6 +348,19 @@ Checkpoint authorization checks the parent cancellation/close fence and
 absolute deadline together, after native children have exited. A late
 cancellation cannot rewrite an already-sealed model outcome, but can still
 refuse the dependent checkpoint.
+
+Automatic Title uses the exact first local ordinary Human and its retained
+usable-text outcome; a preview, maximum timestamp, inherited message or later
+Human cannot substitute for that identity. Source/capacity watches precede
+authoritative reads. Only one current Call can bind a source. A confirmed
+zero-request terminal releases only its own association; the first confirmed
+request permanently consumes automatic eligibility and only that live Call may
+use its remaining technical attempts. Restart never replays inference or output.
+Title retains native business ownership through the separate Catalog commit.
+Manual names and deletion win; an already-visible generated title survives a
+committed-error response and publishes summary invalidation. Catalog publication
+changes neither model revision nor latest-Human activity. Clone/Fork copy saved
+labels independently of the historical cut and never copy execution or quota.
 
 Native auxiliary acquisition and waits follow this graph:
 
@@ -6914,10 +6939,10 @@ contracts and provider protocols. These invariants are frozen by M2:
   binding revision and never bypasses runtime retirement.
 
 - **Profile choices preserve whole-state intent.** A same-Model Profile change
-  preserves explicit request/output overrides and the Summary Model policy;
+  preserves explicit request/output overrides and the Summary and Title policies;
   invalid combinations fail without fallback. A different-Model choice resets
   primary request/output overrides, uses its default Profile unless explicitly
-  chosen, and retains the independent Summary Model policy. Every accepted
+  chosen, and retains the independent Summary and Title policies. Every accepted
   mutation remains one complete `SessionModelConfig`.
 
 - **Derived work keeps its parent's authority.** Child execution created after a

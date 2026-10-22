@@ -34,7 +34,7 @@ use crate::model::finish::ModelFinishReason;
 use crate::model::input::RequestOnlyModelContext;
 use crate::model::invocation::finalize_provider_request;
 use crate::model::projected::ModelMessageView;
-use crate::model::types::{ModelProtocol, ModelRequest, ModelUsage, UsageDetails};
+use crate::model::types::{ModelProtocol, ModelRequest, ModelUsage};
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::continuation::{OpenAiResponsesContinuation, ProviderContinuationState};
 use crate::runtime::identity::ToolCallId;
@@ -1245,25 +1245,13 @@ fn unsupported_response_event(event_type: &str) -> bool {
 }
 
 fn parse_usage(usage: &serde_json::Value) -> Option<ModelUsage> {
-    let input_tokens = u64_field(usage, "input_tokens")?;
-    let output_tokens = u64_field(usage, "output_tokens")?;
-    let reasoning_tokens = usage
-        .get("output_tokens_details")
-        .and_then(|d| u64_field(d, "reasoning_tokens"));
-    let cached_input_tokens = usage
-        .get("input_tokens_details")
-        .and_then(|d| u64_field(d, "cached_tokens"));
-    let details =
-        (reasoning_tokens.is_some() || cached_input_tokens.is_some()).then_some(UsageDetails {
-            reasoning_tokens,
-            cached_input_tokens,
-        });
-    Some(ModelUsage {
-        input_tokens,
-        output_tokens,
-        total_tokens: u64_field(usage, "total_tokens").unwrap_or(input_tokens + output_tokens),
-        details,
-    })
+    super::mapping::normalize_usage(
+        usage,
+        "input_tokens",
+        "output_tokens",
+        "input_tokens_details",
+        "output_tokens_details",
+    )
 }
 
 /// Translates a provider-neutral request into a raw Responses request JSON value.
@@ -1790,10 +1778,6 @@ fn optional_u32_field(value: &serde_json::Value, field: &str) -> Result<Option<u
                 "provider stream event has a non-integer {field:?} field"
             ))
         })
-}
-
-fn u64_field(value: &serde_json::Value, field: &str) -> Option<u64> {
-    value.get(field).and_then(serde_json::Value::as_u64)
 }
 
 fn provider_error(message: String) -> ModelError {

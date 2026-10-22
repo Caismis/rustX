@@ -363,7 +363,7 @@ async fn cancellation_in_flight_openai_chat() {
         .expect("terminal within timeout");
     let terminal = match usage_or_terminal {
         Some(ModelStreamItem::Event(ModelEvent::UsageUpdate { usage })) => {
-            assert_eq!(usage.input_tokens, 5);
+            assert_eq!(usage.input_tokens, Some(5));
             tokio::time::timeout(Duration::from_secs(5), stream.next())
                 .await
                 .expect("terminal after usage update")
@@ -421,7 +421,7 @@ async fn cancellation_in_flight_anthropic() {
         .expect("terminal within timeout");
     let terminal = match usage_or_terminal {
         Some(ModelStreamItem::Event(ModelEvent::UsageUpdate { usage })) => {
-            assert_eq!(usage.input_tokens, 5);
+            assert_eq!(usage.input_tokens, Some(5));
             tokio::time::timeout(Duration::from_secs(5), stream.next())
                 .await
                 .expect("terminal after usage update")

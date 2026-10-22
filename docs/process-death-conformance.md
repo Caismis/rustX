@@ -607,3 +607,25 @@ again on the same durable conversation: repeated actual idle admission produces
 no request or new round, and the Paused snapshot remains exactly unchanged.
 Current composition gates future automation, not interrupt authority over
 already-admitted work. No sleep establishes any of these orderings.
+
+### Automatic Title ownership (Issue #475)
+
+The Title rows use the same real child process and native Session owner. A
+canonical Human boundary is committed before activation without creating a
+primary answer obligation. The production Title owner then crosses its own
+Call, Request and Catalog boundaries. Reopen uses native composition and no
+scripted provider work; the process proves that consumption cannot dispatch
+again.
+
+| Kill boundary | Durable after reopen | Forbidden | Test |
+| --- | --- | --- | --- |
+| `after:auxiliary_call_start_confirmed` | the exact stranded zero-request Call settles once during inert startup recovery; its source becomes eligible | replaying the old Call or releasing a different association | `title_call_death_recovery_releases_only_a_confirmed_zero_request_association` |
+| `after:auxiliary_request_start_confirmed` | the Request remains unfinished and source consumption remains permanent | provider replay or an invented terminal | `title_confirmed_request_death_preserves_consumption_without_cold_dispatch` |
+| `before:publish_generated_title` | model settlement and consumption exist; the title remains absent | reconstructing lost model output or admitting another Title Call | `title_catalog_visibility_is_atomic_after_model_settlement_and_never_replayed` |
+| `after:publish_generated_title` | the exact generated text and local source provenance remain visible | another Call or duplicate Catalog publication | `title_catalog_visibility_is_atomic_after_model_settlement_and_never_replayed` |
+
+`title_timestamp_less_human_after_runtime_preview_wakes_the_native_owner`
+additionally composes the same native owner with an already-settled Runtime
+opening preview, commits a Human without a timestamp after the watch is armed,
+and proves one Title request and publication despite unchanged preview and
+activity scalars.

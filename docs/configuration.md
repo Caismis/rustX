@@ -256,14 +256,27 @@ applies independently. An omitted `profile` selects `default_profile`; an
 unknown or inapplicable explicit profile fails without fallback.
 
 The Root `agent.model` object contains `model` and optional `profile`,
-`request_params`, `max_output_tokens`, and `summary_model`. An output limit is
-`{ mode = "catalog_default" }` or `{ mode = "limit", tokens = 2048 }`. Summary
-selection is `{ mode = "session" }` or `{ mode = "explicit", model = "...", ... }`
-with its own `profile`, output and request settings. The whole selection is
+`request_params`, `max_output_tokens`, `summary_model`, and `title_model`. An output limit is
+`{ mode = "catalog_default" }` or `{ mode = "limit", tokens = 2048 }`. Summary and Title
+selection use the same native policy: `{ mode = "session" }` or `{ mode = "explicit", model = "...", ... }`
+with independent `profile`, output and request settings. An absent policy follows the
+Session primary. TOML auxiliary `request_params` is a JSON object string, while
+native/client protocol values are structured objects. Both apply the same shallow
+overlay, Profile key ownership, protected fields and Model hard output limit. The whole selection is
 replaced together. Domain defaults are evaluated inside that winning object.
 An admitted Attempt freezes the complete resolved invocation — Model, Profile,
 reasoning state, output budget and parameters — so later configuration changes
 affect only later admissions.
+
+Automatic Title captures its independent invocation at admission using the current
+Session model and resource revision fences. A later settings change cannot restart
+that operation or reset its source eligibility. Technical retries reuse that captured
+invocation. Summary keeps the parent Attempt snapshot, or the independent manual
+Compaction admission snapshot. Bounded source/effective/model views retain both
+auxiliary policies in inline values, deferred reads and current-revision collection
+pages. These observations grant no execution authority. Web Settings exposes Title
+selection alongside Summary; native, Web and TUI primary-model changes preserve
+explicit auxiliary choices.
 
 ### Root Agent
 
@@ -568,7 +581,7 @@ it does not promise a provider cache hit. Unproven changes require adoption.
 
 Whether a model or catalog edit reaches an existing Session at all is decided by
 the effective invocations an Attempt of that Session would freeze — its primary
-and explicit Summary selection and those of its admitted named Agents — resolved
+and explicit auxiliary selections and those of its admitted named Agents — resolved
 exactly as admission resolves them: provider endpoint and credential source,
 wire model, protocol, limits, compat, effective capabilities, the resolved
 Profile, reasoning state, output budget and request parameters. An omitted
@@ -616,16 +629,16 @@ from the Workspace's published creation catalog.
 
 A configured selection the published catalog does not admit is **unavailable**.
 The Session keeps it configured — nothing switches it to the catalog default or
-drops an explicit Summary policy — and `session/model` reports it in
+drops an explicit Summary or Title policy — and `session/model` reports it in
 `unavailable` with the native diagnostic. Its last resolved `effective` and
-`summary` remain display facts only; a Session loaded with an already unavailable
+`summary` and `title` remain display facts only; a Session loaded with an already unavailable
 selection, after residency loss or a restart, has none. While unavailable, the
 Session admits no model work: `turn/start`, `turn/steer` and `context/compact`
 are refused with `model_unavailable`, and inbound accepted before the publication
 is held, never run on the removed selection and never dropped. Held work does not
 make the Session busy for the correction. The correction is an ordinary
 `session/setModel` with a complete selection the
-catalog admits, primary and explicit Summary alike; it commits through the usual
+catalog admits, primary and explicit auxiliary selections alike; it commits through the usual
 fence and admits held work with exactly the new selection.
 
 The adopted generation's `source_revisions` stay the source manifest its context
@@ -660,11 +673,11 @@ instructions, capabilities or other source changes. Explicit context adoption
 retains its separate readiness, cache-impact and idle-safety rules.
 
 The whole `SessionModelConfig` is replaced together. A same-Model Profile choice
-preserves request overrides, output override and Summary Model policy; native
+preserves request overrides, output override and Summary and Title policies; native
 validation rejects any newly incompatible combination. Choosing a different Model
 resets primary request/output overrides and uses that Model's default Profile
 unless a Profile is explicitly chosen, while retaining the independently selected
-Summary Model policy. There
+Summary and Title policies. There
 is no fallback to another Model or Profile after validation failure.
 
 The selected Session Model/Profile and an active Attempt's Model/Profile are
