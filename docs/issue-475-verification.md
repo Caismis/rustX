@@ -171,3 +171,25 @@ liveness limits are unchanged. A complete final-head FULL run remains required.
 
 The existing workflow checker passed all 24 tests, and native Linux discovery
 for `rust-boundaries` passed with all selected targets covered.
+
+## Late cold-history browser acceptance
+
+The commands case in FULL #1475 assumed that a cold history preview always
+renders while the new live attachment acknowledgement is withheld. Its real
+transport trace instead contains a valid `stale_runtime` history error after
+attach wins; cold history is intentionally best-effort. The provider fixture
+completed all three expected requests without failures.
+
+The test now holds both genuine `session/history` and `session/attach` replies,
+releases attach first, and waits for the live controls and exact Fork checkpoint.
+It then delivers the actual late history reply, including errors, and verifies
+that mobile Usage still equals the original saved turn's measurements. The
+shared probe selects held replies by method while preserving FIFO release for
+existing callers; it never manufactures semantic results.
+
+The repository's pinned Playwright container passed the complete commands case
+and all four convergence/startup cases that share this probe. Web typecheck and
+whitespace checks passed. Desktop (1440×1000) and mobile (390×844) screenshots
+were inspected for the transcript, Usage and model selector; existing console
+and overflow assertions passed. The Browser plugin was unavailable. A fresh
+independent subagent reviewed this test-only change with no actionable findings.

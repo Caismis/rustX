@@ -5,7 +5,7 @@ import { domainOriginalValue } from '../../../protocol/app-server/domain-observa
 type NativeRead = 'session/checkpoint' | 'session/effectiveConfiguration';
 type NativeReadResult<M extends NativeRead> = Extract<MethodResult, { type: M extends 'session/checkpoint' ? 'checkpoint' : 'effective_configuration' }>;
 
-/** Observe the real socket; fault only a selected acknowledgement after commit.
+/** Observe the real socket; hold replies or lose a committed acknowledgement.
  * No snapshots, notifications, or semantic results are manufactured here. */
 export async function wireProbe(page: Page) {
   const requests: { id: string | number; method: string; params: any }[] = [];
@@ -14,8 +14,8 @@ export async function wireProbe(page: Page) {
   let lose: string | undefined;
   let lost = 0;
   let nextRead = 0;
-  let hold: string | undefined;
-  const held: (() => void)[] = [];
+  let hold = new Set<string>();
+  const held: { method: string; send: () => void }[] = [];
   let nativeRead: ((method: NativeRead | 'session/effectiveConfigurationValueRead' | 'conversation/checkpointValueRead', params: object) => Promise<MethodResult>) | undefined;
   await page.routeWebSocket(/^wss?:\/\/[^/]+\/?$/, socket => {
     const server = socket.connectToServer();
@@ -60,9 +60,8 @@ export async function wireProbe(page: Page) {
       if (method) {
         methods.delete(response.id);
         responses.push({ method, result: response.result });
-        if (method === hold && response.result) {
-          hold = undefined;
-          held.push(() => { if (!retired) socket.send(message); });
+        if (hold.delete(method)) {
+          held.push({ method, send: () => { if (!retired) socket.send(message); } });
           return;
         }
         if (method === lose && response.result) {
@@ -78,8 +77,11 @@ export async function wireProbe(page: Page) {
     });
   });
   return { requests, responses, notifications, loseNext: (method: string) => { lose = method; }, lost: () => lost,
-    holdNext: (method: string) => { hold = method; }, held: () => held.length,
-    releaseHeld: () => { held.shift()?.(); },
+    holdNext: (...methods: string[]) => { hold = new Set(methods); }, held: () => held.length,
+    releaseHeld: (method?: string) => {
+      const index = method === undefined ? 0 : held.findIndex(reply => reply.method === method);
+      if (index >= 0) held.splice(index, 1)[0]?.send();
+    },
     /** Existing native read RPCs use the browser's one controller connection.
      * Probe IDs never enter its client; no authority or result is manufactured. */
     async read<M extends NativeRead>(method: M, target: AttachmentTarget): Promise<NativeReadResult<M>> {
