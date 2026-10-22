@@ -2406,7 +2406,7 @@ node, connect to no provider or MCP endpoint and read no credential. Diagnostic
 paths are bounded to 512 bytes and details to 1 KiB, and each listing entry to a
 7 KiB serialized share, so a scope's at most 128 files always list within the
 message bound. Document numbers follow the Workflow number contract: a file or
-candidate holding a number a browser would round or retype is `unsupported_number`. Numbers
+candidate holding a number a browser would round, retype or re-sign (an integer beyond ±(2^53 − 1), an integral float such as `1.0` below 1e21, or negative zero) is `unsupported_number`; see [the number contract](workflow-authoring.md#number-contract). Numbers
 travel in the existing exact wire domains, so `u64` fields such as `timeout_ms`
 are decimal strings in TypeScript. Documents are bounded by the native 512 KiB
 Workflow limit and the 1 MiB message limit.

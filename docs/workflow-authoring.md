@@ -97,6 +97,29 @@ identity. An open editor, a pending library operation and an open confirmation
 dialog each keep the port they started with; refreshing the library creates a
 new read port for the listing only, and is never applied to them.
 
+### Library observations and confirmations
+
+The library machine accepts each listing together with the exact port that read
+it, as one immutable observation (`LibraryObservation`). A refresh reads on a
+new port while the previous observation stays visible, and a read superseded by
+a newer one has no completion path. While a replacement read is pending, no new
+Open, New, Copy or Delete starts: the buttons are disabled and the machine
+ignores such requests, so a listing of one read is never combined with the port
+of another.
+
+A confirmation is machine state. It captures its observation when it opens: the
+scope, directory and listing it shows, and for Copy and Delete the exact source
+file and revision. The dialog submits only the author's values; the machine
+builds the operation from that observation, so what a confirmation shows is
+exactly what it changes. A confirmation opened before a refresh stays bound to
+its observation; submitted during the refresh it is accepted and runs on its
+own port, which refuses (`product_host_replaced`) if its authority was replaced
+meanwhile, never redirecting to the replacement. A dispatched operation keeps
+its port, expected revision and result path: a refresh waits for its outcome,
+and a scope chosen meanwhile is selected after it. The confirmation closes only
+when that operation succeeded; a failure, including an uncertain outcome, stays
+in it. An uncertain write is observed by the next listing, never replayed.
+
 IDs follow the native `WorkflowId` rule. Paths are resolved by native code
 relative to the scope's admitted directory handle: traversal, absolute paths,
 symlinked directories or files and a scope redirected after admission are
@@ -128,14 +151,17 @@ as one binary64 and writes it back as the shortest decimal of that binary64, so
 the editable domain is exactly the numbers whose browser round trip returns the
 same native number:
 
-- integers within ±(2^53 − 1);
+- integers written without a fraction or exponent, within ±(2^53 − 1);
 - non-integral finite floats, and integral floats from 1e21 (which a browser
   prints in exponent form, so they stay floats).
 
-An integer beyond that range would be rounded, and an integral float below 1e21
-(`1.0`, `-0.0`) would come back as an integer, which native types differently: a
-constructed array of `1.0` and `1.5` would then no longer compile. Native applies
-this one rule (`unrepresentable_number`) on read and to every candidate:
+Everything else is outside the editable domain, so numeric editing is not
+lossless in general. An integer beyond that range would be rounded. An integral
+float below 1e21 (`1.0`, `1e3`, `2.50e1`) would come back as an integer, which
+native types differently: a constructed array of `1.0` and `1.5` would then no
+longer compile. Negative zero in any spelling (`-0`, `-0.0`, `-0e0`) would be
+written as `0`. Native applies this one rule (`unrepresentable_number`) on read
+and to every candidate:
 
 - a file holding such a number is listed and opened read-only with category
   `unsupported_number`, located at the number's authored path, and its bytes are
@@ -143,8 +169,10 @@ this one rule (`unrepresentable_number`) on read and to every candidate:
 - `workflow/check` and a `replace` write refuse a candidate holding one.
 
 The browser judges authored text before conversion, from each number's source
-token (`JSON.parse` source text access): a field holding such a number is not
-applied and says why, so no rounded value is ever sent.
+token (`JSON.parse` source text access), at any depth of the typed value.
+Negative zero is refused before the integer rule, since `-0` is spelled like an
+integer. A field holding such a number keeps its text with the error and is not
+applied, so no rounded, retyped or re-signed value is ever sent.
 
 ### Checking
 
@@ -229,15 +257,48 @@ Node positions and the viewport are presentation only. They are kept in browser
 written to the file; clearing them only resets the layout.
 
 Unsaved edits live in memory: leaving a dirty editor asks for confirmation, and
-there are no persisted drafts. The editor machine owns every piece of unapplied
-field text (a JSON schema or literal being typed, a node or branch rename, a path
-component being added) under the field's stable identity. Such text counts as
-unsaved for leaving and unloading, survives the field being hidden and shown
-again, and never enters the document until its field applies it (on blur, Enter,
-Save or Check). Save and Check, including Ctrl/Cmd+S from a focused field, first
-apply every shown field's valid text; text that cannot be applied (invalid JSON,
-a number outside the number contract) stays visible, refuses the Save or Check
-with nothing sent, and can be discarded explicitly.
+there are no persisted drafts.
+
+Every editable field has an editor-internal address (`FieldAddress`): its lexical
+block path, its owning node (none for a block's own contract), and its path as
+separate components, with authored object keys (`{ key }`) kept distinct from
+structural properties and array indices. Its canonical key is the JSON encoding
+of that tuple, so a direct field `a.fields.b` and the nested field `a → b` are
+two fields, and every key the native format allows stays editable. One address
+owns a field's unapplied text, its error, its commit registration and its edit
+session. Human-readable labels and native diagnostic paths are separate from it.
+
+The editor machine owns every piece of unapplied field text (a JSON schema or
+literal being typed, a node or branch rename, a path component being added) as a
+versioned draft under its address. A draft is dirty for leaving and unloading
+and survives selection, block navigation, tab changes and component remounts or
+reuse; only a successful application, an explicit discard, or a confirmed reload
+clears it. Blur, Enter, Save and Check request an application (`APPLY_DRAFT`)
+of one exact draft version. In one context update the editor runs the field's
+command against the current document and decides the outcome:
+
+- `applied`: the document and history change and exactly that version is
+  cleared; newer text of the same field is never cleared;
+- `unchanged`: the field already holds that value, and the draft is cleared;
+- `rejected`: invalid JSON, a number outside the contract, an empty key, or a
+  refused structured command (for example `duplicate_identifier`) keeps the text
+  with its error and changes nothing.
+
+A renamed node or branch takes the drafts of its other fields along to their new
+addresses. When another change (undo or redo, for instance) changes a field that
+holds a draft, the text is kept and marked as changed: it is neither dropped nor
+reapplied, until the author keeps it over the current value or uses the current
+value. When the field is gone (its node or branch deleted, its value kind
+changed, or an earlier array item removed so indices shifted), the draft is
+marked as belonging to a field that no longer exists; that mark is permanent, so
+an old address never takes on the meaning of a field created later. Changes to
+other fields do not affect a draft.
+
+Save and Check, by button or by Ctrl/Cmd+S from a focused field, first request the
+application of every shown field, renames last, and then pass the editor's
+pending-field gate. While any draft remains (invalid, rejected, conflicting, or in
+a field not shown), nothing is sent, and the notice lists each such field with
+Show (it opens the node and tab that hold it) and Discard.
 
 Undo and redo share one bounded timeline of semantic edits and view steps. One
 completed node drag is one view step: undo restores the dragged nodes' previous
