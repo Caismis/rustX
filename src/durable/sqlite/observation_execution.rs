@@ -194,7 +194,7 @@ pub(super) fn event(
                     0,
                     message_id.as_str(),
                 )
-            });
+            })?;
         }
         RuntimeEvent::AttemptCompleted { finish_reason, .. } => {
             let (reason, deferred) = finite_finish_reason(finish_reason);
@@ -207,7 +207,7 @@ pub(super) fn event(
             close(&mut state.summary, event, "attempt_cancelled");
         }
         RuntimeEvent::AttemptFailed { error, .. } => {
-            attempt_failed(connection, event, error, &mut state.summary);
+            attempt_failed(connection, event, error, &mut state.summary)?;
         }
         RuntimeEvent::AttemptTimedOut { .. } => {
             close(&mut state.summary, event, "attempt_timed_out");
@@ -252,16 +252,17 @@ fn attempt_failed(
     event: &RuntimeEventEnvelope,
     error: &crate::events::types::AttemptFailure,
     summary: &mut AttemptExecutionSummary,
-) {
+) -> Result<(), ConversationStoreError> {
     let normalized = BorrowedFailure(error);
     summary.failure_readable_end = super::optional_display_layout(connection, || {
         super::content::index_attempt_failure(connection, event.sequence, &normalized)
-    })
+    })?
     .unwrap_or(0);
     let (failure, deferred) = crate::observation::failure::finite_attempt_failure(error);
     summary.failure = Some(failure);
     summary.failure_deferred = deferred;
     close(summary, event, "attempt_failed");
+    Ok(())
 }
 fn request_started(
     connection: &Connection,
@@ -298,7 +299,7 @@ fn request_started(
         let ordinal = state.summary.models_total;
         let end = super::optional_display_layout(connection, || {
             super::content::index_model_name(connection, event.sequence, model)
-        })
+        })?
         .unwrap_or(0);
         connection.execute("INSERT INTO observation_models(attempt_id,ordinal,first_sequence,request_alias,request_encoded_bytes,model_hash,encoded_bytes,owner_anchor) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",params![attempt.as_str(),ordinal,event.sequence,state.summary.last_request_id.as_ref().map(RequestId::as_str),super::observation_request_summary::serialized_bytes(&request_id.as_str())?,model_hash,end,state.owner_anchor]).map_err(|error|storage(error.to_string()))?;
         state.summary.models_total += 1;

@@ -1,6 +1,6 @@
 //! Process-local owner publication evidence attached to existing native J rows.
 //! This index is neither client acknowledgement nor model-byte authorization.
-use super::{Connection, ConversationStoreError, params, storage};
+use super::{Connection, ConversationStoreError, params, sqlite_error, storage};
 use crate::events::types::RuntimeEventEnvelope;
 
 pub(super) fn insert(
@@ -8,26 +8,28 @@ pub(super) fn insert(
     event: &RuntimeEventEnvelope,
 ) -> Result<(), ConversationStoreError> {
     let ready = !crate::runtime::observation::trace_fact_requires_publication(&event.event);
+    #[cfg(test)]
+    let _probe = super::start_probe::for_event(event, super::AuxiliaryStartProbe::ReadinessInsert);
     connection
         .execute(
             "INSERT INTO event_observation_readiness(sequence,ready) VALUES(?1,?2)",
             params![event.sequence, ready],
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| sqlite_error(&error, error.to_string()))?;
     connection
         .execute(
             "UPDATE events SET observation_readiness_missing=0 WHERE sequence=?1",
             [event.sequence],
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| sqlite_error(&error, error.to_string()))?;
     Ok(())
 }
 
 pub(super) fn recover_journal(connection: &Connection) -> Result<(), ConversationStoreError> {
     // Only a newly installed native Runtime may recover previously committed
     // durable history. Read-only inspection and unrelated live owners cannot.
-    connection.execute("INSERT OR IGNORE INTO event_observation_readiness(sequence,ready,direct) SELECT sequence,1,0 FROM events INDEXED BY events_observation_readiness_missing_idx WHERE observation_readiness_missing=1",[]).map_err(|error|storage(error.to_string()))?;
-    connection.execute("UPDATE events SET observation_readiness_missing=0 WHERE observation_readiness_missing=1",[]).map_err(|error|storage(error.to_string()))?;
+    connection.execute("INSERT OR IGNORE INTO event_observation_readiness(sequence,ready,direct) SELECT sequence,1,0 FROM events INDEXED BY events_observation_readiness_missing_idx WHERE observation_readiness_missing=1",[]).map_err(|error|sqlite_error(&error, error.to_string()))?;
+    connection.execute("UPDATE events SET observation_readiness_missing=0 WHERE observation_readiness_missing=1",[]).map_err(|error|sqlite_error(&error, error.to_string()))?;
     Ok(())
 }
 
@@ -44,12 +46,12 @@ pub(super) fn mark(
             "observation readiness range exceeds native Journal".into(),
         ));
     }
-    let missing:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_readiness_missing_idx WHERE observation_readiness_missing=1 AND sequence>=?1 AND sequence<=?2)",params![first,last],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let missing:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_readiness_missing_idx WHERE observation_readiness_missing=1 AND sequence>=?1 AND sequence<=?2)",params![first,last],|row|row.get(0)).map_err(|error|sqlite_error(&error, error.to_string()))?;
     if missing {
         return Err(storage("native observation readiness evidence unavailable"));
     }
     // The partial index visits only unpublished owner holes, never full events.
-    connection.execute("UPDATE event_observation_readiness SET ready=1 WHERE ready=0 AND sequence>=?1 AND sequence<=?2",params![first,last]).map_err(|error|storage(error.to_string()))?;
+    connection.execute("UPDATE event_observation_readiness SET ready=1 WHERE ready=0 AND sequence>=?1 AND sequence<=?2",params![first,last]).map_err(|error|sqlite_error(&error, error.to_string()))?;
     Ok(())
 }
 
@@ -64,7 +66,7 @@ pub(super) fn mark_direct(
             "UPDATE event_observation_readiness SET direct=1 WHERE sequence>=?1 AND sequence<=?2",
             params![first, last],
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| sqlite_error(&error, error.to_string()))?;
     Ok(())
 }
 
@@ -78,8 +80,8 @@ pub(super) fn frontier(
             "invalid observation readiness cut".into(),
         ));
     }
-    let hole: Option<u64> = connection.query_row("SELECT MIN(sequence) FROM event_observation_readiness WHERE ready=0 AND sequence>?1 AND sequence<=?2",params![after,through],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
-    let missing:Option<u64>=connection.query_row("SELECT MIN(sequence) FROM events INDEXED BY events_observation_readiness_missing_idx WHERE observation_readiness_missing=1 AND sequence>?1 AND sequence<=?2",params![after,through],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let hole: Option<u64> = connection.query_row("SELECT MIN(sequence) FROM event_observation_readiness WHERE ready=0 AND sequence>?1 AND sequence<=?2",params![after,through],|row|row.get(0)).map_err(|error|sqlite_error(&error, error.to_string()))?;
+    let missing:Option<u64>=connection.query_row("SELECT MIN(sequence) FROM events INDEXED BY events_observation_readiness_missing_idx WHERE observation_readiness_missing=1 AND sequence>?1 AND sequence<=?2",params![after,through],|row|row.get(0)).map_err(|error|sqlite_error(&error, error.to_string()))?;
     Ok(hole
         .into_iter()
         .chain(missing)
@@ -94,17 +96,17 @@ fn transcript_head(connection: &Connection) -> Result<u64, ConversationStoreErro
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(error.to_string()))
+        .map_err(|error| sqlite_error(&error, error.to_string()))
 }
 pub(super) fn recover_transcript(connection: &Connection) -> Result<(), ConversationStoreError> {
-    connection.execute("INSERT OR IGNORE INTO transcript_observation_readiness(position,ready) SELECT position,1 FROM transcript_order INDEXED BY transcript_observation_readiness_missing_idx WHERE observation_readiness_missing=1", []).map_err(|error| storage(error.to_string()))?;
-    connection.execute("UPDATE transcript_order SET observation_readiness_missing=0 WHERE observation_readiness_missing=1", []).map_err(|error| storage(error.to_string()))?;
+    connection.execute("INSERT OR IGNORE INTO transcript_observation_readiness(position,ready) SELECT position,1 FROM transcript_order INDEXED BY transcript_observation_readiness_missing_idx WHERE observation_readiness_missing=1", []).map_err(|error| sqlite_error(&error, error.to_string()))?;
+    connection.execute("UPDATE transcript_order SET observation_readiness_missing=0 WHERE observation_readiness_missing=1", []).map_err(|error| sqlite_error(&error, error.to_string()))?;
     connection
         .execute(
             "UPDATE transcript_observation_readiness SET ready=1 WHERE ready=0",
             [],
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| sqlite_error(&error, error.to_string()))?;
     Ok(())
 }
 pub(super) fn mark_transcript(
@@ -116,7 +118,7 @@ pub(super) fn mark_transcript(
             "invalid native transcript publication position".into(),
         ));
     }
-    let missing: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM transcript_order WHERE position=?1 AND observation_readiness_missing=1)", [cursor], |row| row.get(0)).map_err(|error| storage(error.to_string()))?;
+    let missing: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM transcript_order WHERE position=?1 AND observation_readiness_missing=1)", [cursor], |row| row.get(0)).map_err(|error| sqlite_error(&error, error.to_string()))?;
     if missing {
         return Err(storage("native transcript readiness evidence unavailable"));
     }
@@ -126,7 +128,7 @@ pub(super) fn mark_transcript(
             "UPDATE transcript_observation_readiness SET ready=1 WHERE position=?1 AND ready=0",
             [cursor],
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| sqlite_error(&error, error.to_string()))?;
     Ok(())
 }
 pub(super) fn mark_canonical(
@@ -140,7 +142,7 @@ pub(super) fn mark_canonical(
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| sqlite_error(&error, error.to_string()))?;
     if first == 0 || first > last || last > ledger {
         return Err(ConversationStoreError::InvalidReference(
             "invalid canonical transcript publication range".into(),
@@ -148,13 +150,13 @@ pub(super) fn mark_canonical(
     }
     // Numeric L selects only this C batch, excluding unrelated Audit or
     // interaction T positions allocated between its canonical messages.
-    let missing: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM message_ledger m JOIN transcript_order t ON t.position=m.native_transcript WHERE m.position>=?1 AND m.position<=?2 AND t.observation_readiness_missing=1)", params![first,last], |row| row.get(0)).map_err(|error| storage(error.to_string()))?;
+    let missing: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM message_ledger m JOIN transcript_order t ON t.position=m.native_transcript WHERE m.position>=?1 AND m.position<=?2 AND t.observation_readiness_missing=1)", params![first,last], |row| row.get(0)).map_err(|error| sqlite_error(&error, error.to_string()))?;
     if missing {
         return Err(storage(
             "native canonical transcript readiness evidence unavailable",
         ));
     }
-    connection.execute("UPDATE transcript_observation_readiness SET ready=1 WHERE ready=0 AND position IN(SELECT native_transcript FROM message_ledger WHERE position>=?1 AND position<=?2)",params![first,last]).map_err(|error|storage(error.to_string()))?;
+    connection.execute("UPDATE transcript_observation_readiness SET ready=1 WHERE ready=0 AND position IN(SELECT native_transcript FROM message_ledger WHERE position>=?1 AND position<=?2)",params![first,last]).map_err(|error|sqlite_error(&error, error.to_string()))?;
     Ok(())
 }
 pub(super) fn transcript_frontier(
@@ -167,8 +169,8 @@ pub(super) fn transcript_frontier(
             "invalid native transcript publication cut".into(),
         ));
     }
-    let hole:Option<u64>=connection.query_row("SELECT MIN(position) FROM transcript_observation_readiness WHERE ready=0 AND position>?1 AND position<=?2",params![after,through],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
-    let missing: Option<u64> = connection.query_row("SELECT MIN(position) FROM transcript_order INDEXED BY transcript_observation_readiness_missing_idx WHERE observation_readiness_missing=1 AND position>?1 AND position<=?2", params![after,through], |row| row.get(0)).map_err(|error| storage(error.to_string()))?;
+    let hole:Option<u64>=connection.query_row("SELECT MIN(position) FROM transcript_observation_readiness WHERE ready=0 AND position>?1 AND position<=?2",params![after,through],|row|row.get(0)).map_err(|error|sqlite_error(&error, error.to_string()))?;
+    let missing: Option<u64> = connection.query_row("SELECT MIN(position) FROM transcript_order INDEXED BY transcript_observation_readiness_missing_idx WHERE observation_readiness_missing=1 AND position>?1 AND position<=?2", params![after,through], |row| row.get(0)).map_err(|error| sqlite_error(&error, error.to_string()))?;
     Ok(hole
         .into_iter()
         .chain(missing)

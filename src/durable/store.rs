@@ -99,6 +99,10 @@ pub enum ConversationStoreError {
     /// (Issue #108). The durable store — not only Agent Loop control flow —
     /// rejects impossible publication state combinations.
     PublicationViolation(String),
+    /// A cancellable Store scope stopped its operation.
+    OperationCancelled,
+    /// The owning transaction cannot safely continue, including failed savepoint cleanup.
+    TransactionInvalid(String),
     /// The underlying storage rejected the operation.
     Storage(String),
 }
@@ -151,6 +155,8 @@ impl core::fmt::Display for ConversationStoreError {
             Self::PublicationViolation(message) => {
                 write!(f, "invalid publication transition: {message}")
             }
+            Self::OperationCancelled => write!(f, "the Store operation was cancelled"),
+            Self::TransactionInvalid(message) => write!(f, "invalid Store transaction: {message}"),
             Self::Storage(message) => write!(f, "durable ConversationStore failed: {message}"),
         }
     }
@@ -183,6 +189,14 @@ pub trait ConversationStore:
     fn presentation_reader(&self) -> std::sync::Arc<dyn ConversationStore>;
     /// Cancel this reader's connection waits and running `SQLite` queries.
     fn close_presentation_reader(&self);
+    /// A native required-write scope sharing the original connection owner.
+    /// Cancellation is confined to this scope's exact connection lease.
+    /// Already-owned settlement uses the original, uncancelled Store.
+    fn auxiliary_writer(&self) -> std::sync::Arc<dyn ConversationStore>;
+
+    /// Closes new work in this write scope and interrupts only its active lease.
+    fn cancel_auxiliary_writer(&self);
+
     #[cfg(test)]
     fn park_presentation_read_until_cancelled(&self, entered: tokio::sync::oneshot::Sender<()>);
 }

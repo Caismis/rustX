@@ -1,5 +1,7 @@
 //! Bounded auxiliary audit reconstruction at an exact Journal cut.
 
+use super::super::sqlite_error;
+
 use super::{
     AUXILIARY_AUDIT_RECORD_ENCODED_MAX, AuxiliaryAuditCut, AuxiliaryAuditFact,
     AuxiliaryAuditRecord, AuxiliaryCallAudit, AuxiliaryCallId, AuxiliaryCallStart,
@@ -9,10 +11,10 @@ use super::{
     RuntimeEventEnvelope, Transaction, bounded_encoded_len, call_has_requests_query,
     call_outcome_for_terminal, call_row_query, call_started_event_id, event_at_connection,
     journal_prefix, open_request_query, owner_row_query, params, request_row_query,
-    request_start_matches, require_audit_fact, seq_to_i64, sequence_from_i64, storage,
-    terminal_kind, validate_call_start_authority_tx, validate_call_start_input,
-    validate_owner_row_tx, validate_request_evidence, validate_request_start_input,
-    validate_request_terminal_for_row, validate_terminal_envelope_shape,
+    request_start_matches, require_audit_fact, seq_to_i64, sequence_from_i64, terminal_kind,
+    validate_call_start_authority_tx, validate_call_start_input, validate_owner_row_tx,
+    validate_request_evidence, validate_request_start_input, validate_request_terminal_for_row,
+    validate_terminal_envelope_shape,
 };
 
 pub(super) fn has_call_journal_fact_through_tx(
@@ -32,7 +34,7 @@ pub(super) fn has_call_journal_fact_through_tx(
             params![call_id.as_str(), seq_to_i64(through)?],
             |row| row.get(0),
         )
-        .map_err(|error| storage(format!("auxiliary Call Journal probe: {error}")))
+        .map_err(|error| sqlite_error(&error, format!("auxiliary Call Journal probe: {error}")))
 }
 
 pub(super) fn has_call_journal_fact_tx(
@@ -57,7 +59,7 @@ pub(super) fn has_request_journal_fact_through_tx(
             params![request_id.as_str(), seq_to_i64(through)?],
             |row| row.get(0),
         )
-        .map_err(|error| storage(format!("auxiliary request Journal probe: {error}")))
+        .map_err(|error| sqlite_error(&error, format!("auxiliary request Journal probe: {error}")))
 }
 
 pub(super) fn has_request_terminal_journal_tx(
@@ -75,7 +77,7 @@ pub(super) fn has_request_terminal_journal_tx(
             [request_id.as_str()],
             |row| row.get(0),
         )
-        .map_err(|error| storage(format!("auxiliary request terminal probe: {error}")))
+        .map_err(|error| sqlite_error(&error, format!("auxiliary request terminal probe: {error}")))
 }
 
 pub(super) fn has_call_settlement_journal_tx(
@@ -92,7 +94,7 @@ pub(super) fn has_call_settlement_journal_tx(
             [call_id.as_str()],
             |row| row.get(0),
         )
-        .map_err(|error| storage(format!("auxiliary Call settlement probe: {error}")))
+        .map_err(|error| sqlite_error(&error, format!("auxiliary Call settlement probe: {error}")))
 }
 
 pub(super) fn call_audit_at_tx(
@@ -180,13 +182,13 @@ pub(super) fn call_audit_at_tx(
            AND json_extract(event_json,'$.event.type')='auxiliary_call_settled'
            AND sequence<=?2 ORDER BY sequence LIMIT 2",
         )
-        .map_err(|error| storage(error.to_string()))?
+        .map_err(|error| sqlite_error(&error, error.to_string()))?
         .query_map(params![call_id.as_str(), seq_to_i64(cut.journal)?], |row| {
             row.get::<_, i64>(0)
         })
-        .map_err(|error| storage(error.to_string()))?
+        .map_err(|error| sqlite_error(&error, error.to_string()))?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| sqlite_error(&error, error.to_string()))?;
     if settlement_facts.len() > 1
         || settlement_facts
             .first()
@@ -677,12 +679,14 @@ pub(super) fn audit_total_at_connection(
             Ok((row.get(0)?, row.get(1)?))
         })
         .optional()
-        .map_err(|error| storage(format!("auxiliary audit total lookup: {error}")))?;
+        .map_err(|error| sqlite_error(&error, format!("auxiliary audit total lookup: {error}")))?;
     let authoritative: Option<i64> = connection
         .query_row(AUXILIARY_AUTHORITATIVE_FRONTIER_SQL, [journal], |row| {
             row.get(0)
         })
-        .map_err(|error| storage(format!("auxiliary authoritative frontier: {error}")))?;
+        .map_err(|error| {
+            sqlite_error(&error, format!("auxiliary authoritative frontier: {error}"))
+        })?;
     let authoritative = authoritative.map(sequence_from_i64).transpose()?;
     match (derived, authoritative) {
         (None, None) => Ok(0),

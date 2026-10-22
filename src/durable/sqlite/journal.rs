@@ -3,6 +3,8 @@
 #[cfg(test)]
 mod tests;
 
+use super::sqlite_error;
+
 use crate::durable::sqlite::auxiliary;
 use crate::durable::sqlite::request::snapshot::find_request_start_event;
 use crate::durable::sqlite::schema::validate_primary_request_owner_event;
@@ -548,7 +550,7 @@ pub(super) fn persist_event_tx_internal(
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(format!("read event sequence: {error}")))?;
+        .map_err(|error| sqlite_error(&error, format!("read event sequence: {error}")))?;
     let sequence = current
         .checked_add(1)
         .ok_or_else(|| storage("event sequence exhausted"))?;
@@ -565,7 +567,7 @@ pub(super) fn persist_event_tx_internal(
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|error| storage(format!("lifecycle probe: {error}")))?;
+            .map_err(|error| sqlite_error(&error, format!("lifecycle probe: {error}")))?;
         if existing.as_ref().is_some_and(Option::is_some) {
             return Err(ConversationStoreError::TerminalViolation(format!(
                 "lifecycle {key} is already terminal"
@@ -579,7 +581,7 @@ pub(super) fn persist_event_tx_internal(
                     "INSERT INTO lifecycle_state(lifecycle_key,terminal_event_id) VALUES(?1,?2) ON CONFLICT(lifecycle_key) DO UPDATE SET terminal_event_id=excluded.terminal_event_id",
                     params![key, event.event_id.as_str()],
                 )
-                .map_err(|error| storage(format!("record terminal lifecycle: {error}")))?;
+                .map_err(|error| sqlite_error(&error, format!("record terminal lifecycle: {error}")))?;
         } else {
             let exists: bool = transaction
                 .query_row(
@@ -587,14 +589,16 @@ pub(super) fn persist_event_tx_internal(
                     [&key],
                     |row| row.get(0),
                 )
-                .map_err(|error| storage(format!("lifecycle existence probe: {error}")))?;
+                .map_err(|error| {
+                    sqlite_error(&error, format!("lifecycle existence probe: {error}"))
+                })?;
             if !exists {
                 transaction
                     .execute(
                         "INSERT INTO lifecycle_state(lifecycle_key,terminal_event_id) VALUES(?1,NULL)",
                         [&key],
                     )
-                    .map_err(|error| storage(format!("record lifecycle: {error}")))?;
+                    .map_err(|error| sqlite_error(&error, format!("record lifecycle: {error}")))?;
             }
         }
     }
@@ -620,7 +624,7 @@ pub(super) fn persist_event_tx_internal(
                 observation_execution::required(&event),
             ],
         )
-        .map_err(|error| storage(format!("insert runtime event: {error}")))?;
+        .map_err(|error| sqlite_error(&error, format!("insert runtime event: {error}")))?;
     auxiliary::index_event_tx(transaction, &event)?;
     // Missing auxiliary evidence is the fail-closed initial state. Independent
     // savepoints preserve own lifecycle facts if a different layout fails.
@@ -628,24 +632,24 @@ pub(super) fn persist_event_tx_internal(
     // installed Runtime may repair it without clearing unrelated layout holes.
     let _ = optional_display_layout(transaction, || {
         observation_readiness::insert(transaction, &event)
-    });
+    })?;
     let statistics_available = optional_display_layout(transaction, || {
         observation_statistics::event(transaction, &event)?;
         observation_members::member_event(transaction, &event)
-    })
+    })?
     .is_some();
     if let RuntimeEvent::AssistantMessageCommitted { message_id } = &event.event {
-        transaction.execute("UPDATE canonical_tool_calls SET attempt_id=?1,commit_sequence=?2 WHERE assistant_message_id=?3",params![event.attempt_id.as_ref().map(crate::runtime::identity::AttemptId::as_str),sequence,message_id.as_str()]).map_err(|error|storage(error.to_string()))?;
+        transaction.execute("UPDATE canonical_tool_calls SET attempt_id=?1,commit_sequence=?2 WHERE assistant_message_id=?3",params![event.attempt_id.as_ref().map(crate::runtime::identity::AttemptId::as_str),sequence,message_id.as_str()]).map_err(|error|sqlite_error(&error, error.to_string()))?;
     }
 
     // Caller-supplied ephemeral evidence is never trusted. Native canonical
     // ownership is resolved inside this exact append transaction.
     let assistant_available = optional_display_layout(transaction, || {
         if let RuntimeEvent::AssistantMessageCommitted { message_id } = &event.event {
-            transaction.execute("UPDATE events SET observation_assistant_ledger=(SELECT position FROM message_ledger WHERE message_id=?2) WHERE sequence=?1",params![sequence,message_id.as_str()]).map_err(|error|storage(error.to_string()))?;
+            transaction.execute("UPDATE events SET observation_assistant_ledger=(SELECT position FROM message_ledger WHERE message_id=?2) WHERE sequence=?1",params![sequence,message_id.as_str()]).map_err(|error|sqlite_error(&error, error.to_string()))?;
         }
         Ok(())
-    }).is_some();
+    })?.is_some();
     event.tool_occurrence = observation::tool_occurrence_receipt(transaction, &event)?;
     let tool_available = optional_display_layout(transaction, || {
     if let Some(occurrence) = &event.tool_occurrence {
@@ -655,48 +659,51 @@ pub(super) fn persist_event_tx_internal(
             | RuntimeEvent::ToolExecutionFailed { .. } => Some(2),
             _ => None,
         };
-        transaction.execute("UPDATE events SET observation_tool_ledger=?1,observation_tool_block=?2,observation_tool_phase=?4 WHERE sequence=?3",params![occurrence.ledger_position,occurrence.block_index.get(),sequence,phase]).map_err(|error|storage(error.to_string()))?;
+        transaction.execute("UPDATE events SET observation_tool_ledger=?1,observation_tool_block=?2,observation_tool_phase=?4 WHERE sequence=?3",params![occurrence.ledger_position,occurrence.block_index.get(),sequence,phase]).map_err(|error|sqlite_error(&error, error.to_string()))?;
     }
         Ok(())
-    }).is_some();
+    })?.is_some();
     let execution_available = optional_display_layout(transaction, || {
         observation_execution::event(transaction, &event)
-    })
+    })?
     .is_some();
     let state_available = optional_display_layout(transaction, || {
         observation_state::event(transaction, &event)
-    })
+    })?
     .is_some();
     let request_available = optional_display_layout(transaction, || {
         observation_occupancy::event(transaction, &event)?;
         observation_request::terminal(transaction, &event)
-    })
+    })?
     .is_some();
-    let witness_available = observation_event::index_optional(transaction, &event);
+    let witness_available = observation_event::index_optional(transaction, &event)?;
     let trace_available = optional_display_layout(transaction, || {
         observation_trace::index_event(transaction, &event)
-    })
+    })?
     .is_some();
     let observation_json = crate::observation::bounded::bounded_bytes(
         &event,
         crate::durable::observation::HEADER_ENCODED_MAX,
     );
     let json_available = optional_display_layout(transaction, || {
+        #[cfg(test)]
+        let _probe =
+            super::start_probe::for_event(&event, super::AuxiliaryStartProbe::ObservationJson);
         transaction
             .execute(
                 "UPDATE events SET observation_json=?2 WHERE sequence=?1",
                 params![sequence, observation_json],
             )
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| sqlite_error(&error, error.to_string()))?;
         Ok(())
-    })
+    })?
     .is_some();
     transaction
         .execute(
             "UPDATE rustx_store SET next_event_sequence=?1 WHERE id=1",
             [sequence],
         )
-        .map_err(|error| storage(format!("update event sequence: {error}")))?;
+        .map_err(|error| sqlite_error(&error, format!("update event sequence: {error}")))?;
     let transcript_cursor = if matches!(
         &event.event,
         RuntimeEvent::AttemptCancelled { .. }
@@ -721,9 +728,9 @@ pub(super) fn persist_event_tx_internal(
     } else {
         None
     };
-    let transcript_available = enrich_event_transcript(transaction, &event, transcript_cursor);
+    let transcript_available = enrich_event_transcript(transaction, &event, transcript_cursor)?;
     let turn_available =
-        optional_display_layout(transaction, || observation_turn::event(transaction, &event))
+        optional_display_layout(transaction, || observation_turn::event(transaction, &event))?
             .is_some();
     // The **P** marker: a durable provider outcome is recorded against its
     // exact request, so the publication plane can reject U-without-P with one
@@ -739,7 +746,7 @@ pub(super) fn persist_event_tx_internal(
                 "UPDATE request_snapshots SET completed_sequence=?1 WHERE request_id=?2 AND completed_sequence IS NULL",
                 params![sequence, request_id.as_str()],
             )
-            .map_err(|error| storage(format!("record provider outcome: {error}")))?;
+            .map_err(|error| sqlite_error(&error, format!("record provider outcome: {error}")))?;
         if updated != 1 {
             return Err(ConversationStoreError::TerminalViolation(format!(
                 "request {request_id} already has a durable provider outcome"
@@ -766,9 +773,9 @@ pub(super) fn persist_event_tx_internal(
                     "UPDATE events SET observation_unavailable=0 WHERE sequence=?1",
                     [sequence],
                 )
-                .map_err(|error| storage(error.to_string()))?;
+                .map_err(|error| sqlite_error(&error, error.to_string()))?;
             Ok(())
-        });
+        })?;
     }
     event.observation = prepare_observation
         .then(|| observation_receipt::single(transaction, conversation_id, &event))
@@ -779,15 +786,15 @@ pub(super) fn persist_event_tx_internal(
     })
 }
 
-/// Independent derived T coordinates, witness and display header cannot refuse
-/// the original transcript seat or erase another successfully captured layout.
+/// Contained derived-layout failures preserve the original transcript seat.
+/// Transaction-integrity failures must still abort the owning native write.
 pub(super) fn enrich_event_transcript(
     transaction: &Transaction<'_>,
     event: &RuntimeEventEnvelope,
     cursor: Option<TranscriptCursor>,
-) -> bool {
+) -> Result<bool, ConversationStoreError> {
     let Some(cursor) = cursor else {
-        return true;
+        return Ok(true);
     };
     let coordinates = optional_display_layout(transaction, || {
         transaction
@@ -795,13 +802,13 @@ pub(super) fn enrich_event_transcript(
                 "UPDATE events SET observation_transcript=?1 WHERE sequence=?2",
                 params![cursor.get(), event.sequence],
             )
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| sqlite_error(&error, error.to_string()))?;
         Ok(())
-    })
+    })?
     .is_some();
     let witness = optional_display_layout(transaction, || {
         observation_event::attach_transcript(transaction, event.sequence, cursor)
-    })
+    })?
     .is_some();
     let kind = if matches!(
         event.event,
@@ -813,9 +820,9 @@ pub(super) fn enrich_event_transcript(
     };
     let header = optional_display_layout(transaction, || {
         observation::index::index_native_event(transaction, kind, event, cursor)
-    })
+    })?
     .is_some();
-    coordinates && witness && header
+    Ok(coordinates && witness && header)
 }
 
 pub(super) fn validate_event_identity(
@@ -872,7 +879,9 @@ pub(super) fn validate_attempt_start_uniqueness(
             [&key],
             |row| row.get(0),
         )
-        .map_err(|error| storage(format!("attempt start uniqueness probe: {error}")))?;
+        .map_err(|error| {
+            sqlite_error(&error, format!("attempt start uniqueness probe: {error}"))
+        })?;
     if exists {
         return Err(ConversationStoreError::TerminalViolation(format!(
             "attempt {attempt_id} already entered durable authority; an attempt identity starts exactly once"
@@ -913,7 +922,7 @@ pub(super) fn find_event_by_id(
             |row| row.get::<_, String>(0),
         )
         .optional()
-        .map_err(|error| storage(format!("event identity probe: {error}")))?
+        .map_err(|error| sqlite_error(&error, format!("event identity probe: {error}")))?
     else {
         return Ok(None);
     };
@@ -948,7 +957,7 @@ pub(super) fn find_event_at_sequence(
             |row| row.get::<_, String>(0),
         )
         .optional()
-        .map_err(|error| storage(format!("event sequence probe: {error}")))?
+        .map_err(|error| sqlite_error(&error, format!("event sequence probe: {error}")))?
     else {
         return Ok(None);
     };
@@ -969,7 +978,9 @@ pub(super) fn load_user_notification_tx(
             [message_id.as_str()],
             |row| row.get(0),
         )
-        .map_err(|error| storage(format!("{domain} notification reference: {error}")))?;
+        .map_err(|error| {
+            sqlite_error(&error, format!("{domain} notification reference: {error}"))
+        })?;
     let message = if let Some(json) = pending_json {
         MessageBlock::User(decode::<UserMessageBlock>(
             &json,

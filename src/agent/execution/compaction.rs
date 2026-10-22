@@ -5,7 +5,7 @@ use super::request::FrozenCarryover;
 use super::terminal::Terminal;
 use super::{AgentExecution, DurableFailureKind};
 use crate::context::compaction::{
-    CompactionAttribution, CompactionExecutionError, execute_compaction,
+    CompactionAttribution, CompactionExecutionError, execute_compaction_in_operation,
 };
 use crate::context::engine::{CompactionConstraints, EstimateCorrection};
 use crate::context::error::{ContextError, ContextErrorKind};
@@ -79,54 +79,86 @@ impl AgentExecution<'_> {
                 overflow,
             ));
         }
-        loop {
-            match self
-                .run_compaction(
-                    &operation_id,
-                    must_cover_through,
-                    fresh_inbound,
-                    effective_system_prompt,
-                    staged_request_context,
-                    estimate_correction,
-                )
-                .await
-            {
-                Ok(_completed) => {
-                    // The typed checkpoint and Projection Head are committed.
-                    // Complete replay replaces all primary continuation ownership;
-                    // the old request measurement is no longer evidence for it.
-                    self.retire_continuation();
-                    self.measurements.withdraw();
-                    // `commit_projection` persisted and returned the exact
-                    // completion fact before this branch became observable.
-                    break;
-                }
-                // Carryover is auxiliary. A full/reduced/metadata-only value
-                // may make a candidate fail the hard fit, but that must never
-                // turn a committed checkpoint into a terminal CannotFit.
-                Err(error) if error.kind == ContextErrorKind::CannotFit => {
-                    let can_degrade = self
-                        .logical_step
-                        .frozen_carryover
-                        .as_mut()
-                        .is_some_and(FrozenCarryover::degrade);
-                    if can_degrade {
-                        continue;
-                    }
-                    return Err(self.compaction_failure(&operation_id, &error, overflow));
-                }
-                // Cancellation never becomes a compaction failure: no
-                // `CompactionFailed` event is emitted and the attempt settles
-                // cancelled.
-                Err(error) if error.kind == ContextErrorKind::Cancelled => {
-                    return Err(Terminal::Cancelled {
-                        reason: self.cancellation.reason(),
-                    });
-                }
-                Err(error) => return Err(self.compaction_failure(&operation_id, &error, overflow)),
-            }
+        let budget = self.context_runtime.compaction_budget(operation_id.clone());
+        #[cfg(test)]
+        let admission_gate = self
+            .pauses
+            .compaction_admission
+            .lock()
+            .expect("compaction admission gate")
+            .take();
+        #[cfg(test)]
+        if let Some(gate) = admission_gate {
+            gate.enter();
         }
-        Ok(())
+        let operation = match self
+            .context_runtime
+            .summarizer
+            .operation(budget.clone(), self.cancellation.signal().child())
+        {
+            Ok(operation) => operation,
+            Err(error) if error.kind == ContextErrorKind::Cancelled => {
+                return Err(Terminal::Cancelled {
+                    reason: self.cancellation.reason(),
+                });
+            }
+            Err(error) => return Err(self.compaction_failure(&operation_id, &error, overflow)),
+        };
+        let result = async {
+            loop {
+                match self
+                    .run_compaction(
+                        must_cover_through,
+                        fresh_inbound,
+                        effective_system_prompt,
+                        staged_request_context,
+                        estimate_correction,
+                        operation.as_ref(),
+                    )
+                    .await
+                {
+                    Ok(_completed) => {
+                        // The typed checkpoint and Projection Head are committed.
+                        // Complete replay replaces all primary continuation ownership;
+                        // the old request measurement is no longer evidence for it.
+                        self.retire_continuation();
+                        self.measurements.withdraw();
+                        // `commit_projection` persisted and returned the exact
+                        // completion fact before this branch became observable.
+                        break;
+                    }
+                    // Carryover is auxiliary. A full/reduced/metadata-only value
+                    // may make a candidate fail the hard fit, but that must never
+                    // turn a committed checkpoint into a terminal CannotFit.
+                    Err(error) if error.kind == ContextErrorKind::CannotFit => {
+                        let can_degrade = self
+                            .logical_step
+                            .frozen_carryover
+                            .as_mut()
+                            .is_some_and(FrozenCarryover::degrade);
+                        if can_degrade {
+                            continue;
+                        }
+                        return Err(self.compaction_failure(&operation_id, &error, overflow));
+                    }
+                    // Cancellation never becomes a compaction failure: no
+                    // `CompactionFailed` event is emitted and the attempt settles
+                    // cancelled.
+                    Err(error) if error.kind == ContextErrorKind::Cancelled => {
+                        return Err(Terminal::Cancelled {
+                            reason: self.cancellation.reason(),
+                        });
+                    }
+                    Err(error) => {
+                        return Err(self.compaction_failure(&operation_id, &error, overflow));
+                    }
+                }
+            }
+            Ok(())
+        }
+        .await;
+        operation.close().await;
+        result
     }
 
     /// The cancellation-aware compaction pipeline: plan, summarize, verify
@@ -139,13 +171,14 @@ impl AgentExecution<'_> {
     /// continuation is cleared. Core inputs retain their generation ownership.
     async fn run_compaction(
         &mut self,
-        operation_id: &crate::runtime::identity::CompactionOperationId,
         must_cover_through: Option<&MessageId>,
         fresh_inbound: Option<&FreshInboundTurn>,
         effective_system_prompt: &str,
         staged_request_context: &[MessageBlock],
         estimate_correction: Option<EstimateCorrection>,
+        operation: &dyn crate::context::summarizer::SummaryOperation,
     ) -> Result<CompletedCompaction, ContextError> {
+        let operation_id = operation.budget().operation_id().clone();
         let tools = self.tool_registry().model_definitions();
         let cancellation = self.cancellation.signal();
         // Resolved before the exclusive borrow of the conversation: the
@@ -165,7 +198,7 @@ impl AgentExecution<'_> {
         } else {
             None
         };
-        let result = execute_compaction(
+        let result = execute_compaction_in_operation(
             &mut self.conversation,
             &self.context_runtime,
             &self.request.conversation_id,
@@ -188,6 +221,7 @@ impl AgentExecution<'_> {
                 attempt_id: Some(self.request.attempt_id.clone()),
                 turn_id: Some(TurnId::new(self.turn.to_string())),
             },
+            operation,
         )
         .await;
         let completed = match result {

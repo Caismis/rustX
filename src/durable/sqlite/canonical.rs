@@ -264,7 +264,7 @@ impl CanonicalStore for SqliteConversationStore {
                         position,
                         message,
                     )
-                });
+                })?;
             }
             // The seed's Surface history becomes this lineage's own retained
             // operation log, replayed from revision 1. Flattening it into one
@@ -300,10 +300,10 @@ impl CanonicalStore for SqliteConversationStore {
                 .map_err(|error| storage(format!("insert bootstrap identity: {error}")))?;
             let _ = optional_display_layout(&transaction, || {
                 observation_statistics::seed(&transaction, seed.turns())
-            });
+            })?;
             let _ = optional_display_layout(&transaction, || {
                 observation_occupancy::inherited(&transaction, occupancy.as_ref())
-            });
+            })?;
             provenance::persist(&transaction, seed)?;
             projection::install_inherited_auxiliary_audits(&transaction, seed.auxiliary_audits())?;
             let (auxiliary_audit_count, auxiliary_audit_digest) =
@@ -325,14 +325,14 @@ impl CanonicalStore for SqliteConversationStore {
                 .map_err(|error| storage(format!("mark lineage bootstrap: {error}")))?;
             let _ = optional_display_layout(&transaction, || {
                 observation_members::seed_members(&transaction, seed)
-            });
+            })?;
             let _ = optional_display_layout(&transaction, || {
                 observation_turn::seed(&transaction, seed)
-            });
+            })?;
             for (ordinal, turn) in seed.turns().iter().enumerate() {
                 let _ = optional_display_layout(&transaction, || {
                     reading::index_inherited_turn(&transaction, seq_to_i64(ordinal as u64)?, turn)
-                });
+                })?;
             }
             for (ordinal, turn) in seed.turns().iter().enumerate() {
                 if turn.process_message_ids.is_empty() {
@@ -350,7 +350,7 @@ impl CanonicalStore for SqliteConversationStore {
                                 },
                                 cursor,
                             )
-                        });
+                        })?;
                     }
                 }
             }

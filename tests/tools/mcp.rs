@@ -497,7 +497,8 @@ mod unix_tests {
             result: accepted,
         } = tool_runtime
             .background()
-            .commit_dispatch(prepared, &rustx::runtime::CancellationSignal::new())
+            .commit_dispatch_owned(prepared, &rustx::runtime::CancellationSignal::new())
+            .await
             .expect("commit background MCP dispatch")
         else {
             panic!("background MCP dispatch was not accepted");

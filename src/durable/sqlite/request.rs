@@ -429,7 +429,7 @@ pub(super) fn index_request_read_layouts(
     retry_message_id: Option<&MessageId>,
     context: &[MessageBlock],
     event: &RuntimeEventEnvelope,
-) {
+) -> Result<(), ConversationStoreError> {
     let _ = optional_display_layout(transaction, || {
         if let Some(retry) = retry_message_id {
             content::index_utf8_field(
@@ -441,10 +441,10 @@ pub(super) fn index_request_read_layouts(
             )?;
         }
         Ok(())
-    });
+    })?;
     let _ = optional_display_layout(transaction, || {
         observation_trace::request_core(transaction, event, snapshot)
-    });
+    })?;
     let _ = optional_display_layout(transaction, || {
         transaction
             .execute(
@@ -461,14 +461,15 @@ pub(super) fn index_request_read_layouts(
             snapshot,
             selection,
         )
-    });
+    })?;
     let _ = optional_display_layout(transaction, || {
         observation_trace::index_context(transaction, event.sequence, snapshot, context)
-    });
+    })?;
     // Catalog identity evidence is independent of optional request-body layouts.
     let _ = optional_display_layout(transaction, || {
         observation_trace::index_catalog(transaction, event.sequence, snapshot)
-    });
+    })?;
+    Ok(())
 }
 
 /// Verifies a retried model-turn start against the already-committed durable
@@ -890,7 +891,7 @@ impl SqliteConversationStore {
             retry_message_id.as_ref(),
             context,
             &persisted.event,
-        );
+        )?;
         // Todo progress is a conversation-owned semantic coordinate, not a
         // Surface append count. Advance it only for the first request of a
         // logical primary step and do so after this start's request context

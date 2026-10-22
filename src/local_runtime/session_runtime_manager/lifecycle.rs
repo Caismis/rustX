@@ -487,10 +487,20 @@ impl SessionRuntimeManager {
                 .await
                 .expect("resident owns operation drain");
             let live = runtime.shutdown_runtime().expect("resident composition");
-            if let Err(e) = live.shutdown().await {
-                terminal.finish(Err(error(format!("{e:?}"))));
+            let outcome = match live.shutdown_outcome().await {
+                Ok(outcome) => outcome,
+                Err(e) => {
+                    terminal.finish(Err(error(format!("{e:?}"))));
+                    return;
+                }
+            };
+            if let Err(details) = outcome.physical {
+                terminal.finish(Err(error(format!(
+                    "native physical retirement unproven: {details:?}"
+                ))));
                 return;
             }
+            let shutdown = outcome.logical.map_err(|e| error(format!("{e:?}")));
             drop(live);
             if let Err(e) = host.inner.drain_projection().await {
                 terminal.finish(Err(error(format!("projection drain failed: {e}"))));
@@ -505,6 +515,16 @@ impl SessionRuntimeManager {
                 .expect("composition mutex")
                 .take();
             terminal.writer = WriterCertainty::Absent;
+            if let Err(error) = shutdown {
+                owner
+                    .registry
+                    .0
+                    .lock()
+                    .expect("registry mutex")
+                    .unload_failures += 1;
+                terminal.finish(Err(error));
+                return;
+            }
             if let Some((session, node)) = replacement {
                 owner
                     .registry
@@ -525,7 +545,8 @@ impl SessionRuntimeManager {
 }
 
 /// Owns terminal publication even if a transition panics or the executor drops
-/// it. Failed Loading is removed; failed Unloading retains the closed old writer.
+/// it. Failed Loading is removed; failed Unloading retains the old writer only
+/// when native or projection physical retirement remains unproven.
 /// There is no permanent abandoned Loading entry and no fabricated rollback.
 struct TerminalGuard {
     owner: SessionRuntimeManager,

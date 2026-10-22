@@ -641,3 +641,68 @@ pub(super) fn assert_status_original_ranges(
     let (rows, materialized) = SqliteConversationStore::content_read_work();
     assert!(rows <= 2 && materialized <= 131_072);
 }
+
+impl SqliteConversationStore {
+    pub(crate) fn fail_auxiliary_request_insert_once_for_test(
+        &self,
+        automatic_rollback: bool,
+    ) -> Arc<std::sync::atomic::AtomicUsize> {
+        use rusqlite::functions::FunctionFlags;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let seen = Arc::new(AtomicUsize::new(0));
+        let observed = seen.clone();
+        let connection = self.lock().unwrap();
+        connection
+            .create_scalar_function(
+                "auxiliary_request_fault_once",
+                0,
+                FunctionFlags::SQLITE_UTF8,
+                move |_| Ok(i64::from(observed.fetch_add(1, Ordering::SeqCst) == 0)),
+            )
+            .unwrap();
+        let raise = if automatic_rollback {
+            "ROLLBACK"
+        } else {
+            "FAIL"
+        };
+        connection
+            .execute_batch(&format!(
+                "CREATE TEMP TRIGGER auxiliary_request_fault
+            AFTER INSERT ON auxiliary_requests
+            WHEN auxiliary_request_fault_once() = 1
+            BEGIN SELECT RAISE({raise}, 'consumed required RequestStart storage fault'); END;"
+            ))
+            .unwrap();
+        seen
+    }
+}
+
+impl SqliteConversationStore {
+    pub(crate) fn park_auxiliary_request_insert_until_interrupted_for_test(
+        &self,
+    ) -> tokio::sync::oneshot::Receiver<()> {
+        use rusqlite::functions::FunctionFlags;
+        let (entered, running) = tokio::sync::oneshot::channel();
+        let entered = std::sync::Mutex::new(Some(entered));
+        let connection = self.lock().unwrap();
+        connection
+            .create_scalar_function(
+                "auxiliary_request_insert_entered",
+                0,
+                FunctionFlags::SQLITE_UTF8,
+                move |_| {
+                    if let Some(entered) = entered.lock().unwrap().take() {
+                        let _ = entered.send(());
+                    }
+                    Ok(1_i64)
+                },
+            )
+            .unwrap();
+        connection.execute_batch("CREATE TEMP TRIGGER auxiliary_request_interrupt
+            AFTER INSERT ON auxiliary_requests BEGIN
+                SELECT auxiliary_request_insert_entered();
+                SELECT (WITH RECURSIVE n(x) AS (VALUES(0) UNION ALL SELECT x+1 FROM n WHERE x<1000000000) SELECT sum(x) FROM n);
+            END;").unwrap();
+        running
+    }
+}

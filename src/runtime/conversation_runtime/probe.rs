@@ -60,6 +60,8 @@ pub(crate) struct CoordinatorProbe {
     pub(crate) selection_contended: Option<Arc<tokio::sync::Notify>>,
     /// Parks model selection after taking the coordinator lock and before commit.
     pub(crate) selection_locked_gate: Option<Arc<Gate>>,
+    /// Parks after the mutation retains durability ordering, before persistence.
+    pub(crate) selection_commit_gate: Option<Arc<Gate>>,
     /// Parks the next settlement handoff when armed.
     pub(crate) settlement_gate: Option<Arc<Gate>>,
     /// Parks after durable terminal publication, before restoring conversation state.
@@ -222,6 +224,36 @@ impl Drop for GateRelease {
 
 #[cfg(test)]
 impl ConversationRuntime {
+    pub(crate) fn hold_auxiliary_retirement_for_test(
+        &self,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        std::sync::mpsc::Sender<()>,
+    ) {
+        self.inner.auxiliary.hold_retirement_for_test()
+    }
+
+    pub(crate) fn hold_auxiliary_settlement_for_test(
+        &self,
+    ) -> crate::runtime::auxiliary::executor::AuxiliaryWriteTestGates {
+        self.inner.auxiliary.hold_settlement_for_test()
+    }
+
+    pub(crate) async fn join_auxiliary_for_test(&self) {
+        self.inner.auxiliary.drain().await;
+    }
+
+    pub(crate) fn install_durability_mutation_probe(
+        &self,
+        submit: Option<Arc<Gate>>,
+        selection: Option<Arc<Gate>>,
+    ) {
+        let mut probe = self.inner.probe.lock().expect("probe lock");
+        let probe = probe.get_or_insert_with(CoordinatorProbe::default);
+        probe.submit_gate = submit;
+        probe.selection_commit_gate = selection;
+    }
+
     /// Execution-boundary fixtures observe original Journal facts after
     /// native receipt notice, without pretending to install a client cut.
     pub(super) fn install_fixture_observation_bridge(

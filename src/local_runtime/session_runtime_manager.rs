@@ -33,6 +33,12 @@ pub use client::ManagedRuntimeClient;
 pub use configuration::SourceSettingsError;
 pub(crate) use model_selection::ModelSelectionError;
 
+pub(super) type CompactionReply = Result<
+    crate::runtime_client::types::RuntimeClientResult,
+    crate::runtime_client::types::RuntimeClientError,
+>;
+pub(super) type CompactionTail = futures_util::future::BoxFuture<'static, CompactionReply>;
+
 /// Process-local live composition identity. Never a durable or transport identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(transparent)]

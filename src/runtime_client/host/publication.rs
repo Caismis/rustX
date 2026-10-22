@@ -2,7 +2,6 @@
 //! are linearized into the projection in commit order.
 #[cfg(test)]
 use super::ProjectionStage;
-use super::sources::activity_domain_sources;
 use super::sources::native_actor_transition;
 use super::sources::observation_domain_sources;
 use super::sources::observation_headers;
@@ -327,13 +326,12 @@ pub(super) fn apply_prepared_observations(
         #[cfg(test)]
         let terminals = observation_terminal_positions(store, &observation, None);
         let journal = journal_preparation(store, &observation);
-        let mut sources = observation_domain_sources(&observation);
-        sources.extend(activity_domain_sources(state, &observation, &sources));
-        let sources = weighted_sources(sources);
+        let sources = observation_domain_sources(&observation);
         super::super::checkpoint::bound_publication_payload(&mut observation);
         #[cfg(test)]
         publication_gate.preparation_stage("publish");
         commit_display(state, publication_gate, |projection| {
+            let sources = weighted_sources(sources);
             projection.prepare_publication_content(publication_content);
             projection.install_content_metadata(references);
             projection.prepare_message_headers(headers);

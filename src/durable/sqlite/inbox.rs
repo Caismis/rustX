@@ -416,7 +416,7 @@ impl InboxStore for SqliteConversationStore {
             // if cleanup fails; their deletion cannot refuse adoption.
             let _ = optional_display_layout(&transaction, || {
                 content::clear_pending(&transaction, &item.sequence.get().to_string())
-            });
+            })?;
         }
         if !items.is_empty() {
             transaction.execute("UPDATE rustx_store SET pending_observation_count=pending_observation_count-?1,reading_mutation_revision=reading_mutation_revision+1 WHERE id=1",[items.len() as u64]).map_err(|error|storage(error.to_string()))?;
@@ -550,7 +550,7 @@ pub(super) fn rewrite_pending_body(
             &MessageBlock::User(item.message.clone()),
             None,
         )
-    });
+    })?;
     let _ = observation::index::index_pending_header(
         transaction,
         expected.sequence.get(),
@@ -594,7 +594,7 @@ pub(super) fn save_goal(
     let bytes = crate::observation::bounded::bounded_bytes(&header, 16384);
     tx.execute("INSERT INTO goal_state(singleton, snapshot_json,observation_header) VALUES(1, ?1,?2) ON CONFLICT(singleton) DO UPDATE SET snapshot_json = excluded.snapshot_json,observation_header=excluded.observation_header,observation_source_id=NULL,observation_sequence=NULL",
         params![encode(goal, "Goal")?,bytes]).map_err(|error| storage(format!("write Goal: {error}")))?;
-    let _ = optional_display_layout(tx, || observation_state::goal(tx, goal));
+    let _ = optional_display_layout(tx, || observation_state::goal(tx, goal))?;
     Ok(())
 }
 
@@ -729,7 +729,7 @@ pub(super) fn accept_inbound_tx(
     let _ = optional_display_layout(transaction, || {
         content::index_pending(transaction, &message, sequence, 0)?;
         observation::index::index_message(transaction, &MessageBlock::User(message.clone()), None)
-    });
+    })?;
     // Acceptance is the durable-before-display frontier for an ordinary
     // inbound user message. Context facts are durable model input but are not
     // ordinary transcript content, so they never receive an ordering row.
@@ -976,7 +976,7 @@ impl SqliteConversationStore {
         } else {
             let _ = optional_display_layout(&transaction, || {
                 content::clear_pending(&transaction, &item.sequence.get().to_string())
-            });
+            })?;
             transaction
                 .execute(
                     "DELETE FROM pending_inbound WHERE sequence=?1",
@@ -986,7 +986,7 @@ impl SqliteConversationStore {
             let _ = optional_display_layout(&transaction, || {
                 transaction.execute("DELETE FROM observation_headers WHERE reference_kind='message' AND reference_id=?1",[item.message_id.as_str()]).map_err(|error|storage(error.to_string()))?;
                 Ok(())
-            });
+            })?;
             transaction.execute("DELETE FROM transcript_order WHERE reference_kind='message' AND reference_id=?1", [item.message_id.as_str()])
                 .map_err(|error| storage(format!("pending transcript remove: {error}")))?;
             transaction.execute("UPDATE rustx_store SET retained_transcript_count=retained_transcript_count-1,pending_observation_count=pending_observation_count-1 WHERE id=1", []).map_err(|error|storage(error.to_string()))?;

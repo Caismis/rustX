@@ -1,5 +1,7 @@
 //! Auxiliary Call/request start and settlement commits; each runs in one write transaction.
 
+use super::super::sqlite_error;
+
 use super::{
     AuxiliaryAuditCut, AuxiliaryAuditFact, AuxiliaryCallId, AuxiliaryCallStart,
     AuxiliaryCallStartCommit, AuxiliaryCommitDisposition, AuxiliaryRequestStart,
@@ -21,7 +23,10 @@ pub(super) fn run_auxiliary_write<T>(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|error| {
-            AuxiliaryWriteFailure::known(storage(format!("auxiliary write transaction: {error}")))
+            AuxiliaryWriteFailure::known(sqlite_error(
+                &error,
+                format!("auxiliary write transaction: {error}"),
+            ))
         })?;
     match operation(&transaction) {
         Ok(value) => transaction.commit().map_or_else(
@@ -32,6 +37,13 @@ pub(super) fn run_auxiliary_write<T>(
             },
             |()| Ok(value),
         ),
+        Err(error) if transaction.is_autocommit() => {
+            // No COMMIT was attempted. SQLite itself rolled this transaction
+            // back (e.g. an interrupted INSERT); absence alone is not the proof.
+            // Optional writers propagate transaction loss before issuing any
+            // later SQL, so no implicit write can escape this original owner.
+            Err(AuxiliaryWriteFailure::known(error))
+        }
         Err(error) => match transaction.rollback() {
             Ok(()) => Err(AuxiliaryWriteFailure::known(error)),
             Err(rollback) => Err(AuxiliaryWriteFailure::unknown(storage(format!(
@@ -253,7 +265,9 @@ impl SqliteConversationStore {
                         seq_to_i64(persisted.event.sequence)?,
                     ],
                 )
-                .map_err(|error| storage(format!("index auxiliary request start: {error}")))?;
+                .map_err(|error| {
+                    sqlite_error(&error, format!("index auxiliary request start: {error}"))
+                })?;
             insert_audit_fact_tx(
                 transaction,
                 persisted.event.sequence,
