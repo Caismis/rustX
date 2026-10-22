@@ -7,7 +7,10 @@ import type { AppServerTransport } from '../../tui/src/app-server/transport.ts';
 import type { WorkflowDefinition, WorkflowSource } from '../../protocol/app-server/v51';
 import { capabilities as nativeCapabilities } from './fixture';
 import { exampleSource } from './workflow-fixtures';
+import { createServer } from 'node:http';
 import { LocalWorkspaceHost } from '../host/workspaces';
+import { workspaceHandler } from '../host/http';
+import { HttpWorkspaceHost } from '../src/workspaces/http-host';
 import type { AppServerClient } from '../src/client/app-server';
 import { createWorkflowPort, WorkflowOperationError } from '../src/app/workflows/port';
 import { WorkspaceAuthority } from '../src/workspaces/authority';
@@ -15,7 +18,9 @@ import { WorkspaceHostError, type ProductHostWorkspaces, type WorkflowHostOperat
 
 interface ObservedRequest { id: string | number; method: string; params: Record<string, unknown> }
 const native = vi.hoisted(() => {
-  const state = { requests: [] as ObservedRequest[], connects: 0 };
+  /** `native` is the identity the App Server answering at the endpoint
+   * reports at `initialize`; `gate`, when set, holds that answer. */
+  const state = { requests: [] as ObservedRequest[], connects: 0, native: 'native-a', gate: undefined as Promise<void> | undefined };
   class FakeTransport implements AppServerTransport {
     readonly closed = undefined;
     private listeners = new Set<(record: unknown) => void>();
@@ -24,7 +29,7 @@ const native = vi.hoisted(() => {
       const request = message as ObservedRequest;
       state.requests.push(request);
       const reply = (result: unknown) => queueMicrotask(() => this.deliver({ jsonrpc: '2.0', id: request.id, result }));
-      if (request.method === 'initialize') reply({ type: 'initialized', authority_id: 'fixture-app-server-authority', protocol_version: 51, capabilities: nativeCapabilities });
+      if (request.method === 'initialize') void (state.gate ?? Promise.resolve()).then(() => reply({ type: 'initialized', authority_id: state.native, protocol_version: 51, capabilities: nativeCapabilities }));
       else if (request.method === 'configuration/sourceWrite') reply({ type: 'sources_written', revision: 'sha256:created', configuration_revision: null });
       else if (request.method === 'workflow/read') reply({ type: 'workflow_source', source: { id: 'flow', revision: 'sha256:created' } });
       else if (request.method === 'workflow/list') reply({ type: 'workflow_library', library: { target: request.params.target, directory: '/x', absent_revision: 'missing', files: [], diagnostic: null } });
@@ -43,7 +48,9 @@ vi.mock('../../tui/src/app-server/websocket-transport.ts', () => ({
 
 const directories: string[] = [];
 afterEach(() => { directories.splice(0).forEach(path => rmSync(path, { force: true, recursive: true })); });
-beforeEach(() => { native.state.requests.length = 0; native.state.connects = 0; });
+beforeEach(() => { native.state.requests.length = 0; native.state.connects = 0; native.state.native = 'native-a'; native.state.gate = undefined; });
+/** Requests other than connection initialization. */
+const dispatched = () => native.state.requests.filter(request => request.method !== 'initialize');
 
 const endpoint = 'ws://127.0.0.1:8080/';
 const document = exampleSource('parallel_review').document as unknown as WorkflowDefinition;
@@ -75,14 +82,14 @@ describe('Workflow operations and Product Host authority (R1)', () => {
     expect(current.workspaces.map(row => row.id)).toEqual([registration.id]);
     expect(current.workspaces[0].displayPath).toBe(b);
     for (const operation of operations) {
-      const refused = h2.workflowWorkspace({ authorityId: old.authorityId, endpoint: old.endpoint }, registration.id, operation);
+      const refused = h2.workflowWorkspace({ authorityId: old.authorityId, endpoint: old.endpoint }, 'native-a', registration.id, operation);
       await expect(refused).rejects.toMatchObject({ kind: 'authority_replaced' });
     }
     expect(native.state.connects).toBe(0);
     expect(native.state.requests).toHaveLength(0);
 
     // The replacement's own scope reaches exactly its own mapping.
-    await h2.workflowWorkspace({ authorityId: current.authorityId, endpoint: current.endpoint }, registration.id, operations[4]);
+    await h2.workflowWorkspace({ authorityId: current.authorityId, endpoint: current.endpoint }, 'native-a', registration.id, operations[4]);
     const [write] = native.state.requests.filter(request => request.method === 'configuration/sourceWrite');
     expect(write.params.target).toEqual({ kind: 'workspace', directory: b });
   });
@@ -114,9 +121,119 @@ describe('Workflow operations and Product Host authority (R1)', () => {
   });
 });
 
+describe('Workflow operations and native App Server authority', () => {
+  /** One Product Host H that stays alive throughout, and one registration. */
+  async function host() {
+    const root = mkdtempSync(join(tmpdir(), 'workflow-native-')); directories.push(root);
+    const a = join(root, 'A'); mkdirSync(a);
+    const h = new LocalWorkspaceHost({ endpoint, picker: true, transportToken: 'transport-token', metadataFile: join(root, 'registrations.json'), roots: [{ id: 'location', cwd: a, displayName: 'Location' }] });
+    const catalog = await h.listWorkspaces();
+    const authority = new WorkspaceAuthority(h);
+    await authority.observe();
+    return { h, catalog, registration: catalog.workspaces[0].id, authority, directory: a };
+  }
+  /** A browser connected to native A; its snapshot keeps A's identity and
+   * authority revision after it loses that connection. */
+  const browser = () => ({
+    client: { getSnapshot: () => ({ endpoint, authorityRevision: 1, authorityId: 'native-a' }), request: () => Promise.reject(new Error('not connected')) } as unknown as AppServerClient,
+  });
+  // A missing-target create and an unchanged-revision replace would both
+  // pass CAS on a replacement server; identity, not revision, refuses them.
+  const portOperations: [string, (port: ReturnType<typeof createWorkflowPort>) => Promise<unknown>][] = [
+    ['list', port => port.list()],
+    ['read', port => port.read('flow')],
+    ['check', port => port.check('flow', document, false)],
+    ['create (missing target)', port => port.write('flow', 'missing', { operation: 'create', description: 'x' })],
+    ['replace (unchanged revision)', port => port.write('flow', 'sha256:same', { operation: 'replace', document })],
+  ];
+
+  it.each(portOperations)('refuses %s through an unchanged Host once native A was replaced by B, before any Workflow RPC', async (_name, run) => {
+    const { h, registration, authority } = await host();
+    const port = createWorkflowPort({ client: browser().client, host: () => h, hostAuthority: authority.capture(), scope: { kind: 'workspace', workspaceId: registration } });
+    native.state.native = 'native-b';
+    const outcome = await run(port).then(() => undefined, error => error);
+    expect(outcome).toBeInstanceOf(WorkflowOperationError);
+    // Known and unavailable: never an uncertain write.
+    expect((outcome as WorkflowOperationError).failure).toMatchObject({ kind: 'unavailable', message: 'App Server authority replaced' });
+    expect(native.state.connects).toBe(1);
+    expect(dispatched()).toEqual([]);
+  });
+
+  it('refuses a Global dependency check routed through a Workspace on a replaced native server', async () => {
+    const { h, registration, authority } = await host();
+    const port = createWorkflowPort({ client: browser().client, host: () => h, hostAuthority: authority.capture(), scope: { kind: 'user' } });
+    native.state.native = 'native-b';
+    await expect(port.check('flow', document, false, registration)).rejects.toMatchObject({ failure: { kind: 'unavailable' } });
+    expect(dispatched()).toEqual([]);
+  });
+
+  it('refuses a write whose native authority is replaced while the Host is initializing its connection', async () => {
+    const { h, registration, authority } = await host();
+    const port = createWorkflowPort({ client: browser().client, host: () => h, hostAuthority: authority.capture(), scope: { kind: 'workspace', workspaceId: registration } });
+    let release!: () => void;
+    native.state.gate = new Promise(resolve => { release = resolve; });
+    const writing = port.write('flow', 'missing', { operation: 'create', description: 'x' }).then(() => undefined, error => error);
+    await flush();
+    expect(native.state.requests.map(request => request.method)).toEqual(['initialize']);
+    // B now answers at the endpoint; the paused initialization completes there.
+    native.state.native = 'native-b';
+    release();
+    const outcome = await writing;
+    expect((outcome as WorkflowOperationError).failure).toMatchObject({ kind: 'unavailable' });
+    expect(dispatched().map(request => request.method)).not.toContain('configuration/sourceWrite');
+  });
+
+  it('keeps working across fresh connections to the same native authority', async () => {
+    const { h, registration, authority, directory } = await host();
+    const port = createWorkflowPort({ client: browser().client, host: () => h, hostAuthority: authority.capture(), scope: { kind: 'workspace', workspaceId: registration } });
+    await port.list();
+    await expect(port.write('flow', 'missing', { operation: 'create', description: 'x' })).resolves.toMatchObject({ acknowledgement: { revision: 'sha256:created' } });
+    // Each operation opened its own connection: transport generation is not identity.
+    expect(native.state.connects).toBe(2);
+    const write = dispatched().find(request => request.method === 'configuration/sourceWrite')!;
+    expect(write.params.target).toEqual({ kind: 'workspace', directory });
+  });
+
+  it('refuses a port that never observed a native authority instead of adopting the next one', async () => {
+    const { h, registration, authority } = await host();
+    const client = { getSnapshot: () => ({ endpoint, authorityRevision: 0, authorityId: undefined }) } as unknown as AppServerClient;
+    const port = createWorkflowPort({ client, host: () => h, hostAuthority: authority.capture(), scope: { kind: 'workspace', workspaceId: registration } });
+    await expect(port.write('flow', 'missing', { operation: 'create', description: 'x' })).rejects.toMatchObject({ failure: { kind: 'unavailable', message: 'server_unavailable' } });
+    expect(native.state.connects).toBe(0);
+  });
+
+  it('carries and validates the expected native authority across the HTTP boundary', async () => {
+    const { h, registration, catalog } = await host();
+    const server = createServer(workspaceHandler(h));
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Missing Host address');
+    const base = `http://127.0.0.1:${address.port}/product-host`;
+    const scope = { authorityId: catalog.authorityId, endpoint: catalog.endpoint };
+    const create = { kind: 'write', id: 'flow', expected_revision: 'missing', edit: { operation: 'create', description: 'x' } } as const;
+    try {
+      // Missing or malformed: refused before the Host is reached.
+      for (const body of [{ scope, id: registration, operation: create }, { scope, native: '', id: registration, operation: create }, { scope, native: 7, id: registration, operation: create }]) {
+        const response = await fetch(`${base}/workflow`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        expect(response.status).toBe(400);
+      }
+      expect(native.state.connects).toBe(0);
+      // The typed client carries it; the Host compares it with the server it reached.
+      vi.stubGlobal('location', new URL(`http://127.0.0.1:${address.port}/`));
+      const client = new HttpWorkspaceHost();
+      native.state.native = 'native-b';
+      const refused = await client.workflowWorkspace(scope, 'native-a', registration, create).then(() => undefined, error => error);
+      expect(refused).toMatchObject({ kind: 'native_replaced', uncertain: false });
+      expect(dispatched()).toEqual([]);
+      await expect(client.workflowWorkspace(scope, 'native-b', registration, create)).resolves.toMatchObject({ kind: 'write' });
+      expect(dispatched().map(request => request.method)).toEqual(['configuration/sourceWrite', 'workflow/read']);
+    } finally { vi.unstubAllGlobals(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
+  });
+});
+
 /** An App Server client whose authority and replies the test controls. */
 function fakeClient() {
-  const snapshot = { endpoint, authorityRevision: 1 };
+  const snapshot = { endpoint, authorityRevision: 1, authorityId: 'native-a' as string | undefined };
   const pending: { method: string; resolve: (value: unknown) => void; reject: (reason: unknown) => void }[] = [];
   const client = {
     getSnapshot: () => snapshot,

@@ -100,10 +100,13 @@ export interface ProductHostWorkspaces {
   openWorkspace?(scope: WorkspaceAuthorityScope, target: import('./desktop.ts').DesktopTarget, application: import('./desktop.ts').DesktopAppId): Promise<import('./desktop.ts').DesktopLaunch>;
   readDelivery?(scope: WorkspaceAuthorityScope, read: DeliveryRead, signal?: AbortSignal): Promise<DeliveryBytes>;
   configureWorkspace?(id: string, endpoint: string, operation: WorkspaceConfigurationOperation): Promise<WorkspaceConfigurationResult>;
-  /** Native Workflow file authoring in exactly this registered Workspace. */
   /** Workflow file authoring in one registration of exactly `scope`, the
-   * Product Host authority that admitted the transaction. */
-  workflowWorkspace?(scope: WorkspaceAuthorityScope, id: string, operation: WorkflowHostOperation): Promise<WorkflowHostResult>;
+   * Product Host authority that admitted the transaction, on exactly the
+   * native App Server `native` (its `initialize` authority identity) the
+   * transaction was bound to. The two are separate constraints: the Host
+   * checks `native` against the connection it opened, after initializing it
+   * and before dispatching anything. */
+  workflowWorkspace?(scope: WorkspaceAuthorityScope, native: string, id: string, operation: WorkflowHostOperation): Promise<WorkflowHostResult>;
   listWorkspaces(signal?: AbortSignal): Promise<WorkspaceCatalog>;
   /** Each metadata write must validate this expected scope at execution, before changing registrations. */
   adoptWorkspace(scope: WorkspaceAuthorityScope, location: string): Promise<void>;

@@ -72,7 +72,7 @@ export function classifyFailure(cause: unknown, write: boolean): WorkflowFailure
     const relayed = native(cause.native);
     if (relayed) return relayed;
     if (cause.uncertain) return { kind: 'uncertain', message };
-    if (cause.kind === 'workspace_unavailable' || cause.kind === 'authority_replaced') return { kind: 'unavailable', message };
+    if (cause.kind === 'workspace_unavailable' || cause.kind === 'authority_replaced' || cause.kind === 'native_replaced') return { kind: 'unavailable', message };
     return { kind: 'failed', message };
   }
   if (cause instanceof RequestNotDispatched) return { kind: 'failed', message };
@@ -119,7 +119,9 @@ export function createWorkflowPort({ client, host, hostAuthority, scope }: {
   hostAuthority: WorkspaceAuthorityObservation | undefined;
   scope: WorkflowScope;
 }): WorkflowScopePort {
-  const { endpoint = '', authorityRevision } = client.getSnapshot();
+  // The native authority is the `initialize` identity already observed;
+  // it is never filled in later from another connection.
+  const { endpoint = '', authorityRevision, authorityId: native } = client.getSnapshot();
   const current = () => client.getSnapshot().authorityRevision === authorityRevision && client.getSnapshot().endpoint === endpoint;
   const attempt = async <T>(write: boolean, operation: () => Promise<T>): Promise<T> => {
     if (!current()) throw new WorkflowOperationError({ kind: 'unavailable', message: 'server_replaced' });
@@ -138,12 +140,13 @@ export function createWorkflowPort({ client, host, hostAuthority, scope }: {
     return current() || commit.reread.status === 'failed' ? commit : { ...commit, reread: { status: 'failed', error: 'server_replaced' } };
   };
   const viaHost = async <K extends WorkflowHostResult['kind']>(workspaceId: string, operation: WorkflowHostOperation & { kind: K }) => {
-    const workflow = host()?.workflowWorkspace;
-    if (!workflow) throw new WorkflowOperationError({ kind: 'unavailable', message: 'product_host_unavailable' });
+    const owner = host();
+    if (!owner?.workflowWorkspace) throw new WorkflowOperationError({ kind: 'unavailable', message: 'product_host_unavailable' });
     if (!hostAuthority?.current() || !sameEndpoint(hostAuthority.scope.endpoint, endpoint)) {
       throw new WorkflowOperationError({ kind: 'unavailable', message: 'product_host_replaced' });
     }
-    const result = await workflow(hostAuthority.scope, workspaceId, operation);
+    if (!native) throw new WorkflowOperationError({ kind: 'unavailable', message: 'server_unavailable' });
+    const result = await owner.workflowWorkspace(hostAuthority.scope, native, workspaceId, operation);
     if (result.kind !== operation.kind) throw new Error('Unexpected Product Host result');
     return result as Extract<WorkflowHostResult, { kind: K }>;
   };

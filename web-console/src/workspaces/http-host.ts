@@ -62,8 +62,8 @@ export class HttpWorkspaceHost implements ProductHostWorkspaces {
   readDelivery = (scope: WorkspaceAuthorityScope, read: DeliveryRead, signal?: AbortSignal) =>
     this.settledFileCall<DeliveryBytes>('file', scope, read, signal);
   configureWorkspace = (id: string, endpoint: string, operation: WorkspaceConfigurationOperation) => this.call<WorkspaceConfigurationResult>('configuration', { id, endpoint, operation });
-  workflowWorkspace = async (scope: WorkspaceAuthorityScope, id: string, operation: WorkflowHostOperation) => {
-    try { return await this.call<WorkflowHostResult>('workflow', { scope, id, operation }); }
+  workflowWorkspace = async (scope: WorkspaceAuthorityScope, native: string, id: string, operation: WorkflowHostOperation) => {
+    try { return await this.call<WorkflowHostResult>('workflow', { scope, native, id, operation }); }
     catch (cause) {
       // A lost write carrier conceals whether native committed it.
       if (cause instanceof WorkspaceHostError || operation.kind !== 'write') throw cause;

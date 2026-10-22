@@ -121,8 +121,14 @@ export function workspaceHandler(host?: ProductHostWorkspaces) {
           if (!host.configureWorkspace) throw new Error('Workspace configuration is unavailable on this Host');
           value = await host.configureWorkspace(string('id'), string('endpoint'), body.operation); break;
         case 'workflow':
-          if (!host.workflowWorkspace || Object.keys(body).some(key => !['scope', 'id', 'operation'].includes(key))) throw new Error('Workflow authoring is unavailable on this Host');
-          value = await host.workflowWorkspace(scope(), string('id'), body.operation); break;
+          if (!host.workflowWorkspace || Object.keys(body).some(key => !['scope', 'native', 'id', 'operation'].includes(key))) throw new Error('Workflow authoring is unavailable on this Host');
+          {
+            // The native App Server identity the transaction is bound to: required, never inferred.
+            const native = string('native');
+            if (!native || native.length > 256) throw new Error('Expected native App Server authority');
+            value = await host.workflowWorkspace(scope(), native, string('id'), body.operation);
+          }
+          break;
         case 'classify': {
           if (!Array.isArray(body.cwds) || body.cwds.some((cwd: unknown) => typeof cwd !== 'string')) throw new Error('Expected bounded cwds');
           value = await host.classifyLocations(body.cwds, string('endpoint'), body.authorityId === undefined ? undefined : string('authorityId')); break;

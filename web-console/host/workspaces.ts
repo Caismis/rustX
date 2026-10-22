@@ -345,13 +345,16 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   /** One native App Server connection in one registration's authority lane.
    * The registration is resolved before connecting and again immediately
    * before submission; `current` re-resolves it after native work. */
-  private nativeLane<T>(id: string, resolve: () => Promise<string>, run: (client: AppServerClient, cwd: string, current: () => Promise<boolean>) => Promise<T>): Promise<T> {
+  private nativeLane<T>(id: string, resolve: () => Promise<string>, run: (client: AppServerClient, cwd: string, current: () => Promise<boolean>) => Promise<T>, native?: string): Promise<T> {
     return this.lane(id, async () => {
       const cwd = await resolve();
       if (!this.config.transportToken) throw new Error('Workspace Host has no native configuration connection');
       const transport = await WebSocketTransport.connect({ endpoint: this.config.endpoint, token: this.config.transportToken });
       const client = await AppServerClient.initialize({ transport, identity: { name: 'rustx-product-host', version: '0.1.0' } }).catch(error => { transport.close(); throw error; });
       try {
+        // The connection just opened may reach another App Server process at
+        // the same endpoint; a transaction bound to one never runs on another.
+        if (native !== undefined && client.authorityId !== native) throw new WorkspaceHostError('App Server authority replaced', 'native_replaced');
         // Resolve again after asynchronous admission, immediately before submission.
         if (await resolve() !== cwd) throw new Error('Workspace authority changed');
         return await run(client, cwd, async () => await resolve() === cwd);
@@ -396,8 +399,9 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
    * replaced authority is `authority_replaced` even when it reuses the
    * registration ID; a registration that is unknown, unavailable or changed
    * is `workspace_unavailable`. Neither falls back to another directory. */
-  async workflowWorkspace(scope: WorkspaceAuthorityScope, id: string, operation: WorkflowHostOperation): Promise<WorkflowHostResult> {
+  async workflowWorkspace(scope: WorkspaceAuthorityScope, native: string, id: string, operation: WorkflowHostOperation): Promise<WorkflowHostResult> {
     validateWorkflowOperation(operation);
+    if (typeof native !== 'string' || !native) throw new WorkspaceHostError('Expected native App Server authority', 'native_replaced');
     // Both lane resolutions, including the one immediately before native
     // dispatch, validate the authority before mapping the registration.
     const resolve = async () => {
@@ -441,7 +445,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
           return { kind: 'write', commit: { acknowledgement: { revision: acknowledgement.revision, configuration_revision: acknowledgement.configuration_revision ?? null }, reread } };
         }
       }
-    });
+    }, native);
   }
   async classifyLocations(cwds: readonly string[], endpoint: string, authorityId?: string): Promise<SessionLocation[]> {
     this.route(endpoint);
