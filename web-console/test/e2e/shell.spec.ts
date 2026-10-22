@@ -119,6 +119,10 @@ for (const mode of ['empty', 'preview', 'named', 'delete', 'other-uncertain', 'b
   if (mode !== 'background' && mode !== 'other-uncertain') await page.evaluate(mode => window.sessionFixture.presentation(mode), mode);
   await expect(page.getByRole('tree', { name: 'Session browser' })).toHaveCount(1);
   await expect(page.getByRole('tablist')).toHaveCount(1);
+  if (mode === 'empty') {
+    await expect(page.getByLabel('Session title')).toHaveText('A');
+    await expect(page.locator('button[data-session-id="A"]')).toHaveAttribute('aria-label', 'Open A');
+  }
   if (mode === 'background') {
     await page.locator('button[data-session-id="B"]').click();
     await expect(page.getByLabel('Session title')).toHaveText('Session B');

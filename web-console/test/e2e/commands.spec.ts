@@ -143,10 +143,17 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     await settled();
     await expect(transcript.getByText('Regenerate my uploaded note', { exact: true })).toHaveCount(1);
     await expect(transcript.getByText('Original native answer', { exact: true })).toHaveCount(0);
+    wire.holdNext('session/attach');
     await sessionTree(page);
     await page.getByRole('dialog', { name: 'Session tree', exact: true }).getByRole('option').filter({ hasText: forkConversation }).click();
+    await expect.poll(() => wire.held()).toBe(1);
     await expect(transcript.getByText('Original native answer', { exact: true })).toBeVisible();
     await expect(transcript.getByText('Inherited replay answer', { exact: true })).toHaveCount(0);
+    // History renders before the new live attachment. Its usage trigger is
+    // replaced on attachment, so wait for the live response actions first.
+    wire.releaseHeld();
+    await expect(page.getByRole('button', { name: 'Regenerate', exact: true })).toBeEnabled();
+    expect((await snapshot()).conversation_id).toBe(forkConversation);
     await page.setViewportSize({ width: 390, height: 844 });
     await usageButton.click();
     await expect(page.getByRole('dialog', { name: 'Turn usage', exact: true })).toBeVisible();
