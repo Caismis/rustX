@@ -68,7 +68,8 @@ for (const theme of ['Light', 'Dark'] as const) for (const width of [1440,390]) 
       await expect(modal.getByLabel(name, {exact:true})).toHaveCount(0);
     }
     await expect(modal.getByRole('textbox', {name:'Model request parameters', exact:true})).toHaveCount(1);
-    await expect(modal.getByRole('checkbox')).toHaveCount(3);
+    await expect(modal.getByRole('checkbox')).toHaveCount(2);
+    await expect(modal.getByRole('checkbox', {name:'Tool calls', exact:true})).toHaveCount(0);
     await expect(modal.getByRole('checkbox', {name:'File', exact:true})).toHaveCount(0);
     await expect(modal.getByText('Output types', {exact:true})).toHaveCount(0);
     await modal.getByRole('checkbox', {name:'Image', exact:true}).first().uncheck();
@@ -182,7 +183,8 @@ test('Chinese settings use the same model dialog without Smart configuration', a
   await expect(modal.getByRole('button',{name:'取消',exact:true})).toBeInViewport();
   await accessible(page);
   await expect(modal.getByText('输出类型',{exact:true})).toHaveCount(0);
-  await expect(modal.getByRole('checkbox')).toHaveCount(3);
+  await expect(modal.getByRole('checkbox')).toHaveCount(2);
+    await expect(modal.getByRole('checkbox', {name:'工具调用', exact:true})).toHaveCount(0);
   await expect(modal.getByRole('checkbox', {name:'文件', exact:true})).toHaveCount(0);
   await modal.getByText('输入类型',{exact:true}).scrollIntoViewIfNeeded();
   await expectStableScreenshot(modal,'model-advanced-zh-dark.png');

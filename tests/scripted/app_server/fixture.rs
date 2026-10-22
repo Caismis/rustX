@@ -152,8 +152,6 @@ impl Fixture {
             "128000",
             "--max-output",
             "4096",
-            "--tool-calls",
-            "true",
             "--compat",
             "chat_reasoning_replay = \"omit\"",
         ]

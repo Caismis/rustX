@@ -55,7 +55,7 @@ it('T10 T11 disconnect preserves native execution and WebUI/TUI recover exact bo
     const home=fixture.path('home'),cwd=fixture.path('workspace');mkdirSync(home,{recursive:true});mkdirSync(cwd,{recursive:true});
     const env: NodeJS.ProcessEnv={...process.env,HOME:home,RUSTX_467_FIXTURE_KEY:'fixture-only'};delete env.XDG_CONFIG_HOME;delete env.XDG_STATE_HOME;
     stage = 'native init';
-    const initialized=spawnSync(binary,['init','--template','openai-chat','--provider','fixture','--model-id','integration-model','--endpoint',provider.url(),'--credential-env','RUSTX_467_FIXTURE_KEY','--context-window','128000','--max-output','4096','--tool-calls','true','--compat','chat_reasoning_replay = "omit"'],{env,encoding:'utf8'});
+    const initialized=spawnSync(binary,['init','--template','openai-chat','--provider','fixture','--model-id','integration-model','--endpoint',provider.url(),'--credential-env','RUSTX_467_FIXTURE_KEY','--context-window','128000','--max-output','4096','--compat','chat_reasoning_replay = "omit"'],{env,encoding:'utf8'});
     expect(initialized.status,initialized.stderr).toBe(0);
     writeFileSync(join(cwd,'rustx.toml'),'[agent.tools]\nbuiltin = ["read"]\n');writeFileSync(fixture.path('token'),token+'\n');
     processOwner=spawn(binary,['app-server','--runtime-root',fixture.path('runtime'),'--listen','ws://127.0.0.1:0','--token-file',fixture.path('token')],{env,cwd,stdio:['pipe','pipe','pipe']});

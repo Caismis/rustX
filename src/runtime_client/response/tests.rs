@@ -233,7 +233,7 @@ fn start_request_with_window(
             protocol: ModelProtocol::OpenAiChatCompletions,
             max_output_tokens: 100,
             request_params: RequestParams::new(),
-            capabilities: ModelCapabilities::text_only(true),
+            capabilities: ModelCapabilities::text_only(),
             compat: ModelCompat::default(),
         },
         context_window,

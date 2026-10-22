@@ -26,7 +26,7 @@ id = "local-model"
 protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 4096
-capabilities = { input_modalities = ["text"], output_modalities = ["text"], tool_calls = true }
+capabilities = { input_modalities = ["text"], output_modalities = ["text"] }
 compat = { chat_reasoning_replay = "omit" }
 `);
   const marker = join(workspace, 'user-owned'); writeFileSync(marker, 'keep');

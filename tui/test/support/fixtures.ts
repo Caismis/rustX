@@ -185,12 +185,10 @@ export function invocation(
     capabilities: {
       inputModalities: ["text"],
       outputModalities: ["text"],
-      toolCalls: true,
       },
     declaredCapabilities: {
       inputModalities: ["text"],
       outputModalities: ["text"],
-      toolCalls: true,
       },
     ...overrides,
   };
@@ -568,12 +566,10 @@ export function catalogModel(
     declaredCapabilities: {
       inputModalities: ["text"],
       outputModalities: ["text"],
-      toolCalls: true,
       },
     effectiveCapabilities: {
       inputModalities: ["text"],
       outputModalities: ["text"],
-      toolCalls: true,
       },
     credentialSource: { type: "environment", variable: "RUSTX_KEY" },
     ...overrides,

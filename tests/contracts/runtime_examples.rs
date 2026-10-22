@@ -55,7 +55,6 @@ fn committed_model_example_uses_the_production_catalog_contract() {
     assert_eq!(model.protocol, ModelProtocol::OpenAiChatCompletions);
     assert_eq!(model.context_window, 128_000);
     assert_eq!(model.max_output_tokens, 4_096);
-    assert!(model.capabilities.tool_calls);
     assert_eq!(model.compat, rustx::model::ModelCompat::default());
     // A Model with profiles declares no model-level native parameters.
     assert!(model.request_params.is_empty());

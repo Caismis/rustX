@@ -478,12 +478,10 @@ describe("CommandDispatcher", () => {
             declaredCapabilities: {
               inputModalities: ["text"],
               outputModalities: ["text"],
-              toolCalls: true,
               },
             effectiveCapabilities: {
               inputModalities: ["text"],
               outputModalities: ["text"],
-              toolCalls: true,
               },
             profiles: [{ id: "off" }],
             defaultProfile: "off",
@@ -604,12 +602,10 @@ describe("CommandDispatcher", () => {
             declaredCapabilities: {
               inputModalities: ["text"],
               outputModalities: ["text"],
-              toolCalls: true,
               },
             effectiveCapabilities: {
               inputModalities: ["text"],
               outputModalities: ["text"],
-              toolCalls: true,
               },
             credentialSource: { type: "environment", variable: "RUSTX_KEY" },
           },

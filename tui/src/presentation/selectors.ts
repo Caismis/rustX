@@ -322,7 +322,6 @@ export function capabilitySummary(invocation: ModelInvocationView): string {
   const parts = [
     `in: ${invocation.capabilities.inputModalities.join("/") || "none"}`,
     `out: ${invocation.capabilities.outputModalities.join("/") || "none"}`,
-    `tools: ${invocation.capabilities.toolCalls ? "yes" : "no"}`,
   ];
   return parts.join("  ");
 }

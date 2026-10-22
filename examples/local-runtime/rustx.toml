@@ -79,7 +79,6 @@ default_profile = "off"
 [models."example/demo-model".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
 [models."example/demo-model".profiles.off]
 request_params = '{"temperature":0.2}'
 

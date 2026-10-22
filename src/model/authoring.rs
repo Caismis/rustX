@@ -57,7 +57,6 @@ pub struct Model {
 pub struct Capabilities {
     pub input_modalities: BTreeSet<Modality>,
     pub output_modalities: BTreeSet<Modality>,
-    pub tool_calls: bool,
 }
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -125,7 +124,6 @@ impl From<Model> for ModelDocument {
             capabilities: ModelCapabilities {
                 input_modalities: value.capabilities.input_modalities,
                 output_modalities: value.capabilities.output_modalities,
-                tool_calls: value.capabilities.tool_calls,
             },
             request_params: value.request_params.map(|params| params.0),
             default_profile: value.default_profile,
@@ -173,7 +171,6 @@ request_params = '{"future":{"nested":[1,"text",{"new":true},null]},"temperature
 [models."p/plain".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
 
 [models."p/m"]
 provider = "p"
@@ -185,7 +182,6 @@ default_profile = "balanced"
 [models."p/m".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
 [models."p/m".profiles.fast]
 max_output_tokens = 1024
 request_params = '{"reasoning_effort":"low"}'
@@ -327,9 +323,14 @@ request_params = '{"thinking":{"type":"disabled"}}'
                 "unknown field `reasoning`",
             ),
             (
-                "tool_calls = true",
-                "tool_calls = true\nreasoning = true",
+                "output_modalities = [\"text\"]",
+                "output_modalities = [\"text\"]\nreasoning = true",
                 "unknown field `reasoning`",
+            ),
+            (
+                "output_modalities = [\"text\"]",
+                "output_modalities = [\"text\"]\ntool_calls = false",
+                "unknown field `tool_calls`",
             ),
             (
                 "[models.\"p/m\".profiles.off]",

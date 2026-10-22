@@ -20,4 +20,3 @@ max_output_tokens = 4096
 [models."example/demo-model".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true

@@ -38,7 +38,7 @@ source.user.authored!.providers![longProvider] = {
   credential: { type: 'environment', variable: 'ENTERPRISE_INFERENCE_GATEWAY_EU_CENTRAL_PRIMARY_API_KEY' },
 };
 source.user.authored!.models![longModel] = { provider: longProvider, id: longModel, protocol: 'openai_chat_completions', context_window: '1048576', max_output_tokens: 65536,
-  capabilities: { input_modalities: ['text', 'image'], output_modalities: ['text'], tool_calls: true } };
+  capabilities: { input_modalities: ['text', 'image'], output_modalities: ['text'] } };
 source.workspace!.authored = { agent_id: 'rustx', agent: { description: 'A native coding assistant', instructions: 'Inspect the source, implement the change, and verify native boundaries.', tools: { builtin: ['read', 'glob'], sources: { 'python:analysis': 'all' } }, plugins: { goal: { enabled: true }, todo: { enabled: true } } }, models: effective.document.models, providers: source.user.authored!.providers };
 effective.document.providers = source.user.authored!.providers;
 effective.provenance = { 'models.main': { kind: 'workspace', base: '/workspace', document: '/workspace/rustx.toml' }, 'providers.transport': { kind: 'user', base: '/bound', document: '/bound/rustx.toml' } };
@@ -83,7 +83,7 @@ function sessionApplication(state: string): ConfigurationApplication {
 // permission; ordinary Settings references deliberately do not publish these.
 if (variant.get('conversation') === 'ready') {
   source.prospective_approval_mode = 'policy';
-  const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], toolCalls: true };
+  const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const] };
   source.session_models = { kind: 'available', default_model: { model: 'fixture/model' }, catalog: { models: [{
     model: 'fixture/model', protocol: 'openai_responses', contextWindow: 128000, maxOutputTokens: 8192,
     declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [],

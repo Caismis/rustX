@@ -128,7 +128,6 @@ request_params = '{"temperature":0.2,"vendor":{"nested_option":true,"unset":null
 [models.fast.capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
 
 # A Model with profiles: each profile is a complete preset; the Model itself
 # declares no request_params.
@@ -143,7 +142,6 @@ default_profile = "balanced"
 [models.thinker.capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
 
 [models.thinker.profiles.fast]
 max_output_tokens = 2048
@@ -172,6 +170,10 @@ credential source; no member is recovered from the shadowed User Provider.
 Each Model requires `provider`, provider-native `id`, explicit `protocol`,
 `context_window`, `max_output_tokens`, and the complete `capabilities` object.
 Supported protocols and modality values are enumerated by the generated schema.
+rustX treats every configured model as supporting tool calls; there is no per-model capability switch.
+Agent tool selection and runtime permissions determine which tools are available.
+The obsolete `capabilities.tool_calls` field and `rustx init --tool-calls` flag are
+not accepted; remove them from existing configuration and launch commands.
 No `compat` declaration is required, including with `rustx init`. Like ZCode's
 OpenAI-compatible path, Chat Completions defaults to `max_completion_tokens`,
 `stream_options.include_usage = true`, native `tool_calls`, and replay of exposed
@@ -1104,7 +1106,6 @@ max_output_tokens = 4096
 [models.vision.capabilities]
 input_modalities = ["text", "image"]
 output_modalities = ["text"]
-tool_calls = true
 
 [agent.model]
 model = "vision"

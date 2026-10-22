@@ -6448,7 +6448,7 @@ fn raw_publication_snapshot(
             protocol: crate::model::ModelProtocol::OpenAiChatCompletions,
             max_output_tokens: 100,
             request_params: crate::model::invocation::RequestParams::new(),
-            capabilities: crate::model::ModelCapabilities::text_only(true),
+            capabilities: crate::model::ModelCapabilities::text_only(),
             compat: crate::model::ModelCompat::default(),
         },
         4096,

@@ -28,7 +28,7 @@ export interface ModelsPageProps {
 
 const emptyModel = (provider = '', id = ''): Model => ({
   provider, id, protocol: 'openai_responses', context_window: '128000', max_output_tokens: 8192,
-  capabilities: { input_modalities: ['text'], output_modalities: ['text'], tool_calls: true },
+  capabilities: { input_modalities: ['text'], output_modalities: ['text'] },
 });
 
 function credentialLabel(tx: Translate, provider: ProviderView | undefined): string {

@@ -22,7 +22,6 @@ request_params = '{"vendor_x":{"secret_mode":true},"temperature":0.25}'
 [models."local/a".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
 [agent.model]
 model = "local/a"
 "#;
@@ -872,7 +871,6 @@ max_output_tokens = 8192
 [models."workspace-provider/model-a".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
 "#;
 
 const USER_SELECTING_WORKSPACE_MODEL: &str =
@@ -893,7 +891,7 @@ fn semantic_diagnostics_never_echo_authored_values_or_identities() {
     };
     let model = |key: &str, extra: &str| {
         format!(
-            "[models.\"{key}\"]\nprovider = \"local\"\nid = \"wire\"\nprotocol = \"openai_responses\"\ncontext_window = 128000\nmax_output_tokens = 8192\n{extra}[models.\"{key}\".capabilities]\ninput_modalities = [\"text\"]\noutput_modalities = [\"text\"]\ntool_calls = true\n"
+            "[models.\"{key}\"]\nprovider = \"local\"\nid = \"wire\"\nprotocol = \"openai_responses\"\ncontext_window = 128000\nmax_output_tokens = 8192\n{extra}[models.\"{key}\".capabilities]\ninput_modalities = [\"text\"]\noutput_modalities = [\"text\"]\n"
         )
     };
     let local = provider("local", "https://example.com/v1");
@@ -3305,7 +3303,6 @@ zsecretz_model_key = 1
 [models."zsecretz-provider/zsecretz-model".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
 [models."zsecretz-provider/zsecretz-model".profiles."zsecretz-profile"]
 request_params = '{"zsecretz_param":"zsecretz-value"}'
 zsecretz_profile_key = true

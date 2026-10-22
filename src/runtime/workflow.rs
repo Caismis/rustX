@@ -2543,13 +2543,6 @@ impl WorkflowRuntime {
                 node: node_id.to_string(),
                 detail: bound_workflow_diagnostic(error.to_string()),
             })?;
-        if !resolved.model.primary.capabilities.tool_calls {
-            return Err(WorkflowRunError::ChildStart {
-                node: node_id.to_string(),
-                detail: "Workflow Agent profile resolves to a model without tool-call capability"
-                    .to_owned(),
-            });
-        }
         let mut bound = serde_json::Map::new();
         for (key, binding) in &agent.input {
             bound.insert(key.clone(), evaluate_value(binding, input, values)?);
@@ -3200,7 +3193,6 @@ max_output_tokens = 512
 [models."local/model".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
 [models."local/model".compat]
 chat_reasoning_replay = "omit"
 "#;

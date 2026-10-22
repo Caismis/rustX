@@ -157,7 +157,7 @@ fn cli04_bare_invocation_is_help_and_launch_grammar_is_retired() {
     );
 }
 #[test]
-fn cli05_explicit_false_and_typed_init_values() {
+fn cli05_typed_init_values() {
     let base = [
         "init",
         "--template=anthropic",
@@ -166,11 +166,10 @@ fn cli05_explicit_false_and_typed_init_values() {
         "--credential-env=KEY",
     ];
     let Command::Init { request, .. } =
-        parse(&[base.to_vec(), vec!["--tool-calls", "false", "--compat="]].concat()).unwrap()
+        parse(&[base.to_vec(), vec!["--compat="]].concat()).unwrap()
     else {
         panic!()
     };
-    assert_eq!(request.tool_calls, Some(false));
     assert_eq!(request.compat.as_deref(), Some(""));
     assert!(
         request.model_id.is_none()
@@ -179,7 +178,7 @@ fn cli05_explicit_false_and_typed_init_values() {
     );
     for args in [
         vec!["--tool-calls"],
-        vec!["--tool-calls=yes"],
+        vec!["--tool-calls=false"],
         vec!["--context-window=abc"],
         vec!["--max-output=4294967296"],
         vec!["--provider=other"],

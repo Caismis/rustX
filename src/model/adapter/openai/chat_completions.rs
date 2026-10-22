@@ -1446,16 +1446,7 @@ fn construct_request(
             include_obfuscation: None,
         });
     }
-    // Tool definitions are only sent to a model whose effective capabilities
-    // include tool calls; the runtime never compiles tools for a text-only
-    // model, and this is the adapter-side guard for the same invariant.
     if !request.tools.is_empty() {
-        if !request.invocation.capabilities.tool_calls {
-            return Err(unsupported(
-                "the effective model capabilities do not include tool calls; \
-                 tool definitions are never sent to a text-only model",
-            ));
-        }
         builder.tools(translate_tools(&request.tools));
     }
     let typed = builder

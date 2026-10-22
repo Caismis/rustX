@@ -236,15 +236,11 @@
           },
           "type": "array",
           "uniqueItems": true
-        },
-        "tool_calls": {
-          "type": "boolean"
         }
       },
       "required": [
         "input_modalities",
-        "output_modalities",
-        "tool_calls"
+        "output_modalities"
       ],
       "type": "object"
     },

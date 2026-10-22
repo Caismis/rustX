@@ -23,12 +23,7 @@ export function ModelFields({ form }: { form: TypedForm<Model> }) {
     </div>
     <Advanced title={tx('settings:models.advanced')}>
     <Text form={form} name="provider" label={tx('settings:models-page.provider-identity')} required />
-    <fieldset className={cards.capabilities}><legend>{tx('settings:models-page.explicit-capabilities')}</legend>
-      <div className={cards.chips}>
-        <CapabilityChip form={form} name="tool_calls" label={tx('settings:models-page.tool-calls')} />
-      </div>
-      <InputModalities form={form} />
-    </fieldset>
+    <InputModalities form={form} />
     <Profiles key={resets} form={form} modelParameters={modelParameters} />
     <div ref={modelParameters}><ModelRequestParameters form={form} /></div>
     </Advanced>
@@ -53,13 +48,6 @@ function Protocol({ form }: { form: TypedForm<Model> }) {
         protocol.handleChange(next as never);
       }
     }} />}</Bound>}</Bound>;
-}
-
-function CapabilityChip({ form, name, label }: { form: TypedForm<Model>; name: 'tool_calls'; label: string }) {
-  const Bound = form.Field as unknown as Field;
-  return <Bound name={`capabilities.${name}`}>{field => <label className={cards.chip}>
-    <input type="checkbox" checked={!!field.state.value} onChange={event => field.handleChange(event.target.checked as never)} />{label}
-  </label>}</Bound>;
 }
 
 function InputModalities({ form }: { form: TypedForm<Model> }) {

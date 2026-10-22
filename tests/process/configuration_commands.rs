@@ -159,8 +159,6 @@ fn cfg235_binary_init_check_show_exit_and_machine_contract() {
         "128000",
         "--max-output",
         "4096",
-        "--tool-calls",
-        "true",
         "--compat",
         "chat_reasoning_replay = \"omit\"",
         "--json",

@@ -347,6 +347,7 @@ pub enum Modality {
 /// capability is always an [`intersection`](ModelCapabilities::intersect) of
 /// the model claim, the adapter/protocol capability, and the current runtime
 /// capability — a raw catalog claim is never advertised.
+/// Tool calls are supported by every model and are not a configurable capability.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
@@ -355,18 +356,15 @@ pub struct ModelCapabilities {
     pub input_modalities: BTreeSet<Modality>,
     /// The produced output modalities.
     pub output_modalities: BTreeSet<Modality>,
-    /// Whether the model can be given tool definitions and can call them.
-    pub tool_calls: bool,
 }
 
 impl ModelCapabilities {
     /// The capability set of a text-only model.
     #[must_use]
-    pub fn text_only(tool_calls: bool) -> Self {
+    pub fn text_only() -> Self {
         Self {
             input_modalities: BTreeSet::from([Modality::Text]),
             output_modalities: BTreeSet::from([Modality::Text]),
-            tool_calls,
         }
     }
 
@@ -384,7 +382,6 @@ impl ModelCapabilities {
                 .intersection(&other.output_modalities)
                 .copied()
                 .collect(),
-            tool_calls: self.tool_calls && other.tool_calls,
         }
     }
 
@@ -2034,7 +2031,7 @@ mod tests {
             "models": {"chosen": {
                 "provider":"p", "id":"wire/model", "protocol":"openai_chat_completions",
                 "contextWindow":1000, "maxOutputTokens":100,
-                "capabilities":{"inputModalities":["text"],"outputModalities":["text"],"toolCalls":true},
+                "capabilities":{"inputModalities":["text"],"outputModalities":["text"]},
                 "compat":{"chatReasoningReplay":"omit"}
             }}
         })
@@ -2326,8 +2323,8 @@ mod tests {
     #[test]
     fn malformed_capabilities_fail() {
         for capabilities in [
-            json!({"inputModalities":[],"outputModalities":["text"],"toolCalls":true}),
-            json!({"inputModalities":["text"],"outputModalities":[],"toolCalls":true}),
+            json!({"inputModalities":[],"outputModalities":["text"]}),
+            json!({"inputModalities":["text"],"outputModalities":[]}),
         ] {
             let mut value = document();
             value["models"]["chosen"]["capabilities"] = capabilities;
@@ -2805,7 +2802,7 @@ mod tests {
             |v| v["models"]["chosen"]["id"] = "wire/other".into(),
             |v| v["models"]["chosen"]["contextWindow"] = 2000.into(),
             |v| v["models"]["chosen"]["maxOutputTokens"] = 200.into(),
-            |v| v["models"]["chosen"]["capabilities"]["toolCalls"] = false.into(),
+            |v| v["models"]["chosen"]["capabilities"]["inputModalities"] = json!(["text", "image"]),
             |v| v["models"]["chosen"]["compat"]["chatReasoningReplay"] = "reasoning_content".into(),
             |v| {
                 v["models"]["chosen"]["protocol"] = "openai_responses".into();

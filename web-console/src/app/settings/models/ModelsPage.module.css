@@ -43,7 +43,6 @@
 .modelDialog label { font-size: 14px; }
 .modelDialog h4 { margin: 0; }
 .modelDialog :is(label, fieldset) { min-width: 0; }
-.modelDialog .capabilities { border: 0; padding: 0; }
 .modalityGroup { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; font-size: 13px; color: var(--dsw-alias-label-secondary); }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .chips .chip { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid var(--dsw-alias-border-l3); border-radius: 8px; cursor: pointer; }

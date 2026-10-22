@@ -787,7 +787,7 @@ fn models_json(emulator: &ProviderEmulator, setup: &Setup) -> String {
             serde_json::json!({
                 "provider": provider, "id": id, "protocol": protocol,
                 "context_window": window, "max_output_tokens": 1024,
-                "capabilities": if setup.images && protocol == "anthropic_messages" { serde_json::json!({"input_modalities": ["text", "image"], "output_modalities": ["text"], "tool_calls": true}) } else { text_capabilities() },
+                "capabilities": if setup.images && protocol == "anthropic_messages" { serde_json::json!({"input_modalities": ["text", "image"], "output_modalities": ["text"]}) } else { text_capabilities() },
             }),
         );
     }
@@ -800,7 +800,7 @@ fn models_json(emulator: &ProviderEmulator, setup: &Setup) -> String {
                 "provider":"emulator", "id":id, "protocol":protocol,
                 "compat": if protocol == "openai_chat_completions" { serde_json::json!({"chat_reasoning_replay":"omit"}) } else { serde_json::json!({}) },
                 "context_window":window, "max_output_tokens":1024,
-                "capabilities":{"input_modalities":["text","image"],"output_modalities":["text"],"tool_calls":true}
+                "capabilities":{"input_modalities":["text","image"],"output_modalities":["text"]}
             }));
         }
     }
@@ -828,7 +828,6 @@ fn text_capabilities() -> serde_json::Value {
     serde_json::json!({
     "input_modalities": ["text"],
     "output_modalities": ["text"],
-    "tool_calls": true,
     })
 }
 

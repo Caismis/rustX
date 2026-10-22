@@ -20,7 +20,6 @@ pub struct InitializationRequest {
     pub model_id: Option<String>,
     pub context_window: Option<u64>,
     pub max_output: Option<u32>,
-    pub tool_calls: Option<bool>,
     pub compat: Option<String>,
     pub model_document: Option<PathBuf>,
 }
@@ -57,7 +56,6 @@ pub(super) fn documents(request: &InitializationRequest) -> Result<[Vec<u8>; 1],
         if request.model_id.is_some()
             || request.context_window.is_some()
             || request.max_output.is_some()
-            || request.tool_calls.is_some()
             || request.compat.is_some()
         {
             return Err("custom uses --model-document for the complete model declaration".into());
@@ -96,7 +94,6 @@ pub(super) fn documents(request: &InitializationRequest) -> Result<[Vec<u8>; 1],
             capabilities: Capabilities {
                 input_modalities: [crate::model::catalog::Modality::Text].into(),
                 output_modalities: [crate::model::catalog::Modality::Text].into(),
-                tool_calls: request.tool_calls.ok_or("init requires --tool-calls")?,
             },
             request_params: None,
             default_profile: None,
@@ -364,7 +361,6 @@ mod tests {
             model_id: Some("declared".into()),
             context_window: Some(128_000),
             max_output: Some(4096),
-            tool_calls: Some(true),
             compat: None,
             model_document: None,
         }
@@ -385,19 +381,18 @@ mod tests {
             model_id: None,
             context_window: None,
             max_output: None,
-            tool_calls: None,
             compat: None,
             model_document: Some(path.clone()),
             ..declarations()
         };
         assert_eq!(documents(&custom).unwrap(), bytes);
-        custom.tool_calls = Some(false);
+        custom.model_id = Some("other".into());
         assert!(
             documents(&custom)
                 .unwrap_err()
                 .contains("complete model declaration")
         );
-        custom.tool_calls = None;
+        custom.model_id = None;
         custom.model_document = None;
         assert!(documents(&custom).unwrap_err().contains("--model-document"));
         for mutation in 0..6 {

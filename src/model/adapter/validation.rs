@@ -110,22 +110,6 @@ pub fn validate_request(
         ));
     }
 
-    if !request.tools.is_empty() && !request.invocation.capabilities.tool_calls {
-        return Err(ModelError {
-            kind: ModelErrorKind::Unsupported,
-            message: "the effective model capabilities do not include tool calls; \
-                      tool definitions are never sent to a text-only model"
-                .to_owned(),
-            retry_disposition: crate::model::error::ModelRetryDisposition::Never,
-            retry_after_ms: None,
-            provider_code: None,
-            context_overflow: None,
-            malformed_tool_proposal: None,
-            timeout_phase: None,
-            generation: None,
-        });
-    }
-
     {
         #[cfg(feature = "issue-387-profile")]
         let _profile = super::profile::phase(super::profile::Phase::Continuation);
@@ -323,7 +307,7 @@ mod tests {
                 protocol: ModelProtocol::OpenAiResponses,
                 max_output_tokens: 512,
                 request_params: crate::model::invocation::RequestParams::new(),
-                capabilities: crate::model::catalog::ModelCapabilities::text_only(true),
+                capabilities: crate::model::catalog::ModelCapabilities::text_only(),
                 compat: crate::model::catalog::ModelCompat::default(),
             },
             messages: crate::model::SelectedModelInput::default(),

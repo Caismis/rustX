@@ -435,7 +435,7 @@ pub fn invocation(
         protocol,
         max_output_tokens: 512,
         request_params: rustx::model::RequestParams::new(),
-        capabilities: rustx::model::ModelCapabilities::text_only(true),
+        capabilities: rustx::model::ModelCapabilities::text_only(),
         compat: rustx::model::ModelCompat {
             chat_reasoning_replay,
             ..rustx::model::ModelCompat::default()

@@ -383,7 +383,6 @@ fn effective_capabilities_intersect_the_raw_claim() {
             .into_iter()
             .collect(),
         output_modalities: [Modality::Text, Modality::Image].into_iter().collect(),
-        tool_calls: true,
     };
     for protocol in [
         ModelProtocol::OpenAiChatCompletions,
@@ -406,11 +405,10 @@ fn effective_capabilities_intersect_the_raw_claim() {
         );
     }
 
-    // The intersection can only narrow: a model that claims no tool calls
-    // stays without tool calls.
-    let restricted = ModelCapabilities::text_only(false);
+    // A text-only declaration still narrows image-capable adapters.
+    let restricted = ModelCapabilities::text_only();
     let effective = effective_capabilities(&restricted, ModelProtocol::OpenAiChatCompletions);
-    assert!(!effective.tool_calls);
+    assert_eq!(effective, restricted);
 }
 
 /// Unsupported canonical input is rejected **before** the provider request
@@ -462,42 +460,49 @@ async fn unsupported_input_is_rejected_before_any_provider_request() {
     }
 }
 
-/// A model without effective tool-call capability stays usable as a text
-/// model, and tool definitions are refused rather than silently sent.
+/// Every protocol accepts tools without a model capability declaration.
+/// Requests without tools remain ordinary text requests.
 #[tokio::test]
-async fn a_text_only_model_is_usable_and_never_receives_tools() {
+async fn tools_are_sent_by_default_when_present() {
     for protocol in Protocol::ALL {
         // A plain text request succeeds.
         let server = protocol.server().await;
         let mut request =
             crate::common::simple_request(protocol.model_protocol(), "wire-test", "hi");
-        request.invocation.capabilities = ModelCapabilities::text_only(false);
+        request.invocation.capabilities = ModelCapabilities::text_only();
         let events =
             crate::common::collect_events(protocol.adapter(&server).as_ref(), request).await;
         assert!(
             matches!(events.last(), Some(ModelEvent::Completed { .. })),
-            "a text-only model remains usable"
+            "a request without tools remains usable"
         );
         let body: serde_json::Value =
             serde_json::from_str(&server.request_body(0)).expect("JSON body");
         assert!(body.get("tools").is_none(), "no tool definitions are sent");
 
-        // Supplying tool definitions to it is refused before the network.
+        // The same text input/output declaration can carry tool definitions.
         let server = protocol.server().await;
         let mut request =
             crate::common::simple_request(protocol.model_protocol(), "wire-test", "hi");
-        request.invocation.capabilities = ModelCapabilities::text_only(false);
+        request.invocation.capabilities = ModelCapabilities::text_only();
         request.tools = vec![crate::common::model_tool("list_directory", "tool-list")];
         let events =
             crate::common::collect_events(protocol.adapter(&server).as_ref(), request).await;
-        assert_eq!(events.len(), 1);
-        match events.first() {
-            Some(ModelEvent::Failed { error }) => {
-                assert_eq!(error.kind, ModelErrorKind::Unsupported);
-            }
-            other => panic!("expected a terminal Failed, got {other:?}"),
-        }
-        assert_eq!(server.attempt_count(), 0);
+        assert!(
+            matches!(events.last(), Some(ModelEvent::Completed { .. })),
+            "{}",
+            crate::common::describe_events(&events)
+        );
+        assert_eq!(server.attempt_count(), 1);
+        let body: serde_json::Value =
+            serde_json::from_str(&server.request_body(0)).expect("JSON body");
+        let tools = body["tools"].as_array().expect("tool definitions are sent");
+        assert_eq!(tools.len(), 1);
+        let name = match protocol {
+            Protocol::Chat => &tools[0]["function"]["name"],
+            Protocol::Responses | Protocol::Anthropic => &tools[0]["name"],
+        };
+        assert_eq!(name, "list_directory");
     }
 }
 
@@ -511,7 +516,7 @@ fn the_invocation_configuration_is_credential_free_and_serializable() {
         protocol: ModelProtocol::AnthropicMessages,
         max_output_tokens: 256,
         request_params: params(serde_json::json!({"temperature": 0.2})),
-        capabilities: ModelCapabilities::text_only(true),
+        capabilities: ModelCapabilities::text_only(),
         compat: ModelCompat::default(),
     };
     let json = serde_json::to_string(&invocation).expect("serialize");
@@ -572,7 +577,6 @@ default_profile = "deep"
 [models."p/m".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
 [models."p/m".profiles.deep]
 max_output_tokens = 2048
 request_params = '''

@@ -2249,8 +2249,8 @@ mod tests {
             max_output_tokens: 512,
             profile: None,
             request_params: crate::model::invocation::RequestParams::new(),
-            capabilities: crate::model::catalog::ModelCapabilities::text_only(true),
-            declared_capabilities: crate::model::catalog::ModelCapabilities::text_only(true),
+            capabilities: crate::model::catalog::ModelCapabilities::text_only(),
+            declared_capabilities: crate::model::catalog::ModelCapabilities::text_only(),
             compat: crate::model::catalog::ModelCompat::default(),
         }
     }
@@ -2415,12 +2415,16 @@ mod tests {
                     .insert("temperature".to_owned(), serde_json::json!(0.2));
             }),
             explicit(&|invocation| {
-                invocation.capabilities =
-                    crate::model::catalog::ModelCapabilities::text_only(false);
+                invocation
+                    .capabilities
+                    .input_modalities
+                    .insert(crate::model::catalog::Modality::Image);
             }),
             explicit(&|invocation| {
-                invocation.declared_capabilities =
-                    crate::model::catalog::ModelCapabilities::text_only(false);
+                invocation
+                    .declared_capabilities
+                    .input_modalities
+                    .insert(crate::model::catalog::Modality::Image);
             }),
             explicit(&|invocation| {
                 invocation.compat.chat_reasoning_replay =
@@ -2443,8 +2447,10 @@ mod tests {
                     .insert("top_p".to_owned(), serde_json::json!(0.9));
             },
             &|invocation| {
-                invocation.capabilities =
-                    crate::model::catalog::ModelCapabilities::text_only(false);
+                invocation
+                    .capabilities
+                    .input_modalities
+                    .insert(crate::model::catalog::Modality::Image);
             },
             &|invocation| {
                 invocation.compat.chat_stream_usage =

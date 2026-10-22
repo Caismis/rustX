@@ -420,8 +420,8 @@ pub(crate) fn test_frozen_model_spec(model: ModelRef) -> FrozenModelSpec {
             max_output_tokens: 512,
             profile: None,
             request_params: RequestParams::new(),
-            capabilities: ModelCapabilities::text_only(true),
-            declared_capabilities: ModelCapabilities::text_only(true),
+            capabilities: ModelCapabilities::text_only(),
+            declared_capabilities: ModelCapabilities::text_only(),
             compat: ModelCompat::default(),
         },
         summary: FrozenSummaryModel::Session,
@@ -476,7 +476,6 @@ request_params = '{"temperature":0.25}'
 [models."local/m".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
 [models."local/m".compat]
 chat_reasoning_replay = "omit"
 "#;
@@ -612,7 +611,6 @@ default_profile = "fast"
 [models."local/m".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
 [models."local/m".compat]
 chat_reasoning_replay = "omit"
 

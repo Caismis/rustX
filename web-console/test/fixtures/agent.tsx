@@ -35,7 +35,7 @@ if (mode === 'desktop') {
 }
 
 server.handlers.set('session/effectiveConfiguration', () => { throw new RpcFailure({ code: -32000, message: 'Appearance fixture' }); });
-const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], toolCalls: true };
+const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const] };
 const model: SessionModelView = { configured: { model: 'native/coder' }, effective: { model: 'native/coder', protocol: 'openai_responses', contextWindow: 128000, modelMaxOutputTokens: 8192, maxOutputTokens: 8192, profile: 'deliberate', capabilities, declaredCapabilities: capabilities }, summary: { mode: 'session' } };
 const catalog: CatalogModelView[] = [{ model: 'native/coder', protocol: 'openai_responses', contextWindow: 128000, maxOutputTokens: 8192, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [{ id: 'deliberate' }, { id: 'brief' }], defaultProfile: 'deliberate', credentialSource: { type: 'literal' } }];
 const source: SourceSettings = { prospective_approval_mode: 'full_access', absent_resource_revision: 'absent', resource_revisions: {}, target: { kind: 'user' }, provenance: {}, process_policy_impacts: {}, user: { path: '/home/rustx.toml', revision: 'user', authored: {} }, workspace: { path: '/workspace/A/rustx.toml', revision: 'workspace', authored: {} }, user_resource_root: '/home/.agents', workspace_resource_root: '/workspace/A/.agents', runtime_root: '/runtime', user_mcp: { path: '/home/.agents/mcp.toml', revision: 'missing' }, workspace_mcp: { path: '/workspace/A/.agents/mcp.toml', revision: 'missing' }, agents: [], repair_sequence: '0' };

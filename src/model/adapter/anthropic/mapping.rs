@@ -358,21 +358,6 @@ fn construct_request(
 ) -> Result<serde_json::Value, ModelError> {
     let (system, messages) = translate_messages(request, tools, require_history)?;
 
-    if !request.tools.is_empty() && !request.invocation.capabilities.tool_calls {
-        return Err(ModelError {
-            kind: ModelErrorKind::Unsupported,
-            message: "the effective model capabilities do not include tool calls; \
-                      tool definitions are never sent to a text-only model"
-                .to_owned(),
-            retry_disposition: crate::model::error::ModelRetryDisposition::Never,
-            retry_after_ms: None,
-            provider_code: None,
-            context_overflow: None,
-            malformed_tool_proposal: None,
-            timeout_phase: None,
-            generation: None,
-        });
-    }
     let tools = translate_tools(&request.tools);
 
     let wire = WireRequest {

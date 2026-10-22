@@ -19,7 +19,6 @@ max_output_tokens = 8192
 [models."arbitrary-name".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
 "#;
 const ROOT: &str = r#"
 [agent.model]

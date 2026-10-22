@@ -61,8 +61,6 @@ impl Fixture {
                 "128000",
                 "--max-output",
                 "4096",
-                "--tool-calls",
-                "true",
                 "--compat",
                 "chat_reasoning_replay = \"omit\"",
             ])
@@ -1561,7 +1559,6 @@ request_params = '{{"temperature":0.11}}'
 [models."fixture/process-model".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
 [models."fixture/process-model".compat]
 chat_reasoning_replay = "omit"
 "#,

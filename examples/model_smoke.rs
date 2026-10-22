@@ -169,7 +169,7 @@ fn build_request(protocol: &str, model: &str, prompt: &str) -> ModelRequest {
             protocol,
             max_output_tokens: 512,
             request_params: RequestParams::new(),
-            capabilities: ModelCapabilities::text_only(true),
+            capabilities: ModelCapabilities::text_only(),
             compat: ModelCompat::default(),
         },
         messages: vec![rustx::model::ModelInputMessage::Canonical(

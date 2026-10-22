@@ -25,7 +25,6 @@ const CATALOG: CatalogModelView[] = [
     effectiveCapabilities: {
       inputModalities: ["text", "image"],
       outputModalities: ["text"],
-      toolCalls: true,
       },
     contextWindow: 200_000,
     maxOutputTokens: 8_192,
@@ -149,10 +148,10 @@ describe("search", () => {
     );
   });
 
-  it("matches the published tool capability", () => {
+  it("does not invent a searchable tool capability", () => {
     const component = selector();
     component.setQuery("tools");
-    assert.equal(component.visibleModels().length, CATALOG.length);
+    assert.equal(component.visibleModels().length, 0);
   });
 
   it("narrows rather than widens when tokens are combined", () => {
@@ -188,7 +187,6 @@ describe("search", () => {
       "Chat Completions",
       "text",
       "image",
-      "tools",
       "low",
       "medium",
       "high",
@@ -245,7 +243,7 @@ describe("search", () => {
 describe("displayed metadata", () => {
   it("shows published capability and window for the highlighted row", () => {
     const rendered = lines(selector()).join("\n");
-    assert.match(rendered, /Chat Completions · 200k ctx · 8k out · tools · in text\/image/);
+    assert.match(rendered, /Chat Completions · 200k ctx · 8k out · in text\/image/);
   });
 
   it("renders Model Profiles exactly as the catalog published them", () => {
@@ -276,7 +274,6 @@ describe("displayed metadata", () => {
           effectiveCapabilities: {
             inputModalities: ["text"],
             outputModalities: ["text"],
-            toolCalls: true,
             },
         }),
       ),
@@ -289,15 +286,13 @@ describe("displayed metadata", () => {
       declaredCapabilities: {
         inputModalities: ["text", "image"],
         outputModalities: ["text"],
-        toolCalls: true,
         },
       effectiveCapabilities: {
         inputModalities: ["text"],
         outputModalities: ["text"],
-        toolCalls: false,
         },
     });
-    assert.match(capabilityLine(model), /no tools/);
+    assert.doesNotMatch(capabilityLine(model), /image/);
     assert.match(capabilityLine(model), /in text$/);
   });
 });
@@ -424,7 +419,6 @@ describe("catalog presets are never presented as current configuration", () => {
             capabilities: {
               inputModalities: ["text"],
               outputModalities: ["text"],
-              toolCalls: true,
               },
             profile: "low",
             }),
@@ -457,7 +451,6 @@ describe("catalog presets are never presented as current configuration", () => {
           capabilities: {
             inputModalities: ["text"],
             outputModalities: ["text"],
-            toolCalls: true,
             },
           }),
       }),
@@ -476,7 +469,6 @@ describe("catalog presets are never presented as current configuration", () => {
           capabilities: {
             inputModalities: ["text"],
             outputModalities: ["text"],
-            toolCalls: true,
             },
           profile: "low",
           }),

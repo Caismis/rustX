@@ -1566,7 +1566,7 @@ mod tests {
         use crate::model::session::{AttemptModelView, SummaryModelView};
         use crate::model::types::ModelProtocol;
 
-        let capabilities = ModelCapabilities::text_only(true);
+        let capabilities = ModelCapabilities::text_only();
         AttemptModelView {
             primary: ModelInvocationView {
                 model: ModelRef::parse(reference).expect("a valid model reference"),

@@ -17,7 +17,7 @@ All value flags are optional unless marked required. Selection = `--model`,
 | config check | selection, process binding, `--json` | LaunchRequest; offline analysis | report stdout; 2/3 |
 | config show | check fields + exactly one of `--sources` / `--agent` | prospective sources or agent inspection | report stdout; 2/3 |
 | doctor | check fields + required `--probe`, optional `--prepare` requiring probe | native probe plan before effects; preparation only when permitted | reports stdout; 1 failure, 2 invalid, 3 unresolved |
-| init | required template/provider/endpoint/credential-env; optional model-id/context-window/max-output/tool-calls/compat/model-document; `--json` | typed declarations; native template rules, validation, create-only publication | report stdout; 0/2 |
+| init | required template/provider/endpoint/credential-env; optional model-id/context-window/max-output/compat/model-document; `--json` | typed declarations; native template rules, validation, create-only publication | report stdout; 0/2 |
 | app-server | required `--listen`; optional config/runtime-root/token-file | distinct process request; native path/transport validation and composition | protocol stdout; diagnostics stderr; 0/2 (existing forced drain 3) |
 | help | root, each nested command, `help <command>` | generated grammar only; no host capture or composition | stderr; 0 (1 on output failure) |
 | internal --subagent-child | exactly this one token | inherited control channel; existing child runtime | IPC stdout, diagnostics stderr; existing child exits |

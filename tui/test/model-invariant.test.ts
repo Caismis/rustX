@@ -441,12 +441,10 @@ describe("session model A -> B invariant", () => {
       capabilities: {
         inputModalities: ["text"],
         outputModalities: ["text"],
-        toolCalls: true,
         },
       declaredCapabilities: {
         inputModalities: ["text"],
         outputModalities: ["text"],
-        toolCalls: true,
         },
     });
     const state = replaceFromSnapshot(
@@ -467,12 +465,10 @@ describe("session model A -> B invariant", () => {
       capabilities: {
         inputModalities: ["text"],
         outputModalities: ["text"],
-        toolCalls: true,
         },
       declaredCapabilities: {
         inputModalities: ["text", "image"],
         outputModalities: ["text"],
-        toolCalls: true,
         },
     });
     const state = replaceFromSnapshot(

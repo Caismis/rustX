@@ -59,7 +59,6 @@ max_output_tokens = 4096
 [models."local/composed-model".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
 [models."local/composed-model".compat]
 chat_reasoning_replay = "omit"
 "#;

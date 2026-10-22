@@ -7886,7 +7886,6 @@ export interface Model {
 export interface Capabilities {
   input_modalities: Modality[];
   output_modalities: Modality[];
-  tool_calls: boolean;
 }
 /**
  * Opaque provider-native request parameters as a structured JSON object. Nested objects, arrays and null are preserved. Every number is exactly an IEEE 754 binary64 value (I-JSON); another, such as 9007199254740993, is refused. Runtime-protected wire keys are checked during model validation.
@@ -11604,10 +11603,6 @@ export interface ModelCapabilities {
    * The produced output modalities.
    */
   outputModalities: Modality[];
-  /**
-   * Whether the model can be given tool definitions and can call them.
-   */
-  toolCalls: boolean;
 }
 /**
  * The raw capabilities the catalog claims, for clients that want to
@@ -11622,10 +11617,6 @@ export interface ModelCapabilities1 {
    * The produced output modalities.
    */
   outputModalities: Modality[];
-  /**
-   * Whether the model can be given tool definitions and can call them.
-   */
-  toolCalls: boolean;
 }
 /**
  * The effective capabilities.
@@ -11639,10 +11630,6 @@ export interface ModelCapabilities2 {
    * The produced output modalities.
    */
   outputModalities: Modality[];
-  /**
-   * Whether the model can be given tool definitions and can call them.
-   */
-  toolCalls: boolean;
 }
 /**
  * The raw capabilities the catalog claims, for clients that want to
@@ -11657,10 +11644,6 @@ export interface ModelCapabilities3 {
    * The produced output modalities.
    */
   outputModalities: Modality[];
-  /**
-   * Whether the model can be given tool definitions and can call them.
-   */
-  toolCalls: boolean;
 }
 /**
  * Facts frozen together with the attempt model under native admission.
@@ -15803,10 +15786,6 @@ export interface ModelCapabilities4 {
    * The produced output modalities.
    */
   outputModalities: Modality[];
-  /**
-   * Whether the model can be given tool definitions and can call them.
-   */
-  toolCalls: boolean;
 }
 /**
  * The capabilities the runtime can actually deliver today.
@@ -15820,10 +15799,6 @@ export interface ModelCapabilities5 {
    * The produced output modalities.
    */
   outputModalities: Modality[];
-  /**
-   * Whether the model can be given tool definitions and can call them.
-   */
-  toolCalls: boolean;
 }
 /**
  * One selectable Model Profile of the public catalog view.
@@ -16784,6 +16759,7 @@ export interface ToolCallOccurrenceRef1 {
  * capability is always an [`intersection`](ModelCapabilities::intersect) of
  * the model claim, the adapter/protocol capability, and the current runtime
  * capability — a raw catalog claim is never advertised.
+ * Tool calls are supported by every model and are not a configurable capability.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ModelCapabilities".
@@ -16797,10 +16773,6 @@ export interface ModelCapabilities6 {
    * The produced output modalities.
    */
   outputModalities: Modality[];
-  /**
-   * Whether the model can be given tool definitions and can call them.
-   */
-  toolCalls: boolean;
 }
 /**
  * The inbound mailbox diagnostics of the Runtime Client projection.

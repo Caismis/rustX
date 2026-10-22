@@ -11244,16 +11244,12 @@
           "items": {
             "$ref": "#/$defs/Modality"
           }
-        },
-        "tool_calls": {
-          "type": "boolean"
         }
       },
       "additionalProperties": false,
       "required": [
         "input_modalities",
-        "output_modalities",
-        "tool_calls"
+        "output_modalities"
       ]
     },
     "Modality": {
@@ -19509,7 +19505,7 @@
       ]
     },
     "ModelCapabilities": {
-      "description": "The semantic capability set of a model, an adapter/protocol, or the\nruntime.\n\nModalities are structured sets rather than one boolean per modality, so\nadding a modality never reshapes the contract. The client-visible\ncapability is always an [`intersection`](ModelCapabilities::intersect) of\nthe model claim, the adapter/protocol capability, and the current runtime\ncapability — a raw catalog claim is never advertised.",
+      "description": "The semantic capability set of a model, an adapter/protocol, or the\nruntime.\n\nModalities are structured sets rather than one boolean per modality, so\nadding a modality never reshapes the contract. The client-visible\ncapability is always an [`intersection`](ModelCapabilities::intersect) of\nthe model claim, the adapter/protocol capability, and the current runtime\ncapability — a raw catalog claim is never advertised.\nTool calls are supported by every model and are not a configurable capability.",
       "type": "object",
       "properties": {
         "inputModalities": {
@@ -19527,17 +19523,12 @@
           "items": {
             "$ref": "#/$defs/Modality"
           }
-        },
-        "toolCalls": {
-          "description": "Whether the model can be given tool definitions and can call them.",
-          "type": "boolean"
         }
       },
       "additionalProperties": false,
       "required": [
         "inputModalities",
-        "outputModalities",
-        "toolCalls"
+        "outputModalities"
       ]
     },
     "SummaryModelView": {

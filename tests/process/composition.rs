@@ -33,7 +33,6 @@ request_params = '{"temperature":0.3}'
 [models."local/composed-model".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
 [models."local/composed-model".compat]
 chat_reasoning_replay = "omit"
 "#;

@@ -381,7 +381,6 @@ export function capabilityLine(model: CatalogModelView): string {
     protocolLabel(model.protocol),
     `${tokens(model.contextWindow)} ctx`,
     `${tokens(model.maxOutputTokens)} out`,
-    capabilities.toolCalls ? "tools" : "no tools",
     `in ${capabilities.inputModalities.join("/") || "none"}`,
   ];
   return parts.join(" · ");
@@ -485,10 +484,6 @@ export function searchTerms(model: CatalogModelView): string[] {
     protocolLabel(model.protocol),
     ...capabilities.inputModalities,
     ...capabilities.outputModalities,
-    // Capability terms are added only when the capability is present: a
-    // negative term would let a query match a model precisely because it
-    // cannot do the thing the query named.
-    ...(capabilities.toolCalls ? ["tools"] : []),
     ...(model.profiles ?? []).map((profile) => profile.id),
     ...(model.defaultProfile == null ? [] : [model.defaultProfile]),
     tokens(model.contextWindow),

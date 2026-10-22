@@ -307,7 +307,6 @@ max_output_tokens = 512
 [models."fixture/process-model".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
 [models."fixture/process-model".compat]
 chat_reasoning_replay = "omit"
 "#

@@ -130,7 +130,7 @@ fn invocation() -> ModelInvocationConfig {
         protocol: ModelProtocol::OpenAiChatCompletions,
         max_output_tokens: 128,
         request_params: RequestParams::new(),
-        capabilities: ModelCapabilities::text_only(true),
+        capabilities: ModelCapabilities::text_only(),
         compat: ModelCompat::default(),
     }
 }

@@ -57,7 +57,7 @@ fn live_invocation(
         protocol,
         max_output_tokens: 256,
         request_params: RequestParams::new(),
-        capabilities: ModelCapabilities::text_only(true),
+        capabilities: ModelCapabilities::text_only(),
         compat: ModelCompat {
             responses_storage: storage,
             ..ModelCompat::default()

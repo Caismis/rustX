@@ -370,7 +370,7 @@ pub fn finalize_provider_request(
 /// File input remains unsupported.
 #[must_use]
 pub fn adapter_capabilities(_protocol: ModelProtocol) -> ModelCapabilities {
-    let mut capabilities = ModelCapabilities::text_only(true);
+    let mut capabilities = ModelCapabilities::text_only();
     capabilities.input_modalities.insert(Modality::Image);
     capabilities
 }
@@ -378,7 +378,7 @@ pub fn adapter_capabilities(_protocol: ModelProtocol) -> ModelCapabilities {
 /// The capabilities the current rustX runtime can carry end to end.
 #[must_use]
 pub fn runtime_capabilities() -> ModelCapabilities {
-    let mut capabilities = ModelCapabilities::text_only(true);
+    let mut capabilities = ModelCapabilities::text_only();
     capabilities.input_modalities.insert(Modality::Image);
     capabilities
 }

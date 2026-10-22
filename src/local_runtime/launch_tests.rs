@@ -840,8 +840,7 @@ fn issue464_a_failure_spanning_both_documents_belongs_to_the_composition() {
     f.user(json!({}));
     f.project(json!({"models":{"ws/x":{"provider":"missing","id":"x",
         "protocol":"openai_responses","context_window":128_000,"max_output_tokens":4096,
-        "capabilities":{"input_modalities":["text"],"output_modalities":["text"],
-        "tool_calls":true}}}}));
+        "capabilities":{"input_modalities":["text"],"output_modalities":["text"]}}}}));
     let failure = analyzed_failure(&f);
     assert!(!failure.incomplete);
     assert_eq!(failure.diagnostic.category, "invalid");
@@ -1437,7 +1436,7 @@ impl Fixture {
                     json!({"provider":"host", "id":name,
                 "protocol":"openai_chat_completions", "context_window":128_000,
                 "max_output_tokens":4096, "capabilities":{"input_modalities":["text"],
-                "output_modalities":["text"],"tool_calls":true},
+                "output_modalities":["text"]},
                 "compat":{"chat_reasoning_replay":"omit"}})
                 ))
                 .collect::<std::collections::BTreeMap<_, _>>()

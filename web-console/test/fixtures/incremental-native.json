@@ -165,8 +165,7 @@
                 ],
                 "outputModalities": [
                   "text"
-                ],
-                "toolCalls": true
+                ]
               },
               "declaredCapabilities": {
                 "inputModalities": [
@@ -174,8 +173,7 @@
                 ],
                 "outputModalities": [
                   "text"
-                ],
-                "toolCalls": true
+                ]
               }
             },
             "summary": {
@@ -1378,8 +1376,7 @@
                           ],
                           "outputModalities": [
                             "text"
-                          ],
-                          "toolCalls": true
+                          ]
                         },
                         "declaredCapabilities": {
                           "inputModalities": [
@@ -1387,8 +1384,7 @@
                           ],
                           "outputModalities": [
                             "text"
-                          ],
-                          "toolCalls": true
+                          ]
                         }
                       },
                       "summary": {
@@ -1493,8 +1489,7 @@
                         ],
                         "outputModalities": [
                           "text"
-                        ],
-                        "toolCalls": true
+                        ]
                       },
                       "declaredCapabilities": {
                         "inputModalities": [
@@ -1502,8 +1497,7 @@
                         ],
                         "outputModalities": [
                           "text"
-                        ],
-                        "toolCalls": true
+                        ]
                       }
                     },
                     "summary": {
@@ -1928,8 +1922,7 @@
                     ],
                     "outputModalities": [
                       "text"
-                    ],
-                    "toolCalls": true
+                    ]
                   },
                   "declaredCapabilities": {
                     "inputModalities": [
@@ -1937,8 +1930,7 @@
                     ],
                     "outputModalities": [
                       "text"
-                    ],
-                    "toolCalls": true
+                    ]
                   }
                 },
                 "summary": {
@@ -18370,8 +18362,7 @@
                   ],
                   "outputModalities": [
                     "text"
-                  ],
-                  "toolCalls": true
+                  ]
                 },
                 "declaredCapabilities": {
                   "inputModalities": [
@@ -18379,8 +18370,7 @@
                   ],
                   "outputModalities": [
                     "text"
-                  ],
-                  "toolCalls": true
+                  ]
                 }
               },
               "summary": {
@@ -18545,8 +18535,7 @@
                 ],
                 "outputModalities": [
                   "text"
-                ],
-                "toolCalls": true
+                ]
               },
               "declaredCapabilities": {
                 "inputModalities": [
@@ -18554,8 +18543,7 @@
                 ],
                 "outputModalities": [
                   "text"
-                ],
-                "toolCalls": true
+                ]
               }
             },
             "summary": {

@@ -130,8 +130,6 @@ pub struct FixtureModel {
     pub profiles: Option<(String, serde_json::Value)>,
     /// The compat block, as a JSON object.
     pub compat: serde_json::Value,
-    /// Whether the model claims tool-call support.
-    pub tool_calls: bool,
     /// Extra claimed input modalities beyond text.
     pub extra_input_modalities: Vec<&'static str>,
 }
@@ -156,7 +154,6 @@ impl FixtureModel {
             request_params: None,
             profiles: None,
             compat,
-            tool_calls: true,
             extra_input_modalities: Vec::new(),
         }
     }
@@ -197,13 +194,6 @@ impl FixtureModel {
         self
     }
 
-    /// Sets whether the model claims tool-call support.
-    #[must_use]
-    pub const fn with_tool_calls(mut self, tool_calls: bool) -> Self {
-        self.tool_calls = tool_calls;
-        self
-    }
-
     /// Claims an additional input modality (used to prove the effective
     /// capability intersection actually narrows a raw catalog claim).
     #[must_use]
@@ -230,7 +220,6 @@ impl FixtureModel {
             "capabilities": {
                 "inputModalities": inputs,
                 "outputModalities": ["text"],
-                "toolCalls": self.tool_calls,
             },
             "compat": self.compat,
         });

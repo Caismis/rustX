@@ -463,7 +463,6 @@ describe("startup and context", () => {
         capabilities: {
           inputModalities: ["text"],
           outputModalities: ["text"],
-          toolCalls: true,
           },
         profile: "medium",
       }),

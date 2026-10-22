@@ -1098,7 +1098,7 @@ fn timed_request_snapshot(
             protocol: ModelProtocol::OpenAiChatCompletions,
             max_output_tokens: 128,
             request_params: crate::model::RequestParams::new(),
-            capabilities: crate::model::catalog::ModelCapabilities::text_only(true),
+            capabilities: crate::model::catalog::ModelCapabilities::text_only(),
             compat: crate::model::catalog::ModelCompat::default(),
         },
         64_000,
