@@ -1207,26 +1207,81 @@ mod observation_tools;
 mod observation_trace;
 
 /// Optional immutable read layout belongs to the native source transaction.
-/// Failure retires this layout without refusing the authoritative write.
+/// Only a failure contained by its savepoint may retire the optional layout.
+/// Cancellation and loss of transaction integrity must reach the write owner
+/// before any subsequent authoritative SQL is issued.
 fn optional_display_layout<T>(
     connection: &Connection,
     build: impl FnOnce() -> Result<T, ConversationStoreError>,
-) -> Option<T> {
+) -> Result<Option<T>, ConversationStoreError> {
+    if connection.is_autocommit() {
+        return Err(ConversationStoreError::TransactionInvalid(
+            "optional layout requires its original owning transaction".into(),
+        ));
+    }
     connection
         .execute_batch("SAVEPOINT rustx_display_layout")
-        .ok()?;
+        .map_err(|error| match sqlite_error(&error, error.to_string()) {
+            ConversationStoreError::OperationCancelled => {
+                ConversationStoreError::OperationCancelled
+            }
+            error => ConversationStoreError::TransactionInvalid(format!(
+                "optional layout savepoint: {error}"
+            )),
+        })?;
     match build() {
-        Ok(value)
-            if connection
+        Ok(value) => {
+            if connection.is_autocommit() {
+                return Err(ConversationStoreError::TransactionInvalid(
+                    "optional layout lost its owning transaction".into(),
+                ));
+            }
+            connection
                 .execute_batch("RELEASE rustx_display_layout")
-                .is_ok() =>
-        {
-            Some(value)
+                .map_err(|error| match sqlite_error(&error, error.to_string()) {
+                    ConversationStoreError::OperationCancelled => {
+                        ConversationStoreError::OperationCancelled
+                    }
+                    error => ConversationStoreError::TransactionInvalid(format!(
+                        "optional layout release: {error}"
+                    )),
+                })?;
+            if connection.is_autocommit() {
+                return Err(ConversationStoreError::TransactionInvalid(
+                    "optional layout release lost its owning transaction".into(),
+                ));
+            }
+            Ok(Some(value))
         }
-        _ => {
-            let _ = connection
-                .execute_batch("ROLLBACK TO rustx_display_layout; RELEASE rustx_display_layout");
-            None
+        Err(error)
+            if connection.is_autocommit()
+                || matches!(
+                    error,
+                    ConversationStoreError::OperationCancelled
+                        | ConversationStoreError::TransactionInvalid(_)
+                ) =>
+        {
+            Err(error)
+        }
+        Err(error) => {
+            connection
+                .execute_batch("ROLLBACK TO rustx_display_layout; RELEASE rustx_display_layout")
+                .map_err(
+                    |cleanup| match sqlite_error(&cleanup, cleanup.to_string()) {
+                        ConversationStoreError::OperationCancelled => {
+                            ConversationStoreError::OperationCancelled
+                        }
+                        cleanup => ConversationStoreError::TransactionInvalid(format!(
+                            "optional layout failed ({error}); savepoint cleanup failed ({cleanup})"
+                        )),
+                    },
+                )?;
+            if connection.is_autocommit() {
+                return Err(ConversationStoreError::TransactionInvalid(
+                    "optional layout cleanup lost its owning transaction".into(),
+                ));
+            }
+            Ok(None)
         }
     }
 }

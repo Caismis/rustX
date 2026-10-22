@@ -11,6 +11,9 @@ pub(crate) enum AuxiliaryStartProbe {
     StartEvent,
     HistoricalCut,
     CompactionFrontier,
+    ReadinessInsert,
+    ObservationFields,
+    ObservationJson,
 }
 type Key = (String, AuxiliaryStartProbe);
 struct Gate {
@@ -29,6 +32,18 @@ pub(super) fn pending() -> bool {
 pub(super) struct ActiveProbe(Option<Key>);
 pub(super) fn activate(id: &str, probe: AuxiliaryStartProbe) -> ActiveProbe {
     ActiveProbe(ACTIVE.with(|slot| slot.replace(Some((id.to_owned(), probe)))))
+}
+pub(super) fn for_event(
+    event: &crate::events::types::RuntimeEventEnvelope,
+    probe: AuxiliaryStartProbe,
+) -> ActiveProbe {
+    use crate::events::types::RuntimeEvent;
+    let id = match &event.event {
+        RuntimeEvent::AuxiliaryCallStarted { call_id, .. } => call_id.as_str(),
+        RuntimeEvent::ModelRequestStarted { request_id, .. } => request_id.as_str(),
+        _ => event.event_id.as_str(),
+    };
+    activate(id, probe)
 }
 impl Drop for ActiveProbe {
     fn drop(&mut self) {
@@ -65,6 +80,23 @@ impl Drop for ProbeRelease {
     }
 }
 impl super::SqliteConversationStore {
+    pub(crate) fn fail_optional_start_layout_for_test(&self, request_start: bool) {
+        let kind = if request_start {
+            "model_request_started"
+        } else {
+            "auxiliary_call_started"
+        };
+        self.lock().unwrap().execute_batch(&format!(
+            "CREATE TRIGGER optional_start_layout_fault BEFORE UPDATE OF observation_json ON events WHEN json_extract(NEW.event_json,'$.event.type')='{kind}' BEGIN SELECT RAISE(FAIL,'benign optional start layout failure'); END;"
+        )).unwrap();
+    }
+    /// Journal head and physical event/Call/Request/owner/audit row counts.
+    pub(crate) fn auxiliary_integrity_counts_for_test(&self) -> (u64, [u64; 5]) {
+        self.lock().unwrap().query_row(
+            "SELECT next_event_sequence,(SELECT count(*) FROM events),(SELECT count(*) FROM auxiliary_calls),(SELECT count(*) FROM auxiliary_requests),(SELECT count(*) FROM request_owners),(SELECT count(*) FROM auxiliary_audit_facts) FROM rustx_store WHERE id=1",
+            [], |row| Ok((row.get(0)?, [row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?])),
+        ).unwrap()
+    }
     pub(crate) fn hold_auxiliary_start_probe_for_test(
         request: String,
         probe: AuxiliaryStartProbe,

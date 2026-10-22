@@ -377,7 +377,7 @@ impl PublicationStore for SqliteConversationStore {
             settled_at: timestamp,
         };
         let _ =
-            optional_display_layout(&transaction, || content::settle_audit(&transaction, &audit));
+            optional_display_layout(&transaction, || content::settle_audit(&transaction, &audit))?;
         let settlement = PublicationSettlement::from(kind);
         transaction
             .execute(
@@ -519,7 +519,7 @@ pub(super) fn rebind_published_read_layouts(
 ) -> Result<(), ConversationStoreError> {
     let _ = optional_display_layout(transaction, || {
         observation_trace::settle_fields(transaction, event)
-    });
+    })?;
     rebind_canonical_display(transaction, message)
 }
 
@@ -541,7 +541,7 @@ pub(super) fn rebind_canonical_display(
             message,
             Some(nonnegative(position, "header ledger position")?),
         )
-    });
+    })?;
     Ok(())
 }
 
@@ -557,7 +557,7 @@ pub(super) fn audit_observation_receipt(
         observation::index::index_audit(connection, audit, cursor)?;
         connection.execute("UPDATE observation_headers SET journal_position=?1 WHERE reference_kind='publication_audit' AND reference_id=?2",params![read_cut.read.journal,audit.stream_id.as_str()]).map_err(|error|storage(error.to_string()))?;
         Ok(())
-    });
+    })?;
     let bytes:Option<Vec<u8>>=connection.query_row("SELECT header_json FROM observation_headers WHERE reference_kind='publication_audit' AND reference_id=?1",[audit.stream_id.as_str()],|row|row.get(0)).optional().ok().flatten();
     let header = bytes
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
@@ -739,6 +739,7 @@ pub(super) fn stage_frame_tx(
                 content::frame_receipt(transaction, conversation_id, start, frame)
             })
         })
+        .transpose()?
         .flatten()
         .unwrap_or_else(|| crate::publication::PublicationFrameReceipt {
             unavailable: true,

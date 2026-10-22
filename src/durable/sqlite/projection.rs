@@ -999,7 +999,7 @@ pub(super) fn commit(
         &input.candidate,
         &fingerprint,
         &activation,
-    );
+    )?;
     let completed = super::journal::persist_event_tx(transaction, scope, event)?.event;
     if completed.sequence != activation.origin.completed_journal.0 {
         return Err(invalid("completion Journal coordinate mismatch"));
@@ -1020,13 +1020,13 @@ pub(super) fn commit(
     let json = encode(&result, "compaction receipt")?;
     transaction.execute("INSERT INTO compaction_operations(operation_id,candidate_fingerprint,receipt_json,receipt_digest) VALUES(?1,?2,?3,?4)",params![result.operation_id.as_str(),result.candidate_fingerprint,json,digest(&json)]).map_err(|e|storage(e.to_string()))?;
     stage(super::CompactionFaultOperation::AfterReceiptInsert)?;
-    super::observation_projection::index_provenance(transaction, &result.checkpoint);
+    super::observation_projection::index_provenance(transaction, &result.checkpoint)?;
     super::projection_publication::index(
         transaction,
         &result.operation_id,
         &digest(&json),
         result.completed.observation.as_deref(),
-    );
+    )?;
     Ok(result)
 }
 
@@ -1511,8 +1511,8 @@ pub(super) fn install_lineage(
                 ],
             )
             .map_err(|e| storage(e.to_string()))?;
-        super::observation_projection::index(transaction, checkpoint);
-        super::observation_projection::index_provenance(transaction, checkpoint);
+        super::observation_projection::index(transaction, checkpoint)?;
+        super::observation_projection::index_provenance(transaction, checkpoint)?;
         last = Some(activation.activation);
         previous_checkpoint = Some(candidate.checkpoint_id.clone());
         previous_ledger = activation.ledger;

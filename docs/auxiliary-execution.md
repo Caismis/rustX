@@ -33,7 +33,13 @@ refusals remain distinct. Historical resource-cut and projection-activation
 validation, shared request-start probes and Journal frontier lookups preserve
 the raw SQLite interrupt cause before formatting diagnostics. An independent
 required Storage failure remains authoritative under coincident cancellation.
-SQLite-proven automatic rollback before any COMMIT
+Optional observation writes remain inside that same transaction. Their failure
+may degrade only after successful savepoint cleanup with the outer transaction
+intact. Cancellation, automatic rollback and failed cleanup stop the append
+through every nested optional helper before later SQL can independently commit
+a Journal head, index or transcript coordinate. Serialization adapters preserve
+the original SQLite interruption cause. SQLite-proven automatic rollback before
+any COMMIT, with no subsequent SQL escaping the transaction,
 is direct noncommit evidence ([SQLite transaction state](https://www.sqlite.org/c3ref/get_autocommit.html));
 absence observed later is not. Failed COMMIT or unproven rollback starts as
 Unknown; exact confirmation may establish the matching committed intent.

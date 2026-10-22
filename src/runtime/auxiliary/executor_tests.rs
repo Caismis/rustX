@@ -1,4 +1,6 @@
 use super::*;
+#[path = "executor_tests/optional_writes.rs"]
+mod optional_writes;
 use crate::durable::{AuxiliaryStore, CanonicalStore, JournalStore};
 use futures_util::StreamExt as _;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

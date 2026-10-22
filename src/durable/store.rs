@@ -101,6 +101,8 @@ pub enum ConversationStoreError {
     PublicationViolation(String),
     /// A cancellable Store scope stopped its operation.
     OperationCancelled,
+    /// The owning transaction cannot safely continue, including failed savepoint cleanup.
+    TransactionInvalid(String),
     /// The underlying storage rejected the operation.
     Storage(String),
 }
@@ -154,6 +156,7 @@ impl core::fmt::Display for ConversationStoreError {
                 write!(f, "invalid publication transition: {message}")
             }
             Self::OperationCancelled => write!(f, "the Store operation was cancelled"),
+            Self::TransactionInvalid(message) => write!(f, "invalid Store transaction: {message}"),
             Self::Storage(message) => write!(f, "durable ConversationStore failed: {message}"),
         }
     }

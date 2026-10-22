@@ -1836,6 +1836,17 @@ an orphan reference structurally impossible in the SQLite backend; a failed
 transaction exposes neither side. Persist-before-publish then appends the
 committed event before any observer or external projection sees it.
 
+Optional observation layouts share that original owning transaction. Their
+savepoints may contain an ordinary derived-layout failure only when rollback
+and release succeed and the outer transaction remains active. Cancellation,
+transaction abort and failed savepoint cleanup propagate through nested layout
+writers before any further SQL. No optional helper may start a replacement
+outer transaction. This rule also protects Canonical Ledger, Surface,
+transcript counters and references, and the Journal/audit frontier from
+independently committed tails after an automatic SQLite rollback. The
+in-memory `TransactionInvalid` Store error marks transaction-integrity failure;
+it does not introduce a persisted schema or migration.
+
 ### 2.6 Durable Pending Inbound Inbox (Issue #63)
 
 The durable authority split for inbound work:

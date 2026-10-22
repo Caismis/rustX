@@ -387,7 +387,16 @@ shared Request Snapshot orphan/start-event probes and the Journal frontier
 lookup; cancellation never masks an independent Storage error, even when
 cancellation is observed before that failure is delivered to the owner.
 An interrupted pre-COMMIT transaction with native SQLite auto-rollback is
-known noncommit; an uncertain COMMIT or rollback remains an obligation.
+known noncommit only when no subsequent SQL escaped that original transaction;
+an uncertain COMMIT or rollback remains an obligation. Optional observation
+writes may degrade only after successful savepoint rollback/release with the
+original outer transaction still intact. Typed cancellation, an aborted outer
+transaction or failed savepoint cleanup propagates immediately through every
+nested optional writer and prevents further authoritative SQL. Savepoints
+must never create a replacement outer transaction. Journal head, event/audit
+rows, Canonical Ledger, Surface and transcript coordinates commit atomically;
+rolled-back frontiers cannot be published as committed. SQLite interruption
+retains its typed cause even through observation serialization writers.
 
 General work cannot select protected capacity by supplying a purpose string.
 

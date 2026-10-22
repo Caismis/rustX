@@ -345,6 +345,7 @@ impl Execution {
             || matches!(
                 failure.error(),
                 crate::durable::ConversationStoreError::Storage(_)
+                    | crate::durable::ConversationStoreError::TransactionInvalid(_)
             );
         self.settlement_blocked |= !start || uncertain;
         let error = ContextError::new(

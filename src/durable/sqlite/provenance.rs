@@ -344,7 +344,7 @@ pub(super) fn persist(
                 u64::try_from(ordinal).map_err(|_| storage("negative inherited ordinal"))?,
                 &turn.id.attempt_id,
             )
-        });
+        })?;
         let _ = super::optional_display_layout(connection, || {
             connection
                 .execute(
@@ -353,7 +353,7 @@ pub(super) fn persist(
                 )
                 .map_err(|error| storage(error.to_string()))?;
             Ok(())
-        });
+        })?;
         for id in &turn.process_message_ids {
             let owner = membership
                 .get_mut(id)
@@ -385,7 +385,7 @@ pub(super) fn persist(
             let display = response_header(connection, ordinal, response)?;
             connection.execute("UPDATE inherited_response_provenance SET display_provenance=?2 WHERE ordinal=?1",params![ordinal,display_bytes(&display)?]).map_err(|error|storage(error.to_string()))?;
             Ok(())
-        });
+        })?;
         for id in &response.process_message_ids {
             let owner = membership
                 .get_mut(id)
@@ -414,7 +414,7 @@ pub(super) fn persist(
                 response,
                 &original_digest,
             )
-        });
+        })?;
     }
     Ok(())
 }

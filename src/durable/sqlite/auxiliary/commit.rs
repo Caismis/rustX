@@ -40,6 +40,8 @@ pub(super) fn run_auxiliary_write<T>(
         Err(error) if transaction.is_autocommit() => {
             // No COMMIT was attempted. SQLite itself rolled this transaction
             // back (e.g. an interrupted INSERT); absence alone is not the proof.
+            // Optional writers propagate transaction loss before issuing any
+            // later SQL, so no implicit write can escape this original owner.
             Err(AuxiliaryWriteFailure::known(error))
         }
         Err(error) => match transaction.rollback() {

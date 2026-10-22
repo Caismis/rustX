@@ -84,22 +84,26 @@ fn view(
         summary_preview,
     })
 }
-pub(super) fn index(transaction: &Transaction<'_>, checkpoint: &ProjectionCheckpoint) {
+pub(super) fn index(
+    transaction: &Transaction<'_>,
+    checkpoint: &ProjectionCheckpoint,
+) -> Result<(), ConversationStoreError> {
     index_activation(
         transaction,
         &checkpoint.candidate,
         &checkpoint.fingerprint,
         &checkpoint.activation,
-    );
+    )
 }
 /// Capture from the already validated native activation before its Completed J
-/// witness is built. Failure affects only optional display availability.
+/// witness is built. Contained layout failure affects only display availability;
+/// transaction-integrity failure still aborts the original write.
 pub(super) fn index_activation(
     transaction: &Transaction<'_>,
     candidate: &CheckpointCandidate,
     fingerprint: &str,
     activation: &ProjectionActivation,
-) {
+) -> Result<(), ConversationStoreError> {
     let _ = super::optional_display_layout(transaction, || {
         let value = view(transaction, candidate, activation)?;
         let bytes = crate::observation::bounded::bounded_bytes(&value, MAX)
@@ -110,7 +114,8 @@ pub(super) fn index_activation(
         let integrity = witness(fingerprint, &native, &bytes);
         transaction.execute("UPDATE projection_activations SET observation_header=?1,observation_header_witness=?2 WHERE activation=?3",params![bytes,integrity.as_slice(),activation.activation.0]).map_err(|error|storage(error.to_string()))?;
         Ok(())
-    });
+    })?;
+    Ok(())
 }
 pub(super) fn read(
     connection: &Connection,
@@ -178,7 +183,10 @@ pub(super) fn read_id(
 fn provenance_key(activation: u64, item: u64) -> String {
     format!("projection-provenance/{activation}/{item}")
 }
-pub(super) fn index_provenance(transaction: &Transaction<'_>, checkpoint: &ProjectionCheckpoint) {
+pub(super) fn index_provenance(
+    transaction: &Transaction<'_>,
+    checkpoint: &ProjectionCheckpoint,
+) -> Result<(), ConversationStoreError> {
     let _ = super::optional_display_layout(transaction, || {
         use crate::context::checkpoint::CheckpointMessage;
         use crate::observation::trace::TraceInputProvenance;
@@ -215,7 +223,8 @@ pub(super) fn index_provenance(transaction: &Transaction<'_>, checkpoint: &Proje
             }
         }
         Ok(())
-    });
+    })?;
+    Ok(())
 }
 #[allow(clippy::too_many_arguments)] // One source-owned range: identity, cut, selected item/path, and byte window.
 pub(super) fn provenance_read(
