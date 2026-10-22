@@ -93,7 +93,27 @@ through a Workspace, carries that Product Host scope; the Host validates it in
 the registration lane immediately before native dispatch. A replaced Host is
 refused (`authority_replaced`) even when it reuses the registration ID with a
 different directory, so revision equality never stands in for resource
-identity. An open editor, a pending library operation and an open confirmation
+identity.
+
+The native App Server is a separate constraint. A port also captures the
+native authority identity (the `authority_id` of the `initialize` the browser
+already observed) and every Host-routed Workflow operation carries it as
+`native`: Workspace list, read, check and write, and a Global file's dependency
+check routed through a Workspace. The Host opens its own connection per
+operation; after initializing it and before dispatching any Workflow request,
+it compares the server's identity with `native` and refuses a mismatch
+(`native_replaced`). Another App Server process at the same endpoint therefore
+never receives a transaction bound to the one it replaced, even when a missing
+target or an unchanged revision would pass its revision check. A missing
+expectation is refused, never filled in from the newly reached server, the
+latest browser snapshot or a later listing. Such a refusal is a known,
+unavailable outcome with no Workflow request sent, never an uncertain write.
+Reconnecting to the same native authority keeps working: a transport
+generation is not an identity. An acknowledgement already received stays a
+committed fact; a later authority change only leaves its reread unconfirmed,
+and nothing is replayed.
+
+An open editor, a pending library operation and an open confirmation
 dialog each keep the port they started with; refreshing the library creates a
 new read port for the listing only, and is never applied to them.
 
@@ -123,7 +143,7 @@ in it. An uncertain write is observed by the next listing, never replayed.
 IDs follow the native `WorkflowId` rule. Paths are resolved by native code
 relative to the scope's admitted directory handle: traversal, absolute paths,
 symlinked directories or files and a scope redirected after admission are
-rejected, and a Workflow directory holds at most 128 files.
+rejected, and a Workflow directory holds at most 128 files (see Capacity).
 
 ### Reading and invalid files
 
@@ -240,6 +260,39 @@ kept with an unobserved reread (committed and unconfirmed); it is never turned
 into an uncertain or failed write, and the editor is never rebound to the
 replacement.
 
+### Capacity
+
+Discovery has two bounds. A resource directory holds at most 128 `.yaml`
+entries, and one composed catalog (User alone, or User with one Workspace after
+shadowing) at most 64 distinct candidate Workflow IDs, counted from valid
+filename identities before any file is compiled, so a file with invalid content
+still occupies its ID. Past either bound, discovery reports the directory or
+catalog instead of the files in it.
+
+`create` and `copy` add a file, so native code admits them against these bounds
+before publication and refuses an addition that would pass one with
+`workflow_invalid`, category `capacity`, and a correction; the destination stays
+absent and existing discovery is unchanged. The scopes counted are exactly the
+ones the operation is authorized for:
+
+- a Global addition counts the User directory and the User-only catalog;
+- a Workspace addition counts that Workspace directory and its composition with
+  User (an override of an existing Global ID adds no identity).
+
+A Global addition cannot see the Workspaces a later session may compose with,
+so it does not prove that every Workspace composition stays within 64 IDs; a
+Workspace addition is the one that checks its own composition.
+
+Count-changing rustX writes take a persistent advisory capacity lock per scope
+before the file's own writer lock, always User first, then the Workspace. Two
+additions competing for the last slot are serialized and at most one succeeds,
+and a Workspace addition waits for, and counts, a concurrent Global addition.
+The file revision check, directory-handle protections and atomic publication
+are unchanged. Like the writer lock, the capacity lock coordinates rustX
+writers only, not editors or Git. `replace` and `delete` never add an
+identity: they keep their revision checks and stay available to bring an
+externally over-full directory or composition back within bounds.
+
 ### Concurrency guarantee
 
 Writers inside rustX are serialized by the source's advisory writer lock, and the
@@ -288,11 +341,27 @@ A renamed node or branch takes the drafts of its other fields along to their new
 addresses. When another change (undo or redo, for instance) changes a field that
 holds a draft, the text is kept and marked as changed: it is neither dropped nor
 reapplied, until the author keeps it over the current value or uses the current
-value. When the field is gone (its node or branch deleted, its value kind
-changed, or an earlier array item removed so indices shifted), the draft is
-marked as belonging to a field that no longer exists; that mark is permanent, so
-an old address never takes on the meaning of a field created later. Changes to
-other fields do not affect a draft.
+value. Changes to other fields do not affect a draft.
+
+When the field is gone (its node or branch deleted, its value kind changed, or
+its array item removed), the draft is detached: it keeps its text and its
+original location for the pending-field list, under an identity of its own that
+no field ever shows. A detached draft can only be discarded. It never follows a
+rename and never occupies the address another draft moves to, so a node or
+branch renamed to the name of a deleted one migrates its own drafts and shows
+its own text; the deleted one's text stays listed apart, and a field created
+later at that place never takes it over. A rename that would still place two
+drafts under one address is refused, with its text kept and nothing changed.
+
+Array items have no identity in the native format, so the editor tracks it per
+edit instead. Removing or appending an item through the inspector is one known
+array edit: drafts of items before the removed one keep their index, drafts of
+items after it move down by one, and the removed item's draft is detached; an
+append moves nothing. Undo and redo apply the inverse or the same edit to the
+drafts. A change of an array's length that is not such an edit leaves item
+identity unknown, so drafts inside that array are detached rather than guessed;
+identity is never inferred from equal values. This metadata is editor state
+only and never reaches the file.
 
 Save and Check, by button or by Ctrl/Cmd+S from a focused field, first request the
 application of every shown field, renames last, and then pass the editor's

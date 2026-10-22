@@ -2411,11 +2411,20 @@ travel in the existing exact wire domains, so `u64` fields such as `timeout_ms`
 are decimal strings in TypeScript. Documents are bounded by the native 512 KiB
 Workflow limit and the 1 MiB message limit.
 
+A `create` or `copy` that would pass a discovery bound (128 `.yaml` entries in the
+directory, or 64 composed Workflow IDs: User alone for a User target, User with
+the Workspace for a Workspace target) is refused before publication with
+`workflow_invalid`, diagnostic category `capacity`; see
+[Capacity](workflow-authoring.md#capacity).
+
 Workspace targets reach the App Server through the Product Host, which maps a
 registration ID to its directory on its per-registration lane
 (`/product-host/workflow`); browsers never send Workspace paths. Each request
 carries the Product Host authority scope the browser transaction was bound to,
-validated in the lane immediately before native dispatch. User-scope
+validated in the lane immediately before native dispatch, and, separately, the
+native App Server identity (`native`, the `authority_id` the browser observed at
+`initialize`), which the Host compares with the connection it initialized before
+sending any Workflow request (`native_replaced` otherwise). User-scope
 calls use the browser's App Server connection directly. A lost write
 acknowledgement on either path is reported as uncertain and reconciled by
 rereading, never by replaying the write.
