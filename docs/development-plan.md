@@ -4,6 +4,9 @@ The [Scheduler #85 implementation proposal](issue-85-scheduler-implementation-pl
 fills in the native temporal-trigger design from a pinned DeepSeek Harness source
 audit. It specifies shared hot/cold writer ownership, atomic durable admission
 independent of node activation, bounded catch-up and explicit timezone behavior.
+Outstanding-target backpressure bounds ongoing production; reconciliation may
+hint activation only for verified Scheduler-origin work. A bounded Human-request
+grant supports multiple mutations and survives notifications within that request.
 Workflow starts validate a pinned execution contract before claim; native control
 receipts, deletion barriers and periodic authoritative discovery close the other
 ownership/recovery boundaries. These are planned capabilities; Fleet is outside

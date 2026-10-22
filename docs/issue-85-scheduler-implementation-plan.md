@@ -128,6 +128,10 @@ Native inbound correlation, Workflow start ownership and consumed Human-command
 receipts follow their own authority lifetimes; deleting a schedule or pruning
 display history must not remove their deduplication/ownership evidence. They do
 not consume the 256-schedule quota. Native target limits apply independently.
+There is a separate cap of 256 outstanding Scheduler-origin targets per
+conversation, across inbox and Workflow targets and including deleted/Completed
+schedules. The temporal backpressure contract below defines when a target releases
+that capacity; pruning configuration/history never releases it.
 
 ## Ownership separation
 
@@ -199,7 +203,8 @@ For inbound, extend the existing atomic Goal/inbox pattern with a dedicated
 2. Under the hot publication boundary or cold commit guard, begin one SQLite
    immediate transaction.
    Read the current schedule and validate identity, revision, `Enabled`, binding,
-   and due state against a freshly sampled UTC decision time.
+   due state and native target backpressure against a freshly sampled UTC decision
+   time. Check per-schedule and conversation-wide capacity in this transaction.
 3. Derive the selected occurrence and immutable `TriggerId`. Call
    `accept_inbound_tx` with ordinary `InboundKind::Message`, runtime provenance,
    and a stable correlation derived from that trigger.
@@ -234,6 +239,53 @@ Record decision/admission time separately in the trigger receipt.
 
 ## Temporal semantics
 
+### Outstanding-target backpressure
+
+Use one fixed v1 policy: a Schedule may have at most one outstanding target across
+all its revisions and target edits. Do not preserve every elapsed tick as an
+independent future task. This bounds unattended production while retaining ordinary
+target ownership; latest-only catch-up applies after both downtime and backpressure.
+
+| Target | Holds capacity | Releases capacity |
+| --- | --- | --- |
+| Conversation inbound | The Scheduler-correlated message remains in native Pending Inbound. | Its owner commits ordinary adoption or an explicitly supported removal. Adoption is not model completion; a long-running attempt may have at most one additional pending message per Schedule. |
+| Workflow | The scheduled start is Accepted or Claimed, or its native execution/physical ownership remains unresolved. | The Workflow owner commits settlement/cancellation with its required ownership proof. An unknown outcome alone does not prove physical settlement. |
+
+Before a new admission, use indexed, bounded native existence/count queries in
+the same immediate transaction as target insert and trigger CAS. The limit is
+one outstanding target for this Schedule **and** fewer than 256 across all
+Scheduler-origin targets in the conversation. Include old revisions, deleted
+schedule IDs and retained native obligations; schedule deletion/recreation cannot
+bypass the aggregate cap. Ordinary Human/other producer inbound does not count
+toward this Scheduler-specific cap. It is not a bound on the whole native inbox.
+
+Use native correlation/start records as authority, not a second inflight counter
+or queue. Add the necessary index on pending correlation and scheduled-start
+identity/state; do not call `load_pending_rows` for these checks. The current
+[inbox selection](../src/durable/sqlite/inbox.rs) loads all pending rows, making
+bounded production and header-only probes necessary. Do not rewrite that owner
+into a Scheduler-specific consumer.
+
+When blocked, leave `next_due_utc`, revision and the accepted target unchanged.
+Return/project `waiting_for_target` or `scheduler_capacity`, with no new message,
+start request or per-tick durable event. Park the local due candidate until a
+native capacity-release hint or the bounded reconciliation/backoff wake; keep
+fair scan progress past blocked records and avoid a zero-delay timer loop.
+Continue keyset paging past a blocked prefix within each conversation; repeatedly
+reading only its first 64 due rows must not starve a later eligible Schedule.
+Release notifications accelerate work but are not required for correctness.
+Every retry rechecks native capacity transactionally, including after restart.
+
+Once released, select the latest due occurrence using the then-current clock and
+commit one new target plus the first future due time. Example: an every-minute
+Schedule admitted at 09:00 stays pending for 14 days: it still owns one pending
+message. On adoption at 09:07 on the final day, the next admission represents
+09:07 once and advances to 09:08, without replaying the intervening minutes.
+The first committed message is immutable; no payload is overwritten or merged.
+Permanent target unavailability keeps this bound and an explicit waiting/failure
+reason until a user/native owner resolves it. Updates and disable/enable never
+clear an existing target obligation or automatically cancel transferred work.
+
 ### At
 
 Accept an offset-bearing RFC 3339 instant and store UTC. Reject offset-free text,
@@ -255,9 +307,9 @@ selected = D + floor((N - D) / P) * P
 next     = selected + P
 ```
 
-All values remain aligned to `A`. Commit exactly one catch-up admission, then the
-first future target; never iterate through a downtime backlog or derive the next
-time from completion. Example: anchor 10:00, period 10 minutes, restart at 10:37
+All values remain aligned to `A`. When target capacity is available, commit one
+catch-up admission, then the first future target; never iterate through a backlog
+or derive the next time from completion. Example: anchor 10:00, period 10 minutes, restart at 10:37
 admits 10:30 once and stores 10:40. Checked arithmetic rejects overflow.
 
 ### Cron
@@ -294,8 +346,9 @@ expects Croner's gap adjustment to 03:00 local (07:00Z); `30 1 * * *` on
 both UTC passes of the repeated hour. These are dependency-gate expectations,
 not results already verified by this research.
 
-Latest-only catch-up applies to Cron too: select the latest library occurrence
-at or before `N`, never before persisted `D`, and store the first occurrence
+When target capacity is available, latest-only catch-up applies to Cron too:
+select the latest library occurrence at or before `N`, never before persisted
+`D`, and store the first occurrence
 strictly after `N`. Preserve a due committed `D` as a candidate even if updated
 timezone rules no longer regenerate it. Search around the decision using the
 library's forward/backward APIs, not by enumerating all missed minutes. Bound the
@@ -327,6 +380,8 @@ A trigger committing first owns its target permanently; the stale mutation
 conflicts and a later successful disable affects future occurrences only. The
 same rule applies to delete. New revisions never alter an admitted payload or
 Workflow execution contract.
+Changing a rule or target does not reset backpressure: the old admitted target
+must release its native obligation before the new revision may admit another.
 
 ## Target: Workflow
 
@@ -410,8 +465,9 @@ the ordinary inbound retention contract; native receipt reads may report pruned
 detail without fabricating it. Scheduled input does not mint Human authority for
 Goal or Schedule control and never creates a special Agent Loop path.
 
-Busy conversations accept into their ordinary pending inbox. No active attempt is
-cancelled or steered by Scheduler; ordinary safe-boundary adoption applies. No
+Busy conversations accept into their ordinary pending inbox subject to the native
+capacity checks above. No active attempt is cancelled or steered by Scheduler;
+ordinary safe-boundary adoption applies. No
 destination sequence is allocated by Scheduler and no canonical ledger row is
 written by its code. The atomic inbox seam owns transcript/reference publication.
 
@@ -431,8 +487,9 @@ and configuration failures are execution-wait reasons, not reasons to fire again
 Native owner reconciliation also finds pending Scheduler-origin inbox/Accepted
 Workflow work after a missed activation hint or restart. Show this distinction in
 creation/update acknowledgments and task details, including the bound node and
-execution wait reason. Recurrence continues to mean one admission per selected
-occurrence; waiting execution is not evidence that a trigger was missed.
+execution wait reason. While the prior target holds capacity, later ticks stay
+uncommitted and collapse into one latest occurrence when capacity becomes free.
+Waiting execution is not evidence that a committed trigger was missed.
 
 ## Relationship to Goal
 
@@ -463,11 +520,26 @@ through native read-only allocation access. Scan one store/page at a time withou
 loading transcripts, providers or Agents. Read the earliest Enabled due time and
 store generation in one read transaction. Maintain at most one earliest target
 per conversation in a rebuildable index; page due rows when processing it.
-The same pass asks the native inbox/Workflow owners for a bounded pending-activation
-summary, including when no Enabled schedule remains. That summary is derived from
-pending inbox/nonterminal Workflow ownership, not a duplicate execution queue. Feed it to
-the manager's exact-node activation path; native owners still decide adoption or
-claim. Thus losing a post-commit activation hint does not strand accepted work.
+The same pass asks native target owners for a bounded **Scheduler-origin only**
+pending-activation/capacity summary, including when no Enabled schedule remains.
+Every activation hint must name an actual committed TriggerId: for inbound, its
+reserved native correlation must resolve to the exact pending Runtime message;
+for Workflow, the durable ScheduledWorkflowStart must bind that trigger and still
+require native recovery/claim. A text prefix, generic Runtime source, ordinary
+pending Human message or unrelated Workflow ownership is insufficient evidence.
+Never activate a cold Session merely because a general pending query is nonempty.
+
+Feed only these verified identities to the manager's exact-node activation path;
+native owners recheck the target before acting. A hint whose target was adopted
+or settled is a no-op. Once legitimately activated, ordinary native admission
+may also process other pending messages in its existing order; Scheduler neither
+selects them nor changes their recovery policy. Native Scheduler provenance
+survives schedule deletion or schedule-display pruning, so lost activation/release hints are
+recoverable without generalizing Scheduler into a recovery driver for other work.
+Capacity summaries and release hints are advisory: admission always queries the
+current native rows, never spends a cached free slot. The periodic pass rereads
+these summaries even when the schedule generation is unchanged; native adoption
+or Workflow settlement need not rewrite the schedule just to release capacity.
 
 Three mechanisms serve different purposes:
 
@@ -554,12 +626,14 @@ authority. Follow the native schema-version policy for the new tables.
 | Inbound and schedule transaction committed; wake/result lost | Return existing evidence; ordinary inbox recovery owns adoption. No new message. |
 | Workflow request and schedule transaction committed; worker not yet claimed | Reconstruct and validate the pinned contract; claim once or durably reject before execution. |
 | Workflow claim committed; executor/terminal state uncertain | Workflow owner reconciles native evidence or reports unknown/interrupted; Scheduler never replays it. |
-| Index/activation/display notification missing | Authoritative passes rediscover schedules and native pending work; refetch display. A missing Journal/UI entry is not permission to fire. |
+| Index/activation/release/display notification missing | Authoritative passes rediscover schedules, capacity and verified Scheduler-origin work only; refetch display. A missing Journal/UI entry is not permission to fire. |
 
 Transient pre-admission writer/capacity refusal keeps the original durable due
 obligation and retries after a fixed 30-second local backoff, or earlier on an
 owner availability notification. Another node's runtime residency does not refuse
-cold durable admission. There is one driver, not one retry task per schedule.
+cold durable admission when target capacity is free. Backpressure waits for native
+capacity release and uses the same bounded retry/reconciliation mechanism. There
+is one driver, not one retry task per schedule.
 Permanent pre-admission input/authority refusal disables the schedule with a
 bounded reason through a revisioned mutation. A Workflow dependency rejection
 after acceptance belongs to that start request; it cannot roll back the trigger.
@@ -597,8 +671,10 @@ above; an empty index still has a scan deadline. A backward jump cannot fire ear
 because admission rechecks UTC.
 
 Use a fixed bounded batch (initially 64 candidates), yield between batches, and
-order candidates by due instant then stable identity. Target preparation must be
-bounded and cancellable through the native owner so one unavailable Session
+order candidates by due instant then stable identity. Park blocked candidates
+until their local retry/reconciliation deadline so the oldest blocked entry cannot
+consume every batch or spin; capacity is rechecked before any actual admission.
+Target preparation must be bounded and cancellable through the native owner so one unavailable Session
 cannot block the entire scheduler indefinitely. Neither the heap nor a `last_run`
 variable determines firing. No per-schedule OS thread, per-schedule timer task,
 leader election or configurable scheduling framework is needed.
@@ -628,14 +704,16 @@ The UI/TUI projects title, rule, explicit zone, next UTC/local time, lifecycle,
 overdue timing, last admission receipt and bounded failure. A receipt says
 “accepted by conversation/Workflow,” not “task succeeded.” Execution links use
 native message/run identity. Show accepted-but-waiting activation separately from
-an overdue uncommitted trigger. Reconnect refetches state; clients never own timers.
+an overdue uncommitted trigger, and show backpressure with the outstanding target
+or aggregate capacity reason. Explain that intervening ticks coalesce rather than
+accumulate independent tasks. Reconnect refetches state; clients never own timers.
 
 ### Control authorization
 
 Follow the existing [Goal Human-origin seam](../src/agent/execution/request.rs)
 and [native adapter](../src/tools/native/goal.rs), with an independent Schedule
-grant and durable consumption. No model argument may supply an authority origin,
-Human message ID, destination binding, scope override or grant renewal.
+grant and durable budget accounting. No model argument may supply an authority
+origin, Human message ID, destination binding, scope override or grant renewal.
 
 | Caller / operation | Required authority |
 | --- | --- |
@@ -645,37 +723,59 @@ Human message ID, destination binding, scope override or grant renewal.
 | Child Agent or Workflow Agent | No Schedule mutation grant, regardless of tool arguments or copied Human text. |
 | Goal/Scheduler/other Runtime-origin work without a fresh Human handoff | No Schedule mutation grant. Historical Human messages and existing schedule receipts cannot supply one. |
 
-At a fresh-inbound boundary, AgentExecution may bind a grant to the latest ordinary
-Human input only if it is the last `InboundKind::Message` in the accepted batch and this is an
-eligible root execution. Ordinary tool/model steps with no new inbound retain
-that grant. New ordinary inbound replaces it; a non-Human last Message clears it.
-Derived Context contributions do not create a new request or renew its grant.
-Settlement, cancellation, drain or loss of the root capability also invalidate
-the live grant. Merely adopting a Scheduler message never creates or renews one.
-A model invocation with a missing/expired grant returns a typed authority refusal.
-The native mutation boundary holds the grant's request-identity fence and rechecks
-current root capability/cancellation alongside lifecycle admission. Recovery may
-restore an exact admitted request's fresh provenance, but cannot search older
-history to manufacture a grant or renew a consumed one.
+Follow Goal's request lifecycle: at a fresh-inbound boundary in an eligible root
+execution, the latest ordinary Human Message in native sequence order establishes
+or replaces the current Schedule grant, even if Runtime notifications follow it
+in the same batch. No new Human in a batch preserves the current request's grant.
+Ordinary steps, Runtime notifications and derived Context neither revoke it nor
+renew its budget. They cannot expand the original Human scheduling intent.
 
-V1 permits one successful Schedule mutation per initiating Human request. In the
-same SQLite transaction as that mutation, insert a native command receipt keyed
-by the Human MessageId, containing AttemptId, command identity, bounded command
-digest and result identity/revision. An exact retry returns the prior result;
-another mutation for that consumed Human request is refused, including after
-restart or schedule deletion. Failed validation, semantic no-op, stale CAS or
-pre-commit cancellation consumes nothing. An uncertain commit is resolved from that receipt,
-not by allocating a new command identity. Keep these compact authority receipts
-for the conversation's lifetime; they are not the prunable schedule display log.
+A new independent Runtime/Goal/Scheduler activation starts without a Human grant;
+it cannot inherit one from a settled attempt or its transcript. An explicit fresh
+Human handoff may establish a grant in an eligible root execution. Settlement,
+cancellation, drain, a newer Human request or lost root capability ends the old
+live binding. Distinguish these request boundaries from a notification inside the
+same request; do not infer them from the source of the last arbitrary message.
+The mutation boundary rechecks current native request identity, root scope,
+capability, cancellation and lifecycle. A missing/expired binding is refused.
 
-The grant proves real Human origin, scope and non-reuse. It does **not** prove the
+Use a fixed v1 budget of **8 successful mutations per Human request**, scoped to
+that root conversation and its current user request. The native grant binds
+Human MessageId, original AttemptId, exact Session/node/conversation and the fixed
+limit; model arguments cannot raise or transfer it. Two reminders requested in
+one message can therefore be created by two commands under one grant. After eight
+successful mutations, another new mutation is refused with
+`schedule_mutation_budget_exhausted`; a new
+explicit Human request is needed for further changes. Read/list consumes none.
+
+Every concrete mutation gets a native command identity stable across transport,
+tool-result and request recovery retries. Store a receipt keyed by
+`(HumanMessageId, command_id)` with original request identity, bounded command
+digest and result identity/revision. Under the same SQLite transaction as the
+mutation, first return any matching committed receipt, then validate the command
+and detect semantic no-ops. For a real change, verify remaining budget from native
+successful-command receipts, then commit mutation and
+receipt together. Concurrent commands share the budget; retries do not charge it
+twice. Reusing a command identity with different content is a conflict. Validation
+failure, semantic no-op, stale CAS and pre-commit cancellation consume nothing.
+
+After an uncertain commit, resolve that command receipt rather than inventing a
+new command ID. Exact committed-result lookup is not permission for another write.
+Recovery may restore remaining budget only with proof of the exact native current
+request/binding; it never resets usage or scans historical Human messages to
+manufacture authority. If that provenance cannot be restored, mutations require
+fresh Human input. Keep compact successful-command receipts for the conversation's
+lifetime, independently of schedule deletion and display pruning. Superseded or
+settled request grants cannot be reopened merely because they have unused budget.
+
+The grant proves real Human origin, scope and bounded use. It does **not** prove the
 semantic meaning of arbitrary prose. Tool instructions must require explicit user
 scheduling intent and prohibit deriving it from task complexity or reminder text,
 as Goal does; no keyword classifier or claim of machine-verified intent is added.
 Direct user controls express their intent through a concrete typed command.
 
-Models may create a target in their own binding and, with fresh authority plus
-expected revision, edit title, reminder text/Workflow args, timing, enabled state,
+Models may create a target in their own binding and, with current request
+authority plus expected revision, edit title, reminder text/Workflow args, timing, enabled state,
 or delete it. A Workflow rebind goes through native spec preparation and the same
 authority checks; models cannot write digests, resource manifests or budgets that
 override native policy. No mutation changes Session/node ownership or enlarges
@@ -697,6 +797,10 @@ useful case ideas; do not import their semantics without the decisions above.
 | At fires once | Two wakes plus reopen produce one trigger receipt and one inbound sequence. |
 | Interval survives restart | 10:00/10-minute anchor, stop/reopen at 10:37, one 10:30 admission and next 10:40; repeat reopen changes nothing. |
 | Catch-up is bounded | Long downtime admits at most one occurrence per schedule; no iteration over missed intervals. |
+| Sustained backpressure | Run a minute interval for 14 days with its node inactive, then with a busy attempt that cannot adopt: one pending message per Schedule, no per-tick writes or zero-delay spin. On adoption, admit one latest occurrence; do not replay or rewrite the prior message. |
+| Workflow backpressure | Hold Accepted indefinitely, hold Claimed during long execution, and retain unresolved physical ownership: no second target for that Schedule. Proven settlement/cancellation releases capacity; permanent unavailability remains bounded. |
+| Aggregate capacity | Create/complete/delete/recreate one-shots and edit target kinds while old targets remain outstanding: at most 256 Scheduler-origin obligations across the conversation, including pruned/deleted definitions. Concurrent admission at the last slot has one winner. |
+| Capacity release recovery | Lose release notifications, restart under backpressure, and race adoption/settlement with trigger CAS: native queries release capacity within reconciliation bounds without cached credits or duplicates. A blocked first page cannot starve later eligible schedules. |
 | Cron policy | Numeric grammar, DOM/DOW stars/full ranges, leap day, impossible date, explicit zones, DST fixed/wildcard gap/overlap, reverse search, timezone-data change and exhaustion. |
 | Concurrent wakes | Barrier before CAS: one commits; the other reports stale/already-admitted. |
 | Mutation races | Both orderings of disable/update/delete versus admission; stale clients cannot overwrite advancement. |
@@ -713,11 +817,14 @@ useful case ideas; do not import their semantics without the decisions above.
 | Workflow reconstruction | Change/remove definition, tool schema/origin, Skill/profile, root permission or workspace binding between Accepted and Claim; zero graph effects and a durable rejection. Unrelated resource revision changes and same-provider credential rotation do not force a false mismatch. |
 | Claim race | Change configuration after preparation but before claim; the owner either retains/revalidates the exact admitted execution contract or refuses. Restart after refusal cannot claim that request. |
 | Index loss/races | Drop the only creation notification while index is empty; mutate just after store visit; create a node after catalog snapshot; deliver an older scan after a newer dirty read. Discovery satisfies the documented pass bound. |
+| Activation scope | A cold Session with ordinary Human/Runtime inbound or unrelated Workflow work and no Scheduler trigger gets no activation hint. Text spoofing is refused. Real Scheduler-origin pending work remains discoverable after its schedule row is deleted/pruned; the native owner rechecks stale hints. |
 | Partial discovery failure | One unreadable store does not hide other schedules; repair/reopen restores discovery within the bound; no assumption that an unreadable store contains zero schedules. |
 | Journal boundary | Inject required receipt failure before commit: neither target nor advancement survives. Inject optional Journal/notification failure after commit: one target survives and is never refired. |
 | Session deletion | Enabled and Accepted/Claimed blockers are visible before deletion; both trigger-versus-retirement orderings have one winner; fresh generations reject stale preview; cleanup failure cannot revive schedules. |
 | Quotas and non-reuse | More than 256 sequential create/complete/delete operations still allow creation; 256 simultaneous Enabled/Disabled rows reject the next; pruning/deletion never reuses IDs or removes native deduplication authority. |
-| Model authority | Forged/missing Human origin, child calls, Runtime-only activation, intervening fresh Runtime input, revoked root capability and reused Human receipts all refuse mutation. Exact retry after commit/crash returns the existing result; failed CAS consumes no grant. |
+| Model authority | Forged/missing Human origin, child calls, independent Runtime-only activation, revoked root capability and superseded/settled request grants refuse mutation. A notification inside the active Human request neither revokes scope nor renews budget. |
+| Multi-command grant | One Human request creates 09:00 and 17:00 reminders with two command IDs. Eight successful mutations fit; racing ninth commands cannot exceed the budget. Exact retry/uncertain-commit recovery returns its existing result without another charge; changed-content reuse conflicts; failed CAS/no-op consumes none. |
+| Grant interleaving/recovery | Human then Runtime in one batch, Runtime-only notifications during that request, and newer Human replacing it follow Goal's source selection. A later independent Scheduler/Goal activation receives no old grant; exact request recovery preserves used budget and cannot reopen superseded authority. |
 
 ## Documentation
 
@@ -728,8 +835,10 @@ time/misfire/DST examples and describe the difference between completed schedule
 accepted messages, Workflow settlement and Goal completion. Remove superseded
 future-only descriptions once the complete native contract exists. Document the
 accepted-but-waiting node behavior, deletion blockers, quota/retention distinction,
-reconciliation latency bound and one-mutation-per-Human-request tool contract in
-their owning product/API sections.
+backpressure/latest-only release, Scheduler-only activation scope, reconciliation
+latency bound and the eight-mutation Human-request budget in their owning product/API
+sections. Explain the difference between a request-local Runtime notification and
+an independent Runtime activation.
 
 ## Non-goals
 
@@ -743,12 +852,12 @@ schedules through fork/clone; Workflow graph checkpoints; a second durable queue
 | Slice | Owned changes | Exit evidence |
 | --- | --- | --- |
 | S0: ownership contract prerequisite | Map manager StorageOnly/load/unload/delete transitions, product/allocation locks, hot/cold commit permits and post-commit publication; enumerate all existing writer entry points. | Verify the transition/lock table against source before S1; no Scheduler SQL writer bypasses the native manager. |
-| S1: At/inbound vertical slice | New Scheduler domain/capability, finite StorageOnly path in the existing manager, compound inbox admission, authoritative receipt/generation, one driver and typed user-control entry. | A controlled-clock one-shot works for hot and cold targets; writer races, rollback/restart, duplicate wake and drain tests pass. B's residency cannot prevent A's durable admission. |
-| S2: lifecycle and management | CAS updates, authority-bound control receipts, independent quotas/retention, periodic catalog/store reconciliation and explicit deletion/fork rules. | Lost notifications meet the pass bound; deletion has one winner; repeated historical creation does not exhaust active quota; scan-scale measurements recorded. |
-| S3: interval and Cron | Add pure occurrence calculations, latest-only policy and the Cron dependency gate; bound payloads, lists and wake batches. | Calendar and restart fixtures pass; unsupported Cron cannot be authored or decoded as executable. |
+| S1: At/inbound vertical slice | New Scheduler domain/capability, finite StorageOnly path, compound admission with per-schedule/aggregate native capacity checks, authoritative receipt/generation, one driver and typed user-control entry. | Hot/cold one-shots, writer races, rollback/restart, duplicate wake, capacity and drain tests pass. B's residency cannot prevent A's first admission when capacity is free. |
+| S2: lifecycle and management | CAS updates, budgeted command receipts, independent quotas/retention, Scheduler-only authoritative reconciliation and explicit deletion/fork rules. | Lost notifications meet the pass bound; ordinary pending work gets no Scheduler activation; deletion has one winner; historical creation does not exhaust configuration quota or evade outstanding capacity; scan measurements recorded. |
+| S3: interval and Cron | Add occurrence calculations, latest-only catch-up after downtime/backpressure and the Cron dependency gate; bound payloads, lists and wakes. | Calendar/restart and sustained-backpressure fixtures pass; unsupported Cron cannot be authored as executable. |
 | S4a: Workflow contract prerequisite | Inventory reusable executor, frozen-profile/materialization and supervision seams; fix the exact bounded ScheduledWorkflowStart fields/digest coverage and reconstruction refusal rules. | Demonstrate a matching reconstruction and an Accepted request rejected after dependency change, without introducing graph checkpointing or serialized runtime handles. |
-| S4b: Workflow native start | Add native request/claim/settlement and scheduled origin, share existing execution, and extend deletion/retirement ownership inspection. | One run identity across crash windows; no second executor after claim; truthful rejection/unknown outcomes and physical-ownership barriers. |
-| S5: product and final conformance | Thin model adapters with fresh Human authority, TUI/Web projections, protocol generation, documentation and complete matrix. | Both targets satisfy #85; fresh-authority and execution-wait behavior are visible; required checks pass; no Fleet/distributed owner added. |
+| S4b: Workflow native start | Add native request/claim/settlement and scheduled origin, share execution, and extend capacity/deletion/retirement ownership inspection. | One run identity; no second executor after claim; no recurring target while native ownership remains outstanding; truthful outcomes and ownership barriers. |
+| S5: product and final conformance | Thin model adapters with bounded current-Human-request authority, TUI/Web projections, protocol generation, documentation and complete matrix. | Multi-reminder requests and Runtime-notification interleavings work; scope/budget/backpressure are visible; both targets satisfy #85 and checks pass. |
 
 File names for new modules are proposed boundaries; keep SQL, temporal arithmetic,
 driver lifecycle and target execution in their respective owners. Extend backend
