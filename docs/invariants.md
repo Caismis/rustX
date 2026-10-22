@@ -382,8 +382,10 @@ RequestStarted rolls back, its budget allowance is refunded and Call-only
 Failed settlement succeeds. The first required failure survives that cleanup.
 Typed cancellation and benign start validation refusals do not poison health.
 SQLite interruption identity survives every required-start SQL adapter,
-including shared Request Snapshot orphan/start-event probes and the Journal
-frontier lookup; cancellation never masks an independent Storage error.
+including Historical resource-cut and projection-activation boundary checks,
+shared Request Snapshot orphan/start-event probes and the Journal frontier
+lookup; cancellation never masks an independent Storage error, even when
+cancellation is observed before that failure is delivered to the owner.
 An interrupted pre-COMMIT transaction with native SQLite auto-rollback is
 known noncommit; an uncertain COMMIT or rollback remains an obligation.
 

@@ -1,17 +1,18 @@
-//! Consumed real-statement progress gates for cancellable `RequestStart` probes.
-//! This module and both query tags exist only in the crate's test build.
-use crate::runtime::identity::RequestId;
+//! Consumed real-statement progress gates for cancellable auxiliary start probes.
+//! This module and its query tags exist only in the crate's test build.
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::sync::{Mutex, OnceLock, mpsc};
 use tokio::sync::oneshot;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum RequestJournalProbe {
+pub(crate) enum AuxiliaryStartProbe {
     Orphan,
     StartEvent,
+    HistoricalCut,
+    CompactionFrontier,
 }
-type Key = (RequestId, RequestJournalProbe);
+type Key = (String, AuxiliaryStartProbe);
 struct Gate {
     entered: oneshot::Sender<()>,
     release: mpsc::Receiver<()>,
@@ -26,8 +27,8 @@ pub(super) fn pending() -> bool {
     !gates().lock().unwrap().is_empty()
 }
 pub(super) struct ActiveProbe(Option<Key>);
-pub(super) fn activate(id: &RequestId, probe: RequestJournalProbe) -> ActiveProbe {
-    ActiveProbe(ACTIVE.with(|slot| slot.replace(Some((id.clone(), probe)))))
+pub(super) fn activate(id: &str, probe: AuxiliaryStartProbe) -> ActiveProbe {
+    ActiveProbe(ACTIVE.with(|slot| slot.replace(Some((id.to_owned(), probe)))))
 }
 impl Drop for ActiveProbe {
     fn drop(&mut self) {
@@ -64,9 +65,9 @@ impl Drop for ProbeRelease {
     }
 }
 impl super::SqliteConversationStore {
-    pub(crate) fn hold_request_journal_probe_for_test(
-        request: RequestId,
-        probe: RequestJournalProbe,
+    pub(crate) fn hold_auxiliary_start_probe_for_test(
+        request: String,
+        probe: AuxiliaryStartProbe,
     ) -> (oneshot::Receiver<()>, ProbeRelease) {
         let (entered, observed) = oneshot::channel();
         let (release, held) = mpsc::channel();

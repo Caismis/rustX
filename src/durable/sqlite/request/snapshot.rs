@@ -246,7 +246,7 @@ thread_local! {
 }
 
 #[cfg(test)]
-pub(in crate::durable::sqlite) fn record_request_probe_work(json: &str) {
+pub(in crate::durable::sqlite) fn record_start_probe_work(json: &str) {
     REQUEST_PROBE_WORK.with(|work| {
         let (rows, bytes) = work.get();
         work.set((rows + 1, bytes + json.len()));
@@ -258,9 +258,9 @@ pub(in crate::durable::sqlite) fn has_request_journal_fact_tx(
     request_id: &RequestId,
 ) -> Result<bool, ConversationStoreError> {
     #[cfg(test)]
-    let _probe = crate::durable::sqlite::request_probe::activate(
-        request_id,
-        crate::durable::sqlite::RequestJournalProbe::Orphan,
+    let _probe = crate::durable::sqlite::start_probe::activate(
+        request_id.as_str(),
+        crate::durable::sqlite::AuxiliaryStartProbe::Orphan,
     );
 
     transaction
@@ -278,9 +278,9 @@ pub(in crate::durable::sqlite) fn find_request_start_event(
     request_id: &RequestId,
 ) -> Result<Option<RuntimeEventEnvelope>, ConversationStoreError> {
     #[cfg(test)]
-    let _probe = crate::durable::sqlite::request_probe::activate(
-        request_id,
-        crate::durable::sqlite::RequestJournalProbe::StartEvent,
+    let _probe = crate::durable::sqlite::start_probe::activate(
+        request_id.as_str(),
+        crate::durable::sqlite::AuxiliaryStartProbe::StartEvent,
     );
 
     let mut statement = transaction
@@ -304,7 +304,7 @@ pub(in crate::durable::sqlite) fn find_request_start_event(
         let (sequence, event_id, schema_version, conversation_id, attempt_id, turn_id, json) =
             row.map_err(|error| sqlite_error(&error, format!("request-start event row: {error}")))?;
         #[cfg(test)]
-        record_request_probe_work(&json);
+        record_start_probe_work(&json);
         if found.is_some() {
             return Err(ConversationStoreError::InvalidReference(format!(
                 "request {request_id} has duplicate request-start facts"
@@ -552,7 +552,7 @@ pub(in crate::durable::sqlite) fn find_request_outcome_event(
         let json =
             row.map_err(|error| sqlite_error(&error, format!("request outcome row: {error}")))?;
         #[cfg(test)]
-        record_request_probe_work(&json);
+        record_start_probe_work(&json);
         let event: RuntimeEventEnvelope = decode(&json, "request outcome")?;
         if matches!(
             &event.event,

@@ -793,7 +793,7 @@ impl SqliteConversationStore {
             #[cfg(test)]
             let mut entered = self.read_progress_entered.lock().unwrap().take();
             #[cfg(test)]
-            let progress_interval = if request_probe::pending() { 1 } else { 1000 };
+            let progress_interval = if start_probe::pending() { 1 } else { 1000 };
             #[cfg(not(test))]
             let progress_interval = 1000;
             #[cfg(test)]
@@ -804,7 +804,7 @@ impl SqliteConversationStore {
                     Some(move || {
                         #[cfg(test)]
                         if progress_interval == 1 {
-                            if request_probe::progress() {
+                            if start_probe::progress() {
                                 // Reset the ordinary cadence after the consumed
                                 // probe so rollback retains its production policy.
                                 probe_ticks = 0;
@@ -1173,11 +1173,11 @@ mod publication;
 mod reading;
 pub(crate) mod request;
 mod request_owner_shape;
-#[cfg(test)]
-mod request_probe;
 mod schema;
 #[cfg(test)]
-pub(crate) use request_probe::RequestJournalProbe;
+mod start_probe;
+#[cfg(test)]
+pub(crate) use start_probe::AuxiliaryStartProbe;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]

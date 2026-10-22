@@ -109,6 +109,11 @@ pub(super) fn validate_call_start_authority_tx(
     validate_call_start_input(start)?;
     match &start.input {
         AuxiliaryInputEvidence::Historical { cut } => {
+            #[cfg(test)]
+            let _probe = super::super::start_probe::activate(
+                start.call_id.as_str(),
+                super::super::AuxiliaryStartProbe::HistoricalCut,
+            );
             if cut.conversation_id != *conversation_id {
                 return Err(ConversationStoreError::ConversationIdMismatch {
                     stored: conversation_id.clone(),
@@ -138,6 +143,11 @@ pub(super) fn validate_call_start_authority_tx(
     match &start.business_source {
         AuxiliaryBusinessSource::Independent | AuxiliaryBusinessSource::Business { .. } => {}
         AuxiliaryBusinessSource::Compaction { operation_id } => {
+            #[cfg(test)]
+            let _probe = super::super::start_probe::activate(
+                start.call_id.as_str(),
+                super::super::AuxiliaryStartProbe::CompactionFrontier,
+            );
             require_compaction_operation_through(
                 connection,
                 operation_id,

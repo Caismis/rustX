@@ -1016,20 +1016,66 @@ async fn production_dispatch_grant_arbitrates_cancellation_and_parent_close() {
     }
 }
 
+async fn submit_with_known_failure_cancellation(
+    reservation: AuxiliaryReservation,
+    frozen: FrozenCall,
+    coincident_cancel: bool,
+) -> Result<ConfirmedExecution, ContextError> {
+    let record = reservation.record.clone();
+    let probe = coincident_cancel.then(|| {
+        SqliteConversationStore::hold_auxiliary_start_probe_for_test(
+            record.request_id.to_string(),
+            crate::durable::sqlite::AuxiliaryStartProbe::Orphan,
+        )
+    });
+    let reply = reservation.submit(frozen).unwrap();
+    if let Some((entered, release)) = probe {
+        tokio::time::timeout(std::time::Duration::from_secs(10), entered)
+            .await
+            .unwrap()
+            .unwrap();
+        let (failed, release_failure) = lock(&record.writer)
+            .as_ref()
+            .unwrap()
+            .hold_known_failure_for_test();
+        let cancelled = lock(&record.writer)
+            .as_ref()
+            .unwrap()
+            .observe_start_cancellation_for_test();
+        drop(release);
+        tokio::time::timeout(std::time::Duration::from_secs(10), failed)
+            .await
+            .unwrap()
+            .unwrap();
+        // The real Storage error and proven rollback precede cancellation;
+        // its evidence is still awaiting delivery to the native owner.
+        record.scope.cancellation.cancel();
+        tokio::time::timeout(std::time::Duration::from_secs(10), cancelled)
+            .await
+            .unwrap()
+            .unwrap();
+        release_failure.send(()).unwrap();
+    }
+    reply.await.unwrap()
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn required_request_start_rollback_refunds_budget_but_fails_native_durability() {
-    for automatic_rollback in [false, true] {
+    for (automatic_rollback, coincident_cancel) in
+        [(false, false), (true, false), (false, true), (true, true)]
+    {
         let fixture = fixture(Script::Complete);
         let call_id = fixture.reservation.call_id().clone();
         let seen = fixture
             .store
             .fail_auxiliary_request_insert_once_for_test(automatic_rollback);
-        let result = fixture
-            .reservation
-            .submit(fixture.frozen)
-            .unwrap()
-            .await
-            .unwrap();
+        let _close = CloseScopeOnDrop(fixture.scope.clone());
+        let result = Box::pin(submit_with_known_failure_cancellation(
+            fixture.reservation,
+            fixture.frozen,
+            coincident_cancel,
+        ))
+        .await;
         assert_eq!(
             seen.load(Ordering::SeqCst),
             1,
@@ -1042,11 +1088,19 @@ async fn required_request_start_rollback_refunds_budget_but_fails_native_durabil
             .load_auxiliary_call(&call_id, cut)
             .unwrap()
             .unwrap();
-        assert_eq!(
-            call.outcome,
-            Some(AuxiliaryCallOutcome::Failed),
-            "Call-only settlement succeeds after RequestStart rollback"
-        );
+        if coincident_cancel {
+            assert_eq!(
+                call.outcome,
+                Some(AuxiliaryCallOutcome::Cancelled),
+                "logical cancellation remains separate from the required Storage failure"
+            );
+        } else {
+            assert_eq!(
+                call.outcome,
+                Some(AuxiliaryCallOutcome::Failed),
+                "Call-only settlement succeeds after RequestStart rollback"
+            );
+        }
         assert!(
             fixture
                 .store
@@ -1180,13 +1234,13 @@ async fn cancelled_request_start_rollback_refunds_budget_without_failing_durabil
 
 #[tokio::test(flavor = "current_thread")]
 async fn cancellation_during_shared_start_probes_refunds_budget_without_durability_failure() {
-    use crate::durable::sqlite::RequestJournalProbe;
-    for probe in [RequestJournalProbe::Orphan, RequestJournalProbe::StartEvent] {
+    use crate::durable::sqlite::AuxiliaryStartProbe;
+    for probe in [AuxiliaryStartProbe::Orphan, AuxiliaryStartProbe::StartEvent] {
         let fixture = fixture(Script::Complete);
         let _close = CloseScopeOnDrop(fixture.scope.clone());
         let record = fixture.reservation.record.clone();
-        let (entered, release) = SqliteConversationStore::hold_request_journal_probe_for_test(
-            record.request_id.clone(),
+        let (entered, release) = SqliteConversationStore::hold_auxiliary_start_probe_for_test(
+            record.request_id.to_string(),
             probe,
         );
         let reply = fixture.reservation.submit(fixture.frozen).unwrap();
@@ -1268,6 +1322,145 @@ async fn cancellation_during_shared_start_probes_refunds_budget_without_durabili
                 .reserve_general(&next)
                 .expect("later active admission remains usable"),
         );
+        fixture.executor.drain().await;
+    }
+}
+
+fn historical_summary_input(
+    fixture: &Fixture,
+) -> (
+    crate::context::summarizer::SummaryRequest,
+    crate::context::resources::ResourceReadCut,
+    crate::model::AuxiliaryAuditCut,
+) {
+    use crate::context::summarizer::SummaryRequest;
+    use crate::durable::{ConversationStore, ProjectionStore};
+    use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
+    let message = match &fixture.frozen.request.messages[0] {
+        ModelInputMessage::Canonical(message) => message.clone(),
+        ModelInputMessage::Derived(_) | ModelInputMessage::RequestOnly(_) => unreachable!(),
+    };
+    fixture
+        .store
+        .initialize(std::slice::from_ref(&message))
+        .unwrap();
+    fixture
+        .store
+        .append_event(RuntimeEventEnvelope {
+            schema_version: EVENT_SCHEMA_VERSION,
+            event_id: crate::runtime::identity::EventId::new(uuid::Uuid::now_v7().to_string()),
+            sequence: 0,
+            conversation_id: fixture.store.conversation_id().clone(),
+            attempt_id: None,
+            turn_id: None,
+            tool_occurrence: None,
+            observation: None,
+            timestamp: chrono::Utc::now(),
+            event: RuntimeEvent::CompactionStarted {
+                operation_id: fixture.scope.budget.operation_id().clone(),
+            },
+        })
+        .unwrap();
+    let cut = fixture.store.compaction_resource_cut().unwrap();
+    let before = fixture.store.auxiliary_audit_cut().unwrap();
+    (
+        SummaryRequest {
+            retired: vec![ModelInputMessage::Canonical(message)],
+        },
+        cut,
+        before,
+    )
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn historical_summary_call_start_cancellation_preserves_native_health() {
+    use crate::context::summarizer::SummaryBackend;
+    use crate::durable::sqlite::AuxiliaryStartProbe;
+    for probe in [
+        AuxiliaryStartProbe::HistoricalCut,
+        AuxiliaryStartProbe::CompactionFrontier,
+    ] {
+        let fixture = fixture(Script::Complete);
+        let (input, cut, before) = historical_summary_input(&fixture);
+        drop(fixture.reservation);
+        let signal = CancellationSignal::new();
+        let operation = fixture
+            .executor
+            .operation(
+                fixture.frozen.invocation,
+                ModelTimeoutPolicy::default(),
+                7,
+                fixture.scope.budget.clone(),
+                signal.clone(),
+            )
+            .unwrap();
+        let prepared = operation.prepare().unwrap();
+        let record = lock(&fixture.executor.0.state)
+            .calls
+            .values()
+            .next()
+            .unwrap()
+            .clone();
+        let (entered, release) = SqliteConversationStore::hold_auxiliary_start_probe_for_test(
+            record.call_id.to_string(),
+            probe,
+        );
+        // Exercise the production Summary adapter, Historical input, and native
+        // Compaction attribution, rather than rewriting a Temporary FrozenCall.
+        let reply = tokio::spawn(prepared.summarize(input, Some(cut)));
+        tokio::time::timeout(std::time::Duration::from_secs(10), entered)
+            .await
+            .unwrap()
+            .unwrap();
+        let cancelled = lock(&record.writer)
+            .as_ref()
+            .unwrap()
+            .observe_start_cancellation_for_test();
+        signal.cancel();
+        tokio::time::timeout(std::time::Duration::from_secs(10), cancelled)
+            .await
+            .unwrap()
+            .unwrap();
+        drop(release);
+        let error = tokio::time::timeout(std::time::Duration::from_secs(10), reply)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(
+            error.kind,
+            ContextErrorKind::Cancelled,
+            "Historical probe {probe:?} retains interruption identity"
+        );
+        assert_eq!(fixture.adapter.entries.load(Ordering::SeqCst), 0);
+        let after = fixture.store.auxiliary_audit_cut().unwrap();
+        assert_eq!(
+            after, before,
+            "CallStart rollback cannot fabricate start or settlement facts"
+        );
+        assert!(
+            fixture
+                .store
+                .load_auxiliary_call(&record.call_id, after)
+                .unwrap()
+                .is_none()
+        );
+        assert!(fixture.executor.0.resources.durability.failure().is_none());
+        let fresh = CancellationSignal::new();
+        let next = AuxiliaryExecutor::scope(
+            CompactionBudget::new(
+                CompactionOperationId::new(uuid::Uuid::now_v7().to_string()),
+                fixture.clock.clone(),
+            ),
+            &fresh,
+        );
+        drop(
+            fixture
+                .executor
+                .reserve_general(&next)
+                .expect("later active admission remains healthy"),
+        );
+        operation.close().await;
         fixture.executor.drain().await;
     }
 }

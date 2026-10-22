@@ -5,7 +5,7 @@ mod auxiliary_lineage;
 mod store;
 use super::{
     Connection, ConversationStoreError, OptionalExtension, Transaction, decode, encode,
-    nonnegative, params, seq_to_i64, storage,
+    nonnegative, params, seq_to_i64, sqlite_error, storage,
 };
 use crate::context::checkpoint::{
     CheckpointCandidate, CheckpointMessage, OriginActivation, ProjectionActivation,
@@ -172,7 +172,7 @@ fn eligibility_header(
     let row: Option<Row> = connection.query_row(
         "SELECT CASE WHEN octet_length(checkpoint_id)<=1024 THEN checkpoint_id END,ledger_frontier,visible_journal,CASE WHEN octet_length(installation_id)<=1024 THEN installation_id END,installation_id IS NOT NULL,CASE WHEN octet_length(header_digest)=64 THEN header_digest END FROM projection_activations WHERE activation=?1",
         [seq_to_i64(id)?], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?)),
-    ).optional().map_err(|e|storage(e.to_string()))?;
+    ).optional().map_err(|e| sqlite_error(&e, e.to_string()))?;
     let (checkpoint, ledger, journal, installation, installed, integrity) =
         row.ok_or_else(|| invalid("missing historical projection predecessor"))?;
     let header = EligibilityHeader {
@@ -236,7 +236,7 @@ fn inherited_count(connection: &Connection) -> Result<u64, ConversationStoreErro
     let row: Option<(Option<String>,u64,Option<String>)> = connection.query_row(
         "SELECT CASE WHEN octet_length(history_digest)=64 THEN history_digest END,projection_count,CASE WHEN octet_length(projection_digest)=64 THEN projection_digest END FROM bootstrap_identity WHERE id=1", [],
         |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)),
-    ).optional().map_err(|e|storage(e.to_string()))?;
+    ).optional().map_err(|e| sqlite_error(&e, e.to_string()))?;
     let Some((history, count, integrity)) = row else {
         return Ok(0);
     };
@@ -292,7 +292,7 @@ fn completion_at(
             ))
         })
         .optional()
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| sqlite_error(&error, error.to_string()))?;
     row.map(
         |(sequence, schema_version, scope, activation, checkpoint, generation)| {
             let scope = scope.ok_or_else(|| invalid("invalid projection completion scope"))?;
@@ -309,7 +309,7 @@ fn completion_at(
                     [scope.as_str()],
                     |row| row.get(0),
                 )
-                .map_err(|error| storage(error.to_string()))?;
+                .map_err(|error| sqlite_error(&error, error.to_string()))?;
             if !local
                 || schema_version != EVENT_SCHEMA_VERSION
                 || activation != generation
@@ -370,7 +370,7 @@ fn journal_frontier(connection: &Connection, through: u64) -> Result<u64, Conver
             [],
             |r| r.get(0),
         )
-        .map_err(|e| storage(e.to_string()))?;
+        .map_err(|e| sqlite_error(&e, e.to_string()))?;
     if last > id {
         let next = eligibility_header(connection, id + 1)?;
         if next.journal <= through || next.installation.is_some() {
@@ -404,7 +404,7 @@ fn selected_frontier(
     let id: Option<u64> = connection.query_row(
         "SELECT activation FROM projection_activations INDEXED BY projection_ledger_idx WHERE ledger_frontier<=?1 ORDER BY ledger_frontier DESC,activation DESC LIMIT 1",
         [seq_to_i64(ledger.0)?],|r|r.get(0),
-    ).optional().map_err(|e|storage(e.to_string()))?;
+    ).optional().map_err(|e| sqlite_error(&e, e.to_string()))?;
     let id = id.unwrap_or(0);
     if id >= through {
         return Err(invalid("nonmonotone projection Ledger eligibility"));

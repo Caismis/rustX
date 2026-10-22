@@ -126,6 +126,8 @@ struct WriterState {
     #[cfg(test)]
     start_cancelled: Option<oneshot::Sender<()>>,
     #[cfg(test)]
+    after_known_failure: Option<(oneshot::Sender<()>, mpsc::Receiver<()>)>,
+    #[cfg(test)]
     after_commit: Option<(oneshot::Sender<()>, mpsc::Receiver<()>)>,
     #[cfg(test)]
     before_confirmation: Option<(oneshot::Sender<()>, mpsc::Receiver<()>)>,
@@ -168,6 +170,21 @@ pub struct JoinedAuxiliaryWriter {
 }
 
 impl AuxiliaryWriter {
+    #[cfg(test)]
+    pub(super) fn hold_known_failure_for_test(&self) -> (oneshot::Receiver<()>, mpsc::Sender<()>) {
+        let (entered, observed) = oneshot::channel();
+        let (release, held) = mpsc::channel();
+        assert!(
+            self.state
+                .lock()
+                .unwrap()
+                .after_known_failure
+                .replace((entered, held))
+                .is_none()
+        );
+        (observed, release)
+    }
+
     #[cfg(test)]
     pub(super) fn observe_start_cancellation_for_test(&self) -> oneshot::Receiver<()> {
         let (observed, cancelled) = oneshot::channel();
@@ -260,6 +277,23 @@ impl AuxiliaryWriter {
                             ),
                         })
                     });
+                    #[cfg(test)]
+                    if matches!(
+                        &written,
+                        Err(AuxiliaryWriteFailure::KnownNotCommitted { .. })
+                    ) {
+                        let gate = thread_state
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .after_known_failure
+                            .take();
+                        if let Some((entered, release)) = gate {
+                            let _ = entered.send(());
+                            release
+                                .recv_timeout(std::time::Duration::from_secs(10))
+                                .expect("known-failure gate released");
+                        }
+                    }
                     // The synchronous transaction call/unwind has finished before
                     // an exact read is attempted. There is no replacement write.
                     let outcome = Arc::new(
