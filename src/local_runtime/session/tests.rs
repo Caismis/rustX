@@ -209,12 +209,11 @@ fn todo_status_start_snapshot(
             protocol: ModelProtocol::OpenAiChatCompletions,
             max_output_tokens: 128,
             request_params: RequestParams::new(),
-            capabilities: ModelCapabilities::text_only(true, true),
+            capabilities: ModelCapabilities::text_only(true),
             compat: ModelCompat::default(),
         },
         1024,
         None,
-        false,
         Vec::new(),
         CapabilityRevision::new(1),
         ContextGeneration {

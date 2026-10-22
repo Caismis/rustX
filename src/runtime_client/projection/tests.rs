@@ -4574,7 +4574,6 @@ fn subagent_observations_fold_the_activity_projection_into_the_view() {
         Some(SubagentExecutionProfile {
             model: "local/model".to_owned(),
             profile: None,
-            reasoning_enabled: false,
         })
     );
     assert_eq!(
@@ -4760,7 +4759,6 @@ fn agent_activation_snapshot(
         profile: Some(std::sync::Arc::new(SubagentExecutionProfile {
             model: "local/model".to_owned(),
             profile: None,
-            reasoning_enabled: false,
         })),
         settlement: crate::runtime::subagent::SubagentSettlement::default(),
         started_at: chrono::DateTime::parse_from_rfc3339("2026-09-02T10:00:00Z")
@@ -6450,12 +6448,11 @@ fn raw_publication_snapshot(
             protocol: crate::model::ModelProtocol::OpenAiChatCompletions,
             max_output_tokens: 100,
             request_params: crate::model::invocation::RequestParams::new(),
-            capabilities: crate::model::ModelCapabilities::text_only(true, true),
+            capabilities: crate::model::ModelCapabilities::text_only(true),
             compat: crate::model::ModelCompat::default(),
         },
         4096,
         None,
-        false,
         Vec::new(),
         crate::runtime::identity::CapabilityRevision::new(1),
         crate::context::assembly::ContextGeneration {

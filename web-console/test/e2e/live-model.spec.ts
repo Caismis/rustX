@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { AppServerHost } from '../../../tui/src/app-server/host';
-import type { SessionModelConfig } from '../../../protocol/app-server/v51';
+import type { SessionModelConfig } from '../../../protocol/app-server/v52';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openEmptySession } from './shell-actions';
@@ -196,7 +196,6 @@ for (const [width, acknowledgement] of [[1440, 'received'], [390, 'lost']] as co
       const frozen = (await sessionSnapshot(wire, sessionId)).attempt!.model!;
       expect(frozen).toEqual(admittedFrozen);
       expect(frozen.primary.profile).toBe('high');
-      expect(frozen.primary.reasoningEnabled).toBe(true);
       expect(frozen.primary.requestParams?.reasoning_effort).toBe('high');
       expect(frozen.primary.maxOutputTokens).toBe(4096);
       expect(frozen.summary.mode).toBe('session');

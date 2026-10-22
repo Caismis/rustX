@@ -524,7 +524,7 @@ pub struct TraceDetail {
 /// still shows what was actually sent.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-#[allow(clippy::struct_excessive_bools)] // Orthogonal inspection truncation flags and frozen reasoning policy, not lifecycle state.
+#[allow(clippy::struct_excessive_bools)] // Orthogonal inspection truncation flags, not lifecycle state.
 pub struct TraceRequestDetail {
     /// Frozen physical/request coordinates and provider correlation labels.
     pub tool_associations: Vec<crate::model::occurrence::ActualRequestToolAssociation>,
@@ -540,7 +540,6 @@ pub struct TraceRequestDetail {
     pub protocol: String,
     pub max_output_tokens: u32,
     pub context_window_tokens: u64,
-    pub reasoning_enabled: bool,
     pub profile: Option<String>,
     /// Allowlisted provider-neutral sampling options; see the options
     /// allowlist for exactly which keys may appear.

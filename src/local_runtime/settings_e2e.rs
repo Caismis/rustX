@@ -25,7 +25,6 @@ max_output_tokens = 8192
 input_modalities = ["text"]
 output_modalities = ["text"]
 tool_calls = true
-reasoning = false
 [agent.model]
 model = "a"
 "#,

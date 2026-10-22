@@ -841,7 +841,7 @@ fn issue464_a_failure_spanning_both_documents_belongs_to_the_composition() {
     f.project(json!({"models":{"ws/x":{"provider":"missing","id":"x",
         "protocol":"openai_responses","context_window":128_000,"max_output_tokens":4096,
         "capabilities":{"input_modalities":["text"],"output_modalities":["text"],
-        "tool_calls":true,"reasoning":false}}}}));
+        "tool_calls":true}}}}));
     let failure = analyzed_failure(&f);
     assert!(!failure.incomplete);
     assert_eq!(failure.diagnostic.category, "invalid");
@@ -1437,7 +1437,7 @@ impl Fixture {
                     json!({"provider":"host", "id":name,
                 "protocol":"openai_chat_completions", "context_window":128_000,
                 "max_output_tokens":4096, "capabilities":{"input_modalities":["text"],
-                "output_modalities":["text"],"tool_calls":true,"reasoning":false},
+                "output_modalities":["text"],"tool_calls":true},
                 "compat":{"chat_reasoning_replay":"omit"}})
                 ))
                 .collect::<std::collections::BTreeMap<_, _>>()
@@ -2914,9 +2914,9 @@ mod session_resolution {
         let mut catalog: serde_json::Value =
             toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         let entry = &mut catalog["models"]["host/one"];
-        entry["capabilities"]["reasoning"] = json!(true);
         entry["default_profile"] = json!("off");
-        entry["profiles"] = json!({"off":{"reasoning_enabled":false},"on":{"reasoning_enabled":true,"request_params":"{\"reasoning_effort\":\"high\"}"}});
+        entry["profiles"] =
+            json!({"off":{},"on":{"request_params":"{\"reasoning_effort\":\"high\"}"}});
         std::fs::write(path, toml::to_string_pretty(&catalog).unwrap()).unwrap();
         let (manager, mut input) = f.request.session_input(&f.host).unwrap();
         let mut model = SessionModelConfig::of(ModelRef::parse("host/one").unwrap());

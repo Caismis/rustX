@@ -1,5 +1,5 @@
 import { createContext, useContext, useCallback, useRef, type ReactNode } from 'react';
-import type { AttachmentTarget, CheckpointReadCut, ObservationReadCut, ContentRef, ContentBinding, MessageBlock, RuntimeClientTranscriptPage } from '../../../../protocol/app-server/v51';
+import type { AttachmentTarget, CheckpointReadCut, ObservationReadCut, ContentRef, ContentBinding, MessageBlock, RuntimeClientTranscriptPage } from '../../../../protocol/app-server/v52';
 import type { AppServerClient } from '../../client/app-server';
 import type { TraceFieldReader } from '../../client/trace';
 

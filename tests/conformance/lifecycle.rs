@@ -55,8 +55,6 @@ request_params = '{"temperature":0.3}'
 input_modalities = ["text"]
 output_modalities = ["text"]
 tool_calls = true
-reasoning = false
-
 [models."local/composed-model".compat]
 chat_reasoning_replay = "omit"
 "#;
@@ -286,7 +284,7 @@ fn emulator_models_json(emulator: &ProviderEmulator) -> String {
         "models": { format!("emulator/{CHAT_MODEL}"): {
             "provider": "emulator", "id": CHAT_MODEL, "protocol": "openai_chat_completions",
             "context_window": 128_000, "max_output_tokens": 1024,
-            "capabilities": {"input_modalities": ["text"], "output_modalities": ["text"], "tool_calls": true, "reasoning": true},
+            "capabilities": {"input_modalities": ["text"], "output_modalities": ["text"], "tool_calls": true},
             "compat": {"chat_reasoning_replay": "omit"}
         } }
     })).unwrap()

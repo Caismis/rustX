@@ -1113,7 +1113,7 @@ export type AttemptId = string;
  *
  * The runtime assigns no meaning to the name: `fast`, `precise`, `creative`,
  * `thinking-32k`, and `deep` are all just names whose behaviour is exactly
- * the profile's declared reasoning state, output default, and
+ * the profile's output default and
  * `request_params`.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -4081,10 +4081,6 @@ export type SummaryModelView =
        * The selected Model Profile, when the model declares any.
        */
       profile?: ModelProfileId | null;
-      /**
-       * Whether reasoning is semantically enabled.
-       */
-      reasoningEnabled: boolean;
       /**
        * The effective opaque provider request parameters.
        */
@@ -7891,7 +7887,6 @@ export interface Capabilities {
   input_modalities: Modality[];
   output_modalities: Modality[];
   tool_calls: boolean;
-  reasoning: boolean;
 }
 /**
  * Opaque provider-native request parameters as a structured JSON object. Nested objects, arrays and null are preserved. Every number is exactly an IEEE 754 binary64 value (I-JSON); another, such as 9007199254740993, is refused. Runtime-protected wire keys are checked during model validation.
@@ -7909,11 +7904,6 @@ export interface RequestParams {
  * via the `definition` "Profile".
  */
 export interface Profile {
-  /**
-   * Required for every profile of a reasoning-capable Model; omission
-   * means `false` for a non-reasoning Model.
-   */
-  reasoning_enabled?: boolean | null;
   /**
    * Default output budget; at most the Model's `max_output_tokens`.
    */
@@ -11555,10 +11545,6 @@ export interface AttemptModelView {
          */
         profile?: ModelProfileId | null;
         /**
-         * Whether reasoning is semantically enabled.
-         */
-        reasoningEnabled: boolean;
-        /**
          * The effective opaque provider request parameters.
          */
         requestParams?: {
@@ -11598,10 +11584,6 @@ export interface ModelInvocationView {
    */
   profile?: ModelProfileId | null;
   /**
-   * Whether reasoning is semantically enabled.
-   */
-  reasoningEnabled: boolean;
-  /**
    * The effective opaque provider request parameters.
    */
   requestParams?: {
@@ -11626,10 +11608,6 @@ export interface ModelCapabilities {
    * Whether the model can be given tool definitions and can call them.
    */
   toolCalls: boolean;
-  /**
-   * Whether the model semantically supports reasoning.
-   */
-  reasoning: boolean;
 }
 /**
  * The raw capabilities the catalog claims, for clients that want to
@@ -11648,10 +11626,6 @@ export interface ModelCapabilities1 {
    * Whether the model can be given tool definitions and can call them.
    */
   toolCalls: boolean;
-  /**
-   * Whether the model semantically supports reasoning.
-   */
-  reasoning: boolean;
 }
 /**
  * The effective capabilities.
@@ -11669,10 +11643,6 @@ export interface ModelCapabilities2 {
    * Whether the model can be given tool definitions and can call them.
    */
   toolCalls: boolean;
-  /**
-   * Whether the model semantically supports reasoning.
-   */
-  reasoning: boolean;
 }
 /**
  * The raw capabilities the catalog claims, for clients that want to
@@ -11691,10 +11661,6 @@ export interface ModelCapabilities3 {
    * Whether the model can be given tool definitions and can call them.
    */
   toolCalls: boolean;
-  /**
-   * Whether the model semantically supports reasoning.
-   */
-  reasoning: boolean;
 }
 /**
  * Facts frozen together with the attempt model under native admission.
@@ -12327,7 +12293,7 @@ export interface SubagentActivityCounters {
  *
  * Derived from the frozen model authority exactly once by
  * [`SubagentExecutionProfile::from_frozen`]: it carries only the effective
- * model identity, Model Profile, and reasoning state. Credentials, endpoints, provider
+ * model identity and Model Profile. Credentials, endpoints, provider
  * bindings, and every other binding internal are never projected.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -12342,10 +12308,6 @@ export interface SubagentExecutionProfile {
    * The selected Model Profile, when the model declares any.
    */
   profile?: ModelProfileId | null;
-  /**
-   * Whether the invocation semantically enables reasoning.
-   */
-  reasoning_enabled: boolean;
 }
 /**
  * The structured Agent Status view of one composition.
@@ -13063,10 +13025,6 @@ export interface ModelInvocationView1 {
    * The selected Model Profile, when the model declares any.
    */
   profile?: ModelProfileId | null;
-  /**
-   * Whether reasoning is semantically enabled.
-   */
-  reasoningEnabled: boolean;
   /**
    * The effective opaque provider request parameters.
    */
@@ -15849,10 +15807,6 @@ export interface ModelCapabilities4 {
    * Whether the model can be given tool definitions and can call them.
    */
   toolCalls: boolean;
-  /**
-   * Whether the model semantically supports reasoning.
-   */
-  reasoning: boolean;
 }
 /**
  * The capabilities the runtime can actually deliver today.
@@ -15870,10 +15824,6 @@ export interface ModelCapabilities5 {
    * Whether the model can be given tool definitions and can call them.
    */
   toolCalls: boolean;
-  /**
-   * Whether the model semantically supports reasoning.
-   */
-  reasoning: boolean;
 }
 /**
  * One selectable Model Profile of the public catalog view.
@@ -15891,14 +15841,10 @@ export interface ModelProfileView {
    *
    * The runtime assigns no meaning to the name: `fast`, `precise`, `creative`,
    * `thinking-32k`, and `deep` are all just names whose behaviour is exactly
-   * the profile's declared reasoning state, output default, and
+   * the profile's output default and
    * `request_params`.
    */
   id: string;
-  /**
-   * Whether the profile semantically enables reasoning.
-   */
-  reasoningEnabled: boolean;
   /**
    * The profile's default output budget, when it declares one.
    */
@@ -16136,7 +16082,6 @@ export interface TraceRequestDetail {
   protocol: string;
   max_output_tokens: number;
   context_window_tokens: string;
-  reasoning_enabled: boolean;
   profile?: string | null;
   /**
    * Allowlisted provider-neutral sampling options; see the options
@@ -16856,10 +16801,6 @@ export interface ModelCapabilities6 {
    * Whether the model can be given tool definitions and can call them.
    */
   toolCalls: boolean;
-  /**
-   * Whether the model semantically supports reasoning.
-   */
-  reasoning: boolean;
 }
 /**
  * The inbound mailbox diagnostics of the Runtime Client projection.

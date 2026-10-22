@@ -492,7 +492,7 @@ pub enum SubagentWaitReason {
 ///
 /// Derived from the frozen model authority exactly once by
 /// [`SubagentExecutionProfile::from_frozen`]: it carries only the effective
-/// model identity, Model Profile, and reasoning state. Credentials, endpoints, provider
+/// model identity and Model Profile. Credentials, endpoints, provider
 /// bindings, and every other binding internal are never projected.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
@@ -503,8 +503,6 @@ pub struct SubagentExecutionProfile {
     /// The selected Model Profile, when the model declares any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<ModelProfileId>,
-    /// Whether the invocation semantically enables reasoning.
-    pub reasoning_enabled: bool,
 }
 
 impl SubagentExecutionProfile {
@@ -514,7 +512,6 @@ impl SubagentExecutionProfile {
         Self {
             model: frozen.primary.model.to_string(),
             profile: frozen.primary.profile.clone(),
-            reasoning_enabled: frozen.primary.reasoning_enabled,
         }
     }
 }
@@ -1331,7 +1328,6 @@ mod tests {
         let profile = SubagentExecutionProfile::from_frozen(&frozen);
         assert_eq!(profile.model, "local/model");
         assert_eq!(profile.profile, None);
-        assert!(!profile.reasoning_enabled);
         let serialized = serde_json::to_string(&profile).expect("serialize");
         assert!(
             !serialized.contains("test-only-secret"),

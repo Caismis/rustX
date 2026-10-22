@@ -146,7 +146,6 @@ async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolu
                     (
                         crate::model::catalog::ModelProfileId::new(name),
                         crate::model::authoring::Profile {
-                            reasoning_enabled: Some(false),
                             ..Default::default()
                         },
                     )
@@ -223,7 +222,6 @@ async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolu
         model.profiles.as_mut().unwrap().insert(
             crate::model::catalog::ModelProfileId::new("new"),
             crate::model::authoring::Profile {
-                reasoning_enabled: Some(false),
                 max_output_tokens: Some(1024),
                 request_params: crate::toml_authoring::AuthoredRequestParams(
                     serde_json::from_value(serde_json::json!({"temperature": 0.8, "stop": [null]}))

@@ -80,14 +80,10 @@ default_profile = "off"
 input_modalities = ["text"]
 output_modalities = ["text"]
 tool_calls = true
-reasoning = true
-
 [models."example/demo-model".profiles.off]
-reasoning_enabled = false
 request_params = '{"temperature":0.2}'
 
 [models."example/demo-model".profiles.on]
-reasoning_enabled = true
 max_output_tokens = 2048
 request_params = '''
 {"temperature": 0.2, "reasoning_effort": "low"}

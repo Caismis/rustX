@@ -28,9 +28,10 @@ export function Reasoning({ text, running = false, hidden = false, preview = tru
   const tx = useTranslation();
  const [expanded, setExpanded] = useState(false);
  const summary = previewLine(text, running).replaceAll('**', '');
- return <div hidden={hidden} className={css.root} data-variant="think" data-state={running ? 'running' : 'ok'} data-expanded={expanded || undefined} data-preview={preview && !expanded && !!summary || undefined}>
+ const showPreview = preview && !expanded && summary !== '';
+ return <div hidden={hidden} className={css.root} data-variant="think" data-state={running ? 'running' : 'ok'} data-expanded={expanded || undefined} data-preview={showPreview || undefined}>
  <DisclosureRow rowClassName={css.row} leadingClassName={css.leading} titleClassName={css.title} running={running}
  icon={<IconThinkOutline14 size={14}/>} title={tx('agent:turn-tail.reasoning')} open={expanded} expandable expandOnRowClick onToggle={() => setExpanded(v => !v)}
- collapsedContent={<><span className={css.separator} data-shimmer-decoration aria-hidden/><span className={css.summary} data-streaming={running || undefined}><span className={css.summaryText}><TextShimmer>{summary}</TextShimmer></span></span></>}>
+ collapsedContent={showPreview ? <><span className={css.separator} data-shimmer-decoration aria-hidden/><span className={css.summary} data-streaming={running || undefined}><span className={css.summaryText}><TextShimmer>{summary}</TextShimmer></span></span></> : undefined}>
  <div className={css.thinkBody}><MarkdownText variant="compact" text={text} streaming={running}/></div></DisclosureRow></div>;
 }

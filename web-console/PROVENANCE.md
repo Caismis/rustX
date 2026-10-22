@@ -4090,14 +4090,14 @@ remain owned by the existing configuration actors.
 Intentional native differences: protocol/API format belongs to each Model,
 not a Provider; input controls expose text and images; output type has no editor.
 The native output declaration stays intact, with new Models declaring text
-output. Other controls expose tool calls, reasoning, Model Profiles and native
+output. Other controls expose tool calls, Model Profiles and native
 request parameters.
 Profiles use selectable chips with inline add/delete and a JSON editor for the
 selected profile. That one editor authors the complete native Profile object:
-reasoning_enabled, optional max_output_tokens, and provider-native request_params.
+optional max_output_tokens and provider-native request_params.
 There are no separate profile reasoning or output-budget controls; the default
-profile remains a selector. New profiles explicitly seed their reasoning state
-from the Model's declared capability, independently of their names. Existing
+profile remains a selector. New profiles start from provider request parameters
+without a reasoning capability or enabled declaration. Existing
 profiles are displayed and replaced whole without rewriting their declarations.
 The shared JsonObjectEditor retains exact JSON parsing and draft/reset ownership
 for both profiles and request-parameter objects. The native map has no
@@ -4116,3 +4116,22 @@ retained drafts, footer visibility, provider creation/secret visibility,
 configuration authority loss, existing native CAS/secret/scope contracts and
 real App Server Provider/Model writes. Browser plugin not available; rendered
 checks use the repository's pinned Playwright Chromium container.
+
+The App Server v52 model/request projections remove declared reasoning capability
+and enabled flags throughout WebUI and TUI. Trace Options renders only frozen
+request parameters, and thinking display uses actual returned reasoning blocks.
+No model classification is inferred from a response without thinking.
+
+Reasoning disclosures omit disabled collapsed previews from the DOM. Streaming
+coverage follows Harness's completed-first-line preview rule and checks that
+manual disclosure state survives display-mode changes. Real multi-PTY ownership
+boundary cases use the native supervisor's 20-second test budget so cleanup
+completes before the next case restores or installs its prototype spy.
+
+Validation: all 3,083 WebUI tests pass (4 platform/opt-in skips); all 1,186 TUI
+tests pass (1 platform skip). Native model/request/subagent/repair coverage,
+Provider/Model wire contracts, generated schemas, type checks, production build,
+i18n and provenance checks pass. Pinned Playwright verifies Settings in both
+color schemes at 1440px and 390px, plus reasoning expansion and display-mode
+switches at both widths; no application errors or horizontal overflow occurred.
+Browser plugin not available; the existing repository-pinned browser was used.

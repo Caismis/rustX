@@ -53,7 +53,6 @@ async fn issue456_json_string_sources_round_trip_and_formatting_is_semantically_
                 (
                     ModelProfileId::new(name),
                     crate::model::authoring::Profile {
-                        reasoning_enabled: None,
                         max_output_tokens: budget,
                         request_params: params(value),
                     },
@@ -247,7 +246,6 @@ async fn issue456_effective_invocation_decides_preparation_and_adoption() {
                         (
                             ModelProfileId::new(name),
                             Profile {
-                                reasoning_enabled: None,
                                 max_output_tokens: budget,
                                 request_params: params(value),
                             },
@@ -613,7 +611,6 @@ async fn issue456_inexact_numbers_are_refused_before_any_write_and_exact_ones_ro
                 [(
                     ModelProfileId::new("p"),
                     Profile {
-                        reasoning_enabled: None,
                         max_output_tokens: None,
                         request_params: params(value),
                     },
@@ -793,7 +790,7 @@ async fn issue456_raw_request_param_literals_are_judged_before_any_rounding() {
             model.profiles = Some(
                 [(
                     ModelProfileId::new("p"),
-                    Profile { reasoning_enabled: None, max_output_tokens: None, request_params: params },
+                    Profile { max_output_tokens: None, request_params: params },
                 )]
                 .into(),
             );
@@ -1024,7 +1021,6 @@ async fn issue456_profile_key_collisions_are_refused_without_echoing_the_key() {
             [(
                 p.clone(),
                 Profile {
-                    reasoning_enabled: None,
                     max_output_tokens: None,
                     request_params: AuthoredRequestParams(object(json!({KEY: null, "temperature": 0.5}))),
                 },
@@ -1222,7 +1218,6 @@ async fn issue456_following_and_pinned_default_profiles_diverge_only_when_the_de
                         (
                             ModelProfileId::new(name),
                             Profile {
-                                reasoning_enabled: None,
                                 max_output_tokens: None,
                                 request_params: AuthoredRequestParams(
                                     serde_json::from_value(json!({"temperature": temperature}))

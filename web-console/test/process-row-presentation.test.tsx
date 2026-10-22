@@ -38,6 +38,19 @@ it('streaming reasoning previews only completed paragraph first lines and retain
   expect(row().hasAttribute('data-preview')).toBe(false);
 });
 
+it('disabled previews are absent while the reasoning body keeps its disclosure state', () => {
+  const view = render(<Reasoning text="Original reasoning"/>);
+  expect(view.getByText('Original reasoning')).toBeTruthy();
+  view.rerender(<Reasoning text="Original reasoning" preview={false}/>);
+  expect(view.queryByText('Original reasoning')).toBeNull();
+  fireEvent.click(view.getByRole('button', {name:'Reasoning'}));
+  expect(view.getByText('Original reasoning')).toBeTruthy();
+  view.rerender(<Reasoning text="Original reasoning"/>);
+  expect(view.getByRole('button', {name:'Reasoning'}).getAttribute('aria-expanded')).toBe('true');
+  view.rerender(<Reasoning text="Original reasoning" preview={false}/>);
+  expect(view.getByText('Original reasoning')).toBeTruthy();
+});
+
 function marqueeFixture(reduced: boolean) {
   const frames = new Map<number, FrameRequestCallback>();
   let id = 0;

@@ -13,7 +13,7 @@ import { prependTrace, beginTraceDetail, completeTraceDetail, refreshTrace, repl
 import { ledgerFocusTargets, ledgerRows, matchedRecordIds, isInspectable, projectTrajectory, trajectoryItems as flattenTrajectory, visibleItems, matchingCalls, preferredItem, systemPresentation, type InspectableDisplayItem, type TurnStructure } from '../src/app/trajectory/layout';
 import { searchItems } from '../src/app/trajectory/search';
 import { stepLessRecords, manyStepRecords, orderedStepRecords, structuralSearchRecords, requestDetail, toolDetail, traceRecord, traceTool } from './trace-fixture';
-import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v51';
+import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v52';
 
 beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(360);
@@ -221,6 +221,17 @@ it('T1-05 latest unchanged-only page inspects request options with one lazy owne
   fireEvent.click(screen.getByRole('tab', { name: 'Options' }));
   expect(screen.getByRole('tab', { name: 'Options' }).getAttribute('aria-selected')).toBe('true');
   expect(load.mock.calls).toEqual([['trace:10']]);
+});
+
+it.each([false, true])('request options reflect provider parameters without a synthetic thinking state (%s)', (configured) => {
+  const record = traceRecord(0), detail = requestDetail(0);
+  detail.request!.options = configured ? [{ name: 'thinking', value: { value: { type: 'enabled', budget_tokens: 1024 }, truncated: false } }] : [];
+  show(completeTraceDetail(cacheOf([record]), record.id, 1, detail));
+  fireEvent.click(row('RequestBoundary'));
+  fireEvent.click(screen.getByRole('tab', { name: 'Options' }));
+  const text = screen.getByRole('tabpanel').textContent!;
+  expect(text.includes('thinking')).toBe(configured);
+  if (configured) expect(text).toContain('budget_tokens');
 });
 
 it.each([[false, true], [true, false], [true, true]])('T1-02 independent truncation previous=%s current=%s forbids complete diff', (previous, current) => {

@@ -154,8 +154,6 @@ impl Fixture {
             "4096",
             "--tool-calls",
             "true",
-            "--reasoning",
-            "false",
             "--compat",
             "chat_reasoning_replay = \"omit\"",
         ]

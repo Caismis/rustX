@@ -1009,7 +1009,7 @@ spellings such as `reasoning` and `reasoning_content` never enter the
 TypeScript protocol or presentation layer. Whether reasoning is *drawn* is a
 client preference (`/show-reasoning`, `ctrl+t`); when hidden it collapses to a
 `Thinking…` marker rather than becoming assistant text. What rustX *asks a
-provider for* is `SessionModelConfig.profile` / `reasoningEnabled`,
+provider for* is the effective provider `requestParams` selected by `SessionModelConfig.profile`,
 which only `session/setModel` changes.
 
 ### Working status is proven, never timed

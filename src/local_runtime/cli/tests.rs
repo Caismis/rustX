@@ -165,18 +165,12 @@ fn cli05_explicit_false_and_typed_init_values() {
         "--endpoint=http://localhost",
         "--credential-env=KEY",
     ];
-    let Command::Init { request, .. } = parse(
-        &[
-            base.to_vec(),
-            vec!["--tool-calls", "false", "--reasoning=false", "--compat="],
-        ]
-        .concat(),
-    )
-    .unwrap() else {
+    let Command::Init { request, .. } =
+        parse(&[base.to_vec(), vec!["--tool-calls", "false", "--compat="]].concat()).unwrap()
+    else {
         panic!()
     };
     assert_eq!(request.tool_calls, Some(false));
-    assert_eq!(request.reasoning, Some(false));
     assert_eq!(request.compat.as_deref(), Some(""));
     assert!(
         request.model_id.is_none()

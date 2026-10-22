@@ -27,7 +27,7 @@ max_output_tokens = 4096
 capabilities = { input_modalities = ["text"], output_modalities = ["text"], tool_calls = true, reasoning = true }
 compat = { chat_reasoning_replay = "omit" }
 default_profile = "deep"
-profiles = { deep = { reasoning_enabled = true }, quick = { reasoning_enabled = false, request_params = '{"temperature":0.1}' } }
+profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"temperature":0.1}' } }
 `).join('') + '[agent.model]\nmodel = "fixture/console-model"\n' + summary);
     writeFileSync(join(fixture.workspaceA, '.agents/agents/optional.toml'), model);
     const mcpFile = join(fixture.workspaceA, '.agents/mcp.toml');

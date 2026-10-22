@@ -1659,10 +1659,10 @@ plans compaction with a previously selected 128k window.
 Issue #42 also retired the universal `ReasoningEffort` enum, and Issue #456
 generalized its replacement: a Model may declare named *Model Profiles*,
 complete invocation presets whose wire behaviour is exactly their configured
-`requestParams`, with an explicit reasoning state and an optional output
-default. The runtime assigns no meaning to a profile name and synthesizes no
+`requestParams`, with an optional output default. The runtime assigns no meaning to a profile name and synthesizes no
 reasoning field. `ModelManifest` therefore carries a catalog `ModelRef`, the
-selected `ModelProfileId`, and the semantic reasoning-enabled state.
+selected `ModelProfileId`. Reasoning is parsed and displayed from actual
+provider output; it requires no declared capability or enabled flag.
 
 ### 2.2 Attempt settlement invariant
 
@@ -2907,7 +2907,7 @@ M3 Agent Loop
 #### Provider, Model and selection ownership
 
 Provider and Model are independently named atomic domains in `rustx.toml`.
-A Model names its Provider and declares protocol, limits, capabilities, reasoning,
+A Model names its Provider and declares protocol, limits, capabilities,
 compatibility and opaque native request defaults. Identity spelling infers none
 of those semantics. A Workspace replacement discards the entire lower object,
 including credentials. Root model selection is another atomic semantic unit.

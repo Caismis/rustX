@@ -64,8 +64,8 @@ export type CommandOutcome =
  * One change to a client presentation preference.
  *
  * These never reach the runtime. `reasoning` here is *display* of reasoning
- * content, which is a different thing from the Model Profile and
- * `reasoningEnabled` model request configuration `/model` shows.
+ * content. Provider request parameters are configured separately through
+ * the Model Profile and model selection.
  */
 export type PreferenceChange =
   | { type: "reasoning"; visible?: boolean }

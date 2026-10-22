@@ -42,8 +42,6 @@ max_output_tokens = 512
 input_modalities = ["text"]
 output_modalities = ["text"]
 tool_calls = true
-reasoning = false
-
 [models."local/model-a".compat]
 chat_reasoning_replay = "omit"
 
@@ -58,8 +56,6 @@ max_output_tokens = 512
 input_modalities = ["text"]
 output_modalities = ["text"]
 tool_calls = true
-reasoning = false
-
 [models."local/model-b".compat]
 chat_reasoning_replay = "omit"
 "#;
@@ -963,7 +959,6 @@ request_params = '{"temperature":0.9}'
 input_modalities = ["text"]
 output_modalities = ["text"]
 tool_calls = true
-reasoning = false
 "#;
 
 /// Blocker 1: the child's model semantics are frozen by the parent, so a

@@ -128,8 +128,6 @@ pub struct FrozenModelInvocation {
     /// The selected Model Profile, when the model declares any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<ModelProfileId>,
-    /// Whether this invocation semantically enables reasoning.
-    pub reasoning_enabled: bool,
     /// The effective opaque provider request parameters, already overlaid.
     #[serde(default)]
     pub request_params: RequestParams,
@@ -187,7 +185,6 @@ impl FrozenModelInvocation {
                 .map(|id| {
                     vec![ModelProfileView {
                         id: id.clone(),
-                        reasoning_enabled: self.reasoning_enabled,
                         max_output_tokens: None,
                     }]
                 })
@@ -351,12 +348,7 @@ impl FrozenModelSpec {
             max_output_tokens: model.model_max_output_tokens,
             declared_capabilities: &model.declared_capabilities,
             effective_capabilities: model.capabilities.clone(),
-            profiles: crate::model::catalog::ProfilesReadView::Frozen(
-                model
-                    .profile
-                    .as_ref()
-                    .map(|id| (id, model.reasoning_enabled)),
-            ),
+            profiles: crate::model::catalog::ProfilesReadView::Frozen(model.profile.as_ref()),
             default_profile: model.profile.as_ref(),
             credential_source: model.binding.credential.read_view(),
         })
@@ -387,10 +379,7 @@ impl Serialize for FrozenCatalogReadView<'_> {
                         declared_capabilities: &model.declared_capabilities,
                         effective_capabilities: model.capabilities.clone(),
                         profiles: crate::model::catalog::ProfilesReadView::Frozen(
-                            model
-                                .profile
-                                .as_ref()
-                                .map(|id| (id, model.reasoning_enabled)),
+                            model.profile.as_ref(),
                         ),
                         default_profile: model.profile.as_ref(),
                         credential_source: model.binding.credential.read_view(),
@@ -430,10 +419,9 @@ pub(crate) fn test_frozen_model_spec(model: ModelRef) -> FrozenModelSpec {
             model_max_output_tokens: 512,
             max_output_tokens: 512,
             profile: None,
-            reasoning_enabled: false,
             request_params: RequestParams::new(),
-            capabilities: ModelCapabilities::text_only(true, false),
-            declared_capabilities: ModelCapabilities::text_only(true, false),
+            capabilities: ModelCapabilities::text_only(true),
+            declared_capabilities: ModelCapabilities::text_only(true),
             compat: ModelCompat::default(),
         },
         summary: FrozenSummaryModel::Session,
@@ -489,8 +477,6 @@ request_params = '{"temperature":0.25}'
 input_modalities = ["text"]
 output_modalities = ["text"]
 tool_calls = true
-reasoning = false
-
 [models."local/m".compat]
 chat_reasoning_replay = "omit"
 "#;
@@ -606,7 +592,7 @@ chat_reasoning_replay = "omit"
     }
 
     /// Issue #456: a delegated child receives the complete invocation the
-    /// parent resolved — the selected Model Profile, its reasoning state,
+    /// parent resolved — the selected Model Profile,
     /// output default and parameters — and an edit of the catalog after the
     /// freeze cannot reach the child.
     #[test]
@@ -627,18 +613,14 @@ default_profile = "fast"
 input_modalities = ["text"]
 output_modalities = ["text"]
 tool_calls = true
-reasoning = true
-
 [models."local/m".compat]
 chat_reasoning_replay = "omit"
 
 [models."local/m".profiles.fast]
-reasoning_enabled = false
 max_output_tokens = 512
 request_params = '{"reasoning_effort":"none","stop":[null]}'
 
 [models."local/m".profiles.deep]
-reasoning_enabled = true
 request_params = '{"reasoning_effort":"high"}'
 "#;
         let mut configured = config();
@@ -658,7 +640,6 @@ request_params = '{"reasoning_effort":"high"}'
         assert_eq!(reresolved.request_params()["reasoning_effort"], "low");
         let (primary, _) = decoded.materialize(&environment()).expect("materialize");
         assert_eq!(primary.profile().expect("profile").as_str(), "fast");
-        assert!(!primary.reasoning_enabled());
         assert_eq!(primary.max_output_tokens(), 512);
         assert_eq!(
             serde_json::Value::Object(primary.request_params().clone()),

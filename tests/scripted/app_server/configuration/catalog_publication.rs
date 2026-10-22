@@ -54,7 +54,6 @@ async fn issue459_catalog_publication_keeps_discovery_and_admission_on_one_autho
                         (
                             ModelProfileId::new(*name),
                             Profile {
-                                reasoning_enabled: None,
                                 max_output_tokens: *budget,
                                 request_params: AuthoredRequestParams(
                                     serde_json::from_value(value.clone()).unwrap(),

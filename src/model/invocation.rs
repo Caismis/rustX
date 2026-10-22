@@ -370,7 +370,7 @@ pub fn finalize_provider_request(
 /// File input remains unsupported.
 #[must_use]
 pub fn adapter_capabilities(_protocol: ModelProtocol) -> ModelCapabilities {
-    let mut capabilities = ModelCapabilities::text_only(true, true);
+    let mut capabilities = ModelCapabilities::text_only(true);
     capabilities.input_modalities.insert(Modality::Image);
     capabilities
 }
@@ -378,7 +378,7 @@ pub fn adapter_capabilities(_protocol: ModelProtocol) -> ModelCapabilities {
 /// The capabilities the current rustX runtime can carry end to end.
 #[must_use]
 pub fn runtime_capabilities() -> ModelCapabilities {
-    let mut capabilities = ModelCapabilities::text_only(true, true);
+    let mut capabilities = ModelCapabilities::text_only(true);
     capabilities.input_modalities.insert(Modality::Image);
     capabilities
 }
@@ -505,7 +505,7 @@ pub struct ModelInvocationConfig {
 /// Everything an attempt needs to talk to a provider is frozen here: the
 /// provider binding and its adapter, the model identity and protocol, the
 /// context window, the output budget, the selected Model Profile and the
-/// semantic reasoning state, the effective request parameters, and the
+/// effective request parameters, and the
 /// effective capabilities.
 ///
 /// The type is deliberately **not** `Serialize`: it owns an adapter handle.
@@ -522,7 +522,6 @@ pub struct ResolvedModelInvocation {
     model_max_output_tokens: u32,
     effective_output_tokens: u32,
     profile: Option<ModelProfileId>,
-    reasoning_enabled: bool,
     request_params: RequestParams,
     capabilities: ModelCapabilities,
     declared_capabilities: ModelCapabilities,
@@ -538,7 +537,6 @@ impl fmt::Debug for ResolvedModelInvocation {
             .field("context_window", &self.context_window)
             .field("effective_output_tokens", &self.effective_output_tokens)
             .field("profile", &self.profile)
-            .field("reasoning_enabled", &self.reasoning_enabled)
             .field("request_params", &self.request_params)
             .field("capabilities", &self.capabilities)
             .field("compat", &self.compat)
@@ -560,7 +558,6 @@ impl PartialEq for ResolvedModelInvocation {
             && self.context_window == other.context_window
             && self.effective_output_tokens == other.effective_output_tokens
             && self.profile == other.profile
-            && self.reasoning_enabled == other.reasoning_enabled
             && self.request_params == other.request_params
             && self.capabilities == other.capabilities
             && self.compat == other.compat
@@ -635,12 +632,6 @@ impl ResolvedModelInvocation {
         self.profile.as_ref()
     }
 
-    /// Whether this invocation semantically enables reasoning.
-    #[must_use]
-    pub const fn reasoning_enabled(&self) -> bool {
-        self.reasoning_enabled
-    }
-
     /// The effective opaque provider request parameters.
     #[must_use]
     pub const fn request_params(&self) -> &RequestParams {
@@ -705,7 +696,6 @@ impl ResolvedModelInvocation {
             model_max_output_tokens: frozen.model_max_output_tokens,
             effective_output_tokens: frozen.max_output_tokens,
             profile: frozen.profile.clone(),
-            reasoning_enabled: frozen.reasoning_enabled,
             request_params: frozen.request_params.clone(),
             capabilities: frozen.capabilities.clone(),
             declared_capabilities: frozen.declared_capabilities.clone(),
@@ -723,7 +713,6 @@ impl ResolvedModelInvocation {
             model_max_output_tokens: self.model_max_output_tokens,
             max_output_tokens: self.effective_output_tokens,
             profile: self.profile.clone(),
-            reasoning_enabled: self.reasoning_enabled,
             request_params: self.request_params.clone(),
             capabilities: self.capabilities.clone(),
             declared_capabilities: self.declared_capabilities.clone(),
@@ -740,7 +729,6 @@ impl ResolvedModelInvocation {
             model_max_output_tokens: self.model_max_output_tokens,
             max_output_tokens: self.effective_output_tokens,
             profile: self.profile.as_ref(),
-            reasoning_enabled: self.reasoning_enabled,
             request_params: &self.request_params,
             capabilities: &self.capabilities,
             declared_capabilities: &self.declared_capabilities,
@@ -758,7 +746,6 @@ pub(crate) struct ModelInvocationReadView<'a> {
     max_output_tokens: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     profile: Option<&'a ModelProfileId>,
-    reasoning_enabled: bool,
     request_params: &'a RequestParams,
     capabilities: &'a ModelCapabilities,
     declared_capabilities: &'a ModelCapabilities,
@@ -789,8 +776,6 @@ pub struct ModelInvocationView {
     /// The selected Model Profile, when the model declares any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<ModelProfileId>,
-    /// Whether reasoning is semantically enabled.
-    pub reasoning_enabled: bool,
     /// The effective opaque provider request parameters.
     #[serde(default)]
     pub request_params: RequestParams,
@@ -1256,7 +1241,6 @@ impl ModelBindingRegistry {
             model_max_output_tokens: analyzed.model_max_output_tokens,
             effective_output_tokens: analyzed.max_output_tokens,
             profile: analyzed.profile,
-            reasoning_enabled: analyzed.reasoning_enabled,
             request_params: analyzed.request_params,
             capabilities: analyzed.capabilities,
             declared_capabilities: analyzed.declared_capabilities,
@@ -1308,7 +1292,6 @@ impl ModelBindingRegistry {
             model_max_output_tokens: resolved.model_max_output_tokens,
             max_output_tokens: resolved.effective_output_tokens,
             profile: resolved.profile.clone(),
-            reasoning_enabled: resolved.reasoning_enabled,
             request_params: resolved.request_params.clone(),
             capabilities: resolved.capabilities.clone(),
             declared_capabilities: resolved.declared_capabilities.clone(),
@@ -1415,11 +1398,6 @@ pub fn analyze_selection(
         model_max_output_tokens: model.max_output_tokens,
         max_output_tokens: effective_output_tokens,
         profile: profile_id,
-        // A reasoning-capable model without profiles has provider-default
-        // reasoning semantics: reasoning is always on, but there is no
-        // selectable profile and no synthetic wire field.
-        reasoning_enabled: model.capabilities.reasoning
-            && profile.is_none_or(|profile| profile.reasoning_enabled),
         request_params,
         capabilities,
         declared_capabilities: model.capabilities.clone(),

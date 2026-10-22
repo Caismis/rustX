@@ -125,8 +125,6 @@ pub struct RequestSnapshot {
     pub context_window_tokens: u64,
     /// The selected Model Profile identity, when any.
     pub profile: Option<crate::model::catalog::ModelProfileId>,
-    /// The effective semantic reasoning state.
-    pub reasoning_enabled: bool,
     /// The exact effective tool definitions/capability view used by this
     /// request. The capability revision is retained for audit, while the
     /// definitions are frozen by value because capability revision metadata
@@ -258,7 +256,6 @@ impl RequestSnapshot {
         invocation: ModelInvocationConfig,
         context_window_tokens: u64,
         profile: Option<crate::model::catalog::ModelProfileId>,
-        reasoning_enabled: bool,
         tool_definitions: Vec<ModelToolDefinition>,
         capability_revision: CapabilityRevision,
         context_generation: ContextGeneration,
@@ -301,7 +298,6 @@ impl RequestSnapshot {
             invocation,
             context_window_tokens,
             profile,
-            reasoning_enabled,
             tool_definitions,
             capability_revision,
             context_generation,
@@ -511,7 +507,6 @@ mod tests {
             request.invocation.clone(),
             128_000,
             None,
-            false,
             request.tools.clone(),
             CapabilityRevision::new(1),
             ContextGeneration {

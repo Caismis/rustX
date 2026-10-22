@@ -4,7 +4,7 @@ import {TurnDeliveries} from '../src/app/agent/TurnDeliveries';
 import {JournalSourceProvider} from '../src/app/agent/ObservationSource';
 import {PreviewContext} from '../src/app/components/ArtifactPreview';
 import {checkpoint,Server,snapshot} from './fixture';
-import type {CheckpointPage,RuntimeClientDeliveryHead,RuntimeClientDeliveryItem,SessionFileReference} from '../../protocol/app-server/v51';
+import type {CheckpointPage,RuntimeClientDeliveryHead,RuntimeClientDeliveryItem,SessionFileReference} from '../../protocol/app-server/v52';
 import {deliveryPage,readDeliveryMetadata} from '../../protocol/app-server/delivery-observation';
 let server:Server;
 afterEach(()=>{cleanup();server?.client.disconnect();});

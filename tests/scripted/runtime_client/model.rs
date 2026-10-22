@@ -240,13 +240,12 @@ fn fixture_models() -> Vec<FixtureModel> {
         FixtureModel::text("alpha/model-a", ModelProtocol::OpenAiChatCompletions)
             .with_context_window(128_000)
             .with_max_output_tokens(4_096)
-            .claiming_reasoning()
+
             // Each profile is a complete preset: both repeat the sampling key.
             .with_profiles("on", serde_json::json!({
-                "off": {"reasoningEnabled": false, "maxOutputTokens": 2_048,
+                "off": {"maxOutputTokens": 2_048,
                         "requestParams": {"thinking": {"type": "disabled"}, "temperature": 0.2}},
-                "on": {"reasoningEnabled": true,
-                       "requestParams": {"thinking": {"type": "enabled"}, "temperature": 0.2}}
+                "on": {"requestParams": {"thinking": {"type": "enabled"}, "temperature": 0.2}}
             }))
             // Explicit Image intent is supported by the Chat adapter/runtime.
             .claiming_input("image"),
@@ -262,7 +261,7 @@ fn fixture_models() -> Vec<FixtureModel> {
         FixtureModel::text("always/always-on", ModelProtocol::OpenAiChatCompletions)
             .with_context_window(64_000)
             .with_max_output_tokens(512)
-            .claiming_reasoning(),
+            ,
     ]
 }
 
@@ -397,7 +396,6 @@ async fn the_identity_receipt_and_checkpoint_keep_the_redacted_session_model() {
         Some(ModelProfileId::new("on")),
         "the model's declared default profile is selected"
     );
-    assert!(model.effective.as_ref().unwrap().reasoning_enabled);
     assert_eq!(model.summary, Some(SummaryModelView::Session));
 
     // The effective capabilities are the intersection, not the raw claim.
@@ -475,24 +473,15 @@ async fn the_catalog_query_exposes_safe_selectable_models() {
     assert_eq!(primary.context_window, 128_000);
     assert_eq!(primary.max_output_tokens, 4_096);
     assert_eq!(primary.default_profile, Some(ModelProfileId::new("on")));
-    let profiles: Vec<(String, bool, Option<u32>)> = primary
+    let profiles: Vec<(String, Option<u32>)> = primary
         .profiles
         .iter()
-        .map(|profile| {
-            (
-                profile.id.to_string(),
-                profile.reasoning_enabled,
-                profile.max_output_tokens,
-            )
-        })
+        .map(|profile| (profile.id.to_string(), profile.max_output_tokens))
         .collect();
     assert_eq!(
         profiles,
-        vec![
-            ("off".to_owned(), false, Some(2_048)),
-            ("on".to_owned(), true, None)
-        ],
-        "profile identities, reasoning state and output defaults are exposed"
+        vec![("off".to_owned(), Some(2_048)), ("on".to_owned(), None)],
+        "profile identities and output defaults are exposed"
     );
     assert!(
         primary
@@ -549,7 +538,6 @@ async fn a_valid_update_publishes_exactly_one_coherent_change() {
     let model = read_model(&attachment, 100);
     assert_eq!(model.configured, desired);
     assert_eq!(model.effective.as_ref().unwrap().max_output_tokens, 1_000);
-    assert!(!model.effective.as_ref().unwrap().reasoning_enabled);
     assert_eq!(
         model.effective.as_ref().unwrap().request_params["thinking"],
         serde_json::json!({"type": "disabled"}),
@@ -653,7 +641,6 @@ async fn model_get_returns_the_authoritative_session_state() {
         None,
         "a model that declares no profiles selects none"
     );
-    assert!(!after.effective.as_ref().unwrap().reasoning_enabled);
 }
 
 /// The TUI `/model X` operation sends a complete replacement: primary
@@ -734,7 +721,7 @@ async fn primary_model_selection_resets_primary_overrides_and_preserves_summary_
 /// Runtime Client model projections preserve always-on reasoning as enabled
 /// without inventing a selectable profile or a provider wire field.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn runtime_client_reports_always_on_reasoning_without_a_profile() {
+async fn runtime_client_lists_a_model_without_synthetic_profiles() {
     let (_model, host) = runtime(vec![one_turn_stop()]).await;
     let (attachment, _) = host
         .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
@@ -749,7 +736,6 @@ async fn runtime_client_reports_always_on_reasoning_without_a_profile() {
     );
     let model = read_model(&attachment, 100);
     assert_eq!(model.effective.as_ref().unwrap().profile, None);
-    assert!(model.effective.as_ref().unwrap().reasoning_enabled);
 
     let catalog_response = attachment.handle_request(RuntimeClientRequest::ModelCatalogGet {
         id: RequestId::new(2),

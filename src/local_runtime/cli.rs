@@ -198,8 +198,6 @@ struct InitArgs {
     max_output: Option<u32>,
     #[arg(long, action = clap::ArgAction::Set)]
     tool_calls: Option<bool>,
-    #[arg(long, action = clap::ArgAction::Set)]
-    reasoning: Option<bool>,
     /// Explicit TOML compatibility document; no compatibility is inferred
     #[arg(long)]
     compat: Option<String>,
@@ -225,7 +223,6 @@ impl InitArgs {
             context_window: self.context_window,
             max_output: self.max_output,
             tool_calls: self.tool_calls,
-            reasoning: self.reasoning,
             compat: self.compat,
             model_document: self.model_document,
         }

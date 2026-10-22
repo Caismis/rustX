@@ -305,7 +305,7 @@ impl SessionArchiveCut {
             "session": self.session, "cwd": self.cwd, "nodes": self.nodes,
             "conversations": self.conversations.iter().map(|c| &c.manifest).collect::<Vec<_>>(),
             "artifacts": self.artifacts.iter().map(|a| &a.manifest).collect::<Vec<_>>(),
-            "schemas": {"journal":5,"messages":1,"surface":1,"requests":4,"projections":2,"generations":2,"auxiliary_audit":2,"inherited_auxiliary_audit":2,"publication_audits":1,"inherited_responses":1,"inherited_turns":1},
+            "schemas": {"journal":5,"messages":1,"surface":1,"requests":5,"projections":2,"generations":2,"auxiliary_audit":2,"inherited_auxiliary_audit":2,"publication_audits":1,"inherited_responses":1,"inherited_turns":1},
             "auxiliary_reconstruction": {"input":false,"output":false,"reason":"minimal audit facts retain identities and outcomes, not temporary input or generated output"},
             "integrity": "ZIP CRC32 per entry",
             "excluded": ["provider-private continuation state", "infrastructure configuration and credentials", "opaque request parameters outside the inspection allowlist", "provider and runtime diagnostic prose/codes", "workflow recovery comparison guards"],

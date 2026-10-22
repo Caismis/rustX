@@ -232,7 +232,7 @@ fn invocation(model: &str) -> ModelInvocationConfig {
         protocol: ModelProtocol::OpenAiChatCompletions,
         max_output_tokens: 128,
         request_params: RequestParams::new(),
-        capabilities: ModelCapabilities::text_only(true, true),
+        capabilities: ModelCapabilities::text_only(true),
         compat: ModelCompat::default(),
     }
 }
@@ -258,7 +258,6 @@ fn snapshot_at(
         invocation(model),
         64_000,
         None,
-        false,
         Vec::new(),
         CapabilityRevision::new(1),
         ContextGeneration {

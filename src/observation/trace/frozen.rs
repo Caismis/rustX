@@ -30,7 +30,7 @@ impl<M: serde::Serialize> serde::Serialize for RequestInspection<'_, M> {
         use serde::ser::SerializeStruct as _;
         let snapshot = self.snapshot;
         let options = Options(snapshot);
-        let mut value = serializer.serialize_struct("TraceRequestDetail", 27)?;
+        let mut value = serializer.serialize_struct("TraceRequestDetail", 26)?;
         value.serialize_field("contributions", &Contributions(snapshot))?;
         value.serialize_field("request_id", &snapshot.request_id)?;
         value.serialize_field("attempt_id", &snapshot.identity.attempt_id)?;
@@ -44,7 +44,6 @@ impl<M: serde::Serialize> serde::Serialize for RequestInspection<'_, M> {
         )?;
         value.serialize_field("max_output_tokens", &snapshot.invocation.max_output_tokens)?;
         value.serialize_field("context_window_tokens", &snapshot.context_window_tokens)?;
-        value.serialize_field("reasoning_enabled", &snapshot.reasoning_enabled)?;
         value.serialize_field(
             "profile",
             &snapshot

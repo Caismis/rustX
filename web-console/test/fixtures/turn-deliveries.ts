@@ -1,5 +1,5 @@
 import { type Server } from '../fixture';
-import type { RuntimeClientSnapshot } from '../../../protocol/app-server/v51';
+import type { RuntimeClientSnapshot } from '../../../protocol/app-server/v52';
 import { deliveryConversation } from '../turn-deliveries-fixture';
 
 export function turnDeliveriesFixture(server: Server, current: RuntimeClientSnapshot) {

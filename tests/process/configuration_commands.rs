@@ -161,8 +161,6 @@ fn cfg235_binary_init_check_show_exit_and_machine_contract() {
         "4096",
         "--tool-calls",
         "true",
-        "--reasoning",
-        "false",
         "--compat",
         "chat_reasoning_replay = \"omit\"",
         "--json",

@@ -1,6 +1,6 @@
 import {act,cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
-import type {CheckpointPage,CheckpointReadCut,MethodResult,Request} from '../../protocol/app-server/v51';
+import type {CheckpointPage,CheckpointReadCut,MethodResult,Request} from '../../protocol/app-server/v52';
 import {Server,checkpoint,snapshot} from './fixture';
 import {nativeTraceFixture} from './native-trace-fixture';
 import {traceRecord,requestDetail} from './trace-fixture';
@@ -37,7 +37,7 @@ it('retains a positive deferred header and reads selected Options at its own ret
  expect(entry.page).toEqual(descriptor(cut));expect(entry.detail).toBeUndefined();expect(entry.error).toBeUndefined();
  const load=show(server);expect(screen.queryByRole('alert')).toBeNull();expect(load).not.toHaveBeenCalled();
  await screen.findByText('"console-model"');expect(screen.queryByRole('combobox')).toBeNull();
- await waitFor(()=>expect(server.requests.filter(row=>row.request.method==='conversation/checkpointValueRead')).toHaveLength(6+Math.max(1,requestDetail(4).request!.options.length)));
+ await waitFor(()=>expect(server.requests.filter(row=>row.request.method==='conversation/checkpointValueRead')).toHaveLength(5+Math.max(1,requestDetail(4).request!.options.length)));
  const reads=server.requests.filter(row=>row.request.method==='conversation/checkpointValueRead');
  expect(reads.every(row=>'cut' in row.request.params&&JSON.stringify(row.request.params.cut)===JSON.stringify(cut))).toBe(true);
  expect(reads[0].request.params).toMatchObject({cut,domain:'trace.records.4.detail.request.model',item_offset:0,path:[],offset:0,max_bytes:65536});
@@ -203,7 +203,7 @@ it.each(['terminal refresh','owner terminal refresh','explicit reselect'] as con
  const {useSyncExternalStore}=await import('react');
  const server=new Server();servers.push(server);await server.attached('A');
  const cut={...checkpoint(snapshot('child')).read_cut,activation_id:'activation-child'};
- let row:import('../../protocol/app-server/v51').TraceRecord={...record(),state:recovery==='owner terminal refresh'?'completed':'running'};
+ let row:import('../../protocol/app-server/v52').TraceRecord={...record(),state:recovery==='owner terminal refresh'?'completed':'running'};
  server.handlers.set('agent/trace',()=>({type:'trace',page:{read_cut:cut,records:[row],next_cursor:null}}));
  server.held.add('agent/traceDetail');
  const original=nativeTraceFixture(row,requestDetail(4),cut);

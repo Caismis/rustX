@@ -111,7 +111,7 @@ fn invocation() -> ModelInvocationConfig {
         protocol: ModelProtocol::OpenAiChatCompletions,
         max_output_tokens: 128,
         request_params: RequestParams::new(),
-        capabilities: ModelCapabilities::text_only(true, true),
+        capabilities: ModelCapabilities::text_only(true),
         compat: ModelCompat::default(),
     }
 }
@@ -147,7 +147,6 @@ fn start_request(store: &SqliteConversationStore, turn: &str) -> RequestId {
         invocation(),
         64_000,
         None,
-        false,
         Vec::new(),
         CapabilityRevision::new(1),
         ContextGeneration {
@@ -3393,7 +3392,6 @@ fn t08_t15_t20_request_detail_ranges_are_frozen_allowlisted_and_physically_bound
         configured,
         64_000,
         None,
-        false,
         Vec::new(),
         CapabilityRevision::new(1),
         ContextGeneration {
@@ -3540,7 +3538,6 @@ fn t08_t15_request_field_pages_advance_past_large_keys_without_losing_source_byt
         invocation(),
         64_000,
         None,
-        false,
         vec![rustx::tools::types::ModelToolDefinition {
             id: ToolId::new("schema-tool"),
             name: "schema_tool".into(),

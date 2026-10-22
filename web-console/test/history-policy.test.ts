@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'vitest';
-import type { RuntimeClientTranscriptEntry } from '../../protocol/app-server/v51';
+import type { RuntimeClientTranscriptEntry } from '../../protocol/app-server/v52';
 import { Server, snapshot, readingWindow } from './fixture';
 import { transcriptWindowReady, traceWindowReady } from '../src/client/history-policy';
 import { traceRecord } from './trace-fixture';

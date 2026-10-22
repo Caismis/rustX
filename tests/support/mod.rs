@@ -73,7 +73,7 @@ pub fn attempt_model(
 /// standing up a catalog binding: the value is protocol payload there, not a
 /// resolution under test.
 pub fn attempt_model_view(reference: &str) -> rustx::model::AttemptModelView {
-    let capabilities = rustx::model::ModelCapabilities::text_only(true, false);
+    let capabilities = rustx::model::ModelCapabilities::text_only(true);
     rustx::model::AttemptModelView {
         primary: rustx::model::ModelInvocationView {
             model: rustx::model::ModelRef::parse(reference).expect("a valid model reference"),
@@ -82,7 +82,6 @@ pub fn attempt_model_view(reference: &str) -> rustx::model::AttemptModelView {
             model_max_output_tokens: 4096,
             max_output_tokens: 4096,
             profile: None,
-            reasoning_enabled: false,
             request_params: rustx::model::RequestParams::new(),
             capabilities: capabilities.clone(),
             declared_capabilities: capabilities,

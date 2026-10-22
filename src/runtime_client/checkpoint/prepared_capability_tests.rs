@@ -159,7 +159,7 @@ fn prepared_capability_same_revision_model_and_availability_keep_exact_source_ow
     source.prepare();
     let original = source.prepared_head();
     assert!(original.same_owner(&source.prepared_head()));
-    let mut image_model = crate::model::catalog::ModelCapabilities::text_only(true, false);
+    let mut image_model = crate::model::catalog::ModelCapabilities::text_only(true);
     image_model
         .input_modalities
         .insert(crate::model::catalog::Modality::Image);

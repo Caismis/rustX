@@ -91,6 +91,41 @@ async fn wire_body(protocol: &Protocol, request_params: RequestParams) -> serde_
     serde_json::from_str(&server.request_body(0)).expect("the provider request body is JSON")
 }
 
+/// Actual response blocks are parsed independently of model capability metadata
+/// and of whether this request explicitly asked the provider for reasoning.
+#[tokio::test]
+async fn returned_thinking_is_parsed_without_a_reasoning_declaration() {
+    for protocol in Protocol::ALL {
+        let (dir, name) = match protocol {
+            Protocol::Chat => ("openai_chat", "reasoning_then_text.sse"),
+            Protocol::Responses => ("openai_responses", "reasoning_then_text.sse"),
+            Protocol::Anthropic => ("anthropic", "thinking.sse"),
+        };
+        let server =
+            crate::common::FixtureServer::start(move |_, _| crate::common::sse_fixture(dir, name))
+                .await;
+        let request = crate::common::simple_request(protocol.model_protocol(), "wire-test", "hi");
+        assert!(request.invocation.request_params.is_empty());
+        let events =
+            crate::common::collect_events(protocol.adapter(&server).as_ref(), request).await;
+        assert!(
+            events.iter().any(
+                |event| matches!(event, ModelEvent::ReasoningDelta { text, .. } if !text.is_empty())
+            ),
+            "{}",
+            crate::common::describe_events(&events)
+        );
+        assert!(
+            matches!(events.last(), Some(ModelEvent::Completed { .. })),
+            "{}",
+            crate::common::describe_events(&events)
+        );
+        let body: serde_json::Value = serde_json::from_str(&server.request_body(0)).unwrap();
+        assert!(body.get("thinking").is_none());
+        assert!(body.get("reasoning_enabled").is_none());
+    }
+}
+
 /// Arbitrary provider extension keys survive resolution and reach the final
 /// wire JSON unchanged, at the request **top level**, on every protocol.
 ///
@@ -349,7 +384,6 @@ fn effective_capabilities_intersect_the_raw_claim() {
             .collect(),
         output_modalities: [Modality::Text, Modality::Image].into_iter().collect(),
         tool_calls: true,
-        reasoning: true,
     };
     for protocol in [
         ModelProtocol::OpenAiChatCompletions,
@@ -374,10 +408,9 @@ fn effective_capabilities_intersect_the_raw_claim() {
 
     // The intersection can only narrow: a model that claims no tool calls
     // stays without tool calls.
-    let restricted = ModelCapabilities::text_only(false, false);
+    let restricted = ModelCapabilities::text_only(false);
     let effective = effective_capabilities(&restricted, ModelProtocol::OpenAiChatCompletions);
     assert!(!effective.tool_calls);
-    assert!(!effective.reasoning);
 }
 
 /// Unsupported canonical input is rejected **before** the provider request
@@ -438,7 +471,7 @@ async fn a_text_only_model_is_usable_and_never_receives_tools() {
         let server = protocol.server().await;
         let mut request =
             crate::common::simple_request(protocol.model_protocol(), "wire-test", "hi");
-        request.invocation.capabilities = ModelCapabilities::text_only(false, false);
+        request.invocation.capabilities = ModelCapabilities::text_only(false);
         let events =
             crate::common::collect_events(protocol.adapter(&server).as_ref(), request).await;
         assert!(
@@ -453,7 +486,7 @@ async fn a_text_only_model_is_usable_and_never_receives_tools() {
         let server = protocol.server().await;
         let mut request =
             crate::common::simple_request(protocol.model_protocol(), "wire-test", "hi");
-        request.invocation.capabilities = ModelCapabilities::text_only(false, false);
+        request.invocation.capabilities = ModelCapabilities::text_only(false);
         request.tools = vec![crate::common::model_tool("list_directory", "tool-list")];
         let events =
             crate::common::collect_events(protocol.adapter(&server).as_ref(), request).await;
@@ -478,7 +511,7 @@ fn the_invocation_configuration_is_credential_free_and_serializable() {
         protocol: ModelProtocol::AnthropicMessages,
         max_output_tokens: 256,
         request_params: params(serde_json::json!({"temperature": 0.2})),
-        capabilities: ModelCapabilities::text_only(true, true),
+        capabilities: ModelCapabilities::text_only(true),
         compat: ModelCompat::default(),
     };
     let json = serde_json::to_string(&invocation).expect("serialize");
@@ -546,17 +579,14 @@ default_profile = "deep"
 input_modalities = ["text"]
 output_modalities = ["text"]
 tool_calls = true
-reasoning = true
 {compat}
 [models."p/m".profiles.deep]
-reasoning_enabled = true
 max_output_tokens = 2048
 request_params = '''
 {{ "vendor": {{"mode": "deep", "budget": [1, null, {{"x": null}}]}},
    "explicit_null": null }}
 '''
 [models."p/m".profiles.quick]
-reasoning_enabled = false
 request_params = '{{"temperature":0.2}}'
 "#
         );

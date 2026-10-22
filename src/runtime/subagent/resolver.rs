@@ -407,6 +407,7 @@ pub struct SubagentExecutionProfileDigest(String);
 /// v3 -> v4  (#462) removes the retired workspace policy. Every child runs
 ///           in the invoking Session's execution binding, which is an
 ///           execution identity, not a profile field.
+/// v4 -> v5  removes the reasoning-enabled declaration from frozen invocations.
 /// ```
 ///
 /// Both `v2 -> v3` corrections change what an existing preimage means: the
@@ -416,7 +417,7 @@ pub struct SubagentExecutionProfileDigest(String);
 /// visibly a different framing rather than silently reinterpreted under the
 /// corrected rules — so the version moves even though `v2` never shipped and
 /// no compatibility mode exists.
-pub const SUBAGENT_EXECUTION_PROFILE_DIGEST_VERSION: &str = "rustx-subagent-profile-v4";
+pub const SUBAGENT_EXECUTION_PROFILE_DIGEST_VERSION: &str = "rustx-subagent-profile-v5";
 
 impl SubagentExecutionProfileDigest {
     /// The stable textual form `sha256:<64 lowercase hex characters>`.
@@ -1151,7 +1152,7 @@ fn resolve_materialization(
 ///
 /// Either way the result is a completely resolved invocation, not a desired
 /// configuration: the parent decides the provider binding, protocol, context
-/// window, output budget, reasoning-profile semantics, effective request
+/// window, output budget, Model Profile selection, effective request
 /// parameters, effective capabilities, and compat metadata exactly once,
 /// here, against the registry the invoking attempt was admitted with. The
 /// child can then have no opinion about a `rustx.toml` that changed in the
@@ -1517,7 +1518,6 @@ fn frame_frozen_model_invocation(
         model_max_output_tokens,
         max_output_tokens,
         profile,
-        reasoning_enabled,
         request_params,
         capabilities,
         declared_capabilities,
@@ -1543,11 +1543,6 @@ fn frame_frozen_model_invocation(
         None => field(hasher, &key("profile"), "\u{0}absent"),
         Some(profile) => field(hasher, &key("profile"), profile.as_str()),
     }
-    field(
-        hasher,
-        &key("reasoning_enabled"),
-        &reasoning_enabled.to_string(),
-    );
     field(
         hasher,
         &key("request_params"),
@@ -2253,10 +2248,9 @@ mod tests {
             model_max_output_tokens: 4096,
             max_output_tokens: 512,
             profile: None,
-            reasoning_enabled: false,
             request_params: crate::model::invocation::RequestParams::new(),
-            capabilities: crate::model::catalog::ModelCapabilities::text_only(true, false),
-            declared_capabilities: crate::model::catalog::ModelCapabilities::text_only(true, true),
+            capabilities: crate::model::catalog::ModelCapabilities::text_only(true),
+            declared_capabilities: crate::model::catalog::ModelCapabilities::text_only(true),
             compat: crate::model::catalog::ModelCompat::default(),
         }
     }
@@ -2415,7 +2409,6 @@ mod tests {
             explicit(&|invocation| {
                 invocation.profile = Some(crate::model::catalog::ModelProfileId::new("high"));
             }),
-            explicit(&|invocation| invocation.reasoning_enabled = true),
             explicit(&|invocation| {
                 invocation
                     .request_params
@@ -2423,11 +2416,11 @@ mod tests {
             }),
             explicit(&|invocation| {
                 invocation.capabilities =
-                    crate::model::catalog::ModelCapabilities::text_only(false, false);
+                    crate::model::catalog::ModelCapabilities::text_only(false);
             }),
             explicit(&|invocation| {
                 invocation.declared_capabilities =
-                    crate::model::catalog::ModelCapabilities::text_only(false, false);
+                    crate::model::catalog::ModelCapabilities::text_only(false);
             }),
             explicit(&|invocation| {
                 invocation.compat.chat_reasoning_replay =
@@ -2440,11 +2433,10 @@ mod tests {
         ];
         // The same mutations on the PRIMARY invocation must also each change
         // the identity, so the shared helper is proven on both users.
-        let primary_mutations: [&dyn Fn(&mut crate::model::frozen::FrozenModelInvocation); 7] = [
+        let primary_mutations: [&dyn Fn(&mut crate::model::frozen::FrozenModelInvocation); 6] = [
             &|invocation| invocation.context_window = 32_000,
             &|invocation| invocation.model_max_output_tokens = 1024,
             &|invocation| invocation.max_output_tokens = 128,
-            &|invocation| invocation.reasoning_enabled = true,
             &|invocation| {
                 invocation
                     .request_params
@@ -2452,7 +2444,7 @@ mod tests {
             },
             &|invocation| {
                 invocation.capabilities =
-                    crate::model::catalog::ModelCapabilities::text_only(false, true);
+                    crate::model::catalog::ModelCapabilities::text_only(false);
             },
             &|invocation| {
                 invocation.compat.chat_stream_usage =
@@ -2574,7 +2566,7 @@ mod tests {
     fn sub258_the_profile_framing_is_versioned() {
         assert_eq!(
             super::SUBAGENT_EXECUTION_PROFILE_DIGEST_VERSION,
-            "rustx-subagent-profile-v4",
+            "rustx-subagent-profile-v5",
             "the corrected framing is not one of the readings it replaced"
         );
         assert!(

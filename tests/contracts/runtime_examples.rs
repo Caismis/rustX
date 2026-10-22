@@ -58,7 +58,6 @@ fn committed_model_example_uses_the_production_catalog_contract() {
     assert_eq!(model.context_window, 128_000);
     assert_eq!(model.max_output_tokens, 4_096);
     assert!(model.capabilities.tool_calls);
-    assert!(model.capabilities.reasoning);
     assert_eq!(
         model.compat.chat_reasoning_replay,
         Some(ChatReasoningReplay::Reasoning)
@@ -69,8 +68,6 @@ fn committed_model_example_uses_the_production_catalog_contract() {
     assert_eq!(model.profiles.len(), 2);
     let off = ModelProfileId::new("off");
     let on = ModelProfileId::new("on");
-    assert!(!model.profiles[&off].reasoning_enabled);
-    assert!(model.profiles[&on].reasoning_enabled);
     assert_eq!(model.profiles[&off].max_output_tokens, None);
     assert_eq!(model.profiles[&on].max_output_tokens, Some(2_048));
     assert_eq!(
@@ -411,7 +408,6 @@ fn configuration_reference_model_example_parses_validates_and_resolves() {
         .resolve(&config.initial_model().selection())
         .unwrap();
     assert_eq!(invocation.profile().unwrap().as_str(), "fast");
-    assert!(invocation.reasoning_enabled());
     assert_eq!(invocation.max_output_tokens(), 2048);
     assert_eq!(
         serde_json::Value::Object(invocation.request_params().clone()),

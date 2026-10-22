@@ -1580,7 +1580,6 @@ fn request_snapshot_history_is_bounded_and_cursor_paged() {
             invocation(),
             1024,
             None,
-            false,
             Vec::new(),
             crate::runtime::identity::CapabilityRevision::new(1),
             ContextGeneration {
@@ -1801,7 +1800,6 @@ fn corrupt_frozen_request_revision_metadata_fails_closed() {
         invocation(),
         1024,
         None,
-        false,
         Vec::new(),
         crate::runtime::identity::CapabilityRevision::new(1),
         ContextGeneration {
@@ -1978,7 +1976,6 @@ fn missing_frozen_original_ledger_dependency_fails_closed() {
         invocation(),
         1024,
         None,
-        false,
         Vec::new(),
         crate::runtime::identity::CapabilityRevision::new(1),
         ContextGeneration {

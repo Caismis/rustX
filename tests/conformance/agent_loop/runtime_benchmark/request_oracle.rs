@@ -80,7 +80,7 @@ pub(super) fn reconstructed_body(request: &Value) -> Value {
         json!({"model":"chat-model",
         "protocol":"openai_chat_completions","max_output_tokens":1024,
         "request_params":{},"capabilities":{"inputModalities":["text"],
-        "outputModalities":["text"],"toolCalls":true,"reasoning":true},
+        "outputModalities":["text"],"toolCalls":true},
         "compat":{"chatReasoningReplay":"omit"}})
     );
     assert_eq!(request["effective_system_prompt"], "");

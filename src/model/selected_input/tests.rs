@@ -376,7 +376,6 @@ fn empty_snapshot(request: &crate::model::ModelRequest) -> crate::model::Request
         request.invocation.clone(),
         128_000,
         None,
-        false,
         request.tools.clone(),
         crate::runtime::identity::CapabilityRevision::new(1),
         crate::context::assembly::ContextGeneration {

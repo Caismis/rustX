@@ -114,7 +114,6 @@ class ServerFixture {
         "--context-window", "128000",
         "--max-output", "4096",
         "--tool-calls", "true",
-        "--reasoning", "false",
         "--compat", 'chat_reasoning_replay = "omit"',
       ],
       { env, encoding: "utf8" },
@@ -260,7 +259,7 @@ it("live profile selection crosses the real TUI/App Server boundary while the or
   const fixture = ServerFixture.create("rustx-tui-live-profile-", provider.url());
   const configPath = join(fixture.home, "rustx/rustx.toml");
   const config = readFileSync(configPath, "utf8").replace('[models."fixture/integration-model"]', '[models."fixture/integration-model"]\ndefault_profile = "high"').replace('reasoning = false', 'reasoning = true');
-  writeFileSync(configPath, config + '\n[models."fixture/integration-model".profiles.high]\nreasoning_enabled = true\nrequest_params = \'{"reasoning_effort":"high"}\'\n[models."fixture/integration-model".profiles.low]\nreasoning_enabled = false\nmax_output_tokens = 1024\n');
+  writeFileSync(configPath, config + '\n[models."fixture/integration-model".profiles.high]\nrequest_params = \'{"reasoning_effort":"high"}\'\n[models."fixture/integration-model".profiles.low]\nmax_output_tokens = 1024\n');
   const host = await AppServerHost.spawnLocal({ binary: BINARY, launch: { runtimeRoot: fixture.runtimeRoot }, env: fixture.env });
   let passed = false;
   try {
@@ -284,7 +283,6 @@ it("live profile selection crosses the real TUI/App Server boundary while the or
     if (selected.kind === "transient") assert.equal(selected.level, "info", selected.text);
     const committed = await session.modelGet();
     assert.deepEqual(committed.configured, { ...settings.model, profile: "low" });
-    assert.equal(committed.effective?.reasoningEnabled, false);
     assert.equal(session.state.attempt?.phase.type, "running");
     assert.deepEqual(session.state.attempt?.model, frozen);
     assert.match(renderModel(session.state), /profile: high/);

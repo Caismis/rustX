@@ -1087,9 +1087,6 @@
           "type": "string",
           "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
         },
-        "reasoning_enabled": {
-          "type": "boolean"
-        },
         "profile": {
           "type": [
             "string",
@@ -1192,7 +1189,6 @@
         "protocol",
         "max_output_tokens",
         "context_window_tokens",
-        "reasoning_enabled",
         "options",
         "omitted_option_count",
         "effective_system_prompt",
@@ -8932,7 +8928,7 @@
       "type": "string"
     },
     "ModelProfileId": {
-      "description": "The identity of one Model Profile declared by a model.\n\nThe runtime assigns no meaning to the name: `fast`, `precise`, `creative`,\n`thinking-32k`, and `deep` are all just names whose behaviour is exactly\nthe profile's declared reasoning state, output default, and\n`request_params`.",
+      "description": "The identity of one Model Profile declared by a model.\n\nThe runtime assigns no meaning to the name: `fast`, `precise`, `creative`,\n`thinking-32k`, and `deep` are all just names whose behaviour is exactly\nthe profile's output default and\n`request_params`.",
       "type": "string"
     },
     "SummaryModelPolicy": {
@@ -11252,17 +11248,13 @@
         },
         "tool_calls": {
           "type": "boolean"
-        },
-        "reasoning": {
-          "type": "boolean"
         }
       },
       "additionalProperties": false,
       "required": [
         "input_modalities",
         "output_modalities",
-        "tool_calls",
-        "reasoning"
+        "tool_calls"
       ]
     },
     "Modality": {
@@ -11294,13 +11286,6 @@
       "description": "One authored Model Profile: a complete, independent invocation preset.",
       "type": "object",
       "properties": {
-        "reasoning_enabled": {
-          "description": "Required for every profile of a reasoning-capable Model; omission\nmeans `false` for a non-reasoning Model.",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
         "max_output_tokens": {
           "description": "Default output budget; at most the Model's `max_output_tokens`.",
           "type": [
@@ -19498,10 +19483,6 @@
             }
           ]
         },
-        "reasoningEnabled": {
-          "description": "Whether reasoning is semantically enabled.",
-          "type": "boolean"
-        },
         "requestParams": {
           "description": "The effective opaque provider request parameters.",
           "type": "object",
@@ -19524,7 +19505,6 @@
         "contextWindow",
         "modelMaxOutputTokens",
         "maxOutputTokens",
-        "reasoningEnabled",
         "capabilities",
         "declaredCapabilities"
       ]
@@ -19552,18 +19532,13 @@
         "toolCalls": {
           "description": "Whether the model can be given tool definitions and can call them.",
           "type": "boolean"
-        },
-        "reasoning": {
-          "description": "Whether the model semantically supports reasoning.",
-          "type": "boolean"
         }
       },
       "additionalProperties": false,
       "required": [
         "inputModalities",
         "outputModalities",
-        "toolCalls",
-        "reasoning"
+        "toolCalls"
       ]
     },
     "SummaryModelView": {
@@ -19627,10 +19602,6 @@
                 }
               ]
             },
-            "reasoningEnabled": {
-              "description": "Whether reasoning is semantically enabled.",
-              "type": "boolean"
-            },
             "requestParams": {
               "description": "The effective opaque provider request parameters.",
               "type": "object",
@@ -19658,7 +19629,6 @@
             "contextWindow",
             "modelMaxOutputTokens",
             "maxOutputTokens",
-            "reasoningEnabled",
             "capabilities",
             "declaredCapabilities"
           ]
@@ -20471,7 +20441,7 @@
       ]
     },
     "SubagentExecutionProfile": {
-      "description": "The safe, redacted execution profile of one child, frozen at child start\n(Issue #178).\n\nDerived from the frozen model authority exactly once by\n[`SubagentExecutionProfile::from_frozen`]: it carries only the effective\nmodel identity, Model Profile, and reasoning state. Credentials, endpoints, provider\nbindings, and every other binding internal are never projected.",
+      "description": "The safe, redacted execution profile of one child, frozen at child start\n(Issue #178).\n\nDerived from the frozen model authority exactly once by\n[`SubagentExecutionProfile::from_frozen`]: it carries only the effective\nmodel identity and Model Profile. Credentials, endpoints, provider\nbindings, and every other binding internal are never projected.",
       "type": "object",
       "properties": {
         "model": {
@@ -20488,16 +20458,11 @@
               "type": "null"
             }
           ]
-        },
-        "reasoning_enabled": {
-          "description": "Whether the invocation semantically enables reasoning.",
-          "type": "boolean"
         }
       },
       "additionalProperties": false,
       "required": [
-        "model",
-        "reasoning_enabled"
+        "model"
       ]
     },
     "RuntimeClientContextView": {
@@ -27022,10 +26987,6 @@
           "description": "The profile identity.",
           "$ref": "#/$defs/ModelProfileId"
         },
-        "reasoningEnabled": {
-          "description": "Whether the profile semantically enables reasoning.",
-          "type": "boolean"
-        },
         "maxOutputTokens": {
           "description": "The profile's default output budget, when it declares one.",
           "type": [
@@ -27039,8 +27000,7 @@
       },
       "additionalProperties": false,
       "required": [
-        "id",
-        "reasoningEnabled"
+        "id"
       ]
     },
     "SourceView": {

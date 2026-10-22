@@ -1,6 +1,6 @@
 import { useToolInspection } from './tool-inspection';
 import { useTranslation } from '../../locale/react';
-import type { ForegroundToolExecution } from '../../../../protocol/app-server/v51';
+import type { ForegroundToolExecution } from '../../../../protocol/app-server/v52';
 import { useToolInput } from './tool-source';
 import { toolCard } from '../../bindings/tools';
 import { askUserRow } from '../../bindings/ask-user';

@@ -323,7 +323,7 @@ mod tests {
                 protocol: ModelProtocol::OpenAiResponses,
                 max_output_tokens: 512,
                 request_params: crate::model::invocation::RequestParams::new(),
-                capabilities: crate::model::catalog::ModelCapabilities::text_only(true, true),
+                capabilities: crate::model::catalog::ModelCapabilities::text_only(true),
                 compat: crate::model::catalog::ModelCompat::default(),
             },
             messages: crate::model::SelectedModelInput::default(),

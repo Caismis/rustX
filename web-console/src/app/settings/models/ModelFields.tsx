@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted typed request controls; see PROVENANCE.md. */
 import { useContext, useId, useRef, useState } from 'react';
-import type { Model, Modality } from '../../../../../protocol/app-server/v51';
+import type { Model, Modality } from '../../../../../protocol/app-server/v52';
 import { useTranslation } from '../../../locale/react';
 import { Button } from '../../../presentation/primitives/Button';
 import { UnitReset, type TypedUnitForm as TypedForm } from '../forms/bridge';
@@ -26,7 +26,6 @@ export function ModelFields({ form }: { form: TypedForm<Model> }) {
     <fieldset className={cards.capabilities}><legend>{tx('settings:models-page.explicit-capabilities')}</legend>
       <div className={cards.chips}>
         <CapabilityChip form={form} name="tool_calls" label={tx('settings:models-page.tool-calls')} />
-        <CapabilityChip form={form} name="reasoning" label={tx('settings:models-page.reasoning')} />
       </div>
       <InputModalities form={form} />
     </fieldset>
@@ -48,7 +47,7 @@ export function ModelFields({ form }: { form: TypedForm<Model> }) {
   </>;
 }
 
-function CapabilityChip({ form, name, label }: { form: TypedForm<Model>; name: 'tool_calls' | 'reasoning'; label: string }) {
+function CapabilityChip({ form, name, label }: { form: TypedForm<Model>; name: 'tool_calls'; label: string }) {
   const Bound = form.Field as unknown as Field;
   return <Bound name={`capabilities.${name}`}>{field => <label className={cards.chip}>
     <input type="checkbox" checked={!!field.state.value} onChange={event => field.handleChange(event.target.checked as never)} />{label}
@@ -81,10 +80,9 @@ function ModelRequestParameters({ form }: { form: TypedForm<Model> }) {
 }
 
 /** General Model Profiles: named, complete and independent invocation
- * presets. A profile's name carries no meaning; its reasoning state, output
- * default and native parameters are exactly what it declares. Native Rust
- * validates the contract — a declared default, explicit reasoning state on a
- * reasoning-capable Model, budgets within the hard maximum, protected keys. */
+ * presets. A profile's name carries no meaning; its output default and native
+ * parameters are exactly what it declares. Native Rust validates the declared
+ * default, budgets within the hard maximum, and protected keys. */
 function Profiles({ form }: { form: TypedForm<Model> }) {
   const tx = useTranslation();
   const [adding, setAdding] = useState(false);
@@ -122,7 +120,7 @@ function Profiles({ form }: { form: TypedForm<Model> }) {
       // Model with profiles no longer declares.
       const seed = identities.length ? {} : (params.state.value as ProfileMap[string]['request_params'] | null | undefined) ?? {};
       if (!identities.length) { params.handleChange(undefined as never); fallback.handleChange(name as never); }
-      update(name, { reasoning_enabled: form.state.values.capabilities.reasoning, request_params: seed });
+      update(name, { request_params: seed });
       setSelected(name);
       setIdentity('');
       setAdding(false);

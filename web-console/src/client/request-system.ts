@@ -1,4 +1,4 @@
-import type { CheckpointReadCut, TraceRecord, TraceToolDefinition } from '../../../protocol/app-server/v51';
+import type { CheckpointReadCut, TraceRecord, TraceToolDefinition } from '../../../protocol/app-server/v52';
 import { checkpointReadCutKey } from '../../../protocol/app-server/content-identity';
 import { traceAttemptKey, traceFieldKey } from '../../../protocol/app-server/trace-identity';
 import type { TraceFieldReader } from './trace';

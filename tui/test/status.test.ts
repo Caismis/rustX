@@ -464,9 +464,7 @@ describe("startup and context", () => {
           inputModalities: ["text"],
           outputModalities: ["text"],
           toolCalls: true,
-          reasoning: true,
-        },
-        reasoningEnabled: true,
+          },
         profile: "medium",
       }),
     });
@@ -486,7 +484,7 @@ describe("startup and context", () => {
     assert.match(rendered, /model alpha\/model-a/);
     assert.match(rendered, /provider alpha · Responses/);
     assert.match(rendered, /context unreported/);
-    assert.match(rendered, /profile medium · reasoning on/);
+    assert.match(rendered, /profile medium/);
     assert.match(rendered, /session review branch/);
     assert.match(rendered, /Ctrl\+L model/);
     assert.match(rendered, /\/help commands/);

@@ -12,7 +12,7 @@ import { traceRecord } from '../trace-fixture';
 import { deferredReplyFixture } from './deferred-reply';
 import { turnDeliveriesFixture } from './turn-deliveries';
 import { workflowCatalogFixture } from './workflow-catalog';
-import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v51';
+import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v52';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -35,9 +35,9 @@ if (mode === 'desktop') {
 }
 
 server.handlers.set('session/effectiveConfiguration', () => { throw new RpcFailure({ code: -32000, message: 'Appearance fixture' }); });
-const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], toolCalls: true, reasoning: true };
-const model: SessionModelView = { configured: { model: 'native/coder' }, effective: { model: 'native/coder', protocol: 'openai_responses', contextWindow: 128000, modelMaxOutputTokens: 8192, maxOutputTokens: 8192, reasoningEnabled: true, profile: 'deliberate', capabilities, declaredCapabilities: capabilities }, summary: { mode: 'session' } };
-const catalog: CatalogModelView[] = [{ model: 'native/coder', protocol: 'openai_responses', contextWindow: 128000, maxOutputTokens: 8192, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [{ id: 'deliberate', reasoningEnabled: true }, { id: 'brief', reasoningEnabled: true }], defaultProfile: 'deliberate', credentialSource: { type: 'literal' } }];
+const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], toolCalls: true };
+const model: SessionModelView = { configured: { model: 'native/coder' }, effective: { model: 'native/coder', protocol: 'openai_responses', contextWindow: 128000, modelMaxOutputTokens: 8192, maxOutputTokens: 8192, profile: 'deliberate', capabilities, declaredCapabilities: capabilities }, summary: { mode: 'session' } };
+const catalog: CatalogModelView[] = [{ model: 'native/coder', protocol: 'openai_responses', contextWindow: 128000, maxOutputTokens: 8192, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [{ id: 'deliberate' }, { id: 'brief' }], defaultProfile: 'deliberate', credentialSource: { type: 'literal' } }];
 const source: SourceSettings = { prospective_approval_mode: 'full_access', absent_resource_revision: 'absent', resource_revisions: {}, target: { kind: 'user' }, provenance: {}, process_policy_impacts: {}, user: { path: '/home/rustx.toml', revision: 'user', authored: {} }, workspace: { path: '/workspace/A/rustx.toml', revision: 'workspace', authored: {} }, user_resource_root: '/home/.agents', workspace_resource_root: '/workspace/A/.agents', runtime_root: '/runtime', user_mcp: { path: '/home/.agents/mcp.toml', revision: 'missing' }, workspace_mcp: { path: '/workspace/A/.agents/mcp.toml', revision: 'missing' }, agents: [], repair_sequence: '0' };
 server.handlers.set('session/model', () => (domainReceipt('model',[model])));
 server.handlers.set('session/models', () => (domainReceipt('model_catalog.models',({ models: catalog }).models??[])));
@@ -171,7 +171,7 @@ if (mode === 'composer') {
 }
 declare global {
  interface Window { compactionFixture: { reply(): Promise<void>; compact(): Promise<void> } }
-  interface Window { composerFixture: { holdUploads(): void; settleUploads(state: 'ready' | 'failed' | 'unresolved'): void; uploads(): number; running(value: boolean): Promise<void>; docks(value: boolean): Promise<void>; holdCancellation(): void; busyEnter(value: 'queue' | 'steer'): void; cancellations(): import('../../../protocol/app-server/v51').AttachmentTarget[]; acknowledgeCancellation(): Promise<void>; submissions(): string[] } }
+  interface Window { composerFixture: { holdUploads(): void; settleUploads(state: 'ready' | 'failed' | 'unresolved'): void; uploads(): number; running(value: boolean): Promise<void>; docks(value: boolean): Promise<void>; holdCancellation(): void; busyEnter(value: 'queue' | 'steer'): void; cancellations(): import('../../../protocol/app-server/v52').AttachmentTarget[]; acknowledgeCancellation(): Promise<void>; submissions(): string[] } }
 }
 
 function RestoredComposerFixture() {

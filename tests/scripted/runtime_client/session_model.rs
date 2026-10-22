@@ -57,7 +57,6 @@ struct Provider {
     max_output_tokens: u32,
     request_params: serde_json::Value,
     profiles: Option<(&'static str, serde_json::Value)>,
-    always_on_reasoning: bool,
 }
 
 impl Provider {
@@ -70,7 +69,6 @@ impl Provider {
             max_output_tokens: 4096,
             request_params: serde_json::json!({}),
             profiles: None,
-            always_on_reasoning: false,
         }
     }
 
@@ -96,11 +94,6 @@ impl Provider {
         self
     }
 
-    const fn always_on_reasoning(mut self) -> Self {
-        self.always_on_reasoning = true;
-        self
-    }
-
     fn reference(&self) -> ModelRef {
         ModelRef::parse(&format!("{}/{}", self.id, self.model)).expect("valid fixture reference")
     }
@@ -116,11 +109,7 @@ impl Provider {
             Some((default, profiles)) => model.with_profiles(default, profiles.clone()),
             None => model.with_request_params(self.request_params.clone()),
         };
-        if self.always_on_reasoning {
-            model.claiming_reasoning()
-        } else {
-            model
-        }
+        model
     }
 }
 
@@ -901,12 +890,12 @@ async fn profiles_freeze_at_admission_through_continuation_compaction_and_retry(
         ],
     )
     .output(4096)
-    .always_on_reasoning()
+
     .profiles(
         "high",
         serde_json::json!({
-            "high": {"reasoningEnabled": true, "maxOutputTokens": 300, "requestParams": {"reasoning_effort": "high", "temperature": 0.1, "stop": [null]}},
-            "low": {"reasoningEnabled": false, "requestParams": {"reasoning_effort": "low", "temperature": 1.3, "metadata": {"tier": null}}}
+            "high": {"maxOutputTokens": 300, "requestParams": {"reasoning_effort": "high", "temperature": 0.1, "stop": [null]}},
+            "low": {"requestParams": {"reasoning_effort": "low", "temperature": 1.3, "metadata": {"tier": null}}}
         }),
     );
     let summary_text = |text: &str| {
@@ -974,10 +963,8 @@ async fn profiles_freeze_at_admission_through_continuation_compaction_and_retry(
         selected.configured.profile,
         Some(ModelProfileId::new("low"))
     );
-    assert!(!selected.effective.as_ref().unwrap().reasoning_enabled);
     let frozen = snapshot.attempt.as_ref().unwrap().model.as_ref().unwrap();
     assert_eq!(frozen.primary.profile, Some(ModelProfileId::new("high")));
-    assert!(frozen.primary.reasoning_enabled);
     assert_eq!(frozen.primary.max_output_tokens, 300);
 
     release.send_replace(true);
@@ -1047,30 +1034,26 @@ async fn profiles_freeze_at_admission_through_continuation_compaction_and_retry(
 fn model_profiles_resolve_to_their_exact_complete_presets() {
     let reasoner = FixtureModel::text("p/reasoner", ModelProtocol::AnthropicMessages)
         .with_max_output_tokens(64_000)
-        .claiming_reasoning()
         .with_profiles(
             "on",
             serde_json::json!({
                 "off": {
-                    "reasoningEnabled": false,
                     "maxOutputTokens": 4_096,
                     "requestParams": {"thinking": {"type": "disabled"}, "temperature": 0.7}
                 },
                 "on": {
-                    "reasoningEnabled": true,
                     "requestParams": {
                         "thinking": {"type": "enabled", "budget_tokens": 32000},
                         "temperature": 1.0
                     }
                 },
                 "thinking-32k": {
-                    "reasoningEnabled": true,
                     "maxOutputTokens": 48_000,
                     "requestParams": {"thinking": {"type": "enabled", "budget_tokens": 32000}}
                 }
             }),
         );
-    // Non-reasoning sampling presets: omitted reasoning state means false.
+    // Sampling presets use exactly their own parameters.
     let sampler = FixtureModel::text("p/sampler", ModelProtocol::OpenAiResponses).with_profiles(
         "precise",
         serde_json::json!({
@@ -1098,7 +1081,6 @@ fn model_profiles_resolve_to_their_exact_complete_presets() {
         .resolve(&selection("p/reasoner", None))
         .expect("default profile resolves");
     assert_eq!(default.profile(), Some(&ModelProfileId::new("on")));
-    assert!(default.reasoning_enabled());
     assert_eq!(default.max_output_tokens(), 64_000);
     assert_eq!(
         params(&default),
@@ -1114,7 +1096,6 @@ fn model_profiles_resolve_to_their_exact_complete_presets() {
     let off = registry
         .resolve(&selection("p/reasoner", Some("off")))
         .expect("off profile resolves");
-    assert!(!off.reasoning_enabled());
     assert_eq!(off.max_output_tokens(), 4_096);
     assert_eq!(
         params(&off),
@@ -1126,7 +1107,6 @@ fn model_profiles_resolve_to_their_exact_complete_presets() {
     let named = registry
         .resolve(&selection("p/reasoner", Some("thinking-32k")))
         .expect("named profile resolves");
-    assert!(named.reasoning_enabled());
     assert_eq!(named.max_output_tokens(), 48_000);
     assert!(!named.request_params().contains_key("temperature"));
 
@@ -1152,7 +1132,6 @@ fn model_profiles_resolve_to_their_exact_complete_presets() {
     let precise = registry
         .resolve(&selection("p/sampler", None))
         .expect("precise");
-    assert!(!precise.reasoning_enabled());
     assert_eq!(
         params(&precise),
         serde_json::json!({"temperature": 0.1, "top_p": 0.5})
@@ -1197,17 +1176,14 @@ fn model_profiles_resolve_to_their_exact_complete_presets() {
 fn a_session_override_may_not_claim_a_profile_owned_key() {
     use rustx::model::invocation::RequestParamsLayer;
     const MARKER: &str = "sk-SECRET_MARKER";
-    let model = FixtureModel::text("p/reasoner", ModelProtocol::AnthropicMessages)
-        .claiming_reasoning()
-        .with_profiles(
-            "on",
-            serde_json::json!({
-                "on": {
-                    "reasoningEnabled": true,
-                    "requestParams": {"thinking": {"type": "enabled"}, "temperature": 1.0, MARKER: 1}
-                }
-            }),
-        );
+    let model = FixtureModel::text("p/reasoner", ModelProtocol::AnthropicMessages).with_profiles(
+        "on",
+        serde_json::json!({
+            "on": {
+                "requestParams": {"thinking": {"type": "enabled"}, "temperature": 1.0, MARKER: 1}
+            }
+        }),
+    );
     let handle: Arc<dyn ModelAdapter> = Arc::new(support::model::NullAdapter);
     let factory = support::model::ScriptedAdapterFactory::new(handle);
     let registry = support::model::fixture_registry(&[model], &factory);
@@ -1407,17 +1383,20 @@ async fn a_rejected_model_update_changes_nothing() {
     assert_eq!(model.configured, SessionModelConfig::of(alpha.reference()));
 }
 
-/// A reasoning-capable model without profiles is semantically
-/// always on, while its session selection has no profile to choose.
+/// A model without profiles keeps provider parameters without synthesizing
+/// a profile or a reasoning-state declaration.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn always_on_reasoning_is_preserved_by_session_resolution() {
-    let always_on = Provider::new(ALPHA, "always-on", vec![one_turn_stop()]).always_on_reasoning();
+async fn a_model_without_profiles_keeps_its_provider_parameters() {
+    let always_on = Provider::new(ALPHA, "always-on", vec![one_turn_stop()])
+        .params(serde_json::json!({"thinking":{"type":"enabled"}}));
     let state = session_model(&[&always_on], SessionModelConfig::of(always_on.reference()));
 
     let view = state.view();
     assert_eq!(view.effective.as_ref().unwrap().profile, None);
-    assert!(view.effective.as_ref().unwrap().reasoning_enabled);
     let snapshot = state.snapshot().unwrap();
     assert_eq!(snapshot.primary().profile(), None);
-    assert!(snapshot.primary().reasoning_enabled());
+    assert_eq!(
+        snapshot.primary().request_params()["thinking"],
+        serde_json::json!({"type":"enabled"})
+    );
 }

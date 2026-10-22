@@ -21,7 +21,6 @@ pub struct InitializationRequest {
     pub context_window: Option<u64>,
     pub max_output: Option<u32>,
     pub tool_calls: Option<bool>,
-    pub reasoning: Option<bool>,
     pub compat: Option<String>,
     pub model_document: Option<PathBuf>,
 }
@@ -59,7 +58,6 @@ pub(super) fn documents(request: &InitializationRequest) -> Result<[Vec<u8>; 1],
             || request.context_window.is_some()
             || request.max_output.is_some()
             || request.tool_calls.is_some()
-            || request.reasoning.is_some()
             || request.compat.is_some()
         {
             return Err("custom uses --model-document for the complete model declaration".into());
@@ -104,7 +102,6 @@ pub(super) fn documents(request: &InitializationRequest) -> Result<[Vec<u8>; 1],
                 input_modalities: [crate::model::catalog::Modality::Text].into(),
                 output_modalities: [crate::model::catalog::Modality::Text].into(),
                 tool_calls: request.tool_calls.ok_or("init requires --tool-calls")?,
-                reasoning: request.reasoning.ok_or("init requires --reasoning")?,
             },
             request_params: None,
             default_profile: None,
@@ -385,7 +382,6 @@ mod tests {
             context_window: Some(128_000),
             max_output: Some(4096),
             tool_calls: Some(true),
-            reasoning: Some(false),
             compat: Some("chat_reasoning_replay = \"omit\"".into()),
             model_document: None,
         }
@@ -407,7 +403,6 @@ mod tests {
             context_window: None,
             max_output: None,
             tool_calls: None,
-            reasoning: None,
             compat: None,
             model_document: Some(path.clone()),
             ..declarations()

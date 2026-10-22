@@ -97,7 +97,7 @@ version is `schema_version = 10`.
 ### Providers and Models
 
 Provider names, Model names and Profile names are lookup identities. They do not
-infer protocol, credentials, limits, endpoint, reasoning support, compatibility
+infer protocol, credentials, limits, endpoint, compatibility
 or any provider-native parameter. A Model can be replaced without replacing its
 Provider.
 
@@ -107,7 +107,7 @@ Ownership is layered, and each layer owns only its own facts:
 | --- | --- |
 | Provider | `base_url` and the credential source |
 | Model | provider binding, provider-native `id`, `protocol`, `context_window`, the hard maximum `max_output_tokens`, declared `capabilities`, `compat`, and either native `request_params` or named `profiles` |
-| Model Profile | one complete, independent invocation preset: `reasoning_enabled`, an optional default `max_output_tokens`, and its own native `request_params` |
+| Model Profile | one complete, independent invocation preset: an optional default `max_output_tokens` and its own native `request_params` |
 | Model selection | the chosen `model`, optional `profile`, explicit `request_params` overrides and an optional output limit |
 | Provider adapter | protocol structure, the output-token field spelling, and final protected-key validation |
 
@@ -129,7 +129,6 @@ request_params = '{"temperature":0.2,"vendor":{"nested_option":true,"unset":null
 input_modalities = ["text"]
 output_modalities = ["text"]
 tool_calls = true
-reasoning = false
 
 [models.fast.compat]
 chat_reasoning_replay = "omit"
@@ -148,24 +147,20 @@ default_profile = "balanced"
 input_modalities = ["text"]
 output_modalities = ["text"]
 tool_calls = true
-reasoning = true
 
 [models.thinker.compat]
 chat_reasoning_replay = "omit"
 
 [models.thinker.profiles.fast]
-reasoning_enabled = true
 max_output_tokens = 2048
 request_params = '{"reasoning_effort":"low"}'
 
 [models.thinker.profiles.balanced]
-reasoning_enabled = true
 request_params = '''
 {"reasoning_effort": "medium", "metadata": {"tier": null}}
 '''
 
 [models.thinker.profiles.precise]
-reasoning_enabled = false
 request_params = '{"temperature":0.1,"top_p":0.5,"stop":["\n\n"]}'
 
 [agent.model]
@@ -223,11 +218,11 @@ string if the provider accepts one.
   naming one of them, and must not declare model-level `request_params` — not
   even `'{}'`.
 - A Model without profiles must not declare `default_profile`; selecting any
-  profile for it fails. A reasoning-capable Model without profiles keeps
-  provider-default reasoning without a synthetic wire field.
-- On a reasoning-capable Model every profile declares `reasoning_enabled`. On a
-  non-reasoning Model omission means `false` and `true` is invalid. Reasoning
-  state is never inferred from a profile name or a native key.
+  profile for it fails.
+- Models and profiles do not declare a reasoning capability or enabled flag.
+  Provider-native `request_params` control reasoning. Returned thinking blocks
+  determine the reasoning content shown for each response; absence of a block
+  does not classify the model.
 - A profile `max_output_tokens` is a positive default no greater than the
   Model's hard maximum.
 - Profiles never inherit: neither from the Model nor from another profile.
@@ -262,7 +257,7 @@ selection is `{ mode = "session" }` or `{ mode = "explicit", model = "...", ... 
 with its own `profile`, output and request settings. The whole selection is
 replaced together. Domain defaults are evaluated inside that winning object.
 An admitted Attempt freezes the complete resolved invocation — Model, Profile,
-reasoning state, output budget and parameters — so later configuration changes
+output budget and parameters — so later configuration changes
 affect only later admissions.
 
 ### Root Agent
@@ -580,7 +575,7 @@ the effective invocations an Attempt of that Session would freeze — its primar
 and explicit Summary selection and those of its admitted named Agents — resolved
 exactly as admission resolves them: provider endpoint and credential source,
 wire model, protocol, limits, compat, effective capabilities, the resolved
-Profile, reasoning state, output budget and request parameters. An omitted
+Profile, output budget and request parameters. An omitted
 `profile` and an explicit `profile` naming the default resolve to the same
 invocation, and an edited, added or removed Profile that no such selection
 resolves through changes nothing for the Session's invocation: it prepares and
@@ -1079,7 +1074,6 @@ max_output_tokens = 4096
 input_modalities = ["text", "image"]
 output_modalities = ["text"]
 tool_calls = true
-reasoning = false
 
 [agent.model]
 model = "vision"

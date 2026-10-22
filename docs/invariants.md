@@ -2334,7 +2334,7 @@ second authority:
 - **The execution profile is safe by construction.**
   `SubagentExecutionProfile` is derived exactly once from the frozen
   `ResolvedSubagentSpec` model the child actually started with and carries
-  only the effective model identity and the reasoning selection — never
+  only the effective model identity and the selected Model Profile — never
   credentials, endpoints, or provider internals. Every status and
   observation surface is diagnostics-only: the successful terminal answer
   has exactly one delivery channel, the canonical durable terminal inbound
@@ -6727,9 +6727,8 @@ contracts and provider protocols. These invariants are frozen by M2:
 - **Profile names carry no semantics.** The runtime assigns no meaning to a
   profile name, synthesizes no `off`/`low`/`medium`/`high` profile, and
   injects no reasoning field of its own. A profile's wire behaviour is exactly
-  its configured `requestParams`. Its reasoning state is explicit rustX
-  semantics: required on every profile of a reasoning-capable Model, `false`
-  when omitted on a non-reasoning Model, and never `true` there. A profile's
+  its configured `requestParams`. No reasoning capability or enabled state
+  is declared; returned reasoning blocks are parsed regardless of the preset. A profile's
   optional output budget is a default within the Model's hard maximum; an
   explicit selection limit replaces it and is bounded by the same maximum. An
   unknown or inapplicable explicit profile fails; nothing falls back.
@@ -7050,7 +7049,7 @@ contracts and provider protocols. These invariants are frozen by M2:
 
 - **Reasoning visibility is not reasoning configuration.** Whether reasoning
   content is drawn is a client display preference. What rustX asks a provider
-  for is `SessionModelConfig.profile` / `reasoningEnabled`, and it is
+  for is the effective provider `requestParams` selected by `SessionModelConfig.profile`, and it is
   changeable only through `model_set`. Hidden reasoning collapses to a marker;
   it never becomes assistant text and never disappears silently.
 
@@ -7077,8 +7076,7 @@ contracts and provider protocols. These invariants are frozen by M2:
   reads `rustx.toml`, instantiates a provider SDK, resolves an API key, or
   interprets provider protocol semantics. Only *effective* capability is
   advertised. Model Profiles are shown exactly as published, with their
-  declared reasoning state and output default: a reasoning-capable model with
-  no profiles means provider-default reasoning with no selectable profile, and
+  output default: a model with no profiles has no selectable profile, and
   no universal off/low/medium/high scale is invented. `requestParams` stays opaque provider-owned JSON — displayed and
   passed, never interpreted.
 
@@ -7096,7 +7094,7 @@ contracts and provider protocols. These invariants are frozen by M2:
   describes what a model *offers*, including `defaultProfile`, which
   is the catalog's fallback. What the session asked for
   (`SessionModelConfig.profile`) and what the runtime resolved
-  (`ModelInvocationView.profile` / `reasoningEnabled`) are separate
+  (`ModelInvocationView.profile` / `requestParams`) are separate
   facts, presented separately. A catalog default is never labelled as the
   current configuration, and an absent configured profile is reported as
   absent rather than borrowing the catalog's.

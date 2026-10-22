@@ -1,4 +1,4 @@
-import { activeBackground, capabilitySummary, describeConfiguredProfile, describeProfile, describeReasoning, inactiveToolsByOrigin, latestAgentStatus, originLabel, outcomeLabel, skills, toolsByOrigin, unavailableInputModalities } from "../presentation/selectors.ts";
+import { activeBackground, capabilitySummary, describeConfiguredProfile, describeProfile, inactiveToolsByOrigin, latestAgentStatus, originLabel, outcomeLabel, skills, toolsByOrigin, unavailableInputModalities } from "../presentation/selectors.ts";
 import type { PresentationState } from "../presentation/state.ts";
 import { renderAgentStatusDetail } from "../ui/components/agent-status.ts";
 import { COMMANDS } from "./registry.ts";
@@ -71,7 +71,7 @@ export function renderHelp(): string {
  * `/model` — the authoritative session model, and the running attempt's
  * frozen model.
  *
- * Three model identities, two profile facts and the reasoning state, each
+ * Three model identities and two profile facts, each
  * named for what it is:
  *
  * ```text
@@ -80,7 +80,6 @@ export function renderHelp(): string {
  * attempt               AttemptModelView.primary.model
  * configured profile    SessionModelConfig.profile
  * effective profile     ModelInvocationView.profile
- * effective reasoning   ModelInvocationView.reasoningEnabled
  * ```
  *
  * They are always all printed, even when they coincide, because `/model show`
@@ -116,7 +115,6 @@ export function renderModel(state: PresentationState): string {
       // the runtime resolves, and a catalog default is neither of them.
       `- configured profile: ${describeConfiguredProfile(session.configured)}`,
       `- effective profile: ${describeProfile(effective)}`,
-      `- reasoning: ${describeReasoning(effective)}`,
       `- capabilities: ${capabilitySummary(effective)}`,
     );
 
@@ -158,7 +156,6 @@ export function renderModel(state: PresentationState): string {
       `- attempt: \`${attempt.attemptId}\` (${attempt.phase.type})`,
       `- model: \`${attempt.model?.primary.model ?? "unavailable"}\``,
       `- profile: ${(attempt.model ? describeProfile(attempt.model.primary) : "unavailable")}`,
-      `- reasoning: ${(attempt.model ? describeReasoning(attempt.model.primary) : "unavailable")}`,
       `- max output tokens: ${attempt.model?.primary.maxOutputTokens ?? "unavailable"}`,
       `- effective capabilities: ${attempt.model ? capabilitySummary(attempt.model.primary) : "unavailable"}`,
       `- read_image active: ${attempt.executionSettings?.read_image_active ?? "unavailable"}`,

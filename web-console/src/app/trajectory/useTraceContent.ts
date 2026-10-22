@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { CheckpointPage, TraceArtifact, TraceContentBlock, TraceInspectionHead, TraceToolDefinition, TraceToolResult, TraceToolSource, TraceText, UserSource } from '../../../../protocol/app-server/v51';
+import type { CheckpointPage, TraceArtifact, TraceContentBlock, TraceInspectionHead, TraceToolDefinition, TraceToolResult, TraceToolSource, TraceText, UserSource } from '../../../../protocol/app-server/v52';
 import { traceFields } from '../../../../protocol/app-server/trace-identity';
 import { readRequestField, readTraceBlocks, readTraceMessages, readTraceSource, traceProgram } from '../../client/trace-content';
 import type { TraceFieldReader } from '../../client/trace';
@@ -15,7 +15,7 @@ function prompt(value: unknown): TraceText {
   if (typeof source.text !== 'string' || typeof source.truncated !== 'boolean') throw Error('Original system prompt is unavailable.');
   return {text:source.text,truncated:source.truncated};
 }
-const optionFields = ['model', 'protocol', 'reasoning_enabled', 'profile', 'max_output_tokens', 'context_window_tokens', 'options'] as const;
+const optionFields = ['model', 'protocol', 'profile', 'max_output_tokens', 'context_window_tokens', 'options'] as const;
 
 /** Transport adapters feed the same semantic views used by the Harness-aligned UI. */
 export function useTraceContent(page: CheckpointPage | undefined, reader: TraceFieldReader | undefined, inspection: TraceInspectionHead | undefined, item: InspectableDisplayItem, facet: TrajectoryFacet, previousDomain?: string) {
@@ -76,7 +76,7 @@ export function useTraceContent(page: CheckpointPage | undefined, reader: TraceF
       if (facet === 'overview' || facet === 'options') {
         const values: Record<string, unknown> = {};
         for (const field of optionFields) values[field] = await readRequestField(reader, cut, `${domain}.${field}`, current);
-        request.options = { model: values.model, protocol: values.protocol, thinking: values.reasoning_enabled ? 'enabled' : 'disabled', ...(values.profile ? { profile: values.profile } : {}), maxTokens: values.max_output_tokens, contextWindowTokens: values.context_window_tokens,
+        request.options = { model: values.model, protocol: values.protocol, ...(values.profile ? { profile: values.profile } : {}), maxTokens: values.max_output_tokens, contextWindowTokens: values.context_window_tokens,
           ...Object.fromEntries((values.options as { name: string; value: { value: unknown } }[]).map(option => [option.name, option.value.value])) };
       }
       let previousRequestDomain = previousDomain?.replace(/\.effective_system_prompt$/, '');

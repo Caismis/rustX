@@ -26,7 +26,7 @@ creates a Session. A declared provider remains connectivity-unresolved offline.
 ```sh
 rustx init --template openai-chat --provider service --model-id fast \
   --endpoint https://api.example.invalid/v1 --credential-env SERVICE_API_KEY \
-  --context-window 128000 --max-output 4096 --tool-calls true --reasoning false \
+  --context-window 128000 --max-output 4096 --tool-calls true \
   --compat 'chat_reasoning_replay = "omit"'
 ```
 

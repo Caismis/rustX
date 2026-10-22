@@ -63,7 +63,7 @@ for (const theme of ['Light', 'Dark'] as const) for (const width of [1440,390]) 
     await noOverflow(page); await accessible(page);
     await expectStableScreenshot(page, `model-basic-${theme.toLowerCase()}-${width}.png`);
     await modal.getByRole('button', {name:'Advanced configuration', exact:true}).click();
-    await expect(modal.getByRole('checkbox')).toHaveCount(4);
+    await expect(modal.getByRole('checkbox')).toHaveCount(3);
     await expect(modal.getByRole('checkbox', {name:'File', exact:true})).toHaveCount(0);
     await expect(modal.getByText('Output types', {exact:true})).toHaveCount(0);
     await modal.getByRole('checkbox', {name:'Image', exact:true}).first().uncheck();
@@ -91,7 +91,7 @@ for (const theme of ['Light', 'Dark'] as const) for (const width of [1440,390]) 
     await identity.fill('low');
     await identity.press('Enter');
     await expect(modal.getByRole('button', {name:'Profile low',exact:true})).toHaveAttribute('aria-pressed','true');
-    const lowValue = {reasoning_enabled:true,request_params:{reasoning_effort:'low'}};
+    const lowValue = {request_params:{reasoning_effort:'low'}};
     await params.fill(JSON.stringify(lowValue));
     await addProfile.click();
     await identity.fill('low');
@@ -102,13 +102,13 @@ for (const theme of ['Light', 'Dark'] as const) for (const width of [1440,390]) 
     const high = 'high-with-an-exceptionally-long-profile-identity';
     await identity.fill(high);
     await identity.press('Enter');
-    await expect(params).toHaveValue(JSON.stringify({reasoning_enabled:true,request_params:{}},null,2));
-    await params.fill('{"reasoning_enabled":');
+    await expect(params).toHaveValue(JSON.stringify({request_params:{}},null,2));
+    await params.fill('{"request_params":');
     await modal.getByRole('button', {name:'Profile low',exact:true}).click();
-    await expect(params).toHaveValue('{"reasoning_enabled":');
+    await expect(params).toHaveValue('{"request_params":');
     await expect(params).toBeFocused();
     await expect(modal.getByRole('button', {name:'Profile '+high,exact:true})).toHaveAttribute('aria-pressed','true');
-    const highValue = {reasoning_enabled:true,max_output_tokens:16384,request_params:{reasoning_effort:'high'}};
+    const highValue = {max_output_tokens:16384,request_params:{reasoning_effort:'high'}};
     await params.fill(JSON.stringify(highValue));
     await modal.getByRole('button', {name:'Profile low',exact:true}).click();
     await expect(params).toHaveValue(JSON.stringify(lowValue,null,2));
@@ -176,7 +176,7 @@ test('Chinese settings use the same model dialog without Smart configuration', a
   await expect(modal.getByRole('button',{name:'取消',exact:true})).toBeInViewport();
   await accessible(page);
   await expect(modal.getByText('输出类型',{exact:true})).toHaveCount(0);
-  await expect(modal.getByRole('checkbox')).toHaveCount(4);
+  await expect(modal.getByRole('checkbox')).toHaveCount(3);
   await expect(modal.getByRole('checkbox', {name:'文件', exact:true})).toHaveCount(0);
   await modal.getByText('输入类型',{exact:true}).scrollIntoViewIfNeeded();
   await expectStableScreenshot(modal,'model-advanced-zh-dark.png');
@@ -186,7 +186,7 @@ test('Chinese settings use the same model dialog without Smart configuration', a
     await identity.fill(name);
     await identity.press('Enter');
   }
-  await modal.getByRole('textbox',{name:'预设参数（JSON）',exact:true}).fill(JSON.stringify({reasoning_enabled:true,max_output_tokens:16384,request_params:{reasoning_effort:'high'}},null,2));
+  await modal.getByRole('textbox',{name:'预设参数（JSON）',exact:true}).fill(JSON.stringify({max_output_tokens:16384,request_params:{reasoning_effort:'high'}},null,2));
   const profile = modal.getByRole('group',{name:'预设 high',exact:true});
   await expect(profile.getByRole('button')).toHaveCount(0);
   await expect(profile.getByRole('spinbutton')).toHaveCount(0);
