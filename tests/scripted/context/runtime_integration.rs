@@ -2230,6 +2230,101 @@ async fn compaction_failure_after_overflow_preserves_the_overflow() {
 // Context failure classification (preparation vs compaction)
 // ---------------------------------------------------------------------------
 
+/// A logical step's proactive compaction and later overflow recovery share
+/// one deadline. Refusing recovery after that deadline preserves the provider
+/// failure and reports the compaction diagnostic without another Summary call.
+#[tokio::test]
+async fn expired_proactive_compaction_budget_preserves_later_overflow() {
+    let clock = Arc::new(crate::runtime::monotonic::ManualMonotonicClock::new());
+    let (release, released) = model_release();
+    let model = fake_model(vec![vec![
+        FakeStep::Emit(started()),
+        FakeStep::ParkUntilReleased(released),
+        FakeStep::Emit(overflow_event()),
+    ]]);
+    let mut parked = model.parked();
+    let controller_clock = clock.clone();
+    let controller = tokio::spawn(async move {
+        parked.wait_for(|parked| *parked).await.unwrap();
+        controller_clock.advance(300_000);
+        release.send(true).unwrap();
+    });
+    let summarizer = FakeContextSummarizer::new(vec![FakeSummaryStep::Return("summary".into())]);
+    let mut policy = crate::scripted_suites::support::default_execution_policy();
+    policy.monotonic_clock = clock;
+    policy.model_timeout_policy = rustx::model::ModelTimeoutPolicy::new(
+        std::time::Duration::from_secs(600),
+        std::time::Duration::from_secs(600),
+    );
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
+    let capability = common::capability_lease(ToolRegistry::new(), &tool_runtime).await;
+    let result = common::durable_agent_result(
+        AgentExecution::new(
+            fresh_request(
+                "attempt-1",
+                vec![
+                    user("old-1", "old"),
+                    user("old-2", "older"),
+                    fresh_user("msg-inbound-1", "fresh instruction"),
+                ],
+                &model,
+            ),
+            capability.into_lease(),
+            &cancellation,
+            policy,
+            runtime_with(250, 0, 0, weighted(100, 10, 0), summarizer.clone()),
+            &tool_runtime,
+            rustx::agent::AttemptLifecycle::inert(),
+        )
+        .unwrap()
+        .run()
+        .await,
+        tool_runtime.durable_store().as_ref(),
+    );
+    assert_single_terminal(&result.event_history);
+    assert_eq!(
+        result.outcome,
+        AttemptOutcome::Failed {
+            error: AttemptFailure::Model {
+                error: overflow_error(),
+            },
+        }
+    );
+    controller.await.unwrap();
+    assert_eq!(model.requests().len(), 1, "no overflow retry starts");
+    assert_eq!(
+        summarizer.requests().len(),
+        1,
+        "only proactive Summary starts"
+    );
+    let started: Vec<_> = result
+        .event_history
+        .iter()
+        .filter_map(|event| match event {
+            RuntimeEvent::CompactionStarted { operation_id } => Some(operation_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(started.len(), 2);
+    assert_ne!(started[0], started[1]);
+    assert!(result.event_history.iter().any(|event| matches!(
+        event,
+        RuntimeEvent::CompactionCompleted { operation_id, .. } if operation_id == started[0]
+    )));
+    assert!(result.event_history.iter().any(|event| matches!(
+        event,
+        RuntimeEvent::CompactionFailed { operation_id, error }
+            if operation_id == started[1] && error.contains("deadline")
+    )));
+    assert!(
+        !result
+            .event_history
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::ModelRetryScheduled { .. }))
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Overflow replanning at the attempt boundary
 // ---------------------------------------------------------------------------

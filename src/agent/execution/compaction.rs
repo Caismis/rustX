@@ -63,9 +63,7 @@ impl AgentExecution<'_> {
         estimate_correction: Option<EstimateCorrection>,
     ) -> Result<(), Terminal> {
         if self.cancellation.is_cancelled() {
-            return Err(Terminal::Cancelled {
-                reason: self.cancellation.reason(),
-            });
+            return Err(self.cancelled_terminal());
         }
         let operation_id =
             crate::runtime::identity::CompactionOperationId::new(uuid::Uuid::now_v7().to_string());
@@ -73,17 +71,20 @@ impl AgentExecution<'_> {
             || self.context_runtime.compaction_budget(operation_id.clone()),
             |previous| previous.next_operation(operation_id.clone()),
         );
-        if let Err(error) = budget.check_start(&self.cancellation.signal()) {
-            return Err(if error.kind == ContextErrorKind::Cancelled {
-                self.cancelled_terminal()
-            } else {
-                Self::context_failure_terminal(&error)
-            });
+        let admission = budget.check_start(&self.cancellation.signal());
+        if admission
+            .as_ref()
+            .is_err_and(|error| error.kind == ContextErrorKind::Cancelled)
+        {
+            return Err(self.cancelled_terminal());
         }
         self.logical_step.compaction_budget = Some(budget.clone());
         self.emit(RuntimeEvent::CompactionStarted {
             operation_id: operation_id.clone(),
         });
+        if let Err(error) = admission {
+            return Err(self.compaction_failure(&operation_id, &error, overflow));
+        }
         if let Some(message) = self.durable_failure.clone() {
             return Err(self.compaction_failure(
                 &operation_id,

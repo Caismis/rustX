@@ -28,8 +28,22 @@ fn publication_is_idempotent_catalog_metadata_and_manual_name_wins() {
     let settings = catalog.settings_revision(&id).unwrap();
     let invalidations = catalog.summary_invalidations();
     let frontier = invalidations.frontier();
+    assert!(
+        catalog
+            .list_page(Some("bounded title"), 0, 32)
+            .unwrap()
+            .sessions
+            .is_empty()
+    );
     assert!(publish(&mut catalog, &id, &conversation).unwrap());
+    let published = invalidations.frontier();
+    assert_eq!(
+        invalidations.next_after(frontier),
+        Some((published, id.clone(), true)),
+        "a new search match invalidates Catalog membership, even when the Session was absent"
+    );
     assert!(!publish(&mut catalog, &id, &conversation).unwrap());
+    assert_eq!(invalidations.frontier(), published);
     let summary = catalog.summary(&id).unwrap();
     assert_eq!(summary.updated_at, before.updated_at);
     assert_eq!(catalog.settings_revision(&id).unwrap(), settings);
@@ -115,6 +129,11 @@ fn visible_error_retains_exact_title_and_publishes_invalidation() {
             .committed()
     );
     assert!(invalidations.frontier() > frontier);
+    assert_eq!(
+        invalidations.next_after(frontier),
+        Some((invalidations.frontier(), id.clone(), true)),
+        "a visible title refreshes query membership even when durability is uncertain"
+    );
     let frontier = invalidations.frontier();
     assert!(!publish(&mut catalog, &id, &conversation).unwrap());
     assert_eq!(invalidations.frontier(), frontier);

@@ -249,3 +249,37 @@ Initial synchronization checks passed: native protocol generation, Protocol/TUI/
 Web typechecking, Rust formatting, the four Ubuntu-installer tests and the
 stable empty-sidebar browser capture. Independent review must cover the entire
 PR against this synchronized main, followed by final-head FULL verification.
+
+## Whole-PR review after synchronization
+
+A fresh independent reviewer audited the complete PR against `5fb1f596`,
+including all 607 changed paths at merge commit `e0ec7069`. Two independent
+read-only specialists covered Title/Store/Catalog and retry/Compaction; the
+reviewer covered models/adapters/configuration, Usage/occupancy, protocol,
+Web/TUI, archive and CI, and verified the synchronized Workflow types.
+The audit confirmed two P2 findings:
+
+* A frozen Compaction budget refused after proactive compaction incorrectly
+  became context-preparation failure on later provider overflow. Non-cancelled
+  admission failures now use the same operation-scoped Compaction failure path,
+  preserving the original overflow and emitting Started/Failed. Cancellation
+  still returns before either event. A native regression completes proactive
+  compaction, parks the primary request, advances the shared monotonic clock
+  through the original five-minute deadline, then returns overflow; only the
+  first Summary runs, no primary retry starts, and the model error survives.
+* Generated-title publication changed search membership without invalidating
+  the Catalog list. Both success and already-visible commit errors now publish
+  membership invalidation. Catalog regressions cover an initially empty title
+  query, the new match, the notification scope, uncertain durability and exact
+  replay without another generation.
+
+The same reviewer independently rechecked both fixes and found no further
+actionable issue. Synchronization also updates the new Workflow-authority
+fixture's native handshake from protocol 51 to 52; all 126 Workflow tests and
+93 client/model/settings tests pass. The pinned browser passed all eight
+selected Workflow, Title (desktop/mobile), commands and sidebar cases.
+Final native validation passed all 264 Context, Title, auxiliary executor and
+model-policy tests with no failures or ignored tests. All-target/all-feature
+Clippy, formatting, whitespace and the 45 verification-planner tests passed;
+protocol generation/drift checks and Protocol/TUI/Web typechecking passed.
+Final-head FULL verification remains required.

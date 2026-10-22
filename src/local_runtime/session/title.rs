@@ -105,7 +105,7 @@ impl SessionCatalog {
         crate::runtime::process_death::reach("before:publish_generated_title");
         let committed = self.commit(next);
         if committed.is_ok() || committed.as_ref().is_err_and(SessionError::committed) {
-            self.summary_invalidations.record(id);
+            self.summary_invalidations.record_change(id, true);
         }
         committed?;
         crate::runtime::process_death::reach("after:publish_generated_title");
