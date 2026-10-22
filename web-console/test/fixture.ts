@@ -215,7 +215,13 @@ export class Server {
       case 'server/info': result = { type: 'server_info', capabilities: this.capabilities }; break;
       case 'session/summary': result = { type: 'session_summary', summary: this.summary(request.params.session_id) }; break;
       case 'session/list': if (request.params.limit > 32) throw new Error('Native Session page limit is 32'); result = { type: 'sessions', sessions: [...this.snapshots.keys()].map(id => this.summary(id)).sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)).filter(row => !request.params.query || [row.id, row.name, row.preview].some(text => text?.toLowerCase().includes(request.params.query!.toLowerCase()))).slice(request.params.offset, request.params.offset + request.params.limit) }; break;
-      case 'session/read': result = { type: 'session', session: { id, active_node: this.summary(id).active_node, active_conversation_id: (this.nodeSnapshots.get(this.summary(id).active_node) ?? this.snapshots.get(id)!).conversation_id, node_count: 1, created_at: '0', updated_at: '0' } }; break;
+      case 'session/read': result = { type: 'session', session: { id, name: this.summary(id).name, active_node: this.summary(id).active_node, active_conversation_id: (this.nodeSnapshots.get(this.summary(id).active_node) ?? this.snapshots.get(id)!).conversation_id, node_count: 1, created_at: '0', updated_at: '0' } }; break;
+      case 'session/name': {
+        const summary = this.summary(id);
+        this.summaries.set(id, { ...summary, name: request.params.name });
+        result = { type: 'session', session: { id, name: request.params.name, active_node: summary.active_node, active_conversation_id: (this.nodeSnapshots.get(summary.active_node) ?? this.snapshots.get(id)!).conversation_id, node_count: 1, created_at: '0', updated_at: '0' } };
+        break;
+      }
       case 'session/node': {
         const nodeId = request.params.node_id;
         const history = this.nodeSnapshots.get(nodeId) ?? (nodeId === this.summary(id).active_node ? this.snapshots.get(id) : undefined);

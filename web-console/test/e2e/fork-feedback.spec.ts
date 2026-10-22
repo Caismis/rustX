@@ -26,6 +26,11 @@ for (const [width, zh] of [[1440, false], [390, true]] as const) {
         await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文');
         await page.getByRole('button', { name: '关闭设置' }).click();
       }
+      const repair = page.getByLabel(zh ? '配置修复' : 'Configuration repair', { exact: true });
+      if (await repair.isVisible()) {
+        const notice = await repair.boundingBox(), composer = await message.boundingBox();
+        expect(notice!.y + notice!.height).toBeLessThan(composer!.y);
+      }
       await message.fill('Fork source'); await page.getByRole('button', { name: zh ? '发送' : 'Send', exact: true }).click();
       await expect(page.getByText('Completed fork answer.', { exact: true })).toBeVisible();
       // Native settled/admission evidence enables Retry; observe that same UI
@@ -54,10 +59,23 @@ for (const [width, zh] of [[1440, false], [390, true]] as const) {
       if (width === 390) await page.getByRole('button', { name: '关闭导航', exact: true }).click({ position: { x: width - 20, y: 400 } });
       await expect(page.getByText('Completed fork answer.', { exact: true })).toBeVisible();
       await expect(page.locator('.chat-reading-surface').getByText('Fork source', { exact: true })).toHaveCount(1);
+      await expect(page.getByLabel(zh ? '会话标题' : 'Session title', { exact: true })).toHaveText('Fork source (1)');
       await expect(page.getByRole('dialog')).toHaveCount(0);
       await page.screenshot({ path: `/tmp/rustx-message-fork-ready-${width}.png` });
       wire.releaseHeld();
-      expect(wire.requests.filter(row => row.method === 'session/fork')).toHaveLength(1);
+      // The default first-message title is the source for the first Fork;
+      // a further Fork increments its now-persisted name before opening it.
+      await fork.click();
+      await expect(page.getByLabel(zh ? '会话标题' : 'Session title', { exact: true })).toHaveText('Fork source (2)');
+      await page.screenshot({ path: `/tmp/rustx-fork-title-numbering-${width}.png` });
+      await message.fill('/fork'); await message.press('Enter');
+      const picker = page.getByRole('dialog', { name: '/fork', exact: true });
+      await picker.getByRole('option', { name: /Fork source/ }).click();
+      await expect(page.getByLabel(zh ? '会话标题' : 'Session title', { exact: true })).toHaveText('Fork source (3)');
+      await expect(message).toHaveValue('Fork source');
+      await expect(picker).toHaveCount(0);
+      expect(wire.requests.filter(row => row.method === 'session/fork')).toHaveLength(3);
+      expect(wire.requests.filter(row => row.method === 'session/name').map(row => row.params.name)).toEqual(['Fork source (1)', 'Fork source (2)', 'Fork source (3)']);
       expect(wire.requests.filter(row => row.method === 'turn/start')).toHaveLength(1);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);

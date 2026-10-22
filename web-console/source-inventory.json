@@ -6857,9 +6857,10 @@
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
       "upstream_sha256": "5a085d04f97ac7a0f76d10815aded19996734742a132d28954b70e07d8ad7116",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "treatment": "Port DSH durable fork-title numbering and catalog-only child publication. Resolve the latest native completed-response boundary through finite immutable history pages; do not attach the source/child, switch the editor or send input. Session-list alignment: DSH row/menu/rename geometry and interaction patterns; browser-scoped pin preference, native completed-response Fork and permanent deletion retain rustX ownership. Archive is excluded. Unicode-scalar title bounds reserve numbering space; committed Session identity survives a later naming failure.",
+      "treatment": "Port DSH durable fork-title numbering and catalog-only child publication. Resolve the latest native completed-response boundary through finite immutable history pages; do not attach the source/child, switch the editor or send input. Session-list alignment: DSH row/menu/rename geometry and interaction patterns; browser-scoped pin preference, native completed-response Fork and permanent deletion retain rustX ownership. Archive is excluded. Unicode-scalar title bounds reserve numbering space; committed Session identity survives a later naming failure. Shared Fork naming: sidebar, response and slash-command entries use one post-commit naming policy. Native first-message previews supply the ordinary title when no explicit name exists, matching Harness first-prompt title behavior. Naming settles after navigation retirement within the same connection generation; failed naming preserves the committed child and source route.",
       "retained_dependencies": [
         "../../../../protocol/app-server/message-descriptor",
+        "../../../../protocol/app-server/v52",
         "../../client/app-server",
         "../../locale/controller",
         "../../locale/translation"
@@ -6868,7 +6869,7 @@
         "Harness Session manager and Host RPC",
         "Cordis runtime and projection stores"
       ],
-      "local_sha256": "d0d6cff602cc13cda6b4550df85402207c1c598d04d8a45b39f6e893a1363fb5"
+      "local_sha256": "f3991992c82a03f77d9ec965918e8ebdeca06fd6c41bb7384c783215f0228ad0"
     },
     {
       "upstream": "packages/client/ui-theme/src/styles/focus.css",

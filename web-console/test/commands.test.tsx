@@ -141,6 +141,45 @@ async function subject() {
   const selection = (await scope.boundaries()).selections[0];
   return { fixture, navigation, scope, selection };
 }
+
+describe('shared Fork naming', () => {
+  it.each(['command', 'response'] as const)('%s Fork increments the displayed native title without another source read', async entry => {
+    server.summaries.set('A', { name: undefined, preview: '计划（9）' });
+    const { fixture, scope, selection } = await subject();
+    const boundary = entry === 'response' ? await scope.responseSelection(fixture.original.transcript.entries![0].completed_response!) : selection;
+    const before = server.requests.length;
+    await scope.transition('fork', boundary);
+    expect(server.summary('child').name).toBe('计划（10）');
+    expect(server.requests.slice(before).filter(row => row.request.method === 'session/read')).toHaveLength(0);
+    expect(methods().filter(method => method === 'session/name')).toHaveLength(1);
+  });
+
+  it('freezes the source title before dispatch and finishes naming after navigation retires', async () => {
+    server.summaries.set('A', { name: 'Original' });
+    const { scope, selection, navigation } = await subject();
+    server.held.add('session/fork');
+    const work = scope.transition('fork', selection);
+    const request = await server.waitFor('session/fork', 1), response = server.commit(request);
+    await server.client.renameSession('A', 'Later source title');
+    navigation.invalidate(); server.socket.deliver(response);
+    expect(await work).toBeUndefined();
+    expect(server.summary('child').name).toBe('Original (1)');
+    expect(server.summary('A').name).toBe('Later source title');
+    expect(server.client.getSnapshot().views.child?.target).toBeUndefined();
+  });
+
+  it('preserves a created child and source navigation when automatic naming fails', async () => {
+    const { fixture, scope, selection, navigation } = await subject();
+    server.handlers.set('session/name', () => { throw new RpcFailure({ code: -32602, message: 'Naming refused' }); });
+    await expect(scope.transition('fork', selection)).rejects.toThrow('Session child was created, but automatic naming failed');
+    expect(fixture.committed).toHaveLength(1);
+    expect(server.snapshots.has('child')).toBe(true);
+    expect(navigation.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'A' });
+    expect(server.client.getSnapshot().views.child?.target).toBeUndefined();
+    expect(methods().filter(method => method === 'session/fork')).toHaveLength(1);
+  });
+});
+
 describe('successful command draft consumption', () => {
   async function open(draft: string) {
     await subject();
@@ -425,7 +464,7 @@ describe('restored native editor content', () => {
     fireEvent.change(input, { target: { value: 'Edited Fork input' } }); input.setSelectionRange(2, 8, 'backward'); fireEvent.select(input);
     const card = input.closest('[data-editor-incarnation]')!, incarnation = card.getAttribute('data-editor-incarnation'), revision = card.getAttribute('data-editor-revision');
     const target = server.client.target('child'), before = server.requests.length;
-    for (let click = 0; click < 2; click++) await act(async () => fireEvent.click(await screen.findByRole('button', { name: 'Open Session child' })));
+    for (let click = 0; click < 2; click++) await act(async () => fireEvent.click(await screen.findByRole('button', { name: 'Open Session A (1)' })));
     expect(input.value).toBe('Edited Fork input'); expect(screen.getByText('Native restored upload batch seed-batch')).toBeTruthy();
     expect([input.selectionStart, input.selectionEnd, input.selectionDirection]).toEqual([2, 8, 'backward']);
     expect(card.getAttribute('data-editor-incarnation')).toBe(incarnation); expect(card.getAttribute('data-editor-revision')).toBe(revision);
@@ -600,7 +639,7 @@ describe('typed native operations and continuation fencing', () => {
     const response = server.commit(request); expect(fixture.committed).toHaveLength(1);
     navigation.invalidate(); const count = server.requests.length;
     server.socket.deliver(response); expect(await work).toBeUndefined();
-    expect(server.requests.slice(count).map(row => row.request.method)).toEqual(['session/list']); expect(fixture.original).toEqual(fixture.originals);
+    expect(server.requests.slice(count).map(row => row.request.method)).toEqual(action === 'fork' ? ['session/list', 'session/name', 'session/summary', 'session/list'] : ['session/list']); expect(fixture.original).toEqual(fixture.originals);
     expect(server.client.getSnapshot().views.A.target?.conversation_id).toBe('conversation-A');
   });
   it('rejects the exact invalid revision without refreshing or replacing it', async () => {

@@ -63,6 +63,33 @@ it('an empty Session has no invented completion or replay input', async () => {
 
 it.each([['Roadmap','Roadmap (1)'],['Roadmap (1)','Roadmap (2)'],['计划（1）','计划（2）'],['计划 （9）','计划 （10）']])('fork numbering follows DSH: %s', (source, child) => { expect(increasedForkTitle(source)).toBe(child); });
 
+it.each([
+  { name: '计划（9）', preview: 'First message', expected: '计划（10）' },
+  { name: undefined, preview: '首条消息', expected: '首条消息 (1)' },
+  { name: undefined, preview: undefined, expected: undefined },
+])('uses the native title without inventing a placeholder: $expected', async ({ name, preview, expected }) => {
+  await setup();
+  server.summaries.set('A', { name, preview });
+  await server.client.listSessions();
+  const rename = vi.spyOn(server.client, 'renameSession');
+  await forkLatestSession(server.client, 'A', () => true);
+  if (expected) expect(rename).toHaveBeenCalledExactlyOnceWith('child', expected);
+  else expect(rename).not.toHaveBeenCalled();
+});
+
+it('settles naming after the sidebar gesture retires once creation has committed', async () => {
+  await setup(); server.summaries.set('A', { name: 'Roadmap (1)' });
+  server.held.add('session/fork');
+  let current = true;
+  const work = forkLatestSession(server.client, 'A', () => current);
+  const request = await server.waitFor('session/fork', 1);
+  const response = server.commit(request);
+  current = false; server.socket.deliver(response);
+  expect(await work).toEqual({ sessionId: 'child' });
+  expect(server.summary('child').name).toBe('Roadmap (2)');
+  expect(server.requests.filter(row => row.request.method === 'session/fork')).toHaveLength(1);
+});
+
 it.each(['水'.repeat(120), '🙂'.repeat(120), 'x'.repeat(116) + ' (9)'])('reserves native scalar space for a legal fork title: %s', async name => {
   await setup();
   server.handlers.set('session/read', () => {

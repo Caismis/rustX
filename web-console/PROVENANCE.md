@@ -2868,7 +2868,7 @@ rustX's native operation, not an upstream Archive action.
 | Row actions lacked Pin and Copy ID; extra Close view displaced the reference menu | Match Pin, Rename, Fork, Delete, Copy ID order, hover buttons and resting pin marker. Close view moves into the existing View options submenu. Pin and Copy ID do not select or attach an inactive Session. |
 | Current upstream Session menu uses 144px minimum width and 34px rows; the older shared menu uses 218px and 40px | Reuse upstream `listClassName` to scope current 13px text, 14px icons, spacing and 16px radius to Session menus; other menus retain their geometry. |
 | Rename had a generic Workspace form, no explicit Cancel footer and a list-refresh barrier | Adapt upstream Session dialog: selected draft, trimmed submit, composition-aware Enter, Cancel/Rename footer, inline error and native summary settlement. Focus returns to the opening control. |
-| Sidebar Fork selected its source and opened an explicit boundary picker | Use the latest completed native response, paging backward at its retained read cut when necessary. Publish the child in the catalog without switching the current Session or editor. Increment an existing durable title using upstream half/full-width parenthesis numbering. Explicit `/fork` and response Fork retain their native boundary pickers. |
+| Sidebar Fork selected its source and opened an explicit boundary picker | Use the latest completed native response, paging backward at its retained read cut when necessary. Publish the child in the catalog without switching the current Session or editor. All Web Fork entries increment the source title using upstream half/full-width parenthesis numbering. Explicit `/fork` retains its native boundary picker; response Fork uses its exact completed-response boundary directly. |
 | Delete confirmation showed low-level native inventory instead of a concise product dialog | Use the shared modal and Cancel/red-outline Delete footer with the Session title, irreversible history removal and active-work termination explanation. Native delete preview, revision check, failure and uncertain-outcome ownership remain intact. |
 
 Intentional native difference: DSH pins are Host metadata. rustX has no native
@@ -4169,3 +4169,40 @@ Browser plugin not available; the repository's pinned Playwright workflow
 verified six settings flows at 1440px and 390px in both themes, including
 Chinese copy, JSON profile editing, reset, keyboard focus, accessibility,
 console health and exact screenshot comparisons.
+
+## Shared Fork naming
+
+Behavioral reference: read-only Harness revision
+`687f282e8625c6b8d11ff58211a90524be2e4317`,
+`packages/api/session-controller/src/client/sessions/service.ts` and
+`packages/session/session-title/src/normalize.ts`. Sidebar Fork, completed-response
+Fork and `/fork` share the existing half/full-width parenthesis numbering policy
+and settle the child's name before navigation opens it. A further Fork increments
+the source's trailing number; sibling Forks use the source title independently,
+as upstream does.
+
+Harness persists a title derived from the first human prompt. rustX's equivalent
+ordinary title is its native first-message preview, so that preview supplies the
+Fork name when no explicit name exists. Empty Sessions keep their existing
+placeholder behavior. The native 120-Unicode-scalar bound still reserves room
+for the suffix without splitting a character.
+
+Post-commit naming completes even when its original navigation is superseded,
+within the same connected authority generation. Naming failure preserves the
+created child's identity and the current source route, and reports that creation
+must not be repeated. Cached native metadata supplies response and command Fork
+titles without another source read. Native lineage cuts, retry/branch behavior,
+protocol and catalog persistence remain with their existing owners.
+
+Rendered Fork validation also exposed the fixed configuration-repair notice
+covering the composer's Send button. It now uses the existing Harness toast's
+top-center placement convention, with pointer events restricted to its explicit
+actions. Repair details and acknowledgement keep their existing owners.
+
+Validation: WebUI unit tests (3,093 passed, four existing skips), typecheck,
+build, i18n and source/dependency provenance checks. Browser plugin not available;
+the pinned Playwright Chromium workflow verified six flows at 1440px English/light
+and 390px Chinese/dark on `http://127.0.0.1:5197`. All three Fork entries,
+successive numbering, editor restoration, running-source preservation, repair
+notice clearance, console health and viewport bounds passed. Screenshots remain
+outside the repository in `/tmp/rustx-fork-title-numbering-{1440,390}.png`.

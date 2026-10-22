@@ -674,14 +674,14 @@ for (const width of [390, 1440]) test(`a native Fork seed remains authored after
   await expect(page.getByLabel('Session title')).toHaveText('Session A');
   await page.getByRole('button', { name: 'Branch into a new Session', exact: true }).click();
   const editor = page.getByRole('textbox', { name: 'Message', exact: true });
-  await expect(page.getByLabel('Session title')).toHaveText('Session seed-child'); await expect(editor).toHaveValue('Native restored Fork draft');
+  await expect(page.getByLabel('Session title')).toHaveText('Session A (1)'); await expect(editor).toHaveValue('Native restored Fork draft');
   await expect(page.getByText('Native restored upload batch restored-batch', { exact: true })).toBeVisible();
   await editor.fill('Edited native Fork draft'); await editor.evaluate((element: HTMLTextAreaElement) => { element.focus(); element.setSelectionRange(3, 8, 'backward'); element.dispatchEvent(new Event('select', { bubbles: true })); });
   const incarnation = await page.locator('[data-editor-incarnation]').getAttribute('data-editor-incarnation'), revision = await page.locator('[data-editor-revision]').getAttribute('data-editor-revision');
   const requests = await page.evaluate(() => window.sessionFixture.requests()), facts = await page.evaluate(() => window.sessionFixture.navigationFacts());
   for (let click = 0; click < 2; click++) {
     if (width === 390) await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
-    await page.getByRole('button', { name: 'Open Session seed-child', exact: true }).click(); await expect(editor).toHaveValue('Edited native Fork draft');
+    await page.getByRole('button', { name: 'Open Session A (1)', exact: true }).click(); await expect(editor).toHaveValue('Edited native Fork draft');
   }
   await expect(page.getByText('Native restored upload batch restored-batch', { exact: true })).toBeVisible();
   await expect(page.locator('[data-editor-incarnation]')).toHaveAttribute('data-editor-incarnation', incarnation!); await expect(page.locator('[data-editor-revision]')).toHaveAttribute('data-editor-revision', revision!);
