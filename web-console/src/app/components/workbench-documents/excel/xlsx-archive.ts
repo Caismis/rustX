@@ -4,6 +4,7 @@ import { zipSync, type Unzipped } from 'fflate'
 import { XMLParser } from 'fast-xml-parser'
 import type { ExcelUnsupportedFeature } from './model.ts'
 import { readXlsxZip } from './xlsx-zip.ts'
+import { definedNamesArea, worksheetArea } from './xlsx-area.ts'
 
 /** Owns the unpacked preview copy and its detected unsupported content. */
 export class XlsxPreviewArchive {
@@ -17,10 +18,15 @@ export class XlsxPreviewArchive {
    * @param bytes - Complete XLSX source bytes.
    * @throws When archive metadata, actual output or package names fail admission.
    */
-  constructor(bytes: Uint8Array<ArrayBuffer>) {
+  constructor(bytes: Uint8Array<ArrayBuffer>, maxCells: number) {
     this.files = readXlsxZip(bytes)
+    let remaining = maxCells
     for (const [path, bytes] of Object.entries(this.files)) {
       if (path.endsWith('/')) continue
+      // Match every entry ExcelJS's loader treats as a worksheet, including
+      // unreferenced parts and its unanchored filename matches.
+      if (/xl\/worksheets\/sheet\d+[.]xml/.test(path)) remaining -= worksheetArea(decodeXml(bytes), remaining)
+      if (path === 'xl/workbook.xml') remaining -= definedNamesArea(decodeXml(bytes), remaining)
       const key = partKey(path)
       if (this.parts.has(key)) throw new Error(`Ambiguous XLSX part: ${path}`)
       this.parts.set(key, bytes)

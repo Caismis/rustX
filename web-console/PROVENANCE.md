@@ -3968,3 +3968,9 @@ local headers and descriptors; fixed-output fflate inflation with exact length
 and CRC checks. ExcelJS receives a stored ZIP rebuilt from admitted bytes. The
 existing transitive `crc-32` 1.2.2 package is declared directly for checksum
 validation. No additional Harness source is copied for this admission boundary.
+The archive also admits actual worksheet coordinates, row/column extents, merged
+rectangles, data-validation ranges and named-range matrices before ExcelJS can materialize them. It
+uses the existing SAX parser and the same aggregate cell-area budget, covers all
+worksheet entries recognized by ExcelJS, and retains ordinary merge rendering.
+The lazy dependency prebundle includes CRC and SAX parsing so opening CSV/XLSX
+does not force a development-server navigation after the preview is already open.

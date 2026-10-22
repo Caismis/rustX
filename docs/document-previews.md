@@ -98,6 +98,14 @@ are rejected. Each DEFLATE member uses a fixed declared-size-plus-one output buf
 after admission, so actual overflow is detected without growing the allocation.
 Exact output size and CRC must match. ExcelJS receives a new stored ZIP containing
 only the admitted bytes with drawings omitted, never the original compressed source.
+Before ExcelJS loading, a streaming XML pass checks every worksheet part the
+loader recognizes. Actual cell coordinates, row/column extents, merges and data
+validation ranges must fit the remaining aggregate 250,000-cell rectangular area;
+declared dimensions and counts do not grant admission. Workbook named ranges also
+consume the budget before ExcelJS expands their separate cell matrices. Repeated
+row, cell, column, merge, validation and name records each have a count bound equal
+to the remaining budget.
+Ordinary merges retain their cached master value and read-only rendering.
 These archive limits bound decompressed bytes, not browser process RSS or the
 object overhead of parsing XML and constructing workbook models.
 Office preflight rejects ZIP64, streaming data descriptors, explicit directory entries, unindexed ZIP payloads, split/encrypted archives, ambiguous/duplicate/path-conflicting names,

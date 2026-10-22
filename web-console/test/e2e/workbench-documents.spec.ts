@@ -28,6 +28,7 @@ test('document registry defaults to rendered Markdown and retains explicit sourc
 test('HTML, image, PDF and spreadsheets use specialized viewers',async({page},info)=>{
   const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));
   await page.goto(`${origin}/test/fixtures/workbench.html`);
+  const navigations:string[]=[];page.on('framenavigated',frame=>{if(frame===page.mainFrame())navigations.push(frame.url());});
   await page.locator('[data-preview-toggle]').click();const panel=page.locator('[data-workbench]');
   await panel.getByRole('button',{name:/Workspace files/}).click();await panel.getByRole('button',{name:'docs',exact:true}).click();
   const open=async(name:string)=>{await panel.getByRole('tab',{name:/Files/}).click();await panel.getByRole('button',{name,exact:true}).click();};
@@ -42,6 +43,7 @@ test('HTML, image, PDF and spreadsheets use specialized viewers',async({page},in
   await expect(panel.locator('.fortune-sheet-container')).toBeVisible();
   await open('sample.xlsx');await expect(panel.locator('.fortune-sheet-container')).toBeVisible();
   await page.screenshot({path:info.outputPath('spreadsheet-preview.png')});
+  expect(navigations).toEqual([]);
   expect(errors).toEqual([]);
 });
 test('source dockkit floats, docks, restores and collapses the last content tab',async({page},info)=>{

@@ -14,7 +14,7 @@ vi.mock('fflate', async importOriginal => {
 beforeEach(() => vi.clearAllMocks());
 const limits = { maxBytes: 16 * 1024 * 1024, maxCells: 250000, timeoutMs: 15000 };
 const source = () => Uint8Array.from(readFileSync('test/fixtures/documents/sample.xlsx'));
-const archive = (bytes: Uint8Array) => new XlsxPreviewArchive(Uint8Array.from(bytes));
+const archive = (bytes: Uint8Array) => new XlsxPreviewArchive(Uint8Array.from(bytes), limits.maxCells);
 
 it('rejects excessive entry count before inflating any member', () => {
   const bytes = zip(Array.from({ length: 10001 }, (_, i) => ({ name: `part${i}`, data: '' })));

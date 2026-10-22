@@ -5137,7 +5137,7 @@
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/xlsx-archive.ts",
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream_sha256": "ffd99f6b2424122b427754e53f6c2cc9f68ff7fa783e0f1816b3998ceb3b6618",
-      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned. XLSX ZIP admission validates all metadata before fixed-output inflation and CRC checks; ExcelJS receives a normalized stored archive containing admitted bytes only.",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned. XLSX ZIP admission validates all metadata before fixed-output inflation and CRC checks; ExcelJS receives a normalized stored archive containing admitted bytes only. Worksheet and named-range cell allocations are admitted before ExcelJS loading under the aggregate preview area budget.",
       "destination": "web-console/src/app/components/workbench-documents/excel/xlsx-archive.ts",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -5145,17 +5145,18 @@
       ],
       "retained_dependencies": [
         "./model.ts",
+        "./xlsx-area.ts",
         "./xlsx-zip.ts",
         "fast-xml-parser",
         "fflate"
       ],
-      "local_sha256": "e4c74d18dadcb6e5256585080a9a7736f7c76a1fc186fb57f9d04b0ad4ef5b2b"
+      "local_sha256": "57c838e23c18c654fe84a37bc19897748170d187995393dfefd94789696527f7"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/xlsx.ts",
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream_sha256": "7192d771db899ece3d7c300ec4cf5f7f1a77c664cd0d0db7a82c2932831178bf",
-      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned. Worksheet and named-range cell allocations are admitted before ExcelJS loading under the aggregate preview area budget.",
       "destination": "web-console/src/app/components/workbench-documents/excel/xlsx.ts",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -5169,7 +5170,7 @@
         "exceljs",
         "fast-xml-parser"
       ],
-      "local_sha256": "ea199c20bda37aef8565a4daed1ba9de42409fe91f7741120fae028f8be229f5"
+      "local_sha256": "9809567019ffef16361bea76ee75a1a905218de7bd86263486baedde7daee400"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/zoom/ZoomControls.module.css",

@@ -218,37 +218,37 @@ fn page(
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn fixture(bytes: &[u8]) -> (tempfile::TempDir, SessionFileReference) {
-        let root = tempfile::tempdir().unwrap();
-        std::fs::write(root.path().join("file.txt"), bytes).unwrap();
+    fn fixture(bytes: &[u8]) -> (tempfile::TempDir, std::path::PathBuf, SessionFileReference) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::write(root.join("file.txt"), bytes).unwrap();
         let conversation = crate::runtime::identity::ConversationId::new(
             "conv_00000000-0000-7000-8000-000000000001",
         );
-        let reference =
-            super::super::declare(root.path(), &conversation, "file.txt", None).unwrap();
-        (root, reference)
+        let reference = super::super::declare(&root, &conversation, "file.txt", None).unwrap();
+        (dir, root, reference)
     }
     #[test]
     fn complete_bytes_and_ranges_are_independent_of_rpc_and_file_size() {
         let bytes = vec![b'x'; 600 * 1024];
-        let (root, file) = fixture(&bytes);
+        let (_dir, root, file) = fixture(&bytes);
         let options = ReadOptions::Bytes {
             max_bytes: FILE_BYTES,
             range: None,
         };
         assert_eq!(
-            read_authorized(root.path(), &file, &options, || Ok(()))
+            read_authorized(&root, &file, &options, || Ok(()))
                 .unwrap()
                 .data,
             bytes
         );
         std::fs::OpenOptions::new()
             .write(true)
-            .open(root.path().join("file.txt"))
+            .open(root.join("file.txt"))
             .unwrap()
             .set_len((FILE_BYTES + 1) as u64)
             .unwrap();
-        assert!(read_authorized(root.path(), &file, &options, || Ok(())).is_err());
+        assert!(read_authorized(&root, &file, &options, || Ok(())).is_err());
         let window = ReadOptions::Bytes {
             max_bytes: FILE_BYTES,
             range: Some(ByteRange {
@@ -256,16 +256,16 @@ mod tests {
                 length: 8,
             }),
         };
-        let read = read_authorized(root.path(), &file, &window, || Ok(())).unwrap();
+        let read = read_authorized(&root, &file, &window, || Ok(())).unwrap();
         assert_eq!(read.data, b"xxxxxxxx");
         assert!(!read.eof);
     }
     #[test]
     fn text_pages_cross_the_old_file_limit_and_preserve_line_boundaries() {
         let bytes = "中文\r\n".repeat(6000);
-        let (root, file) = fixture(bytes.as_bytes());
+        let (_dir, root, file) = fixture(bytes.as_bytes());
         let first = read_authorized(
-            root.path(),
+            &root,
             &file,
             &ReadOptions::Text {
                 offset: 1,
@@ -275,7 +275,7 @@ mod tests {
         )
         .unwrap();
         let second = read_authorized(
-            root.path(),
+            &root,
             &file,
             &ReadOptions::Text {
                 offset: 5001,
@@ -297,10 +297,10 @@ mod tests {
             ),
             bytes
         );
-        std::fs::write(root.path().join("file.txt"), vec![b'x'; 600 * 1024]).unwrap();
+        std::fs::write(root.join("file.txt"), vec![b'x'; 600 * 1024]).unwrap();
         assert_eq!(
             read_authorized(
-                root.path(),
+                &root,
                 &file,
                 &ReadOptions::Text {
                     offset: 1,
@@ -313,10 +313,10 @@ mod tests {
             .len(),
             600 * 1024
         );
-        std::fs::write(root.path().join("file.txt"), vec![b'x'; PAGE_BYTES + 1]).unwrap();
+        std::fs::write(root.join("file.txt"), vec![b'x'; PAGE_BYTES + 1]).unwrap();
         assert!(
             read_authorized(
-                root.path(),
+                &root,
                 &file,
                 &ReadOptions::Text {
                     offset: 1,
