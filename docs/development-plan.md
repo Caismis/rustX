@@ -2,9 +2,12 @@
 
 The [Scheduler #85 implementation proposal](issue-85-scheduler-implementation-plan.md)
 fills in the native temporal-trigger design from a pinned DeepSeek Harness source
-audit. It proposes atomic schedule/target admission in the existing conversation
-store, bounded catch-up, explicit timezone behavior and a Workflow-owned durable
-start contract. These are planned capabilities; Fleet is outside this scope.
+audit. It specifies shared hot/cold writer ownership, atomic durable admission
+independent of node activation, bounded catch-up and explicit timezone behavior.
+Workflow starts validate a pinned execution contract before claim; native control
+receipts, deletion barriers and periodic authoritative discovery close the other
+ownership/recovery boundaries. These are planned capabilities; Fleet is outside
+this scope.
 
 Issue #383 converges native context capabilities over #380's captured Attempt
 configuration. Agent Status and Goal use one registered contribution lifecycle,
