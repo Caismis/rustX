@@ -4,18 +4,22 @@ use super::{
     delivery_access,
     host::AppServerHost,
     protocol::{
-        AttachmentTarget, ErrorData, Failure, JsonRpcVersion, MethodResult, RequestId, Response,
-        RpcError, Success,
+        AttachmentTarget, ErrorData, Failure, JsonRpcVersion, RequestId, Response, RpcError,
     },
     rpc_error::{client_error, domain, host_error, manager_error},
 };
 use crate::tools::session_files::SessionFileReadFailure as FileFailure;
+use crate::tools::session_files::preview::{PreviewRead, ReadOptions};
+use base64::Engine;
 use serde::{Deserialize, Serialize};
-use std::{io, path::PathBuf};
+use sha2::Digest;
+use std::{io, path::PathBuf, time::Duration};
 use tokio_util::sync::CancellationToken;
 
 pub(crate) const PATH: &str = "/product-host/file-read";
-pub(crate) const SUBPROTOCOL: &str = "rustx.product-host.file-read.v4";
+pub(crate) const SUBPROTOCOL: &str = "rustx.product-host.file-read.v5";
+/// A complete file can be much larger than an ordinary RPC record.
+const FILE_WRITE_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[cfg(test)]
 #[derive(Debug)]
@@ -204,30 +208,49 @@ where
             .await
             .map_err(io::Error::other)?;
     };
-    let response = match result {
-        Ok(result) => Response::Success(Box::new(Success {
-            jsonrpc: JsonRpcVersion::V2,
-            id: RequestId::Integer(0),
-            result,
-        })),
-        Err(error) => Response::Failure(Failure {
-            jsonrpc: JsonRpcVersion::V2,
-            id: Some(RequestId::Integer(0)),
-            error,
-        }),
+    let (response, bytes, success) = match result {
+        Ok(mut result) => {
+            let data = std::mem::take(&mut result.content.data);
+            let mut value = serde_json::to_value(result).map_err(io::Error::other)?;
+            value["length"] = serde_json::json!(data.len());
+            (
+                serde_json::json!({"jsonrpc":"2.0", "id":0, "result":value}),
+                Some(data),
+                true,
+            )
+        }
+        Err(error) => (
+            serde_json::to_value(Response::Failure(Failure {
+                jsonrpc: JsonRpcVersion::V2,
+                id: Some(RequestId::Integer(0)),
+                error,
+            }))
+            .map_err(io::Error::other)?,
+            None,
+            false,
+        ),
     };
-    let outbound = super::transport::Outbound::reply(super::connection::Reply {
-        response,
-        publication,
-        registration: None,
-        association: None,
-        may_have_committed: false,
-    })?;
+    let metadata = super::transport::serialize_record(&response)?;
+    let send = async {
+        let original = socket
+            .send_file(
+                Message::Text(metadata.into()),
+                publication.as_ref(),
+                success,
+            )
+            .await?;
+        if original && let Some(bytes) = bytes {
+            socket
+                .send_file(Message::Binary(bytes.into()), publication.as_ref(), true)
+                .await?;
+        }
+        Ok::<_, io::Error>(())
+    };
     tokio::select! {
         biased;
         () = shutdown.cancelled() => (),
         () = authorization.cancelled() => (),
-        result = tokio::time::timeout(super::transport::WRITE_TIMEOUT, socket.send(outbound)) => {
+        result = tokio::time::timeout(FILE_WRITE_TIMEOUT, send) => {
             result.map_err(io::Error::other)??;
         },
     }
@@ -246,6 +269,17 @@ pub(crate) struct FileRead {
     pub target: AttachmentTarget,
     pub source: ReadSource,
     pub roots: Vec<PathBuf>,
+    pub read: ReadOptions,
+}
+
+#[derive(Serialize)]
+struct FileResult {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file: Option<crate::tools::session_files::SessionFileReference>,
+    #[serde(flatten)]
+    content: PreviewRead,
 }
 #[derive(Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -270,7 +304,7 @@ async fn read(
     request: FileRead,
     authorization: CancellationToken,
 ) -> (
-    Result<MethodResult, RpcError>,
+    Result<FileResult, RpcError>,
     Option<delivery_access::Publication>,
 ) {
     if let Err(error) = delivery_access::check_rpc(&authorization) {
@@ -291,27 +325,38 @@ async fn read(
         )
         .expect("a fresh table has no operation");
     let token = publication.token();
-    let FileRead { source, roots, .. } = request;
+    let FileRead {
+        source,
+        roots,
+        read,
+        ..
+    } = request;
     let result = match source {
         ReadSource::SessionFile {
             agent_id,
             locator,
             delivery_index,
-        } => {
-            delivery_access::request(
-                host,
-                route,
-                locator,
-                delivery_index,
-                delivery_access::Roots::Registered(roots),
-                agent_id.map_or(
-                    delivery_access::Access::Bytes,
-                    delivery_access::Access::AgentBytes,
-                ),
-                token,
-            )
-            .await
-        }
+        } => delivery_access::request_data(
+            host,
+            route,
+            locator,
+            delivery_index,
+            delivery_access::Roots::Registered(roots),
+            delivery_access::Access::Preview {
+                agent_id,
+                options: read,
+            },
+            token,
+        )
+        .await
+        .and_then(|result| match result.content {
+            delivery_access::Resolved::Preview(content) => Ok(FileResult {
+                kind: "session_file_bytes",
+                file: Some(result.file),
+                content,
+            }),
+            _ => Err(domain(ErrorData::InvalidParams)),
+        }),
         ReadSource::Artifact {
             artifact_id,
             agent_id,
@@ -326,7 +371,7 @@ async fn artifact(
     artifact_id: crate::runtime::ArtifactId,
     agent_id: Option<crate::runtime::identity::AgentId>,
     authorization: CancellationToken,
-) -> Result<MethodResult, RpcError> {
+) -> Result<FileResult, RpcError> {
     let client = route.client.clone();
     let owner = host.clone();
     let receiver = host
@@ -349,7 +394,21 @@ async fn artifact(
                     .map_err(client_error)?;
                     route.attachment.read_authority().map_err(client_error)?;
                     delivery_access::check_rpc(&authorization)?;
-                    Ok(MethodResult::ArtifactBytes { data })
+                    let data = base64::engine::general_purpose::STANDARD
+                        .decode(data)
+                        .map_err(|_| domain(ErrorData::OperationFailed))?;
+                    Ok(FileResult {
+                        kind: "artifact_bytes",
+                        file: None,
+                        content: PreviewRead {
+                            version: format!("{:x}", sha2::Sha256::digest(&data)),
+                            bytes: data.len() as u64,
+                            offset: 0,
+                            eof: true,
+                            lines: None,
+                            data,
+                        },
+                    })
                 }
             })
         })

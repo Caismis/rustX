@@ -1,5 +1,4 @@
 // @vitest-environment node
-import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -22,10 +21,10 @@ it.each(['converter', 'native reread'] as const)('real document orchestration pr
   const bytes = readFileSync(new URL('./fixtures/documents/sample.docx', import.meta.url));
   const file = { scope: { conversation_id: 'c', device: '1', inode: '2' }, path: 'sample.docx', name: 'sample.docx' };
   const read = { target: { session_id: 's', conversation_id: 'c', runtime_incarnation: 'r', attachment_id: 'a' }, locator: {type:'by_message_id' as const,message_id:'m'}, delivery_index: 0 };
-  const request = { target: read.target, source: { kind: 'session_file' as const, locator: {type:'by_message_id' as const,message_id:'m'}, delivery_index: 0 }, extension: 'docx' as const, digest: createHash('sha256').update(bytes).digest('hex') };
-  boundary.read.mockResolvedValue({ file, data: bytes.toString('base64') });
+  const request = { target: read.target, source: { kind: 'session_file' as const, locator: {type:'by_message_id' as const,message_id:'m'}, delivery_index: 0 }, extension: 'docx' as const };
+  boundary.read.mockResolvedValue({ file, data: Uint8Array.from(bytes) });
   boundary.convert.mockRejectedValue(new OfficeSettlementError());
-  if (owner === 'native reread') boundary.read.mockResolvedValueOnce({ file, data: bytes.toString('base64') })
+  if (owner === 'native reread') boundary.read.mockResolvedValueOnce({ file, data: Uint8Array.from(bytes) })
     .mockRejectedValueOnce(new WorkspaceHostError('native read retirement unknown', 'file_settlement_unknown'));
   try {
     await expect(host.previewDocument(scope, request)).rejects.toMatchObject({ kind: owner === 'converter' ? 'converter_settlement_unknown' : 'file_settlement_unknown' });
@@ -35,7 +34,7 @@ it.each(['converter', 'native reread'] as const)('real document orchestration pr
     await expect(host.previewDocument(scope, request)).rejects.toThrow('capacity');
     expect(boundary.read).toHaveBeenCalledTimes(2);
     if (owner === 'converter') {
-      expect(await host.readDelivery(scope, read)).toEqual({ file, data: bytes.toString('base64') });
+      expect(await host.readDelivery(scope, read)).toEqual({ file, data: Uint8Array.from(bytes) });
       expect(boundary.read).toHaveBeenCalledTimes(3);
     }
   } finally { host.close(); }

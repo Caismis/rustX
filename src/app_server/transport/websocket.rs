@@ -173,6 +173,43 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Socket<S> {
         self.flush().await
     }
 
+    /// The private file lane sends bounded native binary bodies. Its publication
+    /// uses the same revocation order as ordinary delivery replies.
+    pub(in crate::app_server) async fn send_file(
+        &self,
+        message: Message,
+        publication: Option<&crate::app_server::delivery_access::Publication>,
+        success: bool,
+    ) -> io::Result<bool> {
+        let original = std::future::poll_fn(|cx| {
+            let mut stream = self.lock();
+            ready!(stream.poll_flush_unpin(cx)).map_err(io::Error::other)?;
+            ready!(stream.poll_ready_unpin(cx)).map_err(io::Error::other)?;
+            let mut accept = |replacement: &str| {
+                let original = replacement.is_empty();
+                let frame = if original {
+                    message.clone()
+                } else {
+                    Message::Text(replacement.into())
+                };
+                match stream.start_send_unpin(frame) {
+                    Ok(()) => Poll::Ready(Ok(original)),
+                    Err(tokio_tungstenite::tungstenite::Error::WriteBufferFull(_)) => Poll::Pending,
+                    Err(error) => Poll::Ready(Err(io::Error::other(error))),
+                }
+            };
+            match publication {
+                Some(publication) => publication
+                    .poll_hand_off("", success, accept)
+                    .map(|result| result.map(|(_, original)| original)),
+                None => accept(""),
+            }
+        })
+        .await?;
+        self.flush().await?;
+        Ok(original)
+    }
+
     pub(crate) async fn close(&self) -> io::Result<()> {
         std::future::poll_fn(|cx| self.lock().poll_close_unpin(cx))
             .await
@@ -300,7 +337,10 @@ where
         .max_message_size(Some(MAX_MESSAGE_BYTES))
         .max_frame_size(Some(MAX_MESSAGE_BYTES))
         .write_buffer_size(0)
-        .max_write_buffer_size(MAX_MESSAGE_BYTES + 1024);
+        // Ordinary records are still serialized under MAX_MESSAGE_BYTES and
+        // flushed before accepting another. Only the private authenticated file
+        // lane can submit a complete binary source (at most 50 MiB).
+        .max_write_buffer_size(crate::tools::session_files::preview::OFFICE_BYTES + 1024);
     let admission = Arc::new(std::sync::Mutex::new(None));
     let admitted = admission.clone();
     let handshake_host = host.clone();

@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Page geometry/rendering adapted; native resource owner retained. See PROVENANCE.md. */
 import { createPdfBinaryDataFactory } from './pdf-assets';
-import { DERIVED_PDF_MAX_BYTES } from '../../shared/documents.ts';
+import { FILE_PREVIEW_LIMITS } from '../../shared/file-preview.ts';
 import { getDocument, PDFWorker, TextLayer, type PDFDocumentProxy, type RenderTask } from 'pdfjs-dist';
 import type { BaseFilterFactory } from 'pdfjs-dist/types/src/display/filter_factory';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
@@ -96,8 +96,8 @@ export class PdfDocumentOwner {
     held.container.replaceChildren();
     this.presentations.delete(canvas);
   }
-  constructor(bytes: Uint8Array<ArrayBuffer>, private readonly failed: (code: string) => void) {
-    if (bytes.length > DERIVED_PDF_MAX_BYTES) throw new Error('too_large');
+  constructor(bytes: Uint8Array<ArrayBuffer>, private readonly failed: (code: string) => void, maxBytes = FILE_PREVIEW_LIMITS.pdfBytes) {
+    if (bytes.length > maxBytes) throw new Error('too_large');
     if (workers >= limits.workers) throw new Error('capacity');
     try { this.worker = new Worker(workerUrl, { type: 'module' }); }
     catch { throw new Error('worker_failure'); }

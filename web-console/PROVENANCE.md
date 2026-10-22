@@ -3942,3 +3942,22 @@ actual scrolling range before asserting detached reading during settlement.
 A short native head at scrollTop zero is still following the tail; passive
 history assembly may correctly move that viewport. The assertion after an
 explicit detached gesture remains exactly scrollTop zero.
+
+
+### File preview loading
+
+The loading contracts were compared with DeepSeek Harness
+`687f282e8625c6b8d11ff58211a90524be2e4317`: workspace text pages, bounded
+complete-byte reads, multipart responses, and Host-owned Office conversion.
+The [research note](../docs/dsh-file-preview-research.md) records immutable sources.
+No additional upstream implementation source is copied. Existing renderer pins,
+licenses and attribution remain unchanged.
+
+Conversation XLSX previews now compose the existing attributed browser Excel
+parser/viewer, with worksheet selection retained through its public hooks. Both
+spreadsheet surfaces use the same limits. The old Host workbook projection and
+inspection table are removed. PDF wrappers distinguish original and converted
+input budgets. Paged text and complete-byte transport preserve rustX's committed
+delivery identity, descriptor checks, authority fencing and physical settlement.
+The source inventory records updated local hashes and dependency closures for
+the existing adapted files.

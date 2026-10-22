@@ -156,13 +156,17 @@ close deletes an occurrence (scope invalidation also retires incompatible state)
 ## View metadata, keyboard and focus
 
 Tab records contain only inert display/source metadata, pane ID and finite view
-fields: text/Markdown/image body scroll, wrap preference, PDF page/zoom/page scroll,
-Workbook sheet/row window/scroll, and HTML rendered/source mode/source scroll.
+fields: text/Markdown loaded line count and body scroll, image body scroll,
+wrap preference, PDF page/zoom/page scroll, spreadsheet selected worksheet,
+and HTML rendered/source mode/source scroll.
 Opaque-origin HTML iframe internals remain inaccessible; HTML source and the
 outer document scrollport are retained without weakening the sandbox. Scroll and control interactions continuously commit these fields; preservation
 does not depend on unmount cleanup after synchronous lease retirement. View state
 is bounded metadata rather than live document runtime. Reactivation can reflect
 changed mutable file content, so viewer selections clamp to the current document.
+Text reactivation rereads the saved prefix before restoring its scroll position.
+A changed page version resets that prefix and position; an earlier EOF clamps
+the retained line count. Hidden tabs retain no page text.
 
 Tab keyboard navigation uses manual activation: Left/Right/Home/End move focus;
 Enter/Space select; Delete closes the focused occurrence. Clicking or focusing a

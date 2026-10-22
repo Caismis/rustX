@@ -2248,7 +2248,6 @@ async fn delivery_credential_rotation_is_one_transition_ordered_against_publicat
 async fn product_host_credential_rotation_is_one_transition_ordered_against_publication() {
     use super::protocol::delivery::{DELIVERED, committed_delivery};
     use crate::tools::session_files::SESSION_FILE_MAX_READS;
-    use base64::Engine;
     use futures_util::StreamExt;
     use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
     bounded(Box::pin(async {
@@ -2282,7 +2281,7 @@ async fn product_host_credential_rotation_is_one_transition_ordered_against_publ
             .unwrap();
         request.headers_mut().insert(
             "sec-websocket-protocol",
-            format!("rustx.product-host.file-read.v4, rustx-product-host.{ROTATION_A}")
+            format!("rustx.product-host.file-read.v5, rustx-product-host.{ROTATION_A}")
                 .parse()
                 .unwrap(),
         );
@@ -2292,10 +2291,14 @@ async fn product_host_credential_rotation_is_one_transition_ordered_against_publ
         f.host.revocations().waited.send_replace(0);
         valve
             .writes
-            .arm_for(|frame| response(frame_payload(frame), 0) == Some(true));
+            .arm_for(|frame| frame_payload(frame) == DELIVERED);
         socket
             .send(Message::Text(
                 serde_json::to_string(&crate::app_server::product_host::FileRead {
+                    read: crate::tools::session_files::preview::ReadOptions::Bytes {
+                        max_bytes: crate::tools::session_files::preview::FILE_BYTES,
+                        range: None,
+                    },
                     target: target.clone(),
                     source: crate::app_server::product_host::ReadSource::SessionFile {
                         agent_id: None,
@@ -2312,6 +2315,13 @@ async fn product_host_credential_rotation_is_one_transition_ordered_against_publ
             ))
             .await
             .unwrap();
+        let metadata = socket.next().await.unwrap().unwrap();
+        let metadata: serde_json::Value =
+            serde_json::from_str(metadata.to_text().unwrap()).unwrap();
+        assert_eq!(
+            metadata["result"]["length"].as_u64(),
+            Some(DELIVERED.len() as u64)
+        );
         let (frame, ()) = tokio::join!(socket.next(), async {
             valve.writes.entered().await;
             let rotating = tokio::task::spawn_blocking({
@@ -2329,21 +2339,10 @@ async fn product_host_credential_rotation_is_one_transition_ordered_against_publ
             rotating.await.unwrap();
             assert!(early.is_cancelled(), "revoked by the rotation");
         });
-        let Some(Ok(Message::Text(text))) = frame else {
-            panic!("the accepted response")
+        let Some(Ok(Message::Binary(data))) = frame else {
+            panic!("the binary body accepted before rotation")
         };
-        let Response::Success(success) = serde_json::from_str(&text).unwrap() else {
-            panic!("accepted before the rotation: the success stands")
-        };
-        let MethodResult::SessionFileBytes { data, .. } = success.result else {
-            panic!("bytes")
-        };
-        assert_eq!(
-            base64::engine::general_purpose::STANDARD
-                .decode(data)
-                .unwrap(),
-            DELIVERED
-        );
+        assert_eq!(data.as_ref(), DELIVERED);
         assert!(product_host_token(&f, ROTATION_A).is_none(), "A is revoked");
         assert!(!product_host_token(&f, ROTATION_B).unwrap().is_cancelled());
         // Unrelated authority is untouched.

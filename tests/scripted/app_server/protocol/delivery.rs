@@ -59,6 +59,10 @@ async fn artifact_carrier_is_native_scoped_bounded_and_cold_reopen_safe() {
         assert_eq!(uploaded.len(), 1);
         let product_host = TrustedFileHost::new(&f).await;
         let host_read = |target| crate::app_server::product_host::FileRead {
+            read: crate::tools::session_files::preview::ReadOptions::Bytes {
+                max_bytes: crate::tools::session_files::preview::FILE_BYTES,
+                range: None,
+            },
             target,
             source: crate::app_server::product_host::ReadSource::Artifact {
                 agent_id: None,
@@ -179,14 +183,14 @@ impl TrustedFileHost {
         let mut request = self.endpoint.as_str().into_client_request().unwrap();
         request.headers_mut().insert(
             "sec-websocket-protocol",
-            format!("rustx.product-host.file-read.v4, rustx-product-host.{credential}")
+            format!("rustx.product-host.file-read.v5, rustx-product-host.{credential}")
                 .parse()
                 .unwrap(),
         );
         let (socket, reply) = tokio_tungstenite::connect_async(request).await?;
         assert_eq!(
             reply.headers()["sec-websocket-protocol"],
-            "rustx.product-host.file-read.v4"
+            "rustx.product-host.file-read.v5"
         );
         Ok(socket)
     }
@@ -203,7 +207,27 @@ impl TrustedFileHost {
             .await
             .unwrap();
         let frame = socket.next().await.unwrap().unwrap();
-        let response = serde_json::from_str(frame.to_text().unwrap()).unwrap();
+        let mut response: serde_json::Value =
+            serde_json::from_str(frame.to_text().unwrap()).unwrap();
+        if response.get("result").is_some() {
+            let body = socket.next().await.unwrap().unwrap();
+            if let tokio_tungstenite::tungstenite::Message::Binary(bytes) = body {
+                use base64::Engine;
+                assert_eq!(
+                    response["result"]["length"].as_u64(),
+                    Some(bytes.len() as u64)
+                );
+                let value = &response["result"];
+                let mut result = serde_json::json!({"type":value["type"], "data":base64::engine::general_purpose::STANDARD.encode(bytes)});
+                if let Some(file) = value.get("file") {
+                    result["file"] = file.clone();
+                }
+                response["result"] = result;
+            } else {
+                response = serde_json::from_str(body.to_text().unwrap()).unwrap();
+            }
+        }
+        let response = serde_json::from_value(response).unwrap();
         let _ = socket.close(None).await;
         response
     }
@@ -250,6 +274,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
         initialize(&browser).await;
         let target = attach(&browser, &f, 0).await;
         let read = |message_id| crate::app_server::product_host::FileRead {
+            read: crate::tools::session_files::preview::ReadOptions::Bytes { max_bytes: crate::tools::session_files::preview::FILE_BYTES, range: None },
             target: target.clone(),
             source: crate::app_server::product_host::ReadSource::SessionFile { agent_id: None, locator: crate::observation::content::CanonicalContentLocator::ByMessageId { message_id }, delivery_index: 0 },
             roots: vec![f.workspaces[0].clone()],
@@ -366,6 +391,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
         assert_eq!(inherited.result.deliveries.as_slice(), std::slice::from_ref(&file));
         assert_ne!(fork_target.conversation_id, file.scope.conversation_id);
         let MethodResult::SessionFileBytes { file: inherited_file, data } = product_host.success( crate::app_server::product_host::FileRead {
+            read: crate::tools::session_files::preview::ReadOptions::Bytes { max_bytes: crate::tools::session_files::preview::FILE_BYTES, range: None },
             target: fork_target, source: crate::app_server::product_host::ReadSource::SessionFile { agent_id: None, locator: crate::observation::content::CanonicalContentLocator::ByMessageId { message_id: inherited.id.clone() }, delivery_index: 0 }, roots: vec![f.workspaces[0].clone()],
         }).await else { panic!() };
         assert_eq!(inherited_file, file);
@@ -374,6 +400,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
         std::fs::write(f.workspaces[1].join(&file.path), b"UNRELATED").unwrap();
         let unrelated = attach_session(&browser, &f.sessions[1]).await;
         assert_eq!(product_host.rejected( crate::app_server::product_host::FileRead {
+            read: crate::tools::session_files::preview::ReadOptions::Bytes { max_bytes: crate::tools::session_files::preview::FILE_BYTES, range: None },
             target: unrelated, source: crate::app_server::product_host::ReadSource::SessionFile { agent_id: None, locator: crate::observation::content::CanonicalContentLocator::ByMessageId { message_id: tool.id.clone() }, delivery_index: 0 }, roots: vec![f.workspaces[1].clone()],
         }).await, ErrorData::SessionFileRead { reason: FileFailure::Unavailable });
         let mut denied = read(tool.id.clone());
@@ -396,7 +423,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
             ErrorData::InvalidState
         );
         phases.enter("mutable file and capacity checks");
-        std::fs::write(&path, vec![b'x'; 300 * 1024]).unwrap();
+        std::fs::write(&path, vec![b'x'; 2 * 1024 * 1024 + 127]).unwrap();
         let MethodResult::SessionFileBytes { data, .. } =
             product_host.success( read(tool.id.clone())).await
         else {
@@ -407,7 +434,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
                 .decode(data)
                 .unwrap()
                 .len(),
-            300 * 1024
+            2 * 1024 * 1024 + 127
         );
         let permits = f.host.file_reads();
         let one = permits.clone().acquire_owned().await.unwrap();
@@ -426,7 +453,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
         );
         std::fs::write(
             &path,
-            vec![b'x'; crate::tools::session_files::SESSION_FILE_MAX_BYTES + 1],
+            vec![b'x'; crate::tools::session_files::preview::FILE_BYTES + 1],
         )
         .unwrap();
         assert_eq!(

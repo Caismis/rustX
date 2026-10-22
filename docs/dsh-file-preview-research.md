@@ -114,11 +114,13 @@ Its [Session reader](../src/tools/session_files.rs),
 the current policy. The cached `origin/main` at `832b9e54` also retains the
 512 KiB browser read and text-render constants.
 
-Recommended design direction:
+Implemented loading direction:
 
-1. Separate text-page, byte-window, complete-file and conversion budgets. Use
-   DSH's 5,000-line/2 MiB page and 32 MiB complete-file defaults as reference
-   values for validation, not as already-approved rustX requirements.
+1. Separate text-page, byte-window, complete-file and conversion budgets.
+   Adopt DSH's 5,000-line/2 MiB pages, 32 MiB complete files, 16 MiB browser
+   spreadsheet inputs, and 50 MiB Office inputs with 100 MiB PDF outputs.
+   The current ownership and budgets are specified in [file delivery](file-delivery.md)
+   and [document previews](document-previews.md).
 2. Give text, Markdown and code a paged loading contract with source identity,
    version, next offset and EOF. Define browser retention independently; DSH's
    growing prefix alone is not a total-memory guarantee. Preserve literal text

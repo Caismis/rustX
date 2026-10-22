@@ -10,8 +10,8 @@ import { WorkspaceHostError, type ProductHostWorkspaces } from '../src/workspace
 import type { DocumentRequest } from '../shared/documents';
 function gate<T = void>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
 const scope = { authorityId: 'host', endpoint: 'ws://127.0.0.1:7777' };
-const request: DocumentRequest = { target: { session_id: 's', conversation_id: 'c', attachment_id: 'a', runtime_incarnation: 'r' }, source: { kind: 'artifact', artifact_id: 'a' }, extension: 'docx', digest: 'a'.repeat(64) };
-const result = { digest: request.digest, preview: { kind: 'pdf' as const, data: 'JVBERg==' } };
+const request: DocumentRequest = { target: { session_id: 's', conversation_id: 'c', attachment_id: 'a', runtime_incarnation: 'r' }, source: { kind: 'artifact', artifact_id: 'a' }, extension: 'docx' };
+const result = { digest: 'a'.repeat(64), preview: { kind: 'pdf' as const, data: new TextEncoder().encode('%PDF') } };
 let server: Server | undefined;
 afterEach(async () => { vi.unstubAllGlobals(); if (server) { server.closeAllConnections(); await new Promise<void>(resolve => server!.close(() => resolve())); server = undefined; } });
 async function serve(previewDocument: NonNullable<ProductHostWorkspaces['previewDocument']>, readDelivery?: ProductHostWorkspaces['readDelivery']) {
@@ -28,6 +28,25 @@ async function serve(previewDocument: NonNullable<ProductHostWorkspaces['preview
   vi.stubGlobal('location', { href: origin, origin });
   return new HttpWorkspaceHost();
 }
+
+it('600 KiB file bytes cross the actual HTTP carrier as multipart without Base64 expansion', async () => {
+  const data = Uint8Array.from({ length: 600 * 1024 }, (_, index) => index % 256);
+  const file = { scope: { conversation_id: 'c', device: '1', inode: '2' }, path: 'large.bin', name: 'large.bin', mime_type: 'application/octet-stream' };
+  const host = await serve(async () => result, async () => ({ file, data, version: 'v1', bytes: data.length, offset: 0, eof: true }));
+  const fetch = globalThis.fetch;
+  let wire: Promise<ArrayBuffer> | undefined;
+  vi.stubGlobal('fetch', async (input: string, init?: RequestInit) => {
+    const response = await fetch(input, init);
+    if (input.endsWith('/file-read')) {
+      expect(response.headers.get('Content-Type')).toContain('multipart/form-data');
+      wire = response.clone().arrayBuffer();
+    }
+    return response;
+  });
+  const read = await host.readDelivery(scope, { target: request.target, locator: { type: 'by_message_id', message_id: 'delivery' }, delivery_index: 0 });
+  expect(read.data).toEqual(data);
+  expect((await wire)!.byteLength).toBeLessThan(data.length + 4096);
+});
 it.each(['before header acknowledgement', 'after header acknowledgement'] as const)('exact cancellation %s retains admission through physical Host settlement', async timing => {
   const entered = gate<AbortSignal>(), aborted = gate(), settled = gate(), headers = gate<Response>(), deliverHeaders = gate();
   const host = await serve(async (_scope, _request, signal) => {
@@ -91,7 +110,7 @@ it('two original reads keep their physical slots after abort; queued Download st
   const host = await serve(async () => result, async (_scope, _read, signal) => {
     const index = calls++; [firstEntered, secondEntered, thirdEntered][index].resolve();
     if (index === 0) signal!.addEventListener('abort', () => firstAborted.resolve(), { once: true });
-    await releases[index].promise; signal!.throwIfAborted(); return { file, data: btoa('original bytes') };
+    await releases[index].promise; signal!.throwIfAborted(); return { file, data: new TextEncoder().encode('original bytes'), bytes: 14, version: 'v1', offset: 0, eof: true };
   });
   const authority = new WorkspaceAuthority(host); await authority.observe();
   const client = { target: () => request.target, getSnapshot: () => ({ generation: 1, authorityRevision: 1, views: { s: { target: request.target } } }) } as unknown as AppServerClient;
