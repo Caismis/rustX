@@ -111,7 +111,7 @@ pub(crate) fn normalize_http_error(
     headers: &HeaderMap,
     body: &[u8],
 ) -> ModelError {
-    let (provider_code, message) = parse_error_body(body);
+    let (provider_code, provider_type, message) = parse_error_body(body);
     let message = message.unwrap_or_else(|| String::from_utf8_lossy(body).into_owned());
     let retry_after_ms = crate::model::adapter::retry::retry_after(headers);
     let kind = match status.as_u16() {
@@ -132,8 +132,14 @@ pub(crate) fn normalize_http_error(
         }
         _ => ModelErrorKind::ProviderError,
     };
-    let retry_disposition =
-        http_retry_disposition(status, provider_code.as_deref(), &message, &kind);
+    let retry_disposition = if crate::model::adapter::openai::mapping::permanently_invalid_code(
+        provider_type.as_deref(),
+    ) || is_permanent_quota(provider_type.as_deref(), "")
+    {
+        ModelRetryDisposition::Never
+    } else {
+        http_retry_disposition(status, provider_code.as_deref(), &message, &kind)
+    };
     ModelError {
         kind,
         message,
@@ -259,44 +265,31 @@ pub(crate) fn stream_retry_disposition(
     ModelRetryDisposition::Never
 }
 
-fn parse_error_body(body: &[u8]) -> (Option<String>, Option<String>) {
+fn parse_error_body(body: &[u8]) -> (Option<String>, Option<String>, Option<String>) {
     let Ok(root) = serde_json::from_slice::<serde_json::Value>(body) else {
-        return (None, None);
+        return (None, None, None);
     };
     let detail = root
         .get("error")
         .filter(|error| error.is_object())
         .unwrap_or(&root);
-    let permanent_type = detail
+    let provider_type = detail
         .get("type")
         .and_then(serde_json::Value::as_str)
-        .filter(|value| {
-            crate::model::adapter::openai::mapping::permanently_invalid_code(Some(value))
-                || is_permanent_quota(Some(value), "")
-        });
-    let provider_code = permanent_type.map(str::to_owned).or_else(|| {
-        detail
-            .get("code")
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_owned)
-            .or_else(|| {
-                detail
-                    .get("type")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned)
-            })
-            .or_else(|| {
-                detail
-                    .get("code")
-                    .and_then(serde_json::Value::as_u64)
-                    .map(|code| code.to_string())
-            })
-    });
+        .map(str::to_owned);
+    let provider_code = detail
+        .get("code")
+        .and_then(|value| match value {
+            serde_json::Value::String(value) => Some(value.clone()),
+            serde_json::Value::Number(value) => Some(value.to_string()),
+            _ => None,
+        })
+        .or_else(|| provider_type.clone());
     let message = detail
         .get("message")
         .and_then(serde_json::Value::as_str)
         .map(str::to_owned);
-    (provider_code, message)
+    (provider_code, provider_type, message)
 }
 
 /// The runtime-owned structural part of the request body sent to
@@ -1083,11 +1076,32 @@ mod tests {
                     ModelRetryDisposition::Never,
                     "{code} / {status}"
                 );
+                assert_eq!(error.provider_code.as_deref(), Some("server_error"));
             }
             assert_eq!(
                 stream_retry_disposition(Some(code), Some("rejected")),
                 ModelRetryDisposition::Never
             );
+        }
+    }
+
+    #[test]
+    fn specific_context_code_survives_a_broad_permanent_http_type() {
+        for message in ["request rejected", "请求被拒绝"] {
+            let body = serde_json::to_vec(&serde_json::json!({"error": {
+                "type": "invalid_request_error", "code": "context_length_exceeded", "message": message
+            }})).unwrap();
+            let error = normalize_http_error(
+                reqwest::StatusCode::BAD_REQUEST,
+                &reqwest::header::HeaderMap::new(),
+                &body,
+            );
+            assert_eq!(error.kind, ModelErrorKind::ContextWindowExceeded);
+            assert_eq!(
+                error.provider_code.as_deref(),
+                Some("context_length_exceeded")
+            );
+            assert_eq!(error.retry_disposition, ModelRetryDisposition::Never);
         }
     }
 

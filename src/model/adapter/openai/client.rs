@@ -73,6 +73,7 @@ pub(crate) struct HttpFailure {
     pub(crate) retry_after_ms: Option<u64>,
     pub(crate) message: String,
     pub(crate) provider_code: Option<String>,
+    pub(crate) provider_type: Option<String>,
 }
 
 impl std::fmt::Display for HttpFailure {
@@ -101,12 +102,13 @@ impl HttpFailure {
             .await
             .map(|b| b.to_vec())
             .unwrap_or_default();
-        let (message, provider_code) = parse_error_body(&body, status);
+        let (message, provider_code, provider_type) = parse_error_body(&body, status);
         Self {
             status,
             retry_after_ms,
             message,
             provider_code,
+            provider_type,
         }
     }
 }
@@ -115,9 +117,9 @@ fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<u64> {
     crate::model::adapter::retry::retry_after(headers)
 }
 
-fn parse_error_body(body: &[u8], status: StatusCode) -> (String, Option<String>) {
+fn parse_error_body(body: &[u8], status: StatusCode) -> (String, Option<String>, Option<String>) {
     let Ok(root) = serde_json::from_slice::<serde_json::Value>(body) else {
-        return (String::from_utf8_lossy(body).into_owned(), None);
+        return (String::from_utf8_lossy(body).into_owned(), None, None);
     };
     // OpenAI uses `{ "error": { ... } }`, while several compatible
     // providers return the same detail object at the top level.
@@ -139,27 +141,15 @@ fn parse_error_body(body: &[u8], status: StatusCode) -> (String, Option<String>)
             },
             str::to_owned,
         );
-    let permanent_type = detail
+    let provider_type = detail
         .get("type")
         .and_then(serde_json::Value::as_str)
-        .filter(|value| {
-            super::mapping::permanently_invalid_code(Some(value))
-                || super::mapping::is_permanent_quota(Some(value), "")
-        });
-    let provider_code = permanent_type.map(str::to_owned).or_else(|| {
-        detail
-            .get("code")
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_owned)
-            .or_else(|| {
-                detail
-                    .get("type")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned)
-            })
-            .or_else(|| detail.get("code").and_then(provider_code_value))
-    });
-    (message, provider_code)
+        .map(str::to_owned);
+    let provider_code = detail
+        .get("code")
+        .and_then(provider_code_value)
+        .or_else(|| provider_type.clone());
+    (message, provider_code, provider_type)
 }
 
 fn provider_code_value(value: &serde_json::Value) -> Option<String> {
@@ -193,7 +183,8 @@ pub(crate) fn http_failure_of(error: &OpenAIError) -> Option<&HttpFailure> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_error_body, parse_retry_after};
+    use super::{HttpFailure, parse_error_body, parse_retry_after};
+    use crate::model::error::{ModelErrorKind, ModelRetryDisposition};
     use reqwest::StatusCode;
 
     /// `Retry-After` seconds convert to milliseconds.
@@ -216,11 +207,39 @@ mod tests {
     #[test]
     fn top_level_compatible_error_body_is_preserved() {
         let body = br#"{"message":"This model's maximum context length is 116800 tokens","type":"BadRequestError","param":"input_tokens","code":400}"#;
-        let (message, provider_code) = parse_error_body(body, StatusCode::BAD_REQUEST);
+        let (message, provider_code, provider_type) =
+            parse_error_body(body, StatusCode::BAD_REQUEST);
         assert_eq!(
             message,
             "This model's maximum context length is 116800 tokens"
         );
-        assert_eq!(provider_code.as_deref(), Some("BadRequestError"));
+        assert_eq!(provider_code.as_deref(), Some("400"));
+        assert_eq!(provider_type.as_deref(), Some("BadRequestError"));
+    }
+
+    #[test]
+    fn specific_context_code_survives_a_broad_permanent_http_type() {
+        for message in ["request rejected", "请求被拒绝"] {
+            let body = serde_json::to_vec(&serde_json::json!({"error": {
+                "type": "invalid_request_error", "code": "context_length_exceeded", "message": message
+            }})).unwrap();
+            let (message, provider_code, provider_type) =
+                parse_error_body(&body, StatusCode::BAD_REQUEST);
+            let error = super::super::mapping::normalize_error(
+                async_openai::error::OpenAIError::Boxed(Box::new(HttpFailure {
+                    status: StatusCode::BAD_REQUEST,
+                    retry_after_ms: None,
+                    message,
+                    provider_code,
+                    provider_type,
+                })),
+            );
+            assert_eq!(
+                error.provider_code.as_deref(),
+                Some("context_length_exceeded")
+            );
+            assert_eq!(error.kind, ModelErrorKind::ContextWindowExceeded);
+            assert_eq!(error.retry_disposition, ModelRetryDisposition::Never);
+        }
     }
 }

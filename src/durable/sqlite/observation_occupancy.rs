@@ -109,7 +109,7 @@ pub(super) fn event(
             request_id,
             usage: Some(usage),
             ..
-        } => super::observation_request_summary::occupancy(
+        } if usage.input_tokens.is_some() => super::observation_request_summary::occupancy(
             connection,
             request_id,
             usage,
@@ -185,7 +185,7 @@ pub(super) fn read(
                      FROM events INDEXED BY events_context_reading_idx
                      WHERE json_extract(event_json,'$.event.type')=?1
                        AND (json_extract(event_json,'$.event.type')='compaction_completed'
-                            OR (COALESCE(json_type(event_json,'$.event.usage'),'null')!='null'
+                            OR (COALESCE(json_type(event_json,'$.event.usage.input_tokens'),'null')!='null'
                                 AND json_extract(event_json,'$.event.owner.type')='agent'))=1
                        AND sequence<=?2
                      ORDER BY sequence DESC LIMIT 1",
@@ -210,7 +210,7 @@ pub(super) fn read(
                  FROM events e INDEXED BY events_context_reading_idx
                  WHERE json_extract(e.event_json,'$.event.type')=?1
                    AND (json_extract(e.event_json,'$.event.type')='compaction_completed'
-                        OR (COALESCE(json_type(e.event_json,'$.event.usage'),'null')!='null'
+                        OR (COALESCE(json_type(e.event_json,'$.event.usage.input_tokens'),'null')!='null'
                             AND json_extract(e.event_json,'$.event.owner.type')='agent'))=1
                    AND e.sequence<=?2 ORDER BY e.sequence DESC LIMIT 1",
                 params![kind, through, terminal_kind],

@@ -20,7 +20,7 @@ use super::client::http_failure_of;
 /// `Retry-After` header; everything else maps by SDK variant.
 pub(crate) fn normalize_error(error: OpenAIError) -> ModelError {
     if let Some(failure) = http_failure_of(&error) {
-        return match failure.status.as_u16() {
+        let mut error = match failure.status.as_u16() {
             400 => context_or_invalid(&failure.message, failure.provider_code.as_deref()),
             401 | 403 => auth(failure),
             404 => invalid_or_unsupported(failure),
@@ -32,6 +32,14 @@ pub(crate) fn normalize_error(error: OpenAIError) -> ModelError {
             }
             _ => provider_error(failure),
         };
+        // A broad permanent type prohibits repeating the frozen request, but
+        // must not replace the specific code used by semantic recovery.
+        if permanently_invalid_code(failure.provider_type.as_deref())
+            || is_permanent_quota(failure.provider_type.as_deref(), "")
+        {
+            error.retry_disposition = ModelRetryDisposition::Never;
+        }
+        return error;
     }
     normalize_sdk_error(error)
 }
@@ -65,12 +73,11 @@ fn normalize_sdk_error(error: OpenAIError) -> ModelError {
         }
         OpenAIError::ApiError(api_error) => {
             let message = api_error.api_error.message.clone();
-            let permanent_type = api_error.api_error.r#type.as_deref().filter(|value| {
-                permanently_invalid_code(Some(value)) || is_permanent_quota(Some(value), "")
-            });
-            let provider_code = permanent_type
-                .map(str::to_owned)
-                .or_else(|| api_error.api_error.code.clone())
+            let provider_type = api_error.api_error.r#type.as_deref();
+            let provider_code = api_error
+                .api_error
+                .code
+                .clone()
                 .or_else(|| api_error.api_error.r#type.clone());
             let kind = match api_error.status_code.as_u16() {
                 400 => context_or_invalid_kind(&message, provider_code.as_deref()),
@@ -83,12 +90,18 @@ fn normalize_sdk_error(error: OpenAIError) -> ModelError {
                 }
                 _ => ModelErrorKind::ProviderError,
             };
-            let retry_disposition = sdk_status_disposition(
-                api_error.status_code.as_u16(),
-                provider_code.as_deref(),
-                &message,
-                &kind,
-            );
+            let retry_disposition = if permanently_invalid_code(provider_type)
+                || is_permanent_quota(provider_type, "")
+            {
+                ModelRetryDisposition::Never
+            } else {
+                sdk_status_disposition(
+                    api_error.status_code.as_u16(),
+                    provider_code.as_deref(),
+                    &message,
+                    &kind,
+                )
+            };
             ModelError {
                 kind,
                 message,
@@ -613,6 +626,7 @@ mod tests {
             retry_after_ms: None,
             message: message.to_owned(),
             provider_code: provider_code.map(str::to_owned),
+            provider_type: None,
         }
     }
 
@@ -691,6 +705,25 @@ mod tests {
                     super::timeout(&failure).retry_disposition,
                     ModelRetryDisposition::Never
                 );
+                let mut failure = http_failure(status, Some("server_error"), "rejected");
+                failure.provider_type = Some(code.to_owned());
+                let error =
+                    normalize_error(async_openai::error::OpenAIError::Boxed(Box::new(failure)));
+                assert_eq!(error.provider_code.as_deref(), Some("server_error"));
+                assert_eq!(error.retry_disposition, ModelRetryDisposition::Never);
+                let error = normalize_error(async_openai::error::OpenAIError::ApiError(
+                    async_openai::error::ApiErrorResponse {
+                        status_code: reqwest::StatusCode::from_u16(status).unwrap(),
+                        api_error: async_openai::error::ApiError {
+                            message: "rejected".into(),
+                            r#type: Some(code.into()),
+                            code: Some("server_error".into()),
+                            param: None,
+                        },
+                    },
+                ));
+                assert_eq!(error.provider_code.as_deref(), Some("server_error"));
+                assert_eq!(error.retry_disposition, ModelRetryDisposition::Never);
             }
             assert_eq!(
                 stream_retry_disposition(Some(code), Some("server_error"), Some(503), "rejected"),
@@ -794,6 +827,27 @@ mod tests {
         let normalized = normalize_error(error);
         assert_eq!(normalized.kind, ModelErrorKind::InvalidRequest);
         assert!(normalized.message.contains("bad builder"));
+    }
+
+    #[test]
+    fn specific_context_code_survives_a_broad_permanent_sdk_type() {
+        let normalized = normalize_error(async_openai::error::OpenAIError::ApiError(
+            async_openai::error::ApiErrorResponse {
+                status_code: reqwest::StatusCode::BAD_REQUEST,
+                api_error: async_openai::error::ApiError {
+                    message: "请求被拒绝".into(),
+                    r#type: Some("invalid_request_error".into()),
+                    code: Some("context_length_exceeded".into()),
+                    param: None,
+                },
+            },
+        ));
+        assert_eq!(normalized.kind, ModelErrorKind::ContextWindowExceeded);
+        assert_eq!(
+            normalized.provider_code.as_deref(),
+            Some("context_length_exceeded")
+        );
+        assert_eq!(normalized.retry_disposition, ModelRetryDisposition::Never);
     }
 
     #[tokio::test]

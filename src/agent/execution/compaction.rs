@@ -74,7 +74,11 @@ impl AgentExecution<'_> {
             |previous| previous.next_operation(operation_id.clone()),
         );
         if let Err(error) = budget.check_start(&self.cancellation.signal()) {
-            return Err(Self::context_failure_terminal(&error));
+            return Err(if error.kind == ContextErrorKind::Cancelled {
+                self.cancelled_terminal()
+            } else {
+                Self::context_failure_terminal(&error)
+            });
         }
         self.logical_step.compaction_budget = Some(budget.clone());
         self.emit(RuntimeEvent::CompactionStarted {

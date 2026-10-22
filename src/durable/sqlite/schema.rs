@@ -161,7 +161,9 @@ pub(super) fn validate_existing_schema(
 
 // This is an index discriminator, not a second occupancy fact. The Journal
 // continues to own the usage payload and the compaction's explicit absence.
-pub(super) const CONTEXT_READING_PREDICATE: &str = "json_extract(event_json, '$.event.type') = 'compaction_completed' OR (COALESCE(json_type(event_json, '$.event.usage'), 'null') != 'null' AND json_extract(event_json, '$.event.owner.type') = 'agent')";
+// A primary terminal qualifies only with an actual input measurement, including
+// zero. Output-only Usage must preserve the previous reading before LIMIT.
+pub(super) const CONTEXT_READING_PREDICATE: &str = "json_extract(event_json, '$.event.type') = 'compaction_completed' OR (COALESCE(json_type(event_json, '$.event.usage.input_tokens'), 'null') != 'null' AND json_extract(event_json, '$.event.owner.type') = 'agent')";
 
 #[derive(Clone, Copy)]
 pub(super) enum PrimaryRequestFactKind {
@@ -415,7 +417,7 @@ pub(super) const PRESENTATION_INDEXES: &[(&str, &str)] = &[
     ),
     (
         "events_context_reading_idx",
-        "json_extract(event_json, '$.event.type'), (json_extract(event_json, '$.event.type') = 'compaction_completed' OR (COALESCE(json_type(event_json, '$.event.usage'), 'null') != 'null' AND json_extract(event_json, '$.event.owner.type') = 'agent')), sequence",
+        "json_extract(event_json, '$.event.type'), (json_extract(event_json, '$.event.type') = 'compaction_completed' OR (COALESCE(json_type(event_json, '$.event.usage.input_tokens'), 'null') != 'null' AND json_extract(event_json, '$.event.owner.type') = 'agent')), sequence",
     ),
     (
         "events_message_id_kind_idx",

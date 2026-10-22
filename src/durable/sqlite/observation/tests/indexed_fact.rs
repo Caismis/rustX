@@ -294,7 +294,9 @@ fn indexed_occupancy_propagates_missing_and_corrupt_evidence() {
         )
         .unwrap();
     assert!(crate::context::occupancy::read(&store, event.sequence).is_err());
-    store.lock().unwrap().execute("UPDATE events SET event_json=json_set(event_json, '$.event.usage', 'corrupt') WHERE sequence=?1", [event.sequence]).unwrap();
+    // Keep this a selected input reading; malformed measurement data must
+    // still fail rather than being mistaken for a valid output-only report.
+    store.lock().unwrap().execute("UPDATE events SET event_json=json_set(event_json, '$.event.usage.input_tokens', 'corrupt') WHERE sequence=?1", [event.sequence]).unwrap();
     assert!(crate::context::occupancy::read(&store, event.sequence).is_err());
     store
         .lock()
