@@ -36,6 +36,42 @@ it('a late comparison never appears under another file after a rapid switch',asy
   } finally {server.client.disconnect();}
 });
 
+it('replaced ownership restarts a pending comparison even for the same file identity',async()=>{
+  const {server,source}=await sourceFixture();
+  let firstCurrent=true;
+  try {
+    server.held.add('conversation/changeDiff');
+    const request={client:server.client,target:source.target,attemptId:'attempt-1',summary,index:0,owned:()=>firstCurrent};
+    const ui=render(<ChangeComparison request={request} index={0}/>);
+    const first=await server.waitFor('conversation/changeDiff',1);
+    firstCurrent=false;
+    ui.rerender(<ChangeComparison request={{...request,owned:()=>true}} index={0}/>);
+    const second=await server.waitFor('conversation/changeDiff',2);
+    const comparison=(text:string)=>({type:'workspace_change_diff' as const,comparison:{hunks:[{old_start:1,new_start:1,old_text:'old\n',new_text:text}],binary:false,oversized:false,truncated:false}});
+    await act(async()=>server.socket.success(second,comparison('current owner\n')));
+    await act(async()=>server.socket.success(first,comparison('retired owner\n')));
+    expect(ui.getByText('current owner')).toBeTruthy();
+    expect(ui.queryByText('retired owner')).toBeNull();
+  } finally {server.client.disconnect();}
+});
+
+it('replacing the chat owner restarts an unresolved summary under the same attachment',async()=>{
+  const {server,source}=await sourceFixture();
+  let firstCurrent=true;
+  try {
+    server.held.add('conversation/changes');
+    const firstSource={...source,owned:()=>firstCurrent};
+    const ui=render(<JournalSourceProvider source={firstSource}><TurnChanges attemptId="attempt-1" conversationId="conversation-A"/></JournalSourceProvider>);
+    const first=await server.waitFor('conversation/changes',1);
+    firstCurrent=false;
+    ui.rerender(<JournalSourceProvider source={{...source,owned:()=>true}}><TurnChanges attemptId="attempt-1" conversationId="conversation-A"/></JournalSourceProvider>);
+    const second=await server.waitFor('conversation/changes',2);
+    await act(async()=>server.socket.success(second,{type:'workspace_changes',summary}));
+    await act(async()=>server.socket.success(first,{type:'workspace_changes',summary:null}));
+    expect(ui.getByText('Edited 6 files')).toBeTruthy();
+  } finally {server.client.disconnect();}
+});
+
 it('renders native counts, folds at four files, opens the exact file and reads no comparison before hover',async()=>{
   const {server,source}=await sourceFixture(),open=vi.fn();
   try {
@@ -47,6 +83,24 @@ it('renders native counts, folds at four files, opens the exact file and reads n
     fireEvent.click(ui.getByRole('button',{name:'View changes to file-5.ts'}));
     expect(open).toHaveBeenCalledWith(expect.objectContaining({attemptId:'attempt-1',index:5,target:source.target,summary}));
     expect(server.requests.some(row=>row.request.method==='conversation/changeDiff')).toBe(false);
+  } finally {server.client.disconnect();}
+});
+
+it('sidebar comparisons outlive a retired chat view but stop with the original attachment',async()=>{
+  const {server,source}=await sourceFixture(),open=vi.fn();
+  let chatCurrent=true;
+  source.owned=()=>chatCurrent;
+  server.handlers.set('conversation/changeDiff',()=>({type:'workspace_change_diff',comparison:{hunks:[{old_start:1,new_start:1,old_text:'old\n',new_text:'still available\n'}],binary:false,oversized:false,truncated:false}}));
+  try {
+    const chat=render(<JournalSourceProvider source={source}><ChangesReviewContext value={open}><TurnChanges attemptId="attempt-1" conversationId="conversation-A"/></ChangesReviewContext></JournalSourceProvider>);
+    await chat.findByText('Edited 6 files');
+    fireEvent.click(chat.getByRole('button',{name:'View changes to file-0.ts'}));
+    const request=open.mock.calls[0][0];
+    chatCurrent=false;chat.unmount();
+    const sidebar=render(<ChangeComparison request={request} index={0}/>);
+    await sidebar.findByText('still available');
+    await act(async()=>server.client.release('A'));
+    expect(sidebar.getByText('Changes from this turn are no longer available.')).toBeTruthy();
   } finally {server.client.disconnect();}
 });
 

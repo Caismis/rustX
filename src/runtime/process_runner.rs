@@ -1,5 +1,5 @@
 //! The internal supervised command runner shared by native Bash and Skill
-//! environment materialization.
+//! environment materialization and workspace-change Git snapshots.
 //!
 //! This module owns the rustX-side lifecycle of one **owned supervised
 //! command**: the spawn of the per-invocation supervisor unit (the
@@ -53,8 +53,8 @@
 //!   owns this path in one detached invocation-driver task, so its returned
 //!   result waiter can be dropped without dropping the physical owner.
 //!
-//! The module implements no generic process-management framework beyond
-//! these two real consumers.
+//! Git snapshots, like Bash, capture their own bounded streams while this
+//! runner owns termination and reaping, including Git filter descendants.
 //!
 //! # Test seams
 //!

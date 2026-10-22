@@ -18,7 +18,7 @@ export function ChangeComparison({request,index,visible=true,preview=false}: {re
     void request.client.request({method:'conversation/changeDiff',params:{target:request.target,attempt_id:request.attemptId,index}},'workspace_change_diff',undefined,owned)
       .then(value=>{if(owned())setRead({identity,comparison:value.comparison});},()=>{if(owned())setRead({identity,error:true});});
     return()=>{live=false;};
-  },[request.client,identity,current,visible,retry]);
+  },[request.client,request.owned,identity,current,visible,retry]);
   const comparison=state.comparison, file=request.summary.files[index];
   if(!current)return <p>{tx('artifacts:changes.missing')}</p>;
   return <div className={css.comparison} data-change-comparison>

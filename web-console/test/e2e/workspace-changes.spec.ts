@@ -33,6 +33,17 @@ for(const width of [1440,390])test(`completed turn changes and sampled back-to-b
   await expectStableScreenshot(review,`turn-changes-review-${width}.png`);
   await review.getByRole('combobox').selectOption('4');
   await expect(review.locator('[data-change-comparison]')).toContainText('src/file-5.ts');
+  if(width===1440) {
+    await page.getByRole('tab',{name:'Trajectory',exact:true}).click();
+    await expect(page.getByRole('tab',{name:'Trajectory',exact:true})).toHaveAttribute('aria-selected','true');
+    await review.getByRole('combobox').selectOption('2');
+    await expect(review.locator('[data-change-comparison]')).toContainText('export const enabled = true;');
+    await page.getByRole('tab',{name:'Chat',exact:true}).click();
+    await expect(page.getByLabel('Canonical conversation')).toBeVisible();
+    await review.getByRole('combobox').selectOption('0');
+    await expect(review.locator('[data-change-comparison]')).toContainText('src/file-1.ts');
+    await expect(review.locator('[data-change-comparison]')).toContainText('export const enabled = true;');
+  }
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   expect(errors).toEqual([]);
 });

@@ -1,6 +1,6 @@
 //! Bounded line comparisons; raw file captures never travel through the RPC.
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use std::{borrow::Cow, time::Duration};
 
 const MAX_DIFF_BYTES: usize = 128 * 1024;
 const MAX_DIFF_LINES: usize = 2000;
@@ -60,7 +60,7 @@ impl FileContents {
         let after = normalize(after);
         let diff = similar::TextDiff::configure()
             .timeout(Duration::from_millis(100))
-            .diff_lines(before, after);
+            .diff_lines(before.as_ref(), after.as_ref());
         let mut added = 0;
         let mut deleted = 0;
         for change in diff.iter_all_changes() {
@@ -82,9 +82,11 @@ impl FileContents {
         let (Some(before), Some(after)) = (&self.old_text, &self.new_text) else {
             return result;
         };
+        let before = normalize(before);
+        let after = normalize(after);
         let diff = similar::TextDiff::configure()
             .timeout(Duration::from_millis(100))
-            .diff_lines(before.as_str(), after.as_str());
+            .diff_lines(before.as_ref(), after.as_ref());
         let mut bytes = 0;
         let mut lines = 0;
         for group in diff.grouped_ops(3) {
@@ -127,13 +129,34 @@ impl FileContents {
     }
 }
 
-fn normalize(text: &str) -> &str {
-    text.strip_suffix('\n').unwrap_or(text)
+fn normalize(text: &str) -> Cow<'_, str> {
+    if text.is_empty() || text.ends_with('\n') {
+        Cow::Borrowed(text)
+    } else {
+        Cow::Owned(format!("{text}\n"))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn appends_and_empty_lines_use_content_lines_without_changing_the_last_line() {
+        for (before, after, counts) in [
+            ("a\nb\n", "a\nb\nc\n", (1, 0)),
+            ("abc\n", "abc\n\n", (1, 0)),
+            ("\n", "", (0, 1)),
+            ("abc", "abc\n", (0, 0)),
+        ] {
+            let contents = FileContents::from_bytes(
+                Some(before.as_bytes().to_vec()),
+                Some(after.as_bytes().to_vec()),
+            );
+            assert_eq!(contents.counts(), counts);
+            let diff = contents.comparison();
+            assert_eq!(diff.hunks.is_empty(), counts == (0, 0));
+        }
+    }
     #[test]
     fn large_files_send_only_changed_regions_and_replacements_remain_wire_bounded() {
         use std::fmt::Write;

@@ -23,6 +23,20 @@ child-agent edits. Unchanged endpoints produce no card. Records and comparisons
 last only as long as their native runtime, matching the reference's refusal to
 display a card whose source no longer exists.
 
+Recorder coverage follows the reference's real-index tracking and ignore rules:
+captures only supplement ignored/external files, exclude nested repositories,
+and never duplicate Git renames or resurrect edits restored to the baseline.
+Each snapshot seeds its private index from the current real index. Captured text
+adds a missing final LF before line comparison, preserving empty-file changes.
+Nonregular endpoints are skipped without losing other changes. Unused/cancelled
+baselines abort promptly; bounded Git commands reuse rustX's existing supervised
+process owner so cancellation also settles clean-filter descendants.
+
+Sidebar review belongs to the original native attachment rather than the Chat
+view instance. Switching between Chat and Trajectory preserves its authority;
+releasing that attachment still makes the record unavailable. Replaced content
+owners restart pending reads and reject stale replies.
+
 Native limits are 500 displayed files, 2 MiB per captured/read file side,
 100ms line comparison, and 30 seconds per bounded Git child. To fit rustX's
 1 MiB wire envelope, summaries additionally cap metadata at 96 KiB, and

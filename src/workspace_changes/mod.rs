@@ -1,6 +1,7 @@
 //! Actual per-attempt workspace changes. Private snapshots and file captures live
 //! with the runtime, never enter model input, and never mutate the user's index.
 mod capture;
+mod command;
 mod comparison;
 use comparison::FileContents;
 pub use comparison::{ComparisonHunk, FileComparison};
@@ -109,7 +110,7 @@ struct Baseline {
     repository: Repository,
     tree: String,
 }
-type BaselineTask = tokio::task::JoinHandle<Result<Option<Baseline>, String>>;
+type BaselineTask = tokio_util::task::AbortOnDropHandle<Result<Option<Baseline>, String>>;
 
 /// Attempt-bound file capture authority, shared only with foreground file tools.
 pub(crate) struct ChangeRecording {
@@ -141,13 +142,13 @@ impl ChangeRecording {
         };
         let root = cwd.clone();
         let scratch = Arc::clone(&directory);
-        let task = tokio::spawn(async move {
+        let task = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
             let Some(repository) = Repository::locate(&root, scratch.path()).await? else {
                 return Ok(None);
             };
             let tree = repository.snapshot().await?;
             Ok(Some(Baseline { repository, tree }))
-        });
+        }));
         Some(Arc::new(Self {
             attempt,
             cwd,
@@ -162,8 +163,8 @@ impl ChangeRecording {
     }
 
     pub(crate) async fn before_tools(&self) {
-        self.used.store(true, Ordering::Relaxed);
         self.ready().await;
+        self.used.store(true, Ordering::Relaxed);
     }
 
     async fn ready(&self) {
@@ -202,9 +203,10 @@ impl ChangeRecording {
             return;
         }
         match Capture::read(path, self.directory.path()) {
-            Ok(capture) => {
+            Ok(Some(capture)) => {
                 captures.insert(path.to_owned(), capture);
             }
+            Ok(None) => {}
             Err(error) => {
                 tracing::warn!(%error, path=%path.display(), "workspace file capture unavailable");
             }
@@ -214,8 +216,14 @@ impl ChangeRecording {
     /// Record before publishing the Attempt terminal, so its first settled
     /// client observation can already read a complete card.
     pub(crate) async fn finish(&self) {
+        if !self.used.load(Ordering::Relaxed) {
+            // A plain reply or cancellation before tools needs no endpoint.
+            // Dropping the owned task aborts its bounded Git child as well.
+            self.task.lock().await.take();
+            return;
+        }
         self.ready().await;
-        if !self.used.load(Ordering::Relaxed) || self.failed.load(Ordering::Relaxed) {
+        if self.failed.load(Ordering::Relaxed) {
             return;
         }
         if let Err(error) = self.record().await {
@@ -258,7 +266,13 @@ impl ChangeRecording {
             trees = Some((before, after));
             repository = Some(repo);
         }
-        let captures = self.captures.lock().expect("workspace captures").clone();
+        let mut captures = self.captures.lock().expect("workspace captures").clone();
+        if let Some(repo) = &repository {
+            let uncovered = repo
+                .uncovered(&captures.keys().cloned().collect::<Vec<_>>())
+                .await?;
+            captures.retain(|path, _| uncovered.contains(path));
+        }
         let cwd = self.cwd.clone();
         let directory = Arc::clone(&self.directory);
         let repository_root = repository.as_ref().map(|repo| repo.root.clone());
@@ -322,15 +336,14 @@ fn capture_endpoints(
         if files.contains_key(&display) {
             continue;
         }
-        let after = Capture::read(path, directory)?;
+        let Some(after) = Capture::read(path, directory)? else {
+            continue;
+        };
         if before == &after && *before != Capture::Oversized {
             continue;
         }
         let comparison = FileContents::from_bytes(before.bytes()?, after.bytes()?);
         let (added, deleted) = comparison.counts();
-        if !comparison.binary && !comparison.oversized && added == 0 && deleted == 0 {
-            continue;
-        }
         files.insert(
             display.clone(),
             (

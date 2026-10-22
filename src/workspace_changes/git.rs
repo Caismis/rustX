@@ -1,20 +1,17 @@
 //! Git snapshots use a private index and object directory. The repository is read-only.
 use super::capture::MAX_FILE_BYTES;
+use crate::runtime::{cancellation::CancellationSignal, process_runner::SupervisedCommandSpec};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
-    process::Stdio,
     time::Duration,
-};
-use tokio::{
-    io::{AsyncRead, AsyncReadExt},
-    process::Command,
 };
 
 pub(super) struct Repository {
     pub root: PathBuf,
     scratch: PathBuf,
     objects: PathBuf,
+    index: PathBuf,
 }
 
 pub(super) struct Change {
@@ -25,17 +22,8 @@ pub(super) struct Change {
     pub binary: bool,
 }
 
-async fn limited(reader: impl AsyncRead + Unpin, limit: usize) -> Result<Vec<u8>, String> {
-    let mut bytes = Vec::new();
-    reader
-        .take(limit as u64 + 1)
-        .read_to_end(&mut bytes)
-        .await
-        .map_err(|error| error.to_string())?;
-    if bytes.len() > limit {
-        return Err("Git output exceeded its limit".into());
-    }
-    Ok(bytes)
+fn quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 async fn run(
@@ -43,62 +31,84 @@ async fn run(
     args: &[&str],
     repository: Option<&Repository>,
     limit: usize,
+    input: Option<&[u8]>,
 ) -> Result<(i32, Vec<u8>), String> {
-    let mut command = Command::new("git");
-    command
-        .current_dir(cwd)
-        .args([
-            "-c",
-            "core.fsmonitor=false",
-            "-c",
-            "core.splitIndex=false",
-            "-c",
-            "core.untrackedCache=false",
-        ])
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    for (key, _) in std::env::vars_os() {
-        if key.to_string_lossy().starts_with("GIT_") {
-            command.env_remove(key);
+    let invocation = [
+        "git",
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "core.splitIndex=false",
+        "-c",
+        "core.untrackedCache=false",
+    ]
+    .into_iter()
+    .chain(args.iter().copied())
+    .map(quote)
+    .collect::<Vec<_>>()
+    .join(" ");
+    // printf is a shell builtin; both it and Git remain inside the existing
+    // supervised group. Its format is constant and every path is quoted data.
+    let command = match input {
+        Some(input) => {
+            let paths = std::str::from_utf8(input)
+                .map_err(|error| error.to_string())?
+                .split_terminator('\0')
+                .map(quote)
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!("printf '%s\\0' {paths} | exec {invocation}")
         }
-    }
-    command
-        .env("GIT_CONFIG_COUNT", "0")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .env("LC_ALL", "C");
+        None => format!("exec {invocation}"),
+    };
+    let mut environment = std::env::vars_os()
+        .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
+        .filter(|(key, _)| {
+            !key.starts_with("GIT_")
+                && !key.starts_with("BASH_FUNC_")
+                && !["BASH_ENV", "ENV", "BASHOPTS", "SHELLOPTS"].contains(&key.as_str())
+        })
+        .collect::<Vec<_>>();
+    environment.extend([
+        ("GIT_CONFIG_COUNT".into(), "0".into()),
+        ("GIT_TERMINAL_PROMPT".into(), "0".into()),
+        ("GIT_OPTIONAL_LOCKS".into(), "0".into()),
+        ("LC_ALL".into(), "C".into()),
+    ]);
     if let Some(repo) = repository {
-        command
-            .env("GIT_INDEX_FILE", repo.scratch.join("index"))
-            .env("GIT_OBJECT_DIRECTORY", repo.scratch.join("objects"))
-            .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", &repo.objects);
+        environment.extend([
+            (
+                "GIT_INDEX_FILE".into(),
+                repo.scratch.join("index").to_string_lossy().into_owned(),
+            ),
+            (
+                "GIT_OBJECT_DIRECTORY".into(),
+                repo.scratch.join("objects").to_string_lossy().into_owned(),
+            ),
+            (
+                "GIT_ALTERNATE_OBJECT_DIRECTORIES".into(),
+                repo.objects.to_string_lossy().into_owned(),
+            ),
+        ]);
     }
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(error) if repository.is_none() && error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok((128, Vec::new()));
-        }
-        Err(error) => return Err(error.to_string()),
-    };
-    let stdout = child.stdout.take().ok_or("missing Git stdout")?;
-    let stderr = child.stderr.take().ok_or("missing Git stderr")?;
-    let future = async {
-        let (stdout, stderr, status) =
-            tokio::try_join!(limited(stdout, limit), limited(stderr, 16 * 1024), async {
-                child.wait().await.map_err(|error| error.to_string())
-            })?;
-        let code = status.code().ok_or("Git was terminated")?;
-        if code != 0 && code != 1 && code != 128 {
-            return Err(String::from_utf8_lossy(&stderr).trim().to_owned());
-        }
-        Ok((code, stdout))
-    };
-    tokio::time::timeout(Duration::from_secs(30), future)
-        .await
-        .map_err(|_| "Git snapshot timed out".to_owned())?
+    let (code, stdout, stderr) = super::command::run(
+        SupervisedCommandSpec {
+            command,
+            cwd: cwd.to_owned(),
+            command_environment: environment,
+            timeout: Some(Duration::from_secs(30)),
+            cancellation: CancellationSignal::new(),
+        },
+        limit,
+    )
+    .await?;
+    if code == 127 && repository.is_none() {
+        return Ok((128, Vec::new()));
+    }
+    if ![0, 1, 128].contains(&code) {
+        return Err(String::from_utf8_lossy(&stderr).trim().to_owned());
+    }
+    Ok((code, stdout))
 }
 
 impl Repository {
@@ -116,6 +126,7 @@ impl Repository {
             ],
             None,
             64 * 1024,
+            None,
         )
         .await?;
         if status == 128 {
@@ -130,28 +141,39 @@ impl Repository {
         let index = PathBuf::from(lines.next().ok_or("missing Git index")?);
         let objects = PathBuf::from(lines.next().ok_or("missing Git objects")?);
         std::fs::create_dir_all(scratch.join("objects")).map_err(|error| error.to_string())?;
-        if index.exists() {
-            std::fs::copy(index, scratch.join("index")).map_err(|error| error.to_string())?;
-        }
         Ok(Some(Self {
             root,
             scratch: scratch.to_owned(),
             objects,
+            index,
         }))
     }
 
     pub async fn snapshot(&self) -> Result<String, String> {
+        // Each endpoint follows the current tracking state. In particular, an
+        // ignored file force-added during this turn must enter the end tree.
+        match std::fs::copy(&self.index, self.scratch.join("index")) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                match std::fs::remove_file(self.scratch.join("index")) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error.to_string()),
+                }
+            }
+            Err(error) => return Err(error.to_string()),
+        }
         let mut args = vec!["add", "--all", "--ignore-errors", "--", "."];
         let exclusion;
         if let Ok(relative) = self.scratch.strip_prefix(&self.root) {
             exclusion = format!(":(exclude,literal){}", relative.to_string_lossy());
             args.push(&exclusion);
         }
-        let (status, _) = run(&self.root, &args, Some(self), 8 * 1024 * 1024).await?;
+        let (status, _) = run(&self.root, &args, Some(self), 8 * 1024 * 1024, None).await?;
         if status != 0 && status != 1 {
             return Err("Git snapshot add failed".into());
         }
-        let (status, tree) = run(&self.root, &["write-tree"], Some(self), 1024).await?;
+        let (status, tree) = run(&self.root, &["write-tree"], Some(self), 1024, None).await?;
         if status != 0 {
             return Err("Git snapshot write failed".into());
         }
@@ -180,6 +202,7 @@ impl Repository {
             ],
             Some(self),
             8 * 1024 * 1024,
+            None,
         )
         .await?;
         if status != 0 {
@@ -202,6 +225,7 @@ impl Repository {
             ],
             Some(self),
             64 * 1024,
+            None,
         )
         .await?;
         if status != 0 {
@@ -231,12 +255,96 @@ impl Repository {
             &["cat-file", "blob", &object],
             Some(self),
             MAX_FILE_BYTES,
+            None,
         )
         .await?;
         if status != 0 {
             return Err("Git file comparison unavailable".into());
         }
         Ok(Some(bytes))
+    }
+
+    /// Git already owns all ordinary work-tree paths, including paths with no
+    /// net diff. Only ignored files and paths outside this repository need
+    /// first-mutation captures. Nested repository contents stay with their owner.
+    pub async fn uncovered(&self, paths: &[PathBuf]) -> Result<BTreeSet<PathBuf>, String> {
+        let mut uncovered = paths
+            .iter()
+            .filter(|path| !path.starts_with(&self.root))
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let inside = paths
+            .iter()
+            .filter(|path| path.starts_with(&self.root))
+            .collect::<Vec<_>>();
+        if inside.is_empty() {
+            return Ok(uncovered);
+        }
+        let (status, entries) = run(
+            &self.root,
+            &["ls-files", "-z", "--stage"],
+            None,
+            8 * 1024 * 1024,
+            None,
+        )
+        .await?;
+        if status != 0 {
+            return Err("Git nested repository discovery failed".into());
+        }
+        let entries = String::from_utf8(entries).map_err(|error| error.to_string())?;
+        let links = entries
+            .split_terminator('\0')
+            .filter(|entry| entry.starts_with("160000 "))
+            .filter_map(|entry| entry.split_once('\t').map(|(_, path)| self.root.join(path)))
+            .collect::<Vec<_>>();
+        let mut paths = Vec::new();
+        for path in inside {
+            if links.iter().any(|link| path.starts_with(link)) {
+                continue;
+            }
+            let relative = path
+                .strip_prefix(&self.root)
+                .map_err(|error| error.to_string())?;
+            paths.push(relative.to_string_lossy().into_owned());
+        }
+        uncovered.extend(self.ignored(&paths).await?);
+        Ok(uncovered)
+    }
+
+    async fn ignored(&self, mut paths: &[String]) -> Result<BTreeSet<PathBuf>, String> {
+        let mut ignored_paths = BTreeSet::new();
+        while !paths.is_empty() {
+            // Bound the quoted shell argv even for unusually long paths.
+            let mut bytes = 0;
+            let end = paths
+                .iter()
+                .take_while(|path| {
+                    bytes += path.len() + 1;
+                    bytes <= 16 * 1024
+                })
+                .count()
+                .max(1);
+            let input = paths[..end].join("\0") + "\0";
+            let (status, ignored) = run(
+                &self.root,
+                &["check-ignore", "-z", "--stdin"],
+                None,
+                8 * 1024 * 1024,
+                Some(input.as_bytes()),
+            )
+            .await?;
+            if status != 0 && status != 1 {
+                return Err("Git ignored file discovery failed".into());
+            }
+            let ignored = String::from_utf8(ignored).map_err(|error| error.to_string())?;
+            ignored_paths.extend(
+                ignored
+                    .split_terminator('\0')
+                    .map(|path| self.root.join(path)),
+            );
+            paths = &paths[end..];
+        }
+        Ok(ignored_paths)
     }
 }
 

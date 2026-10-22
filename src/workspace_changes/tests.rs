@@ -259,3 +259,289 @@ async fn a_failed_repository_baseline_never_becomes_a_capture_only_record() {
     record.finish().await;
     assert!(store.summary(&AttemptId::new("failed")).is_none());
 }
+
+#[tokio::test]
+async fn review_git_endpoints_win_over_intermediate_file_tool_captures() {
+    let dir = repository();
+    let root = dir.path();
+    let store = Arc::default();
+    let path = root.join("tracked.txt");
+    let record = start(root, &store, "restored");
+    record.before_tools().await;
+    fs::write(&path, "shell intermediate\n").unwrap();
+    record.capture(&path);
+    fs::write(&path, "one\ntwo\n").unwrap();
+    record.finish().await;
+    assert!(store.summary(&AttemptId::new("restored")).is_none());
+
+    let shared = "shared\n".repeat(10);
+    fs::write(&path, format!("{shared}old\n")).unwrap();
+    let record = start(root, &store, "renamed");
+    record.before_tools().await;
+    record.capture(&path);
+    fs::write(&path, format!("{shared}changed\n")).unwrap();
+    fs::rename(&path, root.join("renamed.txt")).unwrap();
+    record.finish().await;
+    let summary = store.summary(&AttemptId::new("renamed")).unwrap();
+    assert_eq!(summary.total, 1, "a rename must not add a second deletion");
+    assert_eq!(summary.files[0].display, "renamed.txt");
+}
+
+#[tokio::test]
+async fn review_empty_file_and_newline_changes_survive_zero_line_counts() {
+    for git_workspace in [false, true] {
+        let dir = if git_workspace {
+            repository()
+        } else {
+            tempfile::tempdir().unwrap()
+        };
+        let root = dir.path();
+        if git_workspace {
+            fs::write(root.join(".gitignore"), "captured.txt\n").unwrap();
+        }
+        let store = Arc::default();
+        let path = root.join("captured.txt");
+        for (id, before, after) in [
+            ("create", None, Some("")),
+            ("delete", Some(""), None),
+            ("newline", Some("text"), Some("text\n")),
+        ] {
+            if let Some(before) = before {
+                fs::write(&path, before).unwrap();
+            }
+            let record = start(root, &store, id);
+            record.before_tools().await;
+            record.capture(&path);
+            match after {
+                Some(after) => fs::write(&path, after).unwrap(),
+                None => fs::remove_file(&path).unwrap(),
+            }
+            record.finish().await;
+            let summary = store.summary(&AttemptId::new(id)).unwrap();
+            assert_eq!(summary.total, 1, "{id}, Git={git_workspace}");
+            assert_eq!((summary.added, summary.deleted), (0, 0));
+        }
+    }
+}
+
+#[tokio::test]
+async fn review_nested_repository_contents_do_not_leak_into_parent_changes() {
+    let dir = repository();
+    let nested = dir.path().join("nested");
+    fs::create_dir(&nested).unwrap();
+    git(&nested, &["init", "-q"]);
+    let path = nested.join("nested.txt");
+    fs::write(&path, "before\n").unwrap();
+    git(&nested, &["add", "."]);
+    git(
+        &nested,
+        &[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "initial nested",
+        ],
+    );
+    let store = Arc::default();
+    for staged in [false, true] {
+        if staged {
+            git(dir.path(), &["add", "nested"]);
+        }
+        fs::write(&path, "before\n").unwrap();
+        let id = format!("nested-{staged}");
+        let record = start(dir.path(), &store, &id);
+        record.before_tools().await;
+        record.capture(&path);
+        fs::write(&path, "after\n").unwrap();
+        fs::write(dir.path().join("tracked.txt"), format!("outer-{staged}\n")).unwrap();
+        record.finish().await;
+        let summary = store.summary(&AttemptId::new(id)).unwrap();
+        assert_eq!(summary.total, 1);
+        assert_eq!(summary.files[0].display, "tracked.txt");
+    }
+}
+
+#[tokio::test]
+async fn review_each_snapshot_observes_the_current_real_index_without_mutating_it() {
+    let dir = repository();
+    let root = dir.path();
+    fs::write(root.join(".gitignore"), "*.generated\n").unwrap();
+    let store = Arc::default();
+    let record = start(root, &store, "force-added");
+    record.before_tools().await;
+    fs::write(root.join("new.generated"), "created\n").unwrap();
+    git(root, &["add", "-f", "new.generated"]);
+    let index = fs::read(root.join(".git/index")).unwrap();
+    record.finish().await;
+    let summary = store.summary(&AttemptId::new("force-added")).unwrap();
+    assert_eq!(summary.total, 1);
+    assert_eq!(summary.files[0].display, "new.generated");
+    assert_eq!((summary.added, summary.deleted), (1, 0));
+    assert_eq!(fs::read(root.join(".git/index")).unwrap(), index);
+}
+
+#[tokio::test]
+async fn review_non_regular_capture_does_not_discard_other_file_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::default();
+    let path = dir.path().join("becomes-directory");
+    let kept = dir.path().join("kept.txt");
+    fs::write(&path, "before\n").unwrap();
+    fs::write(&kept, "before\n").unwrap();
+    let record = start(dir.path(), &store, "directory");
+    record.before_tools().await;
+    record.capture(&path);
+    record.capture(&kept);
+    fs::remove_file(&path).unwrap();
+    fs::create_dir(&path).unwrap();
+    fs::write(&kept, "after\n").unwrap();
+    record.finish().await;
+    let summary = store.summary(&AttemptId::new("directory")).unwrap();
+    assert_eq!(summary.total, 1);
+    assert_eq!(summary.files[0].display, "kept.txt");
+}
+
+async fn blocked_recording(
+    cwd: &Path,
+) -> (Arc<ChangeRecording>, tokio::sync::oneshot::Receiver<()>) {
+    let record = start(cwd, &Arc::default(), "blocked");
+    let (started, waiting) = tokio::sync::oneshot::channel();
+    let (alive, dropped) = tokio::sync::oneshot::channel();
+    let task = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+        let _ = started.send(());
+        let result = std::future::pending::<Result<Option<Baseline>, String>>().await;
+        drop(alive);
+        result
+    }));
+    *record.task.lock().await = Some(task);
+    waiting.await.unwrap();
+    (record, dropped)
+}
+
+#[tokio::test]
+async fn review_unused_cancelled_and_dropped_recordings_abort_their_baseline() {
+    let dir = tempfile::tempdir().unwrap();
+    for mode in ["unused", "cancelled", "dropped"] {
+        let (record, dropped) = blocked_recording(dir.path()).await;
+        if mode == "cancelled" {
+            // Poll the real pre-tool wait, then drop it as the Agent's
+            // cancellation select does before any executor can start.
+            let wait = record.before_tools();
+            tokio::pin!(wait);
+            tokio::select! {
+                biased;
+                () = &mut wait => panic!("baseline is deliberately blocked"),
+                () = tokio::task::yield_now() => {}
+            }
+        }
+        if mode != "dropped" {
+            tokio::time::timeout(std::time::Duration::from_secs(1), record.finish())
+                .await
+                .expect("an unused baseline must not delay the terminal");
+        }
+        drop(record);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), dropped)
+                .await
+                .expect("baseline task must be aborted")
+                .is_err()
+        );
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn review_fifo_endpoints_never_block_other_file_changes() {
+    use std::os::unix::fs::OpenOptionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::default();
+    let path = dir.path().join("becomes-fifo");
+    let kept = dir.path().join("kept.txt");
+    fs::write(&path, "before\n").unwrap();
+    fs::write(&kept, "before\n").unwrap();
+    let record = start(dir.path(), &store, "fifo");
+    record.before_tools().await;
+    record.capture(&path);
+    record.capture(&kept);
+    fs::remove_file(&path).unwrap();
+    nix::unistd::mkfifo(
+        &path,
+        nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+    )
+    .unwrap();
+    fs::write(&kept, "after\n").unwrap();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(1), record.finish()).await;
+    if result.is_err() {
+        // Release an incorrectly blocking read too, so a failing regression
+        // cannot leave the test runtime waiting on its blocking worker.
+        let _ = fs::OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&path);
+    }
+    result.expect("a non-regular endpoint must not block completion");
+    let summary = store.summary(&AttemptId::new("fifo")).unwrap();
+    assert_eq!(summary.total, 1);
+    assert_eq!(summary.files[0].display, "kept.txt");
+}
+
+#[tokio::test]
+async fn review_supervised_git_treats_quoted_newline_paths_as_data() {
+    let dir = repository();
+    let root = dir.path();
+    fs::write(root.join(".gitignore"), "*.txt\n").unwrap();
+    let name = "captured'\n$(touch injected).txt";
+    let path = root.join(name);
+    fs::write(&path, "before\n").unwrap();
+    let store = Arc::default();
+    let record = start(root, &store, "quoted");
+    record.before_tools().await;
+    record.capture(&path);
+    fs::write(&path, "after\n").unwrap();
+    record.finish().await;
+    let summary = store.summary(&AttemptId::new("quoted")).unwrap();
+    assert_eq!(summary.total, 1);
+    assert_eq!(summary.files[0].display, name);
+    assert!(!root.join("injected").exists());
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn review_cancelling_a_snapshot_reaps_git_filter_descendants() {
+    use nix::{errno::Errno, sys::signal::kill, unistd::Pid};
+    let dir = repository();
+    let root = dir.path();
+    let marker = root.join("filter.pid");
+    let filter = format!("echo $$ > '{}'; exec sleep 60", marker.display());
+    git(root, &["config", "filter.review.clean", &filter]);
+    fs::write(root.join(".gitattributes"), "tracked.txt filter=review\n").unwrap();
+    fs::write(root.join("tracked.txt"), "trigger the filter\n").unwrap();
+    let record = start(root, &Arc::default(), "cancel-filter");
+    let pid = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        loop {
+            if let Ok(text) = tokio::fs::read_to_string(&marker).await
+                && let Ok(pid) = text.trim().parse::<i32>()
+            {
+                break pid;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the owned Git filter must start");
+    record.finish().await;
+    drop(record);
+    tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        loop {
+            if kill(Pid::from_raw(pid), None) == Err(Errno::ESRCH) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the supervised Git filter must be gone and reaped");
+}

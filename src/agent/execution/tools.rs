@@ -376,7 +376,11 @@ impl AgentExecution<'_> {
         preflight: Vec<PreflightOutcome>,
     ) -> Result<Vec<SettledCall>, CanonicalCommitError> {
         if let Some(changes) = &self.workspace_changes {
-            changes.before_tools().await;
+            tokio::select! {
+                biased;
+                () = self.cancellation.cancelled() => {}
+                () = changes.before_tools() => {}
+            }
         }
         // `None` is either "this composition has no Todo extension" or "the
         // list already has an open batch". Both mean the same thing to this
