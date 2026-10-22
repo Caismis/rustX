@@ -1,4 +1,4 @@
-import { edgesOf, type Block } from '../../document/model';
+import { edgesOf, nodeAt, type Block } from '../../document/model';
 import { edgePort, outputPorts } from '../../document/ports';
 
 export interface Point { readonly x: number; readonly y: number }
@@ -15,12 +15,12 @@ export function defaultLayout(block: Block): Record<string, Point> {
   const ids = Object.keys(block.nodes).sort();
   const outgoing = new Map<string, string[]>();
   for (const edge of [...edgesOf(block)].sort((a, b) => PORT_ORDER.indexOf(edgePort(a)) - PORT_ORDER.indexOf(edgePort(b)))) {
-    if (!block.nodes[edge.from] || !block.nodes[edge.to]) continue;
+    if (!nodeAt(block, edge.from) || !nodeAt(block, edge.to)) continue;
     outgoing.set(edge.from, [...outgoing.get(edge.from) ?? [], edge.to]);
   }
   const depth = new Map<string, number>();
   const order: string[] = [];
-  const queue = block.nodes[block.entry] ? [block.entry] : [];
+  const queue = nodeAt(block, block.entry) ? [block.entry] : [];
   if (queue.length) depth.set(block.entry, 0);
   while (queue.length) {
     const id = queue.shift()!;
@@ -51,7 +51,8 @@ export function layout(block: Block, stored: Readonly<Record<string, Point>> | u
 /** Where a node added after `from`'s `port` goes: one column right, offset by port. */
 export function after(block: Block, positions: Readonly<Record<string, Point>>, from: string, port: string): Point {
   const origin = positions[from] ?? { x: 0, y: 0 };
-  const ports = block.nodes[from] ? outputPorts(block.nodes[from].type) : [];
+  const source = nodeAt(block, from);
+  const ports = source ? outputPorts(source.type) : [];
   const index = Math.max(0, ports.indexOf(port as never));
   return { x: origin.x + COLUMN, y: origin.y + (index - (ports.length - 1) / 2) * ROW };
 }

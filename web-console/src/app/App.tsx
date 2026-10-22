@@ -92,7 +92,9 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   const [composerDraft] = useState(() => new ComposerDraft());
   // Browser-lifetime Workflows surface: its open file target and unsaved
   // edits survive leaving the route, and never follow conversation focus.
-  const workflows = useActorRef(workflowSurfaceMachine, { input: { ports: scope => createWorkflowPort({ client, host: () => workspaceHost, scope }) } });
+  // Each port binds the App Server and Product Host authorities current when
+  // it is created; transactions keep their port, so they are never retargeted.
+  const workflows = useActorRef(workflowSurfaceMachine, { input: { ports: scope => createWorkflowPort({ client, host: () => workspaceHost, hostAuthority: workspaceAuthority.capture(), scope }) } });
   return <AppSurface composerDraft={composerDraft} client={client} workspaceHost={workspaceHost} workspaceAuthority={workspaceAuthority} connection={connection} navigation={navigation} repairAcknowledgements={repairAcknowledgements} workflows={workflows}/>;
 }
 /** Route rendering and gestures; it owns no native admission or actor lifetime. */

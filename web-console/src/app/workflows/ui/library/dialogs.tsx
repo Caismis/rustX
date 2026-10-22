@@ -3,7 +3,8 @@ import { useSelector } from '@xstate/react';
 import { Button } from '../../../../presentation/primitives/Button';
 import { Modal } from '../../../../presentation/primitives/Modal';
 import { useTranslation } from '../../../../locale/react';
-import type { WorkflowFileSummary } from '../../../../../../protocol/app-server/v51';
+import type { WorkflowFileSummary, WorkflowLibrary } from '../../../../../../protocol/app-server/v51';
+import type { WorkflowScopePort } from '../../port';
 import type { LibraryOperation, WorkflowLibraryActor } from '../../machines/library';
 import { FailureText } from '../notices';
 import css from '../Workflows.module.css';
@@ -17,22 +18,26 @@ export function idProblem(id: string, taken: ReadonlySet<string>) {
   return undefined;
 }
 
+/** The exact scope a confirmation was opened for: its port, the listing it
+ * shows and the scope's label. */
+export interface BoundTarget { readonly port: WorkflowScopePort; readonly listing: WorkflowLibrary; readonly scopeLabel: string }
+
 export type LibraryDialog =
-  | { kind: 'create' }
-  | { kind: 'copy'; file: WorkflowFileSummary }
-  | { kind: 'delete'; file: WorkflowFileSummary };
+  | { kind: 'create'; bound: BoundTarget }
+  | { kind: 'copy'; file: WorkflowFileSummary; bound: BoundTarget }
+  | { kind: 'delete'; file: WorkflowFileSummary; bound: BoundTarget };
 
 /** One confirmation surface for one file operation. It shows the exact
  * scope and target before anything is sent, and stays open until native
  * settles the operation it sent. */
-export function LibraryDialogs({ dialog, close, library, scopeLabel }: {
-  dialog: LibraryDialog | undefined; close: () => void; library: WorkflowLibraryActor; scopeLabel: string;
+export function LibraryDialogs({ dialog, close, library }: {
+  dialog: LibraryDialog | undefined; close: () => void; library: WorkflowLibraryActor;
 }) {
   const tx = useTranslation();
   const state = useSelector(library, snapshot => ({
     operating: snapshot.matches('operating'), pending: snapshot.context.pending,
-    failure: snapshot.context.operationFailure, listing: snapshot.context.library,
-  }), (a, b) => a.operating === b.operating && a.pending === b.pending && a.failure === b.failure && a.listing === b.listing);
+    failure: snapshot.context.operationFailure,
+  }), (a, b) => a.operating === b.operating && a.pending === b.pending && a.failure === b.failure);
   const [id, setId] = useState('');
   const [description, setDescription] = useState('');
   const [sent, setSent] = useState<LibraryOperation>();
@@ -42,10 +47,11 @@ export function LibraryDialogs({ dialog, close, library, scopeLabel }: {
   // The sent operation settled without a failure: the dialog's job is done.
   const settled = !!sent && !busy && !failure;
   useEffect(() => { if (settled) close(); }, [settled, close]);
-  if (!dialog || !state.listing) return null;
-  const directory = state.listing.directory;
-  const taken = new Set(state.listing.files.flatMap(file => file.id ? [file.id] : []));
-  const submit = (operation: LibraryOperation) => { setSent(operation); library.send({ type: 'OPERATE', operation }); };
+  if (!dialog) return null;
+  const { port, listing, scopeLabel } = dialog.bound;
+  const directory = listing.directory;
+  const taken = new Set(listing.files.flatMap(file => file.id ? [file.id] : []));
+  const submit = (operation: LibraryOperation) => { setSent(operation); library.send({ type: 'OPERATE', operation, port, absent: listing.absent_revision }); };
   const dismiss = () => { if (!busy) close(); };
   const problem = dialog.kind === 'delete' ? undefined : idProblem(id, taken);
   const relative = (name: string) => `.agents/workflows/${name}.yaml`;

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import clsx from 'clsx';
 import { useTranslation } from '../../../../../locale/react';
 import type { Predicate, Value } from '../../../document/model';
+import { useFieldDraft } from './drafts';
 import { JsonField } from './fields';
 import css from '../Editor.module.css';
 
@@ -19,7 +20,7 @@ function template(kind: ValueKind): Value {
 
 /** The native value syntax: an explicit reference path, literal JSON, or a
  * constructed object or array. Nothing here is an expression language. */
-export function ValueEditor({ label, value, onChange }: { label: string; value: Value; onChange: (value: Value) => void }) {
+export function ValueEditor({ label, field, value, onChange }: { label: string; field: string; value: Value; onChange: (value: Value) => void }) {
   const tx = useTranslation();
   return <fieldset className={css.value}>
     <legend className={css.fieldLabel}>{label}</legend>
@@ -27,11 +28,11 @@ export function ValueEditor({ label, value, onChange }: { label: string; value: 
       {VALUE_KINDS.map(kind => <button key={kind} type="button" role="radio" aria-checked={value.type === kind} className={clsx(css.chip, value.type === kind && css.chipActive)}
         onClick={() => { if (value.type !== kind) onChange(template(kind)); }}>{tx(`workflows:value.${kind}`)}</button>)}
     </div>
-    {value.type === 'reference' && <PathEditor path={value.path} onChange={path => onChange({ ...value, path })} />}
-    {value.type === 'literal' && <JsonField label={tx('workflows:value.literal-json')} value={value.value} rows={3} onApply={literal => onChange({ ...value, value: literal })} />}
+    {value.type === 'reference' && <PathEditor field={`${field}.path`} path={value.path} onChange={path => onChange({ ...value, path })} />}
+    {value.type === 'literal' && <JsonField label={tx('workflows:value.literal-json')} value={value.value} rows={3} draftKey={`${field}.value`} onApply={literal => onChange({ ...value, value: literal })} />}
     {value.type === 'object' && <div className={css.nested}>
-      {Object.entries(value.fields).map(([key, field]) => <div key={key} className={css.nestedRow}>
-        <ValueEditor label={key} value={field} onChange={next => onChange({ ...value, fields: { ...value.fields, [key]: next } })} />
+      {Object.entries(value.fields).map(([key, entry]) => <div key={key} className={css.nestedRow}>
+        <ValueEditor label={key} field={`${field}.fields.${key}`} value={entry} onChange={next => onChange({ ...value, fields: { ...value.fields, [key]: next } })} />
         <button type="button" className={css.smallButton} aria-label={tx('workflows:inspector.remove', { p0: key })}
           onClick={() => onChange({ ...value, fields: Object.fromEntries(Object.entries(value.fields).filter(([name]) => name !== key)) })}>×</button>
       </div>)}
@@ -39,7 +40,7 @@ export function ValueEditor({ label, value, onChange }: { label: string; value: 
     </div>}
     {value.type === 'array' && <div className={css.nested}>
       {value.items.map((item, index) => <div key={index} className={css.nestedRow}>
-        <ValueEditor label={`[${index}]`} value={item} onChange={next => onChange({ ...value, items: value.items.map((current, at) => at === index ? next : current) })} />
+        <ValueEditor label={`[${index}]`} field={`${field}.items.${index}`} value={item} onChange={next => onChange({ ...value, items: value.items.map((current, at) => at === index ? next : current) })} />
         <button type="button" className={css.smallButton} aria-label={tx('workflows:inspector.remove', { p0: `[${index}]` })}
           onClick={() => onChange({ ...value, items: value.items.filter((_, at) => at !== index) })}>×</button>
       </div>)}
@@ -48,19 +49,19 @@ export function ValueEditor({ label, value, onChange }: { label: string; value: 
   </fieldset>;
 }
 
-/** Explicit path components; a component may itself contain any text. */
-function PathEditor({ path, onChange }: { path: readonly string[]; onChange: (path: string[]) => void }) {
+/** Explicit path components; a component may itself contain any text.
+ * A component being added is unapplied text of the field `field`. */
+function PathEditor({ field, path, onChange }: { field: string; path: readonly string[]; onChange: (path: string[]) => void }) {
   const tx = useTranslation();
-  const [draft, setDraft] = useState('');
-  const add = () => { if (draft) { onChange([...path, draft]); setDraft(''); } };
+  const adding = useFieldDraft({ key: `${field}+`, canonical: '', valid: () => true, commit: text => { onChange([...path, text]); return true; } });
   return <div className={css.path} aria-label={tx('workflows:value.path')} role="group">
     {path.map((component, index) => <span key={index} className={css.pathComponent}>
       <input className={clsx(css.input, css.mono, css.pathInput)} value={component} aria-label={`${tx('workflows:value.path')} ${index + 1}`} spellCheck={false}
         size={Math.max(4, component.length)} onChange={event => onChange(path.map((current, at) => at === index ? event.target.value : current))} />
       <button type="button" className={css.pathRemove} aria-label={tx('workflows:inspector.remove', { p0: component })} onClick={() => onChange(path.filter((_, at) => at !== index))}>×</button>
     </span>)}
-    <input className={clsx(css.input, css.mono, css.pathInput)} value={draft} placeholder="+" aria-label={tx('workflows:value.path-add')} spellCheck={false} size={6}
-      onChange={event => setDraft(event.target.value)} onBlur={add} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); add(); } }} />
+    <input className={clsx(css.input, css.mono, css.pathInput)} value={adding.text} placeholder="+" aria-label={tx('workflows:value.path-add')} spellCheck={false} size={6}
+      onChange={event => adding.change(event.target.value)} onBlur={adding.apply} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); adding.apply(); } }} />
     <small className={css.hint}>{tx('workflows:value.path-hint')}</small>
   </div>;
 }
@@ -93,7 +94,7 @@ function predicateTemplate(kind: PredicateKind, from: Predicate): Predicate {
 }
 
 /** The native predicate vocabulary; equality compares same-typed scalars. */
-export function PredicateEditor({ label, predicate, onChange }: { label: string; predicate: Predicate; onChange: (predicate: Predicate) => void }) {
+export function PredicateEditor({ label, field, predicate, onChange }: { label: string; field: string; predicate: Predicate; onChange: (predicate: Predicate) => void }) {
   const tx = useTranslation();
   return <fieldset className={css.value}>
     <legend className={css.fieldLabel}>{label}</legend>
@@ -101,15 +102,15 @@ export function PredicateEditor({ label, predicate, onChange }: { label: string;
       onChange={event => { const kind = event.target.value as PredicateKind; if (kind !== predicate.type) onChange(predicateTemplate(kind, predicate)); }}>
       {PREDICATE_KINDS.map(kind => <option key={kind} value={kind}>{tx(`workflows:predicate.${kind}`)}</option>)}
     </select>
-    {predicate.type === 'boolean' && <ValueEditor label={tx('workflows:predicate.boolean')} value={predicate.value} onChange={value => onChange({ ...predicate, value })} />}
+    {predicate.type === 'boolean' && <ValueEditor label={tx('workflows:predicate.boolean')} field={`${field}.value`} value={predicate.value} onChange={value => onChange({ ...predicate, value })} />}
     {(predicate.type === 'equal' || predicate.type === 'not_equal') && <>
-      <ValueEditor label={tx('workflows:predicate.left')} value={predicate.left} onChange={left => onChange({ ...predicate, left })} />
-      <ValueEditor label={tx('workflows:predicate.right')} value={predicate.right} onChange={right => onChange({ ...predicate, right })} />
+      <ValueEditor label={tx('workflows:predicate.left')} field={`${field}.left`} value={predicate.left} onChange={left => onChange({ ...predicate, left })} />
+      <ValueEditor label={tx('workflows:predicate.right')} field={`${field}.right`} value={predicate.right} onChange={right => onChange({ ...predicate, right })} />
     </>}
-    {predicate.type === 'not' && <div className={css.nested}><PredicateEditor label={tx('workflows:predicate.not')} predicate={predicate.predicate} onChange={inner => onChange({ ...predicate, predicate: inner })} /></div>}
+    {predicate.type === 'not' && <div className={css.nested}><PredicateEditor label={tx('workflows:predicate.not')} field={`${field}.predicate`} predicate={predicate.predicate} onChange={inner => onChange({ ...predicate, predicate: inner })} /></div>}
     {(predicate.type === 'and' || predicate.type === 'or') && <div className={css.nested}>
       {predicate.predicates.map((item, index) => <div key={index} className={css.nestedRow}>
-        <PredicateEditor label={`${index + 1}`} predicate={item} onChange={next => onChange({ ...predicate, predicates: predicate.predicates.map((current, at) => at === index ? next : current) })} />
+        <PredicateEditor label={`${index + 1}`} field={`${field}.predicates.${index}`} predicate={item} onChange={next => onChange({ ...predicate, predicates: predicate.predicates.map((current, at) => at === index ? next : current) })} />
         <button type="button" className={css.smallButton} aria-label={tx('workflows:inspector.remove', { p0: String(index + 1) })} disabled={predicate.predicates.length === 1}
           onClick={() => onChange({ ...predicate, predicates: predicate.predicates.filter((_, at) => at !== index) })}>×</button>
       </div>)}

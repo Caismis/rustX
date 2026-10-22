@@ -215,3 +215,93 @@ test('conflicts keep edits, invalid files stay preserved, and leaving asks first
     await expectStableScreenshot(page, 'workflow-editor-narrow.png');
   } finally { await fixture.stop(false); }
 });
+
+const FLOATS = `description: Floats a browser would retype.
+block:
+  input: {type: object, properties: {}, additionalProperties: false}
+  output: {type: object, properties: {values: {type: array, items: {type: number}}}, required: [values], additionalProperties: false}
+  entry: done
+  nodes:
+    done:
+      type: return
+      output: {type: object, fields: {values: {type: array, items: [{type: literal, value: 1.0}, {type: literal, value: 1.5}]}}}
+`;
+
+test('keyboard selection, node-move undo, focused-field save and the browser number contract', async ({ page }) => {
+  const fixture = await startDogfood('web_console_dogfood');
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  try {
+    await seed(fixture);
+    const floats = join(fixture.workspaceA, '.agents/workflows/floats.yaml');
+    writeFileSync(floats, FLOATS);
+    await routeWorkspaceHost(page, fixture);
+    await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token);
+    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+
+    // A natively valid file whose numbers the browser would retype (1.0
+    // becomes 1) opens read-only, located at the exact number.
+    await expect(card(page, 'floats')).toContainText('cannot preserve this number exactly');
+    await expect(card(page, 'floats')).toContainText('block.nodes.done.output.fields.values.items.0.value');
+    await card(page, 'floats').getByRole('button', { name: 'floats', exact: true }).click();
+    await expect(page.getByText('This file is preserved as is and cannot be edited here.')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Save File', exact: true })).toBeDisabled();
+    expect(readFileSync(floats, 'utf8')).toBe(FLOATS);
+    await page.getByRole('button', { name: 'Back to Workflows', exact: true }).click();
+
+    // Keyboard: focus an existing node, activate it, edit it in the inspector.
+    await card(page, 'parallel_review').getByRole('button', { name: 'parallel_review', exact: true }).click();
+    const ready = editor(page).getByLabel('Return node ready');
+    await ready.focus();
+    await page.keyboard.press('Enter');
+    const inspector = page.getByRole('complementary', { name: 'Inspector' });
+    await expect(inspector.getByLabel('Node ID')).toHaveValue('ready');
+    await inspector.getByLabel('Node ID').fill('accepted');
+    await inspector.getByLabel('Node ID').press('Enter');
+    await expect(editor(page).getByLabel('Return node accepted')).toBeVisible();
+
+    // One completed drag is one view step: Undo reverts it before the
+    // older rename, without touching the file.
+    const decision = editor(page).getByLabel('Branch node decision');
+    const start = (await decision.boundingBox())!;
+    await page.mouse.move(start.x + 40, start.y + 20);
+    await page.mouse.down();
+    await page.mouse.move(start.x + 140, start.y + 140, { steps: 8 });
+    await page.mouse.up();
+    const moved = (await decision.boundingBox())!;
+    expect(Math.round(moved.y - start.y)).toBeGreaterThan(60);
+    await page.keyboard.press('Control+z');
+    await expect.poll(async () => Math.round((await decision.boundingBox())!.y)).toBe(Math.round(start.y));
+    await expect(editor(page).getByLabel('Return node accepted')).toBeVisible();
+    await page.keyboard.press('Control+z');
+    await expect(editor(page).getByLabel('Return node ready')).toBeVisible();
+    await page.keyboard.press('Control+Shift+z');
+    await expect(editor(page).getByLabel('Return node accepted')).toBeVisible();
+    await page.keyboard.press('Control+Shift+z');
+    await expect.poll(async () => Math.round((await decision.boundingBox())!.y)).toBe(Math.round(moved.y));
+
+    // Ctrl/Cmd+S in a focused JSON field saves exactly the visible text.
+    const path = join(fixture.workspaceA, '.agents/workflows/parallel_review.yaml');
+    const original = readFileSync(path, 'utf8');
+    await page.getByRole('button', { name: 'Block settings', exact: true }).click();
+    const input = inspector.getByLabel('Input schema');
+    await input.fill('{"type": "object", "properties": {"proposal": {"type": "string"}, "rubric": {"type": "string"}}, "required": ["proposal"], "additionalProperties": false}');
+    await expect(input).toBeFocused();
+    await page.keyboard.press('Control+s');
+    await expect.poll(() => readFileSync(path, 'utf8')).toContain('rubric');
+    expect(readFileSync(path, 'utf8')).toContain('accepted');
+    await expect(page.getByRole('status').filter({ hasText: 'No unsaved changes' })).toBeVisible();
+
+    // A number the browser would round is refused in the field; nothing is
+    // written and the visible text stays protected.
+    const saved = readFileSync(path, 'utf8');
+    expect(saved).not.toBe(original);
+    await input.fill('{"type": "object", "properties": {"proposal": {"type": "string", "const": 9007199254740993}}, "additionalProperties": false}');
+    await page.keyboard.press('Control+s');
+    await expect(inspector.getByText('This number cannot be kept exactly in the browser editor', { exact: false })).toBeVisible();
+    await expect(input).toHaveValue(/9007199254740993/);
+    expect(readFileSync(path, 'utf8')).toBe(saved);
+    await page.getByRole('button', { name: 'Back to Workflows', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: 'Discard unsaved changes?' })).toBeVisible();
+    expect(errors).toEqual([]);
+  } finally { await fixture.stop(false); }
+});

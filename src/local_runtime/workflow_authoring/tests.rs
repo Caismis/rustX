@@ -163,7 +163,10 @@ fn the_same_identity_is_independently_addressable_in_every_scope() {
         assert_eq!(library.files.len(), 1, "{library:?}");
         let file = &library.files[0];
         assert_eq!(file.id, Some(id("review")));
-        assert_eq!(file.path, directory.join("review.yaml"));
+        assert_eq!(
+            library.directory.join(&file.file_name),
+            directory.join("review.yaml")
+        );
         assert_eq!(file.relative_path, ".agents/workflows/review.yaml");
         assert_eq!(file.description.as_deref(), Some(description));
         assert_eq!(file.shadows_global, shadows);
@@ -667,7 +670,7 @@ fn offline_checks_are_side_effect_free_and_keep_structure_and_dependencies_apart
             .unwrap()
     });
     assert_eq!(effects, [0; 11]);
-    let WorkflowStructure::Valid { outputs } = &report.structure else {
+    let WorkflowStructure::Valid { outputs, .. } = &report.structure else {
         panic!("valid structure: {report:?}");
     };
     assert!(outputs.contains_key("block.nodes.review"));
@@ -805,4 +808,294 @@ fn overrides_and_explicit_empty_selections_survive_a_whole_file_save() {
         *roots.read(&target, "specialized").document.unwrap(),
         original
     );
+}
+
+/// A program whose single node identity is `width` bytes of an invalid
+/// identity: below the native file bound, structurally invalid, and copied
+/// by the parser into both the diagnostic path and its detail.
+fn oversized_identity(width: usize) -> String {
+    let node = "N".repeat(width);
+    format!(
+        "description: Oversized.\nblock:\n  input: {{type: object, properties: {{}}, additionalProperties: false}}\n  output: {{type: object, properties: {{}}, additionalProperties: false}}\n  entry: {node}\n  nodes:\n    {node}:\n      type: return\n      output: {{type: literal, value: {{}}}}\n"
+    )
+}
+
+#[test]
+fn diagnostics_and_listings_stay_bounded_for_oversized_invalid_identities() {
+    let roots = Roots::new();
+    let target = workspace(&roots.a);
+    roots.create(&target, "valid", "Still listed in full.");
+    let directory = roots.a.join(".agents/workflows");
+    let yaml = oversized_identity(100_000);
+    assert!(yaml.len() > 100_000 && yaml.len() < crate::runtime::workflow::MAX_WORKFLOW_BYTES);
+    for index in 0..6 {
+        std::fs::write(directory.join(format!("big{index}.yaml")), &yaml).unwrap();
+    }
+
+    let source = roots.read(&target, "big0");
+    let diagnostic = source.diagnostic.as_ref().expect("structurally invalid");
+    assert!(source.document.is_none());
+    assert!(
+        diagnostic.path.len() <= MAX_DIAGNOSTIC_PATH_BYTES,
+        "{}",
+        diagnostic.path.len()
+    );
+    assert!(
+        diagnostic
+            .detail
+            .as_ref()
+            .is_none_or(|detail| detail.len() <= MAX_WORKFLOW_DIAGNOSTIC_BYTES)
+    );
+    // The bounded path still locates the owning block.
+    assert!(
+        "block.nodes".starts_with(&diagnostic.path) || diagnostic.path.starts_with("block"),
+        "{}",
+        diagnostic.path
+    );
+    assert!(serde_json::to_vec(&source).unwrap().len() < 16 * 1024);
+
+    let library = roots.manager.workflow_library(&target).unwrap();
+    let encoded = serde_json::to_vec(&library).unwrap();
+    assert!(encoded.len() < 64 * 1024, "{}", encoded.len());
+    assert_eq!(library.files.len(), 7);
+    for file in &library.files[..6] {
+        assert!(
+            file.diagnostic.is_some(),
+            "an invalid file stays discoverable"
+        );
+    }
+    let valid = &library.files[6];
+    assert_eq!(valid.description.as_deref(), Some("Still listed in full."));
+    assert!(valid.diagnostic.is_none());
+
+    // At the 128-file capacity every entry keeps its share, so the listing
+    // fits the App Server message bound however its entries are authored.
+    for index in 6..127 {
+        std::fs::write(
+            directory.join(format!("big{index}.yaml")),
+            oversized_identity(4_000),
+        )
+        .unwrap();
+    }
+    let library = roots.manager.workflow_library(&target).unwrap();
+    assert_eq!(library.files.len(), 128);
+    assert!(
+        serde_json::to_vec(&library).unwrap().len()
+            < crate::app_server::transport::MAX_MESSAGE_BYTES - 64 * 1024
+    );
+}
+
+#[test]
+fn one_listing_entry_is_reduced_to_its_share_without_losing_its_identity() {
+    // Control characters expand sixfold when escaped as JSON.
+    let escaped = |bytes: usize| "\u{1}".repeat(bytes);
+    let summary = WorkflowFileSummary {
+        file_name: format!("{}.yaml", "x".repeat(200)),
+        id: None,
+        relative_path: format!(".agents/workflows/{}.yaml", "x".repeat(200)),
+        revision: "sha256:0".into(),
+        byte_length: 1,
+        modified_ms: None,
+        description: Some(escaped(MAX_LISTED_DESCRIPTION_BYTES)),
+        nodes: None,
+        diagnostic: Some(WorkflowDiagnostic {
+            detail: Some(escaped(MAX_WORKFLOW_DIAGNOSTIC_BYTES)),
+            ..WorkflowDiagnostic::new(
+                escaped(MAX_DIAGNOSTIC_PATH_BYTES),
+                "workflow_language",
+                "invalid",
+            )
+        }),
+        shadows_global: false,
+    };
+    assert!(serde_json::to_vec(&summary).unwrap().len() > MAX_LISTED_ENTRY_BYTES);
+    let fitted = fit_listing_share(summary);
+    assert!(serde_json::to_vec(&fitted).unwrap().len() <= MAX_LISTED_ENTRY_BYTES);
+    let diagnostic = fitted.diagnostic.unwrap();
+    assert_eq!(diagnostic.category, "workflow_language");
+    assert!(diagnostic.detail.is_none());
+    assert_eq!(fitted.revision, "sha256:0");
+}
+
+/// `AGENT_PROGRAM` returning `{values: [...]}` constructed from the given
+/// numeric literals, under a `number` element contract.
+fn returning(literals: &[&str]) -> String {
+    let items = literals
+        .iter()
+        .map(|literal| format!("{{type: literal, value: {literal}}}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    AGENT_PROGRAM
+        .replace(
+            "output: {type: object, properties: {summary: {type: string}}, required: [summary], additionalProperties: false}\n  entry",
+            "output: {type: object, properties: {values: {type: array, items: {type: number}}}, required: [values], additionalProperties: false}\n  entry",
+        )
+        .replace(
+            "output: {type: reference, path: [review]}",
+            &format!("output: {{type: object, fields: {{values: {{type: array, items: [{items}]}}}}}}"),
+        )
+}
+
+#[test]
+fn the_browser_number_contract_holds_for_reading_checking_and_replacing() {
+    let roots = Roots::new();
+    let target = workspace(&roots.a);
+    let directory = roots.a.join(".agents/workflows");
+    // A valid native file the browser would change: it prints `1.0` as `1`,
+    // after which the constructed array no longer has one element type.
+    let floats = returning(&["1.0", "1.5"]);
+    if let Err(error) = crate::local_runtime::workflow_resources::compile_definition(
+        &id("floats"),
+        &directory.join("floats.yaml"),
+        definition(&floats),
+    ) {
+        panic!("natively valid: {error:?}\n{floats}");
+    }
+    roots.create(&target, "floats", "seed");
+    std::fs::write(directory.join("floats.yaml"), &floats).unwrap();
+    let source = roots.read(&target, "floats");
+    assert!(
+        source.document.is_none(),
+        "read-only rather than silently retyped"
+    );
+    let diagnostic = source.diagnostic.unwrap();
+    assert_eq!(diagnostic.category, "unsupported_number");
+    assert_eq!(
+        diagnostic.path,
+        "block.nodes.done.output.fields.values.items.0.value"
+    );
+    let library = roots.manager.workflow_library(&target).unwrap();
+    assert_eq!(
+        library.files[0].diagnostic.as_ref().unwrap().category,
+        "unsupported_number"
+    );
+
+    // What a browser can hold is editable: safe integers and non-integral
+    // floats, and integral floats from 1e21, which it prints in exponent form.
+    let editable = returning(&["2.5", "1.5", "-0.25", "1.0e21"]);
+    std::fs::write(directory.join("floats.yaml"), &editable).unwrap();
+    let source = roots.read(&target, "floats");
+    assert!(source.diagnostic.is_none(), "{:?}", source.diagnostic);
+    let document = source.document.unwrap();
+
+    // A candidate carrying a number the browser already changed is refused
+    // by check and by replace alike, and the file is untouched.
+    for literal in ["9007199254740992", "1.0", "-0.0"] {
+        let candidate = definition(&returning(&[literal, "1.5"]));
+        let report = roots
+            .manager
+            .check_workflow(&target, &id("floats"), candidate.clone(), None, false)
+            .unwrap();
+        let WorkflowStructure::Invalid { diagnostic } = report.structure else {
+            panic!("{literal} must be refused: {report:?}");
+        };
+        assert_eq!(diagnostic.category, "unsupported_number");
+        let refused = roots.write(
+            &target,
+            "floats",
+            &source.revision,
+            WorkflowEdit::Replace {
+                document: Box::new(candidate),
+            },
+        );
+        assert!(
+            matches!(refused, Err(SettingsError::InvalidWorkflow(ref diagnostic)) if diagnostic.category == "unsupported_number"),
+            "{refused:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(directory.join("floats.yaml")).unwrap(),
+            editable
+        );
+    }
+    roots
+        .write(
+            &target,
+            "floats",
+            &source.revision,
+            WorkflowEdit::Replace { document },
+        )
+        .expect("a browser-representable document saves");
+}
+
+#[test]
+fn a_checked_candidate_names_the_revision_its_normalized_commit_takes() {
+    let roots = Roots::new();
+    let target = workspace(&roots.a);
+    let base = roots.create(&target, "review", "seed");
+    // As a browser authors it: an ordinary edge without `port`, and no
+    // `timeout_ms`. Native writes both normalized.
+    let mut candidate: serde_json::Value = serde_json::to_value(definition(AGENT_PROGRAM)).unwrap();
+    candidate.as_object_mut().unwrap().remove("timeout_ms");
+    for edge in candidate["block"]["edges"].as_array_mut().unwrap() {
+        edge.as_object_mut().unwrap().remove("port");
+    }
+    let candidate: WorkflowDefinition = serde_json::from_value(candidate).unwrap();
+    let report = roots
+        .manager
+        .check_workflow(&target, &id("review"), candidate.clone(), None, false)
+        .unwrap();
+    let WorkflowStructure::Valid { revision, .. } = report.structure else {
+        panic!("valid: {report:?}");
+    };
+    let committed = roots
+        .write(
+            &target,
+            "review",
+            &base,
+            WorkflowEdit::Replace {
+                document: Box::new(candidate),
+            },
+        )
+        .unwrap();
+    assert_eq!(committed, revision);
+    let reread = roots.read(&target, "review");
+    assert_eq!(reread.revision, revision);
+    assert!(
+        std::fs::read_to_string(roots.a.join(".agents/workflows/review.yaml"))
+            .unwrap()
+            .contains("timeout_ms")
+    );
+
+    // A meaningful distinction is a different identity: an explicitly empty
+    // override is not an omitted one.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("examples/local-runtime/workflow-templates/.agents/workflows/specialized_agent.yaml");
+    let original: serde_json::Value =
+        serde_json::to_value(definition(&std::fs::read_to_string(path).unwrap())).unwrap();
+    let mut omitted = original.clone();
+    let mut empty = original;
+    for value in [&mut omitted, &mut empty] {
+        let nodes = value["block"]["nodes"].as_object_mut().unwrap();
+        let (_, agent) = nodes
+            .iter_mut()
+            .find(|(_, node)| node.get("override").is_some())
+            .expect("an override");
+        agent.as_object_mut().unwrap().remove("override");
+    }
+    let nodes = empty["block"]["nodes"].as_object_mut().unwrap();
+    let agent = nodes
+        .values_mut()
+        .find(|node| node["type"] == "agent")
+        .unwrap();
+    agent
+        .as_object_mut()
+        .unwrap()
+        .insert("override".into(), serde_json::json!({}));
+    let identity = |value: serde_json::Value| {
+        let report = roots
+            .manager
+            .check_workflow(
+                &target,
+                &id("specialized"),
+                serde_json::from_value(value).unwrap(),
+                None,
+                false,
+            )
+            .unwrap();
+        match report.structure {
+            WorkflowStructure::Valid { revision, .. } => revision,
+            WorkflowStructure::Invalid { diagnostic } => panic!("{diagnostic:?}"),
+        }
+    };
+    assert_ne!(identity(omitted), identity(empty));
 }

@@ -12,7 +12,8 @@ export interface SurfaceContext {
 }
 
 export type SurfaceEvent =
-  | { type: 'OPEN'; scope: WorkflowScope; id: string }
+  /** Open one listed file through the port that listed it. */
+  | { type: 'OPEN'; id: string; port: WorkflowScopePort }
   | LibraryCreated | { type: 'LIBRARY.CHANGED' }
   | { type: 'BACK' }
   | { type: 'LEAVE'; proceed: () => void }
@@ -35,10 +36,12 @@ export const workflowSurfaceMachine = setup({
     holds: ({ context }) => editorHolds(context.editor),
   },
   actions: {
-    open: assign(({ context, event, spawn }) => {
+    open: assign(({ event, spawn }) => {
       if (event.type !== 'OPEN' && event.type !== 'LIBRARY.CREATED') return {};
-      const port = context.ports(event.scope);
-      return { editor: spawn('editor', { id: 'editor', input: { port, target: { endpoint: port.endpoint, scope: event.scope, id: event.id } } }) as WorkflowEditorActor };
+      // The editor keeps the port of the listing or creation it came from:
+      // it is bound to that file's authorities for its whole lifetime.
+      const { port } = event;
+      return { editor: spawn('editor', { id: 'editor', input: { port, target: { endpoint: port.endpoint, scope: port.scope, id: event.id } } }) as WorkflowEditorActor };
     }),
     close: enqueueActions(({ context, enqueue }) => {
       if (context.editor) enqueue(stopChild(context.editor));

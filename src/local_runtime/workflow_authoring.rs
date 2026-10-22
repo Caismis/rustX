@@ -17,7 +17,9 @@ use super::configuration::UserConfigManager;
 use super::configuration::settings::{SettingsError, SourceTarget};
 use super::settings::SourceDirectory;
 use crate::runtime::resources::RuntimeResourceLoadError;
-use crate::runtime::workflow::{MAX_WORKFLOW_BYTES, WorkflowDefinition, WorkflowId};
+use crate::runtime::workflow::{
+    MAX_WORKFLOW_BYTES, MAX_WORKFLOW_DIAGNOSTIC_BYTES, WorkflowDefinition, WorkflowId,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -35,8 +37,17 @@ pub use check::{WorkflowCheckReport, WorkflowDependencies, WorkflowStructure};
 
 /// The byte bound of a description in the bounded library listing.
 pub const MAX_LISTED_DESCRIPTION_BYTES: usize = 512;
+/// The UTF-8 byte bound of a diagnostic's authored path.
+pub const MAX_DIAGNOSTIC_PATH_BYTES: usize = 512;
+/// The serialized byte share of one library entry. A scope holds at most
+/// 128 Workflow files, so a whole listing stays within 896 KiB of the 1 MiB
+/// App Server message bound however its entries are authored.
+const MAX_LISTED_ENTRY_BYTES: usize = 7 * 1024;
 /// The largest integer magnitude a browser JSON number preserves exactly.
 const MAX_EXACT_BROWSER_INTEGER: u64 = (1 << 53) - 1;
+/// The magnitude from which a browser prints an integral binary64 in
+/// exponent form, which still reads back as a native float.
+const MIN_EXPONENT_FORM: f64 = 1e21;
 
 /// One bounded native diagnostic of a Workflow file or candidate.
 ///
@@ -77,17 +88,42 @@ impl WorkflowDiagnostic {
             .filter(|path| !path.starts_with("workflows") && !path.starts_with("resources"))
             .unwrap_or("$");
         Self {
-            path: path.into(),
+            path: bounded_path(path),
             category: error.inspection.category.unwrap_or("resource").into(),
             reason: error
                 .diagnostic_reason
                 .unwrap_or("Workflow file cannot be read as one bounded regular YAML file")
                 .into(),
             correction: error.inspection.correction.map(Into::into),
-            detail: error.inspection.detail.clone(),
+            detail: error
+                .inspection
+                .detail
+                .as_deref()
+                .map(|detail| bounded(detail, MAX_WORKFLOW_DIAGNOSTIC_BYTES)),
             line: error.inspection.line,
             column: error.inspection.column,
         }
+    }
+}
+
+/// An authored path within `MAX_DIAGNOSTIC_PATH_BYTES`. A longer one (an
+/// oversized invalid identity, say) keeps its longest whole-component
+/// prefix, so it still locates the owning block; `$` when none fits.
+fn bounded_path(path: &str) -> String {
+    if path.len() <= MAX_DIAGNOSTIC_PATH_BYTES {
+        return path.into();
+    }
+    let mut end = 0;
+    for (index, _) in path.match_indices('.') {
+        if index > MAX_DIAGNOSTIC_PATH_BYTES {
+            break;
+        }
+        end = index;
+    }
+    if end == 0 {
+        "$".into()
+    } else {
+        path[..end].into()
     }
 }
 
@@ -99,7 +135,6 @@ pub struct WorkflowFileSummary {
     pub file_name: String,
     /// The native identity; absent when the filename is not a Workflow id.
     pub id: Option<WorkflowId>,
-    pub path: PathBuf,
     /// The location relative to the scope's owning directory, e.g.
     /// `.agents/workflows/<id>.yaml`.
     pub relative_path: String,
@@ -230,27 +265,72 @@ fn bounded(text: &str, limit: usize) -> String {
     text[..end].to_owned()
 }
 
-/// Whether every JSON number of the definition survives a browser JSON
-/// round trip exactly: a binary64 does, an integer beyond ±(2^53 − 1) does
-/// not.
-fn browser_representable(definition: &WorkflowDefinition) -> bool {
-    fn exact(value: &Value) -> bool {
+/// The number contract of Workflow authoring across the browser boundary.
+///
+/// Workflow documents cross the App Server as JSON, and the browser reads
+/// every JSON number as one binary64 and writes it back as the shortest
+/// decimal of that binary64. A native number is editable exactly when that
+/// round trip returns the same native number:
+///
+/// - an integer survives within ±(2^53 − 1);
+/// - a float survives unless it is integral below 1e21 (or −0.0): the
+///   browser would write `1.0` back as the integer `1`, which native types
+///   differently.
+///
+/// The first other number makes a file read-only in the editor, and a
+/// candidate carrying one is rejected, so a browser can neither receive a
+/// number it would change nor commit one it already changed.
+pub(super) fn unrepresentable_number(
+    definition: &WorkflowDefinition,
+) -> Option<WorkflowDiagnostic> {
+    fn exact(number: &serde_json::Number) -> bool {
+        if let Some(n) = number.as_u64() {
+            return n <= MAX_EXACT_BROWSER_INTEGER;
+        }
+        if let Some(n) = number.as_i64() {
+            return n.unsigned_abs() <= MAX_EXACT_BROWSER_INTEGER;
+        }
+        number.as_f64().is_some_and(|n| {
+            n.is_finite()
+                && (n.fract() != 0.0 || n.abs() >= MIN_EXPONENT_FORM)
+                && !(n == 0.0 && n.is_sign_negative())
+        })
+    }
+    fn find(value: &Value, path: &mut Vec<String>) -> bool {
         match value {
-            Value::Number(number) => number
-                .as_u64()
-                .map(|n| n <= MAX_EXACT_BROWSER_INTEGER)
-                .or_else(|| {
-                    number
-                        .as_i64()
-                        .map(|n| n.unsigned_abs() <= MAX_EXACT_BROWSER_INTEGER)
-                })
-                .unwrap_or(true),
-            Value::Array(values) => values.iter().all(exact),
-            Value::Object(fields) => fields.values().all(exact),
-            _ => true,
+            Value::Number(number) => !exact(number),
+            Value::Array(values) => values.iter().enumerate().any(|(index, value)| {
+                path.push(index.to_string());
+                let found = find(value, path);
+                if !found {
+                    path.pop();
+                }
+                found
+            }),
+            Value::Object(fields) => fields.iter().any(|(key, value)| {
+                path.push(key.clone());
+                let found = find(value, path);
+                if !found {
+                    path.pop();
+                }
+                found
+            }),
+            _ => false,
         }
     }
-    serde_json::to_value(definition).is_ok_and(|value| exact(&value))
+    let value = serde_json::to_value(definition).ok()?;
+    let mut path = Vec::new();
+    find(&value, &mut path).then(|| WorkflowDiagnostic {
+        correction: Some(
+            "use an integer within ±9007199254740991 or a non-integral number, or edit this file outside the browser editor"
+                .into(),
+        ),
+        ..WorkflowDiagnostic::new(
+            bounded_path(&path.join(".")),
+            "unsupported_number",
+            "the browser editor cannot preserve this number exactly",
+        )
+    })
 }
 
 /// Parse a present file into an editable document, or explain why not.
@@ -273,21 +353,8 @@ fn parse(
             )),
         );
     }
-    if !browser_representable(&definition) {
-        return (
-            None,
-            Some(WorkflowDiagnostic {
-                correction: Some(
-                    "edit this file outside the browser editor or use integers within ±9007199254740991"
-                        .into(),
-                ),
-                ..WorkflowDiagnostic::new(
-                    "$",
-                    "unsupported_number",
-                    "the document contains an integer the browser editor cannot preserve exactly",
-                )
-            }),
-        );
+    if let Some(diagnostic) = unrepresentable_number(&definition) {
+        return (None, Some(diagnostic));
     }
     let diagnostic = super::workflow_resources::compile_definition(id, path, definition.clone())
         .err()
@@ -300,7 +367,7 @@ fn parse(
 fn summarize(
     scope: &Scope,
     directory: &SourceDirectory,
-    path: PathBuf,
+    path: &Path,
     shadows_global: bool,
 ) -> Option<WorkflowFileSummary> {
     let name = path.file_name()?;
@@ -310,17 +377,16 @@ fn summarize(
         .and_then(OsStr::to_str)
         .and_then(|stem| WorkflowId::parse(stem).ok());
     let mut summary = WorkflowFileSummary {
-        relative_path: scope.relative(&path),
+        relative_path: scope.relative(path),
         file_name,
         id,
         revision: String::new(),
         byte_length: 0,
-        modified_ms: modified_ms(&path),
+        modified_ms: modified_ms(path),
         description: None,
         nodes: None,
         diagnostic: None,
         shadows_global,
-        path: PathBuf::new(),
     };
     let bytes = match directory.read(name) {
         Ok(Some(bytes)) => bytes,
@@ -331,12 +397,11 @@ fn summarize(
                 "resource",
                 "Workflow file cannot be read as one bounded regular file",
             ));
-            summary.path = path;
             return Some(summary);
         }
     };
     let (definition, diagnostic) = match &summary.id {
-        Some(id) => parse(id, &path, &bytes),
+        Some(id) => parse(id, path, &bytes),
         None => (
             None,
             Some(WorkflowDiagnostic {
@@ -360,8 +425,35 @@ fn summarize(
         .as_ref()
         .map(|definition| definition.block.nodes.len());
     summary.diagnostic = diagnostic;
-    summary.path = path;
-    Some(summary)
+    Some(fit_listing_share(summary))
+}
+
+/// Keep one entry within its fixed listing share. Only an entry authored
+/// to the extreme is reduced, from the least to the most locating fact: the
+/// compiler detail, then the diagnostic path, then the description. Its
+/// identity, revision and diagnostic category always remain, so an invalid
+/// file stays discoverable and never displaces another entry.
+fn fit_listing_share(mut summary: WorkflowFileSummary) -> WorkflowFileSummary {
+    let fits = |summary: &WorkflowFileSummary| {
+        serde_json::to_vec(summary).is_ok_and(|json| json.len() <= MAX_LISTED_ENTRY_BYTES)
+    };
+    if fits(&summary) {
+        return summary;
+    }
+    if let Some(diagnostic) = &mut summary.diagnostic {
+        diagnostic.detail = None;
+    }
+    if fits(&summary) {
+        return summary;
+    }
+    if let Some(diagnostic) = &mut summary.diagnostic {
+        diagnostic.path = "$".into();
+    }
+    if fits(&summary) {
+        return summary;
+    }
+    summary.description = None;
+    summary
 }
 
 impl UserConfigManager {
@@ -424,7 +516,7 @@ impl UserConfigManager {
         };
         library.files.extend(paths.into_iter().filter_map(|path| {
             let shadows_global = path.file_name().is_some_and(|name| global.contains(name));
-            summarize(&scope, &directory, path, shadows_global)
+            summarize(&scope, &directory, &path, shadows_global)
         }));
         library
             .files

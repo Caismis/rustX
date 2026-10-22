@@ -5,7 +5,7 @@ import { useTranslation } from '../../../../locale/react';
 import { IconCheckOutline14, IconCloseOutline16, IconWarningOutline16 } from '../../../../presentation/primitives/icons';
 import { disconnect } from '../../document/commands';
 import { locate, type DiagnosticLocation } from '../../document/diagnostics';
-import { blockAt, edgesOf, type BlockPath, type WorkflowDocument } from '../../document/model';
+import { blockAt, edgesOf, nodeAt, type BlockPath, type WorkflowDocument } from '../../document/model';
 import { edgePort } from '../../document/ports';
 import type { CheckResult } from '../../machines/editor';
 import { IconBlock, KindIcon } from '../icons';
@@ -28,12 +28,12 @@ export function checkState(check: CheckResult | undefined, generation: number): 
  * selected; it never reserves an empty column. */
 export function Inspector({ document, block, selection, onSelect, edit, rename, navigate, vocabulary, check, generation, rejection, checks }: {
   document: WorkflowDocument; block: BlockPath; selection: NonNullable<Selection>; onSelect: (selection: Selection) => void;
-  edit: Edit; rename: (from: string, to: string) => void; navigate: (block: BlockPath) => void; vocabulary?: WorkflowVocabulary; check?: CheckResult; generation: number;
+  edit: Edit; rename: (from: string, to: string) => boolean; navigate: (block: BlockPath) => void; vocabulary?: WorkflowVocabulary; check?: CheckResult; generation: number;
   rejection?: string; checks: ReactNode;
 }) {
   const tx = useTranslation();
   const owner = blockAt(document, block)!;
-  const node = selection.kind === 'node' ? owner.nodes[selection.id] : undefined;
+  const node = selection.kind === 'node' ? nodeAt(owner, selection.id) : undefined;
   const [tab, setTab] = useState<InspectorTab>('config');
   const nodeId = selection.kind === 'node' ? selection.id : undefined;
   useEffect(() => setTab('config'), [nodeId]);

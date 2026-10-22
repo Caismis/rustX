@@ -5,6 +5,9 @@ import type { WorkflowCheckReport, WorkflowDefinition, WorkflowEdit, WorkflowLib
 import { RpcFailure } from '../src/client/errors';
 import { WorkspaceHostError, type WorkflowCommit } from '../src/workspaces/host';
 import { addNode, renameNode, replaceNode, setWorkflow } from '../src/app/workflows/document/commands';
+import { blockAt, type BlockPath } from '../src/app/workflows/document/model';
+import { fieldKey } from '../src/app/workflows/ui/editor/forms/NodeForms';
+import { editorHolds } from '../src/app/workflows/machines/surface';
 import { sameDocument, ROOT } from '../src/app/workflows/document/model';
 import { isDirty, workflowEditorMachine } from '../src/app/workflows/machines/editor';
 import { workflowSurfaceMachine } from '../src/app/workflows/machines/surface';
@@ -27,9 +30,9 @@ function source(id: string, revision = 'sha256:base'): WorkflowSource {
 const listing = (scope: WorkflowScope, files: string[]): WorkflowLibrary => ({
   target: scope.kind === 'user' ? { kind: 'user' } : { kind: 'workspace', directory: `/${scope.workspaceId}` },
   directory: '/fixture', absent_revision: 'missing', diagnostic: null,
-  files: files.map(id => ({ file_name: `${id}.yaml`, id, path: `/fixture/${id}.yaml`, relative_path: `.agents/workflows/${id}.yaml`, revision: `sha256:${id}`, byte_length: '1', modified_ms: null, description: id, nodes: 1, diagnostic: null, shadows_global: false })),
+  files: files.map(id => ({ file_name: `${id}.yaml`, id, relative_path: `.agents/workflows/${id}.yaml`, revision: `sha256:${id}`, byte_length: '1', modified_ms: null, description: id, nodes: 1, diagnostic: null, shadows_global: false })),
 });
-const valid: WorkflowCheckReport = { structure: { status: 'valid', outputs: {} }, dependencies: { status: 'not_checked' }, explanation: null };
+const valid: WorkflowCheckReport = { structure: { status: 'valid', outputs: {}, revision: 'sha256:candidate' }, dependencies: { status: 'not_checked' }, explanation: null };
 const commit = (revision: string, reread: WorkflowCommit['reread']): WorkflowCommit => ({ acknowledgement: { revision, configuration_revision: '7' }, reread });
 
 interface Scripted {
@@ -137,6 +140,10 @@ describe('Workflow editor races', () => {
     expect(script.reads).toHaveLength(2);
     script.reads[1].result.resolve({ ...source('flow', 'sha256:landed'), document: attempted });
     await flush();
+    // Native names the revision the attempted candidate commits as.
+    expect(sameDocument(script.checks[0].document, attempted)).toBe(true);
+    script.checks[0].result.resolve({ ...valid, structure: { status: 'valid', outputs: {}, revision: 'sha256:landed' } });
+    await flush();
     const context = editor.getSnapshot().context;
     expect(context.notice).toEqual({ kind: 'reconciled' });
     expect(context.base?.revision).toBe('sha256:landed');
@@ -154,6 +161,150 @@ describe('Workflow editor races', () => {
     expect(editor.getSnapshot().context.notice).toEqual({ kind: 'not_committed' });
     editor.send({ type: 'SAVE' });
     expect(script.writes).toHaveLength(3);
+  });
+
+  it('recognizes its own native-normalized commit after a lost acknowledgement and keeps the later generation', async () => {
+    const script = scripted();
+    const editor = await readyEditor(script);
+    // Generation N omits the timeout; native writes the default explicitly
+    // and every ordinary edge with an explicit null port.
+    editor.send({ type: 'EDIT', apply: document => setWorkflow(document, { description: 'generation N', timeout_ms: undefined }) });
+    const attempted = editor.getSnapshot().context.document!;
+    expect(attempted.timeout_ms).toBeUndefined();
+    editor.send({ type: 'SAVE' });
+    editor.send({ type: 'EDIT', apply: describeAs('generation N+1') });
+    const later = editor.getSnapshot().context.document!;
+    script.writes[0].result.reject(new WorkspaceHostError('acknowledgement lost', undefined, true));
+    await flush();
+    editor.send({ type: 'RECONCILE' });
+    const normalized = { ...attempted, timeout_ms: '600000', block: { ...attempted.block, edges: (attempted.block.edges ?? []).map(edge => ({ port: null, ...edge })) } };
+    expect(sameDocument(normalized as typeof attempted, attempted)).toBe(false);
+    script.reads[1].result.resolve({ ...source('flow', 'sha256:n'), document: normalized as WorkflowSource['document'] });
+    await flush();
+    expect(sameDocument(script.checks[0].document, attempted)).toBe(true);
+    script.checks[0].result.resolve({ ...valid, structure: { status: 'valid', outputs: {}, revision: 'sha256:n' } });
+    await flush();
+    const context = editor.getSnapshot().context;
+    expect(context.notice).toEqual({ kind: 'reconciled' });
+    expect(context.base?.revision).toBe('sha256:n');
+    expect(context.receipt).toMatchObject({ revision: 'sha256:n', generation: context.generation - 1, confirmed: true });
+    expect(context.document).toBe(later);
+    expect(isDirty(context)).toBe(true);
+    expect(script.writes).toHaveLength(1);
+    // The next write is guarded by the committed revision, not the old base.
+    editor.send({ type: 'SAVE' });
+    expect(script.writes[1].expected).toBe('sha256:n');
+  });
+
+  it('reports a revision whose candidate identity differs as an external change', async () => {
+    const script = scripted();
+    const editor = await readyEditor(script);
+    editor.send({ type: 'EDIT', apply: describeAs('mine') });
+    editor.send({ type: 'SAVE' });
+    script.writes[0].result.reject(new WorkspaceHostError('acknowledgement lost', undefined, true));
+    await flush();
+    editor.send({ type: 'RECONCILE' });
+    script.reads[1].result.resolve(source('flow', 'sha256:theirs'));
+    await flush();
+    script.checks[0].result.resolve({ ...valid, structure: { status: 'valid', outputs: {}, revision: 'sha256:mine' } });
+    await flush();
+    const context = editor.getSnapshot().context;
+    expect(context.notice).toEqual({ kind: 'changed_externally', revision: 'sha256:theirs' });
+    expect(context.base?.revision).toBe('sha256:base');
+  });
+
+  it('keeps unapplied field text dirty and never writes while it cannot be applied', async () => {
+    const script = scripted();
+    const editor = await readyEditor(script);
+    editor.send({ type: 'DRAFT', key: 'block.input', draft: { text: '{ "type": ', valid: false } });
+    const context = editor.getSnapshot().context;
+    expect(isDirty(context)).toBe(true);
+    editor.send({ type: 'SAVE' });
+    editor.send({ type: 'CHECK', explain: false });
+    expect(script.writes).toHaveLength(0);
+    expect(script.checks).toHaveLength(0);
+    expect(editor.getSnapshot().context.notice).toEqual({ kind: 'pending_fields', count: 1 });
+    expect(editor.getSnapshot().context.drafts['block.input'].text).toBe('{ "type": ');
+    // Discarding is explicit; then the document is clean and saves again.
+    editor.send({ type: 'DISCARD_DRAFTS' });
+    expect(isDirty(editor.getSnapshot().context)).toBe(false);
+  });
+
+  it('guards leaving an editor whose only change is unapplied field text', async () => {
+    const script = scripted();
+    const actor = createActor(workflowSurfaceMachine, { input: { ports: () => script.port } }).start();
+    actor.send({ type: 'OPEN', id: 'flow', port: script.port });
+    script.reads[0].result.resolve(source('flow'));
+    await flush();
+    const editor = actor.getSnapshot().context.editor!;
+    editor.send({ type: 'DRAFT', key: 'block.output', draft: { text: '{}', valid: true } });
+    expect(editorHolds(editor)).toBe(true);
+    let left = false;
+    actor.send({ type: 'LEAVE', proceed: () => { left = true; } });
+    expect(actor.getSnapshot().matches('confirming')).toBe(true);
+    expect(left).toBe(false);
+  });
+
+  it('undoes only the latest edit of the branch being edited, never a same-named node elsewhere', async () => {
+    const editor = await readyEditor();
+    const quality: BlockPath = [{ node: 'reviews', branch: 'quality' }], security: BlockPath = [{ node: 'reviews', branch: 'security' }];
+    const retarget = (path: BlockPath, component: string) => (document: WorkflowDefinition) => {
+      const done = blockAt(document, path)!.nodes.done;
+      return replaceNode(document, path, 'done', { ...done, output: { type: 'reference', path: [component] } } as typeof done);
+    };
+    editor.send({ type: 'NAVIGATE', block: quality });
+    editor.send({ type: 'EDIT', apply: retarget(quality, 'quality_edit'), coalesce: fieldKey(quality, 'done', 'output') });
+    editor.send({ type: 'NAVIGATE', block: security });
+    editor.send({ type: 'EDIT', apply: retarget(security, 'security_edit'), coalesce: fieldKey(security, 'done', 'output') });
+    expect(fieldKey(quality, 'done', 'output')).not.toBe(fieldKey(security, 'done', 'output'));
+    editor.send({ type: 'UNDO' });
+    const document = editor.getSnapshot().context.document!;
+    expect(blockAt(document, quality)!.nodes.done).toMatchObject({ output: { path: ['quality_edit'] } });
+    expect(blockAt(document, security)!.nodes.done).not.toMatchObject({ output: { path: ['security_edit'] } });
+  });
+
+  it('ends a coalesced session at navigation, a selection change and a save, but not within one field session', async () => {
+    const script = scripted();
+    const editor = await readyEditor(script);
+    const key = fieldKey(ROOT, 'decision', 'condition');
+    const past = () => editor.getSnapshot().context.past.length;
+    editor.send({ type: 'EDIT', apply: describeAs('a'), coalesce: key });
+    editor.send({ type: 'EDIT', apply: describeAs('ab'), coalesce: key });
+    expect(past()).toBe(1);
+    editor.send({ type: 'BOUNDARY' });
+    editor.send({ type: 'EDIT', apply: describeAs('abc'), coalesce: key });
+    expect(past()).toBe(2);
+    editor.send({ type: 'NAVIGATE', block: ROOT });
+    editor.send({ type: 'EDIT', apply: describeAs('abcd'), coalesce: key });
+    expect(past()).toBe(3);
+    editor.send({ type: 'SAVE' });
+    editor.send({ type: 'EDIT', apply: describeAs('abcde'), coalesce: key });
+    expect(past()).toBe(4);
+  });
+
+  it('undoes a completed node move before an older semantic edit, and redoes both', async () => {
+    const script = scripted();
+    const editor = await readyEditor(script);
+    editor.send({ type: 'EDIT', apply: describeAs('semantic') });
+    const semantic = editor.getSnapshot().context.document!;
+    const before = { decision: { x: 0, y: 0 } }, after = { decision: { x: 240, y: 80 } };
+    editor.send({ type: 'MOVE', block: 'root', path: ROOT, before, after });
+    // A move is no semantic change: generation and dirtiness are unchanged.
+    const generation = editor.getSnapshot().context.generation;
+    editor.send({ type: 'UNDO' });
+    let context = editor.getSnapshot().context;
+    expect(context.document).toBe(semantic);
+    expect(context.generation).toBe(generation);
+    expect(context.view).toMatchObject({ block: 'root', positions: before });
+    editor.send({ type: 'UNDO' });
+    context = editor.getSnapshot().context;
+    expect(context.document?.description).not.toBe('semantic');
+    editor.send({ type: 'REDO' });
+    expect(editor.getSnapshot().context.document?.description).toBe('semantic');
+    editor.send({ type: 'REDO' });
+    expect(editor.getSnapshot().context.view).toMatchObject({ block: 'root', positions: after });
+    expect(script.writes).toHaveLength(0);
+    expect(script.checks).toHaveLength(0);
   });
 
   it('preserves local edits on conflict and on authorization revocation', async () => {
@@ -250,7 +401,7 @@ describe('Workflow surface and library', () => {
     expect([...scripts.values()].every(script => script.lists.length === 0)).toBe(true);
     actor.getSnapshot().context.library.send({ type: 'ACTIVATE' });
     const script = (key: string) => [...scripts].filter(([name]) => name.startsWith(`${key}#`)).map(([, value]) => value);
-    return { actor, script, library: () => actor.getSnapshot().context.library };
+    return { actor, script, library: () => actor.getSnapshot().context.library, port: ports };
   }
 
   it('drops a superseded Workspace listing and lists exactly the selected scope', async () => {
@@ -275,7 +426,7 @@ describe('Workflow surface and library', () => {
     const port = script('workspace:a')[0];
     port.lists[0].resolve(listing(scope, []));
     await flush();
-    library().send({ type: 'OPERATE', operation: { kind: 'create', id: 'fresh', description: 'Fresh' } });
+    library().send({ type: 'OPERATE', operation: { kind: 'create', id: 'fresh', description: 'Fresh' }, port: port.port, absent: 'missing' });
     expect(port.writes[0]).toMatchObject({ id: 'fresh', expected: 'missing', edit: { operation: 'create', description: 'Fresh' } });
     port.writes[0].result.resolve(commit('sha256:fresh', { status: 'observed', source: source('fresh', 'sha256:fresh') }));
     await flush();
@@ -284,8 +435,8 @@ describe('Workflow surface and library', () => {
   });
 
   it('guards unsaved edits on Back and on leaving the route, and keeps the target fixed', async () => {
-    const { actor, script } = surface();
-    actor.send({ type: 'OPEN', scope: USER_SCOPE, id: 'global_flow' });
+    const { actor, script, port: fresh } = surface();
+    actor.send({ type: 'OPEN', id: 'global_flow', port: fresh(USER_SCOPE) });
     const editor = actor.getSnapshot().context.editor!;
     const port = script('user')[1];
     port.reads[0].result.resolve(source('global_flow'));
@@ -314,10 +465,10 @@ describe('Workflow surface and library', () => {
   });
 
   it('never applies an obsolete file read to a newer editor', async () => {
-    const { actor, script } = surface();
-    actor.send({ type: 'OPEN', scope: USER_SCOPE, id: 'first' });
+    const { actor, script, port: fresh } = surface();
+    actor.send({ type: 'OPEN', id: 'first', port: fresh(USER_SCOPE) });
     actor.send({ type: 'BACK' });
-    actor.send({ type: 'OPEN', scope: USER_SCOPE, id: 'second' });
+    actor.send({ type: 'OPEN', id: 'second', port: fresh(USER_SCOPE) });
     const reading = (id: string) => script('user').find(port => port.reads[0]?.id === id)!.reads[0].result;
     reading('second').resolve(source('second', 'sha256:second'));
     reading('first').resolve(source('first', 'sha256:first'));

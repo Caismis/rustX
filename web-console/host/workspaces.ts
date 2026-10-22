@@ -391,13 +391,18 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       return { kind: operation.kind, projection };
     });
   }
-  /** Native Workflow file authoring in exactly this registered Workspace. A
-   * registration that is unknown, unavailable or changed is the typed
-   * `workspace_unavailable` refusal, never a fallback to another scope. */
-  async workflowWorkspace(id: string, endpoint: string, operation: WorkflowHostOperation): Promise<WorkflowHostResult> {
+  /** Native Workflow file authoring in exactly this registered Workspace of
+   * exactly the Product Host authority that admitted the transaction. A
+   * replaced authority is `authority_replaced` even when it reuses the
+   * registration ID; a registration that is unknown, unavailable or changed
+   * is `workspace_unavailable`. Neither falls back to another directory. */
+  async workflowWorkspace(scope: WorkspaceAuthorityScope, id: string, operation: WorkflowHostOperation): Promise<WorkflowHostResult> {
     validateWorkflowOperation(operation);
+    // Both lane resolutions, including the one immediately before native
+    // dispatch, validate the authority before mapping the registration.
     const resolve = async () => {
-      try { return (await this.resolveWorkspace(id, endpoint)).cwd; }
+      this.mutationScope(scope);
+      try { return (await this.resolveWorkspace(id, scope.endpoint)).cwd; }
       catch (cause) { throw new WorkspaceHostError(cause instanceof Error ? cause.message : String(cause), 'workspace_unavailable'); }
     };
     return this.nativeLane(id, resolve, async (client, cwd, current) => {

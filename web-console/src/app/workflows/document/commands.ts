@@ -1,5 +1,5 @@
 import {
-  blockAt, edgesOf, updateBlock, type Block, type BlockPath, type Edge, type NodeDefinition, type NodeKind,
+  blockAt, branchAt, edgesOf, nodeAt, updateBlock, type Block, type BlockPath, type Edge, type NodeDefinition, type NodeKind,
   type WorkflowDocument,
 } from './model';
 import { authoredEdge, edgePort, outputPorts, type ControlPort } from './ports';
@@ -48,8 +48,8 @@ export function nodeTemplate(kind: NodeKind): NodeDefinition {
 
 /** The first free `<kind>`, `<kind>_2`, … id in a block. */
 export function freshIdentifier(block: Block, base: string): string {
-  if (!block.nodes[base]) return base;
-  for (let index = 2; ; index++) if (!block.nodes[`${base}_${index}`]) return `${base}_${index}`;
+  if (!nodeAt(block, base)) return base;
+  for (let index = 2; ; index++) if (!nodeAt(block, `${base}_${index}`)) return `${base}_${index}`;
 }
 
 function require(block: Block | undefined): Block {
@@ -62,8 +62,8 @@ function withEdges(block: Block, edges: Edge[]): Block {
 }
 
 function checkConnection(block: Block, from: string, port: ControlPort, to: string, ignore?: number) {
-  const source = block.nodes[from];
-  if (!source || !block.nodes[to]) throw new CommandRejected('missing_node');
+  const source = nodeAt(block, from);
+  if (!source || !nodeAt(block, to)) throw new CommandRejected('missing_node');
   if (source.type === 'return') throw new CommandRejected('return_has_no_successor');
   if (!outputPorts(source.type).includes(port)) throw new CommandRejected('invalid_port');
   if (from === to) throw new CommandRejected('self_edge');
@@ -77,7 +77,7 @@ export function addNode(document: WorkflowDocument, path: BlockPath, kind: NodeK
   const block = require(blockAt(document, path));
   const invalid = validIdentifier(id);
   if (invalid) throw new CommandRejected(invalid);
-  if (block.nodes[id]) throw new CommandRejected('duplicate_identifier');
+  if (nodeAt(block, id)) throw new CommandRejected('duplicate_identifier');
   const added = { ...block, nodes: { ...block.nodes, [id]: nodeTemplate(kind) } };
   if (from) checkConnection(added, from.from, from.port, id);
   return updateBlock(document, path, () => from ? withEdges(added, [...edgesOf(added), authoredEdge(from.from, from.port, id)]) : added);
@@ -88,7 +88,7 @@ export function addNode(document: WorkflowDocument, path: BlockPath, kind: NodeK
  * report; nothing is rewired. */
 export function deleteNodes(document: WorkflowDocument, path: BlockPath, ids: readonly string[]): WorkflowDocument {
   const block = require(blockAt(document, path));
-  const doomed = new Set(ids.filter(id => block.nodes[id]));
+  const doomed = new Set(ids.filter(id => nodeAt(block, id)));
   if (!doomed.size) throw new CommandRejected('missing_node');
   if (doomed.size === Object.keys(block.nodes).length) throw new CommandRejected('last_node');
   return updateBlock(document, path, current => ({
@@ -102,11 +102,11 @@ export function deleteNodes(document: WorkflowDocument, path: BlockPath, ids: re
  * block: edges, entry and references. Task text is never touched. */
 export function renameNode(document: WorkflowDocument, path: BlockPath, from: string, to: string): WorkflowDocument {
   const block = require(blockAt(document, path));
-  if (!block.nodes[from]) throw new CommandRejected('missing_node');
+  if (!nodeAt(block, from)) throw new CommandRejected('missing_node');
   if (from === to) return document;
   const invalid = validIdentifier(to);
   if (invalid) throw new CommandRejected(invalid);
-  if (block.nodes[to]) throw new CommandRejected('duplicate_identifier');
+  if (nodeAt(block, to)) throw new CommandRejected('duplicate_identifier');
   return updateBlock(document, path, current => {
     const renamed = rewriteBlockReferences(current, renameProducer(from, to));
     return {
@@ -120,7 +120,7 @@ export function renameNode(document: WorkflowDocument, path: BlockPath, from: st
 
 export function setEntry(document: WorkflowDocument, path: BlockPath, id: string): WorkflowDocument {
   const block = require(blockAt(document, path));
-  if (!block.nodes[id]) throw new CommandRejected('missing_node');
+  if (!nodeAt(block, id)) throw new CommandRejected('missing_node');
   return updateBlock(document, path, current => ({ ...current, entry: id }));
 }
 
@@ -149,13 +149,13 @@ export function reconnect(document: WorkflowDocument, path: BlockPath, index: nu
  * not an edit; the inspector edits only the node's own fields. */
 export function replaceNode(document: WorkflowDocument, path: BlockPath, id: string, node: NodeDefinition): WorkflowDocument {
   const block = require(blockAt(document, path));
-  const current = block.nodes[id];
+  const current = nodeAt(block, id);
   if (!current || current.type !== node.type) throw new CommandRejected('missing_node');
   return updateBlock(document, path, owner => ({ ...owner, nodes: { ...owner.nodes, [id]: node } }));
 }
 
 function parallel(block: Block, id: string) {
-  const node = block.nodes[id];
+  const node = nodeAt(block, id);
   if (!node || node.type !== 'parallel') throw new CommandRejected('missing_node');
   return node;
 }
@@ -164,7 +164,7 @@ export function addBranch(document: WorkflowDocument, path: BlockPath, id: strin
   const node = parallel(require(blockAt(document, path)), id);
   const invalid = validIdentifier(key);
   if (invalid) throw new CommandRejected(invalid);
-  if (node.branches[key]) throw new CommandRejected('duplicate_identifier');
+  if (branchAt(node.branches, key)) throw new CommandRejected('duplicate_identifier');
   return updateBlock(document, path, block => ({ ...block, nodes: { ...block.nodes, [id]: { ...node, branches: { ...node.branches, [key]: { input: { type: 'literal', value: {} }, block: emptyBlock() } } } } }));
 }
 
@@ -172,11 +172,11 @@ export function addBranch(document: WorkflowDocument, path: BlockPath, id: strin
  * owning block. */
 export function renameBranch(document: WorkflowDocument, path: BlockPath, id: string, from: string, to: string): WorkflowDocument {
   const node = parallel(require(blockAt(document, path)), id);
-  if (!node.branches[from]) throw new CommandRejected('missing_branch');
+  if (!branchAt(node.branches, from)) throw new CommandRejected('missing_branch');
   if (from === to) return document;
   const invalid = validIdentifier(to);
   if (invalid) throw new CommandRejected(invalid);
-  if (node.branches[to]) throw new CommandRejected('duplicate_identifier');
+  if (branchAt(node.branches, to)) throw new CommandRejected('duplicate_identifier');
   return updateBlock(document, path, block => {
     const renamed = rewriteBlockReferences(block, renameBranchOutput(id, from, to));
     const owner = parallel(renamed, id);
@@ -186,7 +186,7 @@ export function renameBranch(document: WorkflowDocument, path: BlockPath, id: st
 
 export function removeBranch(document: WorkflowDocument, path: BlockPath, id: string, key: string): WorkflowDocument {
   const node = parallel(require(blockAt(document, path)), id);
-  if (!node.branches[key]) throw new CommandRejected('missing_branch');
+  if (!branchAt(node.branches, key)) throw new CommandRejected('missing_branch');
   if (Object.keys(node.branches).length === 1) throw new CommandRejected('last_branch');
   return updateBlock(document, path, block => ({ ...block, nodes: { ...block.nodes, [id]: { ...node, branches: Object.fromEntries(Object.entries(node.branches).filter(([branch]) => branch !== key)) } } }));
 }

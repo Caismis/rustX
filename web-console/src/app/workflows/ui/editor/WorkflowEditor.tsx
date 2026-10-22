@@ -11,15 +11,16 @@ import { IconCheckOutline16, IconEllipsisOutline16 } from '../../../../presentat
 import type { WorkspaceAuthority } from '../../../../workspaces/authority';
 import { renameNode } from '../../document/commands';
 import { locate, type DiagnosticLocation } from '../../document/diagnostics';
-import { blockAt, blockKey, sameBlockPath, type BlockPath, type WorkflowDocument } from '../../document/model';
-import { isDirty, type EditorNotice, type WorkflowEditorActor } from '../../machines/editor';
+import { blockAt, blockKey, nodeAt, sameBlockPath, type BlockPath, type WorkflowDocument } from '../../document/model';
+import { isDirty, type EditorNotice, type ViewPositions, type WorkflowEditorActor } from '../../machines/editor';
 import { editorHolds, type WorkflowSurfaceActor } from '../../machines/surface';
 import { scopeKey } from '../../port';
 import { IconArrowLeft, IconExplain, IconFile, IconFolder, IconRedo, IconUndo } from '../icons';
 import { FailureText, shortRevision } from '../notices';
 import { Canvas, type Problems, type Selection } from './Canvas';
 import { CheckResults, Inspector } from './Inspector';
-import { clearViews, viewKey } from './view-store';
+import { DraftOwner, FieldCommits } from './forms/drafts';
+import { clearViews, viewKey, writeBlockView } from './view-store';
 import css from './Editor.module.css';
 
 const editableTarget = (target: EventTarget | null) => !!(target as Element | null)?.closest?.('input, textarea, select, [contenteditable="true"]');
@@ -45,7 +46,14 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
   const context = snapshot.context;
   const { target, document, base, block, check, generation, notice } = context;
   const catalog = useSyncExternalStore(authority.subscribe, authority.getCatalog);
-  const [selection, setSelection] = useState<Selection>();
+  const [selection, choose] = useState<Selection>();
+  // Another selection ends the current edit session (one undo step each).
+  const setSelection = useCallback((next: Selection | ((current: Selection) => Selection)) => {
+    choose(next);
+    editor.send({ type: 'BOUNDARY' });
+  }, [editor]);
+  const commits = useMemo(() => new FieldCommits(), []);
+  const owner$ = useMemo(() => ({ editor, commits }), [editor, commits]);
   const [dependencyContext, setDependencyContext] = useState<string>();
   const [explaining, setExplaining] = useState(false);
   const [reloading, setReloading] = useState(false);
@@ -59,12 +67,25 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
   const edit = useCallback((apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?: string) => editor.send({ type: 'EDIT', apply, coalesce }), [editor]);
   const rename = useCallback((from: string, to: string) => {
     editor.send({ type: 'EDIT', apply: current => renameNode(current, editor.getSnapshot().context.block, from, to) });
-    // The inspector follows the node unless the rename was refused.
-    if (!editor.getSnapshot().context.rejection) setSelection({ kind: 'node', id: to });
+    // The inspector follows the renamed node unless the rename was refused.
+    const renamed = !editor.getSnapshot().context.rejection;
+    if (renamed) choose(current => current?.kind === 'node' && current.id === from ? { kind: 'node', id: to } : current);
+    return renamed;
   }, [editor]);
   const navigate = useCallback((next: BlockPath) => { editor.send({ type: 'NAVIGATE', block: next }); setSelection(undefined); }, [editor]);
-  const runCheck = useCallback((explain = false) => editor.send({ type: 'CHECK', explain, context: target.scope.kind === 'user' ? dependencyContext : undefined }), [editor, target.scope.kind, dependencyContext]);
-  const save = useCallback(() => editor.send({ type: 'SAVE' }), [editor]);
+  // Save and Check act on what the author sees: every shown field's valid
+  // unapplied text is applied first; text that cannot be applied refuses.
+  const runCheck = useCallback((explain = false) => { commits.flush(); editor.send({ type: 'CHECK', explain, context: target.scope.kind === 'user' ? dependencyContext : undefined }); }, [editor, commits, target.scope.kind, dependencyContext]);
+  const save = useCallback(() => { commits.flush(); editor.send({ type: 'SAVE' }); }, [editor, commits]);
+  const move = useCallback((moved: { block: string; before: ViewPositions; after: ViewPositions }) => editor.send({ type: 'MOVE', path: editor.getSnapshot().context.block, ...moved }), [editor]);
+  // An undone or redone node move restores its block's browser-local positions.
+  const [viewEpoch, setViewEpoch] = useState(0);
+  useEffect(() => {
+    if (!context.view) return;
+    const { block: changed, positions } = context.view;
+    writeBlockView(key, changed, view => ({ ...view, positions: { ...view.positions, ...positions } }));
+    setViewEpoch(value => value + 1);
+  }, [context.view, key]);
 
   // A browser unload may not drop unsaved edits silently.
   useEffect(() => {
@@ -75,7 +96,7 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
   // A selection that no longer exists in the edited block closes.
   const owner = document ? blockAt(document, block) : undefined;
   useEffect(() => {
-    if (selection?.kind === 'node' && !owner?.nodes[selection.id]) setSelection(undefined);
+    if (selection?.kind === 'node' && !(owner && nodeAt(owner, selection.id))) choose(undefined);
   }, [owner, selection]);
 
   const located = useMemo(() => {
@@ -137,13 +158,13 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
           </span>)}
           {block.length === 0 && <><span aria-hidden>/</span><span className={css.crumbFile}>{target.id}</span></>}
         </nav>
-        <Canvas key={`${blockKey(block)}:${layoutEpoch}`} block={owner} path={block} blockKey={blockKey(block)} viewKey={key} selection={selection} onSelect={setSelection}
-          problems={problems} edit={edit} editable={editable && !saving} blockLabel={blockLabel} />
+        <Canvas key={`${blockKey(block)}:${layoutEpoch}`} block={owner} path={block} blockKey={blockKey(block)} viewKey={key} viewEpoch={viewEpoch} selection={selection} onSelect={setSelection}
+          problems={problems} edit={edit} onMove={move} editable={editable && !saving} blockLabel={blockLabel} />
       </div>
     </ReactFlowProvider>
-    {selection && <Inspector document={document} block={block} selection={selection} onSelect={setSelection} edit={edit} rename={rename} navigate={navigate}
+    {selection && <DraftOwner.Provider value={owner$}><Inspector document={document} block={block} selection={selection} onSelect={setSelection} edit={edit} rename={rename} navigate={navigate}
       vocabulary={base.source.vocabulary} check={check} generation={generation} rejection={context.rejection ? tx(`workflows:rejection.${context.rejection}`) : undefined}
-      checks={<CheckResults check={check} generation={generation} global={target.scope.kind === 'user'} workspaces={workspaces} context={dependencyContext} setContext={setDependencyContext} run={() => runCheck()} go={go} />} />}
+      checks={<CheckResults check={check} generation={generation} global={target.scope.kind === 'user'} workspaces={workspaces} context={dependencyContext} setContext={setDependencyContext} run={() => runCheck()} go={go} />} /></DraftOwner.Provider>}
   </div>;
 
   return <section className={css.editor} aria-labelledby="workflow-editor-title">
@@ -180,7 +201,7 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
         ]} anchor={<button type="button" className={css.moreButton} aria-label={tx('workflows:editor.more')} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(value => !value)}><IconEllipsisOutline16 /></button>} />
       </div>
     </header>
-    <EditorNotices notice={notice} uncertain={!!context.uncertain} receipt={!!context.receipt && !notice} reconcile={() => editor.send({ type: 'RECONCILE' })} dismiss={() => editor.send({ type: 'DISMISS' })} />
+    <EditorNotices notice={notice} uncertain={!!context.uncertain} receipt={!!context.receipt && !notice} reconcile={() => editor.send({ type: 'RECONCILE' })} dismiss={() => editor.send({ type: 'DISMISS' })} discard={() => editor.send({ type: 'DISCARD_DRAFTS' })} />
     {content}
     <Modal open={reloading} onClose={() => setReloading(false)} title={tx('workflows:editor.reload-title')} closeLabel={tx('workflows:dialog.close')} description={tx('workflows:editor.reload-body')}
       footer={<><Button variant="outline" onClick={() => setReloading(false)}>{tx('workflows:dialog.cancel')}</Button><Button variant="primary" onClick={() => { setReloading(false); editor.send({ type: 'RELOAD' }); }}>{tx('workflows:editor.reload-confirm')}</Button></>} />
@@ -188,7 +209,7 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
   </section>;
 }
 
-function EditorNotices({ notice, uncertain, receipt, reconcile, dismiss }: { notice?: EditorNotice; uncertain: boolean; receipt: boolean; reconcile: () => void; dismiss: () => void }) {
+function EditorNotices({ notice, uncertain, receipt, reconcile, dismiss, discard }: { notice?: EditorNotice; uncertain: boolean; receipt: boolean; reconcile: () => void; dismiss: () => void; discard: () => void }) {
   const tx = useTranslation();
   if (!notice && !uncertain) return receipt ? <p className={css.noticeQuiet} role="status">{tx('workflows:notice.saved')}</p> : null;
   let text: ReactNode = null;
@@ -199,11 +220,13 @@ function EditorNotices({ notice, uncertain, receipt, reconcile, dismiss }: { not
   else if (notice?.kind === 'reconciled') text = tx('workflows:notice.reconciled');
   else if (notice?.kind === 'changed_externally') text = tx('workflows:notice.changed-externally', { p0: shortRevision(notice.revision) });
   else if (notice?.kind === 'incomplete') text = tx('workflows:notice.incomplete', { p0: notice.identities.map(item => [...item.block.map(step => step.node), item.node].join(' / ')).join(', ') });
+  else if (notice?.kind === 'pending_fields') text = tx('workflows:notice.pending-fields', { p0: notice.count });
   else if (uncertain) text = tx('workflows:notice.uncertain');
-  const serious = notice?.kind === 'failure' || uncertain || notice?.kind === 'changed_externally' || notice?.kind === 'changed_after_save' || notice?.kind === 'incomplete';
+  const serious = notice?.kind === 'failure' || uncertain || notice?.kind === 'changed_externally' || notice?.kind === 'changed_after_save' || notice?.kind === 'incomplete' || notice?.kind === 'pending_fields';
   return <div className={clsx(css.notice, serious && css.noticeSerious)} role={serious ? 'alert' : 'status'}>
     <span>{text}</span>
     {uncertain && <Button size="sm" variant="outline" onClick={reconcile}>{tx('workflows:notice.reconcile')}</Button>}
+    {notice?.kind === 'pending_fields' && <Button size="sm" variant="outline" onClick={discard}>{tx('workflows:notice.discard-fields')}</Button>}
     {notice && <Button size="sm" onClick={dismiss}>{tx('workflows:notice.dismiss')}</Button>}
   </div>;
 }

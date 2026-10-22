@@ -4,6 +4,8 @@ import type {
 } from '../../../../protocol/app-server/v51';
 import type { AppServerClient } from '../../client/app-server';
 import { isOutcomeUncertain, RequestNotDispatched, RpcFailure } from '../../client/errors';
+import type { WorkspaceAuthorityObservation } from '../../workspaces/authority';
+import { sameEndpoint } from '../../workspaces/endpoint';
 import { WorkspaceHostError, type ProductHostWorkspaces, type WorkflowCommit, type WorkflowHostOperation, type WorkflowHostResult } from '../../workspaces/host';
 
 /** The source scope a Workflow file is physically owned by. The User scope
@@ -93,29 +95,55 @@ export interface WorkflowScopePort {
   write(id: string, expectedRevision: string, edit: WorkflowEdit): Promise<WorkflowCommit>;
 }
 
+const replaced = (write: boolean) => new WorkflowOperationError(write ? { kind: 'uncertain', message: 'server_replaced' } : { kind: 'unavailable', message: 'server_replaced' });
+
 /** Build the port of one scope over the live client and Product Host.
  *
- * Every operation is bound to the server authority the port was created
- * for: after an App Server authority replacement it refuses, so a reply from
- * another server can never be applied to this target. */
-export function createWorkflowPort({ client, host, scope }: {
+ * A port is bound to two authorities, both observed when it is created:
+ * the App Server (endpoint and authority revision) and the Product Host
+ * that maps Workspace registrations (`hostAuthority`). A Workspace
+ * operation, and a Global file's dependency check routed through a
+ * Workspace, carries that Product Host scope, which the Host validates in
+ * the registration lane immediately before native dispatch. A replaced
+ * authority therefore refuses the transaction even when it reuses the
+ * registration ID; it is never retargeted.
+ *
+ * A write acknowledgement is a fact about the original target once it is
+ * received: a later authority change marks its reread unobserved but never
+ * erases the commit. Results that would come from a replacement authority
+ * are refused. */
+export function createWorkflowPort({ client, host, hostAuthority, scope }: {
   client: AppServerClient;
   host: () => ProductHostWorkspaces | undefined;
+  /** The Product Host authority current at creation, if one is observed. */
+  hostAuthority: WorkspaceAuthorityObservation | undefined;
   scope: WorkflowScope;
 }): WorkflowScopePort {
   const { endpoint = '', authorityRevision } = client.getSnapshot();
-  const fenced = async <T>(write: boolean, operation: () => Promise<T>): Promise<T> => {
-    const current = () => client.getSnapshot().authorityRevision === authorityRevision && client.getSnapshot().endpoint === endpoint;
+  const current = () => client.getSnapshot().authorityRevision === authorityRevision && client.getSnapshot().endpoint === endpoint;
+  const attempt = async <T>(write: boolean, operation: () => Promise<T>): Promise<T> => {
     if (!current()) throw new WorkflowOperationError({ kind: 'unavailable', message: 'server_replaced' });
-    let result: T;
-    try { result = await operation(); } catch (cause) { throw new WorkflowOperationError(classifyFailure(cause, write)); }
-    if (!current()) throw new WorkflowOperationError(write ? { kind: 'uncertain', message: 'server_replaced' } : { kind: 'unavailable', message: 'server_replaced' });
+    try { return await operation(); } catch (cause) { throw new WorkflowOperationError(classifyFailure(cause, write)); }
+  };
+  /** A read or check: its result is refused once its server is replaced. */
+  const read = async <T>(operation: () => Promise<T>): Promise<T> => {
+    const result = await attempt(false, operation);
+    if (!current()) throw replaced(false);
     return result;
+  };
+  /** A write: its acknowledgement stands; only the reread depends on the
+   * server still being the one that acknowledged it. */
+  const write = async (operation: () => Promise<WorkflowCommit>): Promise<WorkflowCommit> => {
+    const commit = await attempt(true, operation);
+    return current() || commit.reread.status === 'failed' ? commit : { ...commit, reread: { status: 'failed', error: 'server_replaced' } };
   };
   const viaHost = async <K extends WorkflowHostResult['kind']>(workspaceId: string, operation: WorkflowHostOperation & { kind: K }) => {
     const workflow = host()?.workflowWorkspace;
     if (!workflow) throw new WorkflowOperationError({ kind: 'unavailable', message: 'product_host_unavailable' });
-    const result = await workflow(workspaceId, endpoint, operation);
+    if (!hostAuthority?.current() || !sameEndpoint(hostAuthority.scope.endpoint, endpoint)) {
+      throw new WorkflowOperationError({ kind: 'unavailable', message: 'product_host_replaced' });
+    }
+    const result = await workflow(hostAuthority.scope, workspaceId, operation);
     if (result.kind !== operation.kind) throw new Error('Unexpected Product Host result');
     return result as Extract<WorkflowHostResult, { kind: K }>;
   };
@@ -123,21 +151,21 @@ export function createWorkflowPort({ client, host, scope }: {
     const { workspaceId } = scope;
     return {
       endpoint, scope,
-      list: () => fenced(false, async () => (await viaHost(workspaceId, { kind: 'list' })).library),
-      read: id => fenced(false, async () => (await viaHost(workspaceId, { kind: 'read', id })).source),
-      check: (id, document, explain) => fenced(false, async () => (await viaHost(workspaceId, { kind: 'check', scope: 'workspace', id, document, explain })).report),
-      write: (id, expected_revision, edit) => fenced(true, async () => (await viaHost(workspaceId, { kind: 'write', id, expected_revision, edit })).commit),
+      list: () => read(async () => (await viaHost(workspaceId, { kind: 'list' })).library),
+      read: id => read(async () => (await viaHost(workspaceId, { kind: 'read', id })).source),
+      check: (id, document, explain) => read(async () => (await viaHost(workspaceId, { kind: 'check', scope: 'workspace', id, document, explain })).report),
+      write: (id, expected_revision, edit) => write(async () => (await viaHost(workspaceId, { kind: 'write', id, expected_revision, edit })).commit),
     };
   }
   const target = { kind: 'user' as const };
   return {
     endpoint, scope,
-    list: () => fenced(false, async () => (await client.request({ method: 'workflow/list', params: { target } }, 'workflow_library')).library),
-    read: id => fenced(false, async () => (await client.request({ method: 'workflow/read', params: { target, id } }, 'workflow_source')).source),
-    check: (id, document, explain, context) => fenced(false, async () => context === undefined
+    list: () => read(async () => (await client.request({ method: 'workflow/list', params: { target } }, 'workflow_library')).library),
+    read: id => read(async () => (await client.request({ method: 'workflow/read', params: { target, id } }, 'workflow_source')).source),
+    check: (id, document, explain, context) => read(async () => context === undefined
       ? (await client.request({ method: 'workflow/check', params: { target, id, document, explain } }, 'workflow_check')).report
       : (await viaHost(context, { kind: 'check', scope: 'user', id, document, explain })).report),
-    write: (id, expected_revision, edit) => fenced(true, async () => {
+    write: (id, expected_revision, edit) => write(async () => {
       const acknowledgement = await client.request({ method: 'configuration/sourceWrite', params: { target, expected_revision, mutation: { kind: 'workflow', id, edit } } }, 'sources_written');
       // The commit is a fact from here on; its reread may fail independently.
       let reread: WorkflowCommit['reread'];

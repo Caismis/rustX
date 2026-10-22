@@ -101,7 +101,9 @@ export interface ProductHostWorkspaces {
   readDelivery?(scope: WorkspaceAuthorityScope, read: DeliveryRead, signal?: AbortSignal): Promise<DeliveryBytes>;
   configureWorkspace?(id: string, endpoint: string, operation: WorkspaceConfigurationOperation): Promise<WorkspaceConfigurationResult>;
   /** Native Workflow file authoring in exactly this registered Workspace. */
-  workflowWorkspace?(id: string, endpoint: string, operation: WorkflowHostOperation): Promise<WorkflowHostResult>;
+  /** Workflow file authoring in one registration of exactly `scope`, the
+   * Product Host authority that admitted the transaction. */
+  workflowWorkspace?(scope: WorkspaceAuthorityScope, id: string, operation: WorkflowHostOperation): Promise<WorkflowHostResult>;
   listWorkspaces(signal?: AbortSignal): Promise<WorkspaceCatalog>;
   /** Each metadata write must validate this expected scope at execution, before changing registrations. */
   adoptWorkspace(scope: WorkspaceAuthorityScope, location: string): Promise<void>;

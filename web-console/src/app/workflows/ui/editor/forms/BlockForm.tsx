@@ -1,6 +1,6 @@
 import { useTranslation } from '../../../../../locale/react';
 import { setBlockContract, setEntry, setWorkflow } from '../../../document/commands';
-import { blockAt, type Block, type BlockPath, type WorkflowDocument } from '../../../document/model';
+import { blockAt, nativeBlockPath, nodeAt, type Block, type BlockPath, type WorkflowDocument } from '../../../document/model';
 import { JsonField, Section, SelectField, TextField } from './fields';
 
 type Edit = (apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?: string) => void;
@@ -19,12 +19,12 @@ export function BlockForm({ document, block, edit }: { document: WorkflowDocumen
         onChange={(value, session) => { if (/^\d*$/.test(value)) edit(current => setWorkflow(current, { description: current.description, timeout_ms: value === '' ? undefined : value }), session); }} />
     </Section>}
     <Section title={tx('workflows:inspector.block-title')}>
-      <SelectField label={tx('workflows:inspector.block-entry')} value={owner.nodes[owner.entry] ? owner.entry : ''}
-        options={[...(owner.nodes[owner.entry] ? [] : [{ value: '', label: owner.entry || '—' }]), ...Object.keys(owner.nodes).sort().map(id => ({ value: id, label: id }))]}
+      <SelectField label={tx('workflows:inspector.block-entry')} value={nodeAt(owner, owner.entry) ? owner.entry : ''}
+        options={[...(nodeAt(owner, owner.entry) ? [] : [{ value: '', label: owner.entry || '—' }]), ...Object.keys(owner.nodes).sort().map(id => ({ value: id, label: id }))]}
         onChange={id => { if (id) edit(current => setEntry(current, block, id)); }} />
-      <JsonField label={tx('workflows:inspector.block-input')} hint={tx('workflows:inspector.schema-hint')} value={owner.input} rows={8}
+      <JsonField label={tx('workflows:inspector.block-input')} hint={tx('workflows:inspector.schema-hint')} value={owner.input} rows={8} draftKey={`${nativeBlockPath(block)}.input`}
         onApply={schema => edit(current => setBlockContract(current, block, 'input', schema as Block['input']))} />
-      <JsonField label={tx('workflows:inspector.block-output')} hint={tx('workflows:inspector.schema-hint')} value={owner.output} rows={8}
+      <JsonField label={tx('workflows:inspector.block-output')} hint={tx('workflows:inspector.schema-hint')} value={owner.output} rows={8} draftKey={`${nativeBlockPath(block)}.output`}
         onApply={schema => edit(current => setBlockContract(current, block, 'output', schema as Block['output']))} />
     </Section>
   </>;

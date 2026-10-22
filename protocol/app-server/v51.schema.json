@@ -28377,9 +28377,6 @@
             }
           ]
         },
-        "path": {
-          "type": "string"
-        },
         "relative_path": {
           "description": "The location relative to the scope's owning directory, e.g.\n`.agents/workflows/<id>.yaml`.",
           "type": "string"
@@ -28438,7 +28435,6 @@
       "additionalProperties": false,
       "required": [
         "file_name",
-        "path",
         "relative_path",
         "revision",
         "byte_length",
@@ -28620,12 +28616,15 @@
       "description": "Whether the native compiler admits the candidate's structure.",
       "oneOf": [
         {
-          "description": "Compiled. `outputs` are the compiled output contracts of every node\nby authored path, including derived Parallel and Loop results.",
+          "description": "Compiled. `outputs` are the compiled output contracts of every node\nby authored path, including derived Parallel and Loop results.\n`revision` is the file revision a `replace` with this candidate\ncommits: the native identity of its canonical serialization, so a\nclient recognizes its own normalized commit on reread.",
           "type": "object",
           "properties": {
             "outputs": {
               "type": "object",
               "additionalProperties": true
+            },
+            "revision": {
+              "type": "string"
             },
             "status": {
               "type": "string",
@@ -28635,7 +28634,8 @@
           "additionalProperties": false,
           "required": [
             "status",
-            "outputs"
+            "outputs",
+            "revision"
           ]
         },
         {

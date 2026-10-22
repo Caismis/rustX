@@ -801,7 +801,6 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
                     .map(|(id, definition, revision, length)| WorkflowFileSummary {
                         file_name: format!("{id}.yaml"),
                         id: Some(id.clone()),
-                        path: directory.join(format!("{id}.yaml")),
                         relative_path: format!(".agents/workflows/{id}.yaml"),
                         revision: revision.clone(),
                         byte_length: *length as u64,
@@ -863,6 +862,7 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
             report: Box::new(WorkflowCheckReport {
                 structure: WorkflowStructure::Valid {
                     outputs: program.node_outputs(),
+                    revision: revision.clone(),
                 },
                 dependencies: WorkflowDependencies::Admitted {
                     context: "/workspace/fixture".into(),

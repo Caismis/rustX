@@ -1133,7 +1133,6 @@
           {
             "file_name": "typed_agent.yaml",
             "id": "typed_agent",
-            "path": "/workspace/fixture/.agents/workflows/typed_agent.yaml",
             "relative_path": ".agents/workflows/typed_agent.yaml",
             "revision": "sha256:faeee93a2d421d02316ddb9f8070b152cf92249f6ddf8c106ea5cf3db70e3a5a",
             "byte_length": "735",
@@ -1146,7 +1145,6 @@
           {
             "file_name": "specialized_agent.yaml",
             "id": "specialized_agent",
-            "path": "/workspace/fixture/.agents/workflows/specialized_agent.yaml",
             "relative_path": ".agents/workflows/specialized_agent.yaml",
             "revision": "sha256:54f83b401137ec0fa93eac417d241d20d62553239b83beb24cc70a05d419dca9",
             "byte_length": "1611",
@@ -1159,7 +1157,6 @@
           {
             "file_name": "parallel_checks.yaml",
             "id": "parallel_checks",
-            "path": "/workspace/fixture/.agents/workflows/parallel_checks.yaml",
             "relative_path": ".agents/workflows/parallel_checks.yaml",
             "revision": "sha256:a0d8042249dc206336e1421b81b7db59b0d8d23876ea7b86b57b00a6af60b5af",
             "byte_length": "2407",
@@ -1172,7 +1169,6 @@
           {
             "file_name": "human_plan.yaml",
             "id": "human_plan",
-            "path": "/workspace/fixture/.agents/workflows/human_plan.yaml",
             "relative_path": ".agents/workflows/human_plan.yaml",
             "revision": "sha256:d35430c26c2f8ca059eff2e872be46e8f5d2d9f2945b47b2db88ca642d0e7aab",
             "byte_length": "830",
@@ -1185,7 +1181,6 @@
           {
             "file_name": "parallel_review.yaml",
             "id": "parallel_review",
-            "path": "/workspace/fixture/.agents/workflows/parallel_review.yaml",
             "relative_path": ".agents/workflows/parallel_review.yaml",
             "revision": "sha256:d55f04e130e075e463eb87c6bdfdd0b608285b4d000123daa5b370a722c2d250",
             "byte_length": "3878",
@@ -1198,7 +1193,6 @@
           {
             "file_name": "implement_and_review.yaml",
             "id": "implement_and_review",
-            "path": "/workspace/fixture/.agents/workflows/implement_and_review.yaml",
             "relative_path": ".agents/workflows/implement_and_review.yaml",
             "revision": "sha256:ac19594d41578759a88381d9dbca64a0d4663b904a10382cb88ea3315a1c0d20",
             "byte_length": "11833",
@@ -3683,7 +3677,8 @@
               ],
               "additionalProperties": false
             }
-          }
+          },
+          "revision": "sha256:d55f04e130e075e463eb87c6bdfdd0b608285b4d000123daa5b370a722c2d250"
         },
         "dependencies": {
           "status": "admitted",

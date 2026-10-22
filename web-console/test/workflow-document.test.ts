@@ -10,6 +10,7 @@ import {
 } from '../src/app/workflows/document/model';
 import { edgePort } from '../src/app/workflows/document/ports';
 import { blockReferences } from '../src/app/workflows/document/references';
+import { readJson } from '../src/app/workflows/ui/editor/forms/drafts';
 
 /** The six native examples exactly as the App Server returns them. */
 function example(id: string): WorkflowDocument {
@@ -161,5 +162,34 @@ describe('native Workflow editing document', () => {
     expect(locate('block.nodes.repair.body.entry')).toEqual({ block: [{ node: 'repair' }], field: 'entry' });
     expect(locate('block.nodes.repair.max_iterations')).toEqual({ block: [], node: 'repair', field: 'max_iterations' });
     expect(locate('block.nodes.reviews.branches.quality.input')).toEqual({ block: [], node: 'reviews', field: 'branches.quality.input' });
+  });
+});
+
+describe('authored maps and the browser number contract', () => {
+  it('treats a valid identifier that names an inherited property as free, and still rejects real duplicates', () => {
+    const document = example('parallel_review');
+    const added = addNode(document, ROOT, 'return', 'constructor');
+    expect(Object.hasOwn(blockAt(added, ROOT)!.nodes, 'constructor')).toBe(true);
+    expect(rejection(() => addNode(added, ROOT, 'return', 'constructor'))).toBe('duplicate_identifier');
+    const renamed = renameNode(document, ROOT, 'ready', 'constructor');
+    expect(Object.keys(blockAt(renamed, ROOT)!.nodes)).toContain('constructor');
+    expect(rejection(() => renameNode(renamed, ROOT, 'revise', 'constructor'))).toBe('duplicate_identifier');
+    expect(rejection(() => setEntry(document, ROOT, 'constructor'))).toBe('missing_node');
+    const branched = addBranch(document, ROOT, 'reviews', 'constructor');
+    expect(Object.hasOwn((blockAt(branched, ROOT)!.nodes.reviews as { branches: object }).branches, 'constructor')).toBe(true);
+    expect(rejection(() => renameBranch(document, ROOT, 'reviews', 'constructor', 'quality_2'))).toBe('missing_branch');
+    expect(blockAt(branched, [{ node: 'reviews', branch: 'constructor' }])).toBeDefined();
+    expect(blockAt(document, [{ node: 'reviews', branch: 'constructor' }])).toBeUndefined();
+  });
+
+  it('accepts exactly the numbers a JSON round trip keeps, judged from the authored token', () => {
+    expect(readJson('{"n": 9007199254740991, "f": 1.5, "e": 1e21, "z": 0}')).toEqual({ ok: true, value: { n: 9007199254740991, f: 1.5, e: 1e21, z: 0 } });
+    for (const text of ['9007199254740993', '[9007199254740992]', '1.0', '{"a": 2.50e1}', '-0.0', '1e400']) {
+      expect(readJson(text), text).toEqual({ ok: false, reason: 'number' });
+    }
+    expect(readJson('{"a": ')).toEqual({ ok: false, reason: 'syntax' });
+    // What is accepted serializes back to the very token native receives.
+    const accepted = readJson('[2.5, -0.25, 9007199254740991, 1e21]');
+    expect(accepted.ok && JSON.stringify(accepted.value)).toBe('[2.5,-0.25,9007199254740991,1e+21]');
   });
 });

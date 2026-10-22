@@ -16,7 +16,6 @@ export interface WorkflowNodeData extends Record<string, unknown> {
    * `nested`: a problem inside a block this node owns. */
   readonly problem?: 'error' | 'warning' | 'nested';
   readonly problemLabel: string;
-  readonly label: string;
 }
 export type WorkflowFlowNode = Node<WorkflowNodeData, 'workflow'>;
 
@@ -31,7 +30,7 @@ const PORT_SPACING = 30;
 export const WorkflowNode = memo(function WorkflowNode({ id, data, selected }: NodeProps<WorkflowFlowNode>) {
   const actions = useContext(CanvasActions);
   const multiple = data.ports.length > 1;
-  return <div className={clsx(css.node, selected && css.nodeSelected, data.problem && css[`node_${data.problem}`])} aria-label={data.label} title={data.problem ? data.problemLabel : undefined}>
+  return <div className={clsx(css.node, selected && css.nodeSelected, data.problem && css[`node_${data.problem}`])} title={data.problem ? data.problemLabel : undefined}>
     {data.entryLabel && <span className={css.entry}>{data.entryLabel}</span>}
     <Handle type="target" position={Position.Left} id="in" className={css.handle} />
     <div className={css.nodeHead}>

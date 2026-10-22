@@ -40,7 +40,30 @@ export type EditorNotice =
   /** Reconciliation found a revision this editor did not write. */
   | { kind: 'changed_externally'; revision: string }
   /** Typed identities still to choose; nothing was sent. */
-  | { kind: 'incomplete'; identities: readonly IncompleteIdentity[] };
+  | { kind: 'incomplete'; identities: readonly IncompleteIdentity[] }
+  /** Field text that could not be applied (it is invalid, or its field is
+   * not shown); nothing was sent and the text is kept. */
+  | { kind: 'pending_fields'; count: number };
+
+/** Unapplied text of one deferred-commit field, by stable field identity.
+ * It never enters the document until its field applies it. */
+export interface FieldDraft {
+  readonly text: string;
+  /** Whether the field could apply this text now. */
+  readonly valid: boolean;
+}
+
+/** Browser-local node coordinates of one block, by node id. */
+export type ViewPositions = Readonly<Record<string, { readonly x: number; readonly y: number }>>;
+
+/** One undoable step. A view step moves nodes of one block and never
+ * changes the document; both kinds share one timeline. */
+export type HistoryEntry =
+  | { readonly kind: 'document'; readonly document: WorkflowDocument }
+  | { readonly kind: 'view'; readonly block: string; readonly path: BlockPath; readonly before: ViewPositions; readonly after: ViewPositions };
+
+/** How an uncertain save was settled by observation alone. */
+type Reconciliation = { kind: 'not_committed' | 'committed' | 'changed'; source: WorkflowSource };
 
 export interface EditorContext {
   readonly port: WorkflowScopePort;
@@ -51,10 +74,16 @@ export interface EditorContext {
   document?: WorkflowDocument;
   /** Increments on every semantic change of `document`. */
   generation: number;
-  past: WorkflowDocument[];
-  future: WorkflowDocument[];
-  /** The coalescing key of the latest edit, so one field session is one undo step. */
+  past: HistoryEntry[];
+  future: HistoryEntry[];
+  /** The coalescing key of the latest edit, so one field session is one
+   * undo step. Navigation, selection, saving, checking, a node move and
+   * undo or redo all end the session. */
   coalesce?: string;
+  /** Unapplied field text: dirty, kept across remounts, never written. */
+  drafts: Readonly<Record<string, FieldDraft>>;
+  /** The node positions the latest undo or redo of a view step restores. */
+  view?: { readonly seq: number; readonly block: string; readonly positions: ViewPositions };
   block: BlockPath;
   check?: CheckResult;
   /** The input of the latest check; in flight only while `ready.checking`. */
@@ -71,6 +100,13 @@ export interface EditorContext {
 export type EditorEvent =
   | { type: 'EDIT'; apply: (document: WorkflowDocument) => WorkflowDocument; coalesce?: string }
   | { type: 'UNDO' } | { type: 'REDO' }
+  /** One completed drag of nodes in one block: a view step. */
+  | { type: 'MOVE'; block: string; path: BlockPath; before: ViewPositions; after: ViewPositions }
+  /** A field's unapplied text changed, or was applied or reset (`undefined`). */
+  | { type: 'DRAFT'; key: string; draft?: FieldDraft }
+  | { type: 'DISCARD_DRAFTS' }
+  /** The author moved on (another selection): the edit session ends. */
+  | { type: 'BOUNDARY' }
   | { type: 'NAVIGATE'; block: BlockPath }
   | { type: 'CHECK'; explain: boolean; context?: string }
   | { type: 'SAVE' }
@@ -80,8 +116,11 @@ export type EditorEvent =
 
 export interface EditorInput { readonly port: WorkflowScopePort; readonly target: WorkflowTarget }
 
-export function isDirty(context: Pick<EditorContext, 'document' | 'base'>): boolean {
-  return !!context.document && !!context.base?.document && !sameDocument(context.document, context.base.document);
+/** Unsaved: the document differs from its base, or a field holds text it
+ * has not applied. */
+export function isDirty(context: Pick<EditorContext, 'document' | 'base' | 'drafts'>): boolean {
+  return Object.keys(context.drafts).length > 0
+    || (!!context.document && !!context.base?.document && context.document !== context.base.document && !sameDocument(context.document, context.base.document));
 }
 
 function failure(event: unknown, write: boolean) {
@@ -103,6 +142,14 @@ function committed(context: EditorContext, saving: NonNullable<EditorContext['sa
   };
 }
 
+/** Restore a view step's positions, in its own block. */
+function restore(context: EditorContext, entry: Extract<HistoryEntry, { kind: 'view' }>, positions: ViewPositions): Partial<EditorContext> {
+  return {
+    view: { seq: (context.view?.seq ?? 0) + 1, block: entry.block, positions },
+    block: context.document ? existingPath(context.document, entry.path) : context.block,
+  };
+}
+
 /** One editing transaction of one exact Workflow file. React subscribes and
  * submits intent; this machine alone arbitrates the file target, the base
  * revision, edit generations and correlated native operations. */
@@ -114,6 +161,16 @@ export const workflowEditorMachine = setup({
       ({ input }) => input.port.check(input.id, input.document, input.explain, input.context)),
     save: fromPromise<WorkflowCommit, { port: WorkflowScopePort; id: string; revision: string; document: WorkflowDocument }>(
       ({ input }) => input.port.write(input.id, input.revision, { operation: 'replace', document: input.document })),
+    // Observation only: the uncertain write is never sent again. Native
+    // names the revision the attempted candidate commits as, so its own
+    // normalized commit is recognized by identity, not by shape.
+    reconcile: fromPromise<Reconciliation, { port: WorkflowScopePort; id: string; base: string; document: WorkflowDocument }>(async ({ input }) => {
+      const source = await input.port.read(input.id);
+      if (source.revision === input.base) return { kind: 'not_committed', source };
+      const report = await input.port.check(input.id, input.document, false);
+      const committed = report.structure.status === 'valid' && report.structure.revision === source.revision;
+      return { kind: committed ? 'committed' : 'changed', source };
+    }),
   },
   guards: {
     editable: ({ context }) => !!context.document && !!context.base?.document,
@@ -121,6 +178,7 @@ export const workflowEditorMachine = setup({
     incomplete: ({ context }) => !!context.document && incompleteIdentities(context.document).length > 0,
     canUndo: ({ context }) => context.past.length > 0,
     canRedo: ({ context }) => context.future.length > 0,
+    pendingFields: ({ context }) => Object.keys(context.drafts).length > 0,
   },
   actions: {
     edit: assign(({ context, event }) => {
@@ -132,28 +190,43 @@ export const workflowEditorMachine = setup({
         throw cause;
       }
       if (next === context.document) return { rejection: undefined };
-      const coalesced = event.coalesce !== undefined && event.coalesce === context.coalesce;
+      const coalesced = event.coalesce !== undefined && event.coalesce === context.coalesce && context.past.at(-1)?.kind === 'document';
       return {
         document: next, generation: context.generation + 1, rejection: undefined,
-        past: coalesced ? context.past : [...context.past, context.document].slice(-HISTORY_LIMIT),
+        past: coalesced ? context.past : [...context.past, { kind: 'document' as const, document: context.document }].slice(-HISTORY_LIMIT),
         future: [], coalesce: event.coalesce, block: existingPath(next, context.block),
       };
     }),
+    move: assign(({ context, event }) => {
+      if (event.type !== 'MOVE') return {};
+      const entry: HistoryEntry = { kind: 'view', block: event.block, path: event.path, before: event.before, after: event.after };
+      return { past: [...context.past, entry].slice(-HISTORY_LIMIT), future: [], coalesce: undefined };
+    }),
     undo: assign(({ context }) => {
-      const document = context.past.at(-1)!;
-      return { document, past: context.past.slice(0, -1), future: [context.document!, ...context.future], generation: context.generation + 1, coalesce: undefined, rejection: undefined, block: existingPath(document, context.block) };
+      const entry = context.past.at(-1)!, past = context.past.slice(0, -1);
+      if (entry.kind === 'view') return { past, future: [entry, ...context.future], coalesce: undefined, rejection: undefined, ...restore(context, entry, entry.before) };
+      return { document: entry.document, past, future: [{ kind: 'document' as const, document: context.document! }, ...context.future], generation: context.generation + 1, coalesce: undefined, rejection: undefined, block: existingPath(entry.document, context.block) };
     }),
     redo: assign(({ context }) => {
-      const [document, ...future] = context.future;
-      return { document, past: [...context.past, context.document!], future, generation: context.generation + 1, coalesce: undefined, rejection: undefined, block: existingPath(document, context.block) };
+      const [entry, ...future] = context.future;
+      if (entry.kind === 'view') return { past: [...context.past, entry], future, coalesce: undefined, rejection: undefined, ...restore(context, entry, entry.after) };
+      return { document: entry.document, past: [...context.past, { kind: 'document' as const, document: context.document! }], future, generation: context.generation + 1, coalesce: undefined, rejection: undefined, block: existingPath(entry.document, context.block) };
     }),
-    navigate: assign(({ context, event }) => event.type === 'NAVIGATE' && context.document ? { block: existingPath(context.document, event.block) } : {}),
+    navigate: assign(({ context, event }) => event.type === 'NAVIGATE' && context.document ? { block: existingPath(context.document, event.block), coalesce: undefined } : {}),
+    boundary: assign({ coalesce: undefined }),
+    draft: assign(({ context, event }) => {
+      if (event.type !== 'DRAFT') return {};
+      const { [event.key]: _previous, ...rest } = context.drafts;
+      return { drafts: event.draft ? { ...rest, [event.key]: event.draft } : rest };
+    }),
+    discardDrafts: assign({ drafts: {}, notice: undefined }),
+    pendingFields: assign(({ context }) => ({ notice: { kind: 'pending_fields', count: Object.keys(context.drafts).length } as EditorNotice })),
     dismiss: assign({ notice: undefined, rejection: undefined }),
     incomplete: assign(({ context }) => ({ notice: { kind: 'incomplete', identities: incompleteIdentities(context.document!) } as EditorNotice })),
   },
 }).createMachine({
   id: 'workflowEditor',
-  context: ({ input }) => ({ port: input.port, target: input.target, generation: 0, past: [], future: [], block: ROOT }),
+  context: ({ input }) => ({ port: input.port, target: input.target, generation: 0, past: [], future: [], block: ROOT, drafts: {} }),
   initial: 'loading',
   states: {
     loading: {
@@ -162,7 +235,7 @@ export const workflowEditorMachine = setup({
         src: 'read', input: ({ context }) => ({ port: context.port, id: context.target.id }),
         onDone: { target: 'ready', actions: assign(({ context, event }) => {
           const document = event.output.document ?? undefined;
-          return { base: { revision: event.output.revision, source: event.output, document }, document, generation: context.generation + 1, past: [], future: [], coalesce: undefined, block: ROOT, check: undefined, receipt: undefined, uncertain: undefined };
+          return { base: { revision: event.output.revision, source: event.output, document }, document, generation: context.generation + 1, past: [], future: [], coalesce: undefined, drafts: {}, block: ROOT, check: undefined, receipt: undefined, uncertain: undefined };
         }) },
         onError: { target: 'failed', actions: assign(({ event }) => ({ loadFailure: failure(event, false) })) },
       },
@@ -172,16 +245,20 @@ export const workflowEditorMachine = setup({
       initial: 'idle',
       on: {
         EDIT: { guard: 'editable', actions: 'edit' },
+        MOVE: { guard: 'editable', actions: 'move' },
         UNDO: { guard: 'canUndo', actions: 'undo' },
         REDO: { guard: 'canRedo', actions: 'redo' },
         NAVIGATE: { actions: 'navigate' },
+        BOUNDARY: { actions: 'boundary' },
+        DRAFT: { guard: 'editable', actions: 'draft' },
+        DISCARD_DRAFTS: { actions: 'discardDrafts' },
         DISMISS: { actions: 'dismiss' },
       },
       states: {
         idle: {
           on: {
-            CHECK: [{ guard: 'incomplete', actions: 'incomplete' }, { guard: 'editable', target: 'checking' }],
-            SAVE: [{ guard: 'incomplete', actions: 'incomplete' }, { guard: 'savable', target: 'saving' }],
+            CHECK: [{ guard: 'pendingFields', actions: 'pendingFields' }, { guard: 'incomplete', actions: 'incomplete' }, { guard: 'editable', target: 'checking' }],
+            SAVE: [{ guard: 'pendingFields', actions: 'pendingFields' }, { guard: 'incomplete', actions: 'incomplete' }, { guard: 'savable', target: 'saving' }],
             RECONCILE: { guard: ({ context }) => !!context.uncertain, target: 'reconciling' },
             RELOAD: '#workflowEditor.loading',
           },
@@ -191,7 +268,7 @@ export const workflowEditorMachine = setup({
           // older result has no completion path at all.
           // `checking` is the exact input of the current check. It stays set
           // through the transition that consumes its result.
-          entry: assign(({ context, event }) => ({ checking: { generation: context.generation, document: context.document!, explain: event.type === 'CHECK' && event.explain, context: event.type === 'CHECK' ? event.context : undefined }, notice: undefined })),
+          entry: assign(({ context, event }) => ({ checking: { generation: context.generation, document: context.document!, explain: event.type === 'CHECK' && event.explain, context: event.type === 'CHECK' ? event.context : undefined }, notice: undefined, coalesce: undefined })),
           invoke: {
             src: 'check',
             input: ({ context }) => ({ port: context.port, id: context.target.id, document: context.checking!.document, explain: context.checking!.explain, context: context.checking!.context }),
@@ -201,12 +278,12 @@ export const workflowEditorMachine = setup({
             onError: { target: 'idle', actions: assign(({ event }) => ({ notice: { kind: 'failure', operation: 'check', failure: failure(event, false) } as EditorNotice })) },
           },
           on: {
-            CHECK: [{ guard: 'incomplete', target: 'idle', actions: 'incomplete' }, { guard: 'editable', target: 'checking', reenter: true }],
-            SAVE: [{ guard: 'incomplete', target: 'idle', actions: 'incomplete' }, { guard: 'savable', target: 'saving' }],
+            CHECK: [{ guard: 'pendingFields', target: 'idle', actions: 'pendingFields' }, { guard: 'incomplete', target: 'idle', actions: 'incomplete' }, { guard: 'editable', target: 'checking', reenter: true }],
+            SAVE: [{ guard: 'pendingFields', target: 'idle', actions: 'pendingFields' }, { guard: 'incomplete', target: 'idle', actions: 'incomplete' }, { guard: 'savable', target: 'saving' }],
           },
         },
         saving: {
-          entry: assign(({ context }) => ({ saving: { generation: context.generation, document: context.document! }, notice: undefined })),
+          entry: assign(({ context }) => ({ saving: { generation: context.generation, document: context.document! }, notice: undefined, coalesce: undefined })),
           invoke: {
             src: 'save',
             input: ({ context }) => ({ port: context.port, id: context.target.id, revision: context.base!.revision, document: context.saving!.document }),
@@ -221,13 +298,15 @@ export const workflowEditorMachine = setup({
           },
         },
         reconciling: {
-          // Reconciliation is a read. It never resends the uncertain write.
+          // Reconciliation observes. It never resends the uncertain write,
+          // and the working document (any later generation) is untouched.
           invoke: {
-            src: 'read', input: ({ context }) => ({ port: context.port, id: context.target.id }),
+            src: 'reconcile',
+            input: ({ context }) => ({ port: context.port, id: context.target.id, base: context.base!.revision, document: context.uncertain!.document }),
             onDone: { target: 'idle', actions: assign(({ context, event }) => {
-              const source = event.output, attempt = context.uncertain!;
-              if (source.revision === context.base!.revision) return { uncertain: undefined, notice: { kind: 'not_committed' } as EditorNotice };
-              if (source.document && sameDocument(source.document, attempt.document)) {
+              const { kind, source } = event.output, attempt = context.uncertain!;
+              if (kind === 'not_committed') return { uncertain: undefined, notice: { kind: 'not_committed' } as EditorNotice };
+              if (kind === 'committed') {
                 return { uncertain: undefined, base: { revision: source.revision, source, document: attempt.document }, receipt: { revision: source.revision, configurationRevision: null, generation: attempt.generation, confirmed: true }, notice: { kind: 'reconciled' } as EditorNotice };
               }
               return { uncertain: undefined, notice: { kind: 'changed_externally', revision: source.revision } as EditorNotice };

@@ -26,7 +26,13 @@ use std::path::{Path, PathBuf};
 pub enum WorkflowStructure {
     /// Compiled. `outputs` are the compiled output contracts of every node
     /// by authored path, including derived Parallel and Loop results.
-    Valid { outputs: BTreeMap<String, Value> },
+    /// `revision` is the file revision a `replace` with this candidate
+    /// commits: the native identity of its canonical serialization, so a
+    /// client recognizes its own normalized commit on reread.
+    Valid {
+        outputs: BTreeMap<String, Value>,
+        revision: String,
+    },
     /// The first native compiler rejection.
     Invalid { diagnostic: WorkflowDiagnostic },
 }
@@ -90,23 +96,30 @@ impl UserConfigManager {
             .validate()?;
         }
         let path = file_path(self, target, id);
+        let invalid = |diagnostic| WorkflowCheckReport {
+            structure: WorkflowStructure::Invalid { diagnostic },
+            dependencies: WorkflowDependencies::NotChecked,
+            explanation: None,
+        };
+        // The same number contract a `replace` of this candidate enforces.
+        if let Some(diagnostic) = super::unrepresentable_number(&document) {
+            return Ok(invalid(diagnostic));
+        }
+        let bytes = match super::candidate::encode(id, &path, &document) {
+            Ok(bytes) => bytes,
+            Err(SettingsError::InvalidWorkflow(diagnostic)) => return Ok(invalid(*diagnostic)),
+            Err(error) => return Err(error),
+        };
         let program =
             match crate::local_runtime::workflow_resources::compile_definition(id, &path, document)
             {
                 Ok(program) => program,
-                Err(error) => {
-                    return Ok(WorkflowCheckReport {
-                        structure: WorkflowStructure::Invalid {
-                            diagnostic: WorkflowDiagnostic::from_resource(&error),
-                        },
-                        dependencies: WorkflowDependencies::NotChecked,
-                        explanation: None,
-                    });
-                }
+                Err(error) => return Ok(invalid(WorkflowDiagnostic::from_resource(&error))),
             };
         Ok(WorkflowCheckReport {
             structure: WorkflowStructure::Valid {
                 outputs: program.node_outputs(),
+                revision: crate::local_runtime::settings::revision(Some(&bytes)),
             },
             explanation: explain.then(|| Box::new(program.inspect())),
             dependencies: context.map_or(WorkflowDependencies::NotChecked, |context| {

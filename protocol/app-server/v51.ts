@@ -5418,6 +5418,7 @@ export type WorkflowStructure =
       outputs: {
         [k: string]: unknown;
       };
+      revision: string;
       status: 'valid';
     }
   | {
@@ -16618,7 +16619,6 @@ export interface WorkflowFileSummary {
    * The native identity; absent when the filename is not a Workflow id.
    */
   id?: WorkflowId | null;
-  path: string;
   /**
    * The location relative to the scope's owning directory, e.g.
    * `.agents/workflows/<id>.yaml`.

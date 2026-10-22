@@ -58,6 +58,8 @@ fn minimal(description: &str) -> Result<WorkflowDefinition, SettingsError> {
 
 /// Compile `definition` under `id` and serialize it canonically. The
 /// serialized bytes must parse back to exactly the compiled definition.
+/// These are exactly the bytes a `replace` of `definition` commits, so
+/// their revision is the candidate's native identity.
 pub(in crate::local_runtime) fn encode(
     id: &WorkflowId,
     path: &Path,
@@ -147,6 +149,11 @@ pub(in crate::local_runtime) fn candidate(
         WorkflowEdit::Replace { document } => {
             if original.is_none() {
                 return Err(SettingsError::Invalid);
+            }
+            // A browser-authored document: it must not carry a number the
+            // browser could not have preserved (see `unrepresentable_number`).
+            if let Some(diagnostic) = super::unrepresentable_number(&document) {
+                return Err(invalid(diagnostic));
             }
             encode(id, path, &document).map(Some)
         }

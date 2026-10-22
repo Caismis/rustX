@@ -42,11 +42,23 @@ export function sameBlockPath(left: BlockPath, right: BlockPath): boolean {
   return left.length === right.length && left.every((step, index) => step.node === right[index].node && step.branch === right[index].branch);
 }
 
+/** The node authored under `id`. Authored maps are plain objects, so only
+ * an own entry counts: a valid identifier such as `constructor` is never
+ * mistaken for an inherited property. */
+export function nodeAt(block: Block, id: string): NodeDefinition | undefined {
+  return Object.hasOwn(block.nodes, id) ? block.nodes[id] : undefined;
+}
+
+/** The Parallel branch authored under `key`, by own entry only. */
+export function branchAt<B>(branches: Readonly<Record<string, B>>, key: string): B | undefined {
+  return Object.hasOwn(branches, key) ? branches[key] : undefined;
+}
+
 function child(block: Block, step: BlockStep): Block | undefined {
-  const node = block.nodes[step.node];
+  const node = nodeAt(block, step.node);
   if (!node) return undefined;
   if (step.branch === undefined) return node.type === 'loop' ? node.body : undefined;
-  return node.type === 'parallel' ? node.branches[step.branch]?.block : undefined;
+  return node.type === 'parallel' ? branchAt(node.branches, step.branch)?.block : undefined;
 }
 
 /** The block at `path`, or `undefined` when an ancestor no longer owns it. */
@@ -75,15 +87,15 @@ export function updateBlock(document: WorkflowDocument, path: BlockPath, update:
   const rewrite = (block: Block, depth: number): Block => {
     if (depth === path.length) return update(block);
     const step = path[depth];
-    const node = block.nodes[step.node];
+    const node = nodeAt(block, step.node);
     if (!node) throw new Error('The edited block no longer exists.');
     let replaced: NodeDefinition;
     if (step.branch === undefined) {
       if (node.type !== 'loop') throw new Error('The edited block no longer exists.');
       replaced = { ...node, body: rewrite(node.body, depth + 1) };
     } else {
-      if (node.type !== 'parallel' || !node.branches[step.branch]) throw new Error('The edited block no longer exists.');
-      const branch = node.branches[step.branch];
+      const branch = node.type === 'parallel' ? branchAt(node.branches, step.branch) : undefined;
+      if (node.type !== 'parallel' || !branch) throw new Error('The edited block no longer exists.');
       replaced = { ...node, branches: { ...node.branches, [step.branch]: { ...branch, block: rewrite(branch.block, depth + 1) } } };
     }
     return { ...block, nodes: { ...block.nodes, [step.node]: replaced } };

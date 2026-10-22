@@ -34,7 +34,7 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
   const tx = useTranslation();
   const library = useSelector(surface, snapshot => snapshot.context.library);
   const state = useSelector(library, snapshot => snapshot);
-  const { scope, library: listing, listFailure, operationFailure } = state.context;
+  const { scope, port, library: listing, listFailure, operationFailure } = state.context;
   // Every time Level 1 is shown it lists the selected scope afresh.
   useEffect(() => library.send({ type: 'ACTIVATE' }), [library]);
   const catalog = useSyncExternalStore(authority.subscribe, authority.getCatalog);
@@ -77,7 +77,14 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
     const rows = listing?.files ?? [];
     return needle ? rows.filter(file => [file.file_name, file.description ?? '', file.relative_path].some(text => text.toLowerCase().includes(needle))) : rows;
   }, [listing, query]);
-  const open = (file: WorkflowFileSummary) => { if (file.id) surface.send({ type: 'OPEN', scope, id: file.id }); };
+  const open = (file: WorkflowFileSummary) => { if (file.id && port) surface.send({ type: 'OPEN', id: file.id, port }); };
+  // A confirmation binds the port and listing it was opened from: what it
+  // shows is exactly what it changes, whatever is refreshed meanwhile.
+  const confirm = (dialog: LibraryDialog['kind'], file?: WorkflowFileSummary) => {
+    if (!port || !listing) return;
+    const bound = { port, listing, scopeLabel };
+    setDialog(dialog === 'create' ? { kind: 'create', bound } : { kind: dialog, file: file!, bound });
+  };
   const actions = (file: WorkflowFileSummary) => [
     { id: 'open', label: tx('workflows:library.open'), icon: <IconEditOutline16 />, disabled: !file.id || !file.revision },
     { id: 'copy', label: tx('workflows:library.copy'), icon: <IconCopyOutline16 />, disabled: !file.id || !!file.diagnostic },
@@ -86,8 +93,8 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
   ];
   const act = (file: WorkflowFileSummary, action: string) => {
     if (action === 'open') open(file);
-    else if (action === 'copy') setDialog({ kind: 'copy', file });
-    else if (action === 'delete') setDialog({ kind: 'delete', file });
+    else if (action === 'copy') confirm('copy', file);
+    else if (action === 'delete') confirm('delete', file);
   };
 
   let body;
@@ -122,7 +129,7 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
   return <section className={css.library} aria-labelledby="workflows-title">
     <header className={css.pageHead}>
       <div><h1 id="workflows-title">{tx('workflows:library.title')}</h1><p className={css.muted}>{tx('workflows:library.subtitle')}</p></div>
-      <Button variant="primary" icon={<IconPlusOutline16 />} disabled={!listing || (showingWorkspace && (!workspace || revoked))} onClick={() => setDialog({ kind: 'create' })}>{tx('workflows:library.new')}</Button>
+      <Button variant="primary" icon={<IconPlusOutline16 />} disabled={!listing || (showingWorkspace && (!workspace || revoked))} onClick={() => confirm('create')}>{tx('workflows:library.new')}</Button>
     </header>
     <div className={css.tabs} role="tablist" aria-label={tx('workflows:library.scopes')}>
       {(['workspace', 'global'] as const).map(name => <button key={name} type="button" role="tab" aria-selected={tab === name} className={clsx(css.tab, tab === name && css.tabActive)} onClick={() => chooseTab(name)}>
@@ -152,7 +159,7 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
       {!dialog && <Button size="sm" onClick={() => library.send({ type: 'DISMISS' })}>{tx('workflows:notice.dismiss')}</Button>}
     </div>}
     {body}
-    <LibraryDialogs key={dialog ? `${dialog.kind}:${'file' in dialog ? dialog.file.file_name : ''}` : 'none'} dialog={dialog} close={closeDialog} library={library} scopeLabel={scopeLabel} />
+    <LibraryDialogs key={dialog ? `${dialog.kind}:${'file' in dialog ? dialog.file.file_name : ''}` : 'none'} dialog={dialog} close={closeDialog} library={library} />
   </section>;
 }
 

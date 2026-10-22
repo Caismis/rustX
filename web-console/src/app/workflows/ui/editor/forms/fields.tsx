@@ -1,6 +1,7 @@
-import { useEffect, useId, useState, type ReactNode } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 import clsx from 'clsx';
 import { useTranslation } from '../../../../../locale/react';
+import { readJson, useFieldDraft } from './drafts';
 import css from '../Editor.module.css';
 
 export function Field({ label, hint, children, error }: { label: string; hint?: ReactNode; children: (id: string, describedBy?: string) => ReactNode; error?: string }) {
@@ -27,39 +28,44 @@ export function TextField({ label, hint, value, onChange, multiline, mono, place
   </Field>;
 }
 
-/** A JSON value edited as text. It is applied only when it parses, and
- * the document is never changed by unparseable text. */
-export function JsonField({ label, hint, value, onApply, rows = 6 }: { label: string; hint?: ReactNode; value: unknown; onApply: (value: unknown) => void; rows?: number }) {
+/** A JSON value edited as text, under the field identity `draftKey`. Its
+ * unapplied text belongs to the editor (see `useFieldDraft`); it is applied
+ * on blur, Ctrl/Cmd+Enter, Save or Check, only when it parses within the
+ * browser number contract, and never changes the document otherwise. */
+export function JsonField({ label, hint, value, onApply, rows = 6, draftKey }: { label: string; hint?: ReactNode; value: unknown; onApply: (value: unknown) => void; rows?: number; draftKey: string }) {
   const tx = useTranslation();
   const canonical = JSON.stringify(value, null, 2) ?? 'null';
-  const [text, setText] = useState(canonical);
-  const [error, setError] = useState(false);
-  // A document change elsewhere (undo, rename, reload) replaces the draft text.
-  useEffect(() => { setText(canonical); setError(false); }, [canonical]);
-  const apply = () => {
-    let parsed: unknown;
-    try { parsed = JSON.parse(text); } catch { setError(true); return; }
-    setError(false);
-    if (JSON.stringify(parsed, null, 2) !== canonical) onApply(parsed);
-  };
-  return <Field label={label} hint={hint} error={error ? tx('workflows:inspector.json-invalid') : undefined}>{(id, describedBy) => <>
-    <textarea id={id} aria-describedby={describedBy} aria-invalid={error || undefined} className={clsx(css.input, css.textarea, css.mono)} rows={rows} value={text} spellCheck={false}
-      onChange={event => setText(event.target.value)} onBlur={apply}
+  const [touched, setTouched] = useState(false);
+  const field = useFieldDraft({
+    key: draftKey, canonical,
+    valid: text => readJson(text).ok,
+    commit: text => {
+      const reading = readJson(text);
+      if (!reading.ok) return false;
+      if (JSON.stringify(reading.value, null, 2) !== canonical) onApply(reading.value);
+      return true;
+    },
+  });
+  const reading = field.invalid && (touched || field.flagged) ? readJson(field.text) : undefined;
+  const error = reading && !reading.ok ? tx(reading.reason === 'number' ? 'workflows:inspector.json-number' : 'workflows:inspector.json-invalid') : undefined;
+  const apply = () => { setTouched(true); field.apply(); };
+  return <Field label={label} hint={hint} error={error}>{(id, describedBy) => <>
+    <textarea id={id} aria-describedby={describedBy} aria-invalid={field.invalid || undefined} className={clsx(css.input, css.textarea, css.mono)} rows={rows} value={field.text} spellCheck={false}
+      onChange={event => field.change(event.target.value)} onBlur={apply}
       onKeyDown={event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); apply(); } }} />
   </>}</Field>;
 }
 
-/** An identifier committed explicitly (Enter, blur or Apply), never per keystroke. */
-export function IdentifierField({ label, hint, value, onCommit, error }: { label: string; hint?: ReactNode; value: string; onCommit: (value: string) => void; error?: string }) {
+/** An identifier committed explicitly (Enter, blur, Apply, Save or Check),
+ * never per keystroke. Its unapplied text belongs to the editor. */
+export function IdentifierField({ label, hint, value, onCommit, error, draftKey }: { label: string; hint?: ReactNode; value: string; onCommit: (value: string) => boolean; error?: string; draftKey: string }) {
   const tx = useTranslation();
-  const [draft, setDraft] = useState(value);
-  useEffect(() => setDraft(value), [value]);
-  const commit = () => { if (draft !== value) onCommit(draft.trim()); };
+  const field = useFieldDraft({ key: draftKey, canonical: value, valid: text => text.trim() !== '', commit: text => text.trim() === value || onCommit(text.trim()) });
   return <Field label={label} hint={hint} error={error}>{(id, describedBy) => <div className={css.inline}>
-    <input id={id} aria-describedby={describedBy} className={clsx(css.input, css.mono)} value={draft} spellCheck={false}
-      onChange={event => setDraft(event.target.value)} onBlur={commit}
-      onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); commit(); } else if (event.key === 'Escape') setDraft(value); }} />
-    <button type="button" className={css.smallButton} disabled={draft === value} onClick={commit}>{tx('workflows:inspector.rename')}</button>
+    <input id={id} aria-describedby={describedBy} aria-invalid={field.invalid || !!error || undefined} className={clsx(css.input, css.mono)} value={field.text} spellCheck={false}
+      onChange={event => field.change(event.target.value)} onBlur={field.apply}
+      onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); field.apply(); } else if (event.key === 'Escape') field.reset(); }} />
+    <button type="button" className={css.smallButton} disabled={!field.pending} onClick={field.apply}>{tx('workflows:inspector.rename')}</button>
   </div>}</Field>;
 }
 
