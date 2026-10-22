@@ -152,6 +152,13 @@ impl RuntimeClientProjection {
         self.cursor = RuntimeClientCursor::new(value);
     }
 
+    /// Inspect the actual working owner in source-prefix-gap regression tests.
+    /// `snapshot()` and `snapshot_ref()` intentionally expose published state.
+    #[cfg(test)]
+    pub(crate) fn working_snapshot_for_test(&self) -> &RuntimeClientSnapshot {
+        &self.snapshot
+    }
+
     /// The current snapshot read model reference (host/tests).
     pub(crate) fn snapshot_ref(&self) -> &RuntimeClientSnapshot {
         self.published_seed

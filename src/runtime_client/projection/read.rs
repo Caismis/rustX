@@ -590,7 +590,7 @@ impl RuntimeClientProjection {
             let key = self
                 .domain_sources
                 .keys()
-                .find(|key| key.starts_with("jobs.") || key.starts_with("agents."))
+                .find(|key| key.starts_with("jobs."))
                 .cloned()
                 .or_else(|| self.domain_sources.keys().next().cloned());
             if let Some(key) = key {
@@ -704,10 +704,6 @@ impl RuntimeClientProjection {
                 .jobs
                 .get(usize::try_from(item_offset).ok()?)
                 .map(|job| format!("jobs.{}", job.job_id)),
-            "agents" => snapshot
-                .agents
-                .get(usize::try_from(item_offset).ok()?)
-                .map(|agent| format!("agents.{}", agent.agent_id)),
             domain if domain.starts_with("model_catalog.") => Some("model_catalog".to_owned()),
             domain if domain.starts_with("capabilities.") => Some("capabilities".to_owned()),
             domain if domain.starts_with("resources.") => Some("resources".to_owned()),

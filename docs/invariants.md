@@ -2418,6 +2418,13 @@ second authority:
   keyed by tool call (a settlement push evicts the queued progress of
   that call). At the Runtime Client boundary the projection surfaces
   through `AgentUpdated` events and `snapshot.agents`.
+- **Agent details have one read owner.** Public status, collection pages,
+  identity pages and selected values use the native registry at their captured
+  collection cut. Projection owns its working snapshot, published snapshot and
+  replay, but retains no redundant Agent detail source. Activity acceptance
+  uses the current working activation/lifecycle/revision even when a native
+  source-prefix gap delays publication. Another Agent's valid activity is
+  never rejected solely because the collection generation advanced.
 - **Only superseded observations are coalescible.** Lifecycle,
   cancellation, and terminal publication stay reliable and exactly-once;
   activity delivery is latest-value: a watch overwrite or a replay-ring

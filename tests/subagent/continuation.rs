@@ -484,6 +484,33 @@ async fn assert_agent_page_matches_snapshot(
         panic!("per-Agent page at its native cut: {selected:?}");
     };
     assert_eq!(selected, page);
+    let collection = process
+        .call(Method::ConversationCheckpointPage {
+            target: process.target(),
+            agent_id: None,
+            cut: page.read_cut.clone(),
+            domain: "agents".into(),
+            offset: 0,
+            limit: 32,
+        })
+        .await;
+    let Ok(MethodResult::CheckpointPage { page: collection }) = collection else {
+        panic!("native Agent collection page: {collection:?}");
+    };
+    assert_eq!(
+        collection.total, 1,
+        "this continuation owns exactly one stable Agent"
+    );
+    assert_eq!(collection.items.len(), 1);
+    let collection_original = process
+        .selected_value(None, &collection.read_cut, "agents", 0, &[])
+        .await;
+    let collection_original: rustx::runtime_client::snapshot::RuntimeClientAgent =
+        rustx::observation::bounded::decode_domain_value(collection_original).unwrap();
+    assert_eq!(
+        &collection_original, expected,
+        "public collection values use the native Agent owner"
+    );
     let original = process
         .selected_value(None, &page.read_cut, &page.domain, 0, &[])
         .await;

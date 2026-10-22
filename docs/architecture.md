@@ -4659,7 +4659,13 @@ the bare `profile` key stays retired), and `started_at`. Rust snapshots and
 the maintained TUI mirror agree that an unexpected child process/control-plane
 loss has an unknown outcome, and that the activity projection is
 diagnostics-only. Runtime Client v48 separates durable `AgentState` from finite
-activation `SubagentState`; neither lifecycle is inferred from activity. Superseded
+activation `SubagentState`; neither lifecycle is inferred from activity.
+Agent status, checkpoint collection/identity pages and selected values read the
+native registry at the captured collection cut. Projection retains the finite
+working/published Agent snapshot and replay, without a second Agent detail
+entry in its generic domain-source maps. A deferred publication never makes
+the older published view an owner for a new working-state activity update.
+Superseded
 Runtime Client versions are rejected explicitly;
 there is no compatibility decoder.
 
