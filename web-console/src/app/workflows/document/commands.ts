@@ -10,7 +10,7 @@ import { renameBranchOutput, renameProducer, rewriteBlockReferences } from './re
 export type RejectionCode =
   | 'invalid_identifier' | 'reserved_identifier' | 'duplicate_identifier' | 'missing_node' | 'missing_branch'
   | 'missing_edge' | 'last_branch' | 'return_has_no_successor' | 'invalid_port' | 'port_occupied' | 'self_edge'
-  | 'last_node';
+  | 'last_node' | 'missing_field';
 
 export class CommandRejected extends Error {
   constructor(readonly code: RejectionCode) { super(code); this.name = 'CommandRejected'; }
@@ -189,12 +189,6 @@ export function removeBranch(document: WorkflowDocument, path: BlockPath, id: st
   if (!branchAt(node.branches, key)) throw new CommandRejected('missing_branch');
   if (Object.keys(node.branches).length === 1) throw new CommandRejected('last_branch');
   return updateBlock(document, path, block => ({ ...block, nodes: { ...block.nodes, [id]: { ...node, branches: Object.fromEntries(Object.entries(node.branches).filter(([branch]) => branch !== key)) } } }));
-}
-
-/** Replace a block's input or output contract. */
-export function setBlockContract(document: WorkflowDocument, path: BlockPath, contract: 'input' | 'output', schema: Block['input']): WorkflowDocument {
-  require(blockAt(document, path));
-  return updateBlock(document, path, block => ({ ...block, [contract]: schema }));
 }
 
 /** Set the Workflow description and total timeout. An omitted timeout keeps

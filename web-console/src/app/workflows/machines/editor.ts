@@ -2,6 +2,7 @@ import { assign, fromPromise, setup, type ActorRefFrom, type SnapshotFrom } from
 import type { WorkflowCheckReport, WorkflowSource } from '../../../../../protocol/app-server/v51';
 import type { WorkflowCommit } from '../../../workspaces/host';
 import { CommandRejected, type RejectionCode } from '../document/commands';
+import { encodeField, fieldText, renameAddress, sameField, type FieldAddress } from '../document/fields';
 import { incompleteIdentities, type IncompleteIdentity } from '../document/identities';
 import { existingPath, sameDocument, ROOT, type BlockPath, type WorkflowDocument } from '../document/model';
 import { classifyFailure, type WorkflowFailure, type WorkflowScopePort, type WorkflowTarget } from '../port';
@@ -45,13 +46,46 @@ export type EditorNotice =
    * not shown); nothing was sent and the text is kept. */
   | { kind: 'pending_fields'; count: number };
 
-/** Unapplied text of one deferred-commit field, by stable field identity.
- * It never enters the document until its field applies it. */
+/** Why a field's text was not applied. Its text is kept with the error. */
+export type FieldError =
+  | { kind: 'syntax' } | { kind: 'number' } | { kind: 'empty' }
+  | { kind: 'rejected'; code: RejectionCode }
+  /** The field's value changed under the text (an undo, for instance). */
+  | { kind: 'changed' }
+  /** The field the text was typed into no longer exists. */
+  | { kind: 'missing' };
+
+/** Unapplied text of one deferred-commit field, under its address. It
+ * never enters the document until an `APPLY_DRAFT` of this exact version
+ * is accepted, and it survives selection, navigation and remounts. */
 export interface FieldDraft {
+  readonly address: FieldAddress;
   readonly text: string;
-  /** Whether the field could apply this text now. */
-  readonly valid: boolean;
+  /** Increments on every text change, so an older application request
+   * never applies or clears newer text. */
+  readonly version: number;
+  /** The field's text when this draft began. */
+  readonly base: string;
+  /** The error of the latest application attempt of this text. */
+  readonly error?: FieldError;
+  /** The document changed the field under this text. Sticky: it is
+   * resolved only by the author (keep the text, or discard it). */
+  readonly conflict?: 'changed' | 'missing';
 }
+
+/** The outcome of one field application, as the editor determined it. */
+export type ApplyResult =
+  | { status: 'applied' }
+  /** The field already holds exactly this value; nothing changed. */
+  | { status: 'unchanged' }
+  | { status: 'rejected'; error: FieldError };
+
+/** What applying a field's text does to the current document. A refused
+ * structured command may also throw `CommandRejected`. */
+export type FieldCommand = (document: WorkflowDocument, text: string) =>
+  | { status: 'applied'; document: WorkflowDocument }
+  | { status: 'unchanged' }
+  | { status: 'rejected'; error: FieldError };
 
 /** Browser-local node coordinates of one block, by node id. */
 export type ViewPositions = Readonly<Record<string, { readonly x: number; readonly y: number }>>;
@@ -80,8 +114,12 @@ export interface EditorContext {
    * undo step. Navigation, selection, saving, checking, a node move and
    * undo or redo all end the session. */
   coalesce?: string;
-  /** Unapplied field text: dirty, kept across remounts, never written. */
+  /** Unapplied field text by encoded address: dirty, never written. */
   drafts: Readonly<Record<string, FieldDraft>>;
+  /** The source of draft versions. */
+  draftVersion: number;
+  /** The outcome of the latest `APPLY_DRAFT` that matched its draft. */
+  applied?: { readonly field: string; readonly version: number; readonly result: ApplyResult };
   /** The node positions the latest undo or redo of a view step restores. */
   view?: { readonly seq: number; readonly block: string; readonly positions: ViewPositions };
   block: BlockPath;
@@ -102,8 +140,13 @@ export type EditorEvent =
   | { type: 'UNDO' } | { type: 'REDO' }
   /** One completed drag of nodes in one block: a view step. */
   | { type: 'MOVE'; block: string; path: BlockPath; before: ViewPositions; after: ViewPositions }
-  /** A field's unapplied text changed, or was applied or reset (`undefined`). */
-  | { type: 'DRAFT'; key: string; draft?: FieldDraft }
+  /** A field's text changed. Text equal to the field's value is no draft. */
+  | { type: 'DRAFT'; address: FieldAddress; text: string }
+  /** Apply exactly version `version` of the draft of `field`. */
+  | { type: 'APPLY_DRAFT'; field: string; version: number; command: FieldCommand }
+  /** Keep a conflicting draft's text over the field's current value. */
+  | { type: 'KEEP_DRAFT'; field: string }
+  | { type: 'DISCARD_DRAFT'; field: string }
   | { type: 'DISCARD_DRAFTS' }
   /** The author moved on (another selection): the edit session ends. */
   | { type: 'BOUNDARY' }
@@ -150,6 +193,76 @@ function restore(context: EditorContext, entry: Extract<HistoryEntry, { kind: 'v
   };
 }
 
+function draftOf(context: Pick<EditorContext, 'drafts'>, field: string): FieldDraft | undefined {
+  return Object.hasOwn(context.drafts, field) ? context.drafts[field] : undefined;
+}
+
+/** Drafts after the document changed from `before` to `after`: a draft
+ * whose field is gone, moved or changed keeps its text and is marked, so
+ * it is never silently dropped, reapplied or attached to another field.
+ * Drafts of unchanged fields are untouched. */
+function settleDrafts(drafts: EditorContext['drafts'], before: WorkflowDocument | undefined, after: WorkflowDocument, moved?: ReadonlySet<string>): EditorContext['drafts'] {
+  let changed = false;
+  const next = Object.fromEntries(Object.entries(drafts).map(([field, draft]) => {
+    if (draft.conflict) return [field, draft];
+    const text = fieldText(after, draft.address);
+    // A draft that followed a rename has no address in `before`.
+    const shifted = !!before && !moved?.has(field) && !sameField(before, after, draft.address);
+    const conflict = text === undefined || shifted ? 'missing' : text !== draft.base ? 'changed' : undefined;
+    if (!conflict) return [field, draft];
+    changed = true;
+    return [field, { ...draft, conflict }];
+  }));
+  return changed ? next : drafts;
+}
+
+/** A semantic change of the working document: one undo step, or part of
+ * the open session `coalesce`. */
+function changeDocument(context: EditorContext, next: WorkflowDocument, coalesce: string | undefined, drafts = context.drafts, moved?: ReadonlySet<string>): Partial<EditorContext> {
+  const coalesced = coalesce !== undefined && coalesce === context.coalesce && context.past.at(-1)?.kind === 'document';
+  return {
+    document: next, generation: context.generation + 1, rejection: undefined,
+    past: coalesced ? context.past : [...context.past, { kind: 'document' as const, document: context.document! }].slice(-HISTORY_LIMIT),
+    future: [], coalesce, block: existingPath(next, context.block),
+    drafts: settleDrafts(drafts, context.document, next, moved),
+  };
+}
+
+/** Apply one draft version within one context update: the command runs
+ * against the current document; only an accepted change clears exactly
+ * that draft, and a rejection keeps its text with the error. */
+function applyDraft(context: EditorContext, event: Extract<EditorEvent, { type: 'APPLY_DRAFT' }>): Partial<EditorContext> {
+  const draft = draftOf(context, event.field);
+  if (!draft || draft.version !== event.version || !context.document) return {};
+  const report = (result: ApplyResult) => ({ field: event.field, version: event.version, result });
+  const { [event.field]: _applied, ...rest } = context.drafts;
+  if (draft.conflict) {
+    const error: FieldError = { kind: draft.conflict };
+    return { drafts: { ...rest, [event.field]: { ...draft, error } }, applied: report({ status: 'rejected', error }) };
+  }
+  let outcome: ReturnType<FieldCommand>;
+  try { outcome = event.command(context.document, draft.text); }
+  catch (cause) {
+    if (!(cause instanceof CommandRejected)) throw cause;
+    outcome = { status: 'rejected', error: { kind: 'rejected', code: cause.code } };
+  }
+  if (outcome.status === 'rejected') return { drafts: { ...rest, [event.field]: { ...draft, error: outcome.error } }, applied: report(outcome) };
+  if (outcome.status === 'unchanged') return { drafts: rest, applied: report(outcome) };
+  // A renamed node or branch takes its other fields' drafts along.
+  let others: EditorContext['drafts'] = rest;
+  const moved = new Set<string>();
+  if (draft.address.role === 'key') {
+    const to = draft.text.trim();
+    others = Object.fromEntries(Object.values(rest).map(other => {
+      const address = renameAddress(other.address, draft.address, to);
+      if (address === other.address) return [encodeField(address), other];
+      moved.add(encodeField(address));
+      return [encodeField(address), { ...other, address }];
+    }));
+  }
+  return { ...changeDocument(context, outcome.document, event.field, others, moved), applied: report({ status: 'applied' }) };
+}
+
 /** One editing transaction of one exact Workflow file. React subscribes and
  * submits intent; this machine alone arbitrates the file target, the base
  * revision, edit generations and correlated native operations. */
@@ -190,13 +303,9 @@ export const workflowEditorMachine = setup({
         throw cause;
       }
       if (next === context.document) return { rejection: undefined };
-      const coalesced = event.coalesce !== undefined && event.coalesce === context.coalesce && context.past.at(-1)?.kind === 'document';
-      return {
-        document: next, generation: context.generation + 1, rejection: undefined,
-        past: coalesced ? context.past : [...context.past, { kind: 'document' as const, document: context.document }].slice(-HISTORY_LIMIT),
-        future: [], coalesce: event.coalesce, block: existingPath(next, context.block),
-      };
+      return changeDocument(context, next, event.coalesce);
     }),
+    applyDraft: assign(({ context, event }) => event.type === 'APPLY_DRAFT' ? applyDraft(context, event) : {}),
     move: assign(({ context, event }) => {
       if (event.type !== 'MOVE') return {};
       const entry: HistoryEntry = { kind: 'view', block: event.block, path: event.path, before: event.before, after: event.after };
@@ -205,19 +314,44 @@ export const workflowEditorMachine = setup({
     undo: assign(({ context }) => {
       const entry = context.past.at(-1)!, past = context.past.slice(0, -1);
       if (entry.kind === 'view') return { past, future: [entry, ...context.future], coalesce: undefined, rejection: undefined, ...restore(context, entry, entry.before) };
-      return { document: entry.document, past, future: [{ kind: 'document' as const, document: context.document! }, ...context.future], generation: context.generation + 1, coalesce: undefined, rejection: undefined, block: existingPath(entry.document, context.block) };
+      return { document: entry.document, past, future: [{ kind: 'document' as const, document: context.document! }, ...context.future], generation: context.generation + 1, coalesce: undefined, rejection: undefined, block: existingPath(entry.document, context.block), drafts: settleDrafts(context.drafts, context.document, entry.document) };
     }),
     redo: assign(({ context }) => {
       const [entry, ...future] = context.future;
       if (entry.kind === 'view') return { past: [...context.past, entry], future, coalesce: undefined, rejection: undefined, ...restore(context, entry, entry.after) };
-      return { document: entry.document, past: [...context.past, { kind: 'document' as const, document: context.document! }], future, generation: context.generation + 1, coalesce: undefined, rejection: undefined, block: existingPath(entry.document, context.block) };
+      return { document: entry.document, past: [...context.past, { kind: 'document' as const, document: context.document! }], future, generation: context.generation + 1, coalesce: undefined, rejection: undefined, block: existingPath(entry.document, context.block), drafts: settleDrafts(context.drafts, context.document, entry.document) };
     }),
     navigate: assign(({ context, event }) => event.type === 'NAVIGATE' && context.document ? { block: existingPath(context.document, event.block), coalesce: undefined } : {}),
     boundary: assign({ coalesce: undefined }),
     draft: assign(({ context, event }) => {
-      if (event.type !== 'DRAFT') return {};
-      const { [event.key]: _previous, ...rest } = context.drafts;
-      return { drafts: event.draft ? { ...rest, [event.key]: event.draft } : rest };
+      if (event.type !== 'DRAFT' || !context.document) return {};
+      const field = encodeField(event.address), existing = draftOf(context, field);
+      const { [field]: _previous, ...rest } = context.drafts;
+      if (!existing) {
+        // Text can only be typed into a field that exists now.
+        const base = fieldText(context.document, event.address);
+        if (base === undefined || event.text === base) return {};
+        return { drafts: { ...rest, [field]: { address: event.address, text: event.text, version: context.draftVersion + 1, base } }, draftVersion: context.draftVersion + 1 };
+      }
+      // Typing back to the starting value leaves nothing unapplied.
+      if (!existing.conflict && event.text === existing.base) return { drafts: rest };
+      return { drafts: { ...rest, [field]: { ...existing, text: event.text, version: context.draftVersion + 1, error: undefined } }, draftVersion: context.draftVersion + 1 };
+    }),
+    keepDraft: assign(({ context, event }) => {
+      if (event.type !== 'KEEP_DRAFT' || !context.document) return {};
+      const draft = draftOf(context, event.field);
+      if (draft?.conflict !== 'changed') return {};
+      const base = fieldText(context.document, draft.address);
+      // The field has gone meanwhile: the text cannot be kept for it.
+      if (base === undefined) return { drafts: { ...context.drafts, [event.field]: { ...draft, conflict: 'missing' as const } } };
+      const { conflict: _resolved, error: _error, ...kept } = draft;
+      const { [event.field]: _previous, ...rest } = context.drafts;
+      return { drafts: kept.text === base ? rest : { ...rest, [event.field]: { ...kept, base, version: context.draftVersion + 1 } }, draftVersion: context.draftVersion + 1 };
+    }),
+    discardDraft: assign(({ context, event }) => {
+      if (event.type !== 'DISCARD_DRAFT') return {};
+      const { [event.field]: _discarded, ...rest } = context.drafts;
+      return { drafts: rest };
     }),
     discardDrafts: assign({ drafts: {}, notice: undefined }),
     pendingFields: assign(({ context }) => ({ notice: { kind: 'pending_fields', count: Object.keys(context.drafts).length } as EditorNotice })),
@@ -226,7 +360,7 @@ export const workflowEditorMachine = setup({
   },
 }).createMachine({
   id: 'workflowEditor',
-  context: ({ input }) => ({ port: input.port, target: input.target, generation: 0, past: [], future: [], block: ROOT, drafts: {} }),
+  context: ({ input }) => ({ port: input.port, target: input.target, generation: 0, past: [], future: [], block: ROOT, drafts: {}, draftVersion: 0 }),
   initial: 'loading',
   states: {
     loading: {
@@ -235,7 +369,7 @@ export const workflowEditorMachine = setup({
         src: 'read', input: ({ context }) => ({ port: context.port, id: context.target.id }),
         onDone: { target: 'ready', actions: assign(({ context, event }) => {
           const document = event.output.document ?? undefined;
-          return { base: { revision: event.output.revision, source: event.output, document }, document, generation: context.generation + 1, past: [], future: [], coalesce: undefined, drafts: {}, block: ROOT, check: undefined, receipt: undefined, uncertain: undefined };
+          return { base: { revision: event.output.revision, source: event.output, document }, document, generation: context.generation + 1, past: [], future: [], coalesce: undefined, drafts: {}, applied: undefined, block: ROOT, check: undefined, receipt: undefined, uncertain: undefined };
         }) },
         onError: { target: 'failed', actions: assign(({ event }) => ({ loadFailure: failure(event, false) })) },
       },
@@ -251,6 +385,9 @@ export const workflowEditorMachine = setup({
         NAVIGATE: { actions: 'navigate' },
         BOUNDARY: { actions: 'boundary' },
         DRAFT: { guard: 'editable', actions: 'draft' },
+        APPLY_DRAFT: { guard: 'editable', actions: 'applyDraft' },
+        KEEP_DRAFT: { actions: 'keepDraft' },
+        DISCARD_DRAFT: { actions: 'discardDraft' },
         DISCARD_DRAFTS: { actions: 'discardDrafts' },
         DISMISS: { actions: 'dismiss' },
       },

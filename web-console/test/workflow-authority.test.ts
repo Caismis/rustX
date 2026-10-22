@@ -211,7 +211,7 @@ describe('Library activation after connection bootstrap (R9)', () => {
     expect(library.getSnapshot().context.listFailure).toBeUndefined();
   });
 
-  it('keeps an open confirmation bound to its port when the library refreshes', async () => {
+  it('keeps an open confirmation bound to the observation it opened from when the library refreshes', async () => {
     const { client, pending } = fakeClient();
     const { createActor } = await import('xstate');
     const { workflowLibraryMachine } = await import('../src/app/workflows/machines/library');
@@ -221,14 +221,16 @@ describe('Library activation after connection bootstrap (R9)', () => {
     await flush();
     pending[0].resolve({ type: 'workflow_library', library: { target: { kind: 'user' }, directory: '/d', absent_revision: 'missing', files: [], diagnostic: null } });
     await flush();
-    const bound = library.getSnapshot().context.port!;
+    const bound = library.getSnapshot().context.observation!.port;
+    library.send({ type: 'CONFIRM', kind: 'create' });
+    const { seq } = library.getSnapshot().context.confirmation!;
     // A refresh creates a newer read port; the confirmation keeps its own.
     library.send({ type: 'REFRESH' });
-    expect(library.getSnapshot().context.port).not.toBe(bound);
+    expect(library.getSnapshot().context.reading).not.toBe(bound);
     pending[1].resolve({ type: 'workflow_library', library: { target: { kind: 'user' }, directory: '/d', absent_revision: 'missing', files: [], diagnostic: null } });
     await flush();
-    library.send({ type: 'OPERATE', operation: { kind: 'create', id: 'fresh', description: 'x' }, port: bound, absent: 'missing' });
-    expect(library.getSnapshot().context.pendingTarget?.port).toBe(bound);
+    library.send({ type: 'SUBMIT', seq, id: 'fresh', description: 'x' });
+    expect(library.getSnapshot().context.pending?.port).toBe(bound);
     // A refresh while the operation is in flight neither stops nor retargets it.
     library.send({ type: 'REFRESH' });
     expect(library.getSnapshot().matches('operating')).toBe(true);

@@ -11,13 +11,16 @@ import type { ViewPositions } from '../../machines/editor';
 import { edgePort, outputPorts, type ControlPort } from '../../document/ports';
 import { IconCursor, IconFit, IconHand, IconMinus, IconPlus, IconBlock } from '../icons';
 import { after, layout, NODE_WIDTH, type Point } from './layout';
+import type { InspectorTab } from './forms/NodeForms';
 import { Palette } from './Palette';
 import { nodeSummary } from './summary';
-import { readViews, writeBlockView } from './view-store';
+import { blockView, readViews, writeBlockView } from './view-store';
 import { CanvasActions, WorkflowNode, type WorkflowFlowNode } from './WorkflowNode';
 import css from './Editor.module.css';
 
-export type Selection = { kind: 'node'; id: string } | { kind: 'edge'; index: number } | { kind: 'block' } | { kind: 'check' } | undefined;
+/** What the inspector shows. A node selection may ask for the tab that
+ * shows one of its fields. */
+export type Selection = { kind: 'node'; id: string; tab?: InspectorTab } | { kind: 'edge'; index: number } | { kind: 'block' } | { kind: 'check' } | undefined;
 export interface Problems { readonly nodes: ReadonlyMap<string, 'error' | 'warning' | 'nested'>; readonly edges: ReadonlySet<number> }
 type Edit = (apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?: string) => void;
 
@@ -33,9 +36,9 @@ export const Canvas = memo(function Canvas({ block, path, blockKey, viewKey, vie
   const tx = useTranslation();
   const flow = useReactFlow<WorkflowFlowNode>();
   const container = useRef<HTMLDivElement>(null);
-  const [stored, setStored] = useState(() => readViews(viewKey)[blockKey]);
+  const [stored, setStored] = useState(() => blockView(readViews(viewKey), blockKey));
   // `viewEpoch` advances when an undo or redo restored stored positions.
-  useEffect(() => setStored(readViews(viewKey)[blockKey]), [viewKey, blockKey, viewEpoch]);
+  useEffect(() => setStored(blockView(readViews(viewKey), blockKey)), [viewKey, blockKey, viewEpoch]);
   const positions = useMemo(() => layout(block, stored?.positions), [block, stored]);
   const [mode, setMode] = useState<'select' | 'pan'>('select');
   const [palette, setPalette] = useState<{ at: { x: number; y: number }; position: Point; from?: { node: string; port: ControlPort } }>();
@@ -86,10 +89,10 @@ export const Canvas = memo(function Canvas({ block, path, blockKey, viewKey, vie
   const persist = useCallback((moved: readonly WorkflowFlowNode[]) => {
     const before = dragged.current;
     dragged.current = {};
-    const after = Object.fromEntries(moved.filter(node => before[node.id]).map(node => [node.id, { x: node.position.x, y: node.position.y }]));
+    const after = Object.fromEntries(moved.filter(node => Object.hasOwn(before, node.id)).map(node => [node.id, { x: node.position.x, y: node.position.y }]));
     if (!Object.entries(after).some(([id, point]) => point.x !== before[id].x || point.y !== before[id].y)) return;
     writeBlockView(viewKey, blockKey, view => ({ ...view, positions: { ...positions, ...view.positions, ...after } }));
-    setStored(readViews(viewKey)[blockKey]);
+    setStored(blockView(readViews(viewKey), blockKey));
     onMove({ block: blockKey, before: Object.fromEntries(Object.keys(after).map(id => [id, before[id]])), after });
   }, [viewKey, blockKey, positions, onMove]);
   const onDelete = useCallback<OnDelete<WorkflowFlowNode, FlowEdge>>(({ nodes: removed, edges: cut }) => {
@@ -130,7 +133,7 @@ export const Canvas = memo(function Canvas({ block, path, blockKey, viewKey, vie
     if (!palette) return;
     const id = freshIdentifier(block, kind);
     writeBlockView(viewKey, blockKey, view => ({ ...view, positions: { ...positions, ...view.positions, [id]: palette.position } }));
-    setStored(readViews(viewKey)[blockKey]);
+    setStored(blockView(readViews(viewKey), blockKey));
     edit(document => addNode(document, path, kind, id, palette.from && { from: palette.from.node, port: palette.from.port }));
     setPalette(undefined);
     onSelect({ kind: 'node', id });

@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { EXAMPLES, exampleSource } from './workflow-fixtures';
 import {
   addBranch, addNode, CommandRejected, connect, deleteNodes, disconnect, reconnect, removeBranch, renameBranch,
-  renameNode, replaceNode, setBlockContract, setEntry, setWorkflow,
+  renameNode, replaceNode, setEntry, setWorkflow,
 } from '../src/app/workflows/document/commands';
 import { locate } from '../src/app/workflows/document/diagnostics';
 import {
   blockAt, blockKey, childSteps, existingPath, nativeBlockPath, sameDocument, ROOT, type BlockPath, type WorkflowDocument,
 } from '../src/app/workflows/document/model';
+import { blockField, encodeField, fieldText, nodeField, renameAddress, setField } from '../src/app/workflows/document/fields';
+import { after, defaultLayout, layout } from '../src/app/workflows/ui/editor/layout';
 import { edgePort } from '../src/app/workflows/document/ports';
 import { blockReferences } from '../src/app/workflows/document/references';
 import { readJson } from '../src/app/workflows/ui/editor/forms/drafts';
@@ -134,7 +136,7 @@ describe('native Workflow editing document', () => {
     expect(rejection(() => connect(document, quality, 'review', 'next', 'decision'))).toBe('missing_node');
     document = setEntry(document, quality, 'refine');
     expect(blockAt(document, quality)!.entry).toBe('refine');
-    document = setBlockContract(document, quality, 'output', { type: 'object', properties: {}, additionalProperties: false });
+    document = setField(document, blockField(quality, ['output']), { type: 'object', properties: {}, additionalProperties: false });
     expect(blockAt(document, quality)!.output).toEqual({ type: 'object', properties: {}, additionalProperties: false });
     // Removing the owning branch leaves the editor at the nearest live block.
     const removed = removeBranch(document, ROOT, 'reviews', 'quality');
@@ -191,5 +193,79 @@ describe('authored maps and the browser number contract', () => {
     // What is accepted serializes back to the very token native receives.
     const accepted = readJson('[2.5, -0.25, 9007199254740991, 1e21]');
     expect(accepted.ok && JSON.stringify(accepted.value)).toBe('[2.5,-0.25,9007199254740991,1e+21]');
+  });
+
+  it('refuses negative zero in every spelling and position before an integer rule accepts it', () => {
+    // `-0` is an integer token and `Number.isSafeInteger(-0)` holds, yet it
+    // would be written as `0`.
+    for (const text of ['-0', '-0.0', '-0e0', '-0E+5', '-0.000e-3', '[1, -0]', '{"a": {"b": [2, -0]}}', '{"n": -0, "ok": 1}']) {
+      expect(readJson(text), text).toEqual({ ok: false, reason: 'number' });
+    }
+    for (const [text, value] of [['0', 0], ['-1', -1], ['-9007199254740991', -9007199254740991], ['-0.5', -0.5], ['3.14', 3.14], ['1e-7', 1e-7], ['{"a": [0, -2.5]}', { a: [0, -2.5] }]] as const) {
+      const reading = readJson(text);
+      expect(reading, text).toEqual({ ok: true, value });
+      expect(reading.ok && Object.is(reading.value, -0)).toBe(false);
+    }
+    for (const text of ['9007199254740992', '-9007199254740992', '1.0', '1e3', 'NaN', '1e400']) expect(readJson(text).ok, text).toBe(false);
+  });
+
+  it('places a node named like an inherited property from its own cache entry or its default', () => {
+    const document = addNode(example('parallel_review'), ROOT, 'return', 'constructor');
+    const block = blockAt(document, ROOT)!;
+    // A cache written before the node existed holds other nodes only.
+    const stored = { ready: { x: 900, y: 40 } };
+    const positions = layout(block, stored);
+    expect(positions.ready).toEqual({ x: 900, y: 40 });
+    for (const id of ['constructor', ...Object.keys(block.nodes)]) {
+      expect(Object.hasOwn(positions, id), id).toBe(true);
+      expect(Number.isFinite(positions[id].x) && Number.isFinite(positions[id].y), id).toBe(true);
+    }
+    const own = positions['constructor' as string];
+    expect(own).toEqual(defaultLayout(block)['constructor' as string]);
+    const next = after(block, positions, 'constructor', 'next');
+    expect(next.x).toBe(own.x + 320);
+    expect(Number.isFinite(next.y)).toBe(true);
+  });
+});
+
+describe('field addresses', () => {
+  const fixture = (): WorkflowDocument => {
+    const document = example('parallel_review');
+    return replaceNode(document, ROOT, 'ready', {
+      type: 'return',
+      output: { type: 'object', fields: {
+        'a.fields.b': { type: 'literal', value: 1 },
+        a: { type: 'object', fields: { b: { type: 'literal', value: 2 } } },
+      } },
+    });
+  };
+  const direct = nodeField(ROOT, 'ready', ['output', 'fields', { key: 'a.fields.b' }, 'value']);
+  const nested = nodeField(ROOT, 'ready', ['output', 'fields', { key: 'a' }, 'fields', { key: 'b' }, 'value']);
+
+  it('keeps a direct key containing dots apart from the nested path it spells', () => {
+    expect(encodeField(direct)).not.toBe(encodeField(nested));
+    // An authored key is never a structural component of the same name.
+    expect(encodeField(nodeField(ROOT, 'n', ['output', 'fields', { key: 'fields' }]))).not.toBe(encodeField(nodeField(ROOT, 'n', ['output', 'fields', 'fields'])));
+    const document = fixture();
+    expect(fieldText(document, direct)).toBe('1');
+    expect(fieldText(document, nested)).toBe('2');
+    const edited = setField(document, direct, 3);
+    expect(fieldText(edited, direct)).toBe('3');
+    expect(fieldText(edited, nested)).toBe('2');
+  });
+
+  it('resolves only own entries and existing items, and follows renames', () => {
+    const document = fixture();
+    expect(fieldText(document, nodeField(ROOT, 'constructor', ['output']))).toBeUndefined();
+    expect(fieldText(document, nodeField(ROOT, 'ready', ['output', 'fields', { key: 'toString' }]))).toBeUndefined();
+    expect(fieldText(document, nodeField(ROOT, 'ready', [], 'key'))).toBe('ready');
+    expect(rejection(() => setField(document, nodeField(ROOT, 'ready', ['output', 'items', 0]), 1))).toBe('missing_field');
+    const quality: BlockPath = [{ node: 'reviews', branch: 'quality' }];
+    const inQuality = nodeField(quality, 'done', ['output']);
+    expect(renameAddress(inQuality, nodeField(ROOT, 'reviews', ['branches', { key: 'quality' }], 'key'), 'clarity')).toEqual(nodeField([{ node: 'reviews', branch: 'clarity' }], 'done', ['output']));
+    expect(renameAddress(inQuality, nodeField(ROOT, 'reviews', [], 'key'), 'checks')).toEqual(nodeField([{ node: 'checks', branch: 'quality' }], 'done', ['output']));
+    expect(renameAddress(direct, nodeField(ROOT, 'ready', [], 'key'), 'done_now')).toEqual(nodeField(ROOT, 'done_now', direct.path));
+    // Another block's same-named node is another node.
+    expect(renameAddress(inQuality, nodeField(ROOT, 'done', [], 'key'), 'other')).toBe(inQuality);
   });
 });

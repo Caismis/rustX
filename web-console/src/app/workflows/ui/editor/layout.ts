@@ -42,15 +42,17 @@ export function defaultLayout(block: Block): Record<string, Point> {
   return positions;
 }
 
-/** Stored positions for still-existing node ids, defaults for the rest. */
+/** Stored positions for still-existing node ids, defaults for the rest.
+ * Only an own stored entry counts: `constructor` or `__proto__` is a valid
+ * node id, never an inherited property of the cache. */
 export function layout(block: Block, stored: Readonly<Record<string, Point>> | undefined): Record<string, Point> {
   const defaults = defaultLayout(block);
-  return Object.fromEntries(Object.keys(block.nodes).map(id => [id, stored?.[id] ?? defaults[id]]));
+  return Object.fromEntries(Object.keys(block.nodes).map(id => [id, stored && Object.hasOwn(stored, id) ? stored[id] : defaults[id]]));
 }
 
 /** Where a node added after `from`'s `port` goes: one column right, offset by port. */
 export function after(block: Block, positions: Readonly<Record<string, Point>>, from: string, port: string): Point {
-  const origin = positions[from] ?? { x: 0, y: 0 };
+  const origin = Object.hasOwn(positions, from) ? positions[from] : { x: 0, y: 0 };
   const source = nodeAt(block, from);
   const ports = source ? outputPorts(source.type) : [];
   const index = Math.max(0, ports.indexOf(port as never));

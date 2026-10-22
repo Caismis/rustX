@@ -10,6 +10,8 @@ import { startDogfood } from './dogfood-server';
 import { expectStableScreenshot } from './screenshot';
 import { connectRemote } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
+import { parse } from 'yaml';
+import { COLLIDING_FIELDS } from '../workflow-colliding-document';
 
 const examples = fileURLToPath(new URL('../../../examples/local-runtime/', import.meta.url));
 const example = (path: string) => readFileSync(resolve(examples, path));
@@ -297,11 +299,73 @@ test('keyboard selection, node-move undo, focused-field save and the browser num
     expect(saved).not.toBe(original);
     await input.fill('{"type": "object", "properties": {"proposal": {"type": "string", "const": 9007199254740993}}, "additionalProperties": false}');
     await page.keyboard.press('Control+s');
-    await expect(inspector.getByText('This number cannot be kept exactly in the browser editor', { exact: false })).toBeVisible();
+    await expect(inspector.getByText('This number would change in the browser editor', { exact: false })).toBeVisible();
     await expect(input).toHaveValue(/9007199254740993/);
     expect(readFileSync(path, 'utf8')).toBe(saved);
     await page.getByRole('button', { name: 'Back to Workflows', exact: true }).click();
     await expect(page.getByRole('dialog', { name: 'Discard unsaved changes?' })).toBeVisible();
+    expect(errors).toEqual([]);
+  } finally { await fixture.stop(false); }
+});
+
+test('object keys spelled like paths stay separate fields, and rejected field text is kept unsent', async ({ page }) => {
+  const fixture = await startDogfood('web_console_dogfood');
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  try {
+    await seed(fixture);
+    // JSON is YAML: the very document the component tests use.
+    const path = join(fixture.workspaceA, '.agents/workflows/colliding.yaml');
+    writeFileSync(path, JSON.stringify(COLLIDING_FIELDS, null, 2));
+    await routeWorkspaceHost(page, fixture);
+    await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token);
+    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await card(page, 'colliding').getByRole('button', { name: 'colliding', exact: true }).click();
+
+    // Native accepts the structure; dependencies are a separate fact.
+    await page.getByRole('button', { name: 'Check', exact: true }).click();
+    const inspector = page.getByRole('complementary', { name: 'Inspector' });
+    await expect(inspector.getByText('Structure check passed').first()).toBeVisible();
+
+    const done = editor(page).getByLabel('Return node done');
+    await done.focus();
+    await page.keyboard.press('Enter');
+    // Each value editor is the group its authored key labels.
+    await expect(inspector.getByLabel('Literal JSON')).toHaveCount(2);
+    const direct = inspector.getByRole('group', { name: 'a.fields.b', exact: true }).getByLabel('Literal JSON');
+    const nested = inspector.getByRole('group', { name: 'a', exact: true }).getByRole('group', { name: 'b', exact: true }).getByLabel('Literal JSON');
+    await expect(direct).toHaveValue('1');
+    await expect(nested).toHaveValue('2');
+    // Negative zero is refused in the field before anything is written.
+    await direct.fill('-0');
+    await page.keyboard.press('Control+s');
+    await expect(inspector.getByText('This number would change in the browser editor', { exact: false })).toBeVisible();
+    await expect(nested).toHaveValue('2');
+    expect(parse(readFileSync(path, 'utf8'))).toEqual(COLLIDING_FIELDS);
+    await direct.fill('3');
+    await expect(nested).toHaveValue('2');
+    await page.keyboard.press('Control+s');
+    await expect.poll(() => parse(readFileSync(path, 'utf8')).block.nodes.done.output.fields).toEqual({
+      'a.fields.b': { type: 'literal', value: 3 },
+      a: { type: 'object', fields: { b: { type: 'literal', value: 2 } } },
+    });
+    await expect(page.getByRole('status').filter({ hasText: 'No unsaved changes' })).toBeVisible();
+    await page.getByRole('button', { name: 'Back to Workflows', exact: true }).click();
+
+    // A rename to a key the node already has is refused; its text and error
+    // are kept, and Save sends nothing.
+    await card(page, 'parallel_review').getByRole('button', { name: 'parallel_review', exact: true }).click();
+    const reviews = editor(page).getByLabel('Parallel node reviews');
+    await reviews.focus();
+    await page.keyboard.press('Enter');
+    const key = inspector.getByLabel('Rename branch quality');
+    const review = join(fixture.workspaceA, '.agents/workflows/parallel_review.yaml');
+    const original = readFileSync(review, 'utf8');
+    await key.fill('security');
+    await page.keyboard.press('Control+s');
+    await expect(inspector.getByText('That ID is already used in this block.')).toBeVisible();
+    await expect(key).toHaveValue('security');
+    await expect(page.getByRole('list', { name: 'Fields with unapplied text' })).toContainText('reviews · branches["quality"]');
+    expect(readFileSync(review, 'utf8')).toBe(original);
     expect(errors).toEqual([]);
   } finally { await fixture.stop(false); }
 });

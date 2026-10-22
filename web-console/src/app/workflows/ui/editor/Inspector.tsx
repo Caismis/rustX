@@ -26,9 +26,9 @@ export function checkState(check: CheckResult | undefined, generation: number): 
 
 /** The contextual right inspector. It exists only while something is
  * selected; it never reserves an empty column. */
-export function Inspector({ document, block, selection, onSelect, edit, rename, navigate, vocabulary, check, generation, rejection, checks }: {
+export function Inspector({ document, block, selection, onSelect, edit, onRenamed, navigate, vocabulary, check, generation, rejection, checks }: {
   document: WorkflowDocument; block: BlockPath; selection: NonNullable<Selection>; onSelect: (selection: Selection) => void;
-  edit: Edit; rename: (from: string, to: string) => boolean; navigate: (block: BlockPath) => void; vocabulary?: WorkflowVocabulary; check?: CheckResult; generation: number;
+  edit: Edit; onRenamed: (from: string, to: string) => void; navigate: (block: BlockPath) => void; vocabulary?: WorkflowVocabulary; check?: CheckResult; generation: number;
   rejection?: string; checks: ReactNode;
 }) {
   const tx = useTranslation();
@@ -36,7 +36,9 @@ export function Inspector({ document, block, selection, onSelect, edit, rename, 
   const node = selection.kind === 'node' ? nodeAt(owner, selection.id) : undefined;
   const [tab, setTab] = useState<InspectorTab>('config');
   const nodeId = selection.kind === 'node' ? selection.id : undefined;
-  useEffect(() => setTab('config'), [nodeId]);
+  // A new node opens on Configure; locating a field opens the tab it is on.
+  const requested = selection.kind === 'node' ? selection.tab : undefined;
+  useEffect(() => setTab(requested ?? 'config'), [nodeId, requested, requested && selection]);
   const state = checkState(check, generation);
   const outputs = check?.report.structure.status === 'valid' ? check.report.structure.outputs : undefined;
   let head, body;
@@ -51,8 +53,8 @@ export function Inspector({ document, block, selection, onSelect, edit, rename, 
         {tabs.map(name => <button key={name} type="button" role="tab" aria-selected={tab === name} className={clsx(css.inspectTab, tab === name && css.inspectTabActive)} onClick={() => setTab(name)}>{tx(`workflows:inspector.tab-${name}`)}</button>)}
       </div>}
       <div className={css.inspectBody} role={tabs.length > 1 ? 'tabpanel' : undefined}>
-        <NodeForm document={document} block={block} id={selection.id} tab={tabs.includes(tab) ? tab : 'config'} vocabulary={vocabulary} edit={edit} rename={rename} navigate={navigate} rejected={rejection}
-          derived={outputs ? { schema: outputs[derivedKey(block, selection.id)], current: state === 'passed' } : undefined} />
+        <NodeForm document={document} block={block} id={selection.id} tab={tabs.includes(tab) ? tab : 'config'} vocabulary={vocabulary} edit={edit} onRenamed={onRenamed} navigate={navigate} rejected={rejection}
+          derived={outputs ? { schema: Object.hasOwn(outputs, derivedKey(block, selection.id)) ? outputs[derivedKey(block, selection.id)] : undefined, current: state === 'passed' } : undefined} />
       </div>
     </>;
   } else if (selection.kind === 'edge' && edgesOf(owner)[selection.index]) {

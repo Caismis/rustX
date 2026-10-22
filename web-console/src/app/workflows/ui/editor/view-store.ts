@@ -17,7 +17,7 @@ function finite(value: unknown): value is number { return typeof value === 'numb
 
 function sanitize(value: unknown): Record<string, BlockView> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  const result: Record<string, BlockView> = {};
+  const result: [string, BlockView][] = [];
   for (const [block, view] of Object.entries(value).slice(0, MAX_BLOCKS)) {
     if (!view || typeof view !== 'object') continue;
     const entry: BlockView = {};
@@ -27,14 +27,20 @@ function sanitize(value: unknown): Record<string, BlockView> {
         .filter(([, point]) => point && finite(point.x) && finite(point.y)).map(([id, point]) => [id, { x: point.x, y: point.y }]));
     }
     if (viewport && finite(viewport.x) && finite(viewport.y) && finite(viewport.zoom)) entry.viewport = { x: viewport.x, y: viewport.y, zoom: viewport.zoom };
-    result[block] = entry;
+    result.push([block, entry]);
   }
-  return result;
+  // Own entries only, whatever a stored key is named.
+  return Object.fromEntries(result);
 }
 
 /** The view key of one exact file: server endpoint, scope and id. */
 export function viewKey(endpoint: string, scope: string, id: string) {
   return PREFIX + JSON.stringify([endpoint, scope, id]);
+}
+
+/** The stored view of one block, by own entry only. */
+export function blockView(views: Readonly<Record<string, BlockView>>, block: string): BlockView | undefined {
+  return Object.hasOwn(views, block) ? views[block] : undefined;
 }
 
 export function readViews(key: string): Record<string, BlockView> {
@@ -44,8 +50,7 @@ export function readViews(key: string): Record<string, BlockView> {
 export function writeBlockView(key: string, block: string, update: (view: BlockView) => BlockView) {
   try {
     const views = readViews(key);
-    views[block] = update(views[block] ?? {});
-    localStorage.setItem(key, JSON.stringify(sanitize(views)));
+    localStorage.setItem(key, JSON.stringify(sanitize({ ...views, [block]: update(blockView(views, block) ?? {}) })));
   } catch { /* Presentation preferences are optional. */ }
 }
 

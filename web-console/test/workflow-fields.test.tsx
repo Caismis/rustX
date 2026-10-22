@@ -63,7 +63,7 @@ it('never writes focused invalid text, keeps it visible and protects it from sil
   expect(field.value).toBe('{ "type": "object", ');
   expect(field.getAttribute('aria-invalid')).toBe('true');
   expect(screen.getByText(/Not valid JSON/)).toBeTruthy();
-  expect(screen.getByText(/could not be applied/)).toBeTruthy();
+  expect(screen.getByText(/not applied yet/)).toBeTruthy();
   expect(editorHolds(editor)).toBe(true);
   expect(editor.getSnapshot().context.notice).toEqual({ kind: 'pending_fields', count: 1 });
 });
@@ -73,6 +73,6 @@ it('never writes a number the browser would round, and says why', async () => {
   fireEvent.change(field, { target: { value: '{"type": "object", "properties": {"n": {"const": 9007199254740993}}, "additionalProperties": false}' } });
   saveShortcut(field);
   expect(writes).toHaveLength(0);
-  expect(editor.getSnapshot().context.drafts['block.input'].valid).toBe(false);
-  expect(screen.getByText(/cannot be kept exactly/)).toBeTruthy();
+  expect(Object.values(editor.getSnapshot().context.drafts).map(draft => draft.error)).toEqual([{ kind: 'number' }]);
+  expect(screen.getByText(/would change in the browser editor/)).toBeTruthy();
 });
