@@ -45,6 +45,7 @@ const card = (page: Page, id: string) => page.getByRole('listitem').filter({ has
 test('library → new → nested editor → check → save → reopen → copy → delete', async ({ page }) => {
   const fixture = await startDogfood('web_console_dogfood');
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   try {
     await seed(fixture);
     await routeWorkspaceHost(page, fixture);
@@ -155,6 +156,22 @@ test('library → new → nested editor → check → save → reopen → copy �
     await expect(card(page, 'triage_copy')).toHaveCount(0);
     expect(existsSync(join(fixture.workspaceA, '.agents/workflows/triage_copy.yaml'))).toBe(false);
     expect(existsSync(join(fixture.directory, 'home/rustx/.agents/workflows/typed_agent.yaml'))).toBe(true);
+
+    // A Global dependency result belongs to the selected Workspace, while
+    // the structure result remains independent of that selection.
+    await page.getByRole('tab', { name: 'Global', exact: true }).click();
+    await card(page, 'typed_agent').getByRole('button', { name: 'typed_agent', exact: true }).click();
+    await page.getByRole('button', { name: 'Check', exact: true }).first().click();
+    const dependencies = inspector.getByLabel('Check dependencies in');
+    await dependencies.selectOption({ label: 'Workspace A' });
+    await page.getByRole('button', { name: 'Check', exact: true }).first().click();
+    await expect(inspector).toContainText('Agents and Tools admit in Workspace A.');
+    await dependencies.selectOption({ label: 'Workspace B' });
+    await expect(inspector).not.toContainText('Agents and Tools admit in Workspace A.');
+    await expect(inspector.locator('p').filter({ hasText: /^Not checked$/ })).toBeVisible();
+    await expect(inspector).toContainText('Structure check passed');
+    await dependencies.selectOption({ label: 'Workspace A' });
+    await expect(inspector).toContainText('Agents and Tools admit in Workspace A.');
     expect(errors).toEqual([]);
   } finally { await fixture.stop(false); }
 });
@@ -229,9 +246,10 @@ block:
       output: {type: object, fields: {values: {type: array, items: [{type: literal, value: 1.0}, {type: literal, value: 1.5}]}}}
 `;
 
-test('keyboard selection, node-move undo, focused-field save and the browser number contract', async ({ page }) => {
+test('keyboard selection, node-move undo, focused-field save and the browser number contract', async ({ page }, testInfo) => {
   const fixture = await startDogfood('web_console_dogfood');
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   try {
     await seed(fixture);
     const floats = join(fixture.workspaceA, '.agents/workflows/floats.yaml');
@@ -257,9 +275,19 @@ test('keyboard selection, node-move undo, focused-field save and the browser num
     await page.keyboard.press('Enter');
     const inspector = page.getByRole('complementary', { name: 'Inspector' });
     await expect(inspector.getByLabel('Node ID')).toHaveValue('ready');
+    // Move before renaming: the new identity must keep the authored layout,
+    // and Undo/Redo must carry it back and forward instead of relaying out.
+    const initial = (await ready.boundingBox())!;
+    await page.mouse.move(initial.x + 40, initial.y + 20);
+    await page.mouse.down();
+    await page.mouse.move(initial.x - 20, initial.y + 100, { steps: 8 });
+    await page.mouse.up();
+    const authored = (await ready.boundingBox())!;
+    expect(Math.round(authored.y - initial.y)).toBeGreaterThan(40);
     await inspector.getByLabel('Node ID').fill('accepted');
     await inspector.getByLabel('Node ID').press('Enter');
     await expect(editor(page).getByLabel('Return node accepted')).toBeVisible();
+    await expect.poll(async () => Math.round((await editor(page).getByLabel('Return node accepted').boundingBox())!.y)).toBe(Math.round(authored.y));
 
     // One completed drag is one view step: Undo reverts it before the
     // older rename, without touching the file.
@@ -276,10 +304,20 @@ test('keyboard selection, node-move undo, focused-field save and the browser num
     await expect(editor(page).getByLabel('Return node accepted')).toBeVisible();
     await page.keyboard.press('Control+z');
     await expect(editor(page).getByLabel('Return node ready')).toBeVisible();
+    await expect.poll(async () => Math.round((await ready.boundingBox())!.y)).toBe(Math.round(authored.y));
     await page.keyboard.press('Control+Shift+z');
     await expect(editor(page).getByLabel('Return node accepted')).toBeVisible();
+    await expect.poll(async () => Math.round((await editor(page).getByLabel('Return node accepted').boundingBox())!.y)).toBe(Math.round(authored.y));
     await page.keyboard.press('Control+Shift+z');
     await expect.poll(async () => Math.round((await decision.boundingBox())!.y)).toBe(Math.round(moved.y));
+    await editor(page).getByRole('group', { name: 'Canvas tools' }).getByRole('button', { name: 'Fit view', exact: true }).click();
+    await expect.poll(async () => {
+      const node = (await editor(page).getByLabel('Return node accepted').boundingBox())!;
+      const canvas = (await editor(page).boundingBox())!;
+      return node.x >= canvas.x && node.y >= canvas.y
+        && node.x + node.width <= canvas.x + canvas.width && node.y + node.height <= canvas.y + canvas.height;
+    }).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath('workflow-renamed-layout.png') });
 
     // Ctrl/Cmd+S in a focused JSON field saves exactly the visible text.
     const path = join(fixture.workspaceA, '.agents/workflows/parallel_review.yaml');
@@ -311,6 +349,7 @@ test('keyboard selection, node-move undo, focused-field save and the browser num
 test('object keys spelled like paths stay separate fields, and rejected field text is kept unsent', async ({ page }) => {
   const fixture = await startDogfood('web_console_dogfood');
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   try {
     await seed(fixture);
     // JSON is YAML: the very document the component tests use.

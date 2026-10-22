@@ -25,6 +25,7 @@ export function LibraryDialog({ confirmation, scopeLabel, library }: {
 }) {
   const tx = useTranslation();
   const busy = useSelector(library, snapshot => snapshot.context.pending?.confirmation === confirmation.seq);
+  const blocked = busy || !!confirmation.uncertain;
   const [id, setId] = useState('');
   const [description, setDescription] = useState('');
   const [touched, setTouched] = useState(false);
@@ -44,20 +45,22 @@ export function LibraryDialog({ confirmation, scopeLabel, library }: {
   const idField = <label className={css.field}>
     <span>{tx('workflows:dialog.id')}</span>
     <input value={id} autoFocus spellCheck={false} aria-invalid={touched && !!problem} aria-describedby="workflow-id-hint"
-      onChange={event => { setId(event.target.value.trim()); setTouched(true); }} disabled={busy} />
+      onChange={event => { setId(event.target.value.trim()); setTouched(true); }} disabled={blocked} />
     <small id="workflow-id-hint" className={touched && problem ? css.error : undefined}>{touched && problem ? tx(problem) : tx('workflows:dialog.id-hint')}</small>
   </label>;
-  const error = failure && <p className={css.error} role="alert"><FailureText failure={failure} /></p>;
+  const error = failure && <p className={css.error} role="alert">{confirmation.uncertain
+    ? tx('workflows:library.operation-uncertain', { p0: tx(`workflows:library.${confirmation.kind === 'create' ? 'new' : confirmation.kind}`) })
+    : <FailureText failure={failure} />}</p>;
   if (confirmation.kind === 'create') {
     const ready = !problem && description.trim() !== '';
     return <Modal open onClose={dismiss} title={tx('workflows:dialog.new-title')} closeLabel={tx('workflows:dialog.close')} description={tx('workflows:dialog.new-body')} className={css.dialog}
       footer={<><Button variant="outline" onClick={dismiss} disabled={busy}>{tx('workflows:dialog.cancel')}</Button>
-        <Button variant="primary" disabled={!ready || busy} onClick={submit}>{busy ? tx('workflows:dialog.creating') : tx('workflows:dialog.create')}</Button></>}>
-      <form className={css.form} onSubmit={event => { event.preventDefault(); if (ready && !busy) submit(); }}>
+        <Button variant="primary" disabled={!ready || blocked} onClick={submit}>{busy ? tx('workflows:dialog.creating') : tx('workflows:dialog.create')}</Button></>}>
+      <form className={css.form} onSubmit={event => { event.preventDefault(); if (ready && !blocked) submit(); }}>
         {idField}
         <label className={css.field}>
           <span>{tx('workflows:dialog.description')}</span>
-          <textarea rows={2} value={description} onChange={event => setDescription(event.target.value)} disabled={busy} />
+          <textarea rows={2} value={description} onChange={event => setDescription(event.target.value)} disabled={blocked} />
           <small>{touched && !description.trim() ? tx('workflows:dialog.description-required') : tx('workflows:dialog.description-hint')}</small>
         </label>
         {facts(relative(id || '<id>'))}
@@ -69,8 +72,8 @@ export function LibraryDialog({ confirmation, scopeLabel, library }: {
   if (confirmation.kind === 'copy') {
     return <Modal open onClose={dismiss} title={tx('workflows:dialog.copy-title')} closeLabel={tx('workflows:dialog.close')} description={tx('workflows:dialog.copy-body', { p0: file.relative_path })} className={css.dialog}
       footer={<><Button variant="outline" onClick={dismiss} disabled={busy}>{tx('workflows:dialog.cancel')}</Button>
-        <Button variant="primary" disabled={!!problem || busy} onClick={submit}>{busy ? tx('workflows:dialog.copying') : tx('workflows:dialog.copy')}</Button></>}>
-      <form className={css.form} onSubmit={event => { event.preventDefault(); if (!problem && !busy) submit(); }}>
+        <Button variant="primary" disabled={!!problem || blocked} onClick={submit}>{busy ? tx('workflows:dialog.copying') : tx('workflows:dialog.copy')}</Button></>}>
+      <form className={css.form} onSubmit={event => { event.preventDefault(); if (!problem && !blocked) submit(); }}>
         <dl className={css.facts}><dt>{tx('workflows:dialog.copy-source')}</dt><dd><code>{file.relative_path}</code></dd>
           <dt>{tx('workflows:dialog.revision')}</dt><dd><code>{file.revision.slice(0, 19)}</code></dd></dl>
         {idField}
@@ -81,7 +84,7 @@ export function LibraryDialog({ confirmation, scopeLabel, library }: {
   }
   return <Modal open onClose={dismiss} title={tx('workflows:dialog.delete-title')} closeLabel={tx('workflows:dialog.close')} description={tx('workflows:dialog.delete-body')} className={css.dialog}
     footer={<><Button variant="outline" onClick={dismiss} disabled={busy}>{tx('workflows:dialog.cancel')}</Button>
-      <Button variant="primary" className={css.danger} disabled={busy} onClick={submit}>{busy ? tx('workflows:dialog.deleting') : tx('workflows:dialog.delete')}</Button></>}>
+      <Button variant="primary" className={css.danger} disabled={blocked} onClick={submit}>{busy ? tx('workflows:dialog.deleting') : tx('workflows:dialog.delete')}</Button></>}>
     <div className={css.form}>
       {facts(file.relative_path)}
       <dl className={css.facts}><dt>{tx('workflows:dialog.revision')}</dt><dd><code>{file.revision.slice(0, 19)}</code></dd></dl>

@@ -104,7 +104,7 @@ export function CheckResults({ check, generation, global, workspaces, context, s
     {value.line != null && <small>{tx('workflows:check.line', { p0: value.line, p1: value.column ?? 0 })}</small>}
     {value.path !== '$' && <button type="button" className={css.linkButton} onClick={() => go(locate(value.path))}>{tx('workflows:check.go')}</button>}
   </li>;
-  const dependencies = check?.report.dependencies;
+  const dependencies = check && (!global || check.context === context) ? check.report.dependencies : undefined;
   const name = (path: string) => workspaces.find(row => row.displayPath === path)?.displayName ?? path;
   return <>
     <p className={clsx(css.checkStatus, css[`check_${state}`])}>{tx(state === 'passed' ? 'workflows:check.passed' : state === 'failed' ? 'workflows:check.failed' : state === 'outdated' ? 'workflows:check.outdated' : 'workflows:check.not-run')}</p>
@@ -116,7 +116,7 @@ export function CheckResults({ check, generation, global, workspaces, context, s
         <option value="">{tx('workflows:check.dependencies-not-checked')}</option>
         {workspaces.map(row => <option key={row.id} value={row.id}>{row.displayName}</option>)}
       </select></label>}
-    {(!dependencies || dependencies.status === 'not_checked') && <p className={css.note}>{global ? tx('workflows:check.dependencies-choose') : tx('workflows:check.dependencies-not-checked')}</p>}
+    {(!dependencies || dependencies.status === 'not_checked') && <p className={css.note}>{global && !context ? tx('workflows:check.dependencies-choose') : tx('workflows:check.dependencies-not-checked')}</p>}
     {dependencies?.status === 'admitted' && <p className={css.note}>{tx('workflows:check.dependencies-admitted', { p0: name(dependencies.context) })}</p>}
     {dependencies?.status === 'unavailable' && <p className={css.note}>{tx('workflows:check.dependencies-unavailable', { p0: name(dependencies.context), p1: dependencies.reason })}</p>}
     {dependencies?.status === 'blocked' && <>

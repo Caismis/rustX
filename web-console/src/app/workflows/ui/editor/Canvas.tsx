@@ -38,7 +38,7 @@ export const Canvas = memo(function Canvas({ block, path, blockKey, viewKey, vie
   const flow = useReactFlow<WorkflowFlowNode>();
   const container = useRef<HTMLDivElement>(null);
   const [stored, setStored] = useState(() => blockView(readViews(viewKey), blockKey));
-  // `viewEpoch` advances when an undo or redo restored stored positions.
+  // `viewEpoch` advances after accepted renames or history restores a view.
   useEffect(() => setStored(blockView(readViews(viewKey), blockKey)), [viewKey, blockKey, viewEpoch]);
   const positions = useMemo(() => layout(block, stored?.positions), [block, stored]);
   const [mode, setMode] = useState<'select' | 'pan'>('select');

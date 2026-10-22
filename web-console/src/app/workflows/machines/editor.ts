@@ -1,4 +1,4 @@
-import { assign, fromPromise, setup, type ActorRefFrom, type SnapshotFrom } from 'xstate';
+import { assign, enqueueActions, fromPromise, setup, type ActorRefFrom, type SnapshotFrom } from 'xstate';
 import type { WorkflowCheckReport, WorkflowSource } from '../../../../../protocol/app-server/v51';
 import type { WorkflowCommit } from '../../../workspaces/host';
 import { CommandRejected, type RejectionCode } from '../document/commands';
@@ -92,11 +92,17 @@ export type FieldCommand = (document: WorkflowDocument, text: string) =>
 /** Browser-local node coordinates of one block, by node id. */
 export type ViewPositions = Readonly<Record<string, { readonly x: number; readonly y: number }>>;
 
+/** An accepted node/branch identity change, including its exact inverse. */
+export interface IdentityRename { readonly from: FieldAddress; readonly to: FieldAddress }
+type PresentationEvent =
+  | { type: 'view.rename'; rename: IdentityRename }
+  | { type: 'view.restore'; block: string; positions: ViewPositions };
+
 /** One undoable step. A view step moves nodes of one block and never
  * changes the document; both kinds share one timeline. */
 export type HistoryEntry =
   /** `array` is the array edit that led from `document` to the next state. */
-  | { readonly kind: 'document'; readonly document: WorkflowDocument; readonly array?: ArrayEdit }
+  | { readonly kind: 'document'; readonly document: WorkflowDocument; readonly array?: ArrayEdit; readonly rename?: IdentityRename }
   | { readonly kind: 'view'; readonly block: string; readonly path: BlockPath; readonly before: ViewPositions; readonly after: ViewPositions };
 
 /** How an uncertain save was settled by observation alone. */
@@ -243,14 +249,19 @@ function settleDrafts(drafts: EditorContext['drafts'], before: WorkflowDocument 
   return Object.fromEntries(next);
 }
 
+function renamedPath(path: BlockPath, rename: IdentityRename): BlockPath {
+  const name = rename.to.path.length === 0 ? rename.to.node! : (rename.to.path[1] as { key: string }).key;
+  return renameAddress({ block: path, path: [], role: 'value' }, rename.from, name).block;
+}
+
 /** A semantic change of the working document: one undo step, or part of
  * the open session `coalesce`. */
-function changeDocument(context: EditorContext, next: WorkflowDocument, coalesce: string | undefined, { drafts = context.drafts, moved, array }: { drafts?: EditorContext['drafts']; moved?: ReadonlySet<string>; array?: ArrayEdit } = {}): Partial<EditorContext> {
-  const coalesced = coalesce !== undefined && coalesce === context.coalesce && context.past.at(-1)?.kind === 'document' && !array;
+function changeDocument(context: EditorContext, next: WorkflowDocument, coalesce: string | undefined, { drafts = context.drafts, moved, array, rename }: { drafts?: EditorContext['drafts']; moved?: ReadonlySet<string>; array?: ArrayEdit; rename?: IdentityRename } = {}): Partial<EditorContext> {
+  const coalesced = coalesce !== undefined && coalesce === context.coalesce && context.past.at(-1)?.kind === 'document' && !array && !rename;
   return {
     document: next, generation: context.generation + 1, rejection: undefined,
-    past: coalesced ? context.past : [...context.past, { kind: 'document' as const, document: context.document!, ...(array ? { array } : {}) }].slice(-HISTORY_LIMIT),
-    future: [], coalesce: array ? undefined : coalesce, block: existingPath(next, context.block),
+    past: coalesced ? context.past : [...context.past, { kind: 'document' as const, document: context.document!, ...(array ? { array } : {}), ...(rename ? { rename } : {}) }].slice(-HISTORY_LIMIT),
+    future: [], coalesce: array || rename ? undefined : coalesce, block: existingPath(next, rename ? renamedPath(context.block, rename) : context.block),
     drafts: settleDrafts(drafts, context.document, next, { moved, array }),
   };
 }
@@ -296,14 +307,16 @@ function applyDraft(context: EditorContext, event: Extract<EditorEvent, { type: 
       return { drafts: { ...rest, [event.field]: { ...draft, error } }, applied: report({ status: 'rejected', error }) };
     }
   }
-  return { ...changeDocument(context, outcome.document, event.field, { drafts: others, moved }), applied: report({ status: 'applied' }) };
+  const renamed = draft.address.role === 'key' ? renameAddress(draft.address, draft.address, draft.text.trim()) : draft.address;
+  const rename = renamed !== draft.address ? { from: draft.address, to: renamed } : undefined;
+  return { ...changeDocument(context, outcome.document, event.field, { drafts: others, moved, rename }), applied: report({ status: 'applied' }) };
 }
 
 /** One editing transaction of one exact Workflow file. React subscribes and
  * submits intent; this machine alone arbitrates the file target, the base
  * revision, edit generations and correlated native operations. */
 export const workflowEditorMachine = setup({
-  types: { context: {} as EditorContext, events: {} as EditorEvent, input: {} as EditorInput },
+  types: { context: {} as EditorContext, events: {} as EditorEvent, input: {} as EditorInput, emitted: {} as PresentationEvent },
   actors: {
     read: fromPromise<WorkflowSource, { port: WorkflowScopePort; id: string }>(({ input }) => input.port.read(input.id)),
     check: fromPromise<WorkflowCheckReport, { port: WorkflowScopePort; id: string; document: WorkflowDocument; explain: boolean; context?: string }>(
@@ -341,22 +354,39 @@ export const workflowEditorMachine = setup({
       if (next === context.document) return { rejection: undefined };
       return changeDocument(context, next, event.coalesce, { array: event.array });
     }),
-    applyDraft: assign(({ context, event }) => event.type === 'APPLY_DRAFT' ? applyDraft(context, event) : {}),
+    applyDraft: enqueueActions(({ context, event, enqueue }) => {
+      if (event.type !== 'APPLY_DRAFT') return;
+      const update = applyDraft(context, event);
+      enqueue.assign(update);
+      const entry = update.document && update.past?.at(-1);
+      if (entry && entry.kind === 'document' && entry.rename) enqueue.emit({ type: 'view.rename', rename: entry.rename });
+    }),
     move: assign(({ context, event }) => {
       if (event.type !== 'MOVE') return {};
       const entry: HistoryEntry = { kind: 'view', block: event.block, path: event.path, before: event.before, after: event.after };
       return { past: [...context.past, entry].slice(-HISTORY_LIMIT), future: [], coalesce: undefined };
     }),
-    undo: assign(({ context }) => {
+    undo: enqueueActions(({ context, enqueue }) => {
       const entry = context.past.at(-1)!, past = context.past.slice(0, -1);
-      if (entry.kind === 'view') return { past, future: [entry, ...context.future], coalesce: undefined, rejection: undefined, ...restore(context, entry, entry.before) };
+      if (entry.kind === 'view') {
+        enqueue.assign({ past, future: [entry, ...context.future], coalesce: undefined, rejection: undefined, ...restore(context, entry, entry.before) });
+        enqueue.emit({ type: 'view.restore', block: entry.block, positions: entry.before });
+        return;
+      }
+      const rename = entry.rename && { from: entry.rename.to, to: entry.rename.from };
       // Undoing an array edit performs its inverse on the drafts as well.
-      return { document: entry.document, past, future: [{ kind: 'document' as const, document: context.document!, ...(entry.array ? { array: entry.array } : {}) }, ...context.future], generation: context.generation + 1, coalesce: undefined, rejection: undefined, block: existingPath(entry.document, context.block), drafts: settleDrafts(context.drafts, context.document, entry.document, { array: entry.array && invertArrayEdit(entry.array) }) };
+      enqueue.assign({ document: entry.document, past, future: [{ kind: 'document' as const, document: context.document!, ...(entry.array ? { array: entry.array } : {}), ...(entry.rename ? { rename: entry.rename } : {}) }, ...context.future], generation: context.generation + 1, coalesce: undefined, rejection: undefined, block: existingPath(entry.document, rename ? renamedPath(context.block, rename) : context.block), drafts: settleDrafts(context.drafts, context.document, entry.document, { array: entry.array && invertArrayEdit(entry.array) }) });
+      if (rename) enqueue.emit({ type: 'view.rename', rename });
     }),
-    redo: assign(({ context }) => {
+    redo: enqueueActions(({ context, enqueue }) => {
       const [entry, ...future] = context.future;
-      if (entry.kind === 'view') return { past: [...context.past, entry], future, coalesce: undefined, rejection: undefined, ...restore(context, entry, entry.after) };
-      return { document: entry.document, past: [...context.past, { kind: 'document' as const, document: context.document!, ...(entry.array ? { array: entry.array } : {}) }], future, generation: context.generation + 1, coalesce: undefined, rejection: undefined, block: existingPath(entry.document, context.block), drafts: settleDrafts(context.drafts, context.document, entry.document, { array: entry.array }) };
+      if (entry.kind === 'view') {
+        enqueue.assign({ past: [...context.past, entry], future, coalesce: undefined, rejection: undefined, ...restore(context, entry, entry.after) });
+        enqueue.emit({ type: 'view.restore', block: entry.block, positions: entry.after });
+        return;
+      }
+      enqueue.assign({ document: entry.document, past: [...context.past, { kind: 'document' as const, document: context.document!, ...(entry.array ? { array: entry.array } : {}), ...(entry.rename ? { rename: entry.rename } : {}) }], future, generation: context.generation + 1, coalesce: undefined, rejection: undefined, block: existingPath(entry.document, entry.rename ? renamedPath(context.block, entry.rename) : context.block), drafts: settleDrafts(context.drafts, context.document, entry.document, { array: entry.array }) });
+      if (entry.rename) enqueue.emit({ type: 'view.rename', rename: entry.rename });
     }),
     navigate: assign(({ context, event }) => event.type === 'NAVIGATE' && context.document ? { block: existingPath(context.document, event.block), coalesce: undefined } : {}),
     boundary: assign({ coalesce: undefined }),

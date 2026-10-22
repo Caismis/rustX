@@ -171,7 +171,7 @@ describe('accepted listing observations (F2)', () => {
     expect(a.writes).toHaveLength(1);
   });
 
-  it('settles an uncertain write by the next listing, never by replaying it', async () => {
+  it('observes an uncertain write with the next listing, without claiming success', async () => {
     const { a, library, show } = mount();
     show();
     a.lists[0].resolve(listing(a));
@@ -186,6 +186,62 @@ describe('accepted listing observations (F2)', () => {
     expect(a.writes).toHaveLength(1);
     // The dialog stays open with the failure; it never reads as success.
     expect(screen.getByRole('dialog')).toBeTruthy();
+  });
+
+  it.each(['create', 'copy', 'delete'] as const)('requires an explicit new transaction after an uncertain %s, before and after observation', async kind => {
+    const { a, library, show, surface } = mount();
+    show();
+    a.lists[0].resolve(listing(a));
+    await flush();
+    act(() => library().send({ type: 'CONFIRM', kind, file: kind === 'create' ? undefined : 'flow.yaml' }));
+    if (kind === 'create') fill('fresh', 'Fresh');
+    else if (kind === 'copy') fireEvent.change(dialog().getByLabelText(/^Workflow ID/), { target: { value: 'fresh' } });
+    const label = { create: 'Create', copy: 'Copy', delete: 'Delete' }[kind];
+    fireEvent.click(dialog().getByRole('button', { name: label }));
+    const pending = library().getSnapshot().context.pending!;
+    a.writes[0].result.reject(new WorkflowOperationError({ kind: 'uncertain', message: 'outcome_unknown' }));
+    await flush();
+    expect(library().getSnapshot().context.pending).toBeUndefined();
+    expect(library().getSnapshot().context.confirmation?.uncertain).toBe(pending);
+    const cannotReplay = () => {
+      const button = dialog().getByRole('button', { name: label }) as HTMLButtonElement;
+      expect(button.disabled).toBe(true);
+      fireEvent.click(button);
+      const form = screen.getByRole('dialog').querySelector('form');
+      if (form) fireEvent.submit(form);
+      act(() => library().send({ type: 'SUBMIT', seq: pending.confirmation, id: 'fresh', description: 'Fresh' }));
+      expect(a.writes).toHaveLength(1);
+    };
+    // The observation is held pending, then released with the write's apparent
+    // effect. Neither phase authorizes replay or proves who changed the file.
+    expect(library().getSnapshot().matches('loading')).toBe(true);
+    cannotReplay();
+    const observed = listing(a);
+    observed.files = kind === 'delete' ? [] : [...observed.files, { ...observed.files[0], id: 'fresh', file_name: 'fresh.yaml' }];
+    a.lists[1].resolve(observed);
+    await flush();
+    expect(library().getSnapshot().matches('ready')).toBe(true);
+    cannotReplay();
+    expect(library().getSnapshot().context.confirmation?.uncertain).toBe(pending);
+    expect(surface.getSnapshot().context.editor).toBeUndefined();
+    // A failed read is no stronger evidence than a successful one. The same
+    // confirmation remains blocked through failure and another refresh.
+    act(() => library().send({ type: 'REFRESH' }));
+    a.lists[2].reject(new Error('observation unavailable'));
+    await flush();
+    expect(library().getSnapshot().matches('failed')).toBe(true);
+    cannotReplay();
+    act(() => library().send({ type: 'REFRESH' }));
+    a.lists[3].resolve(observed);
+    await flush();
+    cannotReplay();
+    fireEvent.click(dialog().getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(newButton());
+    fill('another', 'Another transaction');
+    expect(library().getSnapshot().context.confirmation!.seq).toBeGreaterThan(pending.confirmation);
+    fireEvent.click(dialog().getByRole('button', { name: 'Create' }));
+    expect(a.writes).toHaveLength(2);
+    expect(a.writes[1]).toMatchObject({ id: 'another', expected: 'missing-a', edit: { operation: 'create', description: 'Another transaction' } });
   });
 
   it('never lets a superseded listing overwrite a newer accepted read', async () => {

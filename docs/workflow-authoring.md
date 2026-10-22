@@ -138,7 +138,13 @@ meanwhile, never redirecting to the replacement. A dispatched operation keeps
 its port, expected revision and result path: a refresh waits for its outcome,
 and a scope chosen meanwhile is selected after it. The confirmation closes only
 when that operation succeeded; a failure, including an uncertain outcome, stays
-in it. An uncertain write is observed by the next listing, never replayed.
+in it. An uncertain outcome retains the dispatched transaction (confirmation
+sequence, port, operation and expected revision) and permanently disables
+submission of that confirmation, even while its next listing is pending, failed
+or complete. Refresh observes only: a file appearing or disappearing does not
+prove that this transaction committed. The author can close the confirmation,
+inspect the current file and explicitly start a new operation; the old operation
+is never replayed.
 
 IDs follow the native `WorkflowId` rule. Paths are resolved by native code
 relative to the scope's admitted directory handle: traversal, absolute paths,
@@ -335,10 +341,20 @@ renames, so a file is never observed half-written.
 
 Node positions and the viewport are presentation only. They are kept in browser
 `localStorage`, keyed by server, scope, Workflow ID and block path, and are never
-written to the file; clearing them only resets the layout.
+written to the file; clearing them only resets the layout. An accepted node or
+Parallel branch rename moves its positions and every descendant block view to
+the new identity, including their viewports. Undo and redo move those views
+through the inverse or forward rename in history order, preserving intervening
+drags. Rejected renames change no views, and old identity keys do not accumulate.
 
 Unsaved edits live in memory: leaving a dirty editor asks for confirmation, and
 there are no persisted drafts.
+
+Structure checks belong to the document generation. Global dependency results
+also belong to the Workspace used by that check: selecting another Workspace
+hides the previous dependency result and its canvas warnings and shows **Not
+checked** until that context is checked. The independent structure result stays
+visible.
 
 Every editable field has an editor-internal address (`FieldAddress`): its lexical
 block path, its owning node (none for a block's own contract), and its path as
@@ -356,7 +372,10 @@ and survives selection, block navigation, tab changes and component remounts or
 reuse; only a successful application, an explicit discard, or a confirmed reload
 clears it. Blur, Enter, Save and Check request an application (`APPLY_DRAFT`)
 of one exact draft version. In one context update the editor runs the field's
-command against the current document and decides the outcome:
+command against the current document and decides the outcome. Node-specific
+form commands also validate the expected node kind at execution time: a retained
+Agent callback cannot modify a Tool that later reused its ID. Refusal leaves the
+document and history unchanged. The draft outcomes are:
 
 - `applied`: the document and history change and exactly that version is
   cleared; newer text of the same field is never cleared;

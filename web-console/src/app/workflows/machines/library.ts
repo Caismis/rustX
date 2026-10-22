@@ -24,6 +24,9 @@ export interface LibraryConfirmation {
   readonly file?: WorkflowFileSummary;
   /** Why its last submission failed; it stays open to show it. */
   readonly failure?: WorkflowFailure;
+  /** An unknown result belongs to this exact dispatched transaction. Reads
+   * may observe the file, but this confirmation can never submit it again. */
+  readonly uncertain?: PendingOperation;
 }
 
 /** A dispatched operation. Its target is fixed from dispatch to outcome. */
@@ -118,7 +121,7 @@ export const workflowLibraryMachine = setup({
   },
   guards: {
     otherScope: ({ context, event }) => event.type === 'SCOPE' && !sameScope(context.scope, event.scope),
-    submittable: ({ context, event }) => event.type === 'SUBMIT' && context.confirmation?.seq === event.seq && !!operationOf(context.confirmation, event),
+    submittable: ({ context, event }) => event.type === 'SUBMIT' && context.confirmation?.seq === event.seq && !context.confirmation.uncertain && !!operationOf(context.confirmation, event),
   },
   actions: {
     selectScope: assign(({ event }) => event.type === 'SCOPE' ? { scope: event.scope, observation: undefined, operationFailure: undefined } : {}),
@@ -207,7 +210,7 @@ export const workflowLibraryMachine = setup({
             const failure = classifyFailure(event.error, true), pending = context.pending!;
             return {
               operationFailure: { operation: pending.operation, failure },
-              confirmation: context.confirmation?.seq === pending.confirmation ? { ...context.confirmation, failure } : context.confirmation,
+              confirmation: context.confirmation?.seq === pending.confirmation ? { ...context.confirmation, failure, ...(failure.kind === 'uncertain' ? { uncertain: pending } : {}) } : context.confirmation,
               ...settled(context),
             };
           }),

@@ -1,4 +1,6 @@
 import type { Point } from './layout';
+import { blockKey } from '../../document/model';
+import type { IdentityRename } from '../../machines/editor';
 
 /** Browser-local canvas presentation of one exact Workflow file: node
  * coordinates and viewport per lexical block. It holds no program data —
@@ -56,4 +58,31 @@ export function writeBlockView(key: string, block: string, update: (view: BlockV
 
 export function clearViews(key: string) {
   try { localStorage.removeItem(key); } catch { /* Presentation preferences are optional. */ }
+}
+
+/** Move only browser presentation at an accepted identity boundary. The
+ * inverse uses the same operation, so undo/redo carry current viewports too.
+ * Old names are removed instead of accumulating aliases in the bounded cache. */
+export function renameViews(key: string, { from, to }: IdentityRename) {
+  try {
+    const parent = blockKey(from.block), prefix = parent === 'root' ? '' : `${parent}/`;
+    const branch = from.path.length !== 0;
+    const oldRoot = `${prefix}${from.node}${branch ? `/${(from.path[1] as { key: string }).key}` : ''}`;
+    const newRoot = `${prefix}${to.node}${branch ? `/${(to.path[1] as { key: string }).key}` : ''}`;
+    const within = (block: string, root: string) => (branch && block === root) || block.startsWith(`${root}/`);
+    const views: [string, BlockView][] = [];
+    for (const [block, stored] of Object.entries(readViews(key))) {
+      // The destination identity did not exist in the accepted document.
+      // Its old, orphaned preferences cannot replace the moving subtree.
+      if (within(block, newRoot) && !within(block, oldRoot)) continue;
+      let view = stored;
+      if (!branch && block === parent && stored.positions) {
+        const positions = Object.fromEntries(Object.entries(stored.positions).filter(([id]) => id !== from.node && id !== to.node));
+        if (Object.hasOwn(stored.positions, from.node!)) positions[to.node!] = stored.positions[from.node!];
+        view = { ...stored, positions };
+      }
+      views.push([within(block, oldRoot) ? newRoot + block.slice(oldRoot.length) : block, view]);
+    }
+    localStorage.setItem(key, JSON.stringify(sanitize(Object.fromEntries(views))));
+  } catch { /* Presentation preferences are optional. */ }
 }

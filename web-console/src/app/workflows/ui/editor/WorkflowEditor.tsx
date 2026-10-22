@@ -22,7 +22,7 @@ import { Canvas, type Problems, type Selection } from './Canvas';
 import { CheckResults, Inspector } from './Inspector';
 import { DraftOwner, FieldCommits } from './forms/drafts';
 import { tabOfField } from './forms/NodeForms';
-import { clearViews, viewKey, writeBlockView } from './view-store';
+import { clearViews, renameViews, viewKey, writeBlockView } from './view-store';
 import css from './Editor.module.css';
 
 const editableTarget = (target: EventTarget | null) => !!(target as Element | null)?.closest?.('input, textarea, select, [contenteditable="true"]');
@@ -77,14 +77,24 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
   const runCheck = useCallback((explain = false) => { commits.flush(); editor.send({ type: 'CHECK', explain, context: target.scope.kind === 'user' ? dependencyContext : undefined }); }, [editor, commits, target.scope.kind, dependencyContext]);
   const save = useCallback(() => { commits.flush(); editor.send({ type: 'SAVE' }); }, [editor, commits]);
   const move = useCallback((moved: { block: string; before: ViewPositions; after: ViewPositions }) => editor.send({ type: 'MOVE', path: editor.getSnapshot().context.block, ...moved }), [editor]);
-  // An undone or redone node move restores its block's browser-local positions.
+  // Accepted view changes are delivered in order, including several renames
+  // or undo steps in one render batch; no snapshot effect drops an intermediate
+  // identity change or replays an old position restoration on remount.
   const [viewEpoch, setViewEpoch] = useState(0);
   useEffect(() => {
-    if (!context.view) return;
-    const { block: changed, positions } = context.view;
-    writeBlockView(key, changed, view => ({ ...view, positions: { ...view.positions, ...positions } }));
-    setViewEpoch(value => value + 1);
-  }, [context.view, key]);
+    const renamed = editor.on('view.rename', ({ rename }) => {
+      renameViews(key, rename);
+      if (rename.from.path.length === 0 && sameBlockPath(block, rename.from.block)) {
+        choose(current => current?.kind === 'node' && current.id === rename.from.node ? { ...current, id: rename.to.node! } : current);
+      }
+      setViewEpoch(value => value + 1);
+    });
+    const restored = editor.on('view.restore', ({ block: changed, positions }) => {
+      writeBlockView(key, changed, view => ({ ...view, positions: { ...view.positions, ...positions } }));
+      setViewEpoch(value => value + 1);
+    });
+    return () => { renamed.unsubscribe(); restored.unsubscribe(); };
+  }, [editor, key, block]);
 
   // A browser unload may not drop unsaved edits silently.
   useEffect(() => {
@@ -102,11 +112,11 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
     const items: { location: DiagnosticLocation; severity: 'error' | 'warning' }[] = [];
     const current = check && check.generation === generation ? check : undefined;
     if (current?.report.structure.status === 'invalid') items.push({ location: locate(current.report.structure.diagnostic.path), severity: 'error' });
-    if (current?.report.dependencies.status === 'blocked') for (const item of current.report.dependencies.diagnostics) items.push({ location: locate(item.path), severity: 'warning' });
+    if (current?.report.dependencies.status === 'blocked' && (target.scope.kind !== 'user' || current.context === dependencyContext)) for (const item of current.report.dependencies.diagnostics) items.push({ location: locate(item.path), severity: 'warning' });
     if (notice?.kind === 'failure' && notice.failure.kind === 'invalid') items.push({ location: locate(notice.failure.diagnostic.path), severity: 'error' });
     if (notice?.kind === 'incomplete') for (const item of notice.identities) items.push({ location: { block: item.block, node: item.node, field: item.field }, severity: 'error' });
     return items;
-  }, [check, generation, notice]);
+  }, [check, generation, notice, dependencyContext, target.scope.kind]);
   const problems = useMemo(() => problemsIn(block, located), [block, located]);
   const go = useCallback((location: DiagnosticLocation) => {
     navigate(location.block);

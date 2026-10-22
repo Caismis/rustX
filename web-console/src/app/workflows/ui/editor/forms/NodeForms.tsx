@@ -36,10 +36,10 @@ export function NodeForm({ document, block, id, tab, vocabulary, derived, edit, 
   /** The address of one of this node's fields. */
   const at = (...path: FieldStep[]) => nodeField(block, id, path);
   /** Update this node from its value in the document being edited. */
-  const update = <K extends NodeDefinition['type']>(change: (node: Of<K>) => Of<K>, field: FieldAddress, array?: ArrayEdit) =>
-    edit(current => replaceNode(current, block, id, change(currentNode<K>(current, block, id))), array ? undefined : encodeField(field), array);
+  const update = <K extends NodeDefinition['type']>(kind: K, change: (node: Of<K>) => Of<K>, field: FieldAddress, array?: ArrayEdit) =>
+    edit(current => replaceNode(current, block, id, change(currentNode(current, block, id, kind))), array ? undefined : encodeField(field), array);
   /** Remove or append one Review context item, as one known array edit. */
-  const resizeContext = (resize: (current: Of<'review'>['context']) => Of<'review'>['context'], array: ArrayEdit) => node.type === 'review' && update<'review'>(current => {
+  const resizeContext = (resize: (current: Of<'review'>['context']) => Of<'review'>['context'], array: ArrayEdit) => node.type === 'review' && update('review', current => {
     if (current.context.length !== node.context.length) throw new CommandRejected('missing_field');
     return { ...current, context: resize(current.context) };
   }, at('context'), array);
@@ -60,11 +60,11 @@ export function NodeForm({ document, block, id, tab, vocabulary, derived, edit, 
     </div>
     {node.type === 'agent' && <>
       <TextField label={tx('workflows:inspector.agent-profile')} hint={tx('workflows:inspector.agent-profile-hint')} value={node.profile} mono list={listId} invalid={!node.profile} field={encodeField(at('profile'))}
-        onChange={(profile, session) => edit(current => replaceNode(current, block, id, { ...currentNode<'agent'>(current, block, id), profile }), session)} />
+        onChange={(profile, session) => edit(current => replaceNode(current, block, id, { ...currentNode(current, block, id, 'agent'), profile }), session)} />
       <datalist id={listId}>{vocabulary?.profiles.map(name => <option key={name} value={name} />)}</datalist>
       <TextField label={tx('workflows:inspector.agent-task')} value={node.task} multiline field={encodeField(at('task'))}
-        onChange={(task, session) => edit(current => replaceNode(current, block, id, { ...currentNode<'agent'>(current, block, id), task }), session)} />
-      <OverrideField node={node} address={at('override')} onChange={invocation => update<'agent'>(current => {
+        onChange={(task, session) => edit(current => replaceNode(current, block, id, { ...currentNode(current, block, id, 'agent'), task }), session)} />
+      <OverrideField node={node} address={at('override')} onChange={invocation => update('agent', current => {
         const { override: _previous, ...rest } = current;
         return invocation === undefined ? rest : { ...rest, override: invocation };
       }, at('override'))} />
@@ -72,15 +72,15 @@ export function NodeForm({ document, block, id, tab, vocabulary, derived, edit, 
     {node.type === 'tool' && <>
       <SelectField label={tx('workflows:inspector.tool-origin')} value={node.selector.origin}
         options={[{ value: 'builtin', label: tx('workflows:inspector.tool-origin-builtin') }, { value: 'source', label: tx('workflows:inspector.tool-origin-source') }]}
-        onChange={origin => update<'tool'>(current => ({ ...current, selector: origin === 'builtin' ? { origin, name: current.selector.name } : { origin, source_id: current.selector.origin === 'source' ? current.selector.source_id : '', name: current.selector.name } }), at('selector'))} />
+        onChange={origin => update('tool', current => ({ ...current, selector: origin === 'builtin' ? { origin, name: current.selector.name } : { origin, source_id: current.selector.origin === 'source' ? current.selector.source_id : '', name: current.selector.name } }), at('selector'))} />
       {node.selector.origin === 'source' && <TextField label={tx('workflows:inspector.tool-source')} value={node.selector.source_id} mono field={encodeField(at('selector', 'source_id'))}
         onChange={(source_id, session) => edit(current => {
-          const tool = currentNode<'tool'>(current, block, id);
+          const tool = currentNode(current, block, id, 'tool');
           return replaceNode(current, block, id, { ...tool, selector: { origin: 'source', source_id, name: tool.selector.name } });
         }, session)} />}
       <TextField label={tx('workflows:inspector.tool-name')} value={node.selector.name} mono list={node.selector.origin === 'builtin' ? listId : undefined} invalid={!node.selector.name} field={encodeField(at('selector', 'name'))}
         onChange={(name, session) => edit(current => {
-          const tool = currentNode<'tool'>(current, block, id);
+          const tool = currentNode(current, block, id, 'tool');
           return replaceNode(current, block, id, { ...tool, selector: { ...tool.selector, name } });
         }, session)} />
       <datalist id={listId}>{vocabulary?.builtin_tools.map(name => <option key={name} value={name} />)}</datalist>
@@ -114,7 +114,7 @@ export function NodeForm({ document, block, id, tab, vocabulary, derived, edit, 
     </>}
     {node.type === 'loop' && <>
       <Field label={tx('workflows:inspector.loop-max')}>{fieldId => <input id={fieldId} type="number" min={1} max={256} className={css.input} value={node.max_iterations}
-        onChange={event => { const value = Number(event.target.value); if (Number.isSafeInteger(value) && value >= 0) update<'loop'>(current => ({ ...current, max_iterations: value }), at('max_iterations')); }} />}</Field>
+        onChange={event => { const value = Number(event.target.value); if (Number.isSafeInteger(value) && value >= 0) update('loop', current => ({ ...current, max_iterations: value }), at('max_iterations')); }} />}</Field>
       <PredicateEditor label={tx('workflows:inspector.loop-until')} address={at('until')} predicate={node.until} edit={edit} />
       <p className={css.note}>{tx('workflows:inspector.loop-until-hint')}</p>
       <ValueEditor label={tx('workflows:inspector.loop-carry')} address={at('carry')} value={node.carry} edit={edit} />
@@ -135,9 +135,9 @@ export function NodeForm({ document, block, id, tab, vocabulary, derived, edit, 
       {Object.entries(node.input ?? {}).map(([key, binding]) => <div key={key} className={css.nestedRow}>
         <ValueEditor label={key} address={at('input', { key })} value={binding} edit={edit} />
         <button type="button" className={css.smallButton} aria-label={tx('workflows:inspector.remove', { p0: key })}
-          onClick={() => update<'agent'>(current => ({ ...current, input: Object.fromEntries(Object.entries(current.input ?? {}).filter(([name]) => name !== key)) }), at('input'))}>×</button>
+          onClick={() => update('agent', current => ({ ...current, input: Object.fromEntries(Object.entries(current.input ?? {}).filter(([name]) => name !== key)) }), at('input'))}>×</button>
       </div>)}
-      <AddKey existing={Object.keys(node.input ?? {})} onAdd={key => update<'agent'>(current => Object.hasOwn(current.input ?? {}, key) ? current : ({ ...current, input: { ...current.input, [key]: { type: 'reference', path: ['args'] } } }), at('input'))} />
+      <AddKey existing={Object.keys(node.input ?? {})} onAdd={key => update('agent', current => Object.hasOwn(current.input ?? {}, key) ? current : ({ ...current, input: { ...current.input, [key]: { type: 'reference', path: ['args'] } } }), at('input'))} />
     </Section>}
     {node.type === 'tool' && <ValueEditor label={tx('workflows:inspector.tool-arguments')} address={at('arguments')} value={node.arguments} edit={edit} />}
     {node.type === 'parallel' && <Section title={tx('workflows:inspector.parallel-input')}>
@@ -152,9 +152,9 @@ export function NodeForm({ document, block, id, tab, vocabulary, derived, edit, 
     {node.type === 'tool' && <>
       <SelectField label={tx('workflows:inspector.tool-result')} value={node.result.type}
         options={[{ value: 'json', label: tx('workflows:inspector.tool-result-json') }, { value: 'text', label: tx('workflows:inspector.tool-result-text') }]}
-        onChange={type => update<'tool'>(current => ({ ...current, result: type === 'json' ? { type, part: current.result.part, schema: current.result.type === 'json' ? current.result.schema : { type: 'object' } } : { type, part: current.result.part } }), at('result'))} />
+        onChange={type => update('tool', current => ({ ...current, result: type === 'json' ? { type, part: current.result.part, schema: current.result.type === 'json' ? current.result.schema : { type: 'object' } } : { type, part: current.result.part } }), at('result'))} />
       <Field label={tx('workflows:inspector.tool-part')}>{fieldId => <input id={fieldId} type="number" min={0} className={css.input} value={node.result.part}
-        onChange={event => { const part = Number(event.target.value); if (Number.isSafeInteger(part) && part >= 0) update<'tool'>(current => ({ ...current, result: { ...current.result, part } }), at('result', 'part')); }} />}</Field>
+        onChange={event => { const part = Number(event.target.value); if (Number.isSafeInteger(part) && part >= 0) update('tool', current => ({ ...current, result: { ...current.result, part } }), at('result', 'part')); }} />}</Field>
       {node.result.type === 'json' && <JsonField label={tx('workflows:inspector.tool-schema')} hint={tx('workflows:inspector.schema-hint')} value={node.result.schema} rows={8} address={at('result', 'schema')} />}
     </>}
     {(node.type === 'parallel' || node.type === 'loop' || node.type === 'review') && derivedSection(tx('workflows:inspector.parallel-output'))}
@@ -198,10 +198,10 @@ function OverrideField({ node, address, onChange }: { node: Of<'agent'>; address
 
 /** The node `id` of the document being edited, of kind `K`; a node that
  * is gone, or of another kind now, is not this form's node any more. */
-function currentNode<K extends NodeDefinition['type']>(document: WorkflowDocument, block: BlockPath, id: string): Of<K> {
+function currentNode<K extends NodeDefinition['type']>(document: WorkflowDocument, block: BlockPath, id: string, expectedKind: K): Of<K> {
   const owner = blockAt(document, block);
   const node = owner && nodeAt(owner, id);
-  if (!node) throw new CommandRejected('missing_node');
+  if (!node || node.type !== expectedKind) throw new CommandRejected('missing_node');
   return node as Of<K>;
 }
 
