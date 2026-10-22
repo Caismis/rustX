@@ -464,8 +464,11 @@ describe('field drafts in the editor machine', () => {
     expect(draft(editor)).toMatchObject({ text: '"kept"', conflict: 'missing' });
     editor.send({ type: 'KEEP_DRAFT', field });
     expect(draft(editor).conflict).toBe('missing');
+    editor.send({ type: 'SAVE' });
+    expect(editor.getSnapshot().context.notice).toEqual({ kind: 'pending_fields', count: 1 });
     editor.send({ type: 'DISCARD_DRAFT', field });
     expect(editor.getSnapshot().context.drafts).toEqual({});
+    expect(editor.getSnapshot().context.notice).toBeUndefined();
 
     // A value-kind change removes the literal the text was typed into.
     const revise = nodeField(ROOT, 'revise', ['output', 'fields', { key: 'status' }]);

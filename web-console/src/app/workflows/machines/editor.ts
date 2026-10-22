@@ -323,6 +323,8 @@ export const workflowEditorMachine = setup({
     }),
     navigate: assign(({ context, event }) => event.type === 'NAVIGATE' && context.document ? { block: existingPath(context.document, event.block), coalesce: undefined } : {}),
     boundary: assign({ coalesce: undefined }),
+    // The pending-field notice ends with the last pending field.
+    settleNotice: assign(({ context }) => context.notice?.kind === 'pending_fields' && !Object.keys(context.drafts).length ? { notice: undefined } : {}),
     draft: assign(({ context, event }) => {
       if (event.type !== 'DRAFT' || !context.document) return {};
       const field = encodeField(event.address), existing = draftOf(context, field);
@@ -384,10 +386,10 @@ export const workflowEditorMachine = setup({
         REDO: { guard: 'canRedo', actions: 'redo' },
         NAVIGATE: { actions: 'navigate' },
         BOUNDARY: { actions: 'boundary' },
-        DRAFT: { guard: 'editable', actions: 'draft' },
-        APPLY_DRAFT: { guard: 'editable', actions: 'applyDraft' },
+        DRAFT: { guard: 'editable', actions: ['draft', 'settleNotice'] },
+        APPLY_DRAFT: { guard: 'editable', actions: ['applyDraft', 'settleNotice'] },
         KEEP_DRAFT: { actions: 'keepDraft' },
-        DISCARD_DRAFT: { actions: 'discardDraft' },
+        DISCARD_DRAFT: { actions: ['discardDraft', 'settleNotice'] },
         DISCARD_DRAFTS: { actions: 'discardDrafts' },
         DISMISS: { actions: 'dismiss' },
       },
