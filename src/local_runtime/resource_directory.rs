@@ -171,3 +171,51 @@ pub(crate) fn revision(root: &Path) -> String {
     walk(root, &mut hash, &mut 16_384, &mut (64 * 1024 * 1024), 0);
     format!("sha256:{:x}", hash.finalize())
 }
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::MetadataExt;
+
+    #[test]
+    fn case_sensitive_discovery_counts_lock_directory_case_variants() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let locks = root.join(".rustx-locks");
+        std::fs::create_dir(&locks).unwrap();
+        let variants = [root.join(".RUSTX-LOCKS"), root.join(".RuStX-LoCkS")];
+        for path in &variants {
+            std::fs::File::create_new(path)
+                .expect("this regression requires a verified case-sensitive filesystem");
+            let metadata = std::fs::symlink_metadata(path).unwrap();
+            assert!(metadata.is_file());
+            assert_ne!(metadata.ino(), std::fs::metadata(&locks).unwrap().ino());
+        }
+        assert_ne!(
+            std::fs::metadata(&variants[0]).unwrap().ino(),
+            std::fs::metadata(&variants[1]).unwrap().ino()
+        );
+        for index in 0..MAX_DIRECTORY_ENTRIES - variants.len() {
+            std::fs::write(root.join(format!("ordinary-{index}")), b"ordinary").unwrap();
+        }
+
+        let discovered = entries(&root, &root).unwrap();
+        assert_eq!(discovered.len(), MAX_DIRECTORY_ENTRIES);
+        assert!(!discovered.contains(&locks));
+        for path in &variants {
+            assert!(discovered.contains(path));
+        }
+
+        std::fs::write(root.join("overflow"), b"ordinary").unwrap();
+        let error = entries(&root, &root).unwrap_err();
+        assert!(
+            error.to_string().contains("exceeds 1024 entries"),
+            "{error}"
+        );
+        assert_eq!(
+            std::fs::read_dir(&root).unwrap().count(),
+            MAX_DIRECTORY_ENTRIES + 2,
+            "discovery preserves the exact metadata directory and all 1,025 authored entries"
+        );
+    }
+}

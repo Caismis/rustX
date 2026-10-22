@@ -27,6 +27,9 @@ use tokio_tungstenite::tungstenite::protocol::frame::{
 use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
 #[path = "../support/app_server_conformance.rs"]
 mod app_server_conformance;
+#[cfg(target_os = "macos")]
+#[path = "../support/case_insensitive_volume.rs"]
+mod case_insensitive_volume;
 #[path = "../support/app_server_driver.rs"]
 mod driver;
 
@@ -2306,6 +2309,119 @@ async fn app_server_refuses_an_explicit_config_named_like_writer_metadata() {
         let (_endpoint, _stderr) = websocket_startup(&mut child).await;
         child.kill().await.unwrap();
         child.wait().await.unwrap();
+    })
+    .await;
+}
+
+async fn assert_reserved_config_rejected_before_startup(
+    root: &std::path::Path,
+    name: &str,
+    verify_metadata_alias: bool,
+) {
+    use std::os::unix::fs::MetadataExt;
+
+    let document = include_bytes!("../../examples/local-runtime/minimal/rustx.toml");
+    let selected = root.join(name);
+    std::fs::write(&selected, document).unwrap();
+    // An uppercase argument naming a lowercase stored file is insufficient:
+    // canonicalization can recover the lowercase name before the guard runs.
+    assert_eq!(
+        std::fs::read_dir(root)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .file_name(),
+        name
+    );
+    let before = std::fs::symlink_metadata(&selected).unwrap();
+    assert!(before.is_file());
+    if verify_metadata_alias {
+        let metadata_spelling = std::fs::metadata(root.join(".rustx-locks"))
+            .expect("the lowercase metadata spelling must resolve to the selected file");
+        assert_eq!(
+            (metadata_spelling.dev(), metadata_spelling.ino()),
+            (before.dev(), before.ino()),
+            "the fixture must exercise a real filesystem alias for {name}"
+        );
+    }
+    let output = Command::new(env!("CARGO_BIN_EXE_rustx"))
+        .current_dir(root)
+        .env_clear()
+        .env("HOME", root.join("home"))
+        .args(["app-server", "--listen", "stdio", "--config"])
+        .arg(&selected)
+        .arg("--runtime-root")
+        .arg(root.join("runtime"))
+        .kill_on_drop(true)
+        .output()
+        .await
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "reserved source {name} was accepted"
+    );
+    assert!(output.stdout.is_empty(), "no protocol service may start");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("reserves for writer metadata"), "{stderr}");
+    assert!(stderr.contains("rename the file"), "{stderr}");
+    let after = std::fs::symlink_metadata(&selected).unwrap();
+    assert!(after.is_file());
+    assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+    assert_eq!(std::fs::read(&selected).unwrap(), document);
+    assert!(
+        !root.join("runtime").exists(),
+        "no runtime or repair backup"
+    );
+    assert!(!root.join("home").exists(), "no default runtime storage");
+    assert_eq!(
+        std::fs::read_dir(root)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>(),
+        vec![selected],
+        "rejection must not create writer metadata, staging files or backups"
+    );
+}
+
+#[tokio::test]
+async fn app_server_reserves_writer_names_before_any_startup_side_effects() {
+    bounded(async {
+        for name in [
+            ".rustx-locks",
+            ".RUSTX-LOCKS",
+            ".RuStX-LoCkS",
+            ".rustx-loc\u{212a}s",
+            ".ruſtx-locks",
+            ".rustx-stage-candidate",
+            ".RUSTX-STAGE-candidate",
+            ".RuStX-StAgE-candidate",
+            ".rustx-ﬆage-candidate",
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            assert_reserved_config_rejected_before_startup(root.path(), name, false).await;
+        }
+    })
+    .await;
+}
+
+/// This is an executing test in both macOS external-boundary lanes. Its
+/// fixture verifies case insensitivity and creates an APFS image when the
+/// runner's temporary volume is case sensitive; it never silently skips.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn app_server_refuses_actual_reserved_aliases_on_case_insensitive_macos() {
+    let volume = case_insensitive_volume::CaseInsensitiveVolume::new();
+    bounded(async {
+        for name in [
+            ".RUSTX-LOCKS",
+            ".RuStX-LoCkS",
+            ".rustx-loc\u{212a}s",
+            ".ruſtx-locks",
+        ] {
+            let root = tempfile::tempdir_in(volume.path()).unwrap();
+            assert_reserved_config_rejected_before_startup(root.path(), name, true).await;
+        }
     })
     .await;
 }

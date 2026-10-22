@@ -662,6 +662,14 @@ skip:
   `interactive-supervisor` or `rustx` need `cargo build --bins` first;
   integration targets receive `CARGO_BIN_EXE_*` from Cargo. A missing
   executable fails the spawn.
+- **A verified case-insensitive filesystem on macOS.** The `process` target's
+  reserved-configuration-name startup regression probes the temporary
+  volume using file identity. If it is case sensitive, the fixture uses
+  system `hdiutil` to create and mount an isolated case-insensitive APFS
+  image. It verifies that the literal lowercase metadata path resolves to
+  each physically authored alias before testing rejection; unavailable
+  fixtures fail rather than skip. Both macOS external-boundary lanes execute
+  this test, including the no-runtime-storage and unchanged-document checks.
 - **uv and Python 3.12** (the provider emulator and managed `FastMCP`
   children). Every uv-dependent Rust test resolves uv through
   `common::provider_emulator::required_uv`: a local checkout without uv

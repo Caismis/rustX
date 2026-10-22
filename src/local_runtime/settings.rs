@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 
 fn failure(message: &str) -> RuntimeClientError {
@@ -48,7 +48,7 @@ fn lock_file(file: &File, shared: bool) -> std::io::Result<()> {
     }
 }
 // Writer artifacts beside a source document have fixed-length names, so
-// every basename the filesystem accepts stays writable. The persistent writer
+// every nonreserved basename the filesystem accepts stays writable. The persistent writer
 // locks of a directory's documents live in its one private lock directory, so
 // a directory's own entries grow by at most that one however many documents
 // were ever written there: bounded scans of authored resources never count
@@ -72,14 +72,41 @@ pub(super) fn lock_path_of(document: &Path) -> std::path::PathBuf {
     ))
 }
 
-/// Whether `name` is the lock directory or a staged candidate, never a
-/// document. These basenames are reserved: no source document may use one
-/// (see `canonical_settings_source`).
+/// Exact writer-generated spellings ignored by resource revision discovery.
+/// This is separate from the conservative source-selection reservation.
 pub(super) fn is_writer_artifact(name: &OsStr) -> bool {
     is_lock_directory(name) || name.as_encoded_bytes().starts_with(STAGE_PREFIX.as_bytes())
 }
 
-/// Whether `name` is a directory's one lock directory.
+/// Source selection conservatively reserves case-mapped names on every
+/// filesystem, even before the document exists. Uppercase then lowercase also
+/// covers non-ASCII mappings to the fixed ASCII names (e.g. long s and Kelvin
+/// sign). Lossy decoding is only for this comparison, never file identity.
+/// For an existing canonical document, also ask whether the fixed
+/// metadata path names that same file (including non-ASCII aliases). This is
+/// read-only and must run before repair or any writer metadata is created.
+pub(super) fn is_reserved_source(document: &Path) -> std::io::Result<bool> {
+    let Some(name) = document.file_name() else {
+        return Ok(false);
+    };
+    let folded = name.to_string_lossy().to_uppercase().to_lowercase();
+    if folded == LOCK_DIRECTORY || folded.starts_with(STAGE_PREFIX) {
+        return Ok(true);
+    }
+    let metadata = |path: &Path| match std::fs::metadata(path) {
+        Ok(metadata) => Ok(Some((metadata.dev(), metadata.ino()))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    };
+    let Some(source) = metadata(document)? else {
+        return Ok(false);
+    };
+    Ok(metadata(&document.with_file_name(LOCK_DIRECTORY))? == Some(source))
+}
+
+/// The one exact metadata name excluded by bounded resource discovery. Do not
+/// fold case here: multiple case variants can coexist on a case-sensitive
+/// volume, but the scanner's raw-entry bound allows only one exemption.
 pub(super) fn is_lock_directory(name: &OsStr) -> bool {
     name == LOCK_DIRECTORY
 }

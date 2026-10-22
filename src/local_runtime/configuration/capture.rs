@@ -19,12 +19,11 @@ pub(in crate::local_runtime) fn canonical_settings_source(path: &Path) -> Result
     let canonical = normalize_missing(path)?;
     // Writer metadata lives beside its document, under names rustX reserves:
     // a source with such a name would share its path with that metadata.
-    if canonical
-        .file_name()
-        .is_some_and(crate::local_runtime::settings::is_writer_artifact)
+    if crate::local_runtime::settings::is_reserved_source(&canonical)
+        .map_err(|error| format!("cannot check user settings source writer metadata: {error}"))?
     {
         return Err(format!(
-            "user settings source `{}` uses a file name rustX reserves for writer metadata (`.rustx-locks`, `.rustx-stage-*`); rename the file",
+            "user settings source `{}` uses a file name rustX reserves for writer metadata (`.rustx-locks`, `.rustx-stage-*`, including case variants and filesystem aliases of `.rustx-locks`); rename the file",
             canonical.display()
         ));
     }
