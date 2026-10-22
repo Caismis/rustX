@@ -49,24 +49,55 @@ fn lock_file(file: &File, shared: bool) -> std::io::Result<()> {
 }
 // Writer artifacts beside a source document have fixed-length names, so
 // every basename the filesystem accepts stays writable. The persistent writer
-// lock is named by a digest of the document's exact basename bytes: one lock
-// per document, distinct for distinct documents. A staged candidate is named
-// by a fresh UUID.
-const LOCK_PREFIX: &str = ".rustx-lock-";
+// locks of a directory's documents live in its one private lock directory, so
+// a directory's own entries grow by at most that one however many documents
+// were ever written there: bounded scans of authored resources never count
+// lock history. A lock is named by a digest of the document's exact basename
+// bytes: one lock per document, distinct for distinct documents. A staged
+// candidate is named by a fresh UUID beside its document.
+const LOCK_DIRECTORY: &str = ".rustx-locks";
 const STAGE_PREFIX: &str = ".rustx-stage-";
 
-/// The writer lock name of the document named `document` in its directory.
+/// The writer lock name of the document named `document`, inside its
+/// directory's lock directory.
 pub(super) fn lock_name(document: &OsStr) -> String {
-    format!(
-        "{LOCK_PREFIX}{:x}.lock",
-        Sha256::digest(document.as_encoded_bytes())
-    )
+    format!("{:x}.lock", Sha256::digest(document.as_encoded_bytes()))
 }
 
-/// Whether `name` is a writer lock or staged candidate, never a document.
+/// The writer lock path of the document at `document`.
+#[cfg(test)]
+pub(super) fn lock_path_of(document: &Path) -> std::path::PathBuf {
+    document.with_file_name(LOCK_DIRECTORY).join(lock_name(
+        document.file_name().expect("a document is named"),
+    ))
+}
+
+/// Whether `name` is the lock directory or a staged candidate, never a
+/// document.
 pub(super) fn is_writer_artifact(name: &OsStr) -> bool {
-    let name = name.as_encoded_bytes();
-    name.starts_with(LOCK_PREFIX.as_bytes()) || name.starts_with(STAGE_PREFIX.as_bytes())
+    name == LOCK_DIRECTORY || name.as_encoded_bytes().starts_with(STAGE_PREFIX.as_bytes())
+}
+
+/// Open the lock directory below `parent`, never following a symlink:
+/// `None` when it is missing and not `create`. A creator makes it private
+/// (`0700`); one that another writer created first is simply opened. It is
+/// never removed, like the locks in it.
+fn lock_directory(
+    parent: &impl std::os::fd::AsFd,
+    create: bool,
+) -> std::io::Result<Option<std::os::fd::OwnedFd>> {
+    let open = || nix::fcntl::openat(parent, LOCK_DIRECTORY, DIRECTORY_FLAGS, Mode::empty());
+    match open() {
+        Err(nix::errno::Errno::ENOENT) if create => {
+            match nix::sys::stat::mkdirat(parent, LOCK_DIRECTORY, Mode::S_IRWXU) {
+                Ok(()) | Err(nix::errno::Errno::EEXIST) => {}
+                Err(error) => return Err(error.into()),
+            }
+            Ok(Some(open()?))
+        }
+        Err(nix::errno::Errno::ENOENT) => Ok(None),
+        opened => Ok(Some(opened?)),
+    }
 }
 
 /// Open the persistent writer lock inode, creating it when missing.
@@ -92,21 +123,38 @@ fn open_lock(open: impl Fn(OFlag) -> nix::Result<File>) -> std::io::Result<File>
     Ok(file)
 }
 
-/// Shared with create-only initialization. Never unlink the lock inode.
-pub(super) fn lock_document(target: &Path) -> std::io::Result<File> {
-    let lock = lock_path(target)?;
-    let file = open_lock(|flags| {
-        nix::fcntl::open(&lock, flags, Mode::S_IRUSR | Mode::S_IWUSR).map(File::from)
-    })?;
-    lock_file(&file, false)?;
-    Ok(file)
+/// Open the writer lock `name` in the lock directory `locks`.
+fn open_lock_in(locks: &std::os::fd::OwnedFd, name: &OsStr) -> std::io::Result<File> {
+    let lock = lock_name(name);
+    open_lock(|flags| {
+        nix::fcntl::openat(
+            locks,
+            OsStr::new(&lock),
+            flags,
+            Mode::S_IRUSR | Mode::S_IWUSR,
+        )
+        .map(File::from)
+    })
 }
 
-fn lock_path(target: &Path) -> std::io::Result<std::path::PathBuf> {
+/// Shared with create-only initialization: the same inode
+/// [`SourceDirectory::lock`] locks. Never unlink the lock inode.
+pub(super) fn lock_document(target: &Path) -> std::io::Result<File> {
     let name = target
         .file_name()
         .ok_or_else(|| std::io::Error::other("invalid document"))?;
-    Ok(target.with_file_name(lock_name(name)))
+    // The document's directory is named by pathname, as before; only the
+    // lock directory and the lock in it are never followed.
+    let directory = nix::fcntl::open(
+        parent(target)?,
+        OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_CLOEXEC,
+        Mode::empty(),
+    )?;
+    let locks = lock_directory(&directory, true)?
+        .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?;
+    let file = open_lock_in(&locks, name)?;
+    lock_file(&file, false)?;
+    Ok(file)
 }
 
 /// Read an authored resource document by pathname. The `open` that reads it
@@ -437,12 +485,20 @@ impl SourceDirectory {
     /// directory, since lock inodes are never unlinked. The lock name is
     /// never followed.
     pub(super) fn share_lock(&self, name: &OsStr) -> std::io::Result<Option<File>> {
-        let file = match self.open_file(
+        let Some(locks) = lock_directory(&self.directory, false)? else {
+            return Ok(None);
+        };
+        let file = match nix::fcntl::openat(
+            &locks,
             OsStr::new(&lock_name(name)),
-            OFlag::O_RDONLY | OFlag::O_NONBLOCK | OFlag::O_NOCTTY,
+            OFlag::O_RDONLY
+                | OFlag::O_NONBLOCK
+                | OFlag::O_NOCTTY
+                | OFlag::O_NOFOLLOW
+                | OFlag::O_CLOEXEC,
             Mode::empty(),
         ) {
-            Ok(file) => file,
+            Ok(file) => File::from(file),
             Err(nix::errno::Errno::ENOENT) => return Ok(None),
             Err(error) => return Err(error.into()),
         };
@@ -456,8 +512,11 @@ impl SourceDirectory {
     /// Whether the writer lock of `name` exists in this directory, as any
     /// entry.
     pub(super) fn lock_exists(&self, name: &OsStr) -> std::io::Result<bool> {
+        let Some(locks) = lock_directory(&self.directory, false)? else {
+            return Ok(false);
+        };
         match nix::sys::stat::fstatat(
-            &self.directory,
+            &locks,
             OsStr::new(&lock_name(name)),
             nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
         ) {
@@ -471,12 +530,18 @@ impl SourceDirectory {
     /// [`lock_document`] locks while this directory holds. Advisory: it
     /// serializes rustX writers, never an external rename.
     pub(super) fn lock(&self, name: &OsStr) -> std::io::Result<File> {
-        let lock = lock_name(name);
-        let file = open_lock(|flags| {
-            self.open_file(OsStr::new(&lock), flags, Mode::S_IRUSR | Mode::S_IWUSR)
-        })?;
+        let locks = lock_directory(&self.directory, true)?
+            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?;
+        let file = open_lock_in(&locks, name)?;
         lock_file(&file, false)?;
         Ok(file)
+    }
+
+    /// The physical identity (device, inode) of this directory: two
+    /// handles with one identity are the same directory, whatever their
+    /// paths.
+    pub(super) fn identity(&self) -> (u64, u64) {
+        self.identity
     }
 
     /// Write and sync `bytes` to a new private file in this directory. The
@@ -743,7 +808,7 @@ mod lock_tests {
     fn a_creator_that_loses_the_lock_creation_race_opens_the_winners_inode() {
         use std::os::unix::fs::MetadataExt;
         let root = tempfile::tempdir().unwrap();
-        let path = root.path().join(".rustx-lock-race.lock");
+        let path = root.path().join("race.lock");
         let attempts = std::cell::RefCell::new(Vec::new());
         let winner = std::cell::Cell::new(None);
         let file = open_lock(|flags| {

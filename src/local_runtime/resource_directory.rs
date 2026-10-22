@@ -2,6 +2,9 @@
 use crate::runtime::resources::{RuntimeResourceLoadError, validate_project_resource_path};
 use std::path::{Path, PathBuf};
 
+/// The most entries of any kind a canonical resource directory holds.
+pub(crate) const MAX_DIRECTORY_ENTRIES: usize = 1024;
+
 pub(crate) fn entries(
     boundary: &Path,
     root: &Path,
@@ -20,11 +23,11 @@ pub(crate) fn entries(
     }
     let paths = std::fs::read_dir(root)
         .map_err(|e| fail(e.to_string()))?
-        .take(1025)
+        .take(MAX_DIRECTORY_ENTRIES + 1)
         .map(|entry| entry.map(|e| e.path()))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| fail(e.to_string()))?;
-    if paths.len() > 1024 {
+    if paths.len() > MAX_DIRECTORY_ENTRIES {
         return Err(fail("canonical resource root exceeds 1024 entries".into()));
     }
     let mut paths = paths;
