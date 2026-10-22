@@ -1,13 +1,15 @@
 //! Ledger authority and Journal-event validation of auxiliary facts inside the caller's transaction.
 
+use super::super::sqlite_error;
+
 use super::{
     AuxiliaryAuditCut, AuxiliaryBusinessSource, AuxiliaryCallStart, AuxiliaryInputEvidence,
     AuxiliaryRequestStart, CompactionOperationId, Connection, ConversationId,
     ConversationStoreError, MessageId, ModelRequestOwner, ResourceLimits, RuntimeEvent,
     RuntimeEventEnvelope, Transaction, call_audit_at_tx, call_row_tx, call_started_event_id,
     journal_prefix, next_request_ordinal_tx, open_request_tx, owner_row_tx, params, request_row_tx,
-    request_snapshot_exists, request_started_event_id, seq_to_i64, storage,
-    validate_call_start_input, validate_request_start_input, validate_terminal_envelope_shape,
+    request_snapshot_exists, request_started_event_id, seq_to_i64, validate_call_start_input,
+    validate_request_start_input, validate_terminal_envelope_shape,
 };
 
 pub(super) fn ledger_frontier(connection: &Connection) -> Result<u64, ConversationStoreError> {
@@ -17,7 +19,7 @@ pub(super) fn ledger_frontier(connection: &Connection) -> Result<u64, Conversati
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(format!("auxiliary Ledger frontier: {error}")))?;
+        .map_err(|error| sqlite_error(&error, format!("auxiliary Ledger frontier: {error}")))?;
     u64::try_from(value)
         .map_err(|_| ConversationStoreError::InvalidReference("Ledger frontier is negative".into()))
 }
@@ -34,7 +36,7 @@ pub(super) fn require_message_in_ledger(
             params![message_id.as_str(), seq_to_i64(through)?],
             |row| row.get(0),
         )
-        .map_err(|error| storage(format!("auxiliary MessageId lookup: {error}")))?;
+        .map_err(|error| sqlite_error(&error, format!("auxiliary MessageId lookup: {error}")))?;
     if !exists {
         return Err(ConversationStoreError::InvalidReference(format!(
             "auxiliary source MessageId {message_id} is not visible at its historical input cut"
@@ -59,7 +61,7 @@ pub(super) fn require_human_message_in_ledger(
             params![message_id.as_str(), seq_to_i64(through)?],
             |row| row.get(0),
         )
-        .map_err(|error| storage(format!("auxiliary HumanMessage lookup: {error}")))?;
+        .map_err(|error| sqlite_error(&error, format!("auxiliary HumanMessage lookup: {error}")))?;
     if !exists {
         return Err(ConversationStoreError::InvalidReference(format!(
             "auxiliary HumanMessage source {message_id} is not a visible canonical Human message"
@@ -85,7 +87,12 @@ pub(super) fn require_compaction_operation_through(
             params![operation_id.as_str(), seq_to_i64(through_journal)?],
             |row| row.get(0),
         )
-        .map_err(|error| storage(format!("auxiliary Compaction source lookup: {error}")))?;
+        .map_err(|error| {
+            sqlite_error(
+                &error,
+                format!("auxiliary Compaction source lookup: {error}"),
+            )
+        })?;
     if !exists {
         return Err(ConversationStoreError::InvalidReference(format!(
             "auxiliary Compaction source {operation_id} is not visible at the business-source validation frontier"

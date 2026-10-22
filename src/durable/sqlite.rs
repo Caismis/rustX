@@ -480,11 +480,11 @@ impl ConnectionOwner {
                 return Err(storage("connection poisoned"));
             }
             if cancelled.is_some_and(|flag| flag.load(Ordering::Acquire)) {
-                return Err(storage(if write_scope.is_some() {
-                    "required write cancelled before connection acquisition"
+                return Err(if write_scope.is_some() {
+                    ConversationStoreError::OperationCancelled
                 } else {
-                    "presentation read cancelled"
-                }));
+                    storage("presentation read cancelled")
+                });
             }
             if let Some(connection) = slot.take() {
                 let Ok(previous) = self.lease_generation.fetch_update(
@@ -1109,6 +1109,15 @@ fn read_sequence(value: i64) -> Result<u64, rusqlite::Error> {
             Box::new(error),
         )
     })
+}
+
+/// Preserve SQLite's typed interrupt cause before diagnostic formatting.
+fn sqlite_error(error: &rusqlite::Error, diagnostic: String) -> ConversationStoreError {
+    if error.sqlite_error_code() == Some(rusqlite::ErrorCode::OperationInterrupted) {
+        ConversationStoreError::OperationCancelled
+    } else {
+        storage(diagnostic)
+    }
 }
 
 fn storage(message: impl Into<String>) -> ConversationStoreError {

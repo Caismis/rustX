@@ -1,5 +1,7 @@
 //! Typed auxiliary index rows and their bounded queries.
 
+use super::super::sqlite_error;
+
 use super::{
     AUXILIARY_TERMINAL_ENVELOPE_ENCODED_MAX, AuxiliaryCallId, AuxiliaryCallOutcome,
     AuxiliaryRequestTerminal, Connection, ConversationId, ConversationStoreError,
@@ -35,7 +37,7 @@ pub(super) fn call_row_query(
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .optional()
-        .map_err(|error| storage(format!("auxiliary Call lookup: {error}")))?;
+        .map_err(|error| sqlite_error(&error, format!("auxiliary Call lookup: {error}")))?;
     row.map(|(started_sequence, settled_sequence, outcome)| {
         Ok(CallRow {
             started_sequence: sequence_from_i64(started_sequence)?,
@@ -100,7 +102,7 @@ pub(super) fn request_row_query<P: rusqlite::Params>(
             },
         )
         .optional()
-        .map_err(|error| storage(format!("auxiliary request lookup: {error}")))?;
+        .map_err(|error| sqlite_error(&error, format!("auxiliary request lookup: {error}")))?;
     row.map(
         |(
             call_id,
@@ -152,7 +154,7 @@ pub(super) fn open_request_query(
         )
         .optional()
         .map(|value| value.map(RequestId::new))
-        .map_err(|error| storage(format!("auxiliary open request lookup: {error}")))
+        .map_err(|error| sqlite_error(&error, format!("auxiliary open request lookup: {error}")))
 }
 
 pub(super) fn call_has_requests_query(
@@ -167,7 +169,12 @@ pub(super) fn call_has_requests_query(
             [call_id.as_str()],
             |row| row.get(0),
         )
-        .map_err(|error| storage(format!("auxiliary request-presence lookup: {error}")))
+        .map_err(|error| {
+            sqlite_error(
+                &error,
+                format!("auxiliary request-presence lookup: {error}"),
+            )
+        })
 }
 
 pub(super) fn next_request_ordinal_tx(
@@ -180,7 +187,7 @@ pub(super) fn next_request_ordinal_tx(
             [call_id.as_str()],
             |row| row.get(0),
         )
-        .map_err(|error| storage(format!("auxiliary ordinal lookup: {error}")))?;
+        .map_err(|error| sqlite_error(&error, format!("auxiliary ordinal lookup: {error}")))?;
     maximum.map_or(Ok(0), |value| {
         u32::try_from(value)
             .ok()
@@ -203,7 +210,7 @@ pub(super) fn request_snapshot_exists(
             [request_id.as_str()],
             |row| row.get(0),
         )
-        .map_err(|error| storage(format!("primary request lookup: {error}")))
+        .map_err(|error| sqlite_error(&error, format!("primary request lookup: {error}")))
 }
 
 #[derive(Debug)]
@@ -256,7 +263,7 @@ pub(super) fn owner_row_query(
             },
         )
         .optional()
-        .map_err(|error| storage(format!("request owner index lookup: {error}")))?;
+        .map_err(|error| sqlite_error(&error, format!("request owner index lookup: {error}")))?;
     row.map(
         |(
             kind,
@@ -362,7 +369,7 @@ pub(super) fn event_at_connection(
             },
         )
         .optional()
-        .map_err(|error| storage(format!("auxiliary event lookup: {error}")))?;
+        .map_err(|error| sqlite_error(&error, format!("auxiliary event lookup: {error}")))?;
     let Some((
         encoded_bytes,
         stored_event_id,
@@ -388,7 +395,7 @@ pub(super) fn event_at_connection(
             [seq_to_i64(sequence)?],
             |row| row.get(0),
         )
-        .map_err(|error| storage(format!("auxiliary bounded event read: {error}")))?;
+        .map_err(|error| sqlite_error(&error, format!("auxiliary bounded event read: {error}")))?;
     if json.len() > AUXILIARY_TERMINAL_ENVELOPE_ENCODED_MAX {
         return Err(ConversationStoreError::ResourceBoundExceeded(
             "auxiliary source event exceeds its encoded byte bound".into(),
@@ -448,7 +455,7 @@ pub(super) fn audit_fact_row(
             },
         )
         .optional()
-        .map_err(|error| storage(format!("auxiliary audit fact lookup: {error}")))?;
+        .map_err(|error| sqlite_error(&error, format!("auxiliary audit fact lookup: {error}")))?;
     row.map(
         |(sequence, audit_offset, kind, call_id, request_id, ordinal)| {
             Ok(AuditFactRow {
@@ -729,7 +736,7 @@ pub(super) fn request_snapshot_started_sequence(
             |row| row.get::<_, Option<i64>>(0),
         )
         .optional()
-        .map_err(|error| storage(format!("request snapshot start lookup: {error}")))?
+        .map_err(|error| sqlite_error(&error, format!("request snapshot start lookup: {error}")))?
         .flatten()
         .map(sequence_from_i64)
         .transpose()

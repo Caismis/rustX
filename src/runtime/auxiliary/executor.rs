@@ -90,6 +90,8 @@ struct DispatchTestGate {
 struct RecordState {
     #[cfg(test)]
     dispatch_gate: Option<DispatchTestGate>,
+    #[cfg(test)]
+    retirement_gate: Option<(oneshot::Sender<()>, mpsc::Receiver<()>)>,
     submitted: bool,
     dispatched: bool,
     sealed: bool,
@@ -99,7 +101,7 @@ struct RecordState {
 }
 
 pub(super) struct CallRecord {
-    pub executor: Arc<ExecutionResources>,
+    resources: Mutex<Option<Arc<ExecutionResources>>>,
     registry: Weak<ExecutorInner>,
     pub scope: Arc<AuxiliaryScope>,
     pub call_id: AuxiliaryCallId,
@@ -155,6 +157,22 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 impl AuxiliaryExecutor {
+    #[cfg(test)]
+    pub(crate) fn hold_retirement_for_test(&self) -> (oneshot::Receiver<()>, mpsc::Sender<()>) {
+        let state = lock(&self.0.state);
+        assert_eq!(state.calls.len(), 1);
+        let record = state.calls.values().next().unwrap();
+        let (entered, observed) = oneshot::channel();
+        let (release, held) = mpsc::channel();
+        assert!(
+            lock(&record.state)
+                .retirement_gate
+                .replace((entered, held))
+                .is_none()
+        );
+        (observed, release)
+    }
+
     #[cfg(test)]
     pub(crate) fn hold_settlement_for_test(&self) -> AuxiliaryWriteTestGates {
         let record = {
@@ -281,7 +299,7 @@ impl AuxiliaryExecutor {
                                 }
                                 let call_id = AuxiliaryCallId::generate();
                                 let record = Arc::new(CallRecord {
-                                    executor: self.0.resources.clone(),
+                                    resources: Mutex::new(Some(self.0.resources.clone())),
                                     registry: Arc::downgrade(&self.0),
                                     scope: scope.clone(),
                                     call_id: call_id.clone(),
@@ -417,7 +435,7 @@ impl AuxiliaryReservation {
         self,
         frozen: FrozenCall,
     ) -> Result<oneshot::Receiver<Result<ConfirmedExecution, ContextError>>, ContextError> {
-        let handle = self.record.executor.runtime.clone();
+        let handle = self.record.execution_resources()?.runtime.clone();
         let record = self.record.clone();
         let mut state = lock(&record.state);
         if state.submitted {
@@ -487,6 +505,10 @@ impl AuxiliaryReservation {
 }
 
 impl CallRecord {
+    pub(super) fn execution_resources(&self) -> Result<Arc<ExecutionResources>, ContextError> {
+        lock(&self.resources).clone().ok_or_else(closed)
+    }
+
     #[cfg(test)]
     pub(super) fn wait_dispatch_gate_for_test(&self, after_grant: bool) {
         let gate = {
@@ -530,13 +552,15 @@ impl CallRecord {
     }
 
     pub(super) fn grant_dispatch(&self) -> Result<(), ContextError> {
+        // Consumed authority stays consumed after its execution resources have
+        // been released; retirement must not relabel it as fresh cancellation.
+        if lock(&self.state).dispatched {
+            return Err(consumed_dispatch());
+        }
         self.active_grant(|| {
             let mut state = lock(&self.state);
             if state.dispatched || state.sealed {
-                return Err(ContextError::new(
-                    ContextErrorKind::AuxiliarySupervisionFailed,
-                    "auxiliary dispatch already consumed",
-                ));
+                return Err(consumed_dispatch());
             }
             state.dispatched = true;
             Ok(())
@@ -546,6 +570,7 @@ impl CallRecord {
     pub(super) fn seal_success(
         &self,
         fold: super::stream::AuxiliaryStreamFold,
+        clock: &dyn MonotonicClock,
     ) -> (SealedExecution, Option<ContextError>) {
         let mut fold = Some(fold);
         match self.active_grant(|| {
@@ -553,14 +578,14 @@ impl CallRecord {
             Ok(fold
                 .take()
                 .expect("one success grant")
-                .finish(self.executor.monotonic.now_millis()))
+                .finish(clock.now_millis()))
         }) {
             Ok(sealed) => (sealed, None),
             Err(error) => {
-                let sealed = fold.take().expect("refused grant retains fold").fail(
-                    super::execution::control_error(&error),
-                    self.executor.monotonic.now_millis(),
-                );
+                let sealed = fold
+                    .take()
+                    .expect("refused grant retains fold")
+                    .fail(super::execution::control_error(&error), clock.now_millis());
                 (sealed, Some(error))
             }
         }
@@ -572,10 +597,11 @@ impl CallRecord {
     ) -> Result<T, ContextError> {
         // Only the native owner thread can wait for lifecycle ownership;
         // it never retains the durability mutex during that wait.
-        self.executor
+        let resources = self.execution_resources()?;
+        resources
             .lifecycle
             .with_running_commit(|| {
-                self.executor
+                resources
                     .durability
                     .with_healthy_commit(|| {
                         self.cancellation
@@ -600,6 +626,7 @@ impl CallRecord {
     }
 
     fn retire(&self) {
+        drop(lock(&self.resources).take());
         if let Some(registry) = self.registry.upgrade() {
             lock(&registry.state).calls.remove(&self.call_id);
             registry.changed.notify_waiters();
@@ -609,6 +636,9 @@ impl CallRecord {
     }
 
     fn reap(&self) {
+        let resources = self
+            .execution_resources()
+            .expect("registered retirement resources");
         let worker = lock(&self.state)
             .worker
             .take()
@@ -636,8 +666,7 @@ impl CallRecord {
                 || "auxiliary native supervision failed".into(),
                 |error| error.message.clone(),
             );
-            let failure = self
-                .executor
+            let failure = resources
                 .durability
                 .commit_failure(DurableOperation::EventJournal, diagnostic);
             let failure = match failure {
@@ -661,11 +690,23 @@ impl CallRecord {
         // The thread, writer and exact confirmation have exited. Unresolved
         // intent is now under the native failed-durability owner above.
         drop(exit.joined.take());
+        // Releasing admission/registry/result can let the manager publish
+        // WriterAbsent. Neither this frame nor a parked record may keep Store.
+        drop(resources);
+        drop(lock(&self.resources).take());
         drop(lock(&self.state).permit.take());
         drop(lock(&self.state).admission.take());
         self.retire();
         if let Some(completion) = lock(&self.completion).take() {
             let _ = completion.send(exit.result);
+        }
+        #[cfg(test)]
+        {
+            let gate = lock(&self.state).retirement_gate.take();
+            if let Some((entered, release)) = gate {
+                let _ = entered.send(());
+                let _ = release.recv_timeout(std::time::Duration::from_secs(10));
+            }
         }
     }
 }
@@ -736,6 +777,13 @@ fn admission_busy(scope: &AuxiliaryScope, diagnostic: String) -> ContextError {
                 .unwrap_or_else(|| ContextError::new(ContextErrorKind::AuxiliaryBusy, diagnostic))
         })
         .unwrap_or_else(closed)
+}
+
+fn consumed_dispatch() -> ContextError {
+    ContextError::new(
+        ContextErrorKind::AuxiliarySupervisionFailed,
+        "auxiliary dispatch already consumed",
+    )
 }
 
 fn closed() -> ContextError {

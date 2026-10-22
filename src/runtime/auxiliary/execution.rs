@@ -23,6 +23,7 @@ use super::writer::{AuxiliaryWriter, AuxiliaryWriterClient, RequiredReceipt, Req
 
 struct Execution {
     record: Arc<CallRecord>,
+    resources: Arc<super::executor::ExecutionResources>,
     client: AuxiliaryWriterClient,
     start: Arc<AuxiliaryCallStart>,
     request: Option<ModelRequest>,
@@ -38,7 +39,10 @@ struct Execution {
     undispatched: Option<ModelError>,
     settlement: Option<Box<AuxiliarySettlementCommit>>,
     failure: Option<ContextError>,
-    durability_failed: bool,
+    /// Unknown or invalid required evidence forbids further settlement writes.
+    settlement_blocked: bool,
+    /// A required storage failure survives a proven rollback and later settlement.
+    required_failure: Option<ContextError>,
 }
 
 #[allow(clippy::too_many_lines)] // The retained owner contains execution, panic recovery and final physical join.
@@ -48,7 +52,10 @@ pub(super) fn execute(
     frozen: FrozenCall,
     handle: &tokio::runtime::Handle,
 ) -> CallExit {
-    let (writer, client) = match AuxiliaryWriter::start(record.executor.store.clone(), permit) {
+    let resources = record
+        .execution_resources()
+        .expect("registered execution resources");
+    let (writer, client) = match AuxiliaryWriter::start(resources.store.clone(), permit) {
         Ok(writer) => writer,
         Err(error) => {
             return CallExit {
@@ -68,6 +75,7 @@ pub(super) fn execute(
     } = frozen;
     let mut execution = Execution {
         record: record.clone(),
+        resources,
         client,
         start: Arc::new(start),
         request: Some(request),
@@ -83,7 +91,8 @@ pub(super) fn execute(
         undispatched: None,
         settlement: None,
         failure: None,
-        durability_failed: false,
+        settlement_blocked: false,
+        required_failure: None,
     };
     let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         handle.block_on(execution.run())
@@ -96,7 +105,7 @@ pub(super) fn execute(
     // The model future has returned or unwound, but the record still owns all
     // writes and its fold. Recover an abandoned reply without another write.
     execution.recover_pending();
-    if !execution.durability_failed {
+    if !execution.settlement_blocked {
         let cleanup = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             handle.block_on(execution.settle())
         }));
@@ -104,21 +113,21 @@ pub(super) fn execute(
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
                 execution.failure = Some(error);
-                execution.durability_failed = execution.call_started;
+                execution.settlement_blocked = execution.call_started;
             }
             Err(_) => {
                 execution.failure = Some(supervision("auxiliary settlement supervision panicked"));
-                execution.durability_failed = true;
+                execution.settlement_blocked = true;
             }
         }
         execution.recover_pending();
     }
     let joined = record.take_writer().map(AuxiliaryWriter::join);
     if joined.as_ref().is_some_and(|joined| joined.panicked) {
-        execution.durability_failed = true;
+        execution.settlement_blocked = true;
         execution.failure = Some(supervision("required auxiliary writer panicked"));
     }
-    let durability_failed = execution.durability_failed;
+    let durability_failed = execution.settlement_blocked || execution.required_failure.is_some();
     let result = execution.result();
     CallExit {
         joined,
@@ -163,7 +172,7 @@ impl Execution {
         )
         .map_err(|error| not_started(&error.message))?;
         self.write(
-            RequiredWrite::CallStart(self.start.clone(), self.record.executor.clock.now()),
+            RequiredWrite::CallStart(self.start.clone(), self.resources.clock.now()),
             true,
         )
         .await?;
@@ -171,9 +180,9 @@ impl Execution {
         let request_start = self
             .record
             .request_start(self.invocation.invocation_config().model);
-        self.request_start_millis = self.record.executor.monotonic.now_millis();
+        self.request_start_millis = self.resources.monotonic.now_millis();
         self.write(
-            RequiredWrite::RequestStart(Arc::new(request_start), self.record.executor.clock.now()),
+            RequiredWrite::RequestStart(Arc::new(request_start), self.resources.clock.now()),
             true,
         )
         .await?;
@@ -187,7 +196,7 @@ impl Execution {
         #[cfg(test)]
         self.record.wait_dispatch_gate_for_test(true);
         crate::runtime::process_death::reach("after:auxiliary_dispatch_granted");
-        let now = self.record.executor.monotonic.now_millis();
+        let now = self.resources.monotonic.now_millis();
         self.fold = Some(AuxiliaryStreamFold::new(
             self.record.request_id.clone(),
             now,
@@ -208,17 +217,19 @@ impl Execution {
             stream,
             self.fold.as_mut().expect("request fold"),
             &self.record.cancellation,
-            self.record.executor.monotonic.as_ref(),
+            self.resources.monotonic.as_ref(),
         )
         .await;
         let fold = self.fold.take().expect("one request fold");
         self.sealed = Some(match observed {
             Ok(()) => {
-                let (sealed, failure) = self.record.seal_success(fold);
+                let (sealed, failure) = self
+                    .record
+                    .seal_success(fold, self.resources.monotonic.as_ref());
                 self.failure = failure;
                 sealed
             }
-            Err(error) => fold.fail(error, self.record.executor.monotonic.now_millis()),
+            Err(error) => fold.fail(error, self.resources.monotonic.now_millis()),
         });
         Ok(())
     }
@@ -230,7 +241,7 @@ impl Execution {
                 biased;
                 () = self.record.cancellation.cancelled() => return Err(cancelled()),
                 () = self.record.scope.budget.wait_until_deadline() => return Err(deadline()),
-                permission = self.record.executor.durability.enter_ownership_commit_async() => {
+                permission = self.resources.durability.enter_ownership_commit_async() => {
                     permission.map_err(|refused| ContextError::new(ContextErrorKind::AuxiliaryDurabilityFailed, refused.diagnostic))?
                 }
             })
@@ -278,7 +289,7 @@ impl Execution {
         match outcome.as_ref() {
             Ok(receipt) => {
                 self.accept_receipt(receipt);
-                if self.durability_failed {
+                if self.settlement_blocked {
                     Err(self
                         .failure
                         .clone()
@@ -296,21 +307,13 @@ impl Execution {
                 if let Some(allowance) = self.start_allowance.take() {
                     let _ = allowance.reject(failure);
                 }
-                self.durability_failed =
-                    !start || matches!(failure, AuxiliaryWriteFailure::Unknown { .. });
-                if !self.durability_failed
-                    && let Some(error) = control
+                let error = self.record_write_failure(failure, start);
+                if error.kind != ContextErrorKind::AuxiliaryDurabilityFailed
+                    && let Some(control) = control
                 {
-                    return Err(error);
+                    return Err(control);
                 }
-                Err(ContextError::new(
-                    if self.durability_failed {
-                        ContextErrorKind::AuxiliaryDurabilityFailed
-                    } else {
-                        ContextErrorKind::AuxiliaryNotStarted
-                    },
-                    failure.to_string(),
-                ))
+                Err(error)
             }
         }
     }
@@ -324,25 +327,60 @@ impl Execution {
                     && let Err(error) = allowance.confirm(receipt)
                 {
                     self.failure = Some(error);
-                    self.durability_failed = true;
+                    self.settlement_blocked = true;
                 }
             }
             RequiredReceipt::Settlement(receipt) => self.settlement = Some(receipt.clone()),
         }
     }
 
+    fn record_write_failure(
+        &mut self,
+        failure: &AuxiliaryWriteFailure,
+        start: bool,
+    ) -> ContextError {
+        let uncertain = matches!(failure, AuxiliaryWriteFailure::Unknown { .. });
+        let required = !start
+            || uncertain
+            || matches!(
+                failure.error(),
+                crate::durable::ConversationStoreError::Storage(_)
+            );
+        self.settlement_blocked |= !start || uncertain;
+        let error = ContextError::new(
+            if required {
+                ContextErrorKind::AuxiliaryDurabilityFailed
+            } else if matches!(
+                failure.error(),
+                crate::durable::ConversationStoreError::OperationCancelled
+            ) {
+                ContextErrorKind::Cancelled
+            } else {
+                ContextErrorKind::AuxiliaryNotStarted
+            },
+            failure.to_string(),
+        );
+        if required {
+            self.required_failure.get_or_insert_with(|| error.clone());
+        }
+        error
+    }
+
     fn recover_pending(&mut self) {
         if let Some(evidence) = self.record.pending_write() {
             match evidence.outcome.as_ref() {
                 Ok(receipt) => self.accept_receipt(receipt),
-                Err(AuxiliaryWriteFailure::Unknown { .. }) => {
-                    self.durability_failed = true;
-                    self.failure = Some(ContextError::new(
-                        ContextErrorKind::AuxiliaryDurabilityFailed,
-                        "required auxiliary write remains unknown after exact confirmation",
-                    ));
+                Err(failure) => {
+                    if let Some(allowance) = self.start_allowance.take() {
+                        let _ = allowance.reject(failure);
+                    }
+                    let start = matches!(
+                        evidence.intent.as_ref(),
+                        RequiredWrite::CallStart(..) | RequiredWrite::RequestStart(..)
+                    );
+                    let error = self.record_write_failure(failure, start);
+                    self.failure.get_or_insert(error);
                 }
-                Err(AuxiliaryWriteFailure::KnownNotCommitted { .. }) => {}
             }
         }
     }
@@ -360,7 +398,7 @@ impl Execution {
                 )
             });
             if let Some(fold) = self.fold.take() {
-                self.sealed = Some(fold.fail(error, self.record.executor.monotonic.now_millis()));
+                self.sealed = Some(fold.fail(error, self.resources.monotonic.now_millis()));
             } else {
                 self.undispatched = Some(error);
             }
@@ -397,10 +435,10 @@ impl Execution {
         } else {
             None
         };
-        let timestamp = self.record.executor.clock.now();
+        let timestamp = self.resources.clock.now();
         let envelope = |event| {
             auxiliary_settlement_envelope(
-                self.record.executor.store.conversation_id().clone(),
+                self.resources.store.conversation_id().clone(),
                 timestamp,
                 event,
             )
@@ -456,7 +494,10 @@ impl Execution {
     }
 
     fn result(mut self) -> Result<ConfirmedExecution, ContextError> {
-        if self.durability_failed {
+        if let Some(error) = self.required_failure.take() {
+            return Err(error);
+        }
+        if self.settlement_blocked {
             return Err(self.failure.take().unwrap_or_else(|| {
                 ContextError::new(
                     ContextErrorKind::AuxiliaryDurabilityFailed,

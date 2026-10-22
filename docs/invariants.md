@@ -361,6 +361,9 @@ Native auxiliary acquisition and waits follow this graph:
   at 96. Receiver ownership ends before joining. One unexited owner retains
   its actual join and allocation without blocking another Conversation's
   retirement. Neither handoff nor a completion flag proves physical exit.
+  After the actual joins and exact settlement, release every Call-owned Store
+  reference before releasing admission or exposing retirement/completion. A
+  parked retirement worker cannot keep a completed allocation locked.
 
 Failure registration under the coordinator takes only DurabilityGate's short
 state mutex. Coordinator idle probes treat a held lifecycle commit boundary as
@@ -373,6 +376,14 @@ publication. A failure requested by auxiliary cleanup waits for every earlier
 ownership/coordinator permission to exit before publication, without blocking
 the process reaper on coordinator SQL. The durable commit, not a preliminary
 health read or the later response delivery, determines the order.
+KnownNotCommitted describes transaction certainty, not Store health. A genuine
+required storage failure reaches the native durability authority even when
+RequestStarted rolls back, its budget allowance is refunded and Call-only
+Failed settlement succeeds. The first required failure survives that cleanup.
+Typed cancellation and benign start validation refusals do not poison health.
+An interrupted pre-COMMIT transaction with native SQLite auto-rollback is
+known noncommit; an uncertain COMMIT or rollback remains an obligation.
+
 General work cannot select protected capacity by supplying a purpose string.
 
 A failed native drain may prove physical exit while retaining logical

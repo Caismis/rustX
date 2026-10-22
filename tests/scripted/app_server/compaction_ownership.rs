@@ -834,3 +834,50 @@ async fn parked_completed_compaction_reply_does_not_retain_the_deleted_allocatio
     })
     .await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn completed_retirement_releases_store_before_result_and_deletion() {
+    bounded(async {
+        use crate::local_runtime::session::deletion::SessionDeleteResult;
+        let f = Fixture::with_summary_gate().await;
+        let _headers = ReleaseHeaders(f.gates.clone());
+        f.gates[0].release();
+        let loaded = f.load(0).await.unwrap().unwrap();
+        let live = loaded.inspect_runtime().unwrap();
+        complete_history_turn(&live).await;
+        let weak = live.weak_inner();
+        let compaction = tokio::spawn({
+            let live = live.clone();
+            async move { live.compact_context(None).await }
+        });
+        f.gates[1].wait_entered().await;
+        let (reaped, release) = live.hold_auxiliary_retirement_for_test();
+        f.gates[1].release();
+        reaped.await.unwrap();
+        let receipt = compaction.await.unwrap().unwrap();
+        assert_eq!(
+            receipt.generation, 1,
+            "business compaction completes while its reaper is still parked"
+        );
+        drop(live);
+        drop(loaded);
+        let SessionDeleteResult::Preview { preview } =
+            f.manager.sessions.delete_preview(&f.sessions[0].id).await
+        else {
+            panic!("deletion preview");
+        };
+        let deleted = f
+            .manager
+            .delete_session(&f.sessions[0].id, &preview.target_revision)
+            .await
+            .unwrap();
+        assert!(
+            matches!(deleted, SessionDeleteResult::Deleted { .. }),
+            "completed retirement must release Store before notification: {deleted:?}"
+        );
+        assert!(weak.upgrade().is_none());
+        release.send(()).unwrap();
+        f.close().await;
+    })
+    .await;
+}

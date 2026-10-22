@@ -682,7 +682,7 @@ async fn saturated_native_owner_retains_permits_through_lost_settlement_ack_and_
 
 #[tokio::test(flavor = "current_thread")]
 async fn rejected_frozen_authority_never_starts_a_call_or_leaks_native_reservations() {
-    for corruption in 0..6 {
+    for corruption in 0..7 {
         let mut fixture = fixture(Script::Complete);
         match corruption {
             0 => fixture.frozen.start.call_id = AuxiliaryCallId::generate(),
@@ -694,6 +694,13 @@ async fn rejected_frozen_authority_never_starts_a_call_or_leaks_native_reservati
             3 => fixture.frozen.request.invocation.model = "another-model".into(),
             4 => fixture.frozen.timeout.response_start_timeout = std::time::Duration::ZERO,
             5 => fixture.frozen.timeout.stream_idle_timeout = std::time::Duration::ZERO,
+            // Frozen model authority is valid; the real Store refuses this
+            // nonexistent historical input reference without poisoning health.
+            6 => fixture
+                .frozen
+                .start
+                .selected_message_ids
+                .push(MessageId::new("missing-selected-input")),
             _ => unreachable!(),
         }
         let result = tokio::time::timeout(
@@ -1007,4 +1014,166 @@ async fn production_dispatch_grant_arbitrates_cancellation_and_parent_close() {
             fixture.executor.drain().await;
         }
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn required_request_start_rollback_refunds_budget_but_fails_native_durability() {
+    for automatic_rollback in [false, true] {
+        let fixture = fixture(Script::Complete);
+        let call_id = fixture.reservation.call_id().clone();
+        let seen = fixture
+            .store
+            .fail_auxiliary_request_insert_once_for_test(automatic_rollback);
+        let result = fixture
+            .reservation
+            .submit(fixture.frozen)
+            .unwrap()
+            .await
+            .unwrap();
+        assert_eq!(
+            seen.load(Ordering::SeqCst),
+            1,
+            "the real RequestStart INSERT fault was consumed"
+        );
+        assert_eq!(fixture.adapter.entries.load(Ordering::SeqCst), 0);
+        let cut = fixture.store.auxiliary_audit_cut().unwrap();
+        let call = fixture
+            .store
+            .load_auxiliary_call(&call_id, cut)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            call.outcome,
+            Some(AuxiliaryCallOutcome::Failed),
+            "Call-only settlement succeeds after RequestStart rollback"
+        );
+        assert!(
+            fixture
+                .store
+                .read_auxiliary_call_requests(&call_id, cut, None, 32)
+                .unwrap()
+                .is_empty()
+        );
+        let journal = fixture.store.read_events(None, 32).unwrap().events;
+        assert_eq!(
+            journal.len(),
+            2,
+            "only CallStarted and CallSettled survive rollback"
+        );
+        let fresh = CancellationSignal::new();
+        let allowance = (0..12)
+            .map(|_| {
+                fixture
+                    .scope
+                    .budget
+                    .reserve_start(
+                        crate::runtime::identity::RequestId::new(uuid::Uuid::now_v7().to_string()),
+                        &fresh,
+                    )
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            allowance.len(),
+            12,
+            "proven noncommit refunds the start allowance"
+        );
+        assert!(
+            fixture.executor.0.resources.durability.failure().is_some(),
+            "required storage failure must reach native durability despite successful rollback/settlement"
+        );
+        assert_eq!(
+            result.expect_err("failed required start").kind,
+            ContextErrorKind::AuxiliaryDurabilityFailed
+        );
+        let scope = AuxiliaryExecutor::scope(
+            CompactionBudget::new(
+                CompactionOperationId::new(uuid::Uuid::now_v7().to_string()),
+                fixture.clock.clone(),
+            ),
+            &fresh,
+        );
+        assert_eq!(
+            fixture.executor.reserve_general(&scope).err().unwrap().kind,
+            ContextErrorKind::AuxiliaryDurabilityFailed
+        );
+        fixture.executor.drain().await;
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cancelled_request_start_rollback_refunds_budget_without_failing_durability() {
+    let fixture = fixture(Script::Complete);
+    let _close = CloseScopeOnDrop(fixture.scope.clone());
+    let call_id = fixture.reservation.call_id().clone();
+    let entered = fixture
+        .store
+        .park_auxiliary_request_insert_until_interrupted_for_test();
+    let reply = fixture.reservation.submit(fixture.frozen).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(10), entered)
+        .await
+        .unwrap()
+        .unwrap();
+    fixture.scope.cancellation.cancel();
+    let error = tokio::time::timeout(std::time::Duration::from_secs(10), reply)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(
+        error.kind,
+        ContextErrorKind::Cancelled,
+        "the real interrupted INSERT rolls back as cancellation"
+    );
+    assert_eq!(fixture.adapter.entries.load(Ordering::SeqCst), 0);
+    let cut = fixture.store.auxiliary_audit_cut().unwrap();
+    assert_eq!(
+        fixture
+            .store
+            .load_auxiliary_call(&call_id, cut)
+            .unwrap()
+            .unwrap()
+            .outcome,
+        Some(AuxiliaryCallOutcome::Cancelled)
+    );
+    assert!(
+        fixture
+            .store
+            .read_auxiliary_call_requests(&call_id, cut, None, 32)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(fixture.store.read_events(None, 32).unwrap().events.len(), 2);
+    let fresh = CancellationSignal::new();
+    let allowances = (0..12)
+        .map(|_| {
+            fixture
+                .scope
+                .budget
+                .reserve_start(
+                    crate::runtime::identity::RequestId::new(uuid::Uuid::now_v7().to_string()),
+                    &fresh,
+                )
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(allowances.len(), 12);
+    assert!(
+        fixture.executor.0.resources.durability.failure().is_none(),
+        "confirmed cancellation rollback does not poison native authority"
+    );
+    let scope = AuxiliaryExecutor::scope(
+        CompactionBudget::new(
+            CompactionOperationId::new(uuid::Uuid::now_v7().to_string()),
+            fixture.clock.clone(),
+        ),
+        &fresh,
+    );
+    drop(
+        fixture
+            .executor
+            .reserve_general(&scope)
+            .expect("later active admission remains healthy"),
+    );
+    fixture.executor.drain().await;
 }

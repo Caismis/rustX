@@ -473,6 +473,10 @@ queued/in-progress retirement; cleanup obtains no fresh execution permit.
 No provider-execution waiting queue or unbounded join-offloading backlog is
 used. Capacity is released only after actual joins and confirmed obligations
 or a proven-exited handoff of the exact intent to native durability failure.
+Before releasing lifecycle admission, removing the Call or sending completion,
+the reaper drops both its local execution resources and the record's resource
+slot. A retained retirement record contains no Store allocation ownership;
+manager deletion cannot depend on when the worker next gets scheduled.
 
 `model::assembly` supplies canonical event/block validation to Agent and
 auxiliary consumers. Its text-only entry validates reasoning/continuation

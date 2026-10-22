@@ -40,7 +40,8 @@ pub struct AuxiliarySettlementCommit {
 /// Typed outcome of an auxiliary semantic write.
 #[derive(Debug)]
 pub enum AuxiliaryWriteFailure {
-    /// An actual rollback completed, or validation failed before SQL opened.
+    /// Explicit rollback or SQLite-proven auto-rollback completed, or no write began.
+    /// This establishes transaction certainty only; `error` retains its cause.
     KnownNotCommitted { error: ConversationStoreError },
     /// Commit or rollback failed; the physical transaction outcome is unknown.
     Unknown { error: ConversationStoreError },

@@ -224,6 +224,15 @@ impl Drop for GateRelease {
 
 #[cfg(test)]
 impl ConversationRuntime {
+    pub(crate) fn hold_auxiliary_retirement_for_test(
+        &self,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        std::sync::mpsc::Sender<()>,
+    ) {
+        self.inner.auxiliary.hold_retirement_for_test()
+    }
+
     pub(crate) fn hold_auxiliary_settlement_for_test(
         &self,
     ) -> crate::runtime::auxiliary::executor::AuxiliaryWriteTestGates {

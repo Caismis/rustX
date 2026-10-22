@@ -99,6 +99,8 @@ pub enum ConversationStoreError {
     /// (Issue #108). The durable store — not only Agent Loop control flow —
     /// rejects impossible publication state combinations.
     PublicationViolation(String),
+    /// A cancellable Store scope stopped its operation.
+    OperationCancelled,
     /// The underlying storage rejected the operation.
     Storage(String),
 }
@@ -151,6 +153,7 @@ impl core::fmt::Display for ConversationStoreError {
             Self::PublicationViolation(message) => {
                 write!(f, "invalid publication transition: {message}")
             }
+            Self::OperationCancelled => write!(f, "the Store operation was cancelled"),
             Self::Storage(message) => write!(f, "durable ConversationStore failed: {message}"),
         }
     }

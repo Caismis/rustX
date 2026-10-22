@@ -24,6 +24,16 @@ Mandatory request-owner, Call, request and audit indexes are derived in the same
 
 An exact replay returns the original receipt and does not republish events or allocate another Journal sequence. Unsupported envelope metadata and conflicting caller semantics fail explicitly. Local write failure distinguishes a confirmed rollback/no-write path from an unknown commit or rollback outcome. Read-only confirmation returns a known matching commit, a conflict/error, or Unknown when absence cannot prove noncommit. It never creates work. Only actual completed-write evidence can establish noncommit; there is no caller-supplied boolean or fabricated writer-exit token.
 
+Commit certainty and required-write failure cause are independent. Known
+noncommit refunds a start allowance, while a genuine required Store failure
+still closes native durability admission. A confirmed Call can settle Failed
+after its RequestStarted transaction rolls back; successful cleanup does not
+erase the storage failure. Typed Store cancellation and benign start validation
+refusals remain distinct. SQLite-proven automatic rollback before any COMMIT
+is direct noncommit evidence ([SQLite transaction state](https://www.sqlite.org/c3ref/get_autocommit.html));
+absence observed later is not. Failed COMMIT or unproven rollback starts as
+Unknown; exact confirmation may establish the matching committed intent.
+
 Local outcome is separate from observed provider terminal. A locally failed stream may have observed provider completion before rejecting an illegal tail. A locally completed request must agree with a known observed completion kind. Request evidence retains only the closed `stop`, `tool_calls`, `length`, `content_filter`, `refusal` or `other` completion kind; unknown provider prose remains in the physical diagnostic and is not duplicated into audit. Observed usage, completeness and remote-execution uncertainty remain independent. Missing usage is not zero, and a known subtotal is not a complete bill. Results and domain acceptance are separate consumer responsibilities.
 
 ## Bounded reads and ownership isolation
@@ -107,7 +117,10 @@ bounded at 32 and cleanup reserves no new execution permit. A record handed
 off before its owner physically exits retains its real join and permits;
 that join cannot prevent another Conversation from delivering confirmed work
 and releasing its own allocation. Actual write/confirmation and owner joins
-precede resource release. Unresolved exact intent moves to the native failed-durability
+precede resource release. The reaper then clears the Call's resource slot and
+drops its own resources before releasing admission, removing the Call or
+sending its result. A completed record retained by a descheduled reaper owns
+no Store allocation. Unresolved exact intent moves to the native failed-durability
 owner only after physical exit; historical uncertainty does not pin global
 capacity indefinitely. Live/unproven cleanup retains its old allocation.
 
