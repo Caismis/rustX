@@ -56,6 +56,16 @@ it('follows external reset without emitting it and retains the mounted editing s
   expect(screen.getByRole('textbox', { name: 'Parameters' })).toBe(editor);
   expect(jsonValidity(editor).validity.valid).toBe(true);
   expect(screen.queryByRole('alert')).toBeNull();
+  view.rerender(<JsonCodeEditor label="Parameters" value="" onChange={changed} />);
+  await waitFor(() => expect(document.querySelector('.cm-gutters')).toBeNull());
+  expect(screen.getByRole('textbox', { name: 'Parameters' })).toBe(editor);
+  expect(readJson(editor)).toBe('');
+  view.rerender(<JsonCodeEditor label="Parameters" value={'\n  '} onChange={changed} />);
+  await waitFor(() => expect(readJson(editor)).toBe('\n  '));
+  expect(document.querySelector('.cm-gutters')).toBeNull();
+  view.rerender(<JsonCodeEditor label="Parameters" value={'{"restored":true}'} onChange={changed} />);
+  await waitFor(() => expect(document.querySelector('.cm-lineNumbers')).toBeTruthy());
+  expect(screen.getByRole('textbox', { name: 'Parameters' })).toBe(editor);
   expect(changed).not.toHaveBeenCalled();
 });
 

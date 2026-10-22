@@ -6,7 +6,9 @@ import { classHighlighter } from '@lezer/highlight';
 import { linter, lintGutter, setDiagnostics, type Diagnostic } from '@codemirror/lint';
 
 const basicSetup = { syntaxHighlighting: false, highlightActiveLine: false, highlightSelectionMatches: false, autocompletion: false };
-const jsonExtensions = [json(), syntaxHighlighting(classHighlighter), lintGutter(), EditorView.lineWrapping];
+const emptySetup = { ...basicSetup, lineNumbers: false, foldGutter: false, highlightActiveLineGutter: false };
+const jsonExtensions = [json(), syntaxHighlighting(classHighlighter), EditorView.lineWrapping];
+const diagnosticsGutter = lintGutter();
 
 /** Lazy CodeMirror engine; its document, history and selection survive renders. */
 export default function JsonCodeView({ labelId, descriptionId, value, onChange, editor, diagnostics, invalid, disabled, placeholder, minHeight, formatDocument }: {
@@ -14,11 +16,13 @@ export default function JsonCodeView({ labelId, descriptionId, value, onChange, 
   editor: RefObject<EditorView | undefined>; diagnostics: Diagnostic[]; invalid: boolean; disabled: boolean;
   placeholder?: string; minHeight: number; formatDocument: () => boolean;
 }) {
+  const empty = !value.trim();
   const extensions = useMemo(() => [...jsonExtensions,
+    ...(empty ? [] : [diagnosticsGutter]),
     linter(() => diagnostics, { delay: 0 }),
     EditorView.contentAttributes.of({ 'aria-labelledby': labelId, 'aria-describedby': descriptionId, 'aria-invalid': invalid ? 'true' : 'false', 'aria-disabled': String(disabled), spellcheck: 'false' }),
     keymap.of([{ key: 'Mod-Shift-f', run: formatDocument }, { key: 'Alt-Shift-f', run: formatDocument }]),
-  ], [labelId, descriptionId, invalid, disabled, formatDocument, diagnostics]);
+  ], [empty, labelId, descriptionId, invalid, disabled, formatDocument, diagnostics]);
   useLayoutEffect(() => {
     const view = editor.current;
     if (!view) return;
@@ -30,7 +34,7 @@ export default function JsonCodeView({ labelId, descriptionId, value, onChange, 
     view.dispatch(setDiagnostics(view.state, diagnostics));
   }, [value, diagnostics]);
   useLayoutEffect(() => () => { editor.current = undefined; }, [editor]);
-  return <CodeMirror value={value} onChange={onChange} theme="none" basicSetup={basicSetup}
+  return <CodeMirror value={value} onChange={onChange} theme="none" basicSetup={empty ? emptySetup : basicSetup}
     minHeight={`${minHeight}px`} maxHeight="360px" extensions={extensions} placeholder={placeholder}
     editable={!disabled} readOnly={disabled} indentWithTab={false}
     onCreateEditor={view => { editor.current = view; view.dispatch(setDiagnostics(view.state, diagnostics)); }}

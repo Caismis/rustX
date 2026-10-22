@@ -34,6 +34,9 @@ for (const width of [1440, 390]) test(`MCP compact creation form, reference JSON
   await form.getByLabel('Arguments (space-separated)',{exact:true}).fill('-y server --directory "/a b" ""');
   await form.getByText('Environment references (optional)',{exact:true}).click();
   const references=form.getByLabel('Environment variables (JSON)',{exact:true});
+  const referenceEditor=form.locator('[data-json-editor]').filter({has:page.getByRole('textbox',{name:'Environment variables (JSON)',exact:true})});
+  await expect(referenceEditor.locator('.cm-gutters')).toHaveCount(0);
+  await expect(referenceEditor.getByRole('button',{name:'Format JSON: Environment variables (JSON)',exact:true})).toBeHidden();
   await references.fill('{broken');
   await expect(form.getByRole('button',{name:'Save',exact:true})).toBeDisabled();
   await expect(references).toHaveAttribute('aria-invalid','true');
@@ -47,7 +50,13 @@ for (const width of [1440, 390]) test(`MCP compact creation form, reference JSON
   await expect(page.getByRole('button',{name:'Configuration scope',exact:true})).toBeDisabled();
   await page.getByRole('button',{name:'JSON',exact:true}).click();
   const json=page.getByLabel('Complete configuration',{exact:true});
+  const completeEditor=page.locator('[data-json-editor]').filter({has:json});
   expect(JSON.parse(await json.innerText())['browser-compact']).toMatchObject({command:'npx',args:['-y','server','--directory','/a b',''],sensitive_env:{TOKEN:'$TOKEN'}});
+  await json.fill('');
+  await expect(page.getByRole('button',{name:'Save',exact:true})).toBeDisabled();
+  await expect(json).toHaveAttribute('aria-invalid','true');
+  await expect(completeEditor).toHaveAttribute('data-empty','true');
+  await expect(completeEditor.locator('.cm-gutters')).toHaveCount(0);
   await json.fill('{"type":');
   await expect(page.getByRole('button',{name:'Save',exact:true})).toBeDisabled();
   await json.fill('{"type":"http","url":"https://example.com/mcp","sensitive_headers":{"Authorization":"$AUTH"}}');

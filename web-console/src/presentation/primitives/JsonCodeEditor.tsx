@@ -42,7 +42,7 @@ export function JsonCodeEditor({ label, value, onChange, error = '', allowEmpty 
     if (formatted !== text) view.dispatch({ changes: { from: 0, to: text.length, insert: formatted } });
     return true;
   }, [disabled, allowEmpty]);
-  return <div className={css.root} data-json-editor="" data-invalid={!!problem} data-disabled={disabled}>
+  return <div className={css.root} data-json-editor="" data-empty={!value.trim()} data-invalid={!!problem} data-disabled={disabled}>
     <div className={css.header}>
       <label id={`${id}-label`} onClick={() => editor.current?.focus()}>{label}</label>
       <Button size="sm" disabled={disabled || !value.trim() || !!syntax.length} onClick={formatDocument}

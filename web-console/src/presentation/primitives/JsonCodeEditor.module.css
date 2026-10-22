@@ -2,6 +2,7 @@
 .header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
 .root .header label { padding: 0; cursor: text; min-width: 0; overflow-wrap: anywhere; font-size: 13px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
 .header button { flex: none; font-size: 12px; }
+.root[data-empty=true] .header button { visibility: hidden; }
 .root :global(.cm-editor) { overflow: hidden; border: 1px solid var(--dsw-alias-border-l4); border-radius: 8px; background: var(--dsw-alias-bg-layer-3); color: var(--dsw-alias-label-primary); }
 .root :global(.cm-focused) { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: -1px; }
 .root[data-invalid=true] :global(.cm-editor) { border-color: var(--dsw-alias-state-error-primary); }
@@ -9,6 +10,7 @@
 .root :global(.cm-scroller) { font: 13px/21px var(--ds-font-family-code), monospace; overscroll-behavior: contain; }
 .root :global(.cm-content) { padding-block: 10px; caret-color: var(--dsw-alias-label-primary); }
 .root :global(.cm-line) { padding-inline: 8px; }
+.root[data-empty=true] :global(.cm-line) { padding-inline: 12px; }
 .root :global(.cm-gutters) { background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-secondary); border-right: 1px solid var(--dsw-alias-border-l3); }
 .root :global(.cm-gutterElement) { padding-inline: 6px; }
 .root :global(.cm-activeLineGutter), .root :global(.cm-selectionBackground) { background: var(--dsw-alias-interactive-bg-hover); }
