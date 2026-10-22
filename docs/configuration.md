@@ -130,9 +130,6 @@ input_modalities = ["text"]
 output_modalities = ["text"]
 tool_calls = true
 
-[models.fast.compat]
-chat_reasoning_replay = "omit"
-
 # A Model with profiles: each profile is a complete preset; the Model itself
 # declares no request_params.
 [models.thinker]
@@ -147,9 +144,6 @@ default_profile = "balanced"
 input_modalities = ["text"]
 output_modalities = ["text"]
 tool_calls = true
-
-[models.thinker.compat]
-chat_reasoning_replay = "omit"
 
 [models.thinker.profiles.fast]
 max_output_tokens = 2048
@@ -178,10 +172,28 @@ credential source; no member is recovered from the shadowed User Provider.
 Each Model requires `provider`, provider-native `id`, explicit `protocol`,
 `context_window`, `max_output_tokens`, and the complete `capabilities` object.
 Supported protocols and modality values are enumerated by the generated schema.
-Optional `compat` declares the adapter behavior: `chat_max_tokens_field`,
+No `compat` declaration is required, including with `rustx init`. Like ZCode's
+OpenAI-compatible path, Chat Completions defaults to `max_completion_tokens`,
+`stream_options.include_usage = true`, native `tool_calls`, and replay of exposed
+assistant thinking through `reasoning_content`. The Chat response parser accepts
+either `reasoning_content` or `reasoning`; replay concatenates plaintext thinking blocks
+in order and skips opaque blocks that have no Chat representation. These rules
+do not enable thinking or synthesize reasoning request parameters. Profiles
+continue to own the exact provider parameters that control generation.
+
+The bounded endpoint/model rules in `src/model/compat.rs` use `max_tokens` for
+the OpenCode Go API models listed there, following ZCode's built-in catalog.
+Rules are resolved before freezing an invocation, so replay and subprocess
+execution retain the same effective request policy. Unknown endpoints/models
+use the general defaults; there is no speculative retry after an API rejection.
+
+Special services can author optional overrides in TOML: `chat_max_tokens_field`,
 `chat_stream_usage`, `chat_reasoning_replay`, `chat_tool_protocol`, and
-`responses_storage`. Protocol validation determines which members are applicable
-and required.
+`responses_storage` (Responses defaults to `stored`). Explicit overrides win
+over built-in rules. The model settings UI exposes API format, limits,
+capabilities, profiles and request parameters; protocol overrides belong to
+source configuration. Changing API format in the UI clears overrides belonging
+to the previous protocol. Protocol validation rejects foreign members.
 
 #### Provider-native request parameters
 

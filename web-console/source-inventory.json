@@ -3848,7 +3848,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "309fd9d5a87f6f89ff91542d961c4d69b56ec5e48ce1510c377d417415f50d50"
+      "local_sha256": "197675b9a0303e712d1ce309161c83f179fbb3ed18c367bce74ffd00f09ebfb3"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -7128,7 +7128,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "3b9f59981e333581c4c311ec67dad2857513b93e0d328a31da5478ecf795db06"
+      "local_sha256": "e3490873e56d10b0b47b9c22baeb9c54f8c4949651063a5b9cdca2903142b6b6"
     }
   ],
   "inspected_only": [

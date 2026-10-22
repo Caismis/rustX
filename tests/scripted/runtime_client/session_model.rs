@@ -105,11 +105,10 @@ impl Provider {
         )
         .with_context_window(self.context_window)
         .with_max_output_tokens(self.max_output_tokens);
-        let model = match &self.profiles {
+        match &self.profiles {
             Some((default, profiles)) => model.with_profiles(default, profiles.clone()),
             None => model.with_request_params(self.request_params.clone()),
-        };
-        model
+        }
     }
 }
 

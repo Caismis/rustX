@@ -49,7 +49,7 @@ pub struct Model {
     pub default_profile: Option<ModelProfileId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profiles: Option<BTreeMap<ModelProfileId, Profile>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Compat::is_empty")]
     pub compat: Compat,
 }
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
@@ -72,6 +72,11 @@ pub struct Compat {
     pub chat_tool_protocol: Option<ChatToolProtocol>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub responses_storage: Option<ResponsesStorageMode>,
+}
+impl Compat {
+    fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
 }
 /// One authored Model Profile: a complete, independent invocation preset.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
@@ -169,8 +174,6 @@ request_params = '{"future":{"nested":[1,"text",{"new":true},null]},"temperature
 input_modalities = ["text"]
 output_modalities = ["text"]
 tool_calls = true
-[models."p/plain".compat]
-chat_reasoning_replay = "omit"
 
 [models."p/m"]
 provider = "p"
@@ -183,8 +186,6 @@ default_profile = "balanced"
 input_modalities = ["text"]
 output_modalities = ["text"]
 tool_calls = true
-[models."p/m".compat]
-chat_reasoning_replay = "omit"
 [models."p/m".profiles.fast]
 max_output_tokens = 1024
 request_params = '{"reasoning_effort":"low"}'

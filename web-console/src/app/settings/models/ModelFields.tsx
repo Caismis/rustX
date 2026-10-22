@@ -4,7 +4,7 @@ import type { Model, Modality } from '../../../../../protocol/app-server/v52';
 import { useTranslation } from '../../../locale/react';
 import { Button } from '../../../presentation/primitives/Button';
 import { UnitReset, type TypedUnitForm as TypedForm } from '../forms/bridge';
-import { Enum, JsonObjectEditor, Numeric, NumericText, RequestParameters, Text } from '../forms/fields';
+import { JsonObjectEditor, Numeric, NumericText, RequestParameters, Text } from '../forms/fields';
 import { Advanced, Choice } from '../primitives/aria';
 import css from '../../../presentation/settings/SettingsContent.module.css';
 import cards from './ModelsPage.module.css';
@@ -16,8 +16,7 @@ export function ModelFields({ form }: { form: TypedForm<Model> }) {
   return <>
     <div className={cards.basicFields}>
       <Text form={form} name="id" label={tx('settings:models-page.wire-model-identity')} required />
-      <Enum form={form} name="protocol" label={tx('settings:models-page.protocol')}
-        options={[['openai_chat_completions', tx('settings:models.api-chat')], ['openai_responses', tx('settings:models.api-responses')], ['anthropic_messages', tx('settings:models.api-anthropic')]]} />
+      <Protocol form={form} />
       <NumericText form={form} name="context_window" label={tx('settings:models-page.context-window')} />
       <Numeric form={form} name="max_output_tokens" label={tx('settings:models-page.maximum-output-tokens')} />
     </div>
@@ -30,21 +29,29 @@ export function ModelFields({ form }: { form: TypedForm<Model> }) {
       <InputModalities form={form} />
     </fieldset>
     <Profiles key={resets} form={form} />
-    <Advanced title={tx('settings:models-page.request-defaults-and-protocol-compatibility')}>
-      <ModelRequestParameters form={form} />
-      <Enum form={form} name="compat.chat_reasoning_replay" label={tx('settings:models-page.chat-reasoning-replay')} empty={tx('settings:copy.unspecified')}
-        options={[['omit', tx('settings:model-option.omit')], ['reasoning_content', /* i18n-raw: exact protocol or wire-field identifier */ 'reasoning_content'], ['reasoning', /* i18n-raw: exact protocol or wire-field identifier */ 'reasoning']]} />
-      <Enum form={form} name="compat.chat_max_tokens_field" label={tx('settings:models-page.chat-output-field')} empty={tx('settings:copy.unspecified')}
-        options={[['max_tokens', /* i18n-raw: exact protocol or wire-field identifier */ 'max_tokens'], ['max_completion_tokens', /* i18n-raw: exact protocol or wire-field identifier */ 'max_completion_tokens']]} />
-      <Enum form={form} name="compat.chat_stream_usage" label={tx('settings:models-page.chat-stream-usage')} empty={tx('settings:copy.unspecified')}
-        options={[['supported', tx('settings:model-option.supported')], ['unsupported', tx('settings:model-option.unsupported')]]} />
-      <Enum form={form} name="compat.chat_tool_protocol" label={tx('settings:models-page.chat-tool-protocol')} empty={tx('settings:copy.unspecified')}
-        options={[['native', tx('settings:model-option.native')], ['qwen_xml', /* i18n-raw: exact protocol or wire-field identifier */ 'qwen_xml']]} />
-      <Enum form={form} name="compat.responses_storage" label={tx('settings:models-page.responses-storage')} empty={tx('settings:copy.unspecified')}
-        options={[['stateless', tx('settings:model-option.stateless')], ['stored', tx('settings:model-option.stored')]]} />
-    </Advanced>
+    <ModelRequestParameters form={form} />
     </Advanced>
   </>;
+}
+
+/** Changing API format drops overrides owned by the old protocol. Editing
+ * ordinary fields keeps expert overrides authored in source configuration. */
+function Protocol({ form }: { form: TypedForm<Model> }) {
+  const tx = useTranslation();
+  const Bound = form.Field as unknown as Field;
+  return <Bound name="compat">{compat => <Bound name="protocol">{protocol => <Choice
+    label={tx('settings:models-page.protocol')} value={protocol.state.value as string}
+    options={[
+      ['openai_chat_completions', tx('settings:models.api-chat')],
+      ['openai_responses', tx('settings:models.api-responses')],
+      ['anthropic_messages', tx('settings:models.api-anthropic')],
+    ]}
+    onChange={next => {
+      if (next !== protocol.state.value) {
+        compat.handleChange(undefined as never);
+        protocol.handleChange(next as never);
+      }
+    }} />}</Bound>}</Bound>;
 }
 
 function CapabilityChip({ form, name, label }: { form: TypedForm<Model>; name: 'tool_calls'; label: string }) {
@@ -75,7 +82,7 @@ function ModelRequestParameters({ form }: { form: TypedForm<Model> }) {
   const tx = useTranslation();
   const Subscribe = form.Subscribe as unknown as (props: { selector: (state: { values: Model }) => boolean; children: (profiled: boolean) => React.ReactNode }) => React.ReactNode;
   return <Subscribe selector={state => Object.keys(state.values.profiles ?? {}).length > 0}>{profiled => profiled
-    ? <p className={css.hint}>{tx('settings:models-page.profiles-own-request-parameters')}</p>
+    ? null
     : <RequestParameters form={form} name="request_params" label={tx('settings:models-page.model-request-parameters')} />}</Subscribe>;
 }
 

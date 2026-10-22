@@ -548,20 +548,14 @@ async fn profile_presets_authored_as_json_strings_reach_exact_wire_bodies() {
     use rustx::model::invocation::{ModelBindingRegistry, ModelSelection};
     for protocol in Protocol::ALL {
         let server = protocol.server().await;
-        let (base_url, name, compat, budget_field) = match protocol {
+        let (base_url, name, budget_field) = match protocol {
             Protocol::Chat => (
                 server.url("/v1"),
                 "openai_chat_completions",
-                "[models.\"p/m\".compat]\nchat_reasoning_replay = \"omit\"\n",
                 "max_completion_tokens",
             ),
-            Protocol::Responses => (
-                server.url("/v1"),
-                "openai_responses",
-                "",
-                "max_output_tokens",
-            ),
-            Protocol::Anthropic => (server.url(""), "anthropic_messages", "", "max_tokens"),
+            Protocol::Responses => (server.url("/v1"), "openai_responses", "max_output_tokens"),
+            Protocol::Anthropic => (server.url(""), "anthropic_messages", "max_tokens"),
         };
         let source = format!(
             r#"
@@ -579,7 +573,6 @@ default_profile = "deep"
 input_modalities = ["text"]
 output_modalities = ["text"]
 tool_calls = true
-{compat}
 [models."p/m".profiles.deep]
 max_output_tokens = 2048
 request_params = '''

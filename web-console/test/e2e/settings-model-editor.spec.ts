@@ -63,6 +63,11 @@ for (const theme of ['Light', 'Dark'] as const) for (const width of [1440,390]) 
     await noOverflow(page); await accessible(page);
     await expectStableScreenshot(page, `model-basic-${theme.toLowerCase()}-${width}.png`);
     await modal.getByRole('button', {name:'Advanced configuration', exact:true}).click();
+    await expect(modal.getByRole('button', {name:'Request defaults and protocol compatibility', exact:true})).toHaveCount(0);
+    for (const name of ['Chat reasoning replay', 'Chat output field', 'Chat stream usage', 'Chat tool protocol', 'Responses storage']) {
+      await expect(modal.getByLabel(name, {exact:true})).toHaveCount(0);
+    }
+    await expect(modal.getByRole('textbox', {name:'Model request parameters', exact:true})).toHaveCount(1);
     await expect(modal.getByRole('checkbox')).toHaveCount(3);
     await expect(modal.getByRole('checkbox', {name:'File', exact:true})).toHaveCount(0);
     await expect(modal.getByText('Output types', {exact:true})).toHaveCount(0);
@@ -173,6 +178,7 @@ test('Chinese settings use the same model dialog without Smart configuration', a
   await expect(modal.getByLabel('模型 ID',{exact:true})).toHaveValue(model);
   await modal.getByRole('button',{name:'高级配置',exact:true}).click();
   await expect(modal.getByText('智能配置',{exact:true})).toHaveCount(0);
+  await expect(modal.getByRole('button',{name:'请求默认值与协议兼容性',exact:true})).toHaveCount(0);
   await expect(modal.getByRole('button',{name:'取消',exact:true})).toBeInViewport();
   await accessible(page);
   await expect(modal.getByText('输出类型',{exact:true})).toHaveCount(0);

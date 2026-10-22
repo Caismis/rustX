@@ -1,9 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use rustx::local_runtime::CurrentRuntimeConfig;
-use rustx::model::catalog::{
-    ChatReasoningReplay, MapCredentialEnvironment, ModelCatalog, ModelProfileId, ModelRef,
-};
+use rustx::model::catalog::{MapCredentialEnvironment, ModelCatalog, ModelProfileId, ModelRef};
 use rustx::model::session::SummaryModelPolicy;
 use rustx::model::types::ModelProtocol;
 use rustx::skills::{SkillDiscovery, SkillDiscoveryConfig};
@@ -58,10 +56,7 @@ fn committed_model_example_uses_the_production_catalog_contract() {
     assert_eq!(model.context_window, 128_000);
     assert_eq!(model.max_output_tokens, 4_096);
     assert!(model.capabilities.tool_calls);
-    assert_eq!(
-        model.compat.chat_reasoning_replay,
-        Some(ChatReasoningReplay::Reasoning)
-    );
+    assert_eq!(model.compat, rustx::model::ModelCompat::default());
     // A Model with profiles declares no model-level native parameters.
     assert!(model.request_params.is_empty());
     assert_eq!(model.default_profile.as_ref().unwrap().as_str(), "off");

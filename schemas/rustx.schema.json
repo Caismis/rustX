@@ -517,8 +517,7 @@
           "$ref": "#/$defs/Capabilities"
         },
         "compat": {
-          "$ref": "#/$defs/Compat",
-          "default": {}
+          "$ref": "#/$defs/Compat"
         },
         "context_window": {
           "format": "uint64",

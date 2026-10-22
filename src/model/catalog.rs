@@ -38,11 +38,10 @@
 //! default output budget. The runtime assigns no meaning to a profile name,
 //! and a Profile never changes a Model's identity, protocol, context window,
 //! hard output maximum, or declared capabilities.
-//! Structural translation behaviour lives in the bounded [`ModelCompat`],
-//! which is deliberately *not* a strategy framework and is never inferred
-//! from a hostname. Historical Chat reasoning replay is an explicit
-//! model/provider wire contract; it is not a generation-time reasoning
-//! control.
+//! Structural translation behaviour lives in the bounded [`ModelCompat`].
+//! Built-in API/model/site rules and optional source overrides are resolved
+//! before freezing the binding. Historical Chat reasoning replay is a wire
+//! translation policy, independent of generation-time reasoning controls.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -442,13 +441,14 @@ pub enum ResponsesStorageMode {
 
 /// Assistant-message field used to replay canonical reasoning through an
 /// OpenAI-compatible Chat Completions dialect.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(schemars::JsonSchema)]
 pub enum ChatReasoningReplay {
     /// vLLM and `OpenRouter`'s plaintext reasoning field.
     Reasoning,
     /// `DeepSeek` V4, GLM, Qwen, and compatible preserved-thinking APIs.
+    #[default]
     ReasoningContent,
     /// Do not replay historical canonical reasoning to the provider.
     Omit,
@@ -509,8 +509,8 @@ impl ChatToolProtocol {
 /// Every field here corresponds to a translation branch the current
 /// adapters actually take. There is intentionally no strategy trait, no
 /// plugin registry, no translator factory, and no JSON-driven
-/// transformation, and nothing here is ever inferred from a provider name or
-/// a base URL hostname.
+/// transformation. Optional overrides take precedence over the built-in
+/// protocol defaults and endpoint/model rules resolved at the binding boundary.
 #[derive(Debug, Clone, Copy, Default, schemars::JsonSchema)]
 #[schemars(with = "ModelCompatDocument")]
 pub struct ModelCompat {
@@ -519,9 +519,8 @@ pub struct ModelCompat {
     /// Chat Completions: whether the service supports
     /// `stream_options.include_usage`.
     pub chat_stream_usage: ChatStreamUsage,
-    /// Chat Completions: how previous assistant reasoning is replayed. This
-    /// is required for catalog models using Chat Completions and is absent
-    /// for models whose protocol does not use this dialect.
+    /// Chat Completions: how previous assistant reasoning is replayed.
+    /// Omission uses `reasoning_content`; this does not enable thinking.
     pub chat_reasoning_replay: Option<ChatReasoningReplay>,
     /// Chat Completions: the model's in-band tool protocol, if it has one.
     pub chat_tool_protocol: ChatToolProtocol,
@@ -630,6 +629,23 @@ impl From<super::authoring::Compat> for ModelCompat {
 }
 
 impl ModelCompat {
+    /// Resolve optional authoring overrides once, before an invocation is
+    /// frozen. Endpoint/model rules never change an explicit declaration.
+    pub(crate) fn for_binding(
+        mut self,
+        protocol: ModelProtocol,
+        model: &str,
+        base_url: &str,
+    ) -> Self {
+        if protocol == ModelProtocol::OpenAiChatCompletions {
+            if !self.chat_max_tokens_field_is_explicit() {
+                self.chat_max_tokens_field = super::compat::chat_max_tokens_field(model, base_url);
+            }
+            self.chat_reasoning_replay = Some(self.chat_reasoning_replay.unwrap_or_default());
+        }
+        self
+    }
+
     const CHAT_MAX_TOKENS_EXPLICIT: u8 = 1;
     const CHAT_STREAM_USAGE_EXPLICIT: u8 = 1 << 1;
     const CHAT_REASONING_REPLAY_EXPLICIT: u8 = 1 << 2;
@@ -934,12 +950,15 @@ impl ModelCatalog {
     ) -> bool {
         let effective = |catalog: &Self, selection: &ModelSelection| {
             let model = catalog.models.get(&selection.model)?;
+            let provider = catalog.providers.get(&model.provider)?;
             let view = analyze_selection(model, selection, layer).ok()?;
             Some((
                 view,
                 model.id.clone(),
-                model.compat,
-                catalog.providers.get(&model.provider)?.clone(),
+                model
+                    .compat
+                    .for_binding(model.protocol, model.id.as_str(), &provider.base_url),
+                provider.clone(),
             ))
         };
         matches!(
@@ -1473,10 +1492,6 @@ fn validate_compat(
     compat: ModelCompat,
 ) -> Result<(), ModelCatalogError> {
     let invalid_detail = match protocol {
-        ModelProtocol::OpenAiChatCompletions if compat.chat_reasoning_replay.is_none() => Some(
-            "compat.chat_reasoning_replay is required for openai_chat_completions and must be one of reasoning, reasoning_content, or omit"
-                .to_owned(),
-        ),
         ModelProtocol::OpenAiChatCompletions if compat.responses_storage_is_explicit() => Some(
             format!("compat declares fields that do not apply to protocol {protocol:?}"),
         ),
@@ -2339,19 +2354,128 @@ mod tests {
         ));
     }
     #[test]
-    fn chat_reasoning_replay_is_explicit_and_round_trips() {
+    fn chat_reasoning_replay_is_optional_and_overrides_round_trip() {
         let mut value = document();
         value["models"]["chosen"]["compat"] = json!({});
-        assert!(matches!(
-            catalog(value),
-            Err(ModelCatalogError::InvalidCompat { .. })
-        ));
+        assert!(catalog(value).is_ok());
         for replay in ["reasoning", "reasoning_content", "omit"] {
             let mut value = document();
             value["models"]["chosen"]["compat"]["chatReasoningReplay"] = replay.into();
             let doc: ModelCatalogDocument = serde_json::from_value(value).unwrap();
             assert!(catalog(serde_json::to_value(doc).unwrap()).is_ok());
         }
+    }
+
+    #[test]
+    fn built_in_chat_policy_is_frozen_and_explicit_overrides_win() {
+        use crate::model::invocation::ModelSelection;
+        let cases = [
+            (
+                "https://service.example/v1",
+                "deepseek-v4-flash",
+                "max_completion_tokens",
+            ),
+            (
+                "https://opencode.ai/zen/go/v1",
+                "deepseek-v4-flash",
+                "max_tokens",
+            ),
+            (
+                "https://opencode.ai/zen/go/v1/",
+                "glm-5.3-flash",
+                "max_tokens",
+            ),
+            (
+                "https://opencode.ai/zen/go/v1",
+                "unlisted-model",
+                "max_completion_tokens",
+            ),
+            (
+                "https://opencode.ai/zen/v1",
+                "deepseek-v4-flash",
+                "max_completion_tokens",
+            ),
+            (
+                "https://opencode.ai.evil.example/zen/go/v1",
+                "deepseek-v4-flash",
+                "max_completion_tokens",
+            ),
+        ];
+        for (base_url, model, field) in cases {
+            let mut value = document();
+            value["providers"]["p"]["baseUrl"] = base_url.into();
+            value["models"]["chosen"]["id"] = model.into();
+            value["models"]["chosen"]
+                .as_object_mut()
+                .unwrap()
+                .remove("compat");
+            let frozen = registry(value.clone())
+                .freeze(&ModelSelection::of(selected()))
+                .unwrap();
+            assert_eq!(
+                frozen.compat.chat_max_tokens_field.wire_name(),
+                field,
+                "{base_url} {model}"
+            );
+            assert_eq!(
+                frozen.compat.chat_reasoning_replay,
+                Some(ChatReasoningReplay::ReasoningContent)
+            );
+            assert_eq!(frozen.compat.chat_stream_usage, ChatStreamUsage::Supported);
+            assert_eq!(frozen.compat.chat_tool_protocol, ChatToolProtocol::Native);
+            let restored: crate::model::frozen::FrozenModelInvocation =
+                serde_json::from_value(serde_json::to_value(&frozen).unwrap()).unwrap();
+            assert_eq!(restored.compat, frozen.compat);
+
+            value["models"]["chosen"]["compat"] = json!({
+                "chatMaxTokensField":"max_completion_tokens",
+                "chatReasoningReplay":"omit",
+                "chatStreamUsage":"unsupported",
+                "chatToolProtocol":"qwen_xml"
+            });
+            let explicit = registry(value)
+                .freeze(&ModelSelection::of(selected()))
+                .unwrap();
+            assert_eq!(
+                explicit.compat.chat_max_tokens_field,
+                ChatMaxTokensField::MaxCompletionTokens
+            );
+            assert_eq!(
+                explicit.compat.chat_reasoning_replay,
+                Some(ChatReasoningReplay::Omit)
+            );
+            assert_eq!(
+                explicit.compat.chat_stream_usage,
+                ChatStreamUsage::Unsupported
+            );
+            assert_eq!(
+                explicit.compat.chat_tool_protocol,
+                ChatToolProtocol::QwenXml
+            );
+        }
+    }
+
+    #[test]
+    fn authored_and_omitted_protocol_defaults_have_the_same_invocation() {
+        let mut implicit = document();
+        implicit["models"]["chosen"]
+            .as_object_mut()
+            .unwrap()
+            .remove("compat");
+        let mut explicit = implicit.clone();
+        explicit["models"]["chosen"]["compat"] = json!({
+            "chatMaxTokensField":"max_completion_tokens",
+            "chatReasoningReplay":"reasoning_content",
+            "chatStreamUsage":"supported",
+            "chatToolProtocol":"native"
+        });
+        let selection = ModelSelection::of(selected());
+        assert!(catalog(implicit).unwrap().same_invocation(
+            &selection,
+            &catalog(explicit).unwrap(),
+            &selection,
+            RequestParamsLayer::SessionOverrides
+        ));
     }
     #[test]
     fn protocol_specific_compat_rejects_foreign_even_default_valued_members() {
@@ -2691,12 +2815,6 @@ mod tests {
         for (index, change) in profile_edits.iter().chain(&bindings).enumerate() {
             let mut changed = base.clone();
             change(&mut changed);
-            if index == 11 {
-                changed["models"]["chosen"]
-                    .as_object_mut()
-                    .unwrap()
-                    .remove("compat");
-            }
             assert!(
                 !same(&base, &implicit, &changed, &implicit),
                 "change {index}"

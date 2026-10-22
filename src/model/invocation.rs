@@ -1244,7 +1244,9 @@ impl ModelBindingRegistry {
             request_params: analyzed.request_params,
             capabilities: analyzed.capabilities,
             declared_capabilities: analyzed.declared_capabilities,
-            compat: model.compat,
+            compat: model
+                .compat
+                .for_binding(protocol, model.id.as_str(), provider.base_url()),
         })
     }
 

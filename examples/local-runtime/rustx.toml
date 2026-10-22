@@ -89,12 +89,7 @@ request_params = '''
 {"temperature": 0.2, "reasoning_effort": "low"}
 '''
 
-[models."example/demo-model".compat]
-chat_max_tokens_field = "max_completion_tokens"
-chat_reasoning_replay = "reasoning"
-chat_stream_usage = "supported"
-chat_tool_protocol = "native"
-
+# Protocol defaults are built in; no compat table is required.
 # These global policies apply to every admitted Agent's native invocation.
 [native_tools.read]
 execution = "foreground_only"

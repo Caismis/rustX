@@ -11195,8 +11195,7 @@
           }
         },
         "compat": {
-          "$ref": "#/$defs/Compat",
-          "default": {}
+          "$ref": "#/$defs/Compat"
         }
       },
       "additionalProperties": false,

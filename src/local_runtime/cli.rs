@@ -198,7 +198,7 @@ struct InitArgs {
     max_output: Option<u32>,
     #[arg(long, action = clap::ArgAction::Set)]
     tool_calls: Option<bool>,
-    /// Explicit TOML compatibility document; no compatibility is inferred
+    /// Optional TOML overrides for built-in protocol compatibility defaults
     #[arg(long)]
     compat: Option<String>,
     #[arg(long)]

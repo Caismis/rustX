@@ -4135,3 +4135,37 @@ i18n and provenance checks pass. Pinned Playwright verifies Settings in both
 color schemes at 1440px and 390px, plus reasoning expansion and display-mode
 switches at both widths; no application errors or horizontal overflow occurred.
 Browser plugin not available; the existing repository-pinned browser was used.
+
+
+### Model protocol defaults and a smaller editor (2026-10-22)
+
+Reference inspected at ZCode `29628c9acdb81b703bbd4080c207a0e7ce5e276e`:
+`model/model-execution.ts`, `model/model-option-map-fetch.ts`, and
+`config/provider/zcode-builtin.json`, plus the exact locked
+`@ai-sdk/openai-compatible` 2.0.60 Chat conversion and stream parser.
+The reference path accepts both reasoning response aliases, concatenates
+plaintext reasoning for `reasoning_content` replay, requests streaming usage,
+and maps output budgets through built-in API/model/site rules.
+
+rustX implements these defaults with its existing native adapters. A finite
+endpoint/model table covers the reference's OpenCode Go max_tokens rules;
+explicit source overrides take precedence. Policy is resolved before freezing
+an invocation. No mapping expression engine, SDK runtime or ZCode component is
+introduced. Thinking generation remains owned by native request parameters.
+
+The Model editor removes protocol compatibility controls and puts the existing
+unprofiled request-parameter editor directly in Advanced configuration. The
+profile JSON editor remains the sole parameter editor when profiles exist.
+Ordinary edits preserve expert source overrides; an API-format change clears
+the previous protocol's overrides. Empty default compatibility documents are
+omitted from generated TOML and CLI initialization no longer requires them.
+
+Validation: native model/initialization tests (60), configuration/schema tests
+(180), contracts (31), provider tests (179 passed, 5 opt-in tests ignored),
+Rust all-target/all-feature check and Clippy with warnings denied, 37 benchmark
+controller tests, WebUI typecheck/build/i18n/provenance,
+protocol typecheck and all WebUI unit tests (3,085 passed, 4 skipped).
+Browser plugin not available; the repository's pinned Playwright workflow
+verified six settings flows at 1440px and 390px in both themes, including
+Chinese copy, JSON profile editing, reset, keyboard focus, accessibility,
+console health and exact screenshot comparisons.

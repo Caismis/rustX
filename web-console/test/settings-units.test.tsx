@@ -42,8 +42,8 @@ const modelDetail = (source: SourceSettings, scope: SourceScope, revision: strin
 const toolsPage = (source: SourceSettings, document: RuntimeLayer, scope: SourceScope, revision: string) =>
   <ToolsPage source={source} document={document} scope={scope} revision={revision} />;
 
-it('preserves complete Model replacement, profiles and all compatibility fields', async () => {
-  const model = { ...cfg3Effective().document.models!.main, capabilities: { ...cfg3Effective().document.models!.main.capabilities }, default_profile: 'deep', profiles: { deep: { max_output_tokens: 2048, request_params: { reasoning: { effort: 'high' }, stop: [null] } }, quick: { request_params: {} } }, compat: { chat_max_tokens_field: 'max_completion_tokens' as const, chat_stream_usage: 'supported' as const, chat_reasoning_replay: 'omit' as const, chat_tool_protocol: 'native' as const, responses_storage: 'stateless' as const } };
+it('preserves source-authored protocol overrides when editing unrelated Model fields', async () => {
+  const model = { ...cfg3Effective().document.models!.main, protocol: 'openai_chat_completions' as const, capabilities: { ...cfg3Effective().document.models!.main.capabilities }, default_profile: 'deep', profiles: { deep: { max_output_tokens: 2048, request_params: { reasoning: { effort: 'high' }, stop: [null] } }, quick: { request_params: {} } }, compat: { chat_max_tokens_field: 'max_completion_tokens' as const, chat_stream_usage: 'supported' as const, chat_reasoning_replay: 'omit' as const, chat_tool_protocol: 'native' as const } };
   const source = catalogSource('workspace', { models: { main: model } });
   const { writes: write } = await renderEditor(modelDetail(source, 'workspace', 'exact', 'main'), { source, context: source });
   // One unrelated field changes; everything else must survive the complete
@@ -53,6 +53,29 @@ it('preserves complete Model replacement, profiles and all compatibility fields'
   await waitFor(() => expect(write).toHaveBeenCalledWith({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: { ...model, id: 'new-wire' } } }, 'exact'));
   await confirmAction('Use global default Model main');
   await waitFor(() => expect(write).toHaveBeenLastCalledWith({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: null } }, 'exact'));
+});
+
+it('uses protocol defaults without compatibility controls and clears foreign overrides on API change', async () => {
+  const model = { ...cfg3Effective().document.models!.main, protocol: 'openai_chat_completions' as const, compat: { chat_reasoning_replay: 'reasoning' as const } };
+  const source = catalogSource('user', { models: { main: model } });
+  const { writes } = await renderEditor(modelDetail(source, 'user', 'r1', 'main'), { source, context: source });
+  expect(screen.queryByRole('button', { name: /protocol compatibility/i })).toBeNull();
+  for (const label of ['Chat reasoning replay', 'Chat output field', 'Chat stream usage', 'Chat tool protocol', 'Responses storage']) {
+    expect(screen.queryByLabelText(label)).toBeNull();
+  }
+  await chooseOption('API format', 'OpenAI Responses (/v1/responses)');
+  fireEvent.click(screen.getByRole('button', { name: 'Save Model main' }));
+  await waitFor(() => expect(writes).toHaveBeenCalledWith({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: { ...model, protocol: 'openai_responses', compat: undefined } } }, 'r1'));
+});
+
+it('saves a Chat Model without authoring any protocol overrides', async () => {
+  const model = { ...cfg3Effective().document.models!.main, protocol: 'openai_chat_completions' as const };
+  delete model.compat;
+  const source = catalogSource('user', { models: { main: model } });
+  const { writes } = await renderEditor(modelDetail(source, 'user', 'r1', 'main'), { source, context: source });
+  fireEvent.change(screen.getByLabelText('Model ID'), { target: { value: 'plain-chat' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Model main' }));
+  await waitFor(() => expect(writes).toHaveBeenCalledWith({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: { ...model, id: 'plain-chat' } } }, 'r1'));
 });
 
 it('authors general Model Profiles as complete presets, moving model parameters into the first one', async () => {
@@ -335,7 +358,6 @@ async function requestParameters() {
   const main = { ...cfg3Effective().document.models!.main, request_params: { temperature: 1, top_p: 0.5 } };
   const source = catalogSource('user', { models: { main } });
   const editor = await renderEditor(modelDetail(source, 'user', 'r1', 'main'), { source, context: source });
-  fireEvent.click(screen.getByRole('button', { name: 'Request defaults and protocol compatibility' }));
   return { ...editor, main, input: screen.getByLabelText('Model request parameters') as HTMLTextAreaElement };
 }
 const invalidJson = 'Not valid JSON. Nothing is saved until the text is one complete JSON object.';
@@ -398,7 +420,6 @@ async function ownedRequestParameters() {
     write: () => { const next = deferred<WriteOutcome>(); writes.push(next); return next.promise; },
     reread: () => { const next = deferred<SourceSettings>(); reads.push(next); return next.promise; },
   });
-  fireEvent.click(screen.getByRole('button', { name: 'Request defaults and protocol compatibility' }));
   const input = screen.getByLabelText('Model request parameters') as HTMLTextAreaElement;
   /** A native source revision carrying `models`, as the authoritative read
    * and the Settings page that renders it both see it. */
