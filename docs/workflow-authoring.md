@@ -266,8 +266,10 @@ Discovery has two bounds. A resource directory holds at most 128 `.yaml`
 entries, and one composed catalog (User alone, or User with one Workspace after
 shadowing) at most 64 distinct candidate Workflow IDs, counted from valid
 filename identities before any file is compiled, so a file with invalid content
-still occupies its ID. Discovery also reads at most 1024 entries of any kind in
-a directory. Past any bound, discovery reports the directory or catalog instead
+still occupies its ID. Discovery also reads at most 1024 authored entries of any
+kind in a directory, besides rustX's one `.rustx-locks/` lock directory, which it
+reads past without counting (the scan is capped at 1026 raw entries). Past any
+bound, discovery reports the directory or catalog instead
 of the files in it.
 
 `create` and `copy` add a file, so native code admits them against these bounds
@@ -285,10 +287,18 @@ ones the operation is authorized for:
 
 rustX's own writer metadata never consumes these bounds: the persistent writer
 locks of a directory's documents, and its capacity lock, all live in that
-directory's single private `.rustx-locks/` directory, which discovery counts as
-one non-YAML entry and never reads. Create/delete cycles and refused additions
-with ever new IDs leave locks only there, so neither a successful nor a refused
-addition can push existing files out of discovery. Arbitrary files placed in a
+directory's single private `.rustx-locks/` directory, which discovery never
+counts or reads. A first write into a directory an external tool filled to the
+bound creates that directory without changing what discovery admits: a refused
+`create` or `copy` leaves the catalog readable, and an acknowledged `replace`
+leaves the saved file listed and readable, in every scope the write locked
+(including User, whose capacity lock a Workspace addition takes).
+Create/delete cycles and refused additions with ever new IDs leave locks only
+there, so neither a successful nor a refused addition can push existing files
+out of discovery. A `replace` stages its candidate beside the file, so while it
+publishes into a directory already at 1024 authored entries a concurrent
+discovery read can briefly see one entry too many; the saved directory is back
+within the bound when the write returns. Arbitrary files placed in a
 Workflow directory by other tools still count, and the bounds still refuse an
 addition they leave no room for.
 

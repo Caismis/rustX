@@ -2,7 +2,8 @@
 use crate::runtime::resources::{RuntimeResourceLoadError, validate_project_resource_path};
 use std::path::{Path, PathBuf};
 
-/// The most entries of any kind a canonical resource directory holds.
+/// The most authored entries of any kind a canonical resource directory
+/// holds, besides rustX's one lock directory.
 pub(crate) const MAX_DIRECTORY_ENTRIES: usize = 1024;
 
 pub(crate) fn entries(
@@ -21,12 +22,24 @@ pub(crate) fn entries(
         }
         Ok(_) => {}
     }
+    // rustX's lock directory is synchronization metadata, not an authored
+    // entry: it is read past and never counted, so creating it on a first
+    // write never changes what discovery admits. It is one fixed name, so the
+    // read stays bounded at the authored bound plus that one entry.
     let paths = std::fs::read_dir(root)
         .map_err(|e| fail(e.to_string()))?
-        .take(MAX_DIRECTORY_ENTRIES + 1)
+        .take(MAX_DIRECTORY_ENTRIES + 2)
         .map(|entry| entry.map(|e| e.path()))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| fail(e.to_string()))?;
+    let paths: Vec<_> = paths
+        .into_iter()
+        .filter(|path| {
+            !path
+                .file_name()
+                .is_some_and(super::settings::is_lock_directory)
+        })
+        .collect();
     if paths.len() > MAX_DIRECTORY_ENTRIES {
         return Err(fail("canonical resource root exceeds 1024 entries".into()));
     }

@@ -3072,3 +3072,89 @@ async fn composition_shutdown_retry_joins_physical_read_before_immediate_recompo
     crate::runtime::local_storage::ProductController::acquire(&launch.runtime_root)
         .expect("final owner released the physical filesystem lock");
 }
+
+/// A User source named like rustX's writer metadata is refused where it is
+/// selected, with a specific diagnostic, before anything reads, locks or
+/// creates metadata beside it; the same document under an ordinary name is
+/// read and written through its own lock.
+#[test]
+fn an_explicit_config_named_like_writer_metadata_is_refused_at_selection() {
+    use super::configuration::settings::{ConfigMutation, SourceMutation, SourceTarget};
+    const DOCUMENT: &str = "[subagents]\nmax_concurrent = 2\n";
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path().canonicalize().unwrap();
+    let workspace = base.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let host = HostEnvironment::from_paths(workspace.clone(), base.join("home")).unwrap();
+    let select = |name: &str| {
+        let directory = base.join(format!("selected-{}", name.trim_start_matches('.')));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join(name);
+        std::fs::write(&path, DOCUMENT).unwrap();
+        let request = LaunchRequest {
+            workspace: Some(workspace.clone()),
+            config: Some(path.clone()),
+            ..LaunchRequest::default()
+        };
+        (
+            path,
+            request.session_input(&host).map(|(manager, _)| manager),
+        )
+    };
+
+    for reserved in [".rustx-locks", ".rustx-stage-0.tmp"] {
+        let (path, selected) = select(reserved);
+        let Err(failure) = selected else {
+            panic!("a reserved basename is refused");
+        };
+        assert!(
+            failure.to_string().contains("reserves for writer metadata"),
+            "{failure}"
+        );
+        // The requested source is untouched: still the same regular file,
+        // and nothing was created beside it.
+        assert!(std::fs::symlink_metadata(&path).unwrap().is_file());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), DOCUMENT);
+        assert_eq!(
+            std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
+            1
+        );
+    }
+
+    let (path, selected) = select("user.toml");
+    let manager = selected.unwrap();
+    let read = manager.read_source_settings(&SourceTarget::User).unwrap();
+    assert_eq!(read.user.path, path);
+    let expected = crate::local_runtime::settings::revision(Some(DOCUMENT.as_bytes()));
+    assert_eq!(read.user.revision, expected);
+    let written = manager
+        .write_source_settings(
+            &SourceTarget::User,
+            &expected,
+            SourceMutation::Config {
+                mutation: ConfigMutation::Capacity {
+                    authored: Some(crate::local_runtime::authoring::SubagentsLayer {
+                        max_concurrent: Some(3),
+                    }),
+                },
+            },
+        )
+        .unwrap();
+    assert!(std::fs::symlink_metadata(&path).unwrap().is_file());
+    let bytes = std::fs::read(&path).unwrap();
+    assert!(String::from_utf8_lossy(&bytes).contains("max_concurrent = 3"));
+    assert_eq!(
+        written,
+        crate::local_runtime::settings::revision(Some(bytes.as_slice()))
+    );
+    assert_eq!(
+        manager
+            .read_source_settings(&SourceTarget::User)
+            .unwrap()
+            .user
+            .revision,
+        written
+    );
+    // Its lock is in the directory's lock directory, beside the source.
+    assert!(path.with_file_name(".rustx-locks").is_dir());
+}

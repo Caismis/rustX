@@ -16,7 +16,19 @@ pub(in crate::local_runtime) fn canonical_settings_source(path: &Path) -> Result
     if !path.is_absolute() {
         return Err("user settings source must be absolute".into());
     }
-    normalize_missing(path)
+    let canonical = normalize_missing(path)?;
+    // Writer metadata lives beside its document, under names rustX reserves:
+    // a source with such a name would share its path with that metadata.
+    if canonical
+        .file_name()
+        .is_some_and(crate::local_runtime::settings::is_writer_artifact)
+    {
+        return Err(format!(
+            "user settings source `{}` uses a file name rustX reserves for writer metadata (`.rustx-locks`, `.rustx-stage-*`); rename the file",
+            canonical.display()
+        ));
+    }
+    Ok(canonical)
 }
 
 impl UserConfigManager {

@@ -13,10 +13,12 @@
 //! its composition with User. Replace and delete never add an identity, so
 //! they stay available to repair a directory that is already over a bound.
 //!
-//! Discovery also reads at most [`MAX_DIRECTORY_ENTRIES`] entries of a
-//! directory. rustX's own writer locks live in one lock directory, a single
-//! entry however many files were ever written or refused there, so only the
-//! published file itself is admitted against that bound.
+//! Discovery also reads at most [`MAX_DIRECTORY_ENTRIES`] authored entries
+//! of a directory. rustX's own writer locks live in one lock directory, which
+//! discovery never counts, however many files were ever written or refused
+//! there and whether or not this write is the one that creates it, so only
+//! the published file (and its transient staged candidate) is admitted
+//! against that bound.
 //!
 //! Count-changing rustX writes are serialized per physical directory by a
 //! persistent advisory capacity lock, taken before the file's own writer

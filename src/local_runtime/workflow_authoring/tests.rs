@@ -1730,13 +1730,14 @@ fn an_addition_is_refused_when_its_publication_would_pass_the_entry_bound() {
     let roots = Roots::new();
     let directory = roots.user_directory();
     roots.create(&SourceTarget::User, "kept", "Present before the clutter.");
-    // External files that are no Workflows: with the lock directory and
-    // `kept`, 1022 entries. A publication briefly holds its staged
-    // candidate beside the published file, so 1022 + 2 is the last fit.
-    for index in 0..1020 {
+    // External files that are no Workflows: with `kept`, 1022 authored
+    // entries beside the uncounted lock directory. A publication briefly
+    // holds its staged candidate beside the published file, so 1022 + 2 is
+    // the last fit.
+    for index in 0..1021 {
         std::fs::write(directory.join(format!("note-{index:04}.txt")), b"").unwrap();
     }
-    assert_eq!(names(&directory).len(), 1022);
+    assert_eq!(names(&directory).len(), 1023);
     roots.create(&SourceTarget::User, "last_fit", "Fits the entry bound.");
     let refused = capacity_refusal(roots.write(
         &SourceTarget::User,
@@ -1752,9 +1753,135 @@ fn an_addition_is_refused_when_its_publication_would_pass_the_entry_bound() {
         refused.reason
     );
     capacity_refusal(roots.copy(&SourceTarget::User, "kept", "past_copy"));
-    assert_eq!(names(&directory).len(), 1023);
+    assert_eq!(names(&directory).len(), 1024);
     let library = roots.manager.workflow_library(&SourceTarget::User).unwrap();
     assert!(library.diagnostic.is_none());
     assert_eq!(library.files.len(), 2);
     assert!(roots.discover(None).get(&id("last_fit")).is_some());
+}
+
+/// Canonical bytes of a valid minimal Workflow, written by native code in a
+/// separate fixture: any write of this one would take its User capacity lock
+/// and initialize the lock metadata the first-use tests must not have.
+fn external_bytes(_roots: &Roots) -> Vec<u8> {
+    Roots::new().minimal_bytes()
+}
+
+/// The reported first-use boundary, prepared outside rustX: `kept.yaml` and
+/// 1023 ordinary files, 1024 entries, and no lock metadata yet.
+fn seed_first_use(directory: &Path, kept: &[u8]) {
+    std::fs::create_dir_all(directory).unwrap();
+    std::fs::write(directory.join("kept.yaml"), kept).unwrap();
+    for index in 0..1023 {
+        std::fs::write(directory.join(format!("note-{index:04}.txt")), b"").unwrap();
+    }
+    assert_eq!(names(directory).len(), 1024);
+    assert!(!directory.join(".rustx-locks").exists());
+}
+
+/// List, read and discover `kept` in `target`, exactly as seeded.
+fn assert_kept(roots: &Roots, target: &SourceTarget, kept: &[u8]) {
+    let library = roots.manager.workflow_library(target).unwrap();
+    assert!(library.diagnostic.is_none(), "{:?}", library.diagnostic);
+    assert!(library.files.iter().any(|file| file.id == Some(id("kept"))));
+    let source = roots.read(target, "kept");
+    assert!(source.document.is_some());
+    assert_eq!(std::fs::read(&source.path).unwrap(), kept);
+    assert!(roots.discover(None).get(&id("kept")).is_some());
+}
+
+#[test]
+fn a_first_write_into_an_externally_full_directory_keeps_its_catalog_readable() {
+    let roots = Roots::new();
+    let kept = external_bytes(&roots);
+    seed_first_use(&roots.user_directory(), &kept);
+    assert_kept(&roots, &SourceTarget::User, &kept);
+    let refused = capacity_refusal(roots.write(
+        &SourceTarget::User,
+        "fresh",
+        "missing",
+        WorkflowEdit::Create {
+            description: "No room.".into(),
+        },
+    ));
+    assert!(
+        refused.reason.contains("1024 entries"),
+        "{}",
+        refused.reason
+    );
+    capacity_refusal(roots.copy(&SourceTarget::User, "kept", "kept_copy"));
+    // The refusals initialized the lock metadata; it is not counted, and the
+    // catalog and the file are exactly what they were.
+    assert!(roots.user_directory().join(".rustx-locks").is_dir());
+    assert!(!roots.user_directory().join("fresh.yaml").exists());
+    assert!(!roots.user_directory().join("kept_copy.yaml").exists());
+    assert_eq!(
+        std::fs::read(roots.user_directory().join("kept.yaml")).unwrap(),
+        kept
+    );
+    assert_kept(&roots, &SourceTarget::User, &kept);
+    assert!(roots.discover(None).discovery_diagnostics.is_empty());
+}
+
+#[test]
+fn a_first_save_into_an_externally_full_directory_stays_listed_and_readable() {
+    let roots = Roots::new();
+    let kept = external_bytes(&roots);
+    seed_first_use(&roots.user_directory(), &kept);
+    assert_kept(&roots, &SourceTarget::User, &kept);
+    let before = roots.read(&SourceTarget::User, "kept");
+    let mut document = before.document.clone().unwrap();
+    document.description = "Saved at the boundary.".into();
+    let revision = roots
+        .write(
+            &SourceTarget::User,
+            "kept",
+            &before.revision,
+            WorkflowEdit::Replace { document },
+        )
+        .unwrap();
+    assert_ne!(revision, before.revision);
+    let after = roots.read(&SourceTarget::User, "kept");
+    assert_eq!(after.revision, revision);
+    assert_eq!(
+        after.document.unwrap().description,
+        "Saved at the boundary."
+    );
+    assert!(
+        std::fs::read_to_string(roots.user_directory().join("kept.yaml"))
+            .unwrap()
+            .contains("Saved at the boundary.")
+    );
+    let library = roots.manager.workflow_library(&SourceTarget::User).unwrap();
+    assert!(library.diagnostic.is_none(), "{:?}", library.diagnostic);
+    assert_eq!(
+        library
+            .files
+            .iter()
+            .find(|file| file.id == Some(id("kept")))
+            .unwrap()
+            .revision,
+        revision
+    );
+    assert!(roots.discover(None).get(&id("kept")).is_some());
+}
+
+#[test]
+fn a_workspace_addition_never_makes_a_full_global_directory_unreadable() {
+    let roots = Roots::new();
+    let kept = external_bytes(&roots);
+    seed_first_use(&roots.user_directory(), &kept);
+    assert_kept(&roots, &SourceTarget::User, &kept);
+    // The addition takes the User capacity lock, initializing User's lock
+    // metadata, and counts the composition: it fits, and Global stays whole.
+    let target = workspace(&roots.a);
+    roots.create(&target, "local", "Added beside a full Global.");
+    roots.copy(&target, "local", "local_copy").unwrap();
+    assert!(roots.user_directory().join(".rustx-locks").is_dir());
+    assert_kept(&roots, &SourceTarget::User, &kept);
+    let composed = roots.discover(Some(&roots.a));
+    assert!(composed.discovery_diagnostics.is_empty());
+    for name in ["kept", "local", "local_copy"] {
+        assert!(composed.get(&id(name)).is_some(), "{name}");
+    }
 }

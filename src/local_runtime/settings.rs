@@ -73,9 +73,15 @@ pub(super) fn lock_path_of(document: &Path) -> std::path::PathBuf {
 }
 
 /// Whether `name` is the lock directory or a staged candidate, never a
-/// document.
+/// document. These basenames are reserved: no source document may use one
+/// (see `canonical_settings_source`).
 pub(super) fn is_writer_artifact(name: &OsStr) -> bool {
-    name == LOCK_DIRECTORY || name.as_encoded_bytes().starts_with(STAGE_PREFIX.as_bytes())
+    is_lock_directory(name) || name.as_encoded_bytes().starts_with(STAGE_PREFIX.as_bytes())
+}
+
+/// Whether `name` is a directory's one lock directory.
+pub(super) fn is_lock_directory(name: &OsStr) -> bool {
+    name == LOCK_DIRECTORY
 }
 
 /// Open the lock directory below `parent`, never following a symlink:

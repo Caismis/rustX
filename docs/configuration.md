@@ -44,7 +44,11 @@ accumulate. Runtime files can also contain ownership locks, SQLite sidecars and
 physical execution scratch beneath their native owner directories.
 
 `--config /absolute/file.toml` replaces the User document binding for this
-process (`rustx app-server` and the offline configuration commands). User resources stay at `~/rustx/.agents`; the Workspace document stays
+process (`rustx app-server` and the offline configuration commands). Any file
+name works except the two rustX reserves for writer metadata beside a source:
+`.rustx-locks` and names starting with `.rustx-stage-`. Such a selection (after
+symlinks resolve) is refused at startup with a diagnostic naming the file;
+rename it. User resources stay at `~/rustx/.agents`; the Workspace document stays
 at `<workspace>/rustx.toml`. `--runtime-root /absolute/directory` replaces only
 the process runtime storage root. Both are fixed process bindings.
 Workspace identity never determines the default runtime storage root.
@@ -497,7 +501,14 @@ exclusively, and distinct documents never share one. Writers create the private
 lock directory and the lock; nothing unlinks either. Keeping every lock in that
 one directory means a directory's own entries grow by at most one however many
 documents were ever written there, so bounded resource scans never count lock
-history. The lock directory is opened without following a symlink.
+history. The lock directory is opened without following a symlink. Because the
+lock directory and staged candidates share the namespace of the documents beside
+them, those names are reserved: a User source selected with `--config` may not
+use one (the Workspace document is always `rustx.toml`, and Workflow IDs cannot
+start with a dot). Any fixed metadata name inside a source's directory would
+collide with some selectable file name, and metadata kept elsewhere would lose
+exclusion between processes that share the directory, so the reservation is
+explicit and enforced where the source is selected.
 
 Every reader of a `rustx.toml` has the same physical authority as a write.
 Session resolution — Session creation and loading, configuration application

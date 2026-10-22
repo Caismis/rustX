@@ -2254,3 +2254,58 @@ async fn app_server_startup_repairs_the_user_source_before_process_policy() {
     })
     .await;
 }
+
+/// An explicit `--config` whose basename rustX reserves for writer metadata
+/// is refused at startup with its own diagnostic, never accepted and then
+/// failing every source read; the same document as `user.toml` serves.
+#[tokio::test]
+async fn app_server_refuses_an_explicit_config_named_like_writer_metadata() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let document = std::fs::read(f.root.path().join("home/rustx/rustx.toml")).unwrap();
+        let select = |name: &str| {
+            let directory = f
+                .root
+                .path()
+                .join(format!("selected-{}", name.trim_start_matches('.')));
+            std::fs::create_dir_all(&directory).unwrap();
+            let path = directory.join(name);
+            std::fs::write(&path, &document).unwrap();
+            path
+        };
+        let reserved = select(".rustx-locks");
+        let output = f
+            .command("stdio")
+            .arg("--config")
+            .arg(&reserved)
+            .output()
+            .await
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains("reserves for writer metadata"), "{stderr}");
+        assert!(std::fs::symlink_metadata(&reserved).unwrap().is_file());
+        assert_eq!(std::fs::read(&reserved).unwrap(), document);
+        assert_eq!(
+            std::fs::read_dir(reserved.parent().unwrap())
+                .unwrap()
+                .count(),
+            1
+        );
+
+        let ordinary = select("user.toml");
+        let mut child = f
+            .command("ws://127.0.0.1:0")
+            .arg("--token-file")
+            .arg(f.root.path().join("token"))
+            .arg("--config")
+            .arg(&ordinary)
+            .spawn()
+            .unwrap();
+        let (_endpoint, _stderr) = websocket_startup(&mut child).await;
+        child.kill().await.unwrap();
+        child.wait().await.unwrap();
+    })
+    .await;
+}
