@@ -327,4 +327,3 @@ describe('Workflow surface and library', () => {
     expect(context.base?.revision).toBe('sha256:second');
   });
 });
-
