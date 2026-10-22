@@ -169,3 +169,42 @@ export function describeField(address: FieldAddress): string {
     : typeof component === 'object' ? `[${JSON.stringify(component.key)}]` : `${index ? '.' : ''}${component}`).join('');
   return [place, path].filter(Boolean).join(' · ');
 }
+
+/** One array edit of the working document: an item removed at `removed`,
+ * or inserted at `inserted` (an append inserts at the old length). It is
+ * editor-local metadata that lets the drafts of other items keep their
+ * identity; nothing of it reaches the native file. */
+export interface ArrayEdit {
+  readonly array: FieldAddress;
+  readonly removed?: number;
+  readonly inserted?: number;
+}
+
+/** The edit that undoes `edit`. */
+export function invertArrayEdit(edit: ArrayEdit): ArrayEdit {
+  return { array: edit.array, ...(edit.removed !== undefined ? { inserted: edit.removed } : {}), ...(edit.inserted !== undefined ? { removed: edit.inserted } : {}) };
+}
+
+function sameStep(left: FieldStep, right: FieldStep): boolean {
+  return typeof left === 'object' && typeof right === 'object' ? left.key === right.key : left === right;
+}
+
+/** Where a field inside the edited array is after `edit`: the same item at
+ * its new index, `undefined` when its own item was removed, or `address`
+ * itself for a field outside that array. `covered` says the edit accounts
+ * for the array's length change on this field's path. */
+export function remapAddress(address: FieldAddress, edit: ArrayEdit): { address: FieldAddress; covered: boolean } | undefined {
+  const { array } = edit, depth = array.path.length;
+  const inside = address.node === array.node && sameBlockPath(address.block, array.block)
+    && address.path.length > depth && array.path.every((component, index) => sameStep(component, address.path[index]));
+  const index = inside ? address.path[depth] : undefined;
+  if (typeof index !== 'number') return { address, covered: false };
+  let moved = index;
+  if (edit.removed !== undefined) {
+    if (index === edit.removed) return undefined;
+    if (index > edit.removed) moved--;
+  }
+  if (edit.inserted !== undefined && moved >= edit.inserted) moved++;
+  if (moved === index) return { address, covered: true };
+  return { address: { ...address, path: [...address.path.slice(0, depth), moved, ...address.path.slice(depth + 1)] }, covered: true };
+}

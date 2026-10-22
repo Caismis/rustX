@@ -5,7 +5,7 @@ import type { SubagentInvocationOverride, WorkflowVocabulary } from '../../../..
 import {
   addBranch, CommandRejected, connect, deleteNodes, disconnect, reconnect, removeBranch, renameBranch, renameNode, replaceNode, setEntry,
 } from '../../../document/commands';
-import { encodeField, nodeField, type FieldAddress, type FieldStep } from '../../../document/fields';
+import { encodeField, nodeField, type ArrayEdit, type FieldAddress, type FieldStep } from '../../../document/fields';
 import { blockAt, deepNodeCount, edgesOf, nativeBlockPath, nodeAt, type BlockPath, type NodeDefinition, type WorkflowDocument } from '../../../document/model';
 import { edgePort, outputPorts, type ControlPort } from '../../../document/ports';
 import { AddKey, PredicateEditor, ValueEditor } from './ValueEditor';
@@ -13,7 +13,7 @@ import { Field, JsonField, KeyField, Section, SelectField, TextField } from './f
 import css from '../Editor.module.css';
 
 export type InspectorTab = 'config' | 'input' | 'output';
-type Edit = (apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?: string) => void;
+type Edit = (apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?: string, array?: ArrayEdit) => void;
 type Of<K extends NodeDefinition['type']> = Extract<NodeDefinition, { type: K }>;
 
 export function tabsOf(kind: NodeDefinition['type']): readonly InspectorTab[] {
@@ -36,8 +36,13 @@ export function NodeForm({ document, block, id, tab, vocabulary, derived, edit, 
   /** The address of one of this node's fields. */
   const at = (...path: FieldStep[]) => nodeField(block, id, path);
   /** Update this node from its value in the document being edited. */
-  const update = <K extends NodeDefinition['type']>(change: (node: Of<K>) => Of<K>, field: FieldAddress) =>
-    edit(current => replaceNode(current, block, id, change(currentNode<K>(current, block, id))), encodeField(field));
+  const update = <K extends NodeDefinition['type']>(change: (node: Of<K>) => Of<K>, field: FieldAddress, array?: ArrayEdit) =>
+    edit(current => replaceNode(current, block, id, change(currentNode<K>(current, block, id))), array ? undefined : encodeField(field), array);
+  /** Remove or append one Review context item, as one known array edit. */
+  const resizeContext = (resize: (current: Of<'review'>['context']) => Of<'review'>['context'], array: ArrayEdit) => node.type === 'review' && update<'review'>(current => {
+    if (current.context.length !== node.context.length) throw new CommandRejected('missing_field');
+    return { ...current, context: resize(current.context) };
+  }, at('context'), array);
   const derivedSection = (title: string) => <Section title={title}>
     {derived?.schema !== undefined
       ? <><pre className={css.codebox}>{JSON.stringify(derived.schema, null, 2)}</pre><p className={css.note}>{derived.current ? tx('workflows:inspector.derived') : tx('workflows:inspector.derived-outdated')}</p></>
@@ -101,9 +106,9 @@ export function NodeForm({ document, block, id, tab, vocabulary, derived, edit, 
       <Section title={tx('workflows:inspector.review-context')} aside={String(node.context.length)}>
         {node.context.map((item, index) => <div key={index} className={css.nestedRow}>
           <ValueEditor label={`[${index}]`} address={at('context', index)} value={item} edit={edit} />
-          <button type="button" className={css.smallButton} aria-label={tx('workflows:inspector.remove', { p0: `[${index}]` })} onClick={() => update<'review'>(current => ({ ...current, context: current.context.filter((_, position) => position !== index) }), at('context'))}>×</button>
+          <button type="button" className={css.smallButton} aria-label={tx('workflows:inspector.remove', { p0: `[${index}]` })} onClick={() => resizeContext(current => current.filter((_, position) => position !== index), { array: at('context'), removed: index })}>×</button>
         </div>)}
-        <button type="button" className={css.smallButton} onClick={() => update<'review'>(current => ({ ...current, context: [...current.context, { type: 'reference', path: ['args'] }] }), at('context'))}>{tx('workflows:inspector.add-item')}</button>
+        <button type="button" className={css.smallButton} onClick={() => resizeContext(current => [...current, { type: 'reference', path: ['args'] }], { array: at('context'), inserted: node.context.length })}>{tx('workflows:inspector.add-item')}</button>
       </Section>
       <p className={css.note}>{tx('workflows:inspector.review-note')}</p>
     </>}

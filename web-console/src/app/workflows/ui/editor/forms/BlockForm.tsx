@@ -1,10 +1,11 @@
+import type { ArrayEdit } from '../../../document/fields';
 import { useTranslation } from '../../../../../locale/react';
 import { setEntry, setWorkflow } from '../../../document/commands';
 import { blockField, workflowField } from '../../../document/fields';
 import { blockAt, nodeAt, type BlockPath, type WorkflowDocument } from '../../../document/model';
 import { JsonField, Section, SelectField, TextField } from './fields';
 
-type Edit = (apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?: string) => void;
+type Edit = (apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?: string, array?: ArrayEdit) => void;
 
 /** The Workflow's own fields (root only) and one block's contract: entry,
  * input schema and output schema. */

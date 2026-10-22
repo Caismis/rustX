@@ -1,13 +1,13 @@
 import { useState } from 'react';
 import clsx from 'clsx';
 import { useTranslation } from '../../../../../locale/react';
-import { encodeField, fieldValue, setField, updateField, within, type FieldAddress } from '../../../document/fields';
+import { encodeField, fieldValue, setField, updateField, within, type ArrayEdit, type FieldAddress } from '../../../document/fields';
 import { CommandRejected } from '../../../document/commands';
 import type { Predicate, Value, WorkflowDocument } from '../../../document/model';
 import { useFieldDraft } from './drafts';
 import { JsonField } from './fields';
 
-type Edit = (apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?: string) => void;
+type Edit = (apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?: string, array?: ArrayEdit) => void;
 
 /** Change the value of one kind at `address` from its current value; a
  * value whose kind changed meanwhile is not this field any more. */
@@ -36,7 +36,13 @@ function template(kind: ValueKind): Value {
  * expression language. Every change is made from the current document. */
 export function ValueEditor({ label, address, value, edit }: { label: string; address: FieldAddress; value: Value; edit: Edit }) {
   const tx = useTranslation();
-  const change = <K extends ValueKind>(kinds: readonly K[], update: (current: Extract<Value, { type: K }>) => Value) => edit(document => updateKind<K, Value>(document, address, kinds, update));
+  const change = <K extends ValueKind>(kinds: readonly K[], update: (current: Extract<Value, { type: K }>) => Value, array?: ArrayEdit) => edit(document => updateKind<K, Value>(document, address, kinds, update), undefined, array);
+  /** Remove or append one item of the array shown, as one known array edit. */
+  const items = within(address, ['items']);
+  const resize = (update: (current: Value[]) => Value[], array: ArrayEdit) => value.type === 'array' && change(['array'], current => {
+    if (current.items.length !== value.items.length) throw new CommandRejected('missing_field');
+    return { ...current, items: update(current.items) };
+  }, array);
   return <fieldset className={css.value}>
     <legend className={css.fieldLabel}>{label}</legend>
     <div className={css.kindRow} role="radiogroup" aria-label={tx('workflows:value.kind')}>
@@ -57,9 +63,9 @@ export function ValueEditor({ label, address, value, edit }: { label: string; ad
       {value.items.map((item, index) => <div key={index} className={css.nestedRow}>
         <ValueEditor label={`[${index}]`} address={within(address, ['items', index])} value={item} edit={edit} />
         <button type="button" className={css.smallButton} aria-label={tx('workflows:inspector.remove', { p0: `[${index}]` })}
-          onClick={() => change(['array'], current => ({ ...current, items: current.items.filter((_, at) => at !== index) }))}>×</button>
+          onClick={() => resize(current => current.filter((_, at) => at !== index), { array: items, removed: index })}>×</button>
       </div>)}
-      <button type="button" className={css.smallButton} onClick={() => change(['array'], current => ({ ...current, items: [...current.items, template('reference')] }))}>{tx('workflows:inspector.add-item')}</button>
+      <button type="button" className={css.smallButton} onClick={() => resize(current => [...current, template('reference')], { array: items, inserted: value.items.length })}>{tx('workflows:inspector.add-item')}</button>
     </div>}
   </fieldset>;
 }
@@ -124,7 +130,13 @@ function predicateTemplate(kind: PredicateKind, from: Predicate): Predicate {
  * same-typed scalars. */
 export function PredicateEditor({ label, address, predicate, edit }: { label: string; address: FieldAddress; predicate: Predicate; edit: Edit }) {
   const tx = useTranslation();
-  const change = <K extends PredicateKind>(kinds: readonly K[], update: (current: Extract<Predicate, { type: K }>) => Predicate) => edit(document => updateKind<K, Predicate>(document, address, kinds, update));
+  const change = <K extends PredicateKind>(kinds: readonly K[], update: (current: Extract<Predicate, { type: K }>) => Predicate, array?: ArrayEdit) => edit(document => updateKind<K, Predicate>(document, address, kinds, update), undefined, array);
+  const predicates = within(address, ['predicates']);
+  const shown = predicate.type === 'and' || predicate.type === 'or' ? predicate.predicates.length : 0;
+  const resize = (update: (current: Predicate[]) => Predicate[], array: ArrayEdit) => change(['and', 'or'], current => {
+    if (current.predicates.length !== shown) throw new CommandRejected('missing_field');
+    return { ...current, predicates: update(current.predicates) };
+  }, array);
   return <fieldset className={css.value}>
     <legend className={css.fieldLabel}>{label}</legend>
     <select className={css.input} aria-label={tx('workflows:predicate.kind')} value={predicate.type}
@@ -141,9 +153,9 @@ export function PredicateEditor({ label, address, predicate, edit }: { label: st
       {predicate.predicates.map((item, index) => <div key={index} className={css.nestedRow}>
         <PredicateEditor label={`${index + 1}`} address={within(address, ['predicates', index])} predicate={item} edit={edit} />
         <button type="button" className={css.smallButton} aria-label={tx('workflows:inspector.remove', { p0: String(index + 1) })} disabled={predicate.predicates.length === 1}
-          onClick={() => change(['and', 'or'], current => current.predicates.length === 1 ? current : { ...current, predicates: current.predicates.filter((_, at) => at !== index) })}>×</button>
+          onClick={() => { if (shown > 1) resize(current => current.filter((_, at) => at !== index), { array: predicates, removed: index }); }}>×</button>
       </div>)}
-      <button type="button" className={css.smallButton} onClick={() => change(['and', 'or'], current => ({ ...current, predicates: [...current.predicates, { type: 'boolean', value: { type: 'reference', path: ['args'] } }] }))}>{tx('workflows:predicate.add')}</button>
+      <button type="button" className={css.smallButton} onClick={() => resize(current => [...current, { type: 'boolean', value: { type: 'reference', path: ['args'] } }], { array: predicates, inserted: shown })}>{tx('workflows:predicate.add')}</button>
     </div>}
   </fieldset>;
 }

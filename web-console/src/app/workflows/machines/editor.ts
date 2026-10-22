@@ -2,7 +2,7 @@ import { assign, fromPromise, setup, type ActorRefFrom, type SnapshotFrom } from
 import type { WorkflowCheckReport, WorkflowSource } from '../../../../../protocol/app-server/v51';
 import type { WorkflowCommit } from '../../../workspaces/host';
 import { CommandRejected, type RejectionCode } from '../document/commands';
-import { encodeField, fieldText, renameAddress, sameField, type FieldAddress } from '../document/fields';
+import { encodeField, fieldText, invertArrayEdit, remapAddress, renameAddress, sameField, type ArrayEdit, type FieldAddress } from '../document/fields';
 import { incompleteIdentities, type IncompleteIdentity } from '../document/identities';
 import { existingPath, sameDocument, ROOT, type BlockPath, type WorkflowDocument } from '../document/model';
 import { classifyFailure, type WorkflowFailure, type WorkflowScopePort, type WorkflowTarget } from '../port';
@@ -53,7 +53,9 @@ export type FieldError =
   /** The field's value changed under the text (an undo, for instance). */
   | { kind: 'changed' }
   /** The field the text was typed into no longer exists. */
-  | { kind: 'missing' };
+  | { kind: 'missing' }
+  /** A rename would place this field's text where other kept text is. */
+  | { kind: 'occupied' };
 
 /** Unapplied text of one deferred-commit field, under its address. It
  * never enters the document until an `APPLY_DRAFT` of this exact version
@@ -93,7 +95,8 @@ export type ViewPositions = Readonly<Record<string, { readonly x: number; readon
 /** One undoable step. A view step moves nodes of one block and never
  * changes the document; both kinds share one timeline. */
 export type HistoryEntry =
-  | { readonly kind: 'document'; readonly document: WorkflowDocument }
+  /** `array` is the array edit that led from `document` to the next state. */
+  | { readonly kind: 'document'; readonly document: WorkflowDocument; readonly array?: ArrayEdit }
   | { readonly kind: 'view'; readonly block: string; readonly path: BlockPath; readonly before: ViewPositions; readonly after: ViewPositions };
 
 /** How an uncertain save was settled by observation alone. */
@@ -136,7 +139,9 @@ export interface EditorContext {
 }
 
 export type EditorEvent =
-  | { type: 'EDIT'; apply: (document: WorkflowDocument) => WorkflowDocument; coalesce?: string }
+  /** A semantic edit. `array` describes it when it removes or inserts one
+   * array item, so drafts of the other items keep their identity. */
+  | { type: 'EDIT'; apply: (document: WorkflowDocument) => WorkflowDocument; coalesce?: string; array?: ArrayEdit }
   | { type: 'UNDO' } | { type: 'REDO' }
   /** One completed drag of nodes in one block: a view step. */
   | { type: 'MOVE'; block: string; path: BlockPath; before: ViewPositions; after: ViewPositions }
@@ -197,34 +202,48 @@ function draftOf(context: Pick<EditorContext, 'drafts'>, field: string): FieldDr
   return Object.hasOwn(context.drafts, field) ? context.drafts[field] : undefined;
 }
 
-/** Drafts after the document changed from `before` to `after`: a draft
- * whose field is gone, moved or changed keeps its text and is marked, so
- * it is never silently dropped, reapplied or attached to another field.
- * Drafts of unchanged fields are untouched. */
-function settleDrafts(drafts: EditorContext['drafts'], before: WorkflowDocument | undefined, after: WorkflowDocument, moved?: ReadonlySet<string>): EditorContext['drafts'] {
-  let changed = false;
-  const next = Object.fromEntries(Object.entries(drafts).map(([field, draft]) => {
-    if (draft.conflict) return [field, draft];
-    const text = fieldText(after, draft.address);
-    // A draft that followed a rename has no address in `before`.
-    const shifted = !!before && !moved?.has(field) && !sameField(before, after, draft.address);
-    const conflict = text === undefined || shifted ? 'missing' : text !== draft.base ? 'changed' : undefined;
-    if (!conflict) return [field, draft];
-    changed = true;
-    return [field, { ...draft, conflict }];
-  }));
-  return changed ? next : drafts;
+/** The record key of a draft whose field no longer exists. It is never
+ * an address any field shows, so such text stays listed for the author but
+ * is never taken over by a field created or renamed into that place later,
+ * and never occupies the key a live draft moves to. */
+function detachedKey(draft: FieldDraft): string {
+  return JSON.stringify(['detached', draft.version, encodeField(draft.address)]);
+}
+
+/** Drafts after the document changed from `before` to `after`. A draft
+ * whose field is gone (or whose array item cannot be identified) keeps its
+ * text and is detached; one whose field changed keeps its text and is
+ * marked. `moved` drafts followed a rename and `array` is the array edit
+ * performed, so the drafts it accounts for keep their identity. Drafts of
+ * unchanged fields are untouched. */
+function settleDrafts(drafts: EditorContext['drafts'], before: WorkflowDocument | undefined, after: WorkflowDocument, { moved, array }: { moved?: ReadonlySet<string>; array?: ArrayEdit } = {}): EditorContext['drafts'] {
+  const next: [string, FieldDraft][] = [];
+  for (const [field, draft] of Object.entries(drafts)) {
+    if (draft.conflict) { next.push([field, draft]); continue; }
+    const remapped = array ? remapAddress(draft.address, array) : { address: draft.address, covered: false };
+    const detach = () => { const missing = { ...draft, conflict: 'missing' as const }; next.push([detachedKey(missing), missing]); };
+    if (!remapped) { detach(); continue; }
+    const { address, covered } = remapped;
+    const text = fieldText(after, address);
+    // A draft that followed a rename, or whose array edit is known, is
+    // identified already; any other array resize leaves identity unknown.
+    const shifted = !!before && !covered && !moved?.has(field) && !sameField(before, after, draft.address);
+    if (text === undefined || shifted) { detach(); continue; }
+    const current = address === draft.address ? draft : { ...draft, address };
+    next.push([encodeField(address), text === draft.base ? current : { ...current, conflict: 'changed' }]);
+  }
+  return Object.fromEntries(next);
 }
 
 /** A semantic change of the working document: one undo step, or part of
  * the open session `coalesce`. */
-function changeDocument(context: EditorContext, next: WorkflowDocument, coalesce: string | undefined, drafts = context.drafts, moved?: ReadonlySet<string>): Partial<EditorContext> {
-  const coalesced = coalesce !== undefined && coalesce === context.coalesce && context.past.at(-1)?.kind === 'document';
+function changeDocument(context: EditorContext, next: WorkflowDocument, coalesce: string | undefined, { drafts = context.drafts, moved, array }: { drafts?: EditorContext['drafts']; moved?: ReadonlySet<string>; array?: ArrayEdit } = {}): Partial<EditorContext> {
+  const coalesced = coalesce !== undefined && coalesce === context.coalesce && context.past.at(-1)?.kind === 'document' && !array;
   return {
     document: next, generation: context.generation + 1, rejection: undefined,
-    past: coalesced ? context.past : [...context.past, { kind: 'document' as const, document: context.document! }].slice(-HISTORY_LIMIT),
-    future: [], coalesce, block: existingPath(next, context.block),
-    drafts: settleDrafts(drafts, context.document, next, moved),
+    past: coalesced ? context.past : [...context.past, { kind: 'document' as const, document: context.document!, ...(array ? { array } : {}) }].slice(-HISTORY_LIMIT),
+    future: [], coalesce: array ? undefined : coalesce, block: existingPath(next, context.block),
+    drafts: settleDrafts(drafts, context.document, next, { moved, array }),
   };
 }
 
@@ -253,14 +272,23 @@ function applyDraft(context: EditorContext, event: Extract<EditorEvent, { type: 
   const moved = new Set<string>();
   if (draft.address.role === 'key') {
     const to = draft.text.trim();
-    others = Object.fromEntries(Object.values(rest).map(other => {
+    const entries = Object.entries(rest).map(([key, other]): [string, FieldDraft] => {
+      // A detached draft keeps its own identity; it never follows a rename.
+      if (other.conflict === 'missing') return [key, other];
       const address = renameAddress(other.address, draft.address, to);
-      if (address === other.address) return [encodeField(address), other];
+      if (address === other.address) return [key, other];
       moved.add(encodeField(address));
       return [encodeField(address), { ...other, address }];
-    }));
+    });
+    others = Object.fromEntries(entries);
+    // Every retained draft keeps its own place: a rename that would put two
+    // under one field is refused, with nothing changed.
+    if (Object.keys(others).length !== entries.length) {
+      const error: FieldError = { kind: 'occupied' };
+      return { drafts: { ...rest, [event.field]: { ...draft, error } }, applied: report({ status: 'rejected', error }) };
+    }
   }
-  return { ...changeDocument(context, outcome.document, event.field, others, moved), applied: report({ status: 'applied' }) };
+  return { ...changeDocument(context, outcome.document, event.field, { drafts: others, moved }), applied: report({ status: 'applied' }) };
 }
 
 /** One editing transaction of one exact Workflow file. React subscribes and
@@ -303,7 +331,7 @@ export const workflowEditorMachine = setup({
         throw cause;
       }
       if (next === context.document) return { rejection: undefined };
-      return changeDocument(context, next, event.coalesce);
+      return changeDocument(context, next, event.coalesce, { array: event.array });
     }),
     applyDraft: assign(({ context, event }) => event.type === 'APPLY_DRAFT' ? applyDraft(context, event) : {}),
     move: assign(({ context, event }) => {
@@ -314,12 +342,13 @@ export const workflowEditorMachine = setup({
     undo: assign(({ context }) => {
       const entry = context.past.at(-1)!, past = context.past.slice(0, -1);
       if (entry.kind === 'view') return { past, future: [entry, ...context.future], coalesce: undefined, rejection: undefined, ...restore(context, entry, entry.before) };
-      return { document: entry.document, past, future: [{ kind: 'document' as const, document: context.document! }, ...context.future], generation: context.generation + 1, coalesce: undefined, rejection: undefined, block: existingPath(entry.document, context.block), drafts: settleDrafts(context.drafts, context.document, entry.document) };
+      // Undoing an array edit performs its inverse on the drafts as well.
+      return { document: entry.document, past, future: [{ kind: 'document' as const, document: context.document!, ...(entry.array ? { array: entry.array } : {}) }, ...context.future], generation: context.generation + 1, coalesce: undefined, rejection: undefined, block: existingPath(entry.document, context.block), drafts: settleDrafts(context.drafts, context.document, entry.document, { array: entry.array && invertArrayEdit(entry.array) }) };
     }),
     redo: assign(({ context }) => {
       const [entry, ...future] = context.future;
       if (entry.kind === 'view') return { past: [...context.past, entry], future, coalesce: undefined, rejection: undefined, ...restore(context, entry, entry.after) };
-      return { document: entry.document, past: [...context.past, { kind: 'document' as const, document: context.document! }], future, generation: context.generation + 1, coalesce: undefined, rejection: undefined, block: existingPath(entry.document, context.block), drafts: settleDrafts(context.drafts, context.document, entry.document) };
+      return { document: entry.document, past: [...context.past, { kind: 'document' as const, document: context.document!, ...(entry.array ? { array: entry.array } : {}) }], future, generation: context.generation + 1, coalesce: undefined, rejection: undefined, block: existingPath(entry.document, context.block), drafts: settleDrafts(context.drafts, context.document, entry.document, { array: entry.array }) };
     }),
     navigate: assign(({ context, event }) => event.type === 'NAVIGATE' && context.document ? { block: existingPath(context.document, event.block), coalesce: undefined } : {}),
     boundary: assign({ coalesce: undefined }),
@@ -345,7 +374,11 @@ export const workflowEditorMachine = setup({
       if (draft?.conflict !== 'changed') return {};
       const base = fieldText(context.document, draft.address);
       // The field has gone meanwhile: the text cannot be kept for it.
-      if (base === undefined) return { drafts: { ...context.drafts, [event.field]: { ...draft, conflict: 'missing' as const } } };
+      if (base === undefined) {
+        const { [event.field]: _gone, ...others } = context.drafts;
+        const missing = { ...draft, conflict: 'missing' as const };
+        return { drafts: { ...others, [detachedKey(missing)]: missing } };
+      }
       const { conflict: _resolved, error: _error, ...kept } = draft;
       const { [event.field]: _previous, ...rest } = context.drafts;
       return { drafts: kept.text === base ? rest : { ...rest, [event.field]: { ...kept, base, version: context.draftVersion + 1 } }, draftVersion: context.draftVersion + 1 };

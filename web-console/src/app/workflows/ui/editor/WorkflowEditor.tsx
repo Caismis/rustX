@@ -10,7 +10,7 @@ import { Modal } from '../../../../presentation/primitives/Modal';
 import { IconCheckOutline16, IconEllipsisOutline16 } from '../../../../presentation/primitives/icons';
 import type { WorkspaceAuthority } from '../../../../workspaces/authority';
 import { locate, type DiagnosticLocation } from '../../document/diagnostics';
-import { describeField, type FieldAddress } from '../../document/fields';
+import { describeField, type ArrayEdit, type FieldAddress } from '../../document/fields';
 import { blockAt, blockKey, nodeAt, sameBlockPath, type BlockPath, type WorkflowDocument } from '../../document/model';
 import { isDirty, type EditorNotice, type FieldDraft, type ViewPositions, type WorkflowEditorActor } from '../../machines/editor';
 import { editorHolds, type WorkflowSurfaceActor } from '../../machines/surface';
@@ -65,7 +65,7 @@ export default function WorkflowEditor({ surface, editor, authority, scopeLabel 
   const saving = snapshot.matches({ ready: 'saving' });
   const checking = snapshot.matches({ ready: 'checking' });
   const key = useMemo(() => viewKey(target.endpoint, scopeKey(target.scope), target.id), [target]);
-  const edit = useCallback((apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?: string) => editor.send({ type: 'EDIT', apply, coalesce }), [editor]);
+  const edit = useCallback((apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?: string, array?: ArrayEdit) => editor.send({ type: 'EDIT', apply, coalesce, array }), [editor]);
   // The inspector follows a node the editor accepted renaming.
   const onRenamed = useCallback((from: string, to: string) => {
     choose(current => current?.kind === 'node' && current.id === from ? { kind: 'node', id: to } : current);

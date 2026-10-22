@@ -1,3 +1,4 @@
+import type { ArrayEdit } from '../../document/fields';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Background, BackgroundVariant, MiniMap, ReactFlow, applyNodeChanges, useReactFlow, useViewport,
@@ -22,7 +23,7 @@ import css from './Editor.module.css';
  * shows one of its fields. */
 export type Selection = { kind: 'node'; id: string; tab?: InspectorTab } | { kind: 'edge'; index: number } | { kind: 'block' } | { kind: 'check' } | undefined;
 export interface Problems { readonly nodes: ReadonlyMap<string, 'error' | 'warning' | 'nested'>; readonly edges: ReadonlySet<number> }
-type Edit = (apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?: string) => void;
+type Edit = (apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?: string, array?: ArrayEdit) => void;
 
 const nodeTypes = { workflow: WorkflowNode };
 

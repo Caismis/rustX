@@ -43,6 +43,7 @@ export function useFieldError() {
       case 'empty': return tx('workflows:inspector.field-empty');
       case 'changed': return tx('workflows:inspector.field-changed');
       case 'missing': return tx('workflows:inspector.field-missing');
+      case 'occupied': return tx('workflows:inspector.field-occupied');
       case 'rejected': return tx(`workflows:rejection.${error.code}`);
     }
   };

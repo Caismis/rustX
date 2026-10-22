@@ -454,19 +454,27 @@ describe('field drafts in the editor machine', () => {
     expect(status(editor)).toMatchObject({ output: { fields: { status: { value: 'mine' } } } });
   });
 
-  it('never attaches a draft to another field after deletion, a kind change or a shifted array item', async () => {
+  it('never attaches a draft to another field after deletion, a kind change or an unidentified array resize', async () => {
     const editor = await readyEditor();
-    // Deletion, then a new node under the same id: the draft stays the old field's.
+    /** The one draft holding `text`, wherever it is kept, and its key. */
+    const holding = (text: string) => {
+      const found = Object.entries(editor.getSnapshot().context.drafts).filter(([, value]) => value.text === text);
+      expect(found).toHaveLength(1);
+      return { key: found[0][0], draft: found[0][1] };
+    };
+    // Deletion, then a new node under the same id: the text stays the old
+    // field's, detached from any address a field shows.
     editor.send({ type: 'DRAFT', address: ready, text: '"kept"' });
     editor.send({ type: 'EDIT', apply: document => deleteNodes(document, ROOT, ['ready']) });
-    expect(draft(editor).conflict).toBe('missing');
+    expect(holding('"kept"').draft).toMatchObject({ conflict: 'missing', address: ready });
+    expect(draft(editor)).toBeUndefined();
     editor.send({ type: 'EDIT', apply: document => addNode(document, ROOT, 'return', 'ready') });
-    expect(draft(editor)).toMatchObject({ text: '"kept"', conflict: 'missing' });
-    editor.send({ type: 'KEEP_DRAFT', field });
-    expect(draft(editor).conflict).toBe('missing');
+    expect(draft(editor)).toBeUndefined();
+    editor.send({ type: 'KEEP_DRAFT', field: holding('"kept"').key });
+    expect(holding('"kept"').draft.conflict).toBe('missing');
     editor.send({ type: 'SAVE' });
     expect(editor.getSnapshot().context.notice).toEqual({ kind: 'pending_fields', count: 1 });
-    editor.send({ type: 'DISCARD_DRAFT', field });
+    editor.send({ type: 'DISCARD_DRAFT', field: holding('"kept"').key });
     expect(editor.getSnapshot().context.drafts).toEqual({});
     expect(editor.getSnapshot().context.notice).toBeUndefined();
 
@@ -475,19 +483,19 @@ describe('field drafts in the editor machine', () => {
     editor.send({ type: 'DRAFT', address: within(revise, ['value']), text: '"later"' });
     editor.send({ type: 'EDIT', apply: document => setField(document, revise, { type: 'object', fields: {} }) });
     editor.send({ type: 'EDIT', apply: document => setField(document, revise, { type: 'literal', value: 'needs_revision' }) });
-    expect(editor.getSnapshot().context.drafts[encodeField(within(revise, ['value']))].conflict).toBe('missing');
+    expect(holding('"later"').draft.conflict).toBe('missing');
+    expect(editor.getSnapshot().context.drafts[encodeField(within(revise, ['value']))]).toBeUndefined();
 
-    // Removing an earlier array item shifts later ones; an item added back
-    // at the old index is another item.
+    // An array resize the editor cannot attribute (no array edit) leaves
+    // item identity unknown: the text is kept, detached.
     const predicates = nodeField(ROOT, 'decision', ['condition', 'predicates']);
     const first = within(predicates, [0, 'value', 'path'], 'append');
     editor.send({ type: 'DRAFT', address: first, text: 'acceptable' });
     type Items = { type: string }[];
     editor.send({ type: 'EDIT', apply: document => updateField<Items>(document, predicates, items => items.slice(1)) });
     expect(fieldText(editor.getSnapshot().context.document!, first)).toBe('');
-    expect(editor.getSnapshot().context.drafts[encodeField(first)].conflict).toBe('missing');
-    editor.send({ type: 'EDIT', apply: document => updateField<Items>(document, predicates, items => [{ type: 'boolean', value: { type: 'reference', path: ['args'] } }, ...items]) });
-    expect(editor.getSnapshot().context.drafts[encodeField(first)].conflict).toBe('missing');
+    expect(holding('acceptable').draft.conflict).toBe('missing');
+    expect(editor.getSnapshot().context.drafts[encodeField(first)]).toBeUndefined();
   });
 
   it('takes the drafts of a renamed node along, and keeps a refused rename with its error', async () => {

@@ -6,6 +6,7 @@ import type { WorkflowDefinition, WorkflowEdit, WorkflowSource } from '../../pro
 import type { WorkflowCommit } from '../src/workspaces/host';
 import type { WorkspaceAuthority } from '../src/workspaces/authority';
 import { blockAt } from '../src/app/workflows/document/model';
+import { blockField, describeField, encodeField, nodeField } from '../src/app/workflows/document/fields';
 import { isDirty, workflowEditorMachine } from '../src/app/workflows/machines/editor';
 import { workflowSurfaceMachine } from '../src/app/workflows/machines/surface';
 import type { WorkflowScopePort } from '../src/app/workflows/port';
@@ -156,5 +157,161 @@ describe('field application (F4)', () => {
     fireEvent.keyDown(inspector().getByLabelText('Node ID'), { key: 'Enter' });
     expect((inspector().getByLabelText('Node ID') as HTMLInputElement).value).toBe('accepted');
     expect(editor.getSnapshot().context.drafts).toEqual({});
+  });
+});
+
+const status = (node: string) => nodeField([], node, ['output', 'fields', { key: 'status' }, 'value']);
+/** Every retained draft as [text, owner, detached]. */
+const retained = (editor: Awaited<ReturnType<typeof open>>) => Object.entries(editor.getSnapshot().context.drafts)
+  .map(([key, draft]) => [draft.text, describeField(draft.address), key !== encodeField(draft.address)] as const)
+  .sort(([a], [b]) => a.localeCompare(b));
+function type(field: HTMLTextAreaElement | HTMLInputElement, text: string) {
+  fireEvent.change(field, { target: { value: text } });
+  fireEvent.blur(field);
+}
+
+describe('rename with retained drafts (repair B)', () => {
+  it.each([['the deleted node\'s draft first', false], ['the live node\'s draft first', true]])('keeps a deleted node\'s text apart when another node takes its name, %s', async (_order, liveFirst) => {
+    const editor = await open(exampleSource('parallel_review'));
+    const leave = (node: string, text: string) => { select(`Return node ${node}`); type(literals()[0], text); };
+    if (liveFirst) leave('revise', '"live_revise');
+    leave('ready', '"orphan_ready');
+    if (!liveFirst) leave('revise', '"live_revise');
+    select('Return node ready');
+    fireEvent.click(inspector().getByRole('button', { name: 'Delete node' }));
+    select('Return node revise');
+    const id = inspector().getByLabelText('Node ID') as HTMLInputElement;
+    fireEvent.change(id, { target: { value: 'ready' } });
+    fireEvent.keyDown(id, { key: 'Enter' });
+    // The rename is accepted; the inspector follows the node, which shows
+    // its own kept text and never the deleted node's.
+    const nodes = blockAt(editor.getSnapshot().context.document!, [])!.nodes;
+    expect(Object.keys(nodes).sort()).toEqual(['decision', 'ready', 'reviews']);
+    expect(nodes.ready).toMatchObject({ output: { fields: { status: { type: 'literal', value: 'needs_revision' } } } });
+    expect((inspector().getByLabelText('Node ID') as HTMLInputElement).value).toBe('ready');
+    expect(literals()[0].value).toBe('"live_revise');
+    expect(retained(editor)).toEqual([
+      ['"live_revise', 'ready · output.fields["status"].value', false],
+      ['"orphan_ready', 'ready · output.fields["status"].value', true],
+    ]);
+    expect(editor.getSnapshot().context.drafts[encodeField(status('ready'))].text).toBe('"live_revise');
+    save();
+    expect(writes).toHaveLength(0);
+    const pending = within(screen.getByRole('list', { name: 'Fields with unapplied text' }));
+    expect(pending.getAllByRole('listitem')).toHaveLength(2);
+    expect(pending.getByText('This field no longer exists.')).toBeTruthy();
+  });
+
+  it.each([['the deleted branch\'s draft first', false], ['the live branch\'s draft first', true]])('keeps a deleted branch\'s text apart when another branch takes its key, %s', async (_order, liveFirst) => {
+    const editor = await open(exampleSource('parallel_review'));
+    const leave = (branch: 'quality' | 'security', text: string) => {
+      select('Parallel node reviews');
+      fireEvent.click(inspector().getAllByRole('button', { name: /Edit subgraph/ })[branch === 'quality' ? 0 : 1]);
+      fireEvent.click(screen.getByRole('button', { name: 'Block settings' }));
+      type(inspector().getByLabelText('Output schema') as HTMLTextAreaElement, text);
+      fireEvent.click(screen.getByRole('button', { name: 'Root block' }));
+    };
+    if (liveFirst) leave('security', '{"live_security"');
+    leave('quality', '{"orphan_quality"');
+    if (!liveFirst) leave('security', '{"live_security"');
+    select('Parallel node reviews');
+    fireEvent.click(inspector().getByRole('button', { name: 'Remove branch quality' }));
+    const key = inspector().getByLabelText('Rename branch security') as HTMLInputElement;
+    fireEvent.change(key, { target: { value: 'quality' } });
+    fireEvent.keyDown(key, { key: 'Enter' });
+    const reviews = blockAt(editor.getSnapshot().context.document!, [])!.nodes.reviews as { branches: Record<string, { block: { nodes: Record<string, { task?: string }> } }> };
+    expect(Object.keys(reviews.branches)).toEqual(['quality']);
+    expect(reviews.branches.quality.block.nodes.review.task).toContain('for security');
+    const quality = [{ node: 'reviews', branch: 'quality' }];
+    expect(editor.getSnapshot().context.drafts[encodeField(blockField(quality, ['output']))].text).toBe('{"live_security"');
+    expect(retained(editor)).toEqual([
+      ['{"live_security"', 'reviews / quality · output', false],
+      ['{"orphan_quality"', 'reviews / quality · output', true],
+    ]);
+    // The renamed branch's settings show its own kept text.
+    fireEvent.click(inspector().getByRole('button', { name: /Edit subgraph/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Block settings' }));
+    expect((inspector().getByLabelText('Output schema') as HTMLTextAreaElement).value).toBe('{"live_security"');
+    save();
+    expect(writes).toHaveLength(0);
+  });
+
+  it('moves the drafts of a renamed node to its new name when nothing collides', async () => {
+    const editor = await open(exampleSource('parallel_review'));
+    select('Return node revise');
+    type(literals()[0], '"still typing');
+    const id = inspector().getByLabelText('Node ID') as HTMLInputElement;
+    fireEvent.change(id, { target: { value: 'rework' } });
+    fireEvent.keyDown(id, { key: 'Enter' });
+    expect(Object.keys(blockAt(editor.getSnapshot().context.document!, [])!.nodes)).toContain('rework');
+    expect(retained(editor)).toEqual([['"still typing', 'rework · output.fields["status"].value', false]]);
+    expect(literals()[0].value).toBe('"still typing');
+    fireEvent.change(literals()[0], { target: { value: '"reworked"' } });
+    save();
+    expect(writes).toHaveLength(1);
+    expect(blockAt(written(), [])!.nodes.rework).toMatchObject({ output: { fields: { status: { type: 'literal', value: 'reworked' } } } });
+  });
+});
+
+describe('array edits with retained drafts (repair C)', () => {
+  const items = (first: unknown, second: unknown) => {
+    const source = collidingFields();
+    (source.document!.block.nodes as Record<string, unknown>).done = { type: 'return', output: { type: 'object', fields: { items: { type: 'array', items: [{ type: 'literal', value: first }, { type: 'literal', value: second }] } } } };
+    return source;
+  };
+  const item = (index: number) => within(inspector().getByRole('group', { name: `[${index}]` })).getByLabelText('Literal JSON') as HTMLTextAreaElement;
+  const saved = () => (blockAt(written(), [])!.nodes.done as unknown as { output: { fields: { items: { items: unknown[] } } } }).output.fields.items.items;
+
+  it('keeps item 0\'s draft through an append and saves its corrected text there', async () => {
+    await open(items({ n: 1 }, { n: 2 }));
+    select('Return node done');
+    type(item(0), '{"n":');
+    fireEvent.click(inspector().getByRole('button', { name: 'Add item' }));
+    expect(item(0).value).toBe('{"n":');
+    fireEvent.change(item(0), { target: { value: '{"n":3}' } });
+    save();
+    expect(writes).toHaveLength(1);
+    expect(saved()).toEqual([{ type: 'literal', value: { n: 3 } }, { type: 'literal', value: { n: 2 } }, { type: 'reference', path: ['args'] }]);
+  });
+
+  it('keeps item 0\'s draft when a later item is removed, and through undo and redo of it', async () => {
+    const editor = await open(items({ n: 1 }, { n: 2 }));
+    select('Return node done');
+    type(item(0), '{"n":');
+    fireEvent.click(inspector().getByRole('button', { name: 'Remove [1]' }));
+    expect(item(0).value).toBe('{"n":');
+    act(() => { editor.send({ type: 'UNDO' }); });
+    expect(item(0).value).toBe('{"n":');
+    expect(item(1).value).toBe(JSON.stringify({ n: 2 }, null, 2));
+    act(() => { editor.send({ type: 'REDO' }); });
+    expect(item(0).value).toBe('{"n":');
+    fireEvent.change(item(0), { target: { value: '{"n":3}' } });
+    save();
+    expect(saved()).toEqual([{ type: 'literal', value: { n: 3 } }]);
+  });
+
+  it('moves a later item\'s draft with its item when an earlier identical item is removed', async () => {
+    const editor = await open(items({ n: 1 }, { n: 1 }));
+    select('Return node done');
+    type(item(1), '{"n":');
+    fireEvent.click(inspector().getByRole('button', { name: 'Remove [0]' }));
+    // The surviving item is now [0], and its text went with it.
+    expect(item(0).value).toBe('{"n":');
+    expect(retained(editor)).toEqual([['{"n":', 'done · output.fields["items"].items[0].value', false]]);
+    fireEvent.change(item(0), { target: { value: '{"n":4}' } });
+    save();
+    expect(saved()).toEqual([{ type: 'literal', value: { n: 4 } }]);
+  });
+
+  it('detaches the text of a removed item instead of giving it to the identical item now at its index', async () => {
+    const editor = await open(items({ n: 1 }, { n: 1 }));
+    select('Return node done');
+    type(item(0), '{"n":');
+    fireEvent.click(inspector().getByRole('button', { name: 'Remove [0]' }));
+    expect(item(0).value).toBe(JSON.stringify({ n: 1 }, null, 2));
+    expect(retained(editor)).toEqual([['{"n":', 'done · output.fields["items"].items[0].value', true]]);
+    save();
+    expect(writes).toHaveLength(0);
+    expect(within(screen.getByRole('list', { name: 'Fields with unapplied text' })).getByText('This field no longer exists.')).toBeTruthy();
   });
 });

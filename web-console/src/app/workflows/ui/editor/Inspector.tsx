@@ -1,3 +1,4 @@
+import type { ArrayEdit } from '../../document/fields';
 import { useEffect, useState, type ReactNode } from 'react';
 import clsx from 'clsx';
 import type { WorkflowDiagnostic, WorkflowVocabulary } from '../../../../../../protocol/app-server/v51';
@@ -14,7 +15,7 @@ import { BlockForm } from './forms/BlockForm';
 import { derivedKey, NodeForm, tabsOf, type InspectorTab } from './forms/NodeForms';
 import css from './Editor.module.css';
 
-type Edit = (apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?: string) => void;
+type Edit = (apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?: string, array?: ArrayEdit) => void;
 
 export type CheckState = 'not_run' | 'passed' | 'failed' | 'outdated';
 
