@@ -7554,6 +7554,71 @@
           "properties": {
             "method": {
               "type": "string",
+              "const": "conversation/changes"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "attempt_id": {
+                  "$ref": "#/$defs/AttemptId"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "attempt_id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "conversation/changeDiff"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "attempt_id": {
+                  "$ref": "#/$defs/AttemptId"
+                },
+                "index": {
+                  "type": "integer",
+                  "format": "uint",
+                  "minimum": 0,
+                  "maximum": 499
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "attempt_id",
+                "index"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
               "const": "conversation/contentRead"
             },
             "params": {
@@ -12293,6 +12358,52 @@
         {
           "type": "object",
           "properties": {
+            "summary": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ChangesSummary"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "workspace_changes"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "comparison": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/FileComparison"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "workspace_change_diff"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
             "file": {
               "$ref": "#/$defs/SessionFileReference"
             },
@@ -13661,6 +13772,142 @@
             "projection"
           ]
         }
+      ]
+    },
+    "ChangesSummary": {
+      "description": "Bounded paths and counts; whole file content is read only on demand.",
+      "type": "object",
+      "properties": {
+        "files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChangedFile"
+          }
+        },
+        "total": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "added": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "deleted": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "files",
+        "total",
+        "added",
+        "deleted"
+      ]
+    },
+    "ChangedFile": {
+      "description": "One file's actual net change during an attempt.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "Absolute resolved Host path; never accepted from a comparison request.",
+          "type": "string"
+        },
+        "display": {
+          "type": "string"
+        },
+        "added": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "deleted": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "binary": {
+          "type": "boolean"
+        },
+        "oversized": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "display",
+        "added",
+        "deleted",
+        "binary",
+        "oversized"
+      ]
+    },
+    "FileComparison": {
+      "description": "An immutable, bounded comparison of a recorded file's two endpoints.",
+      "type": "object",
+      "properties": {
+        "hunks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ComparisonHunk"
+          }
+        },
+        "binary": {
+          "type": "boolean"
+        },
+        "oversized": {
+          "type": "boolean"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "hunks",
+        "binary",
+        "oversized",
+        "truncated"
+      ]
+    },
+    "ComparisonHunk": {
+      "description": "Three lines of shared context around one group of edits.",
+      "type": "object",
+      "properties": {
+        "old_start": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "new_start": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "old_text": {
+          "type": "string"
+        },
+        "new_text": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "old_start",
+        "new_start",
+        "old_text",
+        "new_text"
       ]
     },
     "SessionFileReference": {

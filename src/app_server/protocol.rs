@@ -581,6 +581,18 @@ pub enum Method {
     SessionDetach { target: AttachmentTarget },
     #[serde(rename = "session/attachmentStatus")]
     SessionAttachmentStatus { session_id: SessionId },
+    #[serde(rename = "conversation/changes")]
+    ConversationChanges {
+        target: AttachmentTarget,
+        attempt_id: crate::runtime::identity::AttemptId,
+    },
+    #[serde(rename = "conversation/changeDiff")]
+    ConversationChangeDiff {
+        target: AttachmentTarget,
+        attempt_id: crate::runtime::identity::AttemptId,
+        #[schemars(range(max = 499))]
+        index: usize,
+    },
     #[serde(rename = "conversation/contentRead")]
     ConversationContentRead {
         target: AttachmentTarget,
@@ -815,6 +827,8 @@ impl Method {
             | Self::SessionDeletePreview { .. }
             | Self::SessionCheckpoint { .. }
             | Self::ConversationContentRead { .. }
+            | Self::ConversationChanges { .. }
+            | Self::ConversationChangeDiff { .. }
             | Self::ConversationCheckpointPage { .. }
             | Self::ConversationCheckpointValueRead { .. }
             | Self::SessionAttachmentStatus { .. }
@@ -1009,6 +1023,8 @@ pub struct Failure {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MethodResult {
+    WorkspaceChanges { summary: Option<crate::workspace_changes::ChangesSummary> },
+    WorkspaceChangeDiff { comparison: Option<crate::workspace_changes::FileComparison> },
     SessionFileBytes {
         file: crate::tools::session_files::SessionFileReference,
         data: String,

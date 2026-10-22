@@ -1,3 +1,35 @@
+## Chat reading samples and turn changes
+
+Read-only reference: `../deepseek-harness` at
+`687f282e8625c6b8d11ff58211a90524be2e4317`, specifically `ui-chat`'s
+`use-chat-reading.ts` and `use-scroll-follow.ts`, and `ui-deliverables`'s
+`ChangedFiles.{tsx,module.css}` and `Deliverables.tsx`.
+
+The return-to-bottom control follows the reference's 500ms/scrollend reader
+sampling, immediate exact-bottom arrival, and 25px near-bottom tolerance.
+Unsampled reader input suspends automatic layout corrections. Explicit latest
+navigation clears pending samples and hides the control immediately, including
+while an older native history window is being replaced. rustX retains its one
+RAF layout writer, native reading anchors and attachment fences.
+
+The completed-turn changes card follows the single-file header, four-row fold,
+line counts, delayed hover preview and right-sidebar review placement. The card
+precedes declared deliveries and response actions, and respects Coding view.
+Data comes from rustX's attempt-bound recorder: private Git index/object
+snapshots plus first-edit whole-file captures; no Harness event or Host service
+is imported. Existing dirty changes are the baseline. File-tool captures cover
+ignored and non-repository files; repository snapshots also cover shell and
+child-agent edits. Unchanged endpoints produce no card. Records and comparisons
+last only as long as their native runtime, matching the reference's refusal to
+display a card whose source no longer exists.
+
+Native limits are 500 displayed files, 2 MiB per captured/read file side,
+100ms line comparison, and 30 seconds per bounded Git child. To fit rustX's
+1 MiB wire envelope, summaries additionally cap metadata at 96 KiB, and
+comparisons send three-context-line hunks capped at 128 KiB/2000 lines with an
+explicit truncation notice. Review uses rustX's existing DockKit and DiffBlock;
+these runtime-bound tabs are not restored as persisted file paths.
+
 ## Background task presentation
 
 Reference inspected read-only: local `../deepseek-harness` at immutable commit

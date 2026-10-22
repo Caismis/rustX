@@ -29,6 +29,7 @@ import { Message, Content } from './Message';
 import { messageContinuation, useMessageBlocks } from './message-blocks';
 import { AssistantMessage, UserMessage } from '../../presentation/agent/Message';
 import { TurnDeliveries } from './TurnDeliveries';
+import { TurnChanges } from './TurnChanges';
 import { descriptorTranscriptPosition, turnDeliveries } from '../../bindings/present';
 import { Tool } from './Tool';
 import { deferredToolDescriptors } from '../../bindings/deferred-tools';
@@ -111,13 +112,13 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
   const requestFeedback = useSystemChanges(snapshot, entries, streaming?.message_id, suppliedFeedback, descriptors);
   const deliveries = turnDeliveries(entries, deferredToolDescriptors(snapshot.message_descriptors ?? [], page, [], !!history?.window), page);
   const deliveredTurns = new Set<string>();
-  const deliveryTail = (key: string, before?: string) => {
+  const deliveryTail = (key: string, before?: string, owner?: {conversation_id:string;attempt_id?:string|null}) => {
     const turn = deliveries.get(key);
-    if (!turn || turn.owner.outcome === 'running' || turn.owner.outcome === 'incomplete_at_cut' || deliveredTurns.has(key)) return null;
-    const batches = before == null ? turn.batches : turn.batches.filter(batch => BigInt(batch.position) < BigInt(before));
-    if (!batches.length) return null;
+    if (turn?.owner.outcome === 'running' || turn?.owner.outcome === 'incomplete_at_cut' || deliveredTurns.has(key)) return null;
+    const batches = turn ? before == null ? turn.batches : turn.batches.filter(batch => BigInt(batch.position) < BigInt(before)) : [];
+    if (!batches.length && !owner?.attempt_id) return null;
     deliveredTurns.add(key);
-    return <TurnDeliveries conversationId={history?.page.source_cut?.read.conversation_id ?? snapshot.conversation_id} batches={batches}/>;
+    return <>{owner?.attempt_id && <TurnChanges conversationId={owner.conversation_id} attemptId={owner.attempt_id}/>} {!!batches.length && <TurnDeliveries conversationId={history?.page.source_cut?.read.conversation_id ?? snapshot.conversation_id} batches={batches}/>}</>;
   };
   const descriptorProcessSeats = new Map<string,string>();
   const loadedProcessOwners = new Set(entries.flatMap(entry=>entry.turn_process?[attemptOwnerKey(entry.turn_process)]:[]));
@@ -246,7 +247,7 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
   const descriptorResponse = (descriptor:RuntimeClientMessageDescriptor) => {
     const cursor = descriptorTranscriptPosition(descriptor, entries, page);
     return descriptor.completed_response && <div className={tailCss.root}>
-      {cursor != null && deliveryTail(attemptOwnerKey(descriptor.completed_response.origin), cursor)}<div className={tailCss.actions} data-clock="end" aria-label={tx('agent:turn-tail.completed-turn')} data-turn-tail={attemptOwnerKey(descriptor.completed_response.origin)}>
+      {cursor != null && deliveryTail(attemptOwnerKey(descriptor.completed_response.origin), cursor, descriptor.completed_response.origin)}<div className={tailCss.actions} data-clock="end" aria-label={tx('agent:turn-tail.completed-turn')} data-turn-tail={attemptOwnerKey(descriptor.completed_response.origin)}>
         {descriptor.completed_response.usage && <TurnUsage usage={descriptor.completed_response.usage} models={descriptor.completed_response.models??[]}/>}
         <MessageTime time={descriptor.completed_response.completed_at}/>
       </div></div>;
@@ -289,12 +290,12 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
           prefix={requestFeedback?.messages.get(node.streaming.message_id)} other={messageSegments({role:'assistant',id:node.streaming.message_id,content:[]}, node.streaming.blocks ?? [], tools, { streaming: true })}/></div>;
       }
       if (node.kind === 'process' && node.process.outcome === 'running') return null;
-      if (node.kind === 'tail') return <TurnTail key={node.key} text={node.text} response={node.response} forking={!!forking && attemptOwnerKey(forking.origin) === node.key} latest={node.response === latestResponse?.completed_response} onHistorical={onHistorical} disabled={historicalDisabled} lineageSwitchSafe={lineageSwitchSafe}>{deliveryTail(node.key, entries.find(entry => entry.completed_response === node.response)?.cursor)}</TurnTail>;
+      if (node.kind === 'tail') return <TurnTail key={node.key} text={node.text} response={node.response} forking={!!forking && attemptOwnerKey(forking.origin) === node.key} latest={node.response === latestResponse?.completed_response} onHistorical={onHistorical} disabled={historicalDisabled} lineageSwitchSafe={lineageSwitchSafe}>{deliveryTail(node.key, entries.find(entry => entry.completed_response === node.response)?.cursor, node.response.origin)}</TurnTail>;
       if (node.kind === 'process') return <div className={css.flowItem} data-chat-flow-kind="turn-process" key={node.key} data-chat-turn-owner={turnAnchor(node.process)} data-chat-anchor-key={entries.some(entry => entry.cursor === node.process.control_cursor) ? turnAnchor(node.process) : undefined}><TurnProcess id={node.key} open tools={node.process.tool_call_count} messages={node.process.message_count} outcome={node.process.outcome} start={node.process.started_at ?? undefined} end={node.process.ended_at ?? undefined}/>{requestFeedback?.attempts.get(attemptOwnerKey(node.process))}</div>;
       const entry = node.entry;
       if (entry.item.type === 'attempt_terminal') {
         const turn = entry.item.turn;
-        if (turn.outcome !== 'failed') return <div key={entryIdentity(entry)}>{deliveryTail(attemptOwnerKey(turn))}</div>;
+        if (turn.outcome !== 'failed') return <div key={entryIdentity(entry)}>{deliveryTail(attemptOwnerKey(turn), undefined, turn)}</div>;
         const failure = turn.failure;
         const error = failure?.type === 'runtime' ? failure.error : undefined;
         const code = failure?.type === 'model' ? failure.kind : error?.type;
@@ -304,7 +305,7 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
             : tx('agent:failure.unavailable');
         return <div key={entryIdentity(entry)} data-chat-anchor-key={entryIdentity(entry)} data-chat-turn-owner={turnAnchor(turn)}>
           <TurnError title={tx('agent:failure.turn-error')} message={message} code={code}/>
-          {deliveryTail(attemptOwnerKey(turn))}
+          {deliveryTail(attemptOwnerKey(turn), undefined, turn)}
         </div>;
       }
       const statuses = statusesAt(placement, { messageId: entry.item.type === 'message' ? entry.item.message.id : undefined, cursor: entry.cursor });

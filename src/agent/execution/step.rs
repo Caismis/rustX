@@ -191,6 +191,9 @@ impl<'a> AgentExecution<'a> {
             terminal.expect("the attempt must settle")
         };
         self.settle(&terminal);
+        if let Some(changes) = &self.workspace_changes {
+            changes.finish().await;
+        }
         self.emit_terminal(&terminal);
         let outcome = terminal.outcome();
         AgentExecutionResult {

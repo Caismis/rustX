@@ -36,6 +36,8 @@ interface MethodPolicy {
 }
 
 export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.freeze({
+  'conversation/changes': { effect: 'read', lane: 'observation' },
+  'conversation/changeDiff': { effect: 'read', lane: 'observation' },
   'session/switchNode': { effect: 'side_effecting' },
   'session/transcript': { effect: 'read' },
   'session/history': { effect: 'read' },

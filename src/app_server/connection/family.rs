@@ -68,6 +68,8 @@ impl Family<'_> {
             | Method::SessionBoundaries { target, .. }
             | Method::SessionCheckpoint { target, .. }
             | Method::ConversationContentRead { target, .. }
+            | Method::ConversationChanges { target, .. }
+            | Method::ConversationChangeDiff { target, .. }
             | Method::ConversationCheckpointPage { target, .. }
             | Method::ConversationCheckpointValueRead { target, .. }
             | Method::SessionSubscribe { target, .. }

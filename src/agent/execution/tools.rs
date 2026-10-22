@@ -375,6 +375,9 @@ impl AgentExecution<'_> {
         occurrences: Vec<crate::message::types::ToolCallOccurrenceRef>,
         preflight: Vec<PreflightOutcome>,
     ) -> Result<Vec<SettledCall>, CanonicalCommitError> {
+        if let Some(changes) = &self.workspace_changes {
+            changes.before_tools().await;
+        }
         // `None` is either "this composition has no Todo extension" or "the
         // list already has an open batch". Both mean the same thing to this
         // batch: it runs without a Todo writer, so a `todo` call (which a
@@ -1041,6 +1044,7 @@ impl AgentExecution<'_> {
             None => context,
         };
         let mut context = context;
+        context.workspace_changes = self.workspace_changes.clone();
         context.model_invocation = Some(self.request.model.primary());
         if let Some(goal) = self.tool_runtime.goal() {
             context.goal = Some(Box::new(crate::goal::GoalToolContext {

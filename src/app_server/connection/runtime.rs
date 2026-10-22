@@ -27,6 +27,26 @@ pub(super) async fn dispatch_runtime(
     observation_cancel: Option<crate::app_server::admission::ObservationControl>,
 ) -> Result<MethodResult, RpcError> {
     match method {
+        Method::ConversationChanges { attempt_id, .. } => Ok(MethodResult::WorkspaceChanges {
+            summary: authority
+                .workspace_changes()
+                .and_then(|records| records.summary(&attempt_id)),
+        }),
+        Method::ConversationChangeDiff {
+            attempt_id, index, ..
+        } => {
+            if index >= 500 {
+                return Err(domain(ErrorData::OperationFailed));
+            }
+            let comparison = match authority.workspace_changes() {
+                Some(records) => records
+                    .comparison(&attempt_id, index)
+                    .await
+                    .map_err(|_| domain(ErrorData::OperationFailed))?,
+                None => None,
+            };
+            Ok(MethodResult::WorkspaceChangeDiff { comparison })
+        }
         Method::ConfigurationGet { target } => {
             let projection = tokio::task::spawn_blocking(move || {
                 let view = configuration

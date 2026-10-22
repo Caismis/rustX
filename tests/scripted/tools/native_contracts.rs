@@ -1381,6 +1381,93 @@ async fn native_agent_loop_invocation_has_one_start_and_one_completion_in_order(
 }
 
 #[tokio::test]
+async fn workspace_changes_follow_native_write_and_edit_without_model_context() {
+    for (name, tool_id, arguments) in [
+        (
+            "write",
+            "tool-write",
+            serde_json::json!({"path":"changed.txt","content":"after\n"}),
+        ),
+        (
+            "edit",
+            "tool-edit",
+            serde_json::json!({"path":"changed.txt","oldText":"before","newText":"after"}),
+        ),
+    ] {
+        let fixture = common::native_fixture();
+        std::fs::write(
+            fixture.runtime.workspace().root().join("changed.txt"),
+            "before\n",
+        )
+        .unwrap();
+        let call = support::fake::ScriptedCall {
+            id: "call-change",
+            tool_id,
+            name,
+            arguments,
+        };
+        let model = support::fake::fake_model(native_tool_turn(&call));
+        let capability =
+            common::capability_lease(fixture.ordinary_registry.clone(), &fixture.runtime).await;
+        let (lease, coordinator) = capability.into_lease_and_coordinator();
+        let request = native_request(&model, fixture.runtime.conversation_id());
+        let attempt = request.attempt_id.clone();
+        let mut policy = support::default_execution_policy();
+        policy.workspace_changes = crate::workspace_changes::ChangeRecording::start(
+            attempt.clone(),
+            fixture.runtime.workspace().root().to_owned(),
+            Arc::clone(&fixture.runtime.workspace_changes),
+        );
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let result = AgentExecution::new(
+            request,
+            lease,
+            &cancellation,
+            policy,
+            native_context_runtime(&model),
+            &fixture.runtime,
+            rustx::agent::AttemptLifecycle::inert().with_pre_tool_policy(Arc::new(
+                crate::agent::lifecycle::ConfiguredApprovalPolicy::new(
+                    rustx::runtime::ApprovalMode::FullAccess,
+                ),
+            )),
+        )
+        .unwrap()
+        .run()
+        .await;
+        let audit = common::durable_agent_result(result, fixture.store.as_ref());
+        assert!(matches!(audit.outcome, AttemptOutcome::Completed { .. }));
+        assert_eq!(
+            std::fs::read_to_string(fixture.runtime.workspace().root().join("changed.txt"))
+                .unwrap(),
+            "after\n",
+            "{name} actually executed"
+        );
+        assert!(audit.messages().iter().any(|message| matches!(
+            message,
+            MessageBlock::Tool(tool) if tool.result.status == ToolExecutionStatus::Success
+        )));
+        let changes = fixture.runtime.workspace_changes.summary(&attempt).unwrap();
+        assert_eq!(changes.total, 1);
+        let diff = fixture
+            .runtime
+            .workspace_changes
+            .comparison(&attempt, 0)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(Some(diff.hunks[0].old_text.as_str()), Some("before\n"));
+        assert_eq!(Some(diff.hunks[0].new_text.as_str()), Some("after\n"));
+        assert_eq!(
+            audit.messages().len(),
+            4,
+            "recording adds no model-facing messages"
+        );
+        drop(coordinator);
+    }
+}
+
+#[tokio::test]
 async fn native_agent_loop_preflight_rejection_settles_without_starting_an_executor() {
     let fixture = common::native_fixture();
     let audit = run_native_script(

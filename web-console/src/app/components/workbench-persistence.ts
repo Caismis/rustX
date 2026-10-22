@@ -2,6 +2,7 @@
 /** Validated current-layout snapshots; undo history belongs to the live window. */
 import { EMPTY_HISTORY, type History } from '../../presentation/dockkit/engine/sequence';
 import type { LayoutState } from '../../presentation/dockkit/contract/types';
+import { applyOp } from '../../presentation/dockkit/engine/operations';
 export type SurfaceState = {layout:LayoutState;minted:number;history:History};
 
 /** Persistence namespace shared by scoped stores and startup discovery. */
@@ -111,7 +112,9 @@ export function readSidebarLayout(sessionId: string): SurfaceState | undefined {
  */
 export function writeSidebarLayout(sessionId: string, surface: SurfaceState): void {
   if (typeof localStorage === 'undefined') return
-  const saved = { bySession: { [sessionId]: { layout: surface.layout, minted: surface.minted } } }
+  let layout=surface.layout;
+  for (const tab of Object.values(layout.tabs)) if (tab.kind==='changes') layout=applyOp(layout,{type:'closeTab',tabId:tab.id}).state;
+  const saved = { bySession: { [sessionId]: { layout, minted: surface.minted } } }
   try { localStorage.setItem(`${sidebarPersistence}.${sessionId}`, JSON.stringify(saved)) }
   catch (error) { console.error('Sidebar layout persistence failed:', error) }
 }

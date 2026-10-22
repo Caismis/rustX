@@ -18,6 +18,9 @@
 @media (prefers-reduced-motion: reduce) { .actions { transition: none !important; } }
 .root { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .root > .actions { margin-top: 4px; }
+/* Runtime-bound cards can resolve to no DOM. Keep an empty tail's original
+   action-row spacing rather than adding the card-to-actions separation. */
+.root > .actions:only-child { margin-top: 0; }
 
 .actions[data-clock="start"] { margin-top: 0; }
 .actions[data-clock="start"] .time { padding-right: 12px; }

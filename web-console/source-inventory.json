@@ -1616,7 +1616,7 @@
     {
       "upstream": "packages/client/ui-chat/src/client/chat/ChatView.tsx",
       "destination": "web-console/src/presentation/layout/ChatViewport.tsx",
-      "treatment": "Rewritten Chat viewport with semantic reading anchors, explicit follow intent, browser-clamp attribution and a single RAF scroll commit. Runtime authority remains native rustX. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. PR #443 repair: detached active identity follows native start intervals, independent of anchor height; sole geometry/scroll owner retained. UI repair: Return to latest is the Harness ChatView toBottom control — a 34px floating chevron on the content column edge; the label stays the accessible name. PR #453 reading contract: finite native anchor-relative history windows and independent live-tail authority; the contiguous load-through model is removed. Navigation highlight repair: use the Harness reading line (20% of viewport height, capped at 96px) and select the rendered tail owner while following settled output. Keep reading highlights continuous across unowned gaps using the preceding native region, or the first loaded region before its start; exact navigation remains separate. Chat reading repair: upward native movement immediately releases follow; queued layout samples actual movement before writing, while explicit navigation supersedes earlier samples. Retain single frame ownership without sampling timers. Navigation ownership repair: the viewport retires the initiating native read intent synchronously on user scroll, replacement and unmount; native publication and the final layout frame are independently fenced. Compaction alignment: DSH command/checkpoint marker in the Chat reading flow; summary-only disclosure and Between Turns presentation, with native retention and execution ownership unchanged. Compaction continuation: explicit latest-reading intent survives delayed native backfill until user scrolling or explicit history/Turn navigation. Message Regenerate: retain the Session viewport across native attachment replacement; reset reading intent through the same single RAF owner without destroying the surface.",
+      "treatment": "Rewritten Chat viewport with semantic reading anchors, explicit follow intent, browser-clamp attribution and a single RAF scroll commit. Runtime authority remains native rustX. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. PR #443 repair: detached active identity follows native start intervals, independent of anchor height; sole geometry/scroll owner retained. UI repair: Return to latest is the Harness ChatView toBottom control — a 34px floating chevron on the content column edge; the label stays the accessible name. PR #453 reading contract: finite native anchor-relative history windows and independent live-tail authority; the contiguous load-through model is removed. Navigation highlight repair: use the Harness reading line (20% of viewport height, capped at 96px) and select the rendered tail owner while following settled output. Keep reading highlights continuous across unowned gaps using the preceding native region, or the first loaded region before its start; exact navigation remains separate. Chat reading repair: native reader movement pauses layout corrections until scrollend or the 500ms sampling interval; bottom arrivals use the upstream 25px tolerance, while explicit navigation supersedes earlier samples. Retain single frame ownership for layout corrections while sampling reader intent separately. Navigation ownership repair: the viewport retires the initiating native read intent synchronously on user scroll, replacement and unmount; native publication and the final layout frame are independently fenced. Compaction alignment: DSH command/checkpoint marker in the Chat reading flow; summary-only disclosure and Between Turns presentation, with native retention and execution ownership unchanged. Compaction continuation: explicit latest-reading intent survives delayed native backfill until user scrolling or explicit history/Turn navigation. Message Regenerate: retain the Session viewport across native attachment replacement; reset reading intent through the same single RAF owner without destroying the surface.",
       "upstream_sha256": "5f6ba885fc60f79cefd212f8b0cb89ceaf72115d971db771fa40c190df89f414",
       "retained_dependencies": [
         "../primitives/icons/index.tsx",
@@ -1630,7 +1630,7 @@
         "Harness attachment identity and storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "78166869ac45179f044c04e3f3fd62b5de1a58afaa9f756b1898302d342f1411",
+      "local_sha256": "eb5289fc21bdb29db4b4133c3e23bb9edddfffd8d2908efd503a7a44a6bffbf9",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/ChatView.tsx",
@@ -1667,6 +1667,18 @@
           "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
           "upstream_sha256": "3b1394c43c1c73c17e1a087e40382e5445623fbea310793a2e8d2f16d3dbf41e",
           "treatment": "Adapted reading-line placement, continuous gap selection, first-loaded-turn and tail-follow active-turn policy; rustX native identities and sole RAF scroll coordinator retained."
+        },
+        {
+          "upstream": "packages/client/ui-chat/src/client/chat/use-chat-reading.ts",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "d124bc0c8f5c1626c9e9d049a030a2f5849a7581f2ff4b8d74d1897f7a5b8f90",
+          "treatment": "Reader samples at 500ms or scrollend; exact bottom arrival is immediate and 25px near-bottom tolerance avoids noisy floating controls."
+        },
+        {
+          "upstream": "packages/client/ui-chat/src/client/chat/use-scroll-follow.ts",
+          "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+          "upstream_sha256": "fd0734320e326292e614991476c1ffe492a40b90e44534b47a0368528a9415f0",
+          "treatment": "Reader samples at 500ms or scrollend; exact bottom arrival is immediate and 25px near-bottom tolerance avoids noisy floating controls."
         }
       ]
     },
@@ -3151,7 +3163,7 @@
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.module.css",
       "destination": "web-console/src/app/agent/TurnTail.module.css",
-      "treatment": "Adapted presentation geometry and interaction hierarchy over native rustX completed-response and Context projections; existing Modal and Tooltip handle focus/dismissal. Issue #406: current App Server v27 type imports / TurnTail owner imports; upstream presentation otherwise retained. UI/UX alignment: stat pill and modal metric rules removed with the TurnUsagePanel port. Turn delivery alignment: one settled native Turn selection after final prose and before actions; original delivery addresses and native observation ownership retained.",
+      "treatment": "Adapted presentation geometry and interaction hierarchy over native rustX completed-response and Context projections; existing Modal and Tooltip handle focus/dismissal. Issue #406: current App Server v27 type imports / TurnTail owner imports; upstream presentation otherwise retained. UI/UX alignment: stat pill and modal metric rules removed with the TurnUsagePanel port. Turn delivery alignment: one settled native Turn selection after final prose and before actions; original delivery addresses and native observation ownership retained. Completed-turn workspace changes: preserve the existing action-row spacing when runtime-bound cards resolve to no DOM.",
       "upstream_sha256": "ee0015510141e0a14b9a7c10a7acecede962a2d6480076f2638842bf1875ac05",
       "additional_sources": [
         {
@@ -3186,7 +3198,7 @@
         "Cordis/plugin slots"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "b65828eb1c810bb765475a34631efc20f6528cbde455c094c6839fe29f0578d0"
+      "local_sha256": "d063052f86103e359eb4310669c6ad12cfcb764870ca6034f4bf6aaf29fe8c0f"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
@@ -3818,7 +3830,7 @@
           "upstream_sha256": "4840dc1d554a4f2457b51339e9195041b6230822c72fc5b10c8f3c2aad971cdb"
         }
       ],
-      "local_sha256": "3554cc48132241ca798889eccb69b6c0e0ad5eb62b414c01920078c2d264f8ca"
+      "local_sha256": "ab60ef389711e4d6eb8e7e1fa526bf0ec7b20c0a5df118eb1cde5f64dbfa2327"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/locales.ts",
@@ -4270,6 +4282,8 @@
         "../../presentation/right-panel/Workbench.module.css",
         "../../workspaces/host",
         "../../workspaces/workbench",
+        "../changes-review",
+        "./ChangesReview",
         "./WorkbenchFiles",
         "./WorkbenchIcons",
         "./WorkbenchTerminal",
@@ -4280,7 +4294,7 @@
         "Harness slot registry",
         "Harness terminal Host and Session store"
       ],
-      "local_sha256": "283d1e5103b3353b54e7b64b5cd0485e9843dd549c123db3d714ead0de0bdda6",
+      "local_sha256": "15c07a4bb8bad3fd3e35834531d6dfa796bf20ef4f9b85c8330841e286bb1783",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-sidebar-terminal/src/client/TerminalGuide.tsx",
@@ -5574,9 +5588,10 @@
       ],
       "retained_dependencies": [
         "../../presentation/dockkit/contract/types",
+        "../../presentation/dockkit/engine/operations",
         "../../presentation/dockkit/engine/sequence"
       ],
-      "local_sha256": "4837f5a4eaecc2114557c3299dc00dd8441078722f646462e9b6f26017dbe41c"
+      "local_sha256": "d70c12572e8c2e95e25a19bb2113449c84c99d76483f0c210b72df78e1e74172"
     },
     {
       "upstream": "packages/client/ui-dockkit/tests/apply.client.spec.ts",
@@ -7130,6 +7145,45 @@
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
       "local_sha256": "0d3d24ae9f54e8b4eb9c06dab6ae10d5ef5920f1b7ecd5f01977052fb5af003e"
+    },
+    {
+      "upstream": "packages/client/ui-deliverables/src/client/ChangedFiles.tsx",
+      "destination": "web-console/src/presentation/attachments/ChangedFiles.tsx",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "563e61f5bc3317c96eda89227ccac506ee8d68795a62f004f896df2416382891",
+      "local_sha256": "806ebb5d077957d8afd6543bc9f22979a84b55fd9b437f41be9325c526115c00",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "classification": "A",
+      "treatment": "Adapted completed-turn single/multiple changed-files card, four-row fold, counts and deferred hover preview. RustX native snapshots, immutable comparisons and DockKit review tabs own data and navigation.",
+      "retained_dependencies": [
+        "../../locale/react",
+        "../primitives/FileTypeIcon",
+        "../primitives/HoverCard",
+        "../primitives/icons",
+        "./ChangedFiles.module.css",
+        "react"
+      ],
+      "excluded_dependencies": [
+        "Harness Session events and Host services",
+        "Cordis injection and slot lifecycle",
+        "Harness review/tab and diff-store authority"
+      ]
+    },
+    {
+      "upstream": "packages/client/ui-deliverables/src/client/ChangedFiles.module.css",
+      "destination": "web-console/src/presentation/attachments/ChangedFiles.module.css",
+      "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "upstream_sha256": "9195a2c60f3987266176a4b1d877ba022bb2b6c1bd9c8fabfc1f41f6277f1e67",
+      "local_sha256": "970d77257d9ab143bf5be5c2128e94e0010c8f755316a5a925004e57252f3230",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "classification": "A",
+      "treatment": "Adapted completed-turn single/multiple changed-files card, four-row fold, counts and deferred hover preview. RustX native snapshots, immutable comparisons and DockKit review tabs own data and navigation.",
+      "retained_dependencies": [],
+      "excluded_dependencies": [
+        "Harness Session events and Host services",
+        "Cordis injection and slot lifecycle",
+        "Harness review/tab and diff-store authority"
+      ]
     }
   ],
   "inspected_only": [

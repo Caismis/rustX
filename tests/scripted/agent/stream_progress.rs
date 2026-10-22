@@ -183,6 +183,7 @@ async fn make_execution(setup: ExecutionSetup<'_>) -> AgentExecution<'_> {
         capability.into_lease(),
         cancellation,
         crate::agent::execution::AgentExecutionRuntimePolicy {
+            workspace_changes: None,
             subagent_context: None,
             workflow_output: None,
             model_timeout_policy: policy,

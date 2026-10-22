@@ -667,6 +667,7 @@ explicitly rejected as an invalid request before any action occurs.
 | `session/attach`, `session/detach` | Load/reuse a runtime and acquire/release its external control attachment |
 | `session/switchNode` | Switch to a selected branch; manager owns retirement and composition |
 | `session/checkpoint`, `session/subscribe`, `session/transcript`, `session/turns`, `session/boundaries` | Authoritative projection, bounded replay, cut-bound transcript windows/native Attempt outline and lineage-specific user-message pages |
+| `conversation/changes`, `conversation/changeDiff` | Read-only, attachment-bound completed-Attempt workspace summaries and immutable per-file comparison hunks |
 | `turn/start`, `turn/steer`, `turn/cancel` | Native inbound and attempt-cancellation owners; acceptance is not terminal execution |
 | `interaction/respond`, `interaction/cancel` | Originating runtime/coordinator, including routed child interactions |
 | `session/settings` | Durable resolved Session selection; model mutation uses `session/setModel` |

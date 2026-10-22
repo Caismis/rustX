@@ -211,6 +211,8 @@ export class Server {
     if (handler) return handler(request);
     let result: MethodResult;
     switch (request.method) {
+      case 'conversation/changes': result = { type:'workspace_changes',summary:null }; break;
+      case 'conversation/changeDiff': result = { type:'workspace_change_diff',comparison:null }; break;
       case 'initialize': result = { type: 'initialized', authority_id: this.authorityId, protocol_version: this.version, capabilities: this.capabilities }; break;
       case 'server/info': result = { type: 'server_info', capabilities: this.capabilities }; break;
       case 'session/summary': result = { type: 'session_summary', summary: this.summary(request.params.session_id) }; break;

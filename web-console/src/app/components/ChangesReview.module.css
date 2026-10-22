@@ -1,0 +1,6 @@
+.root { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
+.selector { display: flex; flex-direction: column; gap: 6px; padding: 12px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
+.selector select { width: 100%; min-width: 0; border: 1px solid var(--dsw-alias-border-l3); border-radius: 8px; background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); padding: 8px; }
+.body { flex: 1; min-height: 0; overflow: auto; padding: 0 12px 12px; }
+.comparison { min-width: 0; color: var(--dsw-alias-label-secondary); font-size: 12px; }
+.path { overflow-wrap: anywhere; }

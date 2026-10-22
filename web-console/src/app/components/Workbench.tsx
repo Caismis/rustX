@@ -15,9 +15,11 @@ import { dockPaneIds, findTabPane, getPane } from '../../presentation/dockkit/en
 import type { PaneId, TabId, TabRecord } from '../../presentation/dockkit/contract/types';
 import type { DockIntents } from '../../presentation/dockkit/contract/adapter';
 import css from '../../presentation/right-panel/Workbench.module.css';
+import { ChangesReview } from './ChangesReview';
+import type { ChangesReviewRequest } from '../changes-review';
 const TerminalView = lazy(() => import('./WorkbenchTerminal'));
 const guideTab = (id: TabId): TabRecord => ({id,kind:'start',contentId:`start:${id}`,title:''});
-export interface WorkbenchHandle { openFile(path: string, line?: number): Promise<boolean>; openAgent(id: string, title: string): void }
+export interface WorkbenchHandle { openFile(path: string, line?: number): Promise<boolean>; openAgent(id: string, title: string): void; openChanges(request:ChangesReviewRequest):void }
 export function Workbench({ renderAgent, fileRef, host, scope, target, visible, floatingVisible, fullscreen, toggleFullscreen, closePanel }: {
   renderAgent?: (id: string, visible: boolean) => ReactNode; fileRef?: Ref<WorkbenchHandle>; host: ProductHostWorkspaces; scope?: WorkspaceAuthorityScope; target?: WorkbenchTarget; visible: boolean; floatingVisible: boolean; fullscreen: boolean; toggleFullscreen: () => void; closePanel: () => void;
 }) {
@@ -32,6 +34,7 @@ export function Workbench({ renderAgent, fileRef, host, scope, target, visible, 
     writeSidebarLayout(storageKey,{layout:state,minted,history:{entries:[],cursor:0}});
   },[state,storageKey]);
   const views = useRef(new Map<TabId,FileTabView>());
+  const reviews = useRef(new Map<string,ChangesReviewRequest>());
   const navigation = useRef(0);
   const viewFor = (id:TabId) => { let view=views.current.get(id); if(!view) {view=fileTabView();views.current.set(id,view);}return view; };
   const [terminals,setTerminals] = useState<WorkbenchTerminal[]>([]), [shells,setShells] = useState<string[]>([]);
@@ -52,7 +55,12 @@ export function Workbench({ renderAgent, fileRef, host, scope, target, visible, 
     dock.openContent({paneId,kind:tab.kind,contentId,title:tab.title ?? tab.path ?? ''});
     if(active && active.kind==='start') dock.closeTab(active.id);
   };
-  useImperativeHandle(fileRef, () => ({ openAgent: (id, title) => open(dock.activeDockPaneId(), { kind: 'subagent', id, title }), openFile: async (path, line) => {
+  useImperativeHandle(fileRef, () => ({ openChanges: request => {
+    const id = `changes:${request.target.attachment_id}:${request.attemptId}`;
+    reviews.current.set(id, request);
+    open(dock.activeDockPaneId(), {kind:'changes',id,title:tx('artifacts:changes.title',{count:request.summary.total})});
+    setFileFocus(value=>value+1);
+  }, openAgent: (id, title) => open(dock.activeDockPaneId(), { kind: 'subagent', id, title }), openFile: async (path, line) => {
     const ticket = ++navigation.current, signal = lifetime.current?.signal;
     setError('');
     try {
@@ -130,18 +138,18 @@ export function Workbench({ renderAgent, fileRef, host, scope, target, visible, 
     window.addEventListener('keydown',key,true);return()=>window.removeEventListener('keydown',key,true);
   });
   const isMac=/Mac/.test(navigator.platform);
-  const title=(tab:TabRecord)=>tab.kind==='subagent'?tab.title:tab.kind==='file'?tab.title.split('/').at(-1):tab.kind==='terminal'?terminals.find(t=>t.id===tab.contentId)?.shell.split('/').at(-1) ?? tab.title:tx(tab.kind==='start'?'artifacts:workbench.start':'artifacts:workbench.file-tab');
+  const title=(tab:TabRecord)=>tab.kind==='changes'||tab.kind==='subagent'?tab.title:tab.kind==='file'?tab.title.split('/').at(-1):tab.kind==='terminal'?terminals.find(t=>t.id===tab.contentId)?.shell.split('/').at(-1) ?? tab.title:tx(tab.kind==='start'?'artifacts:workbench.start':'artifacts:workbench.file-tab');
   const body=(tab:TabRecord)=>{
     const pane=findTabPane(state,tab.id);
     return <div className={css.body} onKeyDown={e=>{if(tab.kind!=='terminal'&&e.key==='Escape'&&!e.defaultPrevented){e.preventDefault();if(fullscreen)toggleFullscreen();else closePanel();}}}>
-    {tab.kind==='subagent'?renderAgent?.(tab.contentId, pane.activeTabId === tab.id && (pane.host === 'float' ? floatingVisible : visible)):tab.kind==='start'? <div className={css.guide}>
+    {tab.kind==='changes' ? (reviews.current.has(tab.contentId) && <ChangesReview request={reviews.current.get(tab.contentId)!} visible={pane.activeTabId===tab.id && (pane.host==='float'?floatingVisible:visible)}/>) : tab.kind==='subagent'?renderAgent?.(tab.contentId, pane.activeTabId === tab.id && (pane.host === 'float' ? floatingVisible : visible)):tab.kind==='start'? <div className={css.guide}>
         <span className={css.hero}><CompassGlyph size={56}/></span>
         <button type="button" className={css.entry} disabled={!available} aria-keyshortcuts={isMac ? 'Alt+Meta+P' : 'Alt+Control+P'} onClick={() => open(pane.id, { kind: 'files' })}><span className={css.entryIcon}><GuideArtworkFiles size={26}/></span><span className={css.entryText}><span className={css.entryTitle}>{tx('artifacts:workbench.files')}</span><span className={css.entryDescription}>{tx('artifacts:workbench.files-description')}</span></span><ShortcutKeys keys={isMac ? ['⌥', '⌘', 'P'] : ['Alt', 'Ctrl', 'P']}/></button>
         <div className={`${css.entry} ${css.terminalEntry}`}><button type="button" className={css.launch} aria-label={tx('artifacts:workbench.new-terminal')} aria-keyshortcuts="Control+`" disabled={!available || busy || !shell} onClick={() => void create(pane.id)}/><span className={css.entryIcon}><PluginArtworkTerminal size={26}/></span><span className={css.entryText}><span className={css.titleRow}><span className={css.entryTitle}>{tx('artifacts:workbench.new-terminal')}</span><Menu open={menu === pane.id} autoFocus align="end" items={shells.map(s => ({ id: s, label: s.split('/').at(-1)! }))} selectedId={shell} onClose={() => setMenu(undefined)} onSelect={s => { setShell(s); setMenu(undefined); void create(pane.id, s); }} anchor={<button type="button" className={css.shellTrigger} disabled={busy || !shells.length} aria-label={tx('artifacts:workbench.shell')} aria-haspopup="menu" aria-expanded={menu === pane.id} onClick={() => setMenu(menu === pane.id ? undefined : pane.id)}><IconChevronDownOutline14/></button>}/></span><span className={css.entryDescription}>{tx('artifacts:workbench.terminal-description')}</span></span><ShortcutKeys keys={[isMac ? '⌃' : 'Ctrl', '`']}/></div>
       </div> :tab.kind==='files'?<WorkspaceFiles call={call} view={viewFor(tab.id)} onOpen={path=>open(pane.id,{kind:'file',path})}/>:tab.kind==='file'?<WorkspaceFile key={`${tab.id}:${viewFor(tab.id).focusRevision ?? 0}`} onOpen={path=>open(pane.id,{kind:'file',path})} path={tab.title} call={call} view={viewFor(tab.id)}/>:<Suspense fallback={<p>{tx('artifacts:workbench.loading')}</p>}><TerminalView id={tab.contentId} call={call}/></Suspense>}
     </div>;
   };
-  const usesWorkspaceTools = Object.values(state.tabs).some(tab => tab.kind !== 'subagent' && findTabPane(state, tab.id).activeTabId === tab.id);
+  const usesWorkspaceTools = Object.values(state.tabs).some(tab => !['subagent','changes'].includes(tab.kind) && findTabPane(state, tab.id).activeTabId === tab.id);
   return <div className={css.root} hidden={!visible && (!floatingVisible || !state.floats.length)} data-workbench>
     {error&&<p role="alert" className={css.notice}>{error}</p>}
     {!available&&usesWorkspaceTools&&<p className={css.notice}>{tx('artifacts:workbench.unavailable')}</p>}

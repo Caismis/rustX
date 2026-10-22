@@ -680,6 +680,21 @@ export type Request1 =
       };
     }
   | {
+      method: 'conversation/changes';
+      params: {
+        target: AttachmentTarget;
+        attempt_id: AttemptId;
+      };
+    }
+  | {
+      method: 'conversation/changeDiff';
+      params: {
+        target: AttachmentTarget;
+        attempt_id: AttemptId;
+        index: number;
+      };
+    }
+  | {
       method: 'conversation/contentRead';
       params: {
         target: AttachmentTarget;
@@ -1861,6 +1876,14 @@ export type Response = Success | Failure;
  * via the `definition` "MethodResult".
  */
 export type MethodResult =
+  | {
+      summary?: ChangesSummary | null;
+      type: 'workspace_changes';
+    }
+  | {
+      comparison?: FileComparison | null;
+      type: 'workspace_change_diff';
+    }
   | {
       file: SessionFileReference;
       data: string;
@@ -8289,6 +8312,59 @@ export interface Success {
   jsonrpc: JsonRpcVersion;
   id: AppServerRequestId;
   result: MethodResult;
+}
+/**
+ * Bounded paths and counts; whole file content is read only on demand.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ChangesSummary".
+ */
+export interface ChangesSummary {
+  files: ChangedFile[];
+  total: number;
+  added: number;
+  deleted: number;
+}
+/**
+ * One file's actual net change during an attempt.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ChangedFile".
+ */
+export interface ChangedFile {
+  /**
+   * Absolute resolved Host path; never accepted from a comparison request.
+   */
+  path: string;
+  display: string;
+  added: number;
+  deleted: number;
+  binary: boolean;
+  oversized: boolean;
+}
+/**
+ * An immutable, bounded comparison of a recorded file's two endpoints.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "FileComparison".
+ */
+export interface FileComparison {
+  hunks: ComparisonHunk[];
+  binary: boolean;
+  oversized: boolean;
+  truncated: boolean;
+}
+/**
+ * Three lines of shared context around one group of edits.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ComparisonHunk".
+ */
+export interface ComparisonHunk {
+  old_start: number;
+  new_start: number;
+  old_text: string;
+  new_text: string;
 }
 /**
  * An explicit delivery fact. Bytes and the leaf inode remain mutable.
