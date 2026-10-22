@@ -1,7 +1,8 @@
 //! Bounded canonical named Agent discovery. Project overrides user as a whole resource.
 use super::config::AgentProfileDocument;
 use crate::runtime::resources::{
-    ProjectContextFile, RuntimeResourceLoadError, validate_project_resource_path,
+    ProjectContextFile, RuntimeResourceLoadError, strip_instruction_bom,
+    validate_project_resource_path,
 };
 use crate::runtime::subagent::{AgentCatalog, NamedAgentDefinition, SubagentName};
 use serde::Serialize;
@@ -51,7 +52,7 @@ pub(crate) fn load_profile_files(
             })?;
             Ok(ProjectContextFile {
                 path: path.clone(),
-                content,
+                content: strip_instruction_bom(&content).to_owned(),
             })
         })
         .collect()
@@ -167,7 +168,7 @@ pub(crate) fn load_authorized(
                 let content = String::from_utf8(bytes).map_err(|e| error(e.to_string()))?;
                 files.push(ProjectContextFile {
                     path: resolved,
-                    content,
+                    content: strip_instruction_bom(&content).to_owned(),
                 });
             }
             let profile = crate::runtime::agent_profile::AgentProfile::from_document(

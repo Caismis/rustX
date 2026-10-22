@@ -192,7 +192,10 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
         .expect("initial product");
     assert_eq!(
         product.runtime().runtime_resources().project_instructions(),
-        Some("old project instructions")
+        Some(format!(
+            "Project-specific instructions and guidelines:\n\n<project_instructions path=\"{}\">\nold project instructions\n</project_instructions>",
+            startup.workspace.join("AGENTS.md").display()
+        ).as_str())
     );
     assert_eq!(
         product.runtime().model_view().configured.model.to_string(),
@@ -250,7 +253,10 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
     let runtime = resumed.runtime();
     assert_eq!(
         runtime.runtime_resources().project_instructions(),
-        Some("new project instructions"),
+        Some(format!(
+            "Project-specific instructions and guidelines:\n\n<project_instructions path=\"{}\">\nnew project instructions\n</project_instructions>",
+            startup.workspace.join("AGENTS.md").display()
+        ).as_str()),
         "cold resume independently discovers current project resources"
     );
     assert_eq!(

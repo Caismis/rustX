@@ -962,7 +962,7 @@ async fn a_normal_streamed_turn_settles_once_on_every_protocol() {
     }
 }
 
-/// Built-in guidance, authored Agent instructions and a real AGENTS.md cross
+/// Built-in guidance, Agent instructions, global, workspace and explicit files cross
 /// every provider boundary in the same order and survive frozen reconstruction.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn default_system_prompt_layers_agent_and_project_instructions_on_every_protocol() {
@@ -986,8 +986,23 @@ async fn default_system_prompt_layers_agent_and_project_instructions_on_every_pr
         let root = tempfile::tempdir().unwrap();
         let workspace = root.path().join("workspace");
         std::fs::create_dir_all(&workspace).unwrap();
+        let global_directory = root.path().join(".test-host/rustx/.agents");
+        std::fs::create_dir_all(&global_directory).unwrap();
+        let global = "Global guidance: show the validation evidence.";
+        std::fs::write(
+            global_directory.join("AGENTS.md"),
+            format!("\u{feff}{global}"),
+        )
+        .unwrap();
         let project = "Project guidance: preserve the public API.";
-        std::fs::write(workspace.join("AGENTS.md"), project).unwrap();
+        std::fs::write(workspace.join("AGENTS.md"), format!("\u{feff}{project}")).unwrap();
+        let explicit = "Explicit guidance: prefer focused changes.";
+        std::fs::write(workspace.join("extra.md"), format!("\u{feff}{explicit}")).unwrap();
+        std::fs::write(
+            workspace.join("rustx.toml"),
+            "[agent.agents_md]\nfiles = ['extra.md']\n",
+        )
+        .unwrap();
         let instructions = "Agent guidance: explain the evidence for changes.";
         let setup = Setup {
             instructions: Some(instructions.to_owned()),
@@ -1006,15 +1021,25 @@ async fn default_system_prompt_layers_agent_and_project_instructions_on_every_pr
             "Current working directory: {}",
             workspace.canonicalize().unwrap().display()
         )));
-        assert!(prompt.ends_with(&format!("\n\n{instructions}\n\n{project}")));
+        assert!(prompt.ends_with(&format!(
+            "\n\n{instructions}\n\nProject-specific instructions and guidelines:\n\n<project_instructions path=\"{}\">\n{global}\n</project_instructions>\n\n<project_instructions path=\"{}\">\n{project}\n</project_instructions>\n\n<project_instructions path=\"{}\">\n{explicit}\n</project_instructions>",
+            global_directory.canonicalize().unwrap().join("AGENTS.md").display(),
+            workspace.canonicalize().unwrap().join("AGENTS.md").display(),
+            workspace.canonicalize().unwrap().join("extra.md").display()
+        )));
         let snapshots = driver.request_history().page(None, 32).unwrap().snapshots;
         assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].effective_system_prompt, prompt);
+        std::fs::write(global_directory.join("AGENTS.md"), "Later global edit").unwrap();
+        std::fs::write(workspace.join("AGENTS.md"), "Later workspace edit").unwrap();
+        std::fs::write(workspace.join("extra.md"), "Later explicit edit").unwrap();
         let reconstructed = driver.reconstruct_request(&snapshots[0].identity).unwrap();
         assert_eq!(reconstructed.effective_system_prompt, prompt);
         assert!(driver.canonical_history().iter().all(|message| {
             let json = serde_json::to_string(message).unwrap();
-            !json.contains(instructions) && !json.contains(project)
+            ![instructions, global, project, explicit]
+                .iter()
+                .any(|text| json.contains(text))
         }));
         emulator.finish().await;
     }

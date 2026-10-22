@@ -953,9 +953,10 @@ async fn agent_and_project_instructions_extend_default_system_authority() {
         .expect("delegated inbound");
     let _ = await_settled_ledger(&runtime, 0).await;
     let expected = format!(
-        "{}\n\nCurrent working directory: {}\n\n{persona}\n\n{project}",
+        "{}\n\nCurrent working directory: {}\n\n{persona}\n\nProject-specific instructions and guidelines:\n\n<project_instructions path=\"{}\">\n{project}\n</project_instructions>",
         crate::context::DEFAULT_SYSTEM_PROMPT,
-        runtime.tool_runtime().workspace().root().display()
+        runtime.tool_runtime().workspace().root().display(),
+        dir.path().join("workspace/AGENTS.md").display()
     );
     assert_eq!(model.requests()[0].effective_system_prompt, expected);
     let snapshots = request_snapshots(&runtime.request_history());

@@ -318,9 +318,28 @@ complete arrays, default empty. Their dispatcher capabilities follow admission
 of those selections. Definition existence never selects a resource.
 
 `agents_md.inherit` defaults true and `files` defaults empty inside its winning
-object. Files are resolved by the native resource owner, captured with the
-generation, and ordered as authored. Root has no child timeout field; it
-belongs to named profiles.
+object. Automatic instruction discovery loads one global file from
+`~/rustx/.agents/`, then one file from the resolved Workspace root. In each
+directory the first regular file wins in this order: `AGENTS.override.md`,
+`AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`, `CLAUDE.MD`. The global resource directory
+stays bound to the User home even with an explicit `--config`. Workspace
+ancestors are not searched, and coincident global and Workspace paths contribute
+only once.
+
+Explicit `files` are appended in authored order. Setting `inherit = false`
+excludes both automatically discovered scopes while retaining explicit files.
+All instruction files must be UTF-8; one optional leading BOM is removed.
+Each nonempty file is rendered in the System Prompt as
+`<project_instructions path="/absolute/source/path">` followed by its content
+and `</project_instructions>`. Source paths are escaped for the attribute;
+file contents are preserved after BOM removal.
+
+Files are resolved by the native resource owner and captured with the
+generation. Source edits affect later configuration captures; an admitted
+request and its reconstructed history retain the original content and source
+markers. Named children inherit the parent generation's frozen automatic chain
+according to their own `agents_md` policy, without rediscovering the filesystem.
+Root has no child timeout field; it belongs to named profiles.
 
 ### Plugins
 

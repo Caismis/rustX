@@ -66,6 +66,11 @@ pub struct ProjectContextFile {
     pub content: String,
 }
 
+/// All instruction readers and capture verification remove exactly one UTF-8 BOM.
+pub(crate) fn strip_instruction_bom(text: &str) -> &str {
+    text.strip_prefix('\u{feff}').unwrap_or(text)
+}
+
 /// Inert canonical Managed Python sources frozen with the full generation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ManagedPythonCatalog {
@@ -940,17 +945,19 @@ impl core::fmt::Display for RuntimeResourceLoadError {
 
 impl std::error::Error for RuntimeResourceLoadError {}
 
-/// Loads project context only from the resolved workspace boundary.
-/// It contributes at most one file using first-match precedence:
+/// Loads global instructions followed by instructions at the workspace boundary.
+/// Each directory contributes at most one file using first-match precedence:
 /// `AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`, `CLAUDE.MD`.
+/// The global directory is the fixed User resource root, independent of `--config`.
 /// Unrelated ancestor instructions are outside this workspace's authority.
 ///
 /// # Errors
 ///
-/// Returns a bounded diagnostic when the workspace cannot be canonicalized,
+/// Returns a bounded diagnostic when an existing directory cannot be canonicalized,
 /// a candidate cannot be inspected/read, or selected content is not UTF-8.
 pub fn load_project_context_files(
     workspace: &Path,
+    user_directory: &Path,
 ) -> Result<Vec<ProjectContextFile>, RuntimeResourceLoadError> {
     let workspace = std::fs::canonicalize(workspace).map_err(|error| {
         RuntimeResourceLoadError::new(format!(
@@ -958,9 +965,24 @@ pub fn load_project_context_files(
             workspace.display()
         ))
     })?;
-    let files = load_context_file_from_directory(&workspace)?
-        .into_iter()
-        .collect();
+    let user_directory = match std::fs::canonicalize(user_directory) {
+        Ok(path) => Some(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(RuntimeResourceLoadError::new(format!(
+                "cannot canonicalize global instruction directory {}: {error}",
+                user_directory.display()
+            )));
+        }
+    };
+    let mut files: Vec<ProjectContextFile> = Vec::new();
+    for directory in user_directory.iter().chain(std::iter::once(&workspace)) {
+        if let Some(file) = load_context_file_from_directory(directory)?
+            && !files.iter().any(|existing| existing.path == file.path)
+        {
+            files.push(file);
+        }
+    }
     Ok(files)
 }
 
@@ -1031,16 +1053,14 @@ fn load_context_file_from_directory(
             ))
             .at(&path, "projectInstructions")
         })?;
-        let mut content = String::from_utf8(bytes).map_err(|error| {
+        let content = String::from_utf8(bytes).map_err(|error| {
             RuntimeResourceLoadError::new(format!(
                 "project context file {} is not UTF-8: {error}",
                 path.display()
             ))
             .at(&path, "projectInstructions")
         })?;
-        if let Some(without_bom) = content.strip_prefix('\u{feff}') {
-            content = without_bom.to_owned();
-        }
+        let content = strip_instruction_bom(&content).to_owned();
         return Ok(Some(ProjectContextFile { path, content }));
     }
     Ok(None)
@@ -1049,10 +1069,27 @@ fn load_context_file_from_directory(
 fn concatenate_project_instructions(files: &[ProjectContextFile]) -> Option<String> {
     let parts = files
         .iter()
-        .map(|file| file.content.as_str())
-        .filter(|content| !content.trim().is_empty())
+        .filter(|file| !file.content.trim().is_empty())
+        .map(|file| {
+            let path = file
+                .path
+                .to_string_lossy()
+                .replace('&', "&amp;")
+                .replace('"', "&quot;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;");
+            format!(
+                "<project_instructions path=\"{path}\">\n{}\n</project_instructions>",
+                file.content
+            )
+        })
         .collect::<Vec<_>>();
-    (!parts.is_empty()).then(|| parts.join("\n\n"))
+    (!parts.is_empty()).then(|| {
+        format!(
+            "Project-specific instructions and guidelines:\n\n{}",
+            parts.join("\n\n")
+        )
+    })
 }
 
 #[cfg(test)]
@@ -1060,7 +1097,7 @@ mod tests {
     use super::{concatenate_project_instructions, load_project_context_files};
 
     #[test]
-    fn project_context_order_is_root_to_leaf_on_canonical_paths() {
+    fn project_context_stays_inside_workspace_boundary() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let root = directory.path().join("root");
         let middle = root.join("middle");
@@ -1071,7 +1108,8 @@ mod tests {
         std::fs::write(child.join("AGENTS.md"), "shadowed child agents").expect("child AGENTS");
         std::fs::write(child.join("AGENTS.override.md"), "child override").expect("child override");
 
-        let files = load_project_context_files(&child).expect("project context");
+        let files = load_project_context_files(&child, &directory.path().join("missing-user"))
+            .expect("project context");
         let canonical_root = std::fs::canonicalize(&root).expect("canonical root");
         assert_eq!(
             files
@@ -1091,7 +1129,10 @@ mod tests {
         );
         assert_eq!(
             concatenate_project_instructions(&files),
-            Some("child override".to_owned())
+            Some(format!(
+                "Project-specific instructions and guidelines:\n\n<project_instructions path=\"{}\">\nchild override\n</project_instructions>",
+                files[0].path.display()
+            ))
         );
     }
 
@@ -1113,7 +1154,9 @@ mod tests {
         )
         .expect("nested CLAUDE");
 
-        let files = load_project_context_files(&agents_directory).expect("project context");
+        let files =
+            load_project_context_files(&agents_directory, &directory.path().join("missing-user"))
+                .expect("project context");
         let canonical_workspace = std::fs::canonicalize(&workspace).expect("canonical workspace");
         let selected = files
             .iter()
@@ -1136,7 +1179,9 @@ mod tests {
             std::fs::create_dir_all(&workspace).expect("workspace");
             std::fs::write(workspace.join(filename), content).expect("context file");
 
-            let files = load_project_context_files(&workspace).expect("project context");
+            let files =
+                load_project_context_files(&workspace, &directory.path().join("missing-user"))
+                    .expect("project context");
             let canonical_workspace =
                 std::fs::canonicalize(&workspace).expect("canonical workspace");
             let selected = files
@@ -1164,12 +1209,90 @@ mod tests {
         std::fs::create_dir_all(&workspace).expect("workspace");
         std::fs::write(workspace.join("CLAUDE.MD"), b"\xef\xbb\xbfwith bom").expect("context file");
 
-        let files = load_project_context_files(&workspace).expect("project context");
+        let files = load_project_context_files(&workspace, &directory.path().join("missing-user"))
+            .expect("project context");
         let canonical_workspace = std::fs::canonicalize(&workspace).expect("canonical workspace");
         let selected = files
             .iter()
             .find(|file| file.path.starts_with(&canonical_workspace))
             .expect("context file");
         assert_eq!(selected.content, "with bom");
+    }
+
+    #[test]
+    fn global_context_precedes_workspace_and_uses_the_same_filename_priority() {
+        let directory = tempfile::tempdir().unwrap();
+        let global = directory.path().join("user");
+        let workspace = directory.path().join("workspace");
+        for root in [&global, &workspace] {
+            std::fs::create_dir_all(root).unwrap();
+            for filename in super::PROJECT_CONTEXT_FILENAMES {
+                std::fs::write(root.join(filename), format!("\u{feff}{filename}")).unwrap();
+            }
+        }
+        // Removing the winner at each step exercises every priority, in both scopes.
+        // Case-insensitive filesystems cannot host both spellings independently.
+        for filename in ["AGENTS.override.md", "AGENTS.md", "CLAUDE.md"] {
+            let files = load_project_context_files(&workspace, &global).unwrap();
+            assert_eq!(files.len(), 2);
+            assert_eq!(
+                files[0].path.parent(),
+                Some(global.canonicalize().unwrap().as_path())
+            );
+            assert_eq!(
+                files[1].path.parent(),
+                Some(workspace.canonicalize().unwrap().as_path())
+            );
+            assert!(
+                files
+                    .iter()
+                    .all(|file| file.content.eq_ignore_ascii_case(filename))
+            );
+            for root in [&global, &workspace] {
+                std::fs::remove_file(root.join(filename)).unwrap();
+                if filename != "AGENTS.override.md" {
+                    let _ = std::fs::remove_file(root.join(filename.to_uppercase()));
+                }
+            }
+        }
+        assert!(
+            load_project_context_files(&workspace, &global)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn overlapping_global_and_workspace_context_is_loaded_once() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("AGENTS.md"), "shared guidance").unwrap();
+        let files =
+            load_project_context_files(directory.path(), &directory.path().join(".")).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].content, "shared guidance");
+    }
+
+    #[test]
+    fn instruction_source_markers_preserve_content_and_escape_paths() {
+        let files = [
+            super::ProjectContextFile {
+                path: "global/\"<&>指令.md".into(),
+                content: "  exact global guidance\n".into(),
+            },
+            super::ProjectContextFile {
+                path: "empty.md".into(),
+                content: " \n\t".into(),
+            },
+            super::ProjectContextFile {
+                path: "workspace/AGENTS.md".into(),
+                content: "workspace guidance".into(),
+            },
+        ];
+        assert_eq!(
+            concatenate_project_instructions(&files).unwrap(),
+            "Project-specific instructions and guidelines:\n\n<project_instructions path=\"global/&quot;&lt;&amp;&gt;指令.md\">\n  exact global guidance\n\n</project_instructions>\n\n<project_instructions path=\"workspace/AGENTS.md\">\nworkspace guidance\n</project_instructions>"
+        );
+        assert!(concatenate_project_instructions(&files[1..2]).is_none());
+        assert!(concatenate_project_instructions(&[]).is_none());
     }
 }

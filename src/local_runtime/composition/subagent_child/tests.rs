@@ -787,12 +787,23 @@ enabled = true
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_child_performs_no_project_instruction_or_skill_discovery() {
     let dir = lab();
-    let frozen = vec![ProjectContextFile {
-        path: dir.path().join("frozen/AGENTS.md"),
-        content: "frozen parent chain".to_owned(),
-    }];
+    let frozen = vec![
+        ProjectContextFile {
+            path: dir.path().join("frozen-global/AGENTS.md"),
+            content: "frozen global guidance".to_owned(),
+        },
+        ProjectContextFile {
+            path: dir.path().join("frozen/AGENTS.md"),
+            content: "frozen parent chain".to_owned(),
+        },
+    ];
     let core = LocalConversationCore::compose_subagent_child(
-        &spec(dir.path(), vec![builtin("read")], frozen, Vec::new()),
+        &spec(
+            dir.path(),
+            vec![builtin("read")],
+            frozen.clone(),
+            Vec::new(),
+        ),
         &dependencies(),
         &ChildPreparation::detached(),
     )
@@ -801,17 +812,17 @@ async fn a_child_performs_no_project_instruction_or_skill_discovery() {
     let resources = core.runtime().runtime_resources();
 
     assert_eq!(
-        resources
-            .project_context_files()
-            .iter()
-            .map(|file| file.content.clone())
-            .collect::<Vec<_>>(),
-        vec!["frozen parent chain".to_owned()],
+        resources.project_context_files(),
+        frozen,
         "the child observes exactly the frozen chain and never walks ancestors"
     );
     assert_eq!(
         resources.project_instructions(),
-        Some("frozen parent chain")
+        Some(format!(
+            "Project-specific instructions and guidelines:\n\n<project_instructions path=\"{}\">\nfrozen global guidance\n</project_instructions>\n\n<project_instructions path=\"{}\">\nfrozen parent chain\n</project_instructions>",
+            dir.path().join("frozen-global/AGENTS.md").display(),
+            dir.path().join("frozen/AGENTS.md").display()
+        ).as_str())
     );
     assert_eq!(
         resources.skill_catalog(),
@@ -936,7 +947,10 @@ async fn a_nested_binding_child_never_discovers_ancestor_project_instructions() 
     );
     assert_eq!(
         resources.project_instructions(),
-        Some("frozen parent chain")
+        Some(format!(
+            "Project-specific instructions and guidelines:\n\n<project_instructions path=\"{}\">\nfrozen parent chain\n</project_instructions>",
+            dir.path().join("frozen/AGENTS.md").display()
+        ).as_str())
     );
     assert_eq!(resources.skill_catalog(), None);
     // Issue #462 (B02/B03): every child Tool, including Write, Edit and
