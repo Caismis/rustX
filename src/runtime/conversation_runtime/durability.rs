@@ -3,8 +3,8 @@
 //! publication failure sinks.
 
 use super::{
-    ConversationObservation, ConversationRuntime, CoordinatorState, DurabilityFailureCommit,
-    DurableOperation, RuntimeInner, Weak,
+    ConversationObservation, ConversationRuntime, CoordinatorState, DurableOperation, RuntimeInner,
+    Weak,
 };
 
 /// The semantic durable operations of the coordinator's durability-health
@@ -211,11 +211,9 @@ impl RuntimeInner {
     /// authority ([`DurabilityGate::commit_failure`]) and published as a
     /// [`ConversationObservation::DurabilityFailed`] exactly once; no
     /// further re-kick is armed, so a persistent or alternating fault cannot
-    /// become a hot loop. The observation is published only when the commit
-    /// reports that THIS call installed the absorbing fact, and it carries
-    /// the authoritative operation and diagnostic returned by the commit
-    /// (see [`Self::commit_failure_and_observe`]) — a later caller can
-    /// never publish a second observation. A failure of a different
+    /// become a hot loop. The gate's one publisher reports the absorbing
+    /// operation and diagnostic after any earlier ownership commit exits;
+    /// repeated requests cannot publish a second observation. A failure of a different
     /// transient stage consumes its own allowance without erasing the first
     /// stage's debt.
     pub(super) fn record_durability_failure(
@@ -269,16 +267,9 @@ impl RuntimeInner {
         operation: DurableOperation,
         diagnostic: String,
     ) {
-        let outcome = self.durability_gate.commit_failure(operation, diagnostic);
-        if let DurabilityFailureCommit::Committed(failure) = outcome {
-            self.observe(ConversationObservation::DurabilityFailed {
-                operation: failure.operation.as_str().to_owned(),
-                diagnostic: failure.diagnostic,
-            });
-            // The absorbing failure is an eligibility input with no
-            // lifecycle announcement of its own.
-            self.wake.eligibility.notify_one();
-        }
+        // An already-authorized writer can finish before this failure becomes
+        // committed. The gate's one publisher runs after that physical boundary.
+        let _ = self.durability_gate.commit_failure(operation, diagnostic);
     }
 
     /// Records progress through one durable stage. This clears only the

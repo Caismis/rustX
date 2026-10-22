@@ -19,7 +19,6 @@ pub(crate) enum DomainSource {
     Goal(Arc<SourceValue<crate::observation::goal::RuntimeClientGoalView>>),
     Todo(Arc<SourceValue<crate::tools::todo::TodoSnapshot>>),
     Job(Arc<SourceValue<super::snapshot::RuntimeClientJob>>),
-    Agent(Arc<SourceValue<super::snapshot::RuntimeClientAgent>>),
 }
 impl DomainSource {
     pub(crate) fn encoded_weight(&self) -> usize {
@@ -67,7 +66,6 @@ impl DomainSource {
             Self::Goal(value) => page!(value),
             Self::Todo(value) => page!(value),
             Self::Job(value) => page!(value),
-            Self::Agent(value) => page!(value),
         }
     }
     pub(crate) fn read(
@@ -162,7 +160,6 @@ impl DomainSource {
             Self::Goal(value) => read!(value),
             Self::Todo(value) => read!(value),
             Self::Job(value) => read!(value),
-            Self::Agent(value) => read!(value),
         }
     }
 }

@@ -2629,6 +2629,178 @@ async fn no_progress_compaction_fails_without_retry() {
 // Cancellation at the Agent Loop/context boundary
 // ---------------------------------------------------------------------------
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines)] // One native admission gate covers trigger, cancellation reason and each Busy source.
+async fn cancellation_winning_summary_admission_is_not_a_compaction_failure() {
+    #[derive(Clone, Copy)]
+    enum Pressure {
+        None,
+        Capacity,
+        Lifecycle,
+    }
+    for (pressure, cancel_attempt) in [
+        (Pressure::None, true),
+        (Pressure::Capacity, true),
+        (Pressure::Lifecycle, true),
+        (Pressure::Lifecycle, false),
+    ] {
+        for (reason, overflow) in [
+            (CancellationReason::UserRequested, false),
+            (CancellationReason::UserRequested, true),
+            (CancellationReason::RuntimeShutdown, false),
+            (CancellationReason::RuntimeShutdown, true),
+        ] {
+            let model = fake_model(if overflow {
+                vec![vec![
+                    FakeStep::Emit(started()),
+                    FakeStep::Emit(overflow_event()),
+                ]]
+            } else {
+                Vec::new()
+            });
+            let cancellation = AgentCancellation::new(reason);
+            let policy = crate::scripted_suites::support::default_execution_policy();
+            let request = request(
+                "cancel-summary-admission",
+                vec![user("history", "history")],
+                1,
+                &model,
+            );
+            let mut context = runtime_with(
+                if overflow { 5_000 } else { 50 },
+                0,
+                0,
+                weighted(100, 10, 0),
+                FakeContextSummarizer::new(Vec::new()),
+            );
+            context.summarizer = Arc::new(rustx::context::ModelBackedSummarizer::new(
+                request.model.summary_invocation().clone(),
+                policy.model_timeout_policy,
+                policy.monotonic_clock.clone(),
+            ));
+            let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
+            let capacity = crate::runtime::auxiliary::capacity::ProcessCapacity::new();
+            let lifecycle = crate::runtime::types::ConversationLifecycle::new();
+            assert!(lifecycle.activate());
+            let backend = crate::runtime::auxiliary::executor::AuxiliaryExecutor::new(
+                tool_runtime.durable_store().clone(),
+                Arc::new(crate::runtime::types::SystemClock),
+                policy.monotonic_clock.clone(),
+                lifecycle.clone(),
+                Arc::new(crate::runtime::types::DurabilityGate::new()),
+                capacity.conversation(),
+            )
+            .unwrap();
+            context
+                .summarizer
+                .bind_backend(Arc::new(backend), context.resource_revision.get());
+            let capability = common::capability_lease(ToolRegistry::new(), &tool_runtime).await;
+            let mut execution = AgentExecution::new(
+                request,
+                capability.into_lease(),
+                &cancellation,
+                policy,
+                context,
+                &tool_runtime,
+                rustx::agent::AttemptLifecycle::inert(),
+            )
+            .unwrap();
+            let gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
+            let _release = gate.arm_scoped();
+            execution.install_compaction_admission_gate(gate.clone());
+            let cancel = cancellation.clone();
+            let (finished, settled) = std::sync::mpsc::channel();
+            let controller = tokio::task::spawn_blocking(move || {
+                gate.wait_entered();
+                let mut held = Vec::new();
+                if matches!(pressure, Pressure::Capacity) {
+                    for _ in 0..8 {
+                        let domain = capacity.conversation();
+                        for _ in 0..4 {
+                            held.push(domain.reserve_compaction().unwrap());
+                        }
+                    }
+                }
+                let resume = || {
+                    if cancel_attempt {
+                        cancel.cancel();
+                    }
+                    gate.release();
+                };
+                if matches!(pressure, Pressure::Lifecycle) {
+                    // This is the very same lifecycle used by the executor,
+                    // held independently of its cancellation gate. No Store
+                    // connection/SQL lease is held across terminal writes.
+                    lifecycle
+                        .with_running_commit(|| {
+                            resume();
+                            settled
+                                .recv_timeout(std::time::Duration::from_secs(10))
+                                .unwrap();
+                        })
+                        .unwrap();
+                } else {
+                    resume();
+                }
+                held
+            });
+            let execution_result = execution.run().await;
+            let _ = finished.send(());
+            let _held = controller.await.unwrap();
+            let result = common::durable_agent_result(
+                execution_result,
+                tool_runtime.durable_store().as_ref(),
+            );
+            if cancel_attempt {
+                assert_eq!(result.outcome, AttemptOutcome::Cancelled { reason });
+            } else {
+                assert!(matches!(result.outcome, AttemptOutcome::Failed { .. }));
+                assert!(
+                    result.event_history.iter().any(|event| matches!(
+                        event, RuntimeEvent::CompactionFailed { error, .. }
+                            if error.contains("native lifecycle ownership boundary is busy")
+                    )),
+                    "active lifecycle contention still reports Busy without waiting"
+                );
+            }
+            assert!(
+                result
+                    .event_history
+                    .iter()
+                    .any(|event| matches!(event, RuntimeEvent::CompactionStarted { .. }))
+            );
+            if cancel_attempt {
+                assert!(!result.event_history.iter().any(|event| matches!(
+                    event,
+                    RuntimeEvent::CompactionFailed { .. } | RuntimeEvent::AttemptFailed { .. }
+                )));
+                assert!(matches!(
+                    result.event_history.last(),
+                    Some(RuntimeEvent::AttemptCancelled { .. })
+                ));
+            }
+            assert_eq!(
+                model.requests().len(),
+                usize::from(overflow),
+                "cancellation prevents Summary dispatch and any subsequent primary dispatch"
+            );
+            assert_no_compaction_committed(&result);
+            let journal = tool_runtime.durable_store().read_events(None, 32).unwrap();
+            assert!(
+                !journal.events.iter().any(|event| matches!(
+                    event.event,
+                    RuntimeEvent::AuxiliaryCallStarted { .. }
+                        | RuntimeEvent::ModelRequestStarted {
+                            owner: rustx::model::ModelRequestOwner::Auxiliary { .. },
+                            ..
+                        }
+                )),
+                "cancelled admission creates no Summary Call or Request start"
+            );
+        }
+    }
+}
+
 /// Cancellation before proactive compaction begins: no `CompactionStarted`,
 /// no summary, no canonical commit, no Surface rewrite, no retry.
 #[tokio::test]

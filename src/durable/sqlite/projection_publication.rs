@@ -32,7 +32,7 @@ pub(super) fn index(
     id: &CompactionOperationId,
     native: &str,
     batch: Option<&NativeObservationBatch>,
-) {
+) -> Result<(), ConversationStoreError> {
     let _ = super::optional_display_layout(transaction, || {
         let batch = batch.ok_or_else(|| storage("original compaction publication unavailable"))?;
         let NativeObservationTransition::Single(witness) = &batch.transition else {
@@ -52,7 +52,8 @@ pub(super) fn index(
         let witness = digest(native, &bytes);
         transaction.execute("UPDATE compaction_operations SET observation_receipt=?1,observation_receipt_witness=?2 WHERE operation_id=?3",params![bytes,witness.as_slice(),id.as_str()]).map_err(|error|storage(error.to_string()))?;
         Ok(())
-    });
+    })?;
+    Ok(())
 }
 pub(super) fn read(
     connection: &Connection,

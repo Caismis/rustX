@@ -332,6 +332,26 @@ pub(crate) fn activation_view(
         workspace: snapshot.workspace.clone(),
     }
 }
+/// Activity enriches only a newer live observation of this exact activation.
+/// Lifecycle and all other owner fields remain the last authoritative receipt.
+pub(crate) fn activity_view(
+    existing: &super::super::snapshot::RuntimeClientAgent,
+    snapshot: &crate::runtime::subagent::SubagentSnapshot,
+) -> Option<super::super::snapshot::RuntimeClientAgent> {
+    if !matches!(
+        snapshot.ownership,
+        crate::events::types::SubagentOwnershipKind::Normal
+    ) || existing.agent_id != snapshot.child_agent_id
+        || existing.activation_id != snapshot.subagent_id
+        || existing.activation_state.is_terminal()
+        || snapshot.observation.revision <= existing.observation.revision
+    {
+        return None;
+    }
+    let mut view = existing.clone();
+    view.observation = snapshot.observation.clone();
+    Some(view)
+}
 pub(super) fn upsert_subagent(
     subagents: &mut Vec<super::super::snapshot::RuntimeClientAgent>,
     seen: &mut std::collections::HashSet<crate::runtime::identity::SubagentId>,

@@ -503,7 +503,7 @@ async fn read_domain(
     clippy::too_many_lines,
     reason = "Keep the single native-result carrier mapping together"
 )]
-fn native_result(
+pub(super) fn native_result(
     result: Result<RuntimeClientResult, RuntimeClientError>,
 ) -> Result<MethodResult, RpcError> {
     Ok(match result.map_err(client_error)? {

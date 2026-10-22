@@ -8,10 +8,10 @@ use super::terminal::Terminal;
 use super::{
     AgentExecution, MAX_MODEL_RETRY_DELAY_MS, MAX_SEMANTIC_CORRECTIVE_GENERATIONS_PER_LOGICAL_STEP,
 };
-use crate::agent::assembly::ModelEventAssembler;
 use crate::context::engine::EstimateCorrection;
 use crate::context::error::{ContextError, ContextErrorKind};
 use crate::events::types::{AttemptFailure, RuntimeEvent};
+use crate::model::assembly::ModelEventAssembler;
 use crate::model::error::{ModelError, ModelErrorKind};
 use crate::model::generation::GenerationFailure;
 use crate::runtime::identity::RequestId;

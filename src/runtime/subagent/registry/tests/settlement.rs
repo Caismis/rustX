@@ -383,7 +383,7 @@ async fn cancellation_is_canonical_over_a_late_result() {
         .expect("known");
     assert_eq!(cancelled.state, SubagentState::Cancelling);
     child
-        .complete(ChildResultStatus::Succeeded, Some("late"))
+        .cancelled_after_delegation(ChildResultStatus::Succeeded, Some("late"))
         .await;
     let settled = plane
         .registry

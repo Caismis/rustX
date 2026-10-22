@@ -1365,8 +1365,19 @@ async fn agent_status_active_snapshot_excludes_terminal_entries() {
 /// A fresh terminal runtime inbound turn carries an Agent Status snapshot
 /// showing the remaining active tasks only.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[allow(clippy::too_many_lines)]
 async fn fresh_terminal_inbound_status_shows_remaining_active_tasks() {
+    assert_terminal_inbound_status(ToolConcurrencyPolicy::Parallel, false).await;
+}
+
+/// Serial background admission in reversed call order makes allocation order
+/// deterministically differ from which task completes first.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn terminal_inbound_status_survives_reversed_background_allocation() {
+    assert_terminal_inbound_status(ToolConcurrencyPolicy::Sequential, true).await;
+}
+
+#[allow(clippy::too_many_lines)]
+async fn assert_terminal_inbound_status(concurrency: ToolConcurrencyPolicy, reverse_order: bool) {
     let dir = tempfile::tempdir().expect("temp dir");
     let workspace_root = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace_root).expect("workspace");
@@ -1388,16 +1399,21 @@ async fn fresh_terminal_inbound_status_shows_remaining_active_tasks() {
         "b2",
         serde_json::json!({"execution_mode": "background"}),
     );
+    let (first_call, second_call) = if reverse_order {
+        (&call_b2, &call_b1)
+    } else {
+        (&call_b1, &call_b2)
+    };
     let (model_release_tx, model_release_rx) = support::fake::model_release();
     let model = fake_model(vec![
         vec![
             FakeStep::Emit(started()),
-            FakeStep::Emit(tool_call_events(0, &call_b1)[0].clone()),
-            FakeStep::Emit(tool_call_events(0, &call_b1)[1].clone()),
-            FakeStep::Emit(tool_call_events(0, &call_b1)[2].clone()),
-            FakeStep::Emit(tool_call_events(1, &call_b2)[0].clone()),
-            FakeStep::Emit(tool_call_events(1, &call_b2)[1].clone()),
-            FakeStep::Emit(tool_call_events(1, &call_b2)[2].clone()),
+            FakeStep::Emit(tool_call_events(0, first_call)[0].clone()),
+            FakeStep::Emit(tool_call_events(0, first_call)[1].clone()),
+            FakeStep::Emit(tool_call_events(0, first_call)[2].clone()),
+            FakeStep::Emit(tool_call_events(1, second_call)[0].clone()),
+            FakeStep::Emit(tool_call_events(1, second_call)[1].clone()),
+            FakeStep::Emit(tool_call_events(1, second_call)[2].clone()),
             FakeStep::Emit(done(ModelFinishReason::ToolCalls)),
         ],
         vec![
@@ -1426,7 +1442,7 @@ async fn fresh_terminal_inbound_status_shows_remaining_active_tasks() {
             "b1",
             "tool-b1",
             ToolExecutionPolicy::ModelSelectable,
-            ToolConcurrencyPolicy::Parallel,
+            concurrency,
         ),
         success_result("b1"),
     );
@@ -1435,7 +1451,7 @@ async fn fresh_terminal_inbound_status_shows_remaining_active_tasks() {
             "b2",
             "tool-b2",
             ToolExecutionPolicy::ModelSelectable,
-            ToolConcurrencyPolicy::Parallel,
+            concurrency,
         ),
         success_result("b2"),
     );
@@ -1459,6 +1475,31 @@ async fn fresh_terminal_inbound_status_shows_remaining_active_tasks() {
             .expect("the second model generation parks");
         await_background_started(&mut started_b1, "b1 started").await;
         await_background_started(&mut started_b2, "b2 started").await;
+        if reverse_order {
+            assert_eq!(
+                controller_registry
+                    .all_snapshots()
+                    .iter()
+                    .map(|task| task.tool_name.as_ref())
+                    .collect::<Vec<_>>(),
+                ["b2", "b1"],
+                "serial admission fixes the reversed allocation order"
+            );
+        }
+        let jobs = controller_registry.all_snapshots();
+        assert_eq!(jobs.len(), 2);
+        let completed_job = jobs
+            .iter()
+            .find(|job| job.tool_id.as_ref() == &ToolId::new("tool-b1"))
+            .expect("b1 owns a background execution")
+            .execution_id
+            .clone();
+        let active_job = jobs
+            .iter()
+            .find(|job| job.tool_id.as_ref() == &ToolId::new("tool-b2"))
+            .expect("b2 owns a background execution")
+            .execution_id
+            .clone();
         // B1 settles while the second model generation is parked. The
         // terminal registry transition and its inbound enqueue share one
         // registry critical section, so observing the terminal registry
@@ -1468,11 +1509,12 @@ async fn fresh_terminal_inbound_status_shows_remaining_active_tasks() {
         release_b1.send_replace(true);
         wait_for_state(
             &controller_registry,
-            &controller_registry.all_snapshots()[0].execution_id,
+            &completed_job,
             BackgroundLifecycle::Succeeded,
         )
         .await;
         model_release_tx.send(true).expect("release the model");
+        (completed_job, active_job)
     });
     let result = tokio::time::timeout(
         Duration::from_secs(15),
@@ -1480,7 +1522,7 @@ async fn fresh_terminal_inbound_status_shows_remaining_active_tasks() {
     )
     .await
     .expect("run terminates");
-    controller.await.expect("controller task");
+    let (completed_job, active_job) = controller.await.expect("controller task");
 
     let requests = model.requests();
     assert_eq!(requests.len(), 3);
@@ -1521,19 +1563,11 @@ async fn fresh_terminal_inbound_status_shows_remaining_active_tasks() {
         })
         .expect("fresh terminal inbound carries Agent Status");
     assert!(
-        status.contains(
-            tool_runtime.background().all_snapshots()[1]
-                .execution_id
-                .as_str()
-        ),
+        status.contains(active_job.as_str()),
         "the remaining active task appears"
     );
     assert!(
-        !status.contains(
-            tool_runtime.background().all_snapshots()[0]
-                .execution_id
-                .as_str()
-        ),
+        !status.contains(completed_job.as_str()),
         "the terminal task is excluded"
     );
     assert!(
@@ -1545,7 +1579,7 @@ async fn fresh_terminal_inbound_status_shows_remaining_active_tasks() {
         requests[2]
             .messages
             .iter()
-            .any(|message| matches!(message.as_canonical(), Some(MessageBlock::User(user)) if user.id.as_str() == format!("background-{}-terminal", tool_runtime.background().all_snapshots()[0].execution_id))),
+            .any(|message| matches!(message.as_canonical(), Some(MessageBlock::User(user)) if user.id.as_str() == format!("background-{completed_job}-terminal"))),
         "the terminal inbound waited for the next batch"
     );
     assert!(matches!(

@@ -5,9 +5,9 @@
 use super::AgentExecution;
 use super::start::StartedModelTurn;
 use super::terminal::Terminal;
-use crate::agent::assembly::ModelEventAssembler;
 use crate::events::types::{AttemptFailure, RuntimeEvent};
 use crate::model::adapter::{ModelStream, ModelStreamItem};
+use crate::model::assembly::ModelEventAssembler;
 use crate::model::deadline::ModelRequestDeadline;
 use crate::model::error::{ModelError, ModelErrorKind};
 use crate::model::event::ModelEvent;

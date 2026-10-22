@@ -4,6 +4,7 @@
 //! creates the development schema only for a new file; there is no migration
 //! or legacy reader.
 
+use std::sync::atomic::AtomicU64;
 #[cfg(test)]
 mod tests;
 
@@ -1167,6 +1168,8 @@ impl SqliteConversationStore {
                 append_validation,
                 wake: Condvar::new(),
                 poisoned: AtomicBool::new(false),
+                lease_generation: AtomicU64::new(0),
+                active_interrupt: Mutex::new(None),
             }),
         ))
     }

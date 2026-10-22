@@ -789,7 +789,7 @@ impl RuntimeClientProjection {
                 return;
             };
             *revision = next;
-            if *owner == "jobs" || *owner == "agents" {
+            if *owner == "jobs" {
                 let keys: Vec<_> = self
                     .domain_sources
                     .range(owner.to_string()..format!("{owner}/"))

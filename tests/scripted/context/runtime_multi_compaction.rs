@@ -131,6 +131,25 @@ fn settled(event: &RuntimeClientProtocolEvent) -> bool {
         .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
 }
 
+/// Fail at the actual semantic outcome before waiting for request transfer.
+fn assert_last_attempt_completed(events: &[RuntimeClientProtocolEvent]) {
+    for event in events.iter().rev() {
+        for fact in event.event.facts() {
+            if let RuntimeClientEvent::AttemptSettled { outcome, .. } = fact {
+                assert!(
+                    matches!(
+                        outcome,
+                        rustx::runtime_client::event::RuntimeClientOutcome::Completed { .. }
+                    ),
+                    "expected a completed attempt before its request history: {outcome:?}"
+                );
+                return;
+            }
+        }
+    }
+    panic!("missing attempt settlement");
+}
+
 /// The committed compaction generations carried by `ContextCompacted`
 /// events, in delivery order.
 fn compaction_generations(events: &[RuntimeClientProtocolEvent]) -> Vec<u64> {
@@ -724,51 +743,54 @@ async fn repeated_overflow_compaction_invalidates_continuation_once_and_retires_
     // Block 0 carries the continuation annotation; the tool call is block 1
     // (the exact layout proven by the m4 continuation suite).
     let call_events = tool_call_events(1, &call);
-    let adapter = Arc::new(FakeModel::new(vec![
-        // Attempt 1 completes holding continuation state; it must not leak.
-        vec![
-            FakeStep::Emit(ModelEvent::Started),
-            FakeStep::Emit(ModelEvent::ContinuationState {
-                block_index: ContentBlockIndex::new(0),
-                state: cross_attempt.clone(),
-            }),
-            FakeStep::Emit(ModelEvent::TextDelta {
-                block_index: ContentBlockIndex::new(1),
-                text: "first".to_owned(),
-            }),
-            FakeStep::Emit(ModelEvent::Completed {
-                finish_reason: ModelFinishReason::Stop,
-                usage: None,
-            }),
-        ],
-        // Attempt 2 turn 1: a tool-call turn carrying continuation state.
-        vec![
-            FakeStep::Emit(ModelEvent::Started),
-            FakeStep::Emit(ModelEvent::ContinuationState {
-                block_index: ContentBlockIndex::new(0),
-                state: intra_attempt.clone(),
-            }),
-            FakeStep::Emit(call_events[0].clone()),
-            FakeStep::Emit(call_events[1].clone()),
-            FakeStep::Emit(call_events[2].clone()),
-            FakeStep::Emit(ModelEvent::Completed {
-                finish_reason: ModelFinishReason::ToolCalls,
-                usage: None,
-            }),
-        ],
-        // Attempt 2 turn 2 request 0: scripted provider overflow.
-        overflow_turn(),
-        // Compaction #1 (must cover the continuation-owning tool unit).
-        turn_text("SUMMARY-ONE covers the tool turn".to_owned()),
-        // Attempt 2 turn 2 retry.
-        turn_text("recovered after one".to_owned()),
-        // Attempt 3 turn 1 request 0: scripted provider overflow.
-        overflow_turn(),
-        // Compaction #2: its span is exactly the still-active first summary.
-        turn_text("SUMMARY-TWO supersedes summary one".to_owned()),
-        // Attempt 3 turn 1 retry.
-        turn_text("recovered after two".to_owned()),
-    ]));
+    let adapter = Arc::new(
+        FakeModel::new(vec![
+            // Attempt 1 completes holding continuation state; it must not leak.
+            vec![
+                FakeStep::Emit(ModelEvent::Started),
+                FakeStep::Emit(ModelEvent::ContinuationState {
+                    block_index: ContentBlockIndex::new(0),
+                    state: cross_attempt.clone(),
+                }),
+                FakeStep::Emit(ModelEvent::TextDelta {
+                    block_index: ContentBlockIndex::new(1),
+                    text: "first".to_owned(),
+                }),
+                FakeStep::Emit(ModelEvent::Completed {
+                    finish_reason: ModelFinishReason::Stop,
+                    usage: None,
+                }),
+            ],
+            // Attempt 2 turn 1: a tool-call turn carrying continuation state.
+            vec![
+                FakeStep::Emit(ModelEvent::Started),
+                FakeStep::Emit(ModelEvent::ContinuationState {
+                    block_index: ContentBlockIndex::new(0),
+                    state: intra_attempt.clone(),
+                }),
+                FakeStep::Emit(call_events[0].clone()),
+                FakeStep::Emit(call_events[1].clone()),
+                FakeStep::Emit(call_events[2].clone()),
+                FakeStep::Emit(ModelEvent::Completed {
+                    finish_reason: ModelFinishReason::ToolCalls,
+                    usage: None,
+                }),
+            ],
+            // Attempt 2 turn 2 request 0: scripted provider overflow.
+            overflow_turn(),
+            // Compaction #1 (must cover the continuation-owning tool unit).
+            turn_text("SUMMARY-ONE covers the tool turn".to_owned()),
+            // Attempt 2 turn 2 retry.
+            turn_text("recovered after one".to_owned()),
+            // Attempt 3 turn 1 request 0: scripted provider overflow.
+            overflow_turn(),
+            // Compaction #2: its span is exactly the still-active first summary.
+            turn_text("SUMMARY-TWO supersedes summary one".to_owned()),
+            // Attempt 3 turn 1 retry.
+            turn_text("recovered after two".to_owned()),
+        ])
+        .with_protocol(ModelProtocol::AnthropicMessages),
+    );
     let status_seam = rustx::context::AgentStatusTestSeam::new();
     let mut tools = ToolRegistry::new();
     FakeTool::new(
@@ -795,14 +817,17 @@ async fn repeated_overflow_compaction_invalidates_continuation_once_and_retires_
     let mut events = Vec::new();
     submit(&attachment, 1, "turn one");
     events.extend(receive_until(&subscription, settled).await);
+    assert_last_attempt_completed(&events);
     await_request_history_len(host, 1).await;
 
     submit(&attachment, 2, "turn two");
     events.extend(receive_until(&subscription, settled).await);
+    assert_last_attempt_completed(&events);
     await_request_history_len(host, 4).await;
 
     submit(&attachment, 3, "turn three");
     events.extend(receive_until(&subscription, settled).await);
+    assert_last_attempt_completed(&events);
     await_request_history_len(host, 6).await;
 
     let requests = adapter.requests();

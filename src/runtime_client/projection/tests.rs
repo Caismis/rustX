@@ -4482,8 +4482,7 @@ fn subagent_observations_fold_the_activity_projection_into_the_view() {
         agent_activation_snapshot(observation.clone()),
         crate::runtime::subagent::AgentState::Active,
     ));
-    // The disposable activity lane folds identically (unconditional
-    // last-write-wins whole-view upsert).
+    // The disposable lane enriches the current owner with newer activity.
     let newer = SubagentObservation {
         revision: 3,
         ..observation.clone()
@@ -4600,6 +4599,49 @@ fn owner_transition_projects_starting_and_terminal_unproven_at_one_cut() {
             owner_state
         );
     }
+}
+
+#[test]
+fn subagent_activity_updates_only_newer_live_observations() {
+    use crate::runtime::subagent::{
+        AgentState, SubagentActivity, SubagentObservation, SubagentState,
+    };
+    let mut projection = projection();
+    let mut owner = agent_activation_snapshot(SubagentObservation::default());
+    owner.state = SubagentState::Stopping;
+    owner.observation.revision = 2;
+    projection.apply(owner_observation(owner.clone(), AgentState::Active));
+    let expected = projection.snapshot().unwrap().0.agents[0].clone();
+    let mut activity = owner.clone();
+    activity.state = SubagentState::Running;
+    activity.detail = Some("stale owner diagnostic".into());
+    activity.observation.revision = 3;
+    activity.observation.activity = SubagentActivity::Compacting;
+    projection.apply(ConversationObservation::SubagentActivity(activity.clone()));
+    let mut enriched = expected;
+    enriched.observation = activity.observation.clone();
+    assert_eq!(projection.snapshot().unwrap().0.agents, vec![enriched]);
+    let current = projection.snapshot().unwrap();
+    projection.apply(ConversationObservation::SubagentActivity(owner.clone()));
+    projection.apply(ConversationObservation::SubagentActivity(activity.clone()));
+    assert_eq!(
+        projection.snapshot().unwrap(),
+        current,
+        "old and repeated revisions cannot regress activity"
+    );
+    owner.state = SubagentState::Succeeded;
+    owner.settlement = committed_settlement();
+    owner.observation = activity.observation.clone();
+    owner.observation.settle_neutral();
+    projection.apply(owner_observation(owner, AgentState::Inactive));
+    let terminal = projection.snapshot().unwrap();
+    activity.observation.revision = 100;
+    projection.apply(ConversationObservation::SubagentActivity(activity));
+    assert_eq!(
+        projection.snapshot().unwrap(),
+        terminal,
+        "terminal activity stays neutral even if a late envelope claims a newer revision"
+    );
 }
 
 #[test]

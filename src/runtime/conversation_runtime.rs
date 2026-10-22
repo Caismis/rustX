@@ -294,7 +294,8 @@ use crate::agent::observer::{AgentExecutionObserver, AgentStatusObservation};
 use crate::agent::{AgentExecution, AgentExecutionRequest};
 use crate::capabilities::{CapabilityCoordinator, CapabilityObserver, CapabilitySnapshot};
 use crate::context::compaction::{
-    CompactionAttribution, CompactionExecutionError, ExecutedCompaction, execute_compaction,
+    CompactionAttribution, CompactionExecutionError, ExecutedCompaction,
+    execute_compaction_in_operation,
 };
 use crate::context::tokens::TokenEstimator;
 use crate::context::{
@@ -339,7 +340,7 @@ use crate::runtime::resources::{
 };
 use crate::runtime::types::{
     ApprovalMode, CancellationReason, ConversationLifecycle, ConversationLifecycleState,
-    DurabilityFailureCommit, DurabilityGate, DurableOperation, RuntimeClock, SystemClock,
+    DurabilityGate, DurableOperation, RuntimeClock, SystemClock,
 };
 use crate::tools::background::{BackgroundExecutionSnapshot, BackgroundObserver};
 use crate::tools::runtime::ConversationToolRuntime;
@@ -362,7 +363,8 @@ mod probe;
 mod test_support;
 
 use admission::{IdleProbe, SemanticInboundClass, WakeGate};
-use compaction::CurrentManualCompaction;
+pub(crate) use compaction::ManualCompactionHandle;
+use compaction::{CurrentManualCompaction, ManualTail};
 use drain::{DrainCompletion, DrainTrigger};
 use durability::{
     AdmissionDurabilityCycle, AdmissionRetryBudget, BackgroundFailureSink, SubagentFailureSink,
@@ -885,10 +887,11 @@ pub(crate) struct RuntimeInner {
     /// The shared durability frontier (Issue #60): the same failed fact the
     /// coordinator commits as `DurabilityFailed`, carried to the
     /// conversation-owned registries so their new durable ownership commits
-    /// linearize against it. Updated under the coordinator lock in
-    /// [`RuntimeInner::record_durability_failure`]; the registries hold it
-    /// across their ownership durable writes.
+    /// linearize against it. The coordinator requests failure without waiting
+    /// for SQL; the gate publishes after any earlier ownership writer exits.
     durability_gate: Arc<DurabilityGate>,
+    auxiliary: crate::runtime::auxiliary::executor::AuxiliaryExecutor,
+    manual_tail: Mutex<Option<ManualTail>>,
     /// The immutable result of this runtime's startup recovery (Issue #12,
     /// M9a): the deterministic classification, exactly which recovery facts
     /// were committed, and what continuation is permitted.

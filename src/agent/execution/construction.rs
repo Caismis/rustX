@@ -155,6 +155,23 @@ impl<'a> AgentExecution<'a> {
                 .input_modalities
                 .contains(&crate::model::catalog::Modality::Image),
         );
+        #[cfg(test)]
+        {
+            context_runtime.monotonic_clock = runtime_policy.monotonic_clock.clone();
+            if !context_runtime.summarizer.has_backend() {
+                let backend = crate::runtime::auxiliary::executor::AuxiliaryExecutor::for_test(
+                    store.clone(),
+                    runtime_policy.monotonic_clock.clone(),
+                )
+                .map_err(|error| {
+                    MailboxError::Durable(ConversationStoreError::Storage(error.message))
+                })?;
+                context_runtime.summarizer.bind_backend(
+                    std::sync::Arc::new(backend),
+                    context_runtime.resource_revision.get(),
+                );
+            }
+        }
         let snapshot = capability.snapshot();
         let lifecycle = context_runtime
             .native_composition

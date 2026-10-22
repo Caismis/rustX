@@ -30,8 +30,7 @@ use std::sync::Arc;
 
 use rustx::context::{
     AgentStatusConfig, AgentStatusEngine, CompactionBudgets, CompactionConstraints, ContextConfig,
-    ContextEngine, ContextErrorKind, ContextRuntime, ContextSummarizer, ModelBackedSummarizer,
-    SummaryRequest,
+    ContextEngine, ContextErrorKind, ContextRuntime, ModelBackedSummarizer, SummaryRequest,
 };
 use rustx::conversation::ConversationState;
 use rustx::durable::{ConversationStore, SqliteConversationStore};
@@ -49,6 +48,296 @@ use support::context::{FakeContextSummarizer, FakeSummaryStep};
 use support::fake::{FakeModel, FakeStep, ScriptedCall, fake_model, tool_call_events};
 
 use super::compaction_metadata::{file_operation_history, user as md_user};
+
+/// Complete prefixes A/B cost 5k/20k for Summary. Full carryover permits
+/// only B in the primary request; Reduced also permits A. Prices are monotone.
+struct CarryoverReentryEstimator;
+
+#[derive(Default)]
+struct OverflowingSummaryProvider {
+    requests: std::sync::Mutex<Vec<rustx::model::ModelRequest>>,
+}
+
+fn summary_includes_b(input: &rustx::model::SelectedModelInput) -> bool {
+    input.iter().any(|message| match message.view() {
+        rustx::model::projected::ModelMessageView::User(content) => content.iter().any(|block|
+            matches!(block, UserContentBlock::Text(text) if text.text.contains("[prefix-b-marker]"))),
+        _ => false,
+    })
+}
+
+impl rustx::model::ModelAdapter for OverflowingSummaryProvider {
+    fn protocol(&self) -> rustx::model::ModelProtocol {
+        rustx::model::ModelProtocol::OpenAiChatCompletions
+    }
+
+    fn stream(
+        &self,
+        request: rustx::model::ModelRequest,
+        _: CancellationSignal,
+    ) -> rustx::model::ModelStream {
+        let oversized = summary_includes_b(&request.messages);
+        self.requests.lock().unwrap().push(request);
+        let mut events = vec![started()];
+        if oversized {
+            events.push(fail(
+                rustx::model::ModelErrorKind::ContextWindowExceeded,
+                "Summary provider rejects prefix B",
+            ));
+        } else {
+            events.push(text_delta(0, "short"));
+            events.push(done_with_usage(ModelFinishReason::Stop, 5));
+        }
+        Box::pin(futures_util::stream::iter(
+            events.into_iter().map(rustx::model::ModelStreamItem::Event),
+        ))
+    }
+}
+
+impl rustx::context::TokenEstimator for CarryoverReentryEstimator {
+    fn supports_monotone_compaction(&self, _: &[rustx::model::ModelInputMessage]) -> bool {
+        true
+    }
+
+    fn estimate_input(
+        &self,
+        messages: &[rustx::model::ModelInputMessage],
+        _: &str,
+        _: &[rustx::tools::types::ModelToolDefinition],
+    ) -> u64 {
+        use rustx::model::{ModelInputMessage, RenderedCarryoverRecord, RequestOnlyModelContext};
+        let text: String = messages
+            .iter()
+            .filter_map(|message| match message.view() {
+                rustx::model::projected::ModelMessageView::User(content) => Some(content),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|block| match block {
+                UserContentBlock::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .collect();
+        if text.contains("<retired-conversation>") {
+            return if text.contains("[prefix-b-marker]") {
+                20_000
+            } else {
+                5_000
+            };
+        }
+        messages
+            .iter()
+            .map(|message| match message {
+                ModelInputMessage::Canonical(MessageBlock::User(user)) => match user.id.as_str() {
+                    "prefix-a" => 200,
+                    "prefix-b" => 100,
+                    "recent" => 400,
+                    _ => 0,
+                },
+                ModelInputMessage::Derived(_) => 10,
+                ModelInputMessage::RequestOnly(
+                    RequestOnlyModelContext::UnresolvedOutputCarryover(carryover),
+                ) => {
+                    if carryover.records.iter().any(|record| {
+                        matches!(record,
+                    RenderedCarryoverRecord::ProposedToolCall(call) if call.arguments.is_some())
+                    }) {
+                        150
+                    } else {
+                        50
+                    }
+                }
+                _ => 0,
+            })
+            .sum()
+    }
+
+    fn estimate_conversation_input(&self, messages: &[MessageBlock]) -> u64 {
+        self.estimate_input(&rustx::model::input::canonical_input(messages), "", &[])
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One integrated real-Store/provider/planner re-entry trace.
+async fn summary_input_limit_survives_full_to_reduced_carryover_reentry() {
+    use crate::context::compaction::{
+        CompactionAttribution, CompactionExecutionError, execute_compaction_in_operation,
+    };
+    use rustx::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
+    use rustx::model::{
+        CarryoverDetailLevel, RenderedCarryoverRecord, RenderedCarryoverToolCall,
+        RenderedUnresolvedOutputCarryover, RequestOnlyInsertionAnchor, UnresolvedOutputSettlement,
+    };
+    use rustx::runtime::identity::{EventId, PublicationStreamId, ToolCallId, ToolId};
+    let model = Arc::new(OverflowingSummaryProvider::default());
+    let history = vec![
+        user_message("prefix-a", "[prefix-a-marker]"),
+        user_message("prefix-b", "[prefix-b-marker]"),
+        user_message("recent", "recent suffix"),
+    ];
+    let store = Arc::new(SqliteConversationStore::in_memory(conversation()).unwrap());
+    store.initialize(&history).unwrap();
+    let head = store.load_head().unwrap();
+    let mut state = ConversationState::from_durable_head(
+        history.clone(),
+        head.active_message_ids,
+        head.revision,
+        head.compaction_generation,
+    )
+    .unwrap();
+    let clock = Arc::new(rustx::runtime::monotonic::ManualMonotonicClock::new());
+    let mut context = ContextRuntime::with_scripted_summarizer(
+        ContextEngine::new(
+            ContextConfig {
+                context_window_tokens: 728,
+                reserve_tokens: 0,
+                keep_recent_tokens: 300,
+            },
+            Arc::new(CarryoverReentryEstimator),
+        )
+        .unwrap(),
+        Arc::new(FakeContextSummarizer::new(Vec::new())),
+        None,
+        CompactionBudgets::new(1, 128, 64_000),
+    );
+    let invocation =
+        support::attempt_model_with_window(model.clone(), "fake-model", 10_000_000, 128)
+            .summary_invocation()
+            .clone();
+    context.summarizer = Arc::new(ModelBackedSummarizer::new(
+        invocation.clone(),
+        rustx::model::ModelTimeoutPolicy::default(),
+        clock.clone(),
+    ));
+    context.monotonic_clock = clock.clone();
+    let backend = crate::runtime::auxiliary::executor::AuxiliaryExecutor::for_test(
+        store.clone(),
+        clock.clone(),
+    )
+    .unwrap();
+    context
+        .summarizer
+        .bind_backend(Arc::new(backend.clone()), 0);
+    let attribution = CompactionAttribution::default();
+    store
+        .append_event(RuntimeEventEnvelope {
+            schema_version: EVENT_SCHEMA_VERSION,
+            event_id: EventId::new("carryover-compaction-start"),
+            sequence: 0,
+            tool_occurrence: None,
+            observation: None,
+            conversation_id: conversation(),
+            attempt_id: None,
+            turn_id: None,
+            timestamp: chrono::DateTime::UNIX_EPOCH,
+            event: RuntimeEvent::CompactionStarted {
+                operation_id: attribution.operation_id.clone(),
+            },
+        })
+        .unwrap();
+    let budget = context.compaction_budget(attribution.operation_id.clone());
+    let cancellation = CancellationSignal::new();
+    let operation = context
+        .summarizer
+        .operation(budget.clone(), cancellation.child())
+        .unwrap();
+    let carryover = RenderedUnresolvedOutputCarryover {
+        source_stream_id: PublicationStreamId::new("frozen-carryover"),
+        source_settlement: UnresolvedOutputSettlement::Incomplete,
+        records: vec![RenderedCarryoverRecord::ProposedToolCall(
+            RenderedCarryoverToolCall {
+                call_id: ToolCallId::new("unexecuted-call"),
+                tool_id: ToolId::new("tool-alpha"),
+                name: "alpha".into(),
+                complete: false,
+                arguments: Some("{\"partial\":".into()),
+                omitted_argument_bytes: 0,
+            },
+        )],
+        omitted_blocks: rustx::model::CarryoverOmissionCounts::default(),
+    };
+    let protected = [MessageId::new("recent")];
+    let anchor = RequestOnlyInsertionAnchor::AfterCanonical;
+    let constraints = CompactionConstraints {
+        protected_context_ids: &protected,
+        carryover: Some(&carryover),
+        carryover_anchor: Some(&anchor),
+        ..Default::default()
+    };
+    let first = execute_compaction_in_operation(
+        &mut state,
+        &context,
+        &conversation(),
+        store.as_ref(),
+        &[],
+        None,
+        "",
+        &constraints,
+        &cancellation,
+        attribution.clone(),
+        operation.as_ref(),
+    )
+    .await;
+    assert!(
+        matches!(&first, Err(CompactionExecutionError::Context(error)) if error.kind == ContextErrorKind::CannotFit),
+        "unexpected first planning result: {first:?}"
+    );
+    assert_eq!(budget.summary_input_limit(64_000), 16_000);
+    assert_no_transition(store.as_ref(), &history);
+    let reduced = carryover.degraded(CarryoverDetailLevel::Reduced);
+    clock.advance(17);
+    let constraints = CompactionConstraints {
+        carryover: Some(&reduced),
+        ..constraints
+    };
+    execute_compaction_in_operation(
+        &mut state,
+        &context,
+        &conversation(),
+        store.as_ref(),
+        &[],
+        None,
+        "",
+        &constraints,
+        &cancellation,
+        attribution,
+        operation.as_ref(),
+    )
+    .await
+    .unwrap();
+    operation.close().await;
+    backend.drain().await;
+    let requests = model.requests.lock().unwrap();
+    assert_eq!(
+        requests.len(),
+        3,
+        "provider sees B,B,A, without paying for the same reductions twice"
+    );
+    let selected: Vec<_> = requests
+        .iter()
+        .map(|request| {
+            if summary_includes_b(&request.messages) {
+                "B"
+            } else {
+                "A"
+            }
+        })
+        .collect();
+    assert_eq!(selected, ["B", "B", "A"]);
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.invocation == invocation.invocation_config())
+    );
+    assert_eq!(
+        budget.deadline_millis(),
+        300_000,
+        "re-entry never renews the frozen deadline"
+    );
+    assert_eq!(budget.summary_input_limit(64_000), 16_000);
+    assert_eq!(store.load_canonical().unwrap(), history);
+    assert!(store.projection_head().unwrap().is_some());
+}
 
 /// The engine used by the pipeline regressions: a large window so planning
 /// admits the full active prefix unless a test sizes it down deliberately.

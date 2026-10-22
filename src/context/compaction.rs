@@ -16,10 +16,6 @@ use chrono::Utc;
 use crate::context::ContextRuntime;
 use crate::context::engine::CompactionConstraints;
 
-/// The bounded number of summary-budget shrinks one compaction may attempt
-/// after the summary model rejected its request as too large.
-const MAX_SUMMARY_SHRINKS: u32 = 3;
-
 /// The floor a shrinking summary input budget never crosses. Below it a
 /// summary request could no longer carry a useful span, and the honest
 /// outcome is an explicit compaction failure.
@@ -83,13 +79,9 @@ impl From<ContextError> for CompactionExecutionError {
     }
 }
 
-/// Plans, summarizes, validates, durably commits, and installs one compaction.
-///
-/// The caller exclusively owns `conversation` for the whole future. A
-/// cancellation or context error installs nothing. Success means the typed
-/// checkpoint, activation/head, operation receipt and actual completion fact
-/// were committed atomically before the current durable head was installed.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+/// Standalone Context fixtures own the same operation lifetime explicitly.
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn execute_compaction(
     conversation: &mut ConversationState,
     context: &ContextRuntime,
@@ -102,9 +94,61 @@ pub(crate) async fn execute_compaction(
     cancellation: &CancellationSignal,
     attribution: CompactionAttribution,
 ) -> Result<ExecutedCompaction, CompactionExecutionError> {
-    if cancellation.is_cancelled() {
-        return Err(cancelled("compaction cancelled before it began").into());
+    let budget = super::compaction_budget::CompactionBudget::new(
+        attribution.operation_id.clone(),
+        context.monotonic_clock.clone(),
+    );
+    let operation = context
+        .summarizer
+        .operation(budget.clone(), cancellation.child())?;
+    let result = execute_compaction_in_operation(
+        conversation,
+        context,
+        conversation_id,
+        store,
+        tools,
+        observed,
+        effective_system_prompt,
+        constraints,
+        cancellation,
+        attribution,
+        operation.as_ref(),
+    )
+    .await;
+    operation.close().await;
+    result
+}
+
+/// Plans, summarizes, validates, durably commits, and installs one compaction.
+///
+/// The caller exclusively owns `conversation` for the whole future. A
+/// cancellation or context error installs nothing. Success means the typed
+/// checkpoint, activation/head, operation receipt and actual completion fact
+/// were committed atomically before the current durable head was installed.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+pub(crate) async fn execute_compaction_in_operation(
+    conversation: &mut ConversationState,
+    context: &ContextRuntime,
+    conversation_id: &ConversationId,
+    store: &dyn ConversationStore,
+    tools: &[ModelToolDefinition],
+    observed: Option<&ProviderObservedInput>,
+    effective_system_prompt: &str,
+    constraints: &CompactionConstraints<'_>,
+    cancellation: &CancellationSignal,
+    attribution: CompactionAttribution,
+    operation: &dyn super::summarizer::SummaryOperation,
+) -> Result<ExecutedCompaction, CompactionExecutionError> {
+    let budget = operation.budget();
+    if budget.operation_id() != &attribution.operation_id {
+        return Err(ContextError::new(
+            ContextErrorKind::AuxiliaryNotStarted,
+            "Summary operation belongs to another Compaction",
+        )
+        .into());
     }
+    budget.check(cancellation)?;
+    let mut prepared = Some(operation.prepare()?);
     let owner = store
         .projection_owner(attribution.attempt_id.as_ref())
         .map_err(resource_failure)?;
@@ -138,13 +182,10 @@ pub(crate) async fn execute_compaction(
         observed,
         effective_system_prompt,
     );
-    let model_resources = crate::context::resources::CompactionModelResources {
-        context,
-        cancellation,
-    };
-    let mut budgets = model_resources.budgets();
-    let mut shrinks = 0;
+    let mut budgets = context.compaction_budgets;
+    budgets.summary_input_limit = budget.summary_input_limit(budgets.summary_input_limit);
     let (retired_count, summary) = loop {
+        budget.check(cancellation)?;
         let n = super::planning::summary_prefix(
             &engine,
             &projection.messages,
@@ -193,9 +234,13 @@ pub(crate) async fn execute_compaction(
         let request = crate::context::summarizer::SummaryRequest {
             retired: projection.messages.range(0..n).to_vec(),
         };
-        let result = model_resources.summarize(request).await;
+        let result = prepared
+            .take()
+            .expect("one reservation per Summary input")
+            .summarize(request, Some(resources.cut().clone()))
+            .await;
         match result {
-            Ok(summary) if !summary.trim().is_empty() => break (n, summary),
+            Ok(summary) if !summary.text.trim().is_empty() => break (n, summary),
             Ok(_) => {
                 return Err(ContextError::new(
                     ContextErrorKind::SummaryFailed,
@@ -205,12 +250,14 @@ pub(crate) async fn execute_compaction(
             }
             Err(error)
                 if error.kind == ContextErrorKind::SummaryInputTooLarge
-                    && shrinks < MAX_SUMMARY_SHRINKS
                     && budgets.summary_input_limit > MIN_SUMMARY_INPUT_LIMIT =>
             {
-                shrinks += 1;
-                budgets.summary_input_limit =
-                    (budgets.summary_input_limit / 2).max(MIN_SUMMARY_INPUT_LIMIT);
+                budgets.summary_input_limit = budget.shrink_summary_input_limit(
+                    budgets.summary_input_limit,
+                    MIN_SUMMARY_INPUT_LIMIT,
+                    cancellation,
+                )?;
+                prepared = Some(operation.prepare()?);
             }
             Err(error) => return Err(error.into()),
         }
@@ -284,7 +331,8 @@ pub(crate) async fn execute_compaction(
             content: vec![crate::message::types::UserContentBlock::Text(
                 crate::message::content::TextBlock {
                     text: crate::context::compaction_metadata::render_summary_text(
-                        &summary, &metadata,
+                        &summary.text,
+                        &metadata,
                     ),
                 },
             )],
@@ -326,7 +374,7 @@ pub(crate) async fn execute_compaction(
         base_frontier: history.cut.ledger,
         items,
         summary_metadata: Some(metadata),
-        summary_generation: None,
+        summary_generation: summary.generation,
     };
     let compiled =
         crate::context::checkpoint::compile_checkpoint(&candidate, |source, body_required| {
@@ -377,9 +425,8 @@ pub(crate) async fn execute_compaction(
         )
         .into());
     }
-    let grant = cancellation
-        .authorize_compaction_commit(attribution.operation_id.clone())
-        .ok_or_else(|| cancelled("compaction cancelled before commit authorization"))?;
+    budget.check(cancellation)?;
+    let grant = operation.authorize_commit()?;
     let fingerprint = candidate.fingerprint();
     let owner_for_install = owner.clone();
     let input = crate::durable::projection::ProjectionCommitInput {
@@ -456,10 +503,6 @@ pub(crate) async fn execute_compaction(
             error,
         }),
     }
-}
-
-fn cancelled(message: &str) -> ContextError {
-    ContextError::new(ContextErrorKind::Cancelled, message)
 }
 
 fn resource_failure(error: crate::durable::ConversationStoreError) -> CompactionExecutionError {

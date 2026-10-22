@@ -35,8 +35,39 @@ pub(super) struct ManualCompactionSuccess {
 #[derive(Debug, Default)]
 pub(super) struct ManualCompactionCompletion {
     pub(super) completed: AtomicBool,
+    pub(super) ready_to_join: AtomicBool,
+    pub(super) joined: AtomicBool,
     pub(super) result: Mutex<Option<Result<ManualCompactionOutcome, ManualCompactionError>>>,
     pub(super) notify: tokio::sync::Notify,
+}
+
+pub(super) struct ManualTail {
+    pub(super) worker: tokio::task::JoinHandle<()>,
+    pub(super) completion: Arc<ManualCompactionCompletion>,
+}
+
+pub(super) struct ManualTailExit {
+    pub(super) completion: Arc<ManualCompactionCompletion>,
+    pub(super) wake: Arc<WakeGate>,
+    pub(super) _admission: crate::runtime::types::LifecycleAdmission,
+}
+
+impl Drop for ManualTailExit {
+    fn drop(&mut self) {
+        // This announces that the native owner may await the actual Join;
+        // it is deliberately not physical-exit evidence by itself.
+        self.completion.ready_to_join.store(true, Ordering::Release);
+        self.wake.notify.notify_one();
+    }
+}
+
+/// A reply view after native ownership of the whole maintenance tail transferred.
+pub(crate) struct ManualCompactionHandle(Arc<ManualCompactionCompletion>);
+
+impl ManualCompactionHandle {
+    pub(crate) async fn wait(self) -> Result<ManualCompactionOutcome, ManualCompactionError> {
+        self.0.wait().await
+    }
 }
 
 impl ManualCompactionCompletion {
@@ -51,7 +82,7 @@ impl ManualCompactionCompletion {
 
     pub(super) async fn wait(&self) -> Result<ManualCompactionOutcome, ManualCompactionError> {
         loop {
-            if self.completed.load(Ordering::Acquire) {
+            if self.completed.load(Ordering::Acquire) && self.joined.load(Ordering::Acquire) {
                 return self
                     .result
                     .lock()
@@ -62,7 +93,7 @@ impl ManualCompactionCompletion {
             let notified = self.notify.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
-            if self.completed.load(Ordering::Acquire) {
+            if self.completed.load(Ordering::Acquire) && self.joined.load(Ordering::Acquire) {
                 return self
                     .result
                     .lock()
@@ -182,16 +213,30 @@ impl RuntimeInner {
     /// settlement even if the requesting attachment disappears.
     pub(super) async fn run_manual_compaction(
         self: &Arc<Self>,
-        operation_id: crate::runtime::identity::CompactionOperationId,
         mut conversation: ConversationState,
         context_runtime: ContextRuntime,
         tools: Vec<ModelToolDefinition>,
         system_sections: Vec<crate::context::AcceptedSystemSection>,
         cancellation: &AgentCancellation,
+        budget: crate::context::compaction_budget::CompactionBudget,
     ) -> ManualCompactionTaskResult {
+        let operation_id = budget.operation_id().clone();
         let effective_system_prompt = render_effective_system_prompt(&system_sections);
         let signal = cancellation.signal();
-        let executed = execute_compaction(
+        let operation = match context_runtime
+            .summarizer
+            .operation(budget.clone(), signal.child())
+        {
+            Ok(operation) => operation,
+            Err(error) => {
+                return ManualCompactionTaskResult {
+                    conversation,
+                    result: Err(ManualCompactionError::Context(error)),
+                    committed_failure: None,
+                };
+            }
+        };
+        let executed = execute_compaction_in_operation(
             &mut conversation,
             &context_runtime,
             &self.conversation_id,
@@ -206,8 +251,10 @@ impl RuntimeInner {
                 attempt_id: None,
                 turn_id: None,
             },
+            operation.as_ref(),
         )
         .await;
+        operation.close().await;
         let result = match executed {
             Ok(completed) => {
                 let RuntimeEvent::CompactionCompleted {
@@ -402,6 +449,14 @@ impl ConversationRuntime {
         &self,
         request_id: Option<crate::runtime::identity::ManualCompactionRequestId>,
     ) -> Result<ManualCompactionOutcome, ManualCompactionError> {
+        self.admit_compaction(request_id)?.wait().await
+    }
+
+    #[allow(clippy::too_many_lines)] // Native ownership transfers the complete maintenance tail once.
+    pub(crate) fn admit_compaction(
+        &self,
+        request_id: Option<crate::runtime::identity::ManualCompactionRequestId>,
+    ) -> Result<ManualCompactionHandle, ManualCompactionError> {
         let completion = {
             let mut state = self.inner.lock_state();
             match self.inner.lifecycle.state() {
@@ -413,14 +468,35 @@ impl ConversationRuntime {
                 }
                 ConversationLifecycleState::Running => {}
             }
-            if let Some(failure) = self.inner.durability_gate.failure() {
+            if let Some(failure) = self.inner.durability_gate.admission_failure() {
                 return Err(ManualCompactionError::DurabilityFailed {
                     message: failure.diagnostic,
                 });
             }
-            if state.current_attempt.is_some() || state.manual_compaction.is_some() {
+            if state.current_attempt.is_some()
+                || state.manual_compaction.is_some()
+                || self
+                    .inner
+                    .manual_tail
+                    .lock()
+                    .expect("manual tail owner")
+                    .is_some()
+            {
                 return Err(ManualCompactionError::Busy);
             }
+            let operation_id = crate::runtime::identity::CompactionOperationId::new(
+                uuid::Uuid::now_v7().to_string(),
+            );
+            let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+            let budget = crate::context::compaction_budget::CompactionBudget::new(
+                operation_id.clone(),
+                self.inner.monotonic_clock.clone(),
+            );
+            let summary_backend = self
+                .inner
+                .auxiliary
+                .pre_admit_summary(budget.clone(), &cancellation.signal())
+                .map_err(ManualCompactionError::Context)?;
             let model = state.model.snapshot().map_err(|error| {
                 ManualCompactionError::ModelUnavailable {
                     diagnostic: error.to_string(),
@@ -442,6 +518,7 @@ impl ConversationRuntime {
                         },
                     ),
                     &resources,
+                    summary_backend,
                 )
                 .map_err(ManualCompactionError::Context)?;
             // Manual maintenance has no attempt lease, but it still freezes
@@ -462,9 +539,6 @@ impl ConversationRuntime {
                         format!("the frozen capability system guidance is invalid: {error}"),
                     ))
                 })?;
-            let operation_id = crate::runtime::identity::CompactionOperationId::new(
-                uuid::Uuid::now_v7().to_string(),
-            );
             self.inner.publish_manual_compaction_event(
                 &mut state,
                 request_id.as_ref(),
@@ -476,7 +550,6 @@ impl ConversationRuntime {
                 .conversation
                 .take()
                 .expect("the idle coordinator owns the conversation state");
-            let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
             state.manual_compaction = Some(CurrentManualCompaction {
                 operation_id: operation_id.clone(),
                 cancellation: cancellation.clone(),
@@ -489,6 +562,7 @@ impl ConversationRuntime {
             let completion = Arc::new(ManualCompactionCompletion::default());
             let completion_for_task = completion.clone();
             let inner = Arc::clone(&self.inner);
+            let (release, registered) = tokio::sync::oneshot::channel();
             drop(state);
             // Diagnostics follow the runtime owner, not the requesting socket:
             // disconnecting the requester cannot hide maintenance settlement.
@@ -497,15 +571,24 @@ impl ConversationRuntime {
                 "rustx: manual context compaction admitted for {}",
                 self.inner.conversation_id
             );
-            self.inner.executor.spawn(async move {
+            let task_completion = completion.clone();
+            let worker = self.inner.executor.spawn(async move {
+                if registered.await.is_err() {
+                    return;
+                }
+                let _tail = ManualTailExit {
+                    completion: task_completion,
+                    wake: inner.wake.clone(),
+                    _admission: admission,
+                };
                 let task = inner
                     .run_manual_compaction(
-                        operation_id,
                         conversation,
                         context_runtime,
                         tools,
                         system_sections,
                         &cancellation,
+                        budget,
                     )
                     .await;
                 #[cfg(test)]
@@ -521,11 +604,15 @@ impl ConversationRuntime {
                     }
                 }
                 inner.finish_manual_compaction(task, &completion_for_task, request_id.as_ref());
-                drop(admission);
             });
+            *self.inner.manual_tail.lock().expect("manual tail owner") = Some(ManualTail {
+                worker,
+                completion: completion.clone(),
+            });
+            let _ = release.send(());
             completion
         };
-        completion.wait().await
+        Ok(ManualCompactionHandle(completion))
     }
 }
 

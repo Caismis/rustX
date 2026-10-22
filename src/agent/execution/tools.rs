@@ -957,7 +957,9 @@ impl AgentExecution<'_> {
             // A detached execution outlives this batch, so it is handed no
             // task-list authority: nothing it does can land in the snapshot
             // this batch is about to commit.
-            ToolInvocationMode::Background => (self.dispatch_background(&invocation), Vec::new()),
+            ToolInvocationMode::Background => {
+                (self.dispatch_background(&invocation).await, Vec::new())
+            }
         };
         (call_index, result, facts)
     }
@@ -1150,7 +1152,7 @@ impl AgentExecution<'_> {
     /// accepted result exactly when conversation ownership commits. A
     /// rolled-back dispatch produces a cancelled result slot for the
     /// originating attempt, never a detached execution.
-    fn dispatch_background(&self, invocation: &ToolInvocation) -> ToolExecutionResult {
+    async fn dispatch_background(&self, invocation: &ToolInvocation) -> ToolExecutionResult {
         let executor = self.tool_registry().executor(&invocation.tool_id);
         // The attempt's effective ToolEnvironment is captured at prepare
         // time, before the background ownership commit: the detached
@@ -1170,7 +1172,8 @@ impl AgentExecution<'_> {
                 match self
                     .tool_runtime
                     .background()
-                    .commit_dispatch(prepared, &self.cancellation.signal())
+                    .commit_dispatch_owned(prepared, &self.cancellation.signal())
+                    .await
                 {
                     Ok(BackgroundDispatchOutcome::Accepted { result, .. }) => result,
                     // A rolled-back dispatch (attempt cancellation won at

@@ -4,6 +4,7 @@ use crate::durable::observation::{
     TraceFactKind as K, TraceFactQuery, TraceFactScope,
 };
 use crate::durable::{ConversationStore, ConversationStoreError};
+use crate::observation::head::RuntimeClientCompactionView;
 use crate::runtime_client::event::RuntimeClientOutcome;
 use crate::runtime_client::projection::PreparedDurableToolReading;
 use crate::runtime_client::snapshot::{
@@ -196,7 +197,19 @@ fn read_compaction(
             context.compaction_error = Some(detail.text.clone());
         }
     }
-    if let Some(reading) = latest(
+    if let Some(compaction) = read_latest_compaction(store, cut)? {
+        context.latest_compaction = Some(compaction);
+        context.compaction_count = 1;
+    }
+    Ok(())
+}
+
+/// Reads one committed completion at the bootstrap cut without replaying live state.
+pub(super) fn read_latest_compaction(
+    store: &dyn ConversationStore,
+    cut: &ObservationReadCut,
+) -> Result<Option<RuntimeClientCompactionView>, ConversationStoreError> {
+    Ok(latest(
         store,
         cut,
         vec![K::CompactionCompleted],
@@ -205,13 +218,9 @@ fn read_compaction(
     )?
     .pop()
     .and_then(|fact| match fact.bootstrap {
-        Some(B::CompactionCompleted { reading }) => Some(reading),
+        Some(B::CompactionCompleted { reading }) => Some(reading.compaction),
         _ => None,
-    }) {
-        context.latest_compaction = Some(reading.compaction);
-        context.compaction_count = 1;
-    }
-    Ok(())
+    }))
 }
 fn read_tools(
     store: &dyn ConversationStore,
