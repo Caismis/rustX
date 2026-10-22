@@ -32,6 +32,9 @@ pub(crate) fn entries(
     Ok(paths)
 }
 
+/// The most resources of one kind a canonical resource directory holds.
+pub(crate) const MAX_RESOURCE_FILES: usize = 128;
+
 pub(crate) fn files(
     boundary: &Path,
     root: &Path,
@@ -44,7 +47,7 @@ pub(crate) fn files(
         }
         files.push(path);
     }
-    if files.len() > 128 {
+    if files.len() > MAX_RESOURCE_FILES {
         return Err(
             RuntimeResourceLoadError::new("canonical catalog exceeds 128 resources")
                 .at(root, "resources"),

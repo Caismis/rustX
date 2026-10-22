@@ -27,12 +27,14 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 mod candidate;
+mod capacity;
 mod check;
 #[cfg(test)]
 mod tests;
 
 pub use candidate::WorkflowEdit;
 pub(super) use candidate::candidate;
+pub(super) use capacity::Capacity;
 pub use check::{WorkflowCheckReport, WorkflowDependencies, WorkflowStructure};
 
 /// The byte bound of a description in the bounded library listing.

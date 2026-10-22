@@ -1099,3 +1099,324 @@ fn a_checked_candidate_names_the_revision_its_normalized_commit_takes() {
     };
     assert_ne!(identity(omitted), identity(empty));
 }
+
+/// Seed `directory` with Workflow files written as an external editor would:
+/// `valid` files named `<prefix><n>` holding `content`, and `invalid_names`
+/// files whose names are no Workflow identity at all.
+fn seed(directory: &Path, prefix: &str, valid: usize, invalid_names: usize, content: &[u8]) {
+    std::fs::create_dir_all(directory).unwrap();
+    for index in 0..valid {
+        std::fs::write(directory.join(format!("{prefix}{index:03}.yaml")), content).unwrap();
+    }
+    for index in 0..invalid_names {
+        std::fs::write(
+            directory.join(format!("Not-An-Id-{index:03}.yaml")),
+            content,
+        )
+        .unwrap();
+    }
+}
+
+fn capacity_refusal(result: Result<String, SettingsError>) -> WorkflowDiagnostic {
+    match result {
+        Err(SettingsError::InvalidWorkflow(diagnostic)) if diagnostic.category == "capacity" => {
+            *diagnostic
+        }
+        other => panic!("expected a capacity refusal, got {other:?}"),
+    }
+}
+
+impl Roots {
+    fn workspace_directory(&self) -> PathBuf {
+        self.a.join(".agents/workflows")
+    }
+
+    /// Canonical bytes of a valid minimal Workflow, written by native code.
+    fn minimal_bytes(&self) -> Vec<u8> {
+        self.create(&SourceTarget::User, "template_source", "Template.");
+        let path = self.user_directory().join("template_source.yaml");
+        let bytes = std::fs::read(&path).unwrap();
+        std::fs::remove_file(path).unwrap();
+        bytes
+    }
+
+    /// What discovery composes for `workspace` (none: User only).
+    fn discover(&self, workspace: Option<&Path>) -> crate::runtime::workflow::WorkflowCatalog {
+        crate::local_runtime::workflow_resources::load(workspace, &self.home.join("rustx/.agents"))
+            .unwrap()
+    }
+
+    fn copy(&self, target: &SourceTarget, source: &str, id: &str) -> Result<String, SettingsError> {
+        let source_revision = self.read(target, source).revision;
+        self.write(
+            target,
+            id,
+            "missing",
+            WorkflowEdit::Copy {
+                source: WorkflowId::parse(source).unwrap(),
+                source_revision,
+            },
+        )
+    }
+}
+
+#[test]
+fn a_global_addition_is_admitted_up_to_64_identities_and_refused_before_publication_after() {
+    let roots = Roots::new();
+    let bytes = roots.minimal_bytes();
+    // 62 valid files and one valid identity with invalid content: an
+    // identity is occupied before anything is compiled.
+    seed(&roots.user_directory(), "g", 62, 0, &bytes);
+    std::fs::write(roots.user_directory().join("broken.yaml"), "description: [").unwrap();
+    roots.create(&SourceTarget::User, "sixty_four", "The 64th identity.");
+    assert_eq!(roots.discover(None).locations.len(), 64);
+
+    let refused = capacity_refusal(roots.write(
+        &SourceTarget::User,
+        "sixty_five",
+        "missing",
+        WorkflowEdit::Create {
+            description: "One too many.".into(),
+        },
+    ));
+    assert_eq!(
+        refused.reason,
+        "Global already defines the maximum of 64 Workflow IDs"
+    );
+    capacity_refusal(roots.copy(&SourceTarget::User, "g000", "sixty_five"));
+    assert!(!roots.user_directory().join("sixty_five.yaml").exists());
+    // Discovery of the existing files is untouched.
+    let catalog = roots.discover(None);
+    assert!(catalog.get(&id("sixty_four")).is_some());
+    assert!(catalog.discovery_diagnostics.is_empty());
+}
+
+#[test]
+fn a_workspace_addition_counts_its_union_with_global_and_an_override_adds_no_identity() {
+    let roots = Roots::new();
+    let bytes = roots.minimal_bytes();
+    let target = workspace(&roots.a);
+    seed(&roots.user_directory(), "u", 40, 0, &bytes);
+    seed(&roots.workspace_directory(), "w", 23, 0, &bytes);
+    roots.create(&target, "workspace_last", "The 64th composed identity.");
+    let refused = capacity_refusal(roots.write(
+        &target,
+        "workspace_more",
+        "missing",
+        WorkflowEdit::Create {
+            description: "x".into(),
+        },
+    ));
+    assert!(
+        refused
+            .reason
+            .contains("Global and this Workspace together"),
+        "{}",
+        refused.reason
+    );
+    capacity_refusal(roots.copy(&target, "w000", "workspace_more"));
+    assert!(
+        !roots
+            .workspace_directory()
+            .join("workspace_more.yaml")
+            .exists()
+    );
+    // Overriding a Global ID keeps the union at 64.
+    roots.create(&target, "u000", "A Workspace override.");
+    let catalog = roots.discover(Some(&roots.a));
+    assert_eq!(catalog.locations.len(), 64);
+    assert!(catalog.discovery_diagnostics.is_empty());
+    assert!(catalog.get(&id("workspace_last")).is_some());
+    // A Global addition counts the User-only catalog it is authorized for:
+    // it cannot know every Workspace a later session composes with.
+    roots.create(
+        &SourceTarget::User,
+        "global_more",
+        "Within Global's own bound.",
+    );
+    assert_eq!(roots.discover(None).locations.len(), 41);
+}
+
+#[test]
+fn a_directory_admits_up_to_128_yaml_entries_and_refuses_the_next() {
+    let roots = Roots::new();
+    let bytes = roots.minimal_bytes();
+    // Entries without a Workflow identity count toward the physical bound
+    // only, isolating it from the 64-identity bound.
+    seed(&roots.user_directory(), "p", 2, 125, &bytes);
+    roots.create(&SourceTarget::User, "entry_128", "The 128th entry.");
+    let refused = capacity_refusal(roots.write(
+        &SourceTarget::User,
+        "entry_129",
+        "missing",
+        WorkflowEdit::Create {
+            description: "x".into(),
+        },
+    ));
+    assert!(
+        refused.reason.contains("128 YAML files"),
+        "{}",
+        refused.reason
+    );
+    assert!(!roots.user_directory().join("entry_129.yaml").exists());
+    let library = roots.manager.workflow_library(&SourceTarget::User).unwrap();
+    assert!(library.diagnostic.is_none());
+    assert_eq!(library.files.len(), 128);
+    assert!(roots.discover(None).get(&id("entry_128")).is_some());
+}
+
+#[test]
+fn an_externally_over_full_scope_still_allows_guarded_replace_and_delete() {
+    let roots = Roots::new();
+    let bytes = roots.minimal_bytes();
+    seed(&roots.user_directory(), "o", 65, 0, &bytes);
+    capacity_refusal(roots.write(
+        &SourceTarget::User,
+        "more",
+        "missing",
+        WorkflowEdit::Create {
+            description: "x".into(),
+        },
+    ));
+    let replaced = roots.read(&SourceTarget::User, "o000");
+    let mut document = replaced.document.clone().unwrap();
+    document.description = "Repaired in place.".into();
+    roots
+        .write(
+            &SourceTarget::User,
+            "o000",
+            &replaced.revision,
+            WorkflowEdit::Replace { document },
+        )
+        .unwrap();
+    let doomed = roots.read(&SourceTarget::User, "o001").revision;
+    // A delete keeps its revision guard.
+    assert!(matches!(
+        roots.write(
+            &SourceTarget::User,
+            "o001",
+            "sha256:other",
+            WorkflowEdit::Delete
+        ),
+        Err(SettingsError::Conflict { .. })
+    ));
+    roots
+        .write(&SourceTarget::User, "o001", &doomed, WorkflowEdit::Delete)
+        .unwrap();
+    let catalog = roots.discover(None);
+    assert_eq!(catalog.locations.len(), 64);
+    assert!(catalog.discovery_diagnostics.is_empty());
+    assert!(catalog.get(&id("o000")).is_some());
+    assert_eq!(
+        roots
+            .read(&SourceTarget::User, "o000")
+            .document
+            .unwrap()
+            .description,
+        "Repaired in place."
+    );
+}
+
+/// Wait until some writer blocks on the lock file `lock` (Linux `/proc/locks`).
+#[cfg(target_os = "linux")]
+fn await_waiter(lock: &Path) {
+    use std::os::unix::fs::MetadataExt;
+    let inode = format!(":{} ", std::fs::metadata(lock).unwrap().ino());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while !std::fs::read_to_string("/proc/locks")
+        .unwrap()
+        .lines()
+        .any(|line| line.contains("->") && line.contains(&inode))
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the second writer never waited for the capacity lock"
+        );
+        std::thread::yield_now();
+    }
+}
+
+/// Run `first` until it holds its capacity locks, start `second`, wait until
+/// it blocks on the User capacity lock, then let both finish.
+fn race(
+    roots: &Roots,
+    first: impl FnOnce(UserConfigManager) -> Result<String, SettingsError> + Send + 'static,
+    second: impl FnOnce(UserConfigManager) -> Result<String, SettingsError> + Send + 'static,
+) -> (Result<String, SettingsError>, Result<String, SettingsError>) {
+    let (held, holding) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    roots
+        .manager
+        .test_hooks
+        .insert("workflow_capacity_locked", move || {
+            held.send(()).unwrap();
+            released.recv().unwrap();
+        });
+    let manager = roots.manager.clone();
+    let first = std::thread::spawn(move || first(manager));
+    holding.recv().unwrap();
+    let manager = roots.manager.clone();
+    let second = std::thread::spawn(move || second(manager));
+    #[cfg(target_os = "linux")]
+    await_waiter(
+        &roots
+            .user_directory()
+            .join(crate::local_runtime::settings::lock_name(OsStr::new(
+                "workflow-capacity",
+            ))),
+    );
+    release.send(()).unwrap();
+    (first.join().unwrap(), second.join().unwrap())
+}
+
+fn creating(
+    target: SourceTarget,
+    name: &'static str,
+) -> impl FnOnce(UserConfigManager) -> Result<String, SettingsError> + Send + 'static {
+    move |manager| {
+        manager.write_source_settings(
+            &target,
+            "missing",
+            SourceMutation::Workflow {
+                id: id(name),
+                edit: WorkflowEdit::Create {
+                    description: "Racing.".into(),
+                },
+            },
+        )
+    }
+}
+
+#[test]
+fn two_additions_competing_for_the_last_slot_admit_at_most_one() {
+    let roots = Roots::new();
+    let bytes = roots.minimal_bytes();
+    seed(&roots.user_directory(), "s", 63, 0, &bytes);
+    let (first, second) = race(
+        &roots,
+        creating(SourceTarget::User, "first_racer"),
+        creating(SourceTarget::User, "second_racer"),
+    );
+    assert!(first.is_ok());
+    capacity_refusal(second);
+    assert!(!roots.user_directory().join("second_racer.yaml").exists());
+    assert_eq!(roots.discover(None).locations.len(), 64);
+}
+
+#[test]
+fn a_workspace_addition_waits_for_and_counts_a_concurrent_global_addition() {
+    let roots = Roots::new();
+    let bytes = roots.minimal_bytes();
+    seed(&roots.user_directory(), "u", 40, 0, &bytes);
+    seed(&roots.workspace_directory(), "w", 23, 0, &bytes);
+    let (global, local) = race(
+        &roots,
+        creating(SourceTarget::User, "global_last"),
+        creating(workspace(&roots.a), "workspace_late"),
+    );
+    assert!(global.is_ok());
+    capacity_refusal(local);
+    let catalog = roots.discover(Some(&roots.a));
+    assert_eq!(catalog.locations.len(), 64);
+    assert!(catalog.discovery_diagnostics.is_empty());
+}

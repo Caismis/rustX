@@ -1221,6 +1221,23 @@ impl UserConfigManager {
         let name = path.file_name().ok_or(SettingsError::Invalid)?;
         #[cfg(test)]
         self.test_hooks.reach("write_before_lock");
+        // A Workflow addition is admitted against the discovery bounds of its
+        // scopes under their capacity locks, taken before the writer lock.
+        let capacity = match &mutation {
+            SourceMutation::Workflow {
+                edit:
+                    super::super::workflow_authoring::WorkflowEdit::Create { .. }
+                    | super::super::workflow_authoring::WorkflowEdit::Copy { .. },
+                ..
+            } => Some(super::super::workflow_authoring::Capacity::lock(
+                self, target,
+            )?),
+            _ => None,
+        };
+        #[cfg(test)]
+        if capacity.is_some() {
+            self.test_hooks.reach("workflow_capacity_locked");
+        }
         let committed_revision;
         {
             let _lock = source.lock(name).map_err(|error| {
@@ -1235,6 +1252,9 @@ impl UserConfigManager {
                     expected: expected.into(),
                     actual,
                 });
+            }
+            if let (Some(capacity), SourceMutation::Workflow { id, .. }) = (&capacity, &mutation) {
+                capacity.admit(id)?;
             }
             let candidate = match mutation {
                 SourceMutation::RepairConfig { document } => {
