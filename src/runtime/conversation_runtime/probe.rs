@@ -44,6 +44,7 @@ use super::{ConversationRuntime, RuntimeInner};
 #[derive(Debug, Default)]
 #[allow(clippy::struct_field_names)]
 pub(crate) struct CoordinatorProbe {
+    pub(crate) title_source_reads: Option<Arc<std::sync::atomic::AtomicUsize>>,
     /// Parks the next admission when armed.
     pub(crate) admission_gate: Option<Arc<Gate>>,
     /// Signals only after admission proves the coordinator lock is held by

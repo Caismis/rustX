@@ -356,6 +356,11 @@ authoritative reads. Only one current Call can bind a source. A confirmed
 zero-request terminal releases only its own association; the first confirmed
 request permanently consumes automatic eligibility and only that live Call may
 use its remaining technical attempts. Restart never replays inference or output.
+Title preserves the resolved invocation's generation budget and provider
+parameters, with whole-generation safety bounds separate from the final label
+limit of 120 characters / 480 UTF-8 bytes. Lifecycle Busy reserves no capacity
+and waits for an actual boundary unlock; coalesced external capacity releases
+cannot cause repeated source reads while that boundary remains occupied.
 Title retains native business ownership through the separate Catalog commit.
 Manual names and deletion win; an already-visible generated title survives a
 committed-error response and publishes summary invalidation. Catalog publication
@@ -364,8 +369,8 @@ labels independently of the historical cut and never copy execution or quota.
 
 Native auxiliary acquisition and waits follow this graph:
 
-- Admission: nonblocking process/Conversation/write reservations, then short
-  durability state, nonblocking lifecycle admission, cancellation grant,
+- Admission: short durability state, nonblocking lifecycle admission, then
+  nonblocking process/Conversation/write reservations, cancellation grant,
   parent Scope and registry publication. No SQL or provider wait occurs here.
 - Ownership start: await the owned durability permission outside coordinator
   and registry locks; enqueue the retained exact intent under the cancellation

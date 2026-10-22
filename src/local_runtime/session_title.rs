@@ -15,7 +15,7 @@ use crate::runtime::conversation_runtime::ConversationRuntime;
 use crate::runtime::identity::{AuxiliaryCallId, ConversationId, SessionId};
 use crate::runtime::types::{CancellationReason, ConversationLifecycleState};
 
-use super::session::{SESSION_TITLE_BYTE_LIMIT, SessionCatalog};
+use super::session::SessionCatalog;
 
 struct TitleDispatchCheck {
     catalog: Weak<tokio::sync::Mutex<SessionCatalog>>,
@@ -54,22 +54,37 @@ pub(crate) fn arm(
     session_id: SessionId,
     runtime: &ConversationRuntime,
 ) {
-    let Ok(mut metadata) = runtime.session_observation_metadata() else {
+    let Ok(metadata) = runtime.session_observation_metadata() else {
         tracing::warn!(%session_id, "Title source subscription unavailable");
         return;
     };
     // Both finite source slots are armed before activation and before any read.
-    let mut capacity = runtime.title_capacity_changes();
+    let capacity = runtime.title_capacity_changes();
     if runtime.recover_title_source().is_err() {
         tracing::warn!(%session_id, "Title source recovery remains unresolved");
         return;
     }
+    runtime.own_title_task(tokio::spawn(owner(
+        catalog, session_id, runtime, metadata, capacity,
+    )));
+}
+
+pub(crate) fn owner(
+    catalog: Weak<tokio::sync::Mutex<SessionCatalog>>,
+    session_id: SessionId,
+    runtime: &ConversationRuntime,
+    mut metadata: tokio::sync::watch::Receiver<
+        crate::runtime::observation::SessionObservationMetadata,
+    >,
+    mut capacity: tokio::sync::watch::Receiver<u64>,
+) -> impl Future<Output = ()> + Send + 'static {
     let lifecycle = runtime.title_lifecycle();
     let weak_runtime = Arc::downgrade(&runtime.inner);
-    let worker = tokio::spawn(async move {
+    async move {
         let mut previous_state = ConversationLifecycleState::Inactive;
         let mut check_eligibility = false;
         let mut model_only = false;
+        let mut lifecycle_only = false;
         let mut observed_model = metadata.borrow().model_generation;
         loop {
             let changed = lifecycle.changed();
@@ -101,9 +116,11 @@ pub(crate) fn arm(
                     TitleProgress::Finished => return,
                     TitleProgress::Waiting => {
                         model_only = false;
+                        lifecycle_only = false;
                     }
                     TitleProgress::WaitingAfterCall => {
                         model_only = false;
+                        lifecycle_only = false;
                         // wait_closed proves exactly one release belongs to this
                         // Call. Preserve any coalesced release from another Call;
                         // suppressing our own release must not erase its wake.
@@ -112,7 +129,12 @@ pub(crate) fn arm(
                     }
                     TitleProgress::WaitingForModel => {
                         model_only = true;
+                        lifecycle_only = false;
                         capacity.borrow_and_update();
+                    }
+                    TitleProgress::WaitingForLifecycle => {
+                        model_only = false;
+                        lifecycle_only = true;
                     }
                 }
                 // Re-arm the lifecycle notification after this operation's own
@@ -126,23 +148,27 @@ pub(crate) fn arm(
                     if result.is_err() { return; }
                     let current = metadata.borrow_and_update();
                     if current.closed { return; }
-                    check_eligibility = !model_only || current.model_generation != observed_model;
+                    check_eligibility = !lifecycle_only
+                        && (!model_only || current.model_generation != observed_model);
                     observed_model = current.model_generation;
                 },
-                result = capacity.changed(), if !model_only => {
+                () = lifecycle.commit_available(), if lifecycle_only => {
+                    check_eligibility = true;
+                },
+                result = capacity.changed(), if !model_only && !lifecycle_only => {
                     if result.is_err() { return; }
                     check_eligibility = true;
                 },
             }
         }
-    });
-    runtime.own_title_task(worker);
+    }
 }
 
 enum TitleProgress {
     Waiting,
     WaitingAfterCall,
     WaitingForModel,
+    WaitingForLifecycle,
     Finished,
 }
 
@@ -188,6 +214,9 @@ async fn generate(
     let cancellation = AgentCancellation::new(CancellationReason::RuntimeShutdown);
     let prepared = match runtime.prepare_title(&cancellation.signal()) {
         Ok(prepared) => prepared,
+        Err(error) if error.kind == ContextErrorKind::AuxiliaryLifecycleBusy => {
+            return TitleProgress::WaitingForLifecycle;
+        }
         Err(error)
             if matches!(
                 error.kind,
@@ -218,7 +247,6 @@ async fn generate(
             conversation_id: source.conversation_id.clone(),
         })),
         title_source: Some(binding),
-        output_bytes_limit: Some(SESSION_TITLE_BYTE_LIMIT as u64),
     });
     let completed = match submitted {
         Ok(receipt) => match receipt.await {

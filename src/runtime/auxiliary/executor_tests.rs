@@ -266,7 +266,6 @@ fn fixture_in_process(
             timeout: ModelTimeoutPolicy::default(),
             resource_revision: 7,
             dispatch_check: None,
-            output_bytes_limit: None,
             title_source: None,
         },
         adapter,
@@ -1470,4 +1469,53 @@ async fn historical_summary_call_start_cancellation_preserves_native_health() {
         operation.close().await;
         fixture.executor.drain().await;
     }
+}
+
+#[tokio::test]
+async fn lifecycle_refusal_neither_reserves_capacity_nor_loses_release_wakes() {
+    let fixture = fixture(Script::Complete);
+    let lifecycle = fixture.executor.0.resources.lifecycle.clone();
+    let mut changes = fixture.executor.capacity_changes();
+    let before = *changes.borrow_and_update();
+    let (entered, held) = tokio::sync::oneshot::channel();
+    let (release, resume) = std::sync::mpsc::channel::<()>();
+    let holder = std::thread::spawn(move || {
+        lifecycle
+            .with_running_commit(|| {
+                entered.send(()).unwrap();
+                let _ = resume.recv();
+            })
+            .unwrap();
+    });
+    held.await.unwrap();
+    for _ in 0..2 {
+        let error = fixture
+            .executor
+            .reserve_general(&fixture.scope)
+            .err()
+            .unwrap();
+        assert_eq!(error.kind, ContextErrorKind::AuxiliaryLifecycleBusy);
+        assert_eq!(
+            *changes.borrow(),
+            before,
+            "failed lifecycle admission creates no capacity notification"
+        );
+    }
+    let other = fixture.process.conversation().reserve_general().unwrap();
+    drop(other);
+    assert!(changes.has_changed().unwrap());
+    let available = fixture.executor.0.resources.lifecycle.commit_available();
+    tokio::pin!(available);
+    assert!(futures_util::poll!(available.as_mut()).is_pending());
+    drop(release);
+    holder.join().unwrap();
+    available.await;
+    assert!(
+        changes.has_changed().unwrap(),
+        "waiting for lifecycle did not drain a coalesced capacity release"
+    );
+    let admitted = fixture.executor.reserve_general(&fixture.scope).unwrap();
+    drop(admitted);
+    drop(fixture.reservation);
+    fixture.executor.drain().await;
 }

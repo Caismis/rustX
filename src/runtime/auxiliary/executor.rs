@@ -123,7 +123,6 @@ pub(crate) struct FrozenCall {
     pub timeout: ModelTimeoutPolicy,
     pub resource_revision: u64,
     pub dispatch_check: Option<Arc<dyn AuxiliaryDispatchCheck>>,
-    pub output_bytes_limit: Option<u64>,
     pub title_source: Option<crate::durable::auxiliary::AuxiliaryTitleSourceBinding>,
 }
 
@@ -301,14 +300,6 @@ impl AuxiliaryExecutor {
                 "auxiliary operation uses another monotonic clock domain",
             ));
         }
-        let permit = match if compaction {
-            self.0.capacity.reserve_compaction()
-        } else {
-            self.0.capacity.reserve_general()
-        } {
-            Ok(permit) => permit,
-            Err(busy) => return Err(admission_busy(scope, busy.to_string())),
-        };
         self.0
             .resources
             .durability
@@ -317,6 +308,14 @@ impl AuxiliaryExecutor {
                     .resources
                     .lifecycle
                     .try_admit_running_commit(|admission| {
+                        let permit = match if compaction {
+                            self.0.capacity.reserve_compaction()
+                        } else {
+                            self.0.capacity.reserve_general()
+                        } {
+                            Ok(permit) => permit,
+                            Err(busy) => return Err(admission_busy(scope, busy.to_string())),
+                        };
                         scope
                             .cancellation
                             .with_active(|| {
@@ -356,10 +355,16 @@ impl AuxiliaryExecutor {
                             .ok_or_else(closed)?
                     })
                     .map_err(|refused| match refused {
-                        crate::runtime::types::NativeAdmissionRefusal::Busy => admission_busy(
-                            scope,
-                            "native lifecycle ownership boundary is busy".to_owned(),
-                        ),
+                        crate::runtime::types::NativeAdmissionRefusal::Busy => {
+                            let mut error = admission_busy(
+                                scope,
+                                "native lifecycle ownership boundary is busy".to_owned(),
+                            );
+                            if error.kind == ContextErrorKind::AuxiliaryBusy {
+                                error.kind = ContextErrorKind::AuxiliaryLifecycleBusy;
+                            }
+                            error
+                        }
                         crate::runtime::types::NativeAdmissionRefusal::Closed(state) => {
                             ContextError::new(
                                 ContextErrorKind::Cancelled,

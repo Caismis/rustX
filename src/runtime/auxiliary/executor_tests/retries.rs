@@ -395,7 +395,6 @@ fn business_child(
             timeout: ModelTimeoutPolicy::default(),
             resource_revision: 7,
             dispatch_check: None,
-            output_bytes_limit: None,
             title_source: None,
         },
         adapter,

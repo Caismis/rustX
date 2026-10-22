@@ -35,6 +35,17 @@ impl ConversationRuntime {
         Option<crate::durable::store::canonical::FirstHumanSource>,
         crate::durable::ConversationStoreError,
     > {
+        #[cfg(test)]
+        if let Some(reads) = self
+            .inner
+            .probe
+            .lock()
+            .expect("coordinator probe")
+            .as_ref()
+            .and_then(|probe| probe.title_source_reads.as_ref())
+        {
+            reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
         self.inner.store.first_human_source()
     }
 
@@ -76,16 +87,12 @@ impl ConversationRuntime {
         cancellation: &crate::runtime::cancellation::CancellationSignal,
     ) -> Result<PreparedTitle, ContextError> {
         let state = self.inner.lock_state();
-        let invocation = state
-            .model
-            .title_invocation()
-            .map_err(|_| {
-                ContextError::new(
-                    ContextErrorKind::AuxiliaryNotStarted,
-                    "Title model unavailable",
-                )
-            })?
-            .with_output_cap(128);
+        let invocation = state.model.title_invocation().map_err(|_| {
+            ContextError::new(
+                ContextErrorKind::AuxiliaryNotStarted,
+                "Title model unavailable",
+            )
+        })?;
         let scope = self.inner.auxiliary.general_scope(3, cancellation);
         let reservation = self.inner.auxiliary.reserve_general(&scope)?;
         let admission =
@@ -155,6 +162,34 @@ impl ConversationRuntime {
             .session_metadata()
             .borrow()
             .clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn title_metadata_changes_for_test(
+        &self,
+    ) -> tokio::sync::watch::Receiver<crate::runtime::observation::SessionObservationMetadata> {
+        self.inner.pending.get().unwrap().session_metadata()
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn stop_title_for_test(&self) {
+        let task = self.inner.session_title_task.lock().unwrap().take();
+        if let Some(task) = task {
+            task.abort();
+            let _ = task.await;
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn count_title_reads_for_test(&self) -> Arc<std::sync::atomic::AtomicUsize> {
+        let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        self.inner
+            .probe
+            .lock()
+            .unwrap()
+            .get_or_insert_with(Default::default)
+            .title_source_reads = Some(reads.clone());
+        reads
     }
 
     #[cfg(test)]

@@ -211,7 +211,6 @@ impl PreparedSummary for Prepared {
                     timeout: self.timeout,
                     resource_revision: self.resource_revision,
                     dispatch_check: None,
-                    output_bytes_limit: None,
                     title_source: None,
                 })?
                 .await

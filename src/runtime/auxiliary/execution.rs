@@ -79,12 +79,8 @@ pub(super) fn execute(
         resource_revision,
         dispatch_check,
         title_source,
-        output_bytes_limit,
     } = frozen;
-    let mut generation_safety = invocation.generation_safety_policy();
-    if let Some(limit) = output_bytes_limit {
-        generation_safety.max_generated_bytes = generation_safety.max_generated_bytes.min(limit);
-    }
+    let generation_safety = invocation.generation_safety_policy();
     let mut execution = Execution {
         record: record.clone(),
         resources,

@@ -463,6 +463,11 @@ semantic input are checked before durable start. Context owns transcript
 construction, Summary acceptance and the checkpoint transaction.
 
 `local_runtime::session_title` owns one root-local automatic Title operation.
+Its captured invocation preserves the selected model's complete generation
+budget and thinking parameters; final label validation is a separate Catalog
+concern. Native lifecycle contention waits for commit-boundary release, distinct
+from process capacity availability; capacity is reserved only after that native
+boundary is acquired.
 Native finite first-Human/model metadata and capacity subscriptions are armed
 before activation. An indexed Store query supplies exact first-Human identity
 and bounded text, including timestamp-less messages after a Runtime preview.
