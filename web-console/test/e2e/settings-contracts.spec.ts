@@ -24,7 +24,7 @@ id = "console-model"
 protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 4096
-capabilities = { input_modalities = ["text"], output_modalities = ["text"], tool_calls = true, reasoning = true }
+capabilities = { input_modalities = ["text"], output_modalities = ["text"], tool_calls = true }
 compat = { chat_reasoning_replay = "omit" }
 default_profile = "deep"
 profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"temperature":0.1}' } }

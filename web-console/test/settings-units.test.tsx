@@ -363,6 +363,28 @@ async function requestParameters() {
 const invalidJson = 'Not valid JSON. Nothing is saved until the text is one complete JSON object.';
 const save = () => screen.getByRole('button', { name: 'Save Model main' }) as HTMLButtonElement;
 
+it('keeps invalid Model parameters mounted until repaired before creating the first profile', async () => {
+  const { writes, main, input } = await requestParameters();
+  fireEvent.change(input, { target: { value: '{"temperature":' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Add profile' }));
+  expect(screen.queryByLabelText('New profile identity')).toBeNull();
+  expect(screen.getByLabelText('Model request parameters')).toBe(input);
+  expect(input.value).toBe('{"temperature":');
+  expect(input.validity.valid).toBe(false);
+  expect(screen.getByRole('alert').textContent).toBe(invalidJson);
+  expect(writes).not.toHaveBeenCalled();
+  fireEvent.change(input, { target: { value: '{"temperature": 0.3}' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Add profile' }));
+  fireEvent.change(screen.getByLabelText('New profile identity'), { target: { value: 'precise' } });
+  fireEvent.keyDown(screen.getByLabelText('New profile identity'), { key: 'Enter' });
+  expect(JSON.parse((screen.getByLabelText('Profile parameters (JSON)') as HTMLTextAreaElement).value)).toEqual({ request_params: { temperature: 0.3 } });
+  fireEvent.click(save());
+  const { request_params: _, ...rest } = main;
+  await waitFor(() => expect(writes).toHaveBeenCalledWith({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: {
+    ...rest, default_profile: 'precise', profiles: { precise: { request_params: { temperature: 0.3 } } },
+  } } }, 'r1'));
+});
+
 it('a pasted object with nested values, arrays and null becomes the structured draft', async () => {
   const { writes: write, main, input } = await requestParameters();
   expect(input.value).toBe('{\n  "temperature": 1,\n  "top_p": 0.5\n}');

@@ -2239,6 +2239,11 @@ cold-read path for trajectory pages and inspection details. They return
 use `session/tracePage` and `session/traceValueRead` with the captured cut. Pages are bounded to
 1..=32 records; detail identities to 256 bytes. Both retain allocation access and
 reuse the native durable TraceProjection without loading configuration or tools.
+The root `trace.records` domain is also available at that exact cut. Its page
+offset is an exclusive Journal-sequence boundary (`0` starts at latest), and
+deferred headers use `traceValueRead` with their advertised sequence as
+`item_offset` and an empty field path. Live checkpoint and retained child readers
+use the same header contract; a sequence never denotes a collection rank.
 The WebUI fences preview reads by navigation, connection and attachment epoch,
 and replaces them with the bounded checkpoint after attachment. Prompts
 submitted during initialization stay locally owned until attachment, display

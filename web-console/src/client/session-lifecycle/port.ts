@@ -40,8 +40,8 @@ export interface SessionLifecyclePort {
   delete(revision: string, admission: Admission): Promise<RuntimeClientSessionDeletionResult>;
   recover(admission: Admission): Promise<RuntimeClientSessionDeletionResult>;
   inspectDeletion(current: () => boolean): Promise<RuntimeClientSessionDeletionResult>;
-  /** Announce ready after native checkpoint/subscription; remaining metadata
-   * settlement still belongs to this attachment's operation. */
+  /** Complete after native checkpoint/subscription. Supplementary metadata
+   * keeps this claim's observation guard without holding the operation open. */
   observeAttached(result: Attached, current: () => boolean, ready: () => void): Promise<void>;
   refresh(target: AttachmentTarget): Promise<void>;
   cold(current: () => boolean): void;

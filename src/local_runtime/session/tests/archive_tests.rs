@@ -700,7 +700,7 @@ async fn archive_v6_contract_preserves_accepted_contributions_and_journal_vocabu
     assert_eq!(
         manifest["schemas"],
         serde_json::json!({
-            "journal": 5, "messages": 1, "surface": 1, "requests": 4, "projections":2,
+            "journal": 5, "messages": 1, "surface": 1, "requests": 5, "projections":2,
             "generations": 2, "auxiliary_audit": 2, "inherited_auxiliary_audit": 2,
             "publication_audits": 1,
             "inherited_responses": 1, "inherited_turns": 1,

@@ -532,6 +532,11 @@ pub(crate) fn checkpoint_page(
     offset: u64,
     limit: usize,
 ) -> Result<super::checkpoint::CheckpointPage, super::types::RuntimeClientError> {
+    if limit == 0 || limit > crate::observation::bounded::CHECKPOINT_PAGE_ITEMS {
+        return Err(super::types::RuntimeClientError::InvalidRequest {
+            message: "invalid Trace header page bounds".into(),
+        });
+    }
     let unavailable = super::types::RuntimeClientError::observation_store_error;
     let before = (offset != 0).then(|| TraceCursor::at(offset));
     let source_cut = cut
@@ -571,6 +576,68 @@ pub(crate) fn checkpoint_page(
         items,
         next_offset: frontier.next_offset,
         collections: vec![frontier],
+    })
+}
+
+/// Read one finite Trace header by its Journal sequence, including headers
+/// deferred by the smaller checkpoint-item budget. Original bodies stay behind
+/// their own advertised readers; this reconstructs only the same bounded header.
+pub(crate) fn header_read(
+    store: &dyn ConversationStore,
+    cut: &crate::observation::cut::CheckpointReadCut,
+    sequence: u64,
+    path: &[String],
+    (offset, max_bytes): (u64, u32),
+) -> Result<super::checkpoint::CheckpointValueChunk, super::types::RuntimeClientError> {
+    use super::types::RuntimeClientError;
+    use base64::Engine as _;
+    if !path.is_empty() || max_bytes == 0 || max_bytes > 65_536 {
+        return Err(RuntimeClientError::InvalidRequest {
+            message: "Trace header read requires an empty path and a bounded byte range".into(),
+        });
+    }
+    let source = cut
+        .source_cut
+        .as_ref()
+        .filter(|source| {
+            source.read.conversation_id == cut.conversation_id && source.read.journal == cut.through
+        })
+        .ok_or(RuntimeClientError::ReadCutExpired)?;
+    let unavailable = RuntimeClientError::observation_store_error;
+    let projection = TraceProjection::at_cut(store, source).map_err(unavailable)?;
+    let anchor = projection
+        .inspection_anchor(sequence)
+        .map_err(unavailable)?;
+    let mut record = projection.record(&anchor).map_err(unavailable)?;
+    bound_record(&mut record);
+    if bounds::encoded_len(&record) > bounds::TRACE_RECORD_BYTES {
+        return Err(unavailable(
+            ConversationStoreError::ObservationCapacityExceeded,
+        ));
+    }
+    // The finite header is capped before encoding. Native u64 fields add only
+    // their decimal-text quotes, just like inline checkpoint headers.
+    let mut bytes = Vec::new();
+    crate::observation::structural_json::to_writer(&mut bytes, &record).map_err(|error| {
+        RuntimeClientError::RuntimeFailure {
+            message: error.to_string(),
+        }
+    })?;
+    let start = usize::try_from(offset)
+        .ok()
+        .filter(|start| *start <= bytes.len())
+        .ok_or(RuntimeClientError::InvalidRange)?;
+    let end = start.saturating_add(max_bytes as usize).min(bytes.len());
+    Ok(super::checkpoint::CheckpointValueChunk {
+        representation: super::checkpoint::CheckpointValueRepresentation::CanonicalJsonV1,
+        cut: cut.clone(),
+        domain: "trace.records".into(),
+        item_offset: sequence,
+        path: Vec::new(),
+        offset,
+        bytes_base64: base64::engine::general_purpose::STANDARD.encode(&bytes[start..end]),
+        readable_end: bytes.len() as u64,
+        next_offset: (end < bytes.len()).then_some(end as u64),
     })
 }
 

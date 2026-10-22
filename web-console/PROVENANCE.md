@@ -4206,3 +4206,28 @@ and 390px Chinese/dark on `http://127.0.0.1:5197`. All three Fork entries,
 successive numbering, editor restoration, running-source preservation, repair
 notice clearance, console health and viewport bounds passed. Screenshots remain
 outside the repository in `/tmp/rustx-fork-title-numbering-{1440,390}.png`.
+
+## Independent review repairs for the prompt/model/fork branch
+
+The Model editor keeps its Harness-derived controls and ZCode-inspired layout.
+Creating the first profile now validates the model parameter buffer before it
+can be replaced, preserving incomplete JSON and moving only the repaired object
+into the new profile. Its local source hash is updated; imports and upstream
+attribution are unchanged.
+
+Native checkpoint/subscription readiness now completes the attachment lifecycle
+operation. Supplementary settings continue under that exact observation claim,
+so immediate Retry can switch lineage and late metadata cannot overwrite a new
+claim. Tests hold real client requests across both transitions without weakening
+mutation admission or retired Trace ownership assertions.
+
+System-change notices keep their existing native Trace authority. Root
+`trace.records` pages and deferred header reads are now available through retained
+history and cold child inspection as well as live checkpoints. Header offsets are
+exact Journal sequences, selected reads retain their cut/activation checks, and
+large headers are returned in bounded chunks. Regression fixtures use a real
+32-file inbound adoption rather than a fabricated deferred header. Obsolete
+reasoning declarations are removed from native/browser/TUI fixtures, and archive
+contract tests now expect the current request schema. Cross-run child inspection
+fingerprints validate and normalize only the fixture's exact volatile working
+directory, preserving byte comparisons of all other system instructions.

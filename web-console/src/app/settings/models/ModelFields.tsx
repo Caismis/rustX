@@ -1,5 +1,5 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted typed request controls; see PROVENANCE.md. */
-import { useContext, useId, useRef, useState } from 'react';
+import { useContext, useId, useRef, useState, type RefObject } from 'react';
 import type { Model, Modality } from '../../../../../protocol/app-server/v52';
 import { useTranslation } from '../../../locale/react';
 import { Button } from '../../../presentation/primitives/Button';
@@ -13,6 +13,7 @@ const inputModalities: readonly Modality[] = ['text', 'image'];
 export function ModelFields({ form }: { form: TypedForm<Model> }) {
   const tx = useTranslation();
   const resets = useContext(UnitReset);
+  const modelParameters = useRef<HTMLDivElement>(null);
   return <>
     <div className={cards.basicFields}>
       <Text form={form} name="id" label={tx('settings:models-page.wire-model-identity')} required />
@@ -28,8 +29,8 @@ export function ModelFields({ form }: { form: TypedForm<Model> }) {
       </div>
       <InputModalities form={form} />
     </fieldset>
-    <Profiles key={resets} form={form} />
-    <ModelRequestParameters form={form} />
+    <Profiles key={resets} form={form} modelParameters={modelParameters} />
+    <div ref={modelParameters}><ModelRequestParameters form={form} /></div>
     </Advanced>
   </>;
 }
@@ -90,7 +91,7 @@ function ModelRequestParameters({ form }: { form: TypedForm<Model> }) {
  * presets. A profile's name carries no meaning; its output default and native
  * parameters are exactly what it declares. Native Rust validates the declared
  * default, budgets within the hard maximum, and protected keys. */
-function Profiles({ form }: { form: TypedForm<Model> }) {
+function Profiles({ form, modelParameters }: { form: TypedForm<Model>; modelParameters: RefObject<HTMLDivElement | null> }) {
   const tx = useTranslation();
   const [adding, setAdding] = useState(false);
   const [identity, setIdentity] = useState('');
@@ -115,7 +116,8 @@ function Profiles({ form }: { form: TypedForm<Model> }) {
     // Validate before replacing its panel so switching cannot discard that text
     // and silently save the last valid parameters instead.
     const canSwitch = () => {
-      const invalid = panel.current?.querySelector<HTMLInputElement | HTMLTextAreaElement>('input:invalid, textarea:invalid');
+      const container = identities.length ? panel.current : modelParameters.current;
+      const invalid = container?.querySelector<HTMLInputElement | HTMLTextAreaElement>('input:invalid, textarea:invalid');
       return invalid ? invalid.reportValidity() : true;
     };
     const finishAdd = () => {

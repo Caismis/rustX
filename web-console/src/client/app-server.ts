@@ -254,13 +254,15 @@ export class AppServerClient {
         }
         this.setSession(id, { observationState: chain.phase });
         this.reconcile(id); this.settleSubmissions(id);
-        // A checkpoint and acknowledged subscription admit navigation. Settings
-        // details still settle under this claim, without delaying its reader.
+        // A checkpoint and acknowledged subscription complete attachment. Settings
+        // remain scoped to that claim but cannot hold its lifecycle operation open:
+        // the now-ready reader can immediately switch lineage or retry.
         ready();
-        const settings=await this.reads.readSettings(id,current);
-        if(!current())return;
-        this.setSession(id,{settings:settings.settings});
-        this.sourceRepairs.visit(settings.settings.cwd);
+        void this.reads.readSettings(id,current).then(settings=>{
+          if(!current())return;
+          this.setSession(id,{settings:settings.settings});
+          this.sourceRepairs.visit(settings.settings.cwd);
+        }).catch(error=>{if(current())this.setSession(id,{error:String(error)});});
         void this.catalog.refreshDisplaySummary(id).catch(() => {});
       },
       refresh: () => this.refresh(id),

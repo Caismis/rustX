@@ -4895,4 +4895,5 @@ fn tool_locator_never_fabricates_execution_for_proposals_or_inherited_history() 
 }
 
 mod frozen_tests;
+mod header_tests;
 mod inspection_tests;

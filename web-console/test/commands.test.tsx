@@ -1,5 +1,5 @@
 import { cfg3Effective } from './cfg3-data';
-import { domainReceipt, compactReceipt } from './fixture';
+import { domainReceipt, compactReceipt, settingsReceipt } from './fixture';
 import { localeController } from '../src/locale/controller';
 import { translator } from '../src/locale/translation';
 import { firstSubmitPort } from '../src/app/new-conversation/port';
@@ -676,6 +676,43 @@ describe('typed native operations and continuation fencing', () => {
     expect(methods()).not.toContain('turn/start');
     server.held.delete('session/settings');
     for (const row of server.requests) if (row.request.method === 'session/settings' && row.request.params.session_id === 'child') server.reply(row.request);
+  });
+  it('Retry completes immediately after attachment readiness while supplementary settings remain held', async () => {
+    const fixture = nativeFixture();
+    await server.connect();
+    const navigation = routeFixture(server.client);
+    server.held.add('session/settings');
+    let ready!: () => void;
+    const observed = new Promise<void>(resolve => { ready = resolve; });
+    const opening = server.client.attach('A', undefined, () => true, ready);
+    try {
+      await observed;
+      const scope = new CommandSession(server.client, 'A', navigation.capture());
+      expect(lineageSwitchSafe(server.client.getSnapshot().views.A)).toBe(true);
+      const oldSettings = server.requests.filter(row => row.request.method === 'session/settings');
+      const selection = (await scope.boundaries()).selections[0];
+      const result = await scope.transition('retry', selection);
+      expect(result?.session.active_node).toBe('branch-A');
+      expect(fixture.committed).toHaveLength(1);
+      expect(methods().filter(method => method === 'session/branch')).toHaveLength(1);
+      expect(methods().filter(method => method === 'session/switchNode')).toHaveLength(1);
+      expect(methods().filter(method => method === 'turn/start')).toHaveLength(1);
+      expect(server.client.getSnapshot().views.A.attachment).toBe('attached');
+      // A supplementary read belongs to its original claim. Receiving it only
+      // after Retry must not overwrite metadata from the new attachment.
+      const newer = server.requests.filter(row => row.request.method === 'session/settings' && !oldSettings.includes(row));
+      server.handlers.set('session/settings', () => settingsReceipt({ cwd: '/workspace/new-claim' }));
+      for (const row of newer) server.reply(row.request);
+      await waitFor(() => expect(server.client.getSnapshot().views.A.settings?.cwd).toBe('/workspace/new-claim'));
+      server.handlers.set('session/settings', () => settingsReceipt({ cwd: '/workspace/old-claim' }));
+      for (const row of oldSettings) server.reply(row.request);
+      await Promise.resolve();
+      expect(server.client.getSnapshot().views.A.settings?.cwd).toBe('/workspace/new-claim');
+    } finally {
+      server.held.delete('session/settings');
+      for (const row of server.requests) if (row.request.method === 'session/settings') server.reply(row.request);
+      await opening;
+    }
   });
   it.each(['branch', 'retry'] as const)('%s creates a native node, unloads then attaches exactly; only retry executes returned input once', async action => {
     const { scope, selection, fixture } = await subject();

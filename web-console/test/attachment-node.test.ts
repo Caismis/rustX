@@ -503,7 +503,8 @@ it('switch deletion exclusion is Session scoped', async () => {
 });
 
 it('generic request cannot bypass the actor to acquire, switch, detach or delete a Session', async () => {
-  const s = await setup(); await s.client.attach('A', 'left'); const target = s.client.target('A'), before = s.client.getSnapshot(), count = s.requests.length;
+  const s = await setup(); s.held.add('session/settings');
+  await s.client.attach('A', 'left'); const target = s.client.target('A'), before = s.client.getSnapshot(), count = s.requests.length;
   const operations = [
     { method: 'session/attach', params: { session_id: 'A', node_id: 'right' } },
     { method: 'session/switchNode', params: { target, node_id: 'right' } },
