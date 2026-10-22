@@ -655,6 +655,18 @@ cancelled run is diagnostic evidence, not a timing baseline.
 
 ## Prerequisites
 
+Linux CI installs its existing native and Office prerequisites through
+`.github/scripts/install_ubuntu_packages.py`. GitHub's Ubuntu image already
+uses `/etc/apt/apt-mirrors.txt`; the installer selects the official HTTPS
+Ubuntu archive directly, retaining the image's suites, components and signing
+keyrings. Each APT connection/read has a 30-second idle timeout and each file
+has at most two retries. An index or package failure fails the job; stale
+indexes never stand in for a failed refresh. This avoids spending the test
+budget waiting for Azure mirror failover (37 min 43 s in run 39780556818,
+attempt 1). Package requirements, sandbox admission, test selection, assertions
+and job/test deadlines are unchanged. The installer is covered by the existing
+`.github/scripts/test_*.py` checks that execute on every CI run.
+
 Mandatory prerequisites fail closed; only explicitly opt-in tooling may
 skip:
 
