@@ -60,6 +60,8 @@ retires every incompatible active occurrence lease, including its original URL.
 | Node parser worker | 1, 15 seconds; V8 old/young heap 64/16 MiB, stack 2 MiB |
 | Office XML depth / elements per part | 64 / 200,000 |
 | Browser spreadsheet source / rectangular cell area / parser deadline | 16 MiB / 250,000 cells across worksheets / 15 seconds |
+| Browser XLSX ZIP entries / path bytes | 10,000 / 240 |
+| Browser XLSX ZIP individual / total expansion / declared ratio | 32 MiB / 64 MiB / 200:1 |
 | Office service runtime / aggregate CPU rate | 60 seconds (external systemd timer); one CPU quota, 100 ms per 100 ms period across the complete cgroup |
 | Converter writable filesystem | One 256 MiB private tmpfs at `/tmp`, including `/dev/shm`; root and input read-only. Private Host snapshot ≤50 MiB plus fixed profile seed |
 | Converter aggregate memory / swap / tasks | 512 MiB cgroup memory, zero swap, 64 tasks including threads and descendants; whole-cgroup OOM kill |
@@ -89,6 +91,15 @@ The spreadsheet parser rejects a source or rectangular cell area above its budge
 it never returns a truncated Host projection. The legacy Host workbook parser and
 100-row inspection UI are removed. The shared browser viewer preserves selected
 worksheet metadata across remounts and releases its parser on lease cancellation.
+Both delivered and workspace XLSX sources pass complete ZIP-directory admission
+before any member is inflated. Central/local headers, names, payload coverage and
+streaming descriptors must agree; ZIP64, encryption and Unicode path overrides
+are rejected. Each DEFLATE member uses a fixed declared-size-plus-one output buffer
+after admission, so actual overflow is detected without growing the allocation.
+Exact output size and CRC must match. ExcelJS receives a new stored ZIP containing
+only the admitted bytes with drawings omitted, never the original compressed source.
+These archive limits bound decompressed bytes, not browser process RSS or the
+object overhead of parsing XML and constructing workbook models.
 Office preflight rejects ZIP64, streaming data descriptors, explicit directory entries, unindexed ZIP payloads, split/encrypted archives, ambiguous/duplicate/path-conflicting names,
 traversal, absolute paths, nested packages and malformed headers are rejected.
 All central and local headers are checked before any inflation. Each inflate

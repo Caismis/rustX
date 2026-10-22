@@ -5137,7 +5137,7 @@
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/xlsx-archive.ts",
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream_sha256": "ffd99f6b2424122b427754e53f6c2cc9f68ff7fa783e0f1816b3998ceb3b6618",
-      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned. XLSX ZIP admission validates all metadata before fixed-output inflation and CRC checks; ExcelJS receives a normalized stored archive containing admitted bytes only.",
       "destination": "web-console/src/app/components/workbench-documents/excel/xlsx-archive.ts",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -5145,10 +5145,11 @@
       ],
       "retained_dependencies": [
         "./model.ts",
+        "./xlsx-zip.ts",
         "fast-xml-parser",
         "fflate"
       ],
-      "local_sha256": "40007c6e99ad2efd01321a85ced2d6ac278f90abd87f430c5539681077d96ff6"
+      "local_sha256": "e4c74d18dadcb6e5256585080a9a7736f7c76a1fc186fb57f9d04b0ad4ef5b2b"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/xlsx.ts",

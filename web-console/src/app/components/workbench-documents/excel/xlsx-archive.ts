@@ -1,8 +1,9 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Source port; see PROVENANCE.md. */
 /** XLSX preview copies without DrawingML parts; worksheet XML and source bytes remain untouched. */
-import { unzipSync, zipSync, type Unzipped } from 'fflate'
+import { zipSync, type Unzipped } from 'fflate'
 import { XMLParser } from 'fast-xml-parser'
 import type { ExcelUnsupportedFeature } from './model.ts'
+import { readXlsxZip } from './xlsx-zip.ts'
 
 /** Owns the unpacked preview copy and its detected unsupported content. */
 export class XlsxPreviewArchive {
@@ -14,10 +15,10 @@ export class XlsxPreviewArchive {
   /**
    * Read an archive without modifying the borrowed source buffer.
    * @param bytes - Complete XLSX source bytes.
-   * @throws When ZIP entries have ASCII case-equivalent names.
+   * @throws When archive metadata, actual output or package names fail admission.
    */
-  constructor(private readonly bytes: Uint8Array<ArrayBuffer>) {
-    this.files = unzipSync(bytes)
+  constructor(bytes: Uint8Array<ArrayBuffer>) {
+    this.files = readXlsxZip(bytes)
     for (const [path, bytes] of Object.entries(this.files)) {
       if (path.endsWith('/')) continue
       const key = partKey(path)
@@ -28,7 +29,7 @@ export class XlsxPreviewArchive {
 
   /**
    * Omit DrawingML parts before ExcelJS parses them; callers must also ignore worksheet drawing references.
-   * @returns Source bytes when no parts were omitted, otherwise an uncompressed temporary ZIP.
+   * @returns A stored ZIP containing only admitted bytes, never the untrusted compressed source.
    */
   withoutDrawings(): Uint8Array<ArrayBuffer> {
     const entries = Object.entries(this.files)
@@ -62,7 +63,7 @@ export class XlsxPreviewArchive {
       }).parse(decodeXml(bytes))
     }
     const retained = entries.filter(([path]) => !omitted.has(partKey(path)))
-    return retained.length === entries.length ? this.bytes : new Uint8Array(zipSync(Object.fromEntries(retained), { level: 0 }))
+    return new Uint8Array(zipSync(Object.fromEntries(retained), { level: 0 }))
   }
 
   private inspectContent(bytes: Uint8Array): void {

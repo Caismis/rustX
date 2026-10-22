@@ -3961,3 +3961,10 @@ input budgets. Paged text and complete-byte transport preserve rustX's committed
 delivery identity, descriptor checks, authority fencing and physical settlement.
 The source inventory records updated local hashes and dependency closures for
 the existing adapted files.
+
+The shared XLSX preview archive uses rustX-owned ZIP admission before expanding
+any member: bounded directory count, names, declared sizes and ratios; matching
+local headers and descriptors; fixed-output fflate inflation with exact length
+and CRC checks. ExcelJS receives a stored ZIP rebuilt from admitted bytes. The
+existing transitive `crc-32` 1.2.2 package is declared directly for checksum
+validation. No additional Harness source is copied for this admission boundary.
