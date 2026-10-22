@@ -9,6 +9,8 @@ runs:
         set -euo pipefail
         case "$RUNNER_OS" in
           Linux)
+            # Use Ubuntu's HTTPS origin instead of the degraded Azure mirror.
+            printf '%s\n' 'https://archive.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
             sudo apt-get update
             sudo apt-get install -y libclang-dev
             ;;

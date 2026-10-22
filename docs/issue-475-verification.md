@@ -207,3 +207,29 @@ Both checks and their commands remain unchanged.
 
 The existing workflow checker passed all 24 tests. Independent subagent review
 reported no actionable findings in this CI-only change.
+
+## Ubuntu package origin
+
+FULL #1478 passed both native platforms, protocol generation, TUI and the
+277-case second browser shard on `c610f842`. Its Web task never reached tests:
+Ubuntu's index update stalled until the 30-minute ceiling. The first browser
+shard spent more than 35 minutes downloading Office dependencies from
+`azure.archive.ubuntu.com`, with no time left for complete acceptance within
+the job budget. After preserving the completed checks and retrying only the
+affected tasks, both again spent more than 15 minutes preparing dependencies.
+
+This matches the upstream runner-image reports
+[14594](https://github.com/actions/runner-images/issues/14594) and
+[14823](https://github.com/actions/runner-images/issues/14823): an Azure mirror
+can stall or continuously trickle data without triggering apt's idle timeout.
+The existing libclang and document-runtime actions now select Ubuntu's official
+HTTPS archive directly through apt's native mirror list. Package names,
+repository signing, sandbox admission and all test commands remain unchanged.
+No retry wrapper, optional dependency or alternate verification path is added.
+
+The pinned Noble Playwright container successfully fetched all four Ubuntu
+pockets through this exact `mirror+file` list and downloaded the combined
+libclang/Office/sandbox dependency set (228 MB in 81 seconds). The existing
+workflow checker passed all 24 tests, whitespace checks passed, and independent
+subagent review reported no actionable findings. Full GitHub verification of
+the final source remains required.

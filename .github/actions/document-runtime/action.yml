@@ -7,6 +7,8 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
+        # Use Ubuntu's HTTPS origin instead of the degraded Azure mirror.
+        printf '%s\n' 'https://archive.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
         sudo apt-get update
         sudo apt-get install -y bubblewrap apparmor-profiles libreoffice-writer libreoffice-impress fonts-liberation
         # Ubuntu restricts capabilities in unprivileged user namespaces.
