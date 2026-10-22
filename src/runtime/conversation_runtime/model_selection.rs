@@ -252,7 +252,7 @@ impl ConversationRuntime {
         if !self.inner.lifecycle.is_running() {
             return Err(ModelUpdateError::Inactive);
         }
-        if let Some(failure) = self.inner.durability_gate.failure() {
+        if let Some(failure) = self.inner.durability_gate.admission_failure() {
             return Err(ModelUpdateError::DurabilityFailed {
                 message: failure.diagnostic,
             });
@@ -300,6 +300,25 @@ impl ConversationRuntime {
             gate.enter();
         }
         self.check_model_selection_lifecycle()?;
+        let _permission = self
+            .inner
+            .durability_gate
+            .enter_coordinator_commit()
+            .map_err(|failure| ModelUpdateError::DurabilityFailed {
+                message: failure.diagnostic,
+            })?;
+        #[cfg(test)]
+        let commit_gate = self
+            .inner
+            .probe
+            .lock()
+            .expect("coordinator probe lock poisoned")
+            .as_ref()
+            .and_then(|probe| probe.selection_commit_gate.clone());
+        #[cfg(test)]
+        if let Some(gate) = commit_gate {
+            gate.enter();
+        }
         if state.binding_revision != candidate.baseline
             || !Arc::ptr_eq(&candidate.owner, &self.inner.configuration_owner)
             || !Arc::ptr_eq(&candidate.resources, &state.resources)

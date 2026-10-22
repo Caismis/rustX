@@ -18,9 +18,9 @@ pub(super) struct DrainCompletion {
 /// owners have positively settled. The child's durable physical receipt must
 /// not lose that proof merely because logical publication failed.
 #[derive(Debug, Clone)]
-pub(super) struct NativeDrainOutcome {
-    pub(super) logical: Result<(), ShutdownError>,
-    pub(super) physical: Result<(), Vec<String>>,
+pub(crate) struct NativeDrainOutcome {
+    pub(crate) logical: Result<(), ShutdownError>,
+    pub(crate) physical: Result<(), Vec<String>>,
 }
 
 impl NativeDrainOutcome {
@@ -64,10 +64,6 @@ impl DrainCompletion {
         *self.result.lock().expect("drain completion lock poisoned") = Some(result);
         self.completed.store(true, Ordering::Release);
         self.notify.notify_waiters();
-    }
-
-    pub(super) async fn wait(&self) -> Result<(), ShutdownError> {
-        self.wait_outcome().await.logical
     }
 
     pub(super) async fn wait_outcome(&self) -> NativeDrainOutcome {
@@ -228,6 +224,7 @@ impl RuntimeInner {
                         transitioned,
                         "the coordinator lock owns the runtime drain transition"
                     );
+                    self.auxiliary.begin_drain();
                     first = true;
                     self.observe(ConversationObservation::Shutdown);
                     #[cfg(test)]
@@ -362,6 +359,48 @@ impl RuntimeInner {
         }
     }
 
+    pub(super) async fn reap_manual_tail(self: &Arc<Self>, wait: bool) {
+        let tail = {
+            let mut owner = self.manual_tail.lock().expect("manual tail owner");
+            if owner.as_ref().is_some_and(|tail| {
+                wait || tail.completion.ready_to_join.load(Ordering::Acquire)
+                    || tail.worker.is_finished()
+            }) {
+                owner.take()
+            } else {
+                None
+            }
+        };
+        let Some(tail) = tail else {
+            return;
+        };
+        if let Err(error) = tail.worker.await {
+            let diagnostic = format!("native manual Compaction task failed: {error}");
+            self.commit_failure_and_observe(DurableOperation::CanonicalCommit, diagnostic.clone());
+            // A panicking business future has dropped its parent scopes. The
+            // native Call registry still owns and joins every live child.
+            self.auxiliary.drain().await;
+            {
+                let mut state = self
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                state.manual_compaction = None;
+            }
+            if !tail.completion.completed.load(Ordering::Acquire) {
+                // No invented CompactionFailed fact after an unknown commit.
+                tail.completion
+                    .complete(Err(ManualCompactionError::Durable {
+                        message: diagnostic,
+                    }));
+            }
+        }
+        tail.completion.joined.store(true, Ordering::Release);
+        tail.completion.notify.notify_waiters();
+        self.settlement.notify_waiters();
+        self.wake.notify.notify_one();
+    }
+
     /// Supervises every runtime-owned operation to its strongest honest
     /// settlement, then publishes `Quiescent` only if nothing prevents it.
     ///
@@ -384,6 +423,7 @@ impl RuntimeInner {
     /// admission is released by its owner. No wait here depends on a global
     /// health flag, so one owner's failure can never be mistaken for
     /// another's settlement.
+    #[allow(clippy::too_many_lines)]
     pub(super) async fn drain_to_quiescence(
         self: &Arc<Self>,
         _completion: Arc<DrainCompletion>,
@@ -399,6 +439,20 @@ impl RuntimeInner {
         self.interaction
             .cancel_pending_async(interaction_cancel_reason)
             .await;
+        // Cancellation intent reaches every sibling before an irreducible
+        // auxiliary write/confirmation wait can delay this drain owner.
+        if let Some(subagents) = &self.subagents {
+            for child in subagents.unsettled_snapshot() {
+                let _ = subagents.cancel(&child.subagent_id, CancellationReason::RuntimeShutdown);
+            }
+        }
+        for execution in self.tool_runtime.background().unsettled_snapshot() {
+            self.tool_runtime
+                .background()
+                .cancel_with_reason(&execution.execution_id, CancellationReason::RuntimeShutdown);
+        }
+        self.auxiliary.drain().await;
+        self.reap_manual_tail(true).await;
         loop {
             self.wait_for_foreground_operation().await;
 
@@ -561,6 +615,14 @@ impl ConversationRuntime {
     /// Panics only if the test-only coordinator probe lock is poisoned,
     /// which would mean a previous test hook panicked while holding it.
     pub async fn shutdown(&self) -> Result<(), ShutdownError> {
+        self.shutdown_outcome().await?.logical?;
+        self.inner.lifecycle.wait_until_quiescent().await;
+        Ok(())
+    }
+
+    /// Retains physical-exit evidence for native writer retirement even when
+    /// logical settlement failed. This never turns a failed shutdown into success.
+    pub(crate) async fn shutdown_outcome(&self) -> Result<NativeDrainOutcome, ShutdownError> {
         // Test-only: signal that shutdown reached the point just before it
         // attempts the coordinator lock. Combined with the submit gate this
         // makes the submit-vs-shutdown ordering provable by mutex exclusion.
@@ -576,9 +638,7 @@ impl ConversationRuntime {
             arrival.notify_one();
         }
         let completion = self.inner.begin_drain()?;
-        completion.wait().await?;
-        self.inner.lifecycle.wait_until_quiescent().await;
-        Ok(())
+        Ok(completion.wait_outcome().await)
     }
 }
 

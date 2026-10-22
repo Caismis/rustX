@@ -1,6 +1,6 @@
 # Auxiliary request facts and inspection
 
-Auxiliary execution shares the physical model-request Journal with Agent execution. The native Runtime will own execution in AUX-02; this layer supplies the synchronous Store transitions and bounded inspection contract. It does not schedule inference, retain generated auxiliary output, or make historical Calls runnable after restart.
+Auxiliary execution shares the physical model-request Journal with Agent execution. Native Runtime owns supervised execution and physical cleanup; Store supplies synchronous transitions and bounded inspection. Durable audit does not retain generated auxiliary output or make historical Calls runnable after restart.
 
 ## Identity and authority
 
@@ -23,6 +23,26 @@ Mandatory request-owner, Call, request and audit indexes are derived in the same
 `ConversationStore::read_auxiliary_call_requests` returns up to 32 local request audit projections for one Call at a captured Journal cut. Requests are ordered by their original start sequence; the last returned `started_sequence` advances the next query, and an empty result ends iteration. Each supplied cursor must name a visible request start in that same local Call. Selection uses the Call/sequence index within one SQLite read transaction and validates the original owner and mandatory audit evidence. The query excludes unrelated Calls and inherited source audit without materializing their history. Global audit pages bound both ends of the dense-offset interval at the captured total, so old final and exhausted pages do not scan later execution history.
 
 An exact replay returns the original receipt and does not republish events or allocate another Journal sequence. Unsupported envelope metadata and conflicting caller semantics fail explicitly. Local write failure distinguishes a confirmed rollback/no-write path from an unknown commit or rollback outcome. Read-only confirmation returns a known matching commit, a conflict/error, or Unknown when absence cannot prove noncommit. It never creates work. Only actual completed-write evidence can establish noncommit; there is no caller-supplied boolean or fabricated writer-exit token.
+
+Commit certainty and required-write failure cause are independent. Known
+noncommit refunds a start allowance, while a genuine required Store failure
+still closes native durability admission. A confirmed Call can settle Failed
+after its RequestStarted transaction rolls back; successful cleanup does not
+erase the storage failure. Typed Store cancellation and benign start validation
+refusals remain distinct. Historical resource-cut and projection-activation
+validation, shared request-start probes and Journal frontier lookups preserve
+the raw SQLite interrupt cause before formatting diagnostics. An independent
+required Storage failure remains authoritative under coincident cancellation.
+Optional observation writes remain inside that same transaction. Their failure
+may degrade only after successful savepoint cleanup with the outer transaction
+intact. Cancellation, automatic rollback and failed cleanup stop the append
+through every nested optional helper before later SQL can independently commit
+a Journal head, index or transcript coordinate. Serialization adapters preserve
+the original SQLite interruption cause. SQLite-proven automatic rollback before
+any COMMIT, with no subsequent SQL escaping the transaction,
+is direct noncommit evidence ([SQLite transaction state](https://www.sqlite.org/c3ref/get_autocommit.html));
+absence observed later is not. Failed COMMIT or unproven rollback starts as
+Unknown; exact confirmation may establish the matching committed intent.
 
 Local outcome is separate from observed provider terminal. A locally failed stream may have observed provider completion before rejecting an illegal tail. A locally completed request must agree with a known observed completion kind. Request evidence retains only the closed `stop`, `tool_calls`, `length`, `content_filter`, `refusal` or `other` completion kind; unknown provider prose remains in the physical diagnostic and is not duplicated into audit. Observed usage, completeness and remote-execution uncertainty remain independent. Missing usage is not zero, and a known subtotal is not a complete bill. Results and domain acceptance are separate consumer responsibilities.
 
@@ -71,6 +91,58 @@ Inspection archives keep requests.jsonl for actual primary Snapshots. Auxiliary 
 
 ## Verification boundary
 
-Real SQLite tests own transaction atomicity, owner/index consistency, rollback and receipt-loss evidence, immutable cuts, pagination and corruption refusal. Mixed-history regressions compare primary behavior with auxiliary facts interleaved. A private supervised consumer fixture owns actual tasks and writer joins, arbitrates cancellation against adapter entry, and confirms settlement after physical exit. It validates the Store/executor seam without shipping the AUX-02 executor.
+Real SQLite tests cover transaction atomicity, owner/index consistency, rollback and receipt-loss evidence, immutable cuts, pagination and corruption refusal. Mixed-history regressions compare primary behavior with auxiliary facts interleaved. Native execution tests exercise the production executor with a private second consumer, actual starts before adapter entry, panic after trusted usage, waiter loss and parent close. Writer boundary tests retain capacity through actual confirmation and joins after a real COMMIT. Consumed production-executor barriers cover cancellation/parent-close on both sides of the single-use dispatch grant. Real child-process kills cover confirmed RequestStarted, granted dispatch and adapter entry; quiescent cold reopening preserves unresolved Call/Request facts and never redispatches their RequestId. A completed, parked manual-compaction reply permits manager deletion and then delivers the exact original receipt. These are separate from Context deciding whether generated text is a usable Summary.
+
+## Native execution
+
+Automatic and manual Summary use the Runtime-owned single-request executor.
+Native preparation reserves process total/general, Conversation total/general
+and write responsibility without waiting. Limits are 32/24 and 4/3; only
+native Compaction authority may omit the general reservations. A purpose or
+trigger string grants no execution or protected-capacity authority. Both
+capacity and lifecycle-lock Busy refusals arbitrate under cancellation; an
+earlier cancellation remains cancellation, and active callers never wait for
+either resource.
+
+Each Call confirms CallStarted and RequestStarted before consuming its only
+dispatch grant. Unknown start never enters the adapter. The owner retains
+execution state outside the polled future, so panic cannot discard trusted
+usage or cause reentry. Required terminal Request and Call facts settle
+atomically. Already-owned settlement and exact confirmation remain available
+after admission closes.
+
+Success requires a valid completion and EOF under current native authority;
+the absolute deadline continues through EOF. Valid provider observations and
+usage survive a later local refusal. Context separately rejects empty/refused
+Summary content and commits its checkpoint only with an accepted parent grant.
+The checkpoint names the confirmed local Call at its exact settlement Journal
+cut. No input body, generated output, credentials or logical budget is copied
+into auxiliary audit metadata.
+
+Each live Call owns at most one owner thread and one serialized write thread.
+Before the first physical owner starts, 32 process-owned retirement workers
+are installed, independently joining up to the existing 32 admitted Calls.
+The global bound is 96 auxiliary threads; queued retirement records remain
+bounded at 32 and cleanup reserves no new execution permit. A record handed
+off before its owner physically exits retains its real join and permits;
+that join cannot prevent another Conversation from delivering confirmed work
+and releasing its own allocation. Actual write/confirmation and owner joins
+precede resource release. The reaper then clears the Call's resource slot and
+drops its own resources before releasing admission, removing the Call or
+sending its result. A completed record retained by a descheduled reaper owns
+no Store allocation. Unresolved exact intent moves to the native failed-durability
+owner only after physical exit; historical uncertainty does not pin global
+capacity indefinitely. Live/unproven cleanup retains its old allocation.
+
+One Compaction shares twelve confirmed/unresolved starts, three total input
+shrinks and a five-minute absolute deadline across carryover and input replans.
+The model and resources remain frozen. Manual compaction transfers its native
+business tail before the manager lease is released, and a lost observer or
+later checkpoint cannot replace the exact result of the original invocation.
+The transferred reply owns only its native completion handle and receipt
+conversion inputs, never the Runtime Client, Runtime or Store allocation.
+A completed reply awaiting delivery cannot prevent manager deletion.
+Technical retries, Title, Classification/BTW and result retention remain
+outside this executor's shipped consumer scope.
 
 Changes to stored facts or read layouts advance the affected development-format gates. Unsupported or falsely current layouts are rejected without migrations, fallback readers, data deletion or database reconstruction.

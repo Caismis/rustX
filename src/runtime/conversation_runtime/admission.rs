@@ -223,7 +223,14 @@ impl RuntimeInner {
     ) -> Result<u64, IdleBusyReason> {
         use IdleBusyReason as Busy;
         let epoch = self.lifecycle.idle_epoch().ok_or(Busy::LifecycleOwner)?;
-        if state.current_attempt.is_some() || state.manual_compaction.is_some() {
+        if state.current_attempt.is_some()
+            || state.manual_compaction.is_some()
+            || self
+                .manual_tail
+                .lock()
+                .expect("manual tail owner")
+                .is_some()
+        {
             return Err(Busy::Foreground);
         }
         // Work that waits for admission owns nothing while the published
@@ -329,6 +336,7 @@ impl RuntimeInner {
         assembly: crate::context::ContextAssembly,
         model_timeout_policy: ModelTimeoutPolicy,
         resources: &RuntimeResourceSnapshot,
+        summary_backend: Arc<dyn crate::context::summarizer::SummaryBackend>,
     ) -> Result<ContextRuntime, crate::context::ContextError> {
         let configuration = resources.configuration();
         let policy = configuration.map_or(self.context.policy, |generation| {
@@ -354,6 +362,9 @@ impl RuntimeInner {
             model_timeout_policy,
             Arc::clone(&self.monotonic_clock),
         )?;
+        context
+            .summarizer
+            .bind_backend(summary_backend, resources.revision().get());
         if let Some(owner) = &self.tool_runtime.uploads {
             context.engine.set_upload_resolver(owner.clone());
         }
@@ -380,7 +391,8 @@ impl RuntimeInner {
     /// The worker never owns the runtime. It captures `Weak<RuntimeInner>`
     /// plus an `Arc<WakeGate>` — the minimal wait state — and it upgrades
     /// the weak handle only inside an admission step, never across an
-    /// await. A parked worker therefore holds no strong reference, so it
+    /// ordinary idle wait. Native manual-tail joins retain their accountable
+    /// owner until actual exit. A parked worker holds no strong reference, so it
     /// cannot keep a runtime alive that has no semantic owner left.
     ///
     /// Termination is deterministic, not timed: dropping the last
@@ -418,12 +430,13 @@ impl RuntimeInner {
                 let lifecycle_changed = lifecycle.changed();
                 tokio::pin!(lifecycle_changed);
                 lifecycle_changed.as_mut().enable();
-                // The strong handle exists only inside this block, so it is
-                // never held across the await below.
+                // Retain the native owner across a concrete manual-tail join,
+                // then release it before the ordinary idle wait below.
                 {
                     let Some(inner) = weak.upgrade() else {
                         break;
                     };
+                    inner.reap_manual_tail(false).await;
                     if admit {
                         inner.admit_next_attempt();
                     }
@@ -1062,11 +1075,13 @@ impl ConversationRuntime {
             }
             ConversationLifecycleState::Running => {}
         }
-        if let Some(failure) = self.inner.durability_gate.failure() {
-            return Err(InboundAdmissionError::DurabilityFailed {
+        let permission = self
+            .inner
+            .durability_gate
+            .enter_coordinator_commit()
+            .map_err(|failure| InboundAdmissionError::DurabilityFailed {
                 message: failure.diagnostic,
-            });
-        }
+            })?;
         // Explicit refusal, ordered with catalog publication and model
         // commits by this lock: nothing is accepted for a selection the
         // Session's published catalog does not admit.
@@ -1111,6 +1126,7 @@ impl ConversationRuntime {
                 correlation: None,
             })
             .map_err(InboundAdmissionError::Mailbox)?;
+        drop(permission);
         drop(state);
         Ok(InboundAdmission {
             message_id: accepted.message_id,

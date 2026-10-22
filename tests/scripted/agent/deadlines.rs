@@ -17,8 +17,7 @@ use rustx::agent::{
 };
 use rustx::context::{
     AgentStatusEngine, CompactionBudgets, ContextConfig, ContextEngine, ContextRuntime,
-    ContextSummarizer, DefaultTokenEstimator, ModelBackedSummarizer, SessionContextPolicy,
-    SummaryRequest,
+    DefaultTokenEstimator, ModelBackedSummarizer, SessionContextPolicy, SummaryRequest,
 };
 use rustx::conversation::ConversationState;
 use rustx::events::types::{AttemptFailure, AttemptOutcome, RuntimeEvent};
@@ -1128,13 +1127,10 @@ async fn repeated_runtime_timeouts_use_the_bounded_generic_retry_budget_without_
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn model_backed_summarizer_uses_the_same_deadlines_without_generic_retry() {
     for (script, expected) in [
-        (
-            vec![FakeStep::Emit(started())],
-            "summary generation timed out",
-        ),
+        (vec![FakeStep::Emit(started())], "response-start deadline"),
         (
             vec![FakeStep::Emit(started()), FakeStep::Emit(text("partial"))],
-            "summary generation timed out",
+            "stream-idle deadline",
         ),
     ] {
         let (release, release_rx) = model_release();
@@ -1183,7 +1179,10 @@ async fn model_backed_summarizer_uses_the_same_deadlines_without_generic_retry()
         .expect("summary timeout must be deterministic")
         .expect_err("summary must fail on timeout");
         controller.await.expect("summary controller completes");
-        assert_eq!(error.kind, rustx::context::ContextErrorKind::SummaryFailed);
+        assert_eq!(
+            error.kind,
+            rustx::context::ContextErrorKind::AuxiliaryDeadlineExceeded
+        );
         assert!(error.message.contains(expected));
         assert_eq!(model.requests().len(), 1, "summarizer has no generic retry");
     }
@@ -1299,7 +1298,7 @@ async fn runtime_composition_shares_one_clock_between_primary_and_summarizer() {
     assert!(matches!(
         summary_error,
         rustx::runtime::conversation_runtime::ManualCompactionError::Context(error)
-            if error.kind == rustx::context::ContextErrorKind::SummaryFailed
+            if error.kind == rustx::context::ContextErrorKind::AuxiliaryDeadlineExceeded
     ));
     drop(summary_release);
 
@@ -1355,8 +1354,10 @@ async fn runtime_composition_shares_one_clock_between_primary_and_summarizer() {
             .iter()
             .filter(|event| matches!(
                 event.event,
-                RuntimeEvent::ModelRequestFailed { ref error, .. }
-                    if error.kind == rustx::model::ModelErrorKind::Timeout
+                RuntimeEvent::ModelRequestFailed {
+                    owner: rustx::model::ModelRequestOwner::Agent { .. },
+                    ref error, ..
+                } if error.kind == rustx::model::ModelErrorKind::Timeout
             ))
             .count(),
         1,

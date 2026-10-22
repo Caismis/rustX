@@ -719,7 +719,7 @@ pub(in crate::durable::sqlite) fn index_event(
                         position(connection, message_id)?
                             .ok_or_else(|| storage("original Assistant C absent"))?,
                     )
-                })
+                })?
                 .is_some(),
         );
         let _ = super::super::optional_display_layout(connection, || {
@@ -730,10 +730,10 @@ pub(in crate::durable::sqlite) fn index_event(
                     .ok_or_else(|| storage("original Assistant C absent"))?,
                 message_id,
             )
-        });
+        })?;
         let _ = super::super::optional_display_layout(connection, || {
             capture_accepted_relation(connection, event, message_id)
-        });
+        })?;
     }
     let mut fields = Vec::new();
     let header = TraceFactHeader {

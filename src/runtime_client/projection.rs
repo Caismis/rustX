@@ -160,7 +160,7 @@ use in_flight::{
 use publication::encoded_event_bytes;
 use publication::stamp_trace_cut;
 use views::{
-    accumulate_finite_facts, activation_view, admit_status, agent_view, background_view,
+    accumulate_finite_facts, activity_view, admit_status, agent_view, background_view,
     client_failure, inbound_item_view, set_checkpoint_transition_cursor, upsert_background,
     upsert_interaction, upsert_subagent,
 };

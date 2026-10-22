@@ -1,3 +1,4 @@
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Condvar, Mutex};
 
 use rusqlite::Connection;
@@ -18,6 +19,8 @@ fn presentation_cancellation_interrupts_running_sql_and_restores_writer_policy()
         available: Mutex::new(Some(Connection::open_in_memory().unwrap())),
         wake: Condvar::new(),
         poisoned: AtomicBool::new(false),
+        lease_generation: AtomicU64::new(0),
+        active_interrupt: Mutex::new(None),
     });
     let mut reader = SqliteConversationStore::from_connection_owner(
         ConversationId::new("conv_8307904d-d256-77de-8e8a-63789f0ed1a5"),
@@ -63,6 +66,8 @@ fn presentation_cancellation_ends_connection_wait_without_releasing_writer() {
         available: Mutex::new(Some(Connection::open_in_memory().unwrap())),
         wake: Condvar::new(),
         poisoned: AtomicBool::new(false),
+        lease_generation: AtomicU64::new(0),
+        active_interrupt: Mutex::new(None),
     });
     let writer = owner.lock().unwrap();
     let mut reader = SqliteConversationStore::from_connection_owner(

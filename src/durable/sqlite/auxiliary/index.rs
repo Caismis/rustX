@@ -1,5 +1,7 @@
 //! Request-owner and audit-fact index writes performed inside the Journal append transaction.
 
+use super::super::sqlite_error;
+
 use super::{
     AUXILIARY_REQUEST_ID_BYTES_MAX, AUXILIARY_TERMINAL_ENVELOPE_ENCODED_MAX, AuxiliaryAuditCut,
     AuxiliaryCallId, ConversationId, ConversationStoreError, ModelRequestOwner, RequestId,
@@ -136,7 +138,9 @@ pub(in crate::durable::sqlite) fn index_event_tx(
                      ) VALUES(?1,?2,NULL,NULL)",
                     params![call_id.as_str(), seq_to_i64(event.sequence)?],
                 )
-                .map_err(|error| storage(format!("index auxiliary Call start: {error}")))?;
+                .map_err(|error| {
+                    sqlite_error(&error, format!("index auxiliary Call start: {error}"))
+                })?;
             insert_audit_fact_tx(
                 transaction,
                 event.sequence,
@@ -159,7 +163,9 @@ pub(in crate::durable::sqlite) fn index_event_tx(
                         call_id.as_str(),
                     ],
                 )
-                .map_err(|error| storage(format!("index auxiliary Call settlement: {error}")))?;
+                .map_err(|error| {
+                    sqlite_error(&error, format!("index auxiliary Call settlement: {error}"))
+                })?;
             if updated != 1 {
                 return Err(ConversationStoreError::TerminalViolation(format!(
                     "auxiliary Call {call_id} already has a settlement"
@@ -201,7 +207,9 @@ pub(super) fn insert_owner_tx(
                         seq_to_i64(start_sequence)?,
                     ],
                 )
-                .map_err(|error| storage(format!("index Agent request owner: {error}")))?;
+                .map_err(|error| {
+                    sqlite_error(&error, format!("index Agent request owner: {error}"))
+                })?;
         }
         ModelRequestOwner::Auxiliary { call_id, ordinal } => {
             if request_id.as_str().is_empty()
@@ -224,7 +232,9 @@ pub(super) fn insert_owner_tx(
                         seq_to_i64(start_sequence)?,
                     ],
                 )
-                .map_err(|error| storage(format!("index auxiliary request owner: {error}")))?;
+                .map_err(|error| {
+                    sqlite_error(&error, format!("index auxiliary request owner: {error}"))
+                })?;
         }
     }
     Ok(())
@@ -254,7 +264,7 @@ pub(super) fn index_terminal_tx(
              WHERE request_id=?3 AND terminal_sequence IS NULL",
             params![seq_to_i64(event.sequence)?, kind, request_id.as_str(),],
         )
-        .map_err(|error| storage(format!("index request terminal: {error}")))?;
+        .map_err(|error| sqlite_error(&error, format!("index request terminal: {error}")))?;
     if updated != 1 {
         return Err(ConversationStoreError::TerminalViolation(format!(
             "request {request_id} already has a terminal"
@@ -278,7 +288,9 @@ pub(super) fn index_terminal_tx(
                  WHERE request_id=?3 AND terminal_sequence IS NULL",
                 params![seq_to_i64(event.sequence)?, kind, request_id.as_str(),],
             )
-            .map_err(|error| storage(format!("index auxiliary request terminal: {error}")))?;
+            .map_err(|error| {
+                sqlite_error(&error, format!("index auxiliary request terminal: {error}"))
+            })?;
         if updated != 1 {
             return Err(ConversationStoreError::TerminalViolation(format!(
                 "auxiliary request {request_id} already has a terminal"
@@ -306,7 +318,9 @@ pub(super) fn next_audit_offset(
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(format!("auxiliary audit frontier lookup: {error}")))?;
+        .map_err(|error| {
+            sqlite_error(&error, format!("auxiliary audit frontier lookup: {error}"))
+        })?;
     let maximum =
         u64::try_from(maximum).map_err(|_| storage("auxiliary audit frontier is negative"))?;
     maximum
@@ -338,6 +352,6 @@ pub(super) fn insert_audit_fact_tx(
                 ordinal.map(i64::from),
             ],
         )
-        .map_err(|error| storage(format!("insert auxiliary audit fact: {error}")))?;
+        .map_err(|error| sqlite_error(&error, format!("insert auxiliary audit fact: {error}")))?;
     Ok(audit_offset)
 }

@@ -12,9 +12,9 @@ use super::{
     AgentExecution, AgentExecutionResult, DurableFailureKind,
     MAX_CONTEXT_OVERFLOW_RETRIES_PER_MODEL_TURN, MAX_TRANSIENT_MODEL_RETRIES_PER_LOGICAL_STEP,
 };
-use crate::agent::assembly::ModelEventAssembler;
 use crate::context::AcceptedContext;
 use crate::events::types::{AttemptFailure, RuntimeEvent};
+use crate::model::assembly::ModelEventAssembler;
 use crate::model::error::ModelErrorKind;
 use crate::model::snapshot::RequestIdentity;
 use crate::runtime::identity::MessageId;

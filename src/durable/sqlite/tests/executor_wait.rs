@@ -1,3 +1,4 @@
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Condvar, Mutex};
 
 use rusqlite::Connection;
@@ -86,6 +87,8 @@ fn a_connection_wait_does_not_park_its_tokio_worker() {
         available: Mutex::new(Some(Connection::open_in_memory().unwrap())),
         wake: Condvar::new(),
         poisoned: AtomicBool::new(false),
+        lease_generation: AtomicU64::new(0),
+        active_interrupt: Mutex::new(None),
     });
     // Declared first so a failing assertion still releases the lease
     // before the runtime waits for its worker on unwind.

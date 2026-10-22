@@ -1,7 +1,7 @@
 //! Original RequestStart-owned allowlisted structural inspection layout.
 //! Request inspection composes authenticated fragments over the native selected
 //! tree. Other finite state domains retain their original segmented layouts.
-use super::{Connection, ConversationStoreError, OptionalExtension, params, storage};
+use super::{Connection, ConversationStoreError, OptionalExtension, params, sqlite_error, storage};
 use crate::durable::observation::{
     HEADER_PAGE_MAX, ObservationValueChunk, RequestObservationField, RequestObservationHeader,
     RequestObservationPage,
@@ -20,11 +20,15 @@ struct SourceWriter<'a> {
     buffer: Vec<u8>,
     written: u64,
     segment: u64,
+    failure: Option<ConversationStoreError>,
 }
 impl SourceWriter<'_> {
     fn drain(&mut self) -> std::io::Result<()> {
         if !self.buffer.is_empty() {
-            self.connection.execute("INSERT INTO content_segments(source_kind,source_id,block_index,representation,segment,bytes) VALUES(?1,?2,0,'canonical_json_v1',?3,?4)",params![self.kind,self.id,self.segment,self.buffer]).map_err(std::io::Error::other)?;
+            self.connection.execute("INSERT INTO content_segments(source_kind,source_id,block_index,representation,segment,bytes) VALUES(?1,?2,0,'canonical_json_v1',?3,?4)",params![self.kind,self.id,self.segment,self.buffer]).map_err(|error| {
+                self.failure = Some(sqlite_error(&error, error.to_string()));
+                std::io::Error::other("native observation source write failed")
+            })?;
             self.written = self
                 .written
                 .checked_add(self.buffer.len() as u64)
@@ -105,18 +109,29 @@ fn index_stream<T: serde::Serialize + schemars::JsonSchema>(
         buffer: Vec::with_capacity(SEGMENT),
         written: 0,
         segment: 0,
+        failure: None,
     };
     source
         .copy_original_bytes_to(&mut writer)
-        .map_err(|error| storage(error.to_string()))?;
-    writer.flush().map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| {
+            writer
+                .failure
+                .take()
+                .unwrap_or_else(|| storage(error.to_string()))
+        })?;
+    writer.flush().map_err(|error| {
+        writer
+            .failure
+            .take()
+            .unwrap_or_else(|| storage(error.to_string()))
+    })?;
     index_fields(&writer, &source)?;
     connection
         .execute(
             "INSERT INTO content_frontiers VALUES(?1,?2,0,'canonical_json_v1',1,?3)",
             params![kind, id, writer.written],
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| sqlite_error(&error, error.to_string()))?;
     Ok(())
 }
 fn stored_preview(
@@ -157,7 +172,7 @@ fn index_fields(
     );
     let mut fields = connection
         .prepare_cached(&insert)
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| sqlite_error(&error, error.to_string()))?;
     let mut failure = None;
     source
         .visit_fields_selecting_previews(
@@ -176,7 +191,7 @@ fn index_fields(
                             children,
                             header
                         ])
-                        .map_err(|error| storage(error.to_string()))?;
+                        .map_err(|error| sqlite_error(&error, error.to_string()))?;
                     if let Some((start, end)) = key_span
                         && path.last().is_some_and(|part| part.starts_with('@'))
                     {
@@ -400,7 +415,7 @@ fn started(
     request: &RequestId,
     through: u64,
 ) -> Result<u64, ConversationStoreError> {
-    let sequence:Option<u64>=connection.query_row("SELECT started_sequence FROM request_snapshots WHERE request_id=?1 AND started_sequence<=?2",params![request.as_str(),through],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+    let sequence:Option<u64>=connection.query_row("SELECT started_sequence FROM request_snapshots WHERE request_id=?1 AND started_sequence<=?2",params![request.as_str(),through],|row|row.get(0)).optional().map_err(|error|sqlite_error(&error, error.to_string()))?;
     sequence.ok_or_else(|| {
         ConversationStoreError::InvalidReference("request is outside native read cut".into())
     })
@@ -436,7 +451,7 @@ pub(super) fn field_coordinates(
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .optional()
-        .map_err(|error| storage(error.to_string()))?
+        .map_err(|error| sqlite_error(&error, error.to_string()))?
         .ok_or_else(|| {
             ConversationStoreError::InvalidReference("request field is unavailable".into())
         })?;
@@ -551,8 +566,8 @@ fn field_with_key(
     if table == "request_observation_fields" {
         return composed::field(connection, id, path);
     }
-    let (field,key)=connection.prepare_cached(&format!("SELECT {},CASE WHEN typeof(key_header)='blob' AND length(key_header)<=4096 THEN key_header END FROM {table} WHERE source_id=?1 AND path_json=?2",header_columns(table)?)).map_err(|error|storage(error.to_string()))?
-        .query_row(params![id,field_path(path)?],|row|Ok((StoredField::row(row,0)?,row.get::<_,Option<Vec<u8>>>(4)?))).optional().map_err(|error|storage(error.to_string()))?
+    let (field,key)=connection.prepare_cached(&format!("SELECT {},CASE WHEN typeof(key_header)='blob' AND length(key_header)<=4096 THEN key_header END FROM {table} WHERE source_id=?1 AND path_json=?2",header_columns(table)?)).map_err(|error|sqlite_error(&error, error.to_string()))?
+        .query_row(params![id,field_path(path)?],|row|Ok((StoredField::row(row,0)?,row.get::<_,Option<Vec<u8>>>(4)?))).optional().map_err(|error|sqlite_error(&error, error.to_string()))?
         .ok_or_else(||ConversationStoreError::InvalidReference("request field is unavailable".into()))?;
     let (start, end, children, bytes) = field.materialize()?;
     Ok((start, end, children, bytes, key))
@@ -578,7 +593,7 @@ pub(super) fn validate_start(
             |row| row.get(0),
         )
         .optional()
-        .map_err(|error| storage(error.to_string()))?
+        .map_err(|error| sqlite_error(&error, error.to_string()))?
         .unwrap_or(false);
     if agent {
         Ok(())
@@ -698,9 +713,9 @@ pub(super) fn page_from(
         return Err(ConversationStoreError::InvalidContentRange);
     }
     let rows=connection.prepare_cached(&format!("SELECT {},{} FROM {table} WHERE source_id=?1 AND parent_path=?2 AND ordinal>=?3 ORDER BY ordinal LIMIT ?4",page_metadata_columns(),header_columns(table)?))
-        .map_err(|error|storage(error.to_string()))?.query_map(params![id,field_path(path)?,offset,limit],
+        .map_err(|error|sqlite_error(&error, error.to_string()))?.query_map(params![id,field_path(path)?,offset,limit],
             |row| {let (path,key)=page_metadata(row,0)?;Ok((path,StoredField::row(row,2)?,key))})
-        .map_err(|error|storage(error.to_string()))?.collect::<Result<Vec<_>,_>>().map_err(|error|storage(error.to_string()))?;
+        .map_err(|error|sqlite_error(&error, error.to_string()))?.collect::<Result<Vec<_>,_>>().map_err(|error|sqlite_error(&error, error.to_string()))?;
     let mut fields = rows
         .into_iter()
         .map(|(path, field, key)| {
@@ -910,7 +925,7 @@ pub(super) fn terminal(
             [request.as_str()],
             |row| row.get(0),
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| sqlite_error(&error, error.to_string()))?;
     if !retained {
         return Ok(());
     }
@@ -978,7 +993,7 @@ pub(super) fn terminal(
     };
     let bytes = crate::observation::bounded::bounded_bytes(&header, 16_384)
         .ok_or_else(|| storage("native request outcome header exceeds bound"))?;
-    let changed=connection.execute("UPDATE request_snapshots SET observation_terminal_sequence=?2,observation_terminal_header=?3 WHERE request_id=?1 AND observation_terminal_sequence IS NULL",params![request.as_str(),event.sequence,bytes]).map_err(|error|storage(error.to_string()))?;
+    let changed=connection.execute("UPDATE request_snapshots SET observation_terminal_sequence=?2,observation_terminal_header=?3 WHERE request_id=?1 AND observation_terminal_sequence IS NULL",params![request.as_str(),event.sequence,bytes]).map_err(|error|sqlite_error(&error, error.to_string()))?;
     if changed != 1 {
         return Err(storage(
             "native request terminal header owner missing or duplicated",
@@ -993,7 +1008,7 @@ pub(super) fn outcome_at(
 ) -> Result<Option<crate::durable::observation::RequestObservationOutcome>, ConversationStoreError>
 {
     validate_start(connection, source_sequence, through)?;
-    let row:Option<(Option<u64>,Option<Vec<u8>>)>=connection.query_row("SELECT completed_sequence,observation_terminal_header FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence=?1",[source_sequence],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|storage(error.to_string()))?;
+    let row:Option<(Option<u64>,Option<Vec<u8>>)>=connection.query_row("SELECT completed_sequence,observation_terminal_header FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence=?1",[source_sequence],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|sqlite_error(&error, error.to_string()))?;
     let (terminal, bytes) =
         row.ok_or_else(|| storage("original Request snapshot source absent"))?;
     if terminal.is_none_or(|sequence| sequence > through) {
@@ -1366,7 +1381,7 @@ fn index_key(
             &insert,
             params![writer.id, encoded_path(&key_path)?, start, end, key_value],
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| sqlite_error(&error, error.to_string()))?;
     writer
         .connection
         .execute(
@@ -1381,6 +1396,6 @@ fn index_key(
                 header
             ],
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| sqlite_error(&error, error.to_string()))?;
     Ok(())
 }

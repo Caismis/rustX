@@ -303,6 +303,132 @@ Pre-1.0 development does not preserve compatibility with previous runtimes, lega
 
 ## Core ownership
 
+Native auxiliary capacity is acquired without waiting, process before
+Conversation, and all partial reservations unwind on refusal. Each process
+has 32 total and 24 general Call slots; each Conversation has four total and
+three general slots. Only native Compaction admission can use total capacity
+without a general slot. Attribution strings grant no protected authority.
+Every admitted Call also reserves its serialized required-write responsibility.
+Native owners retain these resources through physical work and confirmation;
+reply receivers and observers never own their release.
+
+An auxiliary required-write scope shares the existing ConnectionOwner and its
+native manifest/append-certificate ownership. Cancellation wakes its connection
+waiter and interrupts SQL only while that exact lease generation remains
+active. A delayed signal cannot interrupt a successor Agent lease. Existing
+settlement and confirmation use uncancelled Store authority. The Call's writer
+owner retains the exact submitted intent, completion evidence and real thread
+join; a lost reply cannot release its permits or establish noncommit.
+
+One Compaction budget spans all input shrink and carryover re-entry: twelve
+confirmed or unresolved starts, three shrinks and one five-minute monotonic
+deadline. Its learned Summary input limit is retained across re-entry and
+reduced atomically with its shrink count; carryover degradation cannot restore
+the configured limit or charge again for the same reduction. A matching Store receipt confirms a start; only Store-proven
+noncommit refunds it. Dropping a reservation preserves logical uncertainty
+without retaining an execution permit. Capacity, deadline, supervision and
+required-durability failures retain typed distinctions from rejected Summary
+content.
+
+The Summary operation owns that budget; every input replan obtains the same
+accounting object. Its monotonic clock domain must match the native executor.
+Checkpoint authorization checks the parent cancellation/close fence and
+absolute deadline together, after native children have exited. A late
+cancellation cannot rewrite an already-sealed model outcome, but can still
+refuse the dependent checkpoint.
+
+Native auxiliary acquisition and waits follow this graph:
+
+- Admission: nonblocking process/Conversation/write reservations, then short
+  durability state, nonblocking lifecycle admission, cancellation grant,
+  parent Scope and registry publication. No SQL or provider wait occurs here.
+- Ownership start: await the owned durability permission outside coordinator
+  and registry locks; enqueue the retained exact intent under the cancellation
+  grant; the dedicated writer acquires ConnectionOwner and runs SQLite.
+  Request start allowance precedes that submission. Cancellation first wins
+  without submitting; a confirmed start remains charged even without dispatch.
+- Dispatch/success seal: the native owner thread enters lifecycle, short
+  durability state, cancellation grant, parent Scope and Call state. No await
+  or SQL splits the winning decision from its one-shot consumption.
+- Settlement/confirmation: retained write responsibility enters ConnectionOwner
+  directly, including after DurabilityFailed. Neither cancellation nor healthy
+  admission can remove an existing obligation.
+- Retirement: join the write/confirmation thread, join the owner thread,
+  confirm obligations or retain the exact intent under proven-exited native
+  failure, release permits/admission, retire the child, then deliver its result.
+  The process provisions 32 retirement workers before any owner starts;
+  together with at most 32 owners and 32 writers, auxiliary threads are bounded
+  at 96. Receiver ownership ends before joining. One unexited owner retains
+  its actual join and allocation without blocking another Conversation's
+  retirement. Neither handoff nor a completion flag proves physical exit.
+  After the actual joins and exact settlement, release every Call-owned Store
+  reference before releasing admission or exposing retirement/completion. A
+  parked retirement worker cannot keep a completed allocation locked.
+
+Failure registration under the coordinator takes only DurabilityGate's short
+state mutex. Coordinator idle probes treat a held lifecycle commit boundary as
+busy instead of waiting for its writer. A pending winner refuses later work
+while an earlier writer finishes. Permission exit commits/publishes that first winner exactly once,
+without holding the gate mutex or a SQL lease during the native callback.
+Inbound durable acceptance and model-selection persistence retain their own
+nonblocking gate permission throughout the coordinator's decision, write and
+publication. A failure requested by auxiliary cleanup waits for every earlier
+ownership/coordinator permission to exit before publication, without blocking
+the process reaper on coordinator SQL. The durable commit, not a preliminary
+health read or the later response delivery, determines the order.
+KnownNotCommitted describes transaction certainty, not Store health. A genuine
+required storage failure reaches the native durability authority even when
+RequestStarted rolls back, its budget allowance is refunded and Call-only
+Failed settlement succeeds. The first required failure survives that cleanup.
+Typed cancellation and benign start validation refusals do not poison health.
+SQLite interruption identity survives every required-start SQL adapter,
+including Historical resource-cut and projection-activation boundary checks,
+shared Request Snapshot orphan/start-event probes and the Journal frontier
+lookup; cancellation never masks an independent Storage error, even when
+cancellation is observed before that failure is delivered to the owner.
+An interrupted pre-COMMIT transaction with native SQLite auto-rollback is
+known noncommit only when no subsequent SQL escaped that original transaction;
+an uncertain COMMIT or rollback remains an obligation. Optional observation
+writes may degrade only after successful savepoint rollback/release with the
+original outer transaction still intact. Typed cancellation, an aborted outer
+transaction or failed savepoint cleanup propagates immediately through every
+nested optional writer and prevents further authoritative SQL. Savepoints
+must never create a replacement outer transaction. Journal head, event/audit
+rows, Canonical Ledger, Surface and transcript coordinates commit atomically;
+rolled-back frontiers cannot be published as committed. SQLite interruption
+retains its typed cause even through observation serialization writers.
+
+General work cannot select protected capacity by supplying a purpose string.
+
+A failed native drain may prove physical exit while retaining logical
+durability uncertainty. The manager must still join projection owners and
+release the old composition in that case, return the failure, and remove its
+writer-absent registry entry so a later load can attempt exclusive recovery.
+An unproven physical exit must retain isolation. Neither failure is promoted
+to successful quiescence, and recovery never redispatches an old RequestId.
+
+Cancellation winning Summary operation admission settles the Agent Attempt as
+cancelled with its native reason. It emits neither CompactionFailed nor
+AttemptFailed, including when compaction was recovering a provider overflow.
+Capacity and lifecycle-boundary refusals both arbitrate under the cancellation
+grant: completed cancellation cannot become Busy when Call slots are occupied
+or another native commit holds the lifecycle boundary. Active, uncancelled
+admission still returns Busy without waiting for capacity or the commit lock.
+
+One auxiliary generation folds the same canonical ordering as Agent output.
+It refuses tools and more than 4096 content blocks, discards validated native
+continuation/reasoning state, and never modifies primary continuation or usage.
+UsageUpdate replaces the prior cumulative snapshot. Missing final usage
+retains the latest partial value; absence never becomes zero. Illegal tail
+events cannot change trusted evidence. A local timeout, transport error or
+cancellation does not assert provider termination or remote execution certainty.
+
+Manual maintenance keeps an actual native task join. Reply waiter loss does
+not release its native lifetime or lose the checked-out conversation. The
+compaction-specific manager path releases its OperationLease immediately
+after native admission/transfer and waits for the exact receipt outside that
+lease. Other managed operations retain their existing lease semantics.
+
 The agent kernel owns agent execution semantics. Provider SDKs, MCP SDKs, storage clients, HTTP frameworks, and control-plane schemas must not define kernel types.
 
 ## Native durable authority (M8 / Issue #11)
@@ -2306,6 +2432,13 @@ second authority:
   keyed by tool call (a settlement push evicts the queued progress of
   that call). At the Runtime Client boundary the projection surfaces
   through `AgentUpdated` events and `snapshot.agents`.
+- **Agent details have one read owner.** Public status, collection pages,
+  identity pages and selected values use the native registry at their captured
+  collection cut. Projection owns its working snapshot, published snapshot and
+  replay, but retains no redundant Agent detail source. Activity acceptance
+  uses the current working activation/lifecycle/revision even when a native
+  source-prefix gap delays publication. Another Agent's valid activity is
+  never rejected solely because the collection generation advanced.
 - **Only superseded observations are coalescible.** Lifecycle,
   cancellation, and terminal publication stay reliable and exactly-once;
   activity delivery is latest-value: a watch overwrite or a replay-ring

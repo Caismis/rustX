@@ -428,6 +428,96 @@ policy and retry orchestration remain intentionally outside this architecture.
 
 ## 1.2 Runtime supervision and quiescence (M9c / Issue #12)
 
+`runtime::auxiliary::capacity` owns nonblocking process and Conversation Call
+reservations, including required-writer capacity. Runtime instances share the
+native process domain and retain their own Conversation domain. Manual
+Compaction reserves protected capacity before model/context preparation and
+keeps it under native operation ownership. Ordinary consumers cannot select
+the crate-private protected admission path.
+
+`context::compaction_budget` owns cumulative business accounting independently
+of physical execution capacity. Its clones share the same operation identity,
+deadline, start reservations, shrink count and learned Summary input limit.
+Provider-driven reductions update the count and effective limit together;
+carryover re-entry never restores the configured upper bound. Request receipts and typed
+noncommit evidence resolve reservations; an unknown transaction remains a
+logical budget obligation rather than permission for another physical start.
+
+`runtime::auxiliary::executor` registers each preparation before expensive
+history/media work. A close-fenced native Scope owns the Compaction children;
+one Call consumes one RequestId-specific dispatch grant after both starts are
+confirmed. Call records keep lifecycle admission and capacity independently
+of the result receiver. Capacity and lifecycle-lock Busy refusals share the
+native cancellation arbitration: an earlier cancellation cannot become a
+compaction failure, while active callers still receive nonblocking Busy.
+Frozen invocation parameters, resource revision and
+semantic input are checked before durable start. Context owns transcript
+construction, Summary acceptance and the checkpoint transaction.
+
+An admitted Call creates at most one native owner thread and one serialized
+write thread. Before the first owner is spawned, the process installs a fixed
+pool of 32 retirement workers, matching the shared Call limit. Thus 32 live
+Calls plus process retirement use at most 96 auxiliary threads. Conversations
+that never submit a Call create no retirement threads. Partial pool startup
+failure closes its channel and joins every worker already created before
+refusing submission; no physical execution starts without retirement capacity.
+
+The write thread performs exact confirmation; the owner joins that thread,
+then a retirement worker joins the actual owner, including its thread-local
+destructors ([the Rust join contract](https://doc.rust-lang.org/std/thread/struct.JoinHandle.html#method.join)).
+Handoff is not exit proof. A worker releases the shared receiver mutex before
+joining, so an unexited owner occupies only its own retirement worker and
+retains its Call permits while unrelated Conversations retire independently.
+The channel holds at most 32 records, and existing Call permits bound all
+queued/in-progress retirement; cleanup obtains no fresh execution permit.
+No provider-execution waiting queue or unbounded join-offloading backlog is
+used. Capacity is released only after actual joins and confirmed obligations
+or a proven-exited handoff of the exact intent to native durability failure.
+Before releasing lifecycle admission, removing the Call or sending completion,
+the reaper drops both its local execution resources and the record's resource
+slot. A retained retirement record contains no Store allocation ownership;
+manager deletion cannot depend on when the worker next gets scheduled.
+
+`model::assembly` supplies canonical event/block validation to Agent and
+auxiliary consumers. Its text-only entry validates reasoning/continuation
+envelopes without retaining their bytes. The auxiliary fold retains
+request-local timing and cumulative usage snapshots, accepts success only
+after Completed and EOF, and keeps the absolute deadline active after
+Completed. Provider observation, remote uncertainty and local outcome stay
+separate. Context can reject refused/empty Summary text after confirmed
+execution without causing another provider entry.
+
+Manual compaction transfers its whole business tail to ConversationRuntime
+before releasing the manager OperationLease. The resident worker or drain
+owner joins the retained maintenance task; callers await a reply view outside
+the manager lease. Responses use that invocation's exact native receipt,
+including when a later compaction commits or observation delivery is lost.
+
+DurabilityGate keeps a short state mutex and an owned ownership permission.
+A failure request immediately closes later admission without parking the
+coordinator behind SQL. An earlier permission retains its order through the
+write and native publication, then commits the pending absorbing failure on
+exit. Coordinator-owned inbound acceptance and model selection also retain a
+nonblocking commit permission under their existing coordinator lock. This
+permission can overlap an ownership writer; a pending failure is published
+only after both earlier commits exit. Neither permission holds the gate mutex
+across SQL, and the global auxiliary reaper never waits for coordinator SQL.
+The single failure publisher runs outside the gate mutex. Existing
+background and Subagent ownership writers await permission outside registry
+locks and perform their synchronous transaction/publication on blocking
+workers; already-owned settlement never reacquires healthy admission.
+Coordinator idle probes report busy immediately when the lifecycle commit
+boundary is held, so they cannot retain the coordinator while waiting for
+one of those writers.
+
+The runtime manager consumes the native drain's logical result and physical
+exit proof separately. A logical durability failure still fails unload, but
+proven native exit is followed by actual projection drain and release of the
+old composition. The failed flight reports writer absence and removes its
+residency claim, allowing a later exclusive recovery attempt. Unproven native
+or projection retirement retains the isolated old writer and its failure;
+neither path fabricates successful logical quiescence or replays a Request.
+
 `ConversationRuntime` owns one lifecycle authority:
 
 ```text
@@ -1745,6 +1835,17 @@ transaction as the Ledger body it references. The same rule applies to
 an orphan reference structurally impossible in the SQLite backend; a failed
 transaction exposes neither side. Persist-before-publish then appends the
 committed event before any observer or external projection sees it.
+
+Optional observation layouts share that original owning transaction. Their
+savepoints may contain an ordinary derived-layout failure only when rollback
+and release succeed and the outer transaction remains active. Cancellation,
+transaction abort and failed savepoint cleanup propagate through nested layout
+writers before any further SQL. No optional helper may start a replacement
+outer transaction. This rule also protects Canonical Ledger, Surface,
+transcript counters and references, and the Journal/audit frontier from
+independently committed tails after an automatic SQLite rollback. The
+in-memory `TransactionInvalid` Store error marks transaction-integrity failure;
+it does not introduce a persisted schema or migration.
 
 ### 2.6 Durable Pending Inbound Inbox (Issue #63)
 
@@ -4569,7 +4670,13 @@ the bare `profile` key stays retired), and `started_at`. Rust snapshots and
 the maintained TUI mirror agree that an unexpected child process/control-plane
 loss has an unknown outcome, and that the activity projection is
 diagnostics-only. Runtime Client v48 separates durable `AgentState` from finite
-activation `SubagentState`; neither lifecycle is inferred from activity. Superseded
+activation `SubagentState`; neither lifecycle is inferred from activity.
+Agent status, checkpoint collection/identity pages and selected values read the
+native registry at the captured collection cut. Projection retains the finite
+working/published Agent snapshot and replay, without a second Agent detail
+entry in its generic domain-source maps. A deferred publication never makes
+the older published view an owner for a new working-state activity update.
+Superseded
 Runtime Client versions are rejected explicitly;
 there is no compatibility decoder.
 

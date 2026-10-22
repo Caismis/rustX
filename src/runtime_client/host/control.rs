@@ -360,50 +360,110 @@ impl ClientInner {
         request_id: Option<crate::runtime::identity::ManualCompactionRequestId>,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.ensure_writable_runtime()?;
-        let outcome = self
+        let handle = self
             .runtime
             .as_ref()
             .expect("a writable Runtime Client host has a runtime")
-            .compact_context(request_id)
-            .await
-            .map_err(|error| match error {
-                ManualCompactionError::Inactive | ManualCompactionError::Busy => {
-                    RuntimeClientError::InvalidState {
-                        message: error.to_string(),
-                    }
-                }
-                ManualCompactionError::Shutdown => RuntimeClientError::RuntimeShutdown,
-                ManualCompactionError::ModelUnavailable { .. } => {
-                    RuntimeClientError::InvalidModelConfiguration {
-                        message: error.to_string(),
-                    }
-                }
-                ManualCompactionError::DurabilityFailed { message }
-                | ManualCompactionError::Durable { message } => {
-                    RuntimeClientError::InvalidState { message }
-                }
-                ManualCompactionError::Context(context)
-                    if matches!(
-                        context.kind,
-                        crate::context::ContextErrorKind::NoProgress
-                            | crate::context::ContextErrorKind::CannotFit
-                    ) =>
-                {
-                    RuntimeClientError::InvalidState {
-                        message: context.message,
-                    }
-                }
-                ManualCompactionError::Context(context) => RuntimeClientError::RuntimeFailure {
-                    message: context.message,
-                },
-            })?;
+            .admit_compaction(request_id)
+            .map_err(Self::compaction_error)?;
         #[cfg(test)]
-        {
-            let gate = self.manual_compaction_response_gate.lock().unwrap().take();
-            if let Some((committed, release)) = gate {
-                let _ = committed.send(outcome.clone());
-                let _ = release.await;
+        let gate = self.manual_compaction_response_gate.lock().unwrap().take();
+        Self::finish_compaction(
+            handle,
+            #[cfg(test)]
+            gate,
+        )
+        .await
+    }
+
+    pub(crate) fn admit_compaction_transfer(
+        &self,
+        request_id: Option<crate::runtime::identity::ManualCompactionRequestId>,
+    ) -> Result<
+        futures_util::future::BoxFuture<'static, Result<RuntimeClientResult, RuntimeClientError>>,
+        RuntimeClientError,
+    > {
+        self.ensure_writable_runtime()?;
+        let handle = self
+            .runtime
+            .as_ref()
+            .expect("writable runtime")
+            .admit_compaction(request_id)
+            .map_err(Self::compaction_error)?;
+        // The transferred reply must not retain the host's Runtime or Store
+        // allocation after native retirement. Only the exact receipt travels.
+        Ok(Box::pin(Self::finish_compaction(
+            handle,
+            #[cfg(test)]
+            self.manual_compaction_response_gate.lock().unwrap().take(),
+        )))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn hold_compaction_response_for_test(
+        &self,
+    ) -> (
+        tokio::sync::oneshot::Receiver<
+            crate::runtime::conversation_runtime::ManualCompactionOutcome,
+        >,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (committed, receipt) = tokio::sync::oneshot::channel();
+        let (release, held) = tokio::sync::oneshot::channel();
+        assert!(
+            self.manual_compaction_response_gate
+                .lock()
+                .unwrap()
+                .replace((committed, held))
+                .is_none()
+        );
+        (receipt, release)
+    }
+
+    fn compaction_error(error: ManualCompactionError) -> RuntimeClientError {
+        match error {
+            ManualCompactionError::Inactive | ManualCompactionError::Busy => {
+                RuntimeClientError::InvalidState {
+                    message: error.to_string(),
+                }
             }
+            ManualCompactionError::Shutdown => RuntimeClientError::RuntimeShutdown,
+            ManualCompactionError::ModelUnavailable { .. } => {
+                RuntimeClientError::InvalidModelConfiguration {
+                    message: error.to_string(),
+                }
+            }
+            ManualCompactionError::DurabilityFailed { message }
+            | ManualCompactionError::Durable { message } => {
+                RuntimeClientError::InvalidState { message }
+            }
+            ManualCompactionError::Context(context)
+                if matches!(
+                    context.kind,
+                    crate::context::ContextErrorKind::NoProgress
+                        | crate::context::ContextErrorKind::CannotFit
+                        | crate::context::ContextErrorKind::AuxiliaryBusy
+                ) =>
+            {
+                RuntimeClientError::InvalidState {
+                    message: context.message,
+                }
+            }
+            ManualCompactionError::Context(context) => RuntimeClientError::RuntimeFailure {
+                message: context.message,
+            },
+        }
+    }
+
+    async fn finish_compaction(
+        handle: crate::runtime::conversation_runtime::ManualCompactionHandle,
+        #[cfg(test)] gate: Option<super::ManualCompactionResponseGate>,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        let outcome = handle.wait().await.map_err(Self::compaction_error)?;
+        #[cfg(test)]
+        if let Some((committed, release)) = gate {
+            let _ = committed.send(outcome.clone());
+            let _ = release.await;
         }
         Ok(RuntimeClientResult::ContextCompacted {
             compaction: Some(crate::observation::head::RuntimeClientCompactionView {

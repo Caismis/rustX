@@ -346,7 +346,7 @@ pub(in crate::durable::sqlite) fn append_message_ledger(
             message,
             Some(nonnegative(position, "header ledger position")?),
         )
-    });
+    })?;
     if let MessageBlock::Assistant(assistant) = message {
         let mut tool_ordinal = 0_u64;
         for (index, block) in assistant.content.iter().enumerate() {
@@ -379,7 +379,7 @@ pub(in crate::durable::sqlite) fn append_message_ledger(
         let position = nonnegative(position, "native Trace C position")?;
         observation_trace::index_proposals(transaction, &conversation, position, message)?;
         observation_trace::index_canonical(transaction, &conversation, position, message)
-    });
+    })?;
     if transcript_visible_message(message) {
         Ok(Some(append_transcript_reference(
             transaction,
@@ -430,7 +430,10 @@ pub(in crate::durable::sqlite) fn append_transcript_reference(
                 )
                 .map_err(|error| storage(error.to_string()))?;
         }
-        let _=transaction.execute("UPDATE observation_headers SET transcript_position=?1,header_json=CASE WHEN reference_kind='message' THEN CAST(json_set(header_json,'$.transcript_cursor',?1) AS BLOB) ELSE header_json END WHERE reference_kind=?2 AND reference_id=?3",params![position,reference_kind,reference_id]);
+        let _ = optional_display_layout(transaction, || {
+            transaction.execute("UPDATE observation_headers SET transcript_position=?1,header_json=CASE WHEN reference_kind='message' THEN CAST(json_set(header_json,'$.transcript_cursor',?1) AS BLOB) ELSE header_json END WHERE reference_kind=?2 AND reference_id=?3",params![position,reference_kind,reference_id]).map_err(|error| super::super::sqlite_error(&error, error.to_string()))?;
+            Ok(())
+        })?;
         return Ok(TranscriptCursor::new(
             u64::try_from(position).map_err(|_| storage("negative transcript position"))?,
         ));
@@ -465,7 +468,7 @@ pub(in crate::durable::sqlite) fn append_transcript_reference(
             )
             .map_err(|error| storage(error.to_string()))?;
         Ok(())
-    });
+    })?;
     transaction
         .execute(
             "UPDATE rustx_store SET next_transcript_position=?1,retained_transcript_count=retained_transcript_count+1 WHERE id=1",
@@ -480,7 +483,10 @@ pub(in crate::durable::sqlite) fn append_transcript_reference(
             )
             .map_err(|error| storage(error.to_string()))?;
     }
-    let _=transaction.execute("UPDATE observation_headers SET transcript_position=?1,header_json=CASE WHEN reference_kind='message' THEN CAST(json_set(header_json,'$.transcript_cursor',?1) AS BLOB) ELSE header_json END WHERE reference_kind=?2 AND reference_id=?3",params![position,reference_kind,reference_id]);
+    let _ = optional_display_layout(transaction, || {
+        transaction.execute("UPDATE observation_headers SET transcript_position=?1,header_json=CASE WHEN reference_kind='message' THEN CAST(json_set(header_json,'$.transcript_cursor',?1) AS BLOB) ELSE header_json END WHERE reference_kind=?2 AND reference_id=?3",params![position,reference_kind,reference_id]).map_err(|error| super::super::sqlite_error(&error, error.to_string()))?;
+        Ok(())
+    })?;
     Ok(TranscriptCursor::new(
         u64::try_from(position).map_err(|_| storage("negative transcript position"))?,
     ))
@@ -548,7 +554,7 @@ pub(in crate::durable::sqlite) fn append_surface_op(
                     .map_err(|error| storage(error.to_string()))?;
             }
             Ok(())
-        });
+        })?;
     }
     Ok(())
 }

@@ -1,5 +1,5 @@
 //! Finite witnesses and exact field ranges derived in the existing native J transaction.
-use super::{Connection, ConversationStoreError, OptionalExtension, params, storage};
+use super::{Connection, ConversationStoreError, OptionalExtension, params, sqlite_error, storage};
 use crate::durable::observation::{
     ObservationEventField, ObservationEventWitness, ObservationValueChunk, RequestObservationPage,
 };
@@ -174,7 +174,7 @@ fn result_position(
             |row| row.get(0),
         )
         .optional()
-        .map_err(|error| storage(error.to_string()))
+        .map_err(|error| sqlite_error(&error, error.to_string()))
 }
 fn prefix(text: &str) -> &str {
     let mut end = text.len().min(256);
@@ -366,21 +366,28 @@ fn mandatory_witness(
             "UPDATE events SET observation_witness=?2 WHERE sequence=?1",
             params![event.sequence, bytes],
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| sqlite_error(&error, error.to_string()))?;
     Ok(!missing)
 }
 
 /// The layout is observation-only. A failed derived encoding cannot fabricate
 /// an execution failure; its exact J source stays typed unavailable instead.
-pub(super) fn index_optional(connection: &Connection, event: &RuntimeEventEnvelope) -> bool {
-    if let Some(available) = super::optional_display_layout(connection, || index(connection, event))
-    {
-        return available;
+pub(super) fn index_optional(
+    connection: &Connection,
+    event: &RuntimeEventEnvelope,
+) -> Result<bool, ConversationStoreError> {
+    if let Some(available) = super::optional_display_layout(connection, || {
+        #[cfg(test)]
+        let _probe =
+            super::start_probe::for_event(event, super::AuxiliaryStartProbe::ObservationFields);
+        index(connection, event)
+    })? {
+        return Ok(available);
     }
     // Keep finite own terminal facts when full field indexing fails. The
     // original row remains explicitly unavailable even if this also fails.
-    let _ = super::optional_display_layout(connection, || mandatory_witness(connection, event));
-    false
+    let _ = super::optional_display_layout(connection, || mandatory_witness(connection, event))?;
+    Ok(false)
 }
 
 /// The original native T assignment is already committed to this transaction.
@@ -393,7 +400,7 @@ pub(super) fn attach_transcript(
     let rows = connection.execute(
             "UPDATE events SET observation_witness=CAST(json_set(observation_witness,'$.transcript_cursor',?1) AS BLOB) WHERE sequence=?2 AND observation_witness IS NOT NULL AND length(observation_witness)<=16256",
             params![cursor.get(), sequence],
-        ).map_err(|error| storage(error.to_string()))?;
+        ).map_err(|error| sqlite_error(&error, error.to_string()))?;
     if rows != 1 {
         return Err(storage("native transcript witness unavailable"));
     }
@@ -483,7 +490,7 @@ fn index_with_paths(
             "UPDATE events SET observation_witness=?2 WHERE sequence=?1",
             params![event.sequence, bytes],
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| sqlite_error(&error, error.to_string()))?;
     Ok(!missing)
 }
 fn readable(
@@ -496,7 +503,7 @@ fn readable(
             "event outside native read cut".into(),
         ));
     }
-    let exists:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM events WHERE sequence=?1 AND observation_kind IS NOT NULL)",[sequence],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let exists:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM events WHERE sequence=?1 AND observation_kind IS NOT NULL)",[sequence],|row|row.get(0)).map_err(|error|sqlite_error(&error, error.to_string()))?;
     if !exists {
         return Err(ConversationStoreError::InvalidReference(
             "native event source unavailable".into(),
@@ -521,7 +528,7 @@ pub(super) fn kind(
             |row| row.get(0),
         )
         .optional()
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| sqlite_error(&error, error.to_string()))?;
     match kind {
         Some(Some(kind)) => Ok(Some(kind)),
         Some(None) => Err(storage("native event kind header unavailable")),
@@ -545,7 +552,7 @@ pub(super) fn witness(
             |row| row.get(0),
         )
         .optional()
-        .map_err(|error| storage(error.to_string()))?
+        .map_err(|error| sqlite_error(&error, error.to_string()))?
         .flatten();
     bytes
         .map(|bytes| {
@@ -554,7 +561,7 @@ pub(super) fn witness(
             let (direct, missing): (bool, bool) = connection.query_row(
                 "SELECT COALESCE(r.direct=1 AND r.ready=1,0),e.observation_readiness_missing OR e.observation_unavailable FROM events e LEFT JOIN event_observation_readiness r ON r.sequence=e.sequence WHERE e.sequence=?1",
                 [sequence], |row| Ok((row.get(0)?, row.get(1)?)),
-            ).map_err(|error| storage(error.to_string()))?;
+            ).map_err(|error| sqlite_error(&error, error.to_string()))?;
             witness.native_direct=direct;
             witness.source_unavailable|=missing;
             Ok(witness)

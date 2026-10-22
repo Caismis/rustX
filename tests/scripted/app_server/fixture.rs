@@ -77,13 +77,27 @@ impl Fixture {
         Self::with_session_count(tool, 2).await
     }
     pub(super) async fn with_session_count(tool: Option<&'static str>, count: usize) -> Self {
+        Self::with_provider_gating(tool, count, false).await
+    }
+
+    pub(super) async fn with_summary_gate() -> Self {
+        Self::with_provider_gating(None, 1, true).await
+    }
+
+    async fn with_provider_gating(
+        tool: Option<&'static str>,
+        count: usize,
+        gate_summary: bool,
+    ) -> Self {
         let mut phases = FixturePhase::new("Session fixture construction");
         phases.enter("provider listener");
         let gates = [HeaderGate::new(), HeaderGate::new()];
         let server_gates = gates.clone();
         let provider = FixtureServer::start_with_body(move |_, _, body| {
             let request: serde_json::Value = serde_json::from_str(body).unwrap();
-            let index = if tool == Some("delivery-child") {
+            let index = if gate_summary {
+                usize::from(request["tools"].as_array().is_none_or(Vec::is_empty))
+            } else if tool == Some("delivery-child") {
                 delivery_child_input_index(&request)
             } else {
                 usize::from(body.contains("request-B"))

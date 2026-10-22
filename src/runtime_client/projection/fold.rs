@@ -14,9 +14,9 @@ use super::{
     ForegroundToolExecution, ForegroundToolState, InFlightAssistantMessage, InFlightBlock,
     PublicationFrame, PublicationPayload, RuntimeClientAttempt, RuntimeClientAttemptPhase,
     RuntimeClientError, RuntimeClientEvent, RuntimeClientProjection, RuntimeClientTranscriptCursor,
-    TextKind, activation_view, admit_status, agent_view, arguments_of, background_view,
-    inline_label, push_in_flight_block, update_stored_tool_slots, upsert_background,
-    upsert_interaction, upsert_subagent,
+    TextKind, activity_view, admit_status, agent_view, arguments_of, background_view, inline_label,
+    push_in_flight_block, update_stored_tool_slots, upsert_background, upsert_interaction,
+    upsert_subagent,
 };
 
 impl RuntimeClientProjection {
@@ -726,12 +726,9 @@ impl RuntimeClientProjection {
                 }) else {
                     return Vec::new();
                 };
-                let view = activation_view(
-                    &snapshot,
-                    existing.state,
-                    existing.current_activation.clone(),
-                    &existing.title,
-                );
+                let Some(view) = activity_view(existing, &snapshot) else {
+                    return Vec::new();
+                };
                 if !upsert_subagent(
                     &mut self.snapshot.agents,
                     &mut self.seen_activations,

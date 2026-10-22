@@ -91,6 +91,7 @@ impl RuntimeInner {
                 resources.context_assembly().clone(),
                 model_timeout_policy,
                 &resources,
+                Arc::new(self.auxiliary.clone()),
             )
             .expect("admission validated this model against the session context policy");
         let context_runtime = context_runtime.with_runtime_resources(&resources);

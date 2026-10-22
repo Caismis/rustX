@@ -14,7 +14,7 @@ use std::time::Duration;
 use rustx::agent::{AgentCancellation, AgentExecution, AgentExecutionRequest};
 use rustx::context::{
     AgentStatusEngine, CompactionBudgets, ContextConfig, ContextEngine, ContextRuntime,
-    ContextSummarizer, ModelBackedSummarizer, SummaryRequest,
+    ModelBackedSummarizer, SummaryRequest,
 };
 use rustx::conversation::ConversationState;
 use rustx::events::types::{AttemptOutcome, RuntimeEvent};

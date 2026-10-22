@@ -94,10 +94,11 @@ impl std::error::Error for RuntimeBootstrapError {}
 /// immutable view; the Runtime Client layer owns the translation into its
 /// snapshot read model.
 ///
-/// There is deliberately no attempt / Agent Status / compaction field: a
-/// runtime binds its Runtime Client host while inactive, so no attempt has
-/// ever run, no status has been composed, and no compaction has occurred.
-/// Every one of those facts arrives through the live observation stream.
+/// There is deliberately no live attempt / Agent Status / compaction owner
+/// field: this allocation binds its Runtime Client host while inactive and
+/// has admitted none of them. The client separately reads committed historical
+/// compaction metadata at `observation_cut`; later transitions arrive through
+/// the live observation stream.
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeBootstrapSnapshot {
     pub observation_cut: Option<crate::durable::observation::ObservationReadCut>,
@@ -883,6 +884,17 @@ impl ConversationRuntime {
         // the runtime is still inactive — no ownership commit can race the
         // installation.
         let durability_gate = Arc::new(DurabilityGate::new());
+        let monotonic_clock = injected_monotonic_clock
+            .unwrap_or_else(|| Arc::new(SystemMonotonicClock::new()) as Arc<dyn MonotonicClock>);
+        let auxiliary = crate::runtime::auxiliary::executor::AuxiliaryExecutor::new(
+            store.clone(),
+            clock.clone(),
+            monotonic_clock.clone(),
+            lifecycle.clone(),
+            durability_gate.clone(),
+            crate::runtime::auxiliary::capacity::ProcessCapacity::shared_process().conversation(),
+        )
+        .map_err(|error| ConversationRuntimeError::Storage(error.message))?;
         let inner = Arc::new(RuntimeInner {
             configuration_owner: Arc::new(()),
             model_selection_owner,
@@ -901,10 +913,10 @@ impl ConversationRuntime {
             clock,
             model_timeout_policy: config.model_timeout_policy,
             tool_deadline_policy: config.tool_deadline_policy,
-            monotonic_clock: injected_monotonic_clock.unwrap_or_else(|| {
-                Arc::new(SystemMonotonicClock::new()) as Arc<dyn MonotonicClock>
-            }),
+            monotonic_clock,
             durability_gate: durability_gate.clone(),
+            auxiliary,
+            manual_tail: Mutex::new(None),
             recovery,
             executor,
             state: Mutex::new(CoordinatorState {
@@ -966,6 +978,18 @@ impl ConversationRuntime {
         // exist before activation — the registry refused every commit
         // while the mailbox was bound inactive — so the installation can
         // never race a settlement.
+        durability_gate.install_failure_publisher(Arc::new({
+            let weak = Arc::downgrade(&inner);
+            move |failure| {
+                if let Some(inner) = weak.upgrade() {
+                    inner.observe(ConversationObservation::DurabilityFailed {
+                        operation: failure.operation.as_str().to_owned(),
+                        diagnostic: failure.diagnostic,
+                    });
+                    inner.wake.eligibility.notify_one();
+                }
+            }
+        }));
         inner
             .tool_runtime
             .background()

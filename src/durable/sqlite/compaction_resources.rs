@@ -1,7 +1,7 @@
 //! Short, bounded source reads for the Context Engine. No persistent derived cache.
 use super::{
     Connection, ConversationStoreError, OptionalExtension, decode, nonnegative, params, seq_to_i64,
-    storage,
+    sqlite_error, storage,
 };
 use crate::context::resources::{
     JournalFrontier, LedgerFrontier, ResourceLimits, ResourcePage, ResourceReadCut, bound,
@@ -22,14 +22,14 @@ pub(super) fn cut(
             [],
             |row| row.get(0),
         )
-        .map_err(|e| storage(e.to_string()))?;
+        .map_err(|e| sqlite_error(&e, e.to_string()))?;
     let activation: u64 = connection
         .query_row(
             "SELECT coalesce(max(activation),0) FROM projection_activations",
             [],
             |row| row.get(0),
         )
-        .map_err(|e| storage(e.to_string()))?;
+        .map_err(|e| sqlite_error(&e, e.to_string()))?;
     Ok(ResourceReadCut {
         projection_activation: crate::context::checkpoint::ProjectionActivationId(activation),
         conversation_id: conversation.clone(),

@@ -1177,7 +1177,7 @@ async fn an_owned_subagent_survives_a_later_durability_failure() {
 /// ownership commit is parked inside its authoritative critical section
 /// (holding the runtime durability frontier across its durable write
 /// and record publication) while the `DurabilityFailed` commit is
-/// invoked concurrently; the failure provably blocks on the frontier,
+/// invoked concurrently; the failure fact waits on the frontier without blocking the coordinator,
 /// the ownership completes first, and only then does the failure
 /// linearize. The owned child survives with its settlement authority.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1256,7 +1256,7 @@ async fn subagent_ownership_racing_a_durability_failure_linearizes_on_the_runtim
     .expect("commit-boundary entered");
 
     // The DurabilityFailed commit is now invoked concurrently: it takes
-    // the coordinator lock and blocks on the runtime frontier held by
+    // the coordinator lock and records its intent behind the frontier held by
     // the parked ownership commit.
     let (failed_started_tx, failed_started_rx) = std::sync::mpsc::channel();
     let (failed_done_tx, failed_done_rx) = std::sync::mpsc::channel();
@@ -1272,24 +1272,27 @@ async fn subagent_ownership_racing_a_durability_failure_linearizes_on_the_runtim
     failed_started_rx
         .recv()
         .expect("failure is invoked while the ownership is parked");
+    let failure_registered = failed_done_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .is_ok();
+    let failure_published = pending.drain_fixture_facts().iter().any(|observation| {
+        matches!(
+            observation,
+            ConversationObservation::DurabilityFailed { .. }
+        )
+    });
+
+    // Capture both facts while parked, then release before asserting so
+    // a regression reports its failure instead of stranding the worker.
+    hook.release();
     assert!(
-        failed_done_rx.try_recv().is_err(),
-        "the DurabilityFailed commit is provably blocked on the runtime frontier held by the parked ownership commit"
+        failure_registered,
+        "failure registration returns without parking the coordinator while its committed fact waits for ownership exit"
     );
     assert!(
-        !pending
-            .drain_fixture_facts()
-            .iter()
-            .any(|observation| matches!(
-                observation,
-                ConversationObservation::DurabilityFailed { .. }
-            )),
+        !failure_published,
         "the health failure has not linearized while the ownership commit holds the frontier"
     );
-
-    // Release the ownership commit: it completes its durable write and
-    // record publication first, then the failure commit linearizes.
-    hook.release();
     let outcome = tokio::time::timeout(std::time::Duration::from_secs(10), committer)
         .await
         .expect("commit liveness")
@@ -1597,7 +1600,7 @@ async fn background_ownership_racing_a_durability_failure_linearizes_on_the_runt
     }
 
     // The DurabilityFailed commit is now invoked concurrently: it takes
-    // the coordinator lock and blocks on the runtime frontier held by
+    // the coordinator lock and records its intent behind the frontier held by
     // the parked ownership commit.
     let (failed_started_tx, failed_started_rx) = std::sync::mpsc::channel();
     let (failed_done_tx, failed_done_rx) = std::sync::mpsc::channel();
@@ -1614,8 +1617,10 @@ async fn background_ownership_racing_a_durability_failure_linearizes_on_the_runt
         .recv()
         .expect("failure is invoked while the ownership is parked");
     assert!(
-        failed_done_rx.try_recv().is_err(),
-        "the DurabilityFailed commit is provably blocked on the runtime frontier held by the parked ownership commit"
+        failed_done_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .is_ok(),
+        "failure registration returns without parking the coordinator while its committed fact waits for ownership exit"
     );
     assert!(
         !pending
