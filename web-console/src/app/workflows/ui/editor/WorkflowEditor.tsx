@@ -1,10 +1,11 @@
 import '@xyflow/react/dist/base.css';
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
 import { useSelector } from '@xstate/react';
 import clsx from 'clsx';
 import { useTranslation } from '../../../../locale/react';
 import { Button } from '../../../../presentation/primitives/Button';
+import { writeClipboard } from '../../../../presentation/primitives/clipboard';
 import { Menu } from '../../../../presentation/primitives/Menu';
 import { Modal } from '../../../../presentation/primitives/Modal';
 import { IconCheckOutline16, IconEllipsisOutline16 } from '../../../../presentation/primitives/icons';
@@ -241,11 +242,34 @@ function EditorNotices({ notice, uncertain, receipt, reconcile, dismiss, discard
     {notice?.kind === 'pending_fields' && <ul className={css.pendingFields} aria-label={tx('workflows:notice.pending-list')}>
       {Object.entries(drafts).map(([field, draft]) => <li key={field}>
         <code>{describeField(draft.address)}</code>
-        {draft.conflict === 'missing' ? <small>{tx('workflows:notice.field-gone')}</small> : <Button size="sm" variant="outline" onClick={() => show(draft.address)}>{tx('workflows:notice.show-field')}</Button>}
-        <Button size="sm" variant="outline" onClick={() => discardField(field)}>{tx('workflows:notice.discard-field')}</Button>
+        {draft.conflict === 'missing' ? <DetachedText draft={draft} discard={() => discardField(field)} /> : <>
+          <Button size="sm" variant="outline" onClick={() => show(draft.address)}>{tx('workflows:notice.show-field')}</Button>
+          <Button size="sm" variant="outline" onClick={() => discardField(field)}>{tx('workflows:notice.discard-field')}</Button>
+        </>}
       </li>)}
     </ul>}
   </div>;
+}
+
+/** Text kept from a field that no longer exists. No field shows it, so
+ * the author reads it here, exactly as typed, and copies what they need
+ * before discarding it. Showing or copying it changes nothing. */
+function DetachedText({ draft, discard }: { draft: FieldDraft; discard: () => void }) {
+  const tx = useTranslation();
+  const [open, setOpen] = useState(false);
+  const [copy, setCopy] = useState<'copied' | 'failed'>();
+  const id = useId();
+  const location = describeField(draft.address);
+  return <>
+    <small>{tx('workflows:notice.field-gone')}</small>
+    <Button size="sm" variant="outline" aria-expanded={open} aria-controls={id} onClick={() => setOpen(value => !value)}>{tx(open ? 'workflows:notice.hide-text' : 'workflows:notice.view-text')}</Button>
+    <Button size="sm" variant="outline" onClick={discard}>{tx('workflows:notice.discard-field')}</Button>
+    {open && <div id={id} className={css.keptText}>
+      <textarea className={clsx(css.input, css.textarea, css.mono)} readOnly value={draft.text} aria-label={tx('workflows:notice.kept-text', { p0: location })} spellCheck={false} rows={Math.min(8, draft.text.split('\n').length + 1)} />
+      <Button size="sm" variant="outline" onClick={() => { setCopy(undefined); void writeClipboard(draft.text).then(ok => setCopy(ok ? 'copied' : 'failed')); }}>{tx('workflows:notice.copy-text')}</Button>
+      <span role="status">{copy && tx(copy === 'copied' ? 'workflows:notice.text-copied' : 'workflows:notice.copy-failed')}</span>
+    </div>}
+  </>;
 }
 
 /** The redacted static explanation of the exact candidate last checked. */

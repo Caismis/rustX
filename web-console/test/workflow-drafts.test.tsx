@@ -314,4 +314,177 @@ describe('array edits with retained drafts (repair C)', () => {
     expect(writes).toHaveLength(0);
     expect(within(screen.getByRole('list', { name: 'Fields with unapplied text' })).getByText('This field no longer exists.')).toBeTruthy();
   });
+
+  const undo = () => fireEvent.keyDown(document.body, { key: 'z', ctrlKey: true });
+  const redo = () => fireEvent.keyDown(document.body, { key: 'z', ctrlKey: true, shiftKey: true });
+  const itemGroup = (index: number) => within(inspector().getByRole('group', { name: `[${index}]` }));
+  const pretty = (value: unknown) => JSON.stringify(value, null, 2);
+  /** Item 0 changed to {n:10} and applied, then its incomplete text left;
+   * Undo of the applied change marks that text `changed`. */
+  const changedOnFirst = (survivorFirst: boolean) => {
+    if (survivorFirst) type(item(1), '{"n":202');
+    type(item(0), '{"n":10}');
+    type(item(0), '{"n":101');
+    if (!survivorFirst) type(item(1), '{"n":202');
+    undo();
+    expect(item(0).value).toBe('{"n":101');
+    expect(itemGroup(0).getByRole('button', { name: 'Keep my text' })).toBeTruthy();
+  };
+
+  it.each([['the deleted item\'s draft first', false], ['the surviving item\'s draft first', true]])('detaches a changed draft with its removed item and moves the survivor\'s draft with it, %s', async (_order, survivorFirst) => {
+    const editor = await open(items({ n: 1 }, { n: 2 }));
+    select('Return node done');
+    changedOnFirst(survivorFirst);
+    fireEvent.click(inspector().getByRole('button', { name: 'Remove [0]' }));
+    // The survivor is [0] and shows its own text; the removed item's text
+    // is kept apart, still marked by its content conflict as detached.
+    expect(item(0).value).toBe('{"n":202');
+    expect(itemGroup(0).queryByRole('button', { name: 'Keep my text' })).toBeNull();
+    expect(retained(editor)).toEqual([
+      ['{"n":101', 'done · output.fields["items"].items[0].value', true],
+      ['{"n":202', 'done · output.fields["items"].items[0].value', false],
+    ]);
+    // Undo restores the removed item; its text stays detached, and the
+    // survivor's text follows the survivor back to [1].
+    undo();
+    expect(item(0).value).toBe(pretty({ n: 1 }));
+    expect(item(1).value).toBe('{"n":202');
+    expect(retained(editor)).toEqual([
+      ['{"n":101', 'done · output.fields["items"].items[0].value', true],
+      ['{"n":202', 'done · output.fields["items"].items[1].value', false],
+    ]);
+    redo();
+    expect(item(0).value).toBe('{"n":202');
+    fireEvent.change(item(0), { target: { value: '{"n":22}' } });
+    save();
+    expect(writes).toHaveLength(0);
+    const pending = within(screen.getByRole('list', { name: 'Fields with unapplied text' }));
+    fireEvent.click(within(pending.getAllByRole('listitem').find(entry => entry.textContent!.includes('no longer exists'))!).getByRole('button', { name: 'Discard' }));
+    save();
+    expect(writes).toHaveLength(1);
+    expect(saved()).toEqual([{ type: 'literal', value: { n: 22 } }]);
+  });
+
+  it('never gives a removed item\'s changed draft to the item now at its index', async () => {
+    const editor = await open(items({ n: 1 }, { n: 2 }));
+    select('Return node done');
+    type(item(0), '{"n":10}');
+    type(item(0), '{"n":101');
+    undo();
+    fireEvent.click(inspector().getByRole('button', { name: 'Remove [0]' }));
+    expect(item(0).value).toBe(pretty({ n: 2 }));
+    expect(inspector().queryByRole('button', { name: 'Keep my text' })).toBeNull();
+    expect(retained(editor)).toEqual([['{"n":101', 'done · output.fields["items"].items[0].value', true]]);
+    save();
+    expect(writes).toHaveLength(0);
+    fireEvent.click(within(screen.getByRole('list', { name: 'Fields with unapplied text' })).getByRole('button', { name: 'Discard' }));
+    save();
+    expect(writes).toHaveLength(1);
+    expect(saved()).toEqual([{ type: 'literal', value: { n: 2 } }]);
+  });
+
+  it('moves a later item\'s changed draft back to it when Undo restores an earlier item, and with Redo', async () => {
+    const editor = await open(items({ n: 1 }, { n: 2 }));
+    select('Return node done');
+    fireEvent.click(inspector().getByRole('button', { name: 'Remove [0]' }));
+    type(item(0), '{"n":20}');
+    type(item(0), '{"n":203');
+    undo();
+    expect(itemGroup(0).getByRole('button', { name: 'Keep my text' })).toBeTruthy();
+    undo();
+    // A is back at [0]; B and its text are at [1].
+    expect(item(0).value).toBe(pretty({ n: 1 }));
+    expect(item(1).value).toBe('{"n":203');
+    expect(itemGroup(0).queryByRole('button', { name: 'Keep my text' })).toBeNull();
+    expect(retained(editor)).toEqual([['{"n":203', 'done · output.fields["items"].items[1].value', false]]);
+    redo();
+    expect(item(0).value).toBe('{"n":203');
+    expect(retained(editor)).toEqual([['{"n":203', 'done · output.fields["items"].items[0].value', false]]);
+    undo();
+    expect(item(1).value).toBe('{"n":203');
+    fireEvent.click(itemGroup(1).getByRole('button', { name: 'Keep my text' }));
+    fireEvent.change(item(1), { target: { value: '{"n":203}' } });
+    save();
+    expect(writes).toHaveLength(1);
+    expect(saved()).toEqual([{ type: 'literal', value: { n: 1 } }, { type: 'literal', value: { n: 203 } }]);
+  });
+});
+
+describe('recovering detached text (F4)', () => {
+  /** Incomplete JSON with inner whitespace and newlines, exactly as typed. */
+  const kept = '"half typed\n  {  \n\tstill';
+  const location = 'ready · output.fields["status"].value';
+  const undo = () => fireEvent.keyDown(document.body, { key: 'z', ctrlKey: true });
+  const pending = () => within(screen.getByRole('list', { name: 'Fields with unapplied text' }));
+  const detachedEntry = () => within(pending().getAllByRole('listitem').find(entry => entry.textContent!.includes('no longer exists'))!);
+  let clipboard: string[];
+  let refuse: boolean;
+  beforeEach(() => {
+    clipboard = []; refuse = false;
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (text: string) => { if (refuse) throw new Error('denied'); clipboard.push(text); } } });
+  });
+  afterEach(() => { Reflect.deleteProperty(navigator, 'clipboard'); });
+  const reveal = () => {
+    save();
+    fireEvent.click(detachedEntry().getByRole('button', { name: 'Show kept text' }));
+    return screen.getByRole('textbox', { name: `Kept text of ${location}` }) as HTMLTextAreaElement;
+  };
+
+  it('shows and copies the exact text kept from a deleted node after Undo, beside the live field\'s own text, and discards only it', async () => {
+    const editor = await open(exampleSource('parallel_review'));
+    select('Return node ready');
+    type(literals()[0], kept);
+    fireEvent.click(inspector().getByRole('button', { name: 'Delete node' }));
+    undo();
+    // The node is back; its field shows its value, not the kept text, and
+    // takes its own new draft.
+    select('Return node ready');
+    expect(literals()[0].value).toBe('"ready"');
+    type(literals()[0], '"live');
+    const text = reveal();
+    expect(writes).toHaveLength(0);
+    expect(text.value).toBe(kept);
+    expect(text.readOnly).toBe(true);
+    const before = editor.getSnapshot().context.drafts;
+    await act(async () => { fireEvent.click(detachedEntry().getByRole('button', { name: 'Copy' })); });
+    expect(clipboard).toEqual([kept]);
+    expect(detachedEntry().getByRole('status').textContent).toMatch(/Copied/);
+    // A refused clipboard leaves the text shown for manual selection.
+    refuse = true;
+    await act(async () => { fireEvent.click(detachedEntry().getByRole('button', { name: 'Copy' })); });
+    expect(detachedEntry().getByRole('status').textContent).toMatch(/Could not copy/);
+    expect((screen.getByRole('textbox', { name: `Kept text of ${location}` }) as HTMLTextAreaElement).value).toBe(kept);
+    // Showing and copying changed nothing and sent nothing.
+    expect(editor.getSnapshot().context.drafts).toBe(before);
+    expect(writes).toHaveLength(0);
+    expect(literals()[0].value).toBe('"live');
+    fireEvent.click(detachedEntry().getByRole('button', { name: 'Discard' }));
+    expect(retained(editor)).toEqual([['"live', location, false]]);
+    expect(screen.queryByRole('textbox', { name: `Kept text of ${location}` })).toBeNull();
+    fireEvent.change(literals()[0], { target: { value: '"live"' } });
+    save();
+    expect(writes).toHaveLength(1);
+    expect(blockAt(written(), [])!.nodes.ready).toMatchObject({ output: { fields: { status: { type: 'literal', value: 'live' } } } });
+  });
+
+  it('shows the exact text a rename took along after Undo of the rename, and clears it only on discard', async () => {
+    const editor = await open(exampleSource('parallel_review'));
+    select('Return node ready');
+    type(literals()[0], kept);
+    const id = inspector().getByLabelText('Node ID') as HTMLInputElement;
+    fireEvent.change(id, { target: { value: 'accepted' } });
+    fireEvent.keyDown(id, { key: 'Enter' });
+    undo();
+    select('Return node ready');
+    expect(literals()[0].value).toBe('"ready"');
+    expect(retained(editor)).toEqual([[kept, 'accepted · output.fields["status"].value', true]]);
+    save();
+    fireEvent.click(detachedEntry().getByRole('button', { name: 'Show kept text' }));
+    expect((screen.getByRole('textbox', { name: 'Kept text of accepted · output.fields["status"].value' }) as HTMLTextAreaElement).value).toBe(kept);
+    expect(isDirty(editor.getSnapshot().context)).toBe(true);
+    expect(writes).toHaveLength(0);
+    fireEvent.click(detachedEntry().getByRole('button', { name: 'Discard' }));
+    expect(editor.getSnapshot().context.drafts).toEqual({});
+    expect(isDirty(editor.getSnapshot().context)).toBe(false);
+  });
 });
