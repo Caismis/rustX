@@ -141,6 +141,10 @@ occurrence evidence. Target owners own execution, cancellation and recovery.
 The driver receives narrow admission capabilities, not a model adapter or a
 general-purpose SQL callback.
 
+The [S0 source-level verification](issue-85-scheduler-s0.md) maps these requirements
+to the existing manager, writer and host implementation. It identifies the exact
+transition changes and regression gates; it does not claim StorageOnly is shipped.
+
 ### Hot/cold writer protocol
 
 For each Conversation, Scheduler mutations participate in the same native writer
@@ -163,9 +167,9 @@ has the same terminal/retirement certainty discipline as Loading/Unloading.
 
 | Observed state under the manager registry | Required transition |
 | --- | --- |
-| Loaded exact conversation | Borrow its native mutation capability; enter its Running/lifecycle and publication guards. Never open another writer. |
+| Loaded exact conversation | Admit a manager-owned operation lease, then enter native Running/lifecycle and publication guards. Return owned results, never a runtime/store clone. |
 | Loading or Unloading | Release locks, wait for the registered flight, then resolve again. An unproven retirement remains closed. |
-| StorageOnly exact conversation | Serialize bounded storage operations in that flight; runtime load waits for the flight to close its writer and prove release. |
+| StorageOnly exact conversation | Wait for its finite command to close the writer and prove release, then reselect. Other commands cannot extend that flight indefinitely ahead of runtime load or deletion. |
 | Absent | Register StorageOnly before acquiring allocation/opening a writer. Revalidate catalog identity and Session retirement, then open the existing database under ProductController authority. |
 | Session retiring/deleted, process draining, or writer retirement unproven | Refuse admission. Never reinterpret this as an absent slot. |
 
@@ -183,11 +187,12 @@ idle reaping, retirement enumeration and drain inventory together: storage fligh
 are bounded admitted operations, not resident Agents. Session retirement must
 find every matching storage flight, including ones absent from `by_session`.
 
-All paths retain the existing product ownership-mutation participation before
-registry/allocation/commit locking. Under short registry sections, reserve/recheck
-the operation and retirement state; release the mutex before acquisition or waits.
-At commit, hold the shared process/Session admission permit, allocation retention,
-and hot lifecycle/publication guard or cold StorageOnly commit guard, then SQLite.
+Use the [S0 phased lock order](issue-85-scheduler-s0.md#lock-and-wait-phases):
+register under the manager, release its mutex before allocation acquisition or
+waiting, then acquire product ownership-mutation participation outside commit-phase
+mutexes. Recheck retirement under the registry when taking the final counted
+commit permit. At commit retain allocation access, the process/Session permit and
+hot lifecycle/publication guard or cold StorageOnly commit guard, then SQLite.
 Do not wait for a flight or provider while holding ownership/commit locks. A cold
 guard authorizes only the closed schedule operations and scheduled inbox/start
 acceptance; it does not mark a ConversationRuntime Running or enable arbitrary
@@ -290,8 +295,21 @@ clear an existing target obligation or automatically cancel transferred work.
 
 Accept an offset-bearing RFC 3339 instant and store UTC. Reject offset-free text,
 invalid instants and a time that is no longer future at command acceptance.
-Relative “after” UI/tool input, if exposed, normalizes to `At` using the accepted
-command's clock reading; it is not a fourth durable schedule kind.
+Relative “after” UI/tool input, if exposed, normalizes to `At` using the first
+successful acceptance's clock reading; it is not a fourth durable schedule kind.
+The idempotency digest uses the normalized **authored input**, retaining a typed
+`after_seconds` selector, duration, payload and other command fields. It excludes
+`now()`, the derived absolute target and generated revision. With the same command
+identity, compare that input with an existing receipt before deriving time,
+checking that the target is future, or spending budget. Matching retries return
+the original committed At and revision, even if the schedule has since fired,
+changed or been pruned. Different authored input is a command conflict.
+
+Only a command with no committed receipt samples acceptance UTC and computes At
+inside its successful mutation transaction. Store the original input digest and
+resolved At/result in the receipt. A rolled-back attempt establishes no target;
+its next attempt may use a later first-success time. An uncertain commit must be
+resolved before recomputing. This also applies to direct user-control retries.
 
 A committed but overdue one-shot fires once after restart. Its successful target
 admission makes it `Completed`; target failure does not reactivate it.
@@ -449,6 +467,39 @@ does not refund or refire the occurrence; it is a Workflow-owned outcome. Rebind
 or disabling the recurring schedule requires an explicit schedule operation.
 Best-effort `WorkflowStarted` events cannot replace these durable states.
 
+### Diagnosing and resolving unknown ownership
+
+S4b must expose Workflow-owned read-recovery, cancel and reconcile operations for
+an exact scheduled start/run. These are required new interfaces, not existing
+shipped RPCs. The bounded recovery view includes TriggerId/start/run, binding,
+claim/settlement evidence, owned activation/Job/process identities, the last native
+proof result and error, cancellation-intent receipt, and which capacity/deletion
+barrier remains. Repeated reads must preserve the same facts without activating
+an Agent or retrying graph execution.
+
+An operator first inspects this view, then asks the exact native owner to cancel
+remaining live work and reconcile its evidence. Reuse Workflow cancellation and
+child supervision internally; the existing `job/status`, `job/cancel`,
+`agent/status`, `agent/interrupt` and `agent/wait` controls apply only where those
+owners actually expose the referenced work. Finite Workflow children do not gain
+durable Agent control authority just to make recovery convenient. The existing
+[physical-recovery proof reader](../src/runtime/subagent/physical_recovery.rs)
+validates activation identity, kernel ownership and recorded phase; process
+absence, a cancellation acknowledgment or an operator assertion alone is not proof.
+
+Reconcile never starts a second executor for Claimed work. It releases capacity
+only when the native owner can durably settle with its required physical proof.
+External side-effect outcome may remain Unknown after local native ownership is
+proven quiescent; that uncertainty alone is not an unreleased local writer. If a
+supported owner cannot prove retirement, return a stable `recovery_blocked` reason,
+the exact missing evidence and owner-specific diagnostic/recovery instructions.
+The operator may repair an unavailable proof source or use that owner's supported
+termination procedure, then reconcile again. Never recommend deleting lock/receipt
+files, clearing the slot, replaying the Workflow or forcing Session deletion.
+Disabling the schedule stops future eligibility but does not release this work.
+An unsupported external proof mechanism remains visibly blocked; #85 does not
+introduce Fleet or a distributed recovery service to resolve it.
+
 ## Target: Conversation inbound
 
 Use `UserSource::Runtime` and ordinary `InboundKind::Message` without extending
@@ -578,6 +629,16 @@ at 100, 1,000 and 10,000 historical conversations, with sparse active schedules,
 one unreadable store and writes during traversal. Record supported-scale latency
 before release. Add a durable acceleration index only if these measurements
 justify it; such an index cannot replace the native authority.
+Also measure steady idle operation with 10,000 conversations and **zero** Enabled
+schedules or pending Scheduler targets, for at least ten full passes and ten
+minutes. Use the actual native allocation/open/read/close path, including file
+header, schema-shape and identity validation in `open_existing`; substituting a
+preopened handle or mocked summary is not this measurement. Report cold/warm-cache
+results, CPU time/duty cycle, database opens, filesystem reads/bytes per second,
+full-pass p50/p95, memory, and foreground control latency. Fix the supported-host
+CPU/I/O/latency budgets before running the release benchmark and require them to
+pass; recording numbers alone does not satisfy the gate. No scan measurements
+exist in this design branch, so its performance gate remains unpassed.
 
 ### Session deletion and lineage
 
@@ -823,6 +884,8 @@ useful case ideas; do not import their semantics without the decisions above.
 | Session deletion | Enabled and Accepted/Claimed blockers are visible before deletion; both trigger-versus-retirement orderings have one winner; fresh generations reject stale preview; cleanup failure cannot revive schedules. |
 | Quotas and non-reuse | More than 256 sequential create/complete/delete operations still allow creation; 256 simultaneous Enabled/Disabled rows reject the next; pruning/deletion never reuses IDs or removes native deduplication authority. |
 | Model authority | Forged/missing Human origin, child calls, independent Runtime-only activation, revoked root capability and superseded/settled request grants refuse mutation. A notification inside the active Human request neither revokes scope nor renews budget. |
+| Relative command retry | Accept after 600 seconds at 10:00, lose the reply, advance UTC to 10:02 and retry the same command: At remains 10:10, the original revision/result is returned, and budget is charged once. Changed duration conflicts; rollback before first commit may establish a later first-success target. |
+| Permanently unknown ownership | Repeated read/cancel/reconcile of a Claimed run without physical proof exposes the same blocker, retains capacity/deletion protection and starts no new executor. Supply valid native proof later: settle/release once without claiming the external effect succeeded. |
 | Multi-command grant | One Human request creates 09:00 and 17:00 reminders with two command IDs. Eight successful mutations fit; racing ninth commands cannot exceed the budget. Exact retry/uncertain-commit recovery returns its existing result without another charge; changed-content reuse conflicts; failed CAS/no-op consumes none. |
 | Grant interleaving/recovery | Human then Runtime in one batch, Runtime-only notifications during that request, and newer Human replacing it follow Goal's source selection. A later independent Scheduler/Goal activation receives no old grant; exact request recovery preserves used budget and cannot reopen superseded authority. |
 
@@ -851,12 +914,12 @@ schedules through fork/clone; Workflow graph checkpoints; a second durable queue
 
 | Slice | Owned changes | Exit evidence |
 | --- | --- | --- |
-| S0: ownership contract prerequisite | Map manager StorageOnly/load/unload/delete transitions, product/allocation locks, hot/cold commit permits and post-commit publication; enumerate all existing writer entry points. | Verify the transition/lock table against source before S1; no Scheduler SQL writer bypasses the native manager. |
+| S0: ownership contract prerequisite | Use the [source verification](issue-85-scheduler-s0.md) to implement the manager's narrow storage seam; cover registry/session-index separation, leases, terminal certainty and host admission/drain. | Source mapping is recorded; S1 must prove the listed concrete StorageOnly races against real owners. Existing manager tests alone do not prove the new state. |
 | S1: At/inbound vertical slice | New Scheduler domain/capability, finite StorageOnly path, compound admission with per-schedule/aggregate native capacity checks, authoritative receipt/generation, one driver and typed user-control entry. | Hot/cold one-shots, writer races, rollback/restart, duplicate wake, capacity and drain tests pass. B's residency cannot prevent A's first admission when capacity is free. |
 | S2: lifecycle and management | CAS updates, budgeted command receipts, independent quotas/retention, Scheduler-only authoritative reconciliation and explicit deletion/fork rules. | Lost notifications meet the pass bound; ordinary pending work gets no Scheduler activation; deletion has one winner; historical creation does not exhaust configuration quota or evade outstanding capacity; scan measurements recorded. |
 | S3: interval and Cron | Add occurrence calculations, latest-only catch-up after downtime/backpressure and the Cron dependency gate; bound payloads, lists and wakes. | Calendar/restart and sustained-backpressure fixtures pass; unsupported Cron cannot be authored as executable. |
 | S4a: Workflow contract prerequisite | Inventory reusable executor, frozen-profile/materialization and supervision seams; fix the exact bounded ScheduledWorkflowStart fields/digest coverage and reconstruction refusal rules. | Demonstrate a matching reconstruction and an Accepted request rejected after dependency change, without introducing graph checkpointing or serialized runtime handles. |
-| S4b: Workflow native start | Add native request/claim/settlement and scheduled origin, share execution, and extend capacity/deletion/retirement ownership inspection. | One run identity; no second executor after claim; no recurring target while native ownership remains outstanding; truthful outcomes and ownership barriers. |
+| S4b: Workflow native start | Add native request/claim/settlement and scheduled origin, share execution, and expose bounded recovery inspection/cancel/reconcile with capacity/deletion protection. | One run identity; no second executor after claim; permanently Unknown ownership remains diagnosable and blocked until native proof permits settlement. |
 | S5: product and final conformance | Thin model adapters with bounded current-Human-request authority, TUI/Web projections, protocol generation, documentation and complete matrix. | Multi-reminder requests and Runtime-notification interleavings work; scope/budget/backpressure are visible; both targets satisfy #85 and checks pass. |
 
 File names for new modules are proposed boundaries; keep SQL, temporal arithmetic,

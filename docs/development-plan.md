@@ -12,6 +12,11 @@ receipts, deletion barriers and periodic authoritative discovery close the other
 ownership/recovery boundaries. These are planned capabilities; Fleet is outside
 this scope.
 
+The [Scheduler S0 source verification](issue-85-scheduler-s0.md) identifies the
+manager registry, operation lease, writer-retirement and host-drain changes needed
+for the first slice. Its transition matrix is the S1 concurrency acceptance gate;
+it does not represent an implemented StorageOnly state.
+
 Issue #383 converges native context capabilities over #380's captured Attempt
 configuration. Agent Status and Goal use one registered contribution lifecycle,
 with producer-scoped atomic startup receipts, typed historical metadata, and
