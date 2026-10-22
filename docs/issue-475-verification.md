@@ -193,3 +193,17 @@ whitespace checks passed. Desktop (1440×1000) and mobile (390×844) screenshots
 were inspected for the transcript, Usage and model selector; existing console
 and overflow assertions passed. The Browser plugin was unavailable. A fresh
 independent subagent reviewed this test-only change with no actionable findings.
+
+## Protocol generation job budget
+
+[FULL #1477](https://github.com/Caismis/rustX/actions/runs/39822180027)
+also reached the protocol job's 15-minute ceiling during native generator
+compilation, without a compiler or drift error. Its annotation confirms the
+15m0s limit. Downloading the 28.8 MB libclang package consumed 11m03s; the
+`pnpm check` step started at 17:36:21 UTC and cancellation arrived at 17:39:54.
+The whole-job ceiling is now 30 minutes so that preparation, native compilation,
+schema/TypeScript drift validation and fixture typechecking can all finish.
+Both checks and their commands remain unchanged.
+
+The existing workflow checker passed all 24 tests. Independent subagent review
+reported no actionable findings in this CI-only change.
