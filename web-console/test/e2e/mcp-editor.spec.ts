@@ -25,7 +25,7 @@ for (const width of [1440, 390]) test(`MCP compact creation form, reference JSON
     expect((await form.getByLabel('Name',{exact:true}).boundingBox())!.width).toBe(240);
     expect((await form.boundingBox())!.height).toBeLessThan(450);
   }
-  await expect(form.getByLabel('Environment variables (JSON)')).toBeHidden();
+  await expect(form.getByLabel('Environment variables (JSON)',{exact:true})).toBeHidden();
   await expect(form.getByLabel('Working directory')).toHaveCount(0);
   await page.screenshot({path:`/tmp/rustx-mcp-compact-${width}.png`});
   await form.getByLabel('Command',{exact:true}).fill('npx');
@@ -33,18 +33,26 @@ for (const width of [1440, 390]) test(`MCP compact creation form, reference JSON
   await expect(form.getByLabel('Command',{exact:true})).toHaveValue('npx');
   await form.getByLabel('Arguments (space-separated)',{exact:true}).fill('-y server --directory "/a b" ""');
   await form.getByText('Environment references (optional)',{exact:true}).click();
-  const references=form.getByLabel('Environment variables (JSON)');
+  const references=form.getByLabel('Environment variables (JSON)',{exact:true});
   await references.fill('{broken');
   await expect(form.getByRole('button',{name:'Save',exact:true})).toBeDisabled();
+  await expect(references).toHaveAttribute('aria-invalid','true');
+  await expect(form.locator('.cm-lintRange-error')).not.toHaveCount(0);
   await references.fill('{"TOKEN":"$TOKEN"}');
+  await form.getByLabel('Command',{exact:true}).click();
+  await expect(references).toHaveText('{\n  "TOKEN": "$TOKEN"\n}',{useInnerText:true});
   await form.getByRole('button',{name:'Save',exact:true}).click();
   await expect(page.getByRole('listitem',{name:'browser-compact'})).toBeVisible();
   await page.getByRole('button',{name:'MCP browser-compact',exact:true}).click();
   await expect(page.getByRole('button',{name:'Configuration scope',exact:true})).toBeDisabled();
   await page.getByRole('button',{name:'JSON',exact:true}).click();
-  const json=page.getByLabel('Complete configuration');
-  expect(JSON.parse(await json.inputValue())['browser-compact']).toMatchObject({command:'npx',args:['-y','server','--directory','/a b',''],sensitive_env:{TOKEN:'$TOKEN'}});
+  const json=page.getByLabel('Complete configuration',{exact:true});
+  expect(JSON.parse(await json.innerText())['browser-compact']).toMatchObject({command:'npx',args:['-y','server','--directory','/a b',''],sensitive_env:{TOKEN:'$TOKEN'}});
+  await json.fill('{"type":');
+  await expect(page.getByRole('button',{name:'Save',exact:true})).toBeDisabled();
   await json.fill('{"type":"http","url":"https://example.com/mcp","sensitive_headers":{"Authorization":"$AUTH"}}');
+  await page.getByRole('button',{name:'Format JSON: Complete configuration',exact:true}).click();
+  await expect(json).toHaveText(JSON.stringify({type:'http',url:'https://example.com/mcp',sensitive_headers:{Authorization:'$AUTH'}},null,2),{useInnerText:true});
   await page.getByRole('button',{name:'Save',exact:true}).click();
   await expect(page.getByRole('listitem',{name:'browser-compact'})).toContainText('https://example.com/mcp');
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
@@ -69,11 +77,11 @@ test('Chinese MCP reference states contain only the intended controls', async ({
   await surface.screenshot({path:'/tmp/rustx-mcp-form-zh.png'});
   // The native reference-only credential contract is intentionally unchanged.
   await form.getByText('环境变量引用（可选）',{exact:true}).click();
-  await expect(form.getByLabel('环境变量（JSON）')).toBeVisible();
+  await expect(form.getByLabel('环境变量（JSON）',{exact:true})).toBeVisible();
   await surface.screenshot({path:'/tmp/rustx-mcp-env-zh.png'});
   await page.getByRole('button',{name:'JSON',exact:true}).click();
   await expect(form.getByLabel('名称',{exact:true})).toHaveCount(0);
-  await expect(form.getByLabel('完整配置')).toHaveValue(JSON.stringify({'my-mcp-server':{type:'stdio',command:'',args:[]}},null,2));
+  await expect(form.getByLabel('完整配置',{exact:true})).toHaveText(JSON.stringify({'my-mcp-server':{type:'stdio',command:'',args:[]}},null,2), {useInnerText:true});
   await surface.screenshot({path:'/tmp/rustx-mcp-json-zh.png'});
   await form.getByRole('button',{name:'取消',exact:true}).click();
   await expect(surface.getByText('尚未安装 MCP 服务器',{exact:true})).toBeVisible();

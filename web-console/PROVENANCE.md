@@ -4231,3 +4231,41 @@ reasoning declarations are removed from native/browser/TUI fixtures, and archive
 contract tests now expect the current request schema. Cross-run child inspection
 fingerprints validate and normalize only the fixture's exact volatile working
 directory, preserving byte comparisons of all other system instructions.
+
+## Shared JSON settings editor
+
+All editable settings JSON now uses the rustX-owned `JsonCodeEditor` and its
+lazy CodeMirror 6 view: Model parameters and profiles, default/summary overrides,
+MCP complete configuration, and MCP environment/header references. The existing
+native-source transaction owners and strict request-parameter checks remain
+authoritative. A value-free constraint-validation control preserves form
+admission, invalid-buffer protection and disabled fieldset inheritance for the
+contenteditable surface. Owner resets replace the document immediately rather
+than waiting for the React wrapper's typing latch.
+
+`@uiw/react-codemirror` 4.25.12 supplies React lifecycle integration; the official
+CodeMirror JSON/language/lint packages supply highlighting, line numbers, history,
+folding and diagnostics. `jsonc-parser` 3.3.1 supplies strict syntax locations and
+whitespace-only formatting edits. Formatting never round-trips through a parsed
+JavaScript object, so repeated keys, escaped spellings, original numeric tokens
+and key order survive. Valid text formats on blur, by button, or by
+Ctrl/Cmd+Shift+F / Alt+Shift+F. Errors and controls have English/Chinese labels;
+colors and geometry follow the shared settings tokens in both themes.
+
+All packages are pinned and included in production dependency notices. The two
+uiw packages declare MIT but omit a license file from their published archives;
+`licenses/react-codemirror-4.25.12.txt` preserves the MIT license from the matching
+official tag, https://github.com/uiwjs/react-codemirror/blob/v4.25.12/LICENSE.
+No third-party implementation source is copied into the new components. Existing
+Harness-derived dictionaries, MCP styles and Model field provenance are updated.
+
+Validation passed 3,105 WebUI unit tests (four declared skips), 66 focused editor
+regressions, type/copy/provenance/notice checks and the production build. The
+pinned browser container passed all 12 Model/MCP/native-source contract cases,
+then passed again without snapshot updates, including WCAG checks and both
+themes at 1440px/390px. Nine changed Model references were reviewed; appearance,
+provider and basic-model references stayed unchanged. Connected Chrome also
+verified error retention, formatting shortcuts, blur formatting and MCP saves
+on desktop dark and 390px light surfaces. Its temporary viewport, theme change,
+test tab and dev server were cleaned up. This does not claim other browsers or
+the entire browser suite were exercised.

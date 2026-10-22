@@ -75,10 +75,10 @@ profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"tem
       const nested = form.getByRole('group', { name: 'Explicit Summary Model settings', exact: true });
       await expect(nested.getByRole('button', { name: /Profile \(Summary\)$/ })).toContainText('deep');
       await expect(nested.getByLabel('Output limit (Summary)')).toHaveValue('2048');
-      await expect(nested.getByLabel('Request parameter overrides (Summary)')).toHaveValue('{\n  "temperature": 0.2\n}');
+      await expect(nested.getByLabel('Request parameter overrides (Summary)',{exact:true})).toHaveText('{\n  "temperature": 0.2\n}', {useInnerText:true});
       await choose(nested, 'Profile (Summary)', 'quick');
       await nested.getByLabel('Output limit (Summary)').fill('1024');
-      await nested.getByLabel('Request parameter overrides (Summary)').fill('{"seed": 7, "stop": [null]}');
+      await nested.getByLabel('Request parameter overrides (Summary)',{exact:true}).fill('{"seed": 7, "stop": [null]}');
       await save();
       const authored = readFileSync(sourceFile, 'utf8');
       expect(authored).toContain('summary-b'); expect(authored).toContain('quick');
@@ -98,8 +98,8 @@ profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"tem
       await expect(settings).not.toContainText('fixture-header-secret');
       await expect(settings).not.toContainText('fixture-env-secret');
       await settings.getByRole('button', { name: 'JSON', exact: true }).click();
-      const editor = settings.getByLabel('Complete configuration');
-      const config = JSON.parse(await editor.inputValue());
+      const editor = settings.getByLabel('Complete configuration',{exact:true});
+      const config = JSON.parse(await editor.innerText());
       const definition = config[`implicit-${transport}`];
       expect(config).not.toHaveProperty('retained_headers');
       expect(config).not.toHaveProperty('retained_env');

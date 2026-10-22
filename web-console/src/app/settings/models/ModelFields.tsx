@@ -112,12 +112,12 @@ function Profiles({ form, modelParameters }: { form: TypedForm<Model>; modelPara
     const setProfiles = (next: ProfileMap) => field.handleChange((Object.keys(next).length ? next : undefined) as never);
     const update = (id: string, profile: ProfileMap[string]) => setProfiles({ ...profiles, [id]: profile });
     const focusAdd = () => chips.current?.querySelector<HTMLButtonElement>('[data-add-profile]')?.focus();
-    // A JSON syntax error lives in the textarea, not in the native form value.
+    // A JSON syntax error lives in the editor, not in the native form value.
     // Validate before replacing its panel so switching cannot discard that text
     // and silently save the last valid parameters instead.
     const canSwitch = () => {
       const container = identities.length ? panel.current : modelParameters.current;
-      const invalid = container?.querySelector<HTMLInputElement | HTMLTextAreaElement>('input:invalid, textarea:invalid');
+      const invalid = container?.querySelector<HTMLInputElement>('input:invalid');
       return invalid ? invalid.reportValidity() : true;
     };
     const finishAdd = () => {

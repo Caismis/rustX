@@ -2,6 +2,7 @@ import { message, displayText, type DisplayText } from '../../../locale/translat
 import { useTranslation, useNotice } from '../../../locale/react';
 import { useContext, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Button } from '../../../presentation/primitives/Button';
+import { JsonCodeEditor } from '../../../presentation/primitives/JsonCodeEditor';
 import { Choice, Toggle } from '../primitives/aria';
 import { UnitReset, type TypedUnitForm } from './bridge';
 import { formatRequestParams, parseRequestParams, sameJson, type RequestParams } from './request-params';
@@ -224,7 +225,6 @@ export function JsonObjectEditor({ label, value, change, optional = true, hint }
   const display = (current: RequestParams | undefined) => current === undefined ? '' : formatRequestParams(current);
   const [text, setText] = useState(() => display(value));
   const [error, setError] = useNotice();
-  const input = useRef<HTMLTextAreaElement>(null);
   const reflected = useRef(value);
   // Unparsed text is editor-local and never a draft, so the transaction owner
   // cannot reset it through the value alone: a discard or reviewed revision
@@ -240,7 +240,6 @@ export function JsonObjectEditor({ label, value, change, optional = true, hint }
     setText(display(value));
     setError('');
   }, [value, resets]);
-  useLayoutEffect(() => { input.current?.setCustomValidity(error); }, [error]);
   const accept = (next: RequestParams | undefined) => {
     setError('');
     if (sameJson(next, reflected.current)) return;
@@ -248,10 +247,9 @@ export function JsonObjectEditor({ label, value, change, optional = true, hint }
     change(next);
   };
   return <div>
-    <label>{label}<textarea ref={input} value={text} data-request-params="" style={{ fontFamily: 'var(--ds-font-family-code), monospace' }} rows={Math.min(12, Math.max(3, text.split('\n').length))} spellCheck={false}
+    <JsonCodeEditor label={label} value={text} error={error}
       placeholder={tx(optional ? 'settings:fields.request-params-placeholder-optional' : 'settings:fields.request-params-placeholder-required')}
-      aria-invalid={!!error || undefined} onChange={event => {
-        const next = event.target.value;
+      onChange={next => {
         setText(next);
         if (next.trim() === '') { accept(optional ? undefined : {}); return; }
         const parsed = parseRequestParams(next);
@@ -261,8 +259,7 @@ export function JsonObjectEditor({ label, value, change, optional = true, hint }
           : failure.kind === 'not_object' ? message('settings:fields.request-params-not-object')
             : message(failure.kind === 'duplicate_key' ? 'settings:fields.request-params-duplicate-key' : 'settings:fields.request-params-inexact-number',
               { p0: failure.line, p1: failure.column }));
-      }} /></label>
-    {error && <span role="alert" className={css.error}>{error}</span>}
+      }} />
     <p className={css.hint}>{hint ?? tx('settings:fields.request-params-hint')}</p>
   </div>;
 }

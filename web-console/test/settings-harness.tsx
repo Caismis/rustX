@@ -83,6 +83,7 @@ export async function renderEditor(node: ReactNode, options: {
   await waitFor(() => expect(authority.context().observation).toBeTruthy());
   const advanced = screen.queryByRole('dialog', { name: /^Model / });
   if (advanced) fireEvent.click(within(advanced).getByRole('button', { name: 'Advanced configuration' }));
+  await waitFor(() => expect(document.querySelector('[data-json-editor-loading]')).toBeNull());
   const rerender = (next: ReactNode) => view.rerender(<InSettings actor={authority.actor} source={options.context}>{next}</InSettings>);
   return { ...authority, view, rerender };
 }

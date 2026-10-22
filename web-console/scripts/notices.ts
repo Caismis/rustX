@@ -14,6 +14,8 @@ const packages = new Map<string, string>();
  * is pinned to one exact version and one declared license, so an upgrade or a
  * license change fails closed instead of inheriting this record. */
 const declaredOnly: Record<string, { license: string | undefined; notice: string }> = {
+  '@uiw/react-codemirror 4.25.12': { license: 'MIT', notice: readFileSync(join(root, 'licenses/react-codemirror-4.25.12.txt'), 'utf8') },
+  '@uiw/codemirror-extensions-basic-setup 4.25.12': { license: 'MIT', notice: readFileSync(join(root, 'licenses/react-codemirror-4.25.12.txt'), 'utf8') },
   '@fortune-sheet/core 1.0.4': { license: 'MIT', notice: readFileSync(join(root, 'licenses/fortune-sheet-1.0.4.txt'), 'utf8') },
   '@fortune-sheet/react 1.0.4': { license: 'MIT', notice: readFileSync(join(root, 'licenses/fortune-sheet-1.0.4.txt'), 'utf8') },
   'brotli 1.3.3': { license: 'MIT', notice: readFileSync(join(root, 'licenses/brotli-1.3.3.txt'), 'utf8') },
