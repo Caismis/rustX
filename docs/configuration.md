@@ -489,11 +489,15 @@ the writer checks the pathname again after the replacement and reports
 does when the directory sync fails. An uncertain write is never replayed.
 
 Writer artifacts have fixed-length names, so every basename the filesystem
-accepts for a source document stays writable. The persistent writer lock beside a
-document is `.rustx-lock-<sha256 of the exact basename bytes>.lock`: every native
-writer of that document — source authoring, automatic repair and create-only
-initialization — locks the same inode exclusively, and distinct documents never
-share one. Writers create it; nothing unlinks it.
+accepts for a source document stays writable. The persistent writer lock of a
+document is `.rustx-locks/<sha256 of the exact basename bytes>.lock` in the
+document's directory: every native writer of that document — source authoring,
+automatic repair and create-only initialization — locks the same inode
+exclusively, and distinct documents never share one. Writers create the private
+lock directory and the lock; nothing unlinks either. Keeping every lock in that
+one directory means a directory's own entries grow by at most one however many
+documents were ever written there, so bounded resource scans never count lock
+history. The lock directory is opened without following a symlink.
 
 Every reader of a `rustx.toml` has the same physical authority as a write.
 Session resolution — Session creation and loading, configuration application

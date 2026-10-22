@@ -266,8 +266,9 @@ Discovery has two bounds. A resource directory holds at most 128 `.yaml`
 entries, and one composed catalog (User alone, or User with one Workspace after
 shadowing) at most 64 distinct candidate Workflow IDs, counted from valid
 filename identities before any file is compiled, so a file with invalid content
-still occupies its ID. Past either bound, discovery reports the directory or
-catalog instead of the files in it.
+still occupies its ID. Discovery also reads at most 1024 entries of any kind in
+a directory. Past any bound, discovery reports the directory or catalog instead
+of the files in it.
 
 `create` and `copy` add a file, so native code admits them against these bounds
 before publication and refuses an addition that would pass one with
@@ -277,15 +278,32 @@ ones the operation is authorized for:
 
 - a Global addition counts the User directory and the User-only catalog;
 - a Workspace addition counts that Workspace directory and its composition with
-  User (an override of an existing Global ID adds no identity).
+  User (an override of an existing Global ID adds no identity);
+- the directory added to must keep room for the published file within the
+  1024-entry bound, counting the staged candidate that briefly exists beside it
+  during publication.
+
+rustX's own writer metadata never consumes these bounds: the persistent writer
+locks of a directory's documents, and its capacity lock, all live in that
+directory's single private `.rustx-locks/` directory, which discovery counts as
+one non-YAML entry and never reads. Create/delete cycles and refused additions
+with ever new IDs leave locks only there, so neither a successful nor a refused
+addition can push existing files out of discovery. Arbitrary files placed in a
+Workflow directory by other tools still count, and the bounds still refuse an
+addition they leave no room for.
 
 A Global addition cannot see the Workspaces a later session may compose with,
 so it does not prove that every Workspace composition stays within 64 IDs; a
 Workspace addition is the one that checks its own composition.
 
-Count-changing rustX writes take a persistent advisory capacity lock per scope
-before the file's own writer lock, always User first, then the Workspace. Two
-additions competing for the last slot are serialized and at most one succeeds,
+Count-changing rustX writes take a persistent advisory capacity lock per
+physical Workflow directory before the file's own writer lock, always User
+first, then the Workspace. A Workspace whose Workflow directory is the User one
+(a Workspace at `~/rustx`) is recognized by the directory's device and inode,
+and its addition takes that one lock once; its logical scope, authorization and
+counting are unchanged. Two
+additions competing for the last slot, in one process or several, are
+serialized and at most one succeeds,
 and a Workspace addition waits for, and counts, a concurrent Global addition.
 The file revision check, directory-handle protections and atomic publication
 are unchanged. Like the writer lock, the capacity lock coordinates rustX
@@ -341,17 +359,29 @@ A renamed node or branch takes the drafts of its other fields along to their new
 addresses. When another change (undo or redo, for instance) changes a field that
 holds a draft, the text is kept and marked as changed: it is neither dropped nor
 reapplied, until the author keeps it over the current value or uses the current
-value. Changes to other fields do not affect a draft.
+value. Changes to other fields do not affect a draft. Attachment and conflict are
+independent: a draft marked as changed still belongs to its field, follows it
+through renames and array edits like any other attached draft, keeps its mark
+while doing so, and is detached when its field goes.
 
 When the field is gone (its node or branch deleted, its value kind changed, or
 its array item removed), the draft is detached: it keeps its text and its
 original location for the pending-field list, under an identity of its own that
-no field ever shows. A detached draft can only be discarded. It never follows a
+no field ever shows. The pending-field list (shown when Save or Check is held
+back) offers **Show kept text** for it: a read-only field with the exact text,
+whitespace and line breaks included, labelled with the original location, and a
+**Copy** action. Showing or copying applies nothing, changes no draft and sends
+nothing; when the clipboard refuses, the text stays shown for manual selection.
+A detached draft is never reattached automatically; the author recovers its text
+this way and then discards it, and its draft keeps the editor dirty and blocks
+Save and Check until then. It never follows a
 rename and never occupies the address another draft moves to, so a node or
 branch renamed to the name of a deleted one migrates its own drafts and shows
 its own text; the deleted one's text stays listed apart, and a field created
 later at that place never takes it over. A rename that would still place two
-drafts under one address is refused, with its text kept and nothing changed.
+drafts under one address is refused, with its text kept and nothing changed, and
+no other structural change ever lets one draft replace another: a draft whose
+destination is already taken is detached instead.
 
 Array items have no identity in the native format, so the editor tracks it per
 edit instead. Removing or appending an item through the inspector is one known

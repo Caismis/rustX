@@ -13,16 +13,23 @@
 //! its composition with User. Replace and delete never add an identity, so
 //! they stay available to repair a directory that is already over a bound.
 //!
-//! Count-changing rustX writes are serialized per scope by a persistent
-//! advisory capacity lock, taken before the file's own writer lock, in one
-//! order: User, then the Workspace. A Workspace addition therefore excludes
-//! concurrent User additions as well. Like every writer lock, it serializes
-//! rustX writers only, never external editors or Git.
+//! Discovery also reads at most [`MAX_DIRECTORY_ENTRIES`] entries of a
+//! directory. rustX's own writer locks live in one lock directory, a single
+//! entry however many files were ever written or refused there, so only the
+//! published file itself is admitted against that bound.
+//!
+//! Count-changing rustX writes are serialized per physical directory by a
+//! persistent advisory capacity lock, taken before the file's own writer
+//! lock, in one order: User, then the Workspace. A Workspace addition
+//! therefore excludes concurrent User additions as well. A Workspace whose
+//! Workflow directory is the User one holds that one lock once. Like every
+//! writer lock, it serializes rustX writers only, never external editors or
+//! Git.
 use super::{Scope, WorkflowDiagnostic};
 use crate::local_runtime::configuration::UserConfigManager;
 use crate::local_runtime::configuration::settings::SettingsError;
 use crate::local_runtime::configuration::settings::SourceTarget;
-use crate::local_runtime::resource_directory::MAX_RESOURCE_FILES;
+use crate::local_runtime::resource_directory::{MAX_DIRECTORY_ENTRIES, MAX_RESOURCE_FILES};
 use crate::local_runtime::settings::SourceDirectory;
 use crate::runtime::workflow::{MAX_WORKFLOW_DEFINITIONS, WorkflowId};
 use std::collections::BTreeSet;
@@ -59,6 +66,7 @@ impl Capacity {
             ordered.push(Scope::of(manager, target));
         }
         let mut locks = Vec::with_capacity(ordered.len());
+        let mut held = Vec::with_capacity(ordered.len());
         for scope in &ordered {
             let directory =
                 SourceDirectory::create_directory(&scope.directory).map_err(|error| {
@@ -68,6 +76,14 @@ impl Capacity {
                     );
                     target.validate().err().unwrap_or(SettingsError::Io)
                 })?;
+            // A Workspace whose Workflow directory is the User one (a
+            // Workspace at `~/rustx`) shares its one physical capacity lock,
+            // which this addition already holds: locking it again would wait
+            // for itself.
+            if held.contains(&directory.identity()) {
+                continue;
+            }
+            held.push(directory.identity());
             locks.push(
                 directory
                     .lock(OsStr::new(CAPACITY_DOCUMENT))
@@ -105,7 +121,17 @@ impl Capacity {
                     path.extension().and_then(|extension| extension.to_str()) == Some("yaml")
                 })
                 .collect();
-            // The physical bound applies to the directory being added to.
+            // The physical bounds apply to the directory being added to:
+            // publication links the file while its staged candidate still
+            // exists, so a discovery read meanwhile counts two more entries;
+            // afterwards the file is one more entry and one more YAML file.
+            if index == 0 && entries.len() + 2 > MAX_DIRECTORY_ENTRIES {
+                return Err(refused(
+                    "capacity",
+                    "the Workflow directory leaves no room for another file within discovery's bound of 1024 entries",
+                    "remove files that are not Workflows from this directory before adding another",
+                ));
+            }
             if index == 0 && files.len() >= MAX_RESOURCE_FILES {
                 return Err(refused(
                     "capacity",

@@ -55,12 +55,7 @@ model = "a"
             "description = \"Review.\"\ninstructions = \"Review the input.\"\n\n[tools]\nbuiltin = []\n",
         )
         .unwrap();
-        let request = LaunchRequest {
-            workspace: Some(a.clone()),
-            ..LaunchRequest::default()
-        };
-        let host = HostEnvironment::from_paths(a.clone(), home.clone()).unwrap();
-        let (manager, _) = request.session_input(&host).unwrap();
+        let manager = manager_at(&home, &a);
         Self {
             _root: root,
             manager,
@@ -108,6 +103,17 @@ model = "a"
             .workflow_source(target, &WorkflowId::parse(id).unwrap())
             .unwrap()
     }
+}
+
+/// The configuration manager of a session in `workspace` for `home`, as
+/// another process opens it.
+fn manager_at(home: &Path, workspace: &Path) -> UserConfigManager {
+    let request = LaunchRequest {
+        workspace: Some(workspace.to_path_buf()),
+        ..LaunchRequest::default()
+    };
+    let host = HostEnvironment::from_paths(workspace.to_path_buf(), home.to_path_buf()).unwrap();
+    request.session_input(&host).unwrap().0
 }
 
 fn workspace(directory: &Path) -> SourceTarget {
@@ -1318,6 +1324,9 @@ fn an_externally_over_full_scope_still_allows_guarded_replace_and_delete() {
 }
 
 /// Wait until some writer blocks on the lock file `lock` (Linux `/proc/locks`).
+/// Reading `/proc/locks` takes the kernel's lock-list locks every other lock
+/// operation on the machine contends with, so it is polled at an interval,
+/// never spun on while a writer (or its process) is still starting.
 #[cfg(target_os = "linux")]
 fn await_waiter(lock: &Path) {
     use std::os::unix::fs::MetadataExt;
@@ -1332,7 +1341,7 @@ fn await_waiter(lock: &Path) {
             std::time::Instant::now() < deadline,
             "the second writer never waited for the capacity lock"
         );
-        std::thread::yield_now();
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
 }
 
@@ -1358,13 +1367,9 @@ fn race(
     let manager = roots.manager.clone();
     let second = std::thread::spawn(move || second(manager));
     #[cfg(target_os = "linux")]
-    await_waiter(
-        &roots
-            .user_directory()
-            .join(crate::local_runtime::settings::lock_name(OsStr::new(
-                "workflow-capacity",
-            ))),
-    );
+    await_waiter(&crate::local_runtime::settings::lock_path_of(
+        &roots.user_directory().join("workflow-capacity"),
+    ));
     release.send(()).unwrap();
     (first.join().unwrap(), second.join().unwrap())
 }
@@ -1419,4 +1424,337 @@ fn a_workspace_addition_waits_for_and_counts_a_concurrent_global_addition() {
     let catalog = roots.discover(Some(&roots.a));
     assert_eq!(catalog.locations.len(), 64);
     assert!(catalog.discovery_diagnostics.is_empty());
+}
+
+/// Run `operation` on its own thread and require it to finish in time: a
+/// writer waiting for a lock it already holds fails the test instead of
+/// hanging the suite.
+fn bounded<T: Send + 'static>(operation: impl FnOnce() -> T + Send + 'static) -> T {
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || done.send(operation()).unwrap());
+    finished
+        .recv_timeout(std::time::Duration::from_secs(60))
+        .expect("the write never returned: it waits for a lock it holds")
+}
+
+#[test]
+fn a_workspace_whose_workflow_directory_is_global_holds_its_one_capacity_lock_once() {
+    let roots = Roots::new();
+    // A Workspace at `~/rustx`: its Workflow directory is the User one.
+    let coincident = roots.home.join("rustx");
+    let target = workspace(&coincident);
+    let manager = roots.manager.clone();
+    let created = {
+        let target = target.clone();
+        bounded(move || {
+            manager.write_source_settings(
+                &target,
+                "missing",
+                SourceMutation::Workflow {
+                    id: id("shared_scope"),
+                    edit: WorkflowEdit::Create {
+                        description: "Created through the Workspace.".into(),
+                    },
+                },
+            )
+        })
+    };
+    created.unwrap();
+    let source_revision = roots.read(&target, "shared_scope").revision;
+    let manager = roots.manager.clone();
+    let copied = {
+        let target = target.clone();
+        bounded(move || {
+            manager.write_source_settings(
+                &target,
+                "missing",
+                SourceMutation::Workflow {
+                    id: id("shared_copy"),
+                    edit: WorkflowEdit::Copy {
+                        source: id("shared_scope"),
+                        source_revision,
+                    },
+                },
+            )
+        })
+    };
+    copied.unwrap();
+    // Both are listed and read through either scope at once.
+    for scope in [&target, &SourceTarget::User] {
+        let library = roots.manager.workflow_library(scope).unwrap();
+        assert!(library.diagnostic.is_none());
+        let ids: Vec<_> = library.files.iter().map(|file| file.id.clone()).collect();
+        assert!(ids.contains(&Some(id("shared_scope"))), "{ids:?}");
+        assert!(ids.contains(&Some(id("shared_copy"))), "{ids:?}");
+        assert_eq!(
+            roots
+                .read(scope, "shared_copy")
+                .document
+                .unwrap()
+                .description,
+            "Created through the Workspace."
+        );
+    }
+    assert!(
+        roots
+            .discover(Some(&coincident))
+            .get(&id("shared_copy"))
+            .is_some()
+    );
+}
+
+/// The child half of the cross-process race below: open the session of
+/// `RUSTX_491_CAPACITY_HOME`, add `RUSTX_491_CAPACITY_ID` to its target
+/// (`user`, or the Workspace directory given), and print the outcome. With
+/// `RUSTX_491_CAPACITY_HOLD`, it reports holding its capacity locks and
+/// waits for a byte on stdin before going on.
+#[test]
+fn capacity_process_writer_gate() {
+    use std::io::{Read, Write};
+    let Ok(home) = std::env::var("RUSTX_491_CAPACITY_HOME") else {
+        return;
+    };
+    let home = PathBuf::from(home);
+    let session = PathBuf::from(std::env::var("RUSTX_491_CAPACITY_SESSION").unwrap());
+    let manager = manager_at(&home, &session);
+    if std::env::var_os("RUSTX_491_CAPACITY_HOLD").is_some() {
+        manager.test_hooks.insert("workflow_capacity_locked", || {
+            println!("CAPACITY_LOCKED");
+            std::io::stdout().flush().unwrap();
+            std::io::stdin().read_exact(&mut [0]).unwrap();
+        });
+    }
+    let target = match std::env::var("RUSTX_491_CAPACITY_TARGET").unwrap().as_str() {
+        "user" => SourceTarget::User,
+        directory => workspace(Path::new(directory)),
+    };
+    let result = manager.write_source_settings(
+        &target,
+        "missing",
+        SourceMutation::Workflow {
+            id: id(&std::env::var("RUSTX_491_CAPACITY_ID").unwrap()),
+            edit: WorkflowEdit::Create {
+                description: "Racing from another process.".into(),
+            },
+        },
+    );
+    let outcome = match result {
+        Ok(_) => "admitted".to_owned(),
+        Err(SettingsError::InvalidWorkflow(diagnostic)) if diagnostic.category == "capacity" => {
+            "capacity".to_owned()
+        }
+        Err(error) => format!("{error:?}"),
+    };
+    println!("OUTCOME {outcome}");
+}
+
+/// One child writer process; it is killed and reaped whatever happens.
+struct Writer {
+    process: std::process::Child,
+    lines: std::sync::mpsc::Receiver<String>,
+}
+
+impl Writer {
+    fn spawn(roots: &Roots, target: &str, name: &str, hold: bool) -> Self {
+        use std::io::BufRead;
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "local_runtime::workflow_authoring::tests::capacity_process_writer_gate",
+                "--nocapture",
+                "--format=terse",
+                "--test-threads=1",
+            ])
+            .env("RUSTX_491_CAPACITY_HOME", &roots.home)
+            .env("RUSTX_491_CAPACITY_SESSION", &roots.a)
+            .env("RUSTX_491_CAPACITY_TARGET", target)
+            .env("RUSTX_491_CAPACITY_ID", name)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped());
+        if hold {
+            command.env("RUSTX_491_CAPACITY_HOLD", "1");
+        }
+        let mut process = command.spawn().unwrap();
+        let output = std::io::BufReader::new(process.stdout.take().unwrap());
+        let (sent, lines) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for line in output.lines().map_while(Result::ok) {
+                if sent.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        Self { process, lines }
+    }
+
+    /// The first line starting with `prefix`, within a bounded wait.
+    fn expect(&self, prefix: &str) -> String {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            let line = self
+                .lines
+                .recv_timeout(left)
+                .unwrap_or_else(|_| panic!("the writer never printed {prefix}"));
+            if let Some(rest) = line.strip_prefix(prefix) {
+                return rest.trim().to_owned();
+            }
+        }
+    }
+
+    fn release(&mut self) {
+        use std::io::Write;
+        let stdin = self.process.stdin.as_mut().unwrap();
+        stdin.write_all(&[0]).unwrap();
+        stdin.flush().unwrap();
+    }
+}
+
+impl Drop for Writer {
+    fn drop(&mut self) {
+        let _ = self.process.kill();
+        let _ = self.process.wait();
+    }
+}
+
+#[test]
+fn writers_in_two_processes_competing_for_the_last_slot_of_one_shared_directory_admit_one() {
+    let roots = Roots::new();
+    let bytes = roots.minimal_bytes();
+    seed(&roots.user_directory(), "s", 63, 0, &bytes);
+    // One writer adds through a Workspace at `~/rustx`, whose Workflow
+    // directory is the User one; the other adds to Global directly.
+    let coincident = roots.home.join("rustx");
+    let mut first = Writer::spawn(&roots, coincident.to_str().unwrap(), "first_racer", true);
+    first.expect("CAPACITY_LOCKED");
+    let second = Writer::spawn(&roots, "user", "second_racer", false);
+    #[cfg(target_os = "linux")]
+    await_waiter(&crate::local_runtime::settings::lock_path_of(
+        &roots.user_directory().join("workflow-capacity"),
+    ));
+    first.release();
+    assert_eq!(first.expect("OUTCOME"), "admitted");
+    assert_eq!(second.expect("OUTCOME"), "capacity");
+    drop((first, second));
+    assert!(roots.user_directory().join("first_racer.yaml").exists());
+    assert!(!roots.user_directory().join("second_racer.yaml").exists());
+    let catalog = roots.discover(None);
+    assert_eq!(catalog.locations.len(), 64);
+    assert!(catalog.discovery_diagnostics.is_empty());
+}
+
+/// The names directly in `directory`.
+fn names(directory: &Path) -> std::collections::BTreeSet<String> {
+    std::fs::read_dir(directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect()
+}
+
+#[test]
+fn writer_lock_history_never_counts_toward_discovery_of_a_directory() {
+    let roots = Roots::new();
+    let directory = roots.user_directory();
+    // Real create/delete cycles leave each document's lock behind, all of
+    // them inside the one lock directory.
+    for round in 0..3 {
+        let name = format!("cycle_{round}");
+        let revision = roots.create(&SourceTarget::User, &name, "Short-lived.");
+        roots
+            .write(&SourceTarget::User, &name, &revision, WorkflowEdit::Delete)
+            .unwrap();
+        assert!(
+            crate::local_runtime::settings::lock_path_of(&directory.join(format!("{name}.yaml")))
+                .exists()
+        );
+    }
+    assert_eq!(names(&directory), [".rustx-locks".to_owned()].into());
+    // Representative history: far more locks than discovery reads entries.
+    let locks = directory.join(".rustx-locks");
+    for index in 0..1100 {
+        std::fs::write(locks.join(format!("{index:064x}.lock")), b"").unwrap();
+    }
+    roots.create(
+        &SourceTarget::User,
+        "after_history",
+        "Created after much history.",
+    );
+    roots
+        .copy(&SourceTarget::User, "after_history", "copied_after")
+        .unwrap();
+    let library = roots.manager.workflow_library(&SourceTarget::User).unwrap();
+    assert!(library.diagnostic.is_none());
+    assert_eq!(library.files.len(), 2);
+    assert_eq!(
+        roots
+            .read(&SourceTarget::User, "copied_after")
+            .document
+            .unwrap()
+            .description,
+        "Created after much history."
+    );
+    let catalog = roots.discover(None);
+    assert!(catalog.discovery_diagnostics.is_empty());
+    assert!(catalog.get(&id("copied_after")).is_some());
+}
+
+#[test]
+fn refused_additions_leave_no_entry_that_discovery_counts() {
+    let roots = Roots::new();
+    let bytes = roots.minimal_bytes();
+    seed(&roots.user_directory(), "f", 64, 0, &bytes);
+    let before = names(&roots.user_directory());
+    for index in 0..40 {
+        let name = format!("refused_{index}");
+        capacity_refusal(roots.write(
+            &SourceTarget::User,
+            &name,
+            "missing",
+            WorkflowEdit::Create {
+                description: "x".into(),
+            },
+        ));
+        capacity_refusal(roots.copy(&SourceTarget::User, "f000", &format!("copy_{index}")));
+    }
+    assert_eq!(names(&roots.user_directory()), before);
+    let library = roots.manager.workflow_library(&SourceTarget::User).unwrap();
+    assert!(library.diagnostic.is_none());
+    assert_eq!(library.files.len(), 64);
+    assert!(roots.read(&SourceTarget::User, "f063").document.is_some());
+    assert!(roots.discover(None).discovery_diagnostics.is_empty());
+}
+
+#[test]
+fn an_addition_is_refused_when_its_publication_would_pass_the_entry_bound() {
+    let roots = Roots::new();
+    let directory = roots.user_directory();
+    roots.create(&SourceTarget::User, "kept", "Present before the clutter.");
+    // External files that are no Workflows: with the lock directory and
+    // `kept`, 1022 entries. A publication briefly holds its staged
+    // candidate beside the published file, so 1022 + 2 is the last fit.
+    for index in 0..1020 {
+        std::fs::write(directory.join(format!("note-{index:04}.txt")), b"").unwrap();
+    }
+    assert_eq!(names(&directory).len(), 1022);
+    roots.create(&SourceTarget::User, "last_fit", "Fits the entry bound.");
+    let refused = capacity_refusal(roots.write(
+        &SourceTarget::User,
+        "past_bound",
+        "missing",
+        WorkflowEdit::Create {
+            description: "x".into(),
+        },
+    ));
+    assert!(
+        refused.reason.contains("1024 entries"),
+        "{}",
+        refused.reason
+    );
+    capacity_refusal(roots.copy(&SourceTarget::User, "kept", "past_copy"));
+    assert_eq!(names(&directory).len(), 1023);
+    let library = roots.manager.workflow_library(&SourceTarget::User).unwrap();
+    assert!(library.diagnostic.is_none());
+    assert_eq!(library.files.len(), 2);
+    assert!(roots.discover(None).get(&id("last_fit")).is_some());
 }

@@ -2411,9 +2411,9 @@ travel in the existing exact wire domains, so `u64` fields such as `timeout_ms`
 are decimal strings in TypeScript. Documents are bounded by the native 512 KiB
 Workflow limit and the 1 MiB message limit.
 
-A `create` or `copy` that would pass a discovery bound (128 `.yaml` entries in the
-directory, or 64 composed Workflow IDs: User alone for a User target, User with
-the Workspace for a Workspace target) is refused before publication with
+A `create` or `copy` that would pass a discovery bound (1024 entries or 128
+`.yaml` entries in the directory, or 64 composed Workflow IDs: User alone for a
+User target, User with the Workspace for a Workspace target) is refused before publication with
 `workflow_invalid`, diagnostic category `capacity`; see
 [Capacity](workflow-authoring.md#capacity).
 
