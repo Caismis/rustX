@@ -210,27 +210,35 @@ function detachedKey(draft: FieldDraft): string {
   return JSON.stringify(['detached', draft.version, encodeField(draft.address)]);
 }
 
-/** Drafts after the document changed from `before` to `after`. A draft
- * whose field is gone (or whose array item cannot be identified) keeps its
- * text and is detached; one whose field changed keeps its text and is
- * marked. `moved` drafts followed a rename and `array` is the array edit
- * performed, so the drafts it accounts for keep their identity. Drafts of
- * unchanged fields are untouched. */
+/** Drafts after the document changed from `before` to `after`. Every
+ * attached draft, whatever its conflict, follows its own field: `moved`
+ * drafts followed a rename and `array` is the array edit performed, so the
+ * drafts it accounts for keep their identity. A draft whose field is gone
+ * (or whose array item cannot be identified) keeps its text and is
+ * detached; one whose field changed keeps its text and is marked, and that
+ * mark stays until the author resolves it. Detached drafts stay as they
+ * are, and no draft ever replaces another under one key. */
 function settleDrafts(drafts: EditorContext['drafts'], before: WorkflowDocument | undefined, after: WorkflowDocument, { moved, array }: { moved?: ReadonlySet<string>; array?: ArrayEdit } = {}): EditorContext['drafts'] {
-  const next: [string, FieldDraft][] = [];
+  const next = new Map<string, FieldDraft>();
+  const detach = (draft: FieldDraft) => { const missing = { ...draft, conflict: 'missing' as const }; next.set(detachedKey(missing), missing); };
+  const attached: [string, FieldDraft][] = [];
   for (const [field, draft] of Object.entries(drafts)) {
-    if (draft.conflict) { next.push([field, draft]); continue; }
+    if (draft.conflict === 'missing') { next.set(field, draft); continue; }
     const remapped = array ? remapAddress(draft.address, array) : { address: draft.address, covered: false };
-    const detach = () => { const missing = { ...draft, conflict: 'missing' as const }; next.push([detachedKey(missing), missing]); };
-    if (!remapped) { detach(); continue; }
+    if (!remapped) { detach(draft); continue; }
     const { address, covered } = remapped;
     const text = fieldText(after, address);
     // A draft that followed a rename, or whose array edit is known, is
     // identified already; any other array resize leaves identity unknown.
     const shifted = !!before && !covered && !moved?.has(field) && !sameField(before, after, draft.address);
-    if (text === undefined || shifted) { detach(); continue; }
+    if (text === undefined || shifted) { detach(draft); continue; }
     const current = address === draft.address ? draft : { ...draft, address };
-    next.push([encodeField(address), text === draft.base ? current : { ...current, conflict: 'changed' }]);
+    attached.push([encodeField(address), draft.conflict || text !== draft.base ? { ...current, conflict: 'changed' } : current]);
+  }
+  for (const [key, draft] of attached) {
+    // Two drafts never share one field: neither is given the other's place.
+    if (next.has(key) || attached.filter(([other]) => other === key).length > 1) detach(draft);
+    else next.set(key, draft);
   }
   return Object.fromEntries(next);
 }
