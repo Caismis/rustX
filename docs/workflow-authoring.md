@@ -85,6 +85,18 @@ The same ID in both scopes is two independently addressable files. A target is
 never derived from the focused conversation; Workspace directories come from the
 Product Host's registration, and the browser never sends a Workspace path.
 
+A transaction is bound to the authorities it started under, not only to IDs.
+Each browser port captures the App Server endpoint and authority revision and
+the Product Host authority (`WorkspaceAuthorityScope`) current when it is
+created. Every Workspace operation, and a Global file's dependency check routed
+through a Workspace, carries that Product Host scope; the Host validates it in
+the registration lane immediately before native dispatch. A replaced Host is
+refused (`authority_replaced`) even when it reuses the registration ID with a
+different directory, so revision equality never stands in for resource
+identity. An open editor, a pending library operation and an open confirmation
+dialog each keep the port they started with; refreshing the library creates a
+new read port for the listing only, and is never applied to them.
+
 IDs follow the native `WorkflowId` rule. Paths are resolved by native code
 relative to the scope's admitted directory handle: traversal, absolute paths,
 symlinked directories or files and a scope redirected after admission are
@@ -96,15 +108,43 @@ rejected, and a Workflow directory holds at most 128 files.
 revision, byte length, modification time, a description bounded to 512 bytes,
 node count and an optional diagnostic). A malformed file is still listed with its
 bounded diagnostic and stays openable read-only; it is never hidden or repaired.
+Each serialized entry is held to a fixed 7 KiB share, so the at most 128 files of
+a scope always list within the 1 MiB message bound. Only an entry authored to the
+extreme is reduced, dropping first the compiler detail, then the diagnostic path,
+then the description; its identity, revision and diagnostic category remain, and
+no entry ever displaces another.
 `workflow/read` returns the strictly parsed document, its revision and the
 vocabulary the editor offers (named Agent profiles and selectable native Tools).
 Diagnostics carry the native authored path (`block.nodes.<id>.…`), a category,
 static reason and correction text, and parser coordinates; authored values and
-parser messages are not copied into them.
+parser messages are not copied into them. The path is bounded to 512 UTF-8 bytes
+(a longer one keeps its longest whole-component prefix, so it still locates the
+owning block) and the compiler detail to 1 KiB.
 
-Browsers represent JSON numbers as doubles. A file containing an integer whose
-magnitude exceeds 2^53−1 is reported with category `unsupported_number` and is
-read-only in the Web editor rather than silently rounded.
+### Number contract
+
+Workflow documents cross the App Server as JSON. A browser reads every JSON number
+as one binary64 and writes it back as the shortest decimal of that binary64, so
+the editable domain is exactly the numbers whose browser round trip returns the
+same native number:
+
+- integers within ±(2^53 − 1);
+- non-integral finite floats, and integral floats from 1e21 (which a browser
+  prints in exponent form, so they stay floats).
+
+An integer beyond that range would be rounded, and an integral float below 1e21
+(`1.0`, `-0.0`) would come back as an integer, which native types differently: a
+constructed array of `1.0` and `1.5` would then no longer compile. Native applies
+this one rule (`unrepresentable_number`) on read and to every candidate:
+
+- a file holding such a number is listed and opened read-only with category
+  `unsupported_number`, located at the number's authored path, and its bytes are
+  untouched;
+- `workflow/check` and a `replace` write refuse a candidate holding one.
+
+The browser judges authored text before conversion, from each number's source
+token (`JSON.parse` source text access): a field holding such a number is not
+applied and says why, so no rounded value is ever sent.
 
 ### Checking
 
@@ -112,8 +152,10 @@ read-only in the Web editor rather than silently rounded.
 keeps two facts apart:
 
 - **Structure** — the result of `WorkflowProgram::compile` (graph, lexical scope,
-  schemas, bindings, bounds): `valid` with the root outputs, or `invalid` with
-  one bounded diagnostic at its authored path.
+  schemas, bindings, bounds): `valid` with every node's output contract and the
+  `revision` a `replace` with this candidate commits as (the revision of its
+  canonical serialization), or `invalid` with one bounded diagnostic at its
+  authored path.
 - **Dependencies** — `not_checked`, `admitted`, `blocked` with typed diagnostics,
   or `unavailable` with a reason, computed by the same metadata admission as
   `rustx workflow check` (`MetadataAdmission::compose`).
@@ -152,10 +194,23 @@ separately:
    later capture configuration adopt the new file.
 
 A lost acknowledgement (for example a dropped connection after sending) is
-**uncertain**, not failed. The editor rereads the file and compares the revision
-with what it sent; it never replays the write blindly. A matching file is
-reconciled as saved, a different one is reported as changed elsewhere, and the
-local document is kept in either case.
+**uncertain**, not failed. Reconciliation only observes; it never resends the
+write. The editor rereads the file: an unchanged revision means the write did not
+commit. Otherwise it asks native for the attempted candidate's identity (the
+`revision` of its check) and compares that with the reread revision. Because the
+identity is native's own canonical serialization, a commit that native normalized
+(an omitted timeout written as the default, an ordinary edge's port) is still
+recognized as the editor's own, while a meaningful difference — an explicitly
+empty override against an omitted one — is a different identity. A recognized
+commit becomes the new base revision; any other revision is reported as changed
+elsewhere. Edits made after the attempted save are kept, unchanged and dirty, in
+either case.
+
+A received acknowledgement is a fact about the original target. If the App Server
+or Product Host authority changes while the commit is being reread, the commit is
+kept with an unobserved reread (committed and unconfirmed); it is never turned
+into an uncertain or failed write, and the editor is never rebound to the
+replacement.
 
 ### Concurrency guarantee
 
@@ -167,13 +222,30 @@ detected by revision comparison on the next read or write, but a change that
 lands between the final check and the rename is not excluded. Writes are atomic
 renames, so a file is never observed half-written.
 
-### Editor-local state
+### Editor state
 
-Node positions and the viewport are presentation only.
-They are kept in browser `localStorage`, keyed by server, scope, Workflow ID and
-block path, and are never written to the file; clearing them only resets the
-layout. Unsaved edits live in memory: leaving a dirty editor asks for
-confirmation, and there are no persisted drafts.
+Node positions and the viewport are presentation only. They are kept in browser
+`localStorage`, keyed by server, scope, Workflow ID and block path, and are never
+written to the file; clearing them only resets the layout.
+
+Unsaved edits live in memory: leaving a dirty editor asks for confirmation, and
+there are no persisted drafts. The editor machine owns every piece of unapplied
+field text (a JSON schema or literal being typed, a node or branch rename, a path
+component being added) under the field's stable identity. Such text counts as
+unsaved for leaving and unloading, survives the field being hidden and shown
+again, and never enters the document until its field applies it (on blur, Enter,
+Save or Check). Save and Check, including Ctrl/Cmd+S from a focused field, first
+apply every shown field's valid text; text that cannot be applied (invalid JSON,
+a number outside the number contract) stays visible, refuses the Save or Check
+with nothing sent, and can be discarded explicitly.
+
+Undo and redo share one bounded timeline of semantic edits and view steps. One
+completed node drag is one view step: undo restores the dragged nodes' previous
+positions, in their own block, before any older semantic edit. Pointer movement
+never validates or writes the file, and view steps never become file content.
+Typing in one field coalesces into one step; the session ends at a selection
+change, block navigation, Save, Check, a node move, and undo or redo, and is keyed
+by the field's full block, node and field identity.
 
 ## Templates and execution invariants
 
