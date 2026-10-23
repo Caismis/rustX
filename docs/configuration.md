@@ -200,6 +200,22 @@ credential source; no member is recovered from the shadowed User Provider.
 Each Model requires `provider`, provider-native `id`, explicit `protocol`,
 `context_window`, `max_output_tokens`, and the complete `capabilities` object.
 Supported protocols and modality values are enumerated by the generated schema.
+
+The single `json_schema_output` capability defaults to `false`. Set it to `true`
+only after verifying native API-enforced JSON Schema output for this exact Model,
+Provider endpoint and protocol, including the Profile settings that can be selected.
+`reasoning_enabled` does not imply schema support. The effective capability is the
+intersection of the Model declaration, adapter and runtime; it is retained in the
+frozen invocation and read projections. A Workspace Model replaces the full User
+Model, including this declaration. Web Settings exposes **Native JSON Schema output**
+as one checkbox alongside tool calling and reasoning.
+
+This declaration alone changes no Agent, Title or Summary request. Only a structured
+Auxiliary Call supplies a response schema. Auxiliary freezes native schema enforcement
+when the effective claim is true, otherwise trusted prompt guidance; both paths apply
+the same local schema validation before accepting output. A native-format failure
+is an explicit failure and never triggers an extra prompt-mode request.
+
 Optional `compat` declares the adapter behavior: `chat_max_tokens_field`,
 `chat_stream_usage`, `chat_reasoning_replay`, `chat_tool_protocol`, and
 `responses_storage`. Protocol validation determines which members are applicable

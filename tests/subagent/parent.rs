@@ -411,13 +411,36 @@ impl Parent {
             nix::sys::signal::Signal::SIGTERM,
         )
         .expect("SIGTERM the parent");
-        let status = tokio::time::timeout(LIVENESS, self.child.wait())
-            .await
-            .expect("the parent must exit after its explicit drain")
-            .expect("wait");
+        // A subscribed connection can still emit final records during drain.
+        // Keep both pipes flowing while waiting: an accepted JSONL record must
+        // finish before the server can exit, even after carrier retirement.
+        let mut stderr = self.child.stderr.take().expect("stderr is piped");
+        let mut diagnostics = String::new();
+        let (status, (), ()) = tokio::time::timeout(LIVENESS, async {
+            tokio::join!(
+                self.child.wait(),
+                async {
+                    while self
+                        .stdout
+                        .next_line()
+                        .await
+                        .expect("drain parent stdout")
+                        .is_some()
+                    {}
+                },
+                async {
+                    use tokio::io::AsyncReadExt;
+                    stderr
+                        .read_to_string(&mut diagnostics)
+                        .await
+                        .expect("drain parent stderr");
+                },
+            )
+        })
+        .await
+        .expect("the parent must exit after its explicit drain");
         drop(self.stdin.take());
-        let stderr = self.stderr().await;
-        (status, stderr)
+        (status.expect("wait"), diagnostics)
     }
 
     /// Closes the protocol input without an owner shutdown.

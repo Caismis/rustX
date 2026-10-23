@@ -1,5 +1,5 @@
 import { materializeSource } from '../../../../../protocol/app-server/source-observation';
-import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../../../../protocol/app-server/v53';
+import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../../../../protocol/app-server/v54';
 import type { AppServerClient } from '../../../client/app-server';
 import type { ClientView } from '../../../client/contracts';
 import type { ProductHostWorkspaces, WorkspaceConfigurationReread } from '../../../workspaces/host';

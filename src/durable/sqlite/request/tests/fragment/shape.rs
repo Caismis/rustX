@@ -168,6 +168,7 @@ pub(super) fn shape_snapshot(store: &SqliteConversationStore, turn: u32) -> Requ
     let history = store.projected_history().unwrap();
     snapshot.history_cut = history.cut;
     let request = ModelRequest {
+        response_schema: None,
         response_byte_limit: None,
         messages: history.messages,
         images: crate::model::images::ResolvedImages::new(),

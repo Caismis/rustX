@@ -18,7 +18,7 @@ import { StepGroup } from '../../presentation/agent/StepGroup';
 import { TurnError } from '../../presentation/agent/TurnError';
 import { RunningStatus } from '../../presentation/agent/RunningStatus';
 import { TurnProcess } from '../../presentation/agent/TurnProcess';
-import type { RuntimeClientSnapshot, RuntimeClientMessageDescriptor, CompletedResponseView, RuntimeClientTranscriptEntry, MessageBlock, InFlightBlock, ForegroundToolExecution } from '../../../../protocol/app-server/v53';
+import type { RuntimeClientSnapshot, RuntimeClientMessageDescriptor, CompletedResponseView, RuntimeClientTranscriptEntry, MessageBlock, InFlightBlock, ForegroundToolExecution } from '../../../../protocol/app-server/v54';
 import { conversation } from '../../bindings/projection';
 import { agentStatusPlacement, isRuntimeStatusContext, statusesAt } from '../../bindings/agent-status';
 import { TranscriptContinuation } from './TranscriptContinuation';
@@ -42,7 +42,7 @@ import { useContentSource } from './ObservationSource';
 import { SourceContent } from './SourceContent';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import type { PublicationHead } from '../../client/publication-heads';
-import type { RuntimeClientProjectionHeadView } from '../../../../protocol/app-server/v53';
+import type { RuntimeClientProjectionHeadView } from '../../../../protocol/app-server/v54';
 /** Standalone Tool-result bodies are suppressed: the native call projection
  * already renders their content beside the call. Suppressing a body does not
  * erase the entry's authoritative transcript position, so a `PostToolBatch`
@@ -324,7 +324,7 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
         })}</>}/>{runPanels}</div>;
     })}
     {blockPages.errors.map(error => <p role="alert" key={error}>{error} <button type="button" onClick={blockPages.retry}>{tx('agent:message.retry-content')}</button></p>)}
-    {descriptors.filter(descriptor=>descriptor.deliveries && (descriptor.identity==null||!durableIds.has(descriptor.identity))).map(descriptor=><DeliveryHead key={`deliveries:${canonicalLocatorKey(descriptor.locator)}`} head={descriptor.deliveries!} messageId={descriptor.identity}/>)}
+    {descriptors.filter(descriptor=>descriptor.deliveries && (descriptor.identity==null||!durableIds.has(descriptor.identity))).map(descriptor=><DeliveryHead key={`deliveries:${canonicalLocatorKey(descriptor.locator)}`} head={descriptor.deliveries!} messageIdentity={descriptor.identity}/>)}
     {descriptors.filter(descriptor => history?.window || descriptor.identity == null || !messages.some(message => message.id === descriptor.identity)).map(descriptor => <section key={canonicalLocatorKey(descriptor.locator)} data-canonical-locator={JSON.stringify(descriptor.locator)}>
       {descriptorOwner(descriptor)}
       <DescriptorContent descriptor={descriptor}/>

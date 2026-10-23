@@ -22,6 +22,7 @@ pub mod openai;
 pub(crate) mod profile;
 pub(crate) mod proposal;
 pub(crate) mod retry;
+pub(crate) mod structured;
 pub mod traits;
 pub mod validation;
 

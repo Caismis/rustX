@@ -50,6 +50,10 @@ pub enum ModelProtocol {
 /// context is settled before an adapter is called.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelRequest {
+    /// Frozen per-call output contract. Ordinary text requests leave this absent.
+    /// Prompt preparation retains the schema for the same local validation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_schema: Option<super::structured::PreparedResponseSchema>,
     /// Native per-response transport allocation budget, before provider parsing.
     /// It is neither provider input nor durable semantic evidence.
     #[serde(skip)]
@@ -240,6 +244,7 @@ impl ModelRequest {
             &self.tools,
             &self.invocation,
             &self.continuation,
+            &self.response_schema,
         ))
         .expect("semantic input serializes");
         format!("{:x}", Sha256::digest(bytes))

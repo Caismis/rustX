@@ -108,7 +108,8 @@ use super::resolver::ResolvedSubagentSpec;
 /// Version 32 combines native attachment input with the frozen Session
 /// workspace path and removes workspace policy and Candidate snapshots.
 /// Both incompatible version-31 formats are rejected before composition.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 33;
+/// Version 34 adds native JSON Schema output to frozen model capabilities in Hello.
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 34;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -1199,7 +1200,7 @@ mod tests {
     }
 
     /// Issue #462 (D07): a version-30 parent spoke a workspace snapshot
-    /// object. That Hello cannot decode under version 33, and a current-shape
+    /// object. That Hello cannot decode under the current version, and a current-shape
     /// Hello naming any other version is not this build's protocol, so the
     /// child refuses both before composing anything.
     #[test]
@@ -1217,7 +1218,7 @@ mod tests {
         old_version["protocolVersion"] = serde_json::json!(30);
         let decoded = serde_json::from_value::<SubagentChildSpec>(old_version).unwrap();
         assert_ne!(decoded.protocol_version, SUBAGENT_IPC_VERSION);
-        assert_eq!(SUBAGENT_IPC_VERSION, 33);
+        assert_eq!(SUBAGENT_IPC_VERSION, 34);
     }
 
     #[test]

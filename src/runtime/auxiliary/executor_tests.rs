@@ -3,6 +3,8 @@ use super::*;
 mod optional_writes;
 #[path = "executor_tests/retries.rs"]
 mod retries;
+#[path = "executor_tests/structured.rs"]
+mod structured;
 use crate::durable::{AuxiliaryStore, CanonicalStore, JournalStore};
 use futures_util::StreamExt as _;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -224,6 +226,7 @@ fn fixture_in_process(
     .summary_invocation()
     .clone();
     let request = ModelRequest {
+        response_schema: None,
         response_byte_limit: None,
         invocation: invocation.invocation_config(),
         messages: vec![ModelInputMessage::Canonical(MessageBlock::User(
@@ -287,7 +290,7 @@ async fn a_private_second_consumer_uses_the_same_confirmed_single_request_execut
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(result.output.unwrap().text, "traduit");
+    assert_eq!(result.output.unwrap().into_text().unwrap().text, "traduit");
     assert!(fixture.adapter.stream_exited.load(Ordering::SeqCst));
     assert_eq!(fixture.adapter.entries.load(Ordering::SeqCst), 1);
     let cut = fixture.store.auxiliary_audit_cut().unwrap();
@@ -647,7 +650,7 @@ async fn saturated_native_owner_retains_permits_through_lost_settlement_ack_and_
                     );
                 } else {
                     assert_eq!(
-                        result.unwrap().output.unwrap().text,
+                        result.unwrap().output.unwrap().into_text().unwrap().text,
                         "traduit",
                         "cancellation after the sealed outcome cannot rewrite successful execution"
                     );
@@ -874,7 +877,10 @@ async fn an_unexited_owner_does_not_block_another_conversations_retirement() {
         .expect("unrelated completed Call must retire before the held owner exits")
         .unwrap()
         .unwrap();
-    assert_eq!(completed.output.unwrap().text, "traduit");
+    assert_eq!(
+        completed.output.unwrap().into_text().unwrap().text,
+        "traduit"
+    );
     assert!(
         lock(&first_record.state).permit.is_some(),
         "the unexited owner must retain its physical permit"
@@ -903,7 +909,10 @@ async fn an_unexited_owner_does_not_block_another_conversations_retirement() {
         .unwrap()
         .unwrap()
         .unwrap();
-    assert_eq!(completed.output.unwrap().text, "traduit");
+    assert_eq!(
+        completed.output.unwrap().into_text().unwrap().text,
+        "traduit"
+    );
     first.executor.drain().await;
     assert!(explicitly_released.load(Ordering::SeqCst));
     assert!(lock(&first_record.state).worker.is_none());
