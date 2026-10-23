@@ -60,27 +60,59 @@ Characterization runs are evidence, not release acceptance. Results and remainin
 failures must be recorded here before claiming this gate has passed. Budgets must
 not be relaxed after seeing measurements.
 
-## Recorded characterization (2026-10-23)
+## Measurement integrity
 
-The resumed pre-merge optimized artifact uses SQLite schema 77 on WSL2 kernel
-`6.18.33.2-microsoft-standard-WSL2`, with 16 logical CPUs and data on its Linux
-filesystem. These sparse runs include an unavailable source repaired after the
-first pass and a native control write during traversal. Both finished with all
-sources available and no pass-bound overrun. They do not satisfy the idle release
-gate or validate the later schema 78 integration.
+Read hooks are used only for explicitly registered test probes. The benchmark
+records `registered_test_probes`, `retained_test_probes` and `probe_integrity`,
+and fails if reading otherwise unregistered conversations creates test probes.
+The release result also requires this integrity check. Ordinary native database
+opens, schema validation, allocation retention and cancellation remain measured.
 
-| Conversations | Cold pass | Warm pass p95 | Foreground read p95 | Steady CPU cores | Steady logical reads | RSS growth |
-| --- | --- | --- | --- | --- | --- | --- |
-| [100](../benchmarks/runtime/scheduler/schema77-sparse-100.json) | 0.776 s | 0.301 s | 4.38 ms | 0.024 | 0.69 MiB/s | 3.67 MiB |
-| [1,000](../benchmarks/runtime/scheduler/schema77-sparse-1000.json) | 8.852 s | 3.111 s | 4.26 ms | 0.103 | 3.43 MiB/s | 27.73 MiB |
+The minimal native reproduction uses three real conversations and one full pass:
 
-Each run observed three complete passes. The original 100-store attempt failed
-on its first foreground read timeout; the unchanged repeat above passed. The
-1,000-store setup took 366.28 seconds and measurement took 74.99 seconds. Another
-chat's native build overlapped part of setup; this chat's merge-validation build
-also ran on the host. These are characterization observations under that load,
-not a clean-host performance claim. Raw JSON preserves CPU, physical read, open,
-write-latency and memory counters.
+```sh
+RUSTX_SCHEDULER_BENCH_SIZE=3 RUSTX_SCHEDULER_BENCH_PASSES=1 \
+RUSTX_SCHEDULER_BENCH_MODE=idle cargo test --offline --release --lib \
+  --all-features measure_native_scheduler_reconciliation -- --ignored --nocapture
+```
 
-The optimized 10,000-store sparse matrix and the ten-minute idle release run
-remain outstanding. The fixed budgets above remain unchanged.
+Before isolation, [the guard failed](../benchmarks/runtime/scheduler/probe-count-red.json):
+one registered probe became three retained probes. After isolation,
+[the same run passed](../benchmarks/runtime/scheduler/probe-count-green.json) with
+one registered and one retained probe. These small runs validate the measurement
+fixture; their CPU/latency samples are not release evidence.
+
+## Diagnostic measurements (2026-10-23)
+
+The following schema 78 sparse runs used the native historical-seed fixture on
+WSL2 kernel `6.18.33.2-microsoft-standard-WSL2`, with 16 logical CPUs and data on
+its Linux filesystem. Each observed three complete passes, repaired its injected
+unavailable source, finished with all sources available and reported no pass-bound
+overrun. They preceded probe isolation: the scan allocated the full per-target
+test fixture for every conversation. That overhead is absent from production,
+so these records cannot establish the production resource gate.
+
+| Conversations | Cold pass | Warm pass p95 | Foreground read p95 | Steady CPU cores | RSS growth |
+| --- | --- | --- | --- | --- | --- |
+| [100](../benchmarks/runtime/scheduler/schema78-instrumented-sparse-100.json) | 0.664 s | 0.313 s | 4.31 ms | 0.023 | 3.93 MiB |
+| [1,000](../benchmarks/runtime/scheduler/schema78-instrumented-sparse-1000.json) | 7.092 s | 2.967 s | 4.63 ms | 0.103 | 16.78 MiB |
+| [10,000](../benchmarks/runtime/scheduler/schema78-instrumented-sparse-10000.json) | 86.040 s | 30.639 s | 5.69 ms | 0.508 | 128.65 MiB |
+
+The 10,000-store fixture took 756.60 seconds to prepare and 207.07 seconds to
+measure. Steady logical reads were 17.15 MiB/s and physical reads were zero;
+startup physical reads are reported separately in the raw JSON. The 30.639-second
+warm result, 0.508-core steady CPU and 128.65-MiB growth are diagnostic observations,
+not passed budgets. No budget has been relaxed.
+
+Earlier schema 77 [100-store](../benchmarks/runtime/scheduler/schema77-sparse-100.json)
+and [1,000-store](../benchmarks/runtime/scheduler/schema77-sparse-1000.json) records
+are retained as pre-integration characterization. The first 100-store attempt
+failed on a foreground read timeout; its unchanged repeat passed. Native builds
+overlapped the 1,000-store setup/measurement. Those records also include automatic
+test probes and do not establish acceptance for schema 78.
+
+## Release status
+
+The corrected optimized scale matrix and the 10,000-store idle run with at least
+ten passes and 600 seconds remain required. The resource gate is not accepted
+until a run with `probe_integrity: true` passes every fixed budget above.

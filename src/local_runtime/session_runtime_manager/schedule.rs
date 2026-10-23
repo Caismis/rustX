@@ -179,11 +179,22 @@ impl SessionRuntimeManager {
             };
             let clock = self.schedule_clock.clone();
             #[cfg(test)]
-            let probe = self.probe(&binding.conversation_id);
+            // Only explicitly registered read hooks belong in this path. Creating
+            // the full per-target fixture here distorts native scale measurements.
+            let probe = self
+                .registry
+                .0
+                .lock()
+                .expect("registry mutex")
+                .probes
+                .get(&binding.conversation_id)
+                .cloned();
             tokio::task::spawn_blocking(move || {
                 let _permit = permit;
                 #[cfg(test)]
-                tokio::runtime::Handle::current().block_on(probe.schedule_native_read.park());
+                if let Some(probe) = &probe {
+                    tokio::runtime::Handle::current().block_on(probe.schedule_native_read.park());
+                }
                 scope.check().map_err(error)?;
                 let access = plan.open().map_err(error)?;
                 scope.check().map_err(error)?;
@@ -198,9 +209,10 @@ impl SessionRuntimeManager {
                     .execute(&store, &binding, clock.as_ref())
                     .map_err(error);
                 #[cfg(test)]
-                if probe
-                    .pause_schedule_read_return
-                    .swap(false, Ordering::SeqCst)
+                if let Some(probe) = probe
+                    && probe
+                        .pause_schedule_read_return
+                        .swap(false, Ordering::SeqCst)
                 {
                     tokio::runtime::Handle::current().block_on(probe.schedule_read_return.park());
                 }

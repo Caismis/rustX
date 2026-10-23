@@ -457,8 +457,12 @@ to the scheduled-start contract; none alone proves that a start can be replayed.
 The existing `AttemptSubagentContext`, `WorkflowRunId` and Workflow read model
 are tied to an Attempt and an outer ToolCall. S4b must introduce the planned
 native Tool/Scheduled origin before sharing the executor. A synthetic Human
-Attempt or ToolCall is not an implementation of a scheduled origin. Direct Tool
-execution must retain native approval, deadline, cancellation and settlement;
+Attempt or ToolCall is not an implementation of a scheduled origin. `PreToolView`,
+`NativeInvocationServices`, `InteractionRequest` and `ApprovalFacts` also assume
+an Attempt and a model turn. The origin change must reach native approval
+publication, response authorization and interaction projections, using the real
+scheduled start/run identity rather than a sentinel Attempt or turn zero. Direct
+Tool execution must retain native approval, deadline, cancellation and settlement;
 Agent nodes must retain the existing registry's child ownership protocol.
 
 S4a remains unaccepted until the native preparation path supplies the additional
