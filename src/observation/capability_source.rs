@@ -306,6 +306,9 @@ fn source_view<'a>(
             crate::capabilities::CapabilitySourceState::Unprepared => {
                 super::capability_source::CapabilitySourceStateView::Unprepared
             }
+            crate::capabilities::CapabilitySourceState::Connecting { cached } => {
+                super::capability_source::CapabilitySourceStateView::Connecting { cached: *cached }
+            }
             crate::capabilities::CapabilitySourceState::Ready => {
                 super::capability_source::CapabilitySourceStateView::Ready
             }
@@ -461,9 +464,10 @@ pub enum CapabilitySourceDescriptor {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub enum CapabilitySourceStateView {
-    /// Prospective coordinator state before first preparation. Normal Session
-    /// composition completes preparation before publishing this projection.
+    /// Prospective coordinator state before source preparation begins.
     Unprepared,
+    /// Discovery is running; cached declarations do not imply live connectivity.
+    Connecting { cached: bool },
     /// The source initialized; its capabilities are usable.
     Ready,
     /// Preparation failed. External failure payloads are private owner data.
@@ -523,4 +527,27 @@ pub struct RuntimeClientSkill {
     /// a Skill package is an ordinary host directory, and the same path
     /// serves Read, Bash, Grep, and Glob alike.
     pub location: String,
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn connecting_projection_preserves_metadata_provenance_without_claiming_readiness() {
+        let source = crate::capabilities::ToolSourceId::Mcp(
+            crate::runtime::identity::McpServerId::new("optional"),
+        );
+        for cached in [false, true] {
+            let state = crate::capabilities::CapabilitySourceState::Connecting { cached };
+            let wire = serde_json::to_value(super::source_view(&source, &state)).unwrap();
+            assert_eq!(
+                wire["state"],
+                serde_json::json!({"type": "connecting", "cached": cached})
+            );
+            let view: super::CapabilitySourceView = serde_json::from_value(wire).unwrap();
+            assert_eq!(
+                view.state,
+                super::CapabilitySourceStateView::Connecting { cached }
+            );
+        }
+    }
 }

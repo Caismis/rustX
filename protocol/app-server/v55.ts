@@ -4280,6 +4280,9 @@ export type SourceResolutionFailure =
       kind: 'unprepared';
     }
   | {
+      kind: 'pending';
+    }
+  | {
       kind: 'unavailable';
       detail: {};
     };
@@ -4348,6 +4351,10 @@ export type WorkflowDependencyFailure =
 export type SourceInspection =
   | {
       status: 'unprepared';
+    }
+  | {
+      cached: boolean;
+      status: 'connecting';
     }
   | {
       status: 'ready';
@@ -7612,6 +7619,10 @@ export type CapabilitySourceDescriptor =
 export type CapabilitySourceStateView =
   | {
       type: 'unprepared';
+    }
+  | {
+      cached: boolean;
+      type: 'connecting';
     }
   | {
       type: 'ready';
@@ -13622,6 +13633,10 @@ export interface CapabilitySourceView {
   state:
     | {
         type: 'unprepared';
+      }
+    | {
+        cached: boolean;
+        type: 'connecting';
       }
     | {
         type: 'ready';

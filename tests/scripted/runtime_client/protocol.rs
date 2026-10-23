@@ -421,7 +421,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
         assert!(response.error.is_none());
     }
 
-    // Every previous generation, including v54 with its retired Session
+    // Every previous generation, including v55 with its retired Session
     // catalog requests, is rejected.
     for requested in 0..rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION {
         assert!(matches!(host.attach(requested),

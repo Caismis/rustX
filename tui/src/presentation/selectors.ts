@@ -314,6 +314,11 @@ export function unavailableCapabilities(
   );
 }
 
+/** Discovery status comes from native; cached declarations remain connecting. */
+export function connectingCapabilities(state: PresentationState): CapabilitySourceView[] {
+  return (state.capabilities.sources ?? []).filter(source => source.state.type === 'connecting');
+}
+
 /** A compact capability summary line for one resolved invocation. */
 export function capabilitySummary(invocation: ModelInvocationView): string {
   const parts = [

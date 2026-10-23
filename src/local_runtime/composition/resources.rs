@@ -36,6 +36,12 @@ pub(crate) struct LocalRuntimeResourceLoader {
 }
 
 impl LocalRuntimeResourceLoader {
+    pub(super) fn initial_capture(
+        &self,
+    ) -> crate::local_runtime::configuration::ProspectiveSessionConfig {
+        (*self.paths).clone()
+    }
+
     pub(super) fn new(
         paths: AdmittedSessionConfig,
         native_resources: NativeToolResources,
@@ -57,6 +63,26 @@ impl LocalRuntimeResourceLoader {
         capability: &'a CapabilityCoordinator,
         capture: crate::local_runtime::configuration::ProspectiveSessionConfig,
         preparation_cancellation: &'a crate::runtime::cancellation::CancellationSignal,
+    ) -> BoxFuture<'a, Result<PreparedRuntimeResources, RuntimeResourceLoadError>> {
+        self.prepare_mode(capability, capture, preparation_cancellation, false)
+    }
+
+    pub(crate) fn prepare_readiness<'a>(
+        &'a self,
+        capability: &'a CapabilityCoordinator,
+        capture: crate::local_runtime::configuration::ProspectiveSessionConfig,
+        preparation_cancellation: &'a crate::runtime::cancellation::CancellationSignal,
+    ) -> BoxFuture<'a, Result<PreparedRuntimeResources, RuntimeResourceLoadError>> {
+        self.prepare_mode(capability, capture, preparation_cancellation, true)
+    }
+
+    #[allow(clippy::too_many_lines)] // one atomic candidate construction pipeline
+    fn prepare_mode<'a>(
+        &'a self,
+        capability: &'a CapabilityCoordinator,
+        capture: crate::local_runtime::configuration::ProspectiveSessionConfig,
+        preparation_cancellation: &'a crate::runtime::cancellation::CancellationSignal,
+        readiness: bool,
     ) -> BoxFuture<'a, Result<PreparedRuntimeResources, RuntimeResourceLoadError>> {
         Box::pin(async move {
             let config = capture.config.as_ref();
@@ -105,35 +131,42 @@ impl LocalRuntimeResourceLoader {
             };
             let mcp_servers = captured_mcp_bindings(config, &self.paths.credentials)
                 .map_err(|error| RuntimeResourceLoadError::new(error.to_string()))?;
-            let mut candidate = capability
-                .prepare_captured_inputs(
-                    CapabilityResourceInputs {
-                        source_demand: admitted_source_demand(
-                            config,
-                            &subagents,
-                            &workflows,
-                            managed_python.clone(),
-                        ),
-                        base_tool_registry: Arc::new(registry),
-                        agent_activation: AgentActivation {
-                            profile: config.agent.clone(),
-                            admitted_agents: subagents.names().into_iter().cloned().collect(),
-                            admitted_workflows: workflows.entries().keys().cloned().collect(),
-                            project_files: capture.root_agent_project_files.clone(),
-                        },
-                        skill_discovery,
-                        mcp_servers,
-                        base_environment,
-                    },
-                    capture.skill_discovery.clone(),
-                    preparation_cancellation,
-                )
-                .await
-                .map_err(|error| {
-                    RuntimeResourceLoadError::new(format!(
-                        "cannot prepare candidate capability resources: {error}"
-                    ))
-                })?;
+            let inputs = CapabilityResourceInputs {
+                source_demand: admitted_source_demand(
+                    config,
+                    &subagents,
+                    &workflows,
+                    managed_python.clone(),
+                ),
+                base_tool_registry: Arc::new(registry),
+                agent_activation: AgentActivation {
+                    profile: config.agent.clone(),
+                    admitted_agents: subagents.names().into_iter().cloned().collect(),
+                    admitted_workflows: workflows.entries().keys().cloned().collect(),
+                    project_files: capture.root_agent_project_files.clone(),
+                },
+                skill_discovery,
+                mcp_servers,
+                base_environment,
+            };
+            let prepared = if readiness {
+                capability
+                    .prepare_ready_captured_inputs(inputs, preparation_cancellation)
+                    .await
+            } else {
+                capability
+                    .prepare_captured_inputs(
+                        inputs,
+                        capture.skill_discovery.clone(),
+                        preparation_cancellation,
+                    )
+                    .await
+            };
+            let mut candidate = prepared.map_err(|error| {
+                RuntimeResourceLoadError::new(format!(
+                    "cannot prepare candidate capability resources: {error}"
+                ))
+            })?;
             validate_workflow_tool_name_collisions(&candidate, &workflows)?;
             candidate
                 .admit_workflows(&mut workflows, &subagents, &self.workflow_runtime)
@@ -184,6 +217,17 @@ pub(in crate::local_runtime) fn admitted_source_demand(
                 .filter_map(|selector| selector.source().cloned()),
         );
     }
+    sources.extend(workflow_source_demand(config, agents, workflows));
+    crate::capabilities::source::ToolSourceDemand::new(sources, python)
+}
+
+/// Enabled Workflow contracts require complete live definitions before admission.
+pub(super) fn workflow_source_demand(
+    config: &CurrentRuntimeConfig,
+    agents: &crate::runtime::subagent::AgentCatalog,
+    workflows: &WorkflowCatalog,
+) -> BTreeSet<crate::capabilities::ToolSourceId> {
+    let mut sources = BTreeSet::new();
     for (id, entry) in workflows.entries() {
         if !config.agent.workflows.contains(id) {
             continue;
@@ -212,7 +256,7 @@ pub(in crate::local_runtime) fn admitted_source_demand(
             }
         }
     }
-    crate::capabilities::source::ToolSourceDemand::new(sources, python)
+    sources
 }
 
 pub(crate) fn captured_mcp_bindings(

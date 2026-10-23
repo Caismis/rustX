@@ -253,6 +253,7 @@ impl ToolSelectionDocument {
 pub enum SourceResolutionFailure {
     Undefined,
     Unprepared,
+    Pending,
     Unavailable {
         #[serde(skip)]
         reason: String,
@@ -263,6 +264,7 @@ impl std::fmt::Display for SourceResolutionFailure {
         match self {
             Self::Undefined => f.write_str("source is not defined or discovered"),
             Self::Unprepared => f.write_str("source is eligible but not prepared"),
+            Self::Pending => f.write_str("source is still connecting"),
             Self::Unavailable { reason } => f.write_str(reason),
         }
     }
@@ -330,12 +332,17 @@ pub fn source_state(
     match availability.get(source) {
         None => Err(SourceResolutionFailure::Undefined),
         Some(CapabilitySourceState::Unprepared) => Err(SourceResolutionFailure::Unprepared),
+        Some(CapabilitySourceState::Connecting { cached: false }) => {
+            Err(SourceResolutionFailure::Pending)
+        }
         Some(CapabilitySourceState::Unavailable { reason }) => {
             Err(SourceResolutionFailure::Unavailable {
                 reason: reason.clone(),
             })
         }
-        Some(CapabilitySourceState::Ready) => Ok(()),
+        Some(CapabilitySourceState::Ready | CapabilitySourceState::Connecting { cached: true }) => {
+            Ok(())
+        }
     }
 }
 
@@ -674,6 +681,10 @@ mod tests {
                     SourceResolutionFailure::Unprepared,
                 ),
                 (
+                    Some(CapabilitySourceState::Connecting { cached: false }),
+                    SourceResolutionFailure::Pending,
+                ),
+                (
                     Some(CapabilitySourceState::unavailable("offline")),
                     SourceResolutionFailure::Unavailable {
                         reason: "offline".into(),
@@ -701,6 +712,28 @@ mod tests {
             SourceToolResolution::Ready {
                 selected: vec![],
                 missing_exact: vec!["missing".into()]
+            }
+        );
+    }
+    #[test]
+    fn cached_connecting_source_resolves_only_its_frozen_definitions() {
+        let source = ToolSourceId::Mcp(McpServerId::new("github"));
+        let tools = [source_definition(&source, "a")];
+        let availability = [(
+            source.clone(),
+            CapabilitySourceState::Connecting { cached: true },
+        )]
+        .into();
+        assert_eq!(
+            resolve_source(
+                &source,
+                &SourceToolSelection::Exact(vec!["a".into(), "missing".into()]),
+                &tools,
+                &availability,
+            ),
+            SourceToolResolution::Ready {
+                selected: vec![&tools[0]],
+                missing_exact: vec!["missing".into()],
             }
         );
     }

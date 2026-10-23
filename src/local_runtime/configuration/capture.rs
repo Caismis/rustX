@@ -210,6 +210,7 @@ impl UserConfigManager {
             process,
             revision,
             context,
+            refresh_capabilities: false,
         })
     }
 

@@ -133,6 +133,18 @@ preparation failed; it does not enumerate and fail all Preparing units. Componen
 manifest identities follow Capabilities, Instructions and Provider through mixed
 composition in both the retained descriptor and execution resource snapshot.
 
+MCP startup readiness follows these same application and adoption rules. A
+pending source's initializer can complete discovery without editing the current
+Tool registry or an admitted Attempt. Its completion signals the native
+configuration owner to prepare a complete candidate from the already-owned
+connections: completed sources contribute their live result and pending siblings
+retain their frozen declarations and Connecting state. A cached source's terminal
+failure becomes Unavailable through the same adoption boundary. Changes to model-facing
+tool definitions retain the ordinary request-shape and context-adoption effects;
+the process-local inert catalog hint never supplies an alternative Session
+configuration or permission grant. Native inspection distinguishes a connecting
+source with cached declarations from a live ready source.
+
 `ProspectiveSessionConfig::admitted_agent_dependencies` owns the Agent dependency
 set: directly selected Root Agents plus profiles referenced by every selected
 Workflow's Agent nodes, including nested nodes and invocation overrides. Capability

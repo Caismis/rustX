@@ -146,6 +146,9 @@ pub(crate) struct CapturedApplication {
     pub(crate) process: super::super::app_server_policy::AppServerPolicy,
     pub(crate) revision: String,
     pub(crate) context: Result<super::ProspectiveSessionConfig, String>,
+    /// Live source readiness can change a tool catalog without changing any
+    /// authored byte. It still uses this owner's ordinary preparation/adoption.
+    pub(crate) refresh_capabilities: bool,
 }
 
 impl std::fmt::Debug for ApplicationState {
@@ -529,6 +532,64 @@ impl ApplicationState {
         identity
     }
 
+    /// Reconsider the adopted source's live MCP directory. This cannot
+    /// overwrite a newer source/configuration application: that application
+    /// already owns preparation of the newer complete closure.
+    pub(crate) fn capture_capability_readiness(
+        &mut self,
+        scope: &str,
+        adopted: &super::AdmittedSessionConfig,
+        process: super::super::app_server_policy::AppServerPolicy,
+    ) -> bool {
+        let source = &adopted.input.cwd;
+        let compatible = |input: &Result<CapturedApplication, String>| {
+            input
+                .as_ref()
+                .ok()
+                .and_then(|input| input.context.as_ref().ok())
+                .is_some_and(|context| context.same_capabilities(adopted))
+        };
+        if self
+            .inputs
+            .get(scope)
+            .is_some_and(|input| !compatible(input))
+            || self
+                .desired_sources
+                .get(source)
+                .is_some_and(|input| !compatible(input))
+        {
+            return false;
+        }
+        // A newer captured context/model may already be pending. Reprepare
+        // that exact input with its own identities; readiness must not roll
+        // it back to the older adopted context merely to add tools.
+        let latest = self
+            .inputs
+            .get(scope)
+            .or_else(|| self.desired_sources.get(source))
+            .cloned();
+        let revision = super::capture::source_manifest_revision(&adopted.source_revisions);
+        let mut capture = latest
+            .and_then(Result::ok)
+            .unwrap_or_else(|| CapturedApplication {
+                policy: super::IndependentPolicy {
+                    config: adopted.config.as_ref().clone(),
+                    effective: adopted.effective.clone(),
+                    provenance: adopted.provenance.clone(),
+                    revision: revision.clone(),
+                },
+                process,
+                revision,
+                context: Ok((**adopted).clone()),
+                refresh_capabilities: true,
+            });
+        capture.refresh_capabilities = true;
+        self.scope_sources.insert(scope.to_owned(), source.clone());
+        self.own_scope(scope, source);
+        self.capture_binding(scope.to_owned(), Ok(capture));
+        true
+    }
+
     /// Reconsider an existing captured source after explicit Session intent
     /// changes. Selection never ingests source files or adopts pending context.
     pub(crate) fn selection_changed(
@@ -727,6 +788,15 @@ impl ApplicationState {
             return false;
         }
         let outcome = commit();
+        if unit == ApplyUnit::Capabilities
+            && outcome == UnitApplication::Applied
+            && let Some(Ok(input)) = self.inputs.get_mut(scope)
+        {
+            // A pending Ready candidate still owes adoption, so its live
+            // catalog cause survives model-selection recapture. Successful
+            // adoption consumes it; later context-only edits need no refetch.
+            input.refresh_capabilities = false;
+        }
         self.version = self
             .version
             .checked_add(1)

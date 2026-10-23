@@ -98,6 +98,7 @@ pub enum WorkflowInspection {
 #[derive(schemars::JsonSchema)]
 pub enum SourceInspection {
     Unprepared,
+    Connecting { cached: bool },
     Ready,
     Unavailable,
 }
@@ -376,6 +377,9 @@ impl CapabilityInspection {
                         id.clone(),
                         match state {
                             CapabilitySourceState::Unprepared => SourceInspection::Unprepared,
+                            CapabilitySourceState::Connecting { cached } => {
+                                SourceInspection::Connecting { cached: *cached }
+                            }
                             CapabilitySourceState::Ready => SourceInspection::Ready,
                             CapabilitySourceState::Unavailable { .. } => {
                                 SourceInspection::Unavailable
@@ -528,6 +532,17 @@ mod tests {
         let unavailable = resolve(CapabilitySourceState::unavailable(
             "SECRET_EXTERNAL_FAILURE",
         ));
+        for cached in [false, true] {
+            let connecting = resolve(CapabilitySourceState::Connecting { cached });
+            assert_eq!(
+                connecting.sources[&source],
+                SourceInspection::Connecting { cached }
+            );
+            assert_eq!(
+                serde_json::to_value(&connecting).unwrap()["sources"]["optional"],
+                serde_json::json!({"status": "connecting", "cached": cached})
+            );
+        }
         let missing = resolve(CapabilitySourceState::Ready);
         assert!(matches!(
             unavailable.main.as_ref().unwrap().diagnostics[0],

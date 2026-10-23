@@ -64,7 +64,10 @@
 //! # Ordering
 //!
 //! Composition follows a fixed order, and the initial capability candidate
-//! is **prepared and committed before the runtime activates**. A *core*
+//! is **prepared and committed before the runtime activates**. Optional Root
+//! MCP sources may be Connecting after the bounded startup grace; their
+//! initializers already own the same counted lifecycle the runtime activates.
+//! Complete Workflow dependencies still finish live validation first. A *core*
 //! composition failure therefore never leaves a partially initialized
 //! runtime: composition returns an error before any client can attach.
 //!
@@ -81,11 +84,11 @@
 //!
 //! Failures of **optional external capability sources** — each configured
 //! MCP server and each managed Python tool package independently — are
-//! isolated by the capability plane itself (`prepare_candidate` records
+//! isolated by the capability plane itself (preparation records
 //! them as typed [`CapabilitySourceState::Unavailable`](crate::capabilities::CapabilitySourceState)
 //! state instead of failing the candidate). The runtime therefore starts
 //! with, e.g., native tools ready, one MCP server unavailable and another
-//! ready; the base/native capability set is never
+//! ready, with slower optional sources Connecting; the base/native capability set is never
 //! conditional on an optional source, and one optional source's failure
 //! never suppresses another. The Runtime Client projection carries the
 //! typed availability state, so a client observes the reason instead of an
@@ -578,123 +581,165 @@ impl LocalConversationCore {
                 detail: format!("{error:?}"),
             })?;
 
-            // 10-11. Build one complete candidate off-side before publishing any
-            // capability or resource state. The named-subagent catalog, its two
-            // admission domains, the discovered Workflow programs, project
-            // instructions, and the capability candidate are validated as one
-            // coherent generation. Optional-source failures (individual MCP
-            // servers, including managed Python packages) remain typed
-            // availability state inside `prepare_candidate` (Issue #81); base
-            // capability failures remain fatal.
-            let mut candidate = capability
-                .prepare_captured_candidate(paths.skill_discovery.clone())
-                .await
-                .map_err(|error| LocalRuntimeError::Capability {
-                    detail: format!("{error:?}"),
-                })?;
-            validate_workflow_tool_name_collisions(&candidate, &workflows).map_err(|error| {
-                LocalRuntimeError::Capability {
-                    detail: error.to_string(),
-                }
-            })?;
-            candidate
-                .admit_workflows(&mut workflows, &subagent_catalog, &workflow_runtime)
-                .map_err(|detail| LocalRuntimeError::Capability { detail })?;
-            let prepared = PreparedRuntimeResources::new(
-                project_context_files,
-                None,
-                crate::context::ContextAssembly::new(),
-                candidate,
-            )
-            .with_subagent_catalog(subagent_catalog)
-            .with_workflow_catalog(workflows)
-            .with_managed_python_catalog(paths.managed_python.clone())
-            .with_configuration(crate::runtime::resources::RuntimeConfiguration {
-                resource_definitions: paths.inspection.definitions.clone(),
-                resource_diagnostics: paths.inspection.resource_diagnostics.clone(),
-                config: Arc::new(runtime_config.clone()),
-                models: registry.clone(),
-                authored: paths.authored(),
-            });
-            validate_subagent_catalog(&prepared, &registry).map_err(|error| {
-                LocalRuntimeError::Capability {
-                    detail: error.to_string(),
-                }
-            })?;
-            // This is the sole startup publication boundary. Every value below
-            // was admitted against the exact candidate that is now committed,
-            // so startup cannot expose a capability generation whose subagent or
-            // Workflow catalog belongs to another configuration generation.
-            let (candidate, resource_data) = prepared.into_parts();
-            let capability_snapshot =
-                capability
-                    .commit(candidate)
-                    .map_err(|error| LocalRuntimeError::Capability {
-                        detail: format!("{error:?}"),
+            let startup_owner = capability.clone();
+            let outcome = async {
+                // 10-11. Build one complete candidate off-side before publishing any
+                // capability or resource state. The named-subagent catalog, its two
+                // admission domains, the discovered Workflow programs, project
+                // instructions, and the capability candidate are validated as one
+                // coherent generation. Optional-source failures (individual MCP
+                // servers, including managed Python packages) remain typed
+                // availability state inside `prepare_candidate` (Issue #81); base
+                // capability failures remain fatal.
+                let mut retried = false;
+                let (capability_snapshot, resource_data) = loop {
+                    workflows = paths.workflows.as_ref().clone();
+                    let mut candidate = capability
+                        .prepare_startup_candidate(
+                            paths.skill_discovery.clone(),
+                            resources::workflow_source_demand(
+                                &runtime_config,
+                                &paths.subagents,
+                                &workflows,
+                            ),
+                        )
+                        .await
+                        .map_err(|error| LocalRuntimeError::Capability {
+                            detail: format!("{error:?}"),
+                        })?;
+                    validate_workflow_tool_name_collisions(&candidate, &workflows).map_err(
+                        |error| LocalRuntimeError::Capability {
+                            detail: error.to_string(),
+                        },
+                    )?;
+                    candidate
+                        .admit_workflows(&mut workflows, &subagent_catalog, &workflow_runtime)
+                        .map_err(|detail| LocalRuntimeError::Capability { detail })?;
+                    let prepared = PreparedRuntimeResources::new(
+                        project_context_files.clone(),
+                        None,
+                        crate::context::ContextAssembly::new(),
+                        candidate,
+                    )
+                    .with_subagent_catalog(subagent_catalog.clone())
+                    .with_workflow_catalog(workflows.clone())
+                    .with_managed_python_catalog(paths.managed_python.clone())
+                    .with_configuration(
+                        crate::runtime::resources::RuntimeConfiguration {
+                            resource_definitions: paths.inspection.definitions.clone(),
+                            resource_diagnostics: paths.inspection.resource_diagnostics.clone(),
+                            config: Arc::new(runtime_config.clone()),
+                            models: registry.clone(),
+                            authored: paths.authored(),
+                        },
+                    );
+                    validate_subagent_catalog(&prepared, &registry).map_err(|error| {
+                        LocalRuntimeError::Capability {
+                            detail: error.to_string(),
+                        }
                     })?;
-            let resources = Arc::new(RuntimeResourceSnapshot::from_prepared(
-                RuntimeResourceRevision::new(1),
-                resource_data,
-                capability_snapshot,
-            ));
-            let resource_loader = Arc::new(LocalRuntimeResourceLoader::new(
-                paths.clone(),
-                native_resources,
-                dependencies
-                    .credentials
-                    .clone()
-                    .unwrap_or_else(|| Arc::new(paths.credentials.clone())),
-                workflow_runtime,
-            ));
+                    // This is the sole startup publication boundary. Every value below
+                    // was admitted against the exact candidate that is now committed,
+                    // so startup cannot expose a capability generation whose subagent or
+                    // Workflow catalog belongs to another configuration generation.
+                    let (candidate, resource_data) = prepared.into_parts();
+                    match capability.commit(candidate) {
+                        Ok(snapshot) => break (snapshot, resource_data),
+                        Err(crate::capabilities::CapabilityCommitError::StaleMcpCandidate {
+                            ..
+                        }) if !retried => {
+                            retried = true;
+                            capability
+                                .settle_rejected_startup()
+                                .await
+                                .map_err(|error| LocalRuntimeError::Capability {
+                                    detail: error.to_string(),
+                                })?;
+                        }
+                        Err(error) => {
+                            return Err(LocalRuntimeError::Capability {
+                                detail: format!("{error:?}"),
+                            });
+                        }
+                    }
+                };
+                let resources = Arc::new(RuntimeResourceSnapshot::from_prepared(
+                    RuntimeResourceRevision::new(1),
+                    resource_data,
+                    capability_snapshot,
+                ));
+                let resource_loader = Arc::new(LocalRuntimeResourceLoader::new(
+                    paths.clone(),
+                    native_resources,
+                    dependencies
+                        .credentials
+                        .clone()
+                        .unwrap_or_else(|| Arc::new(paths.credentials.clone())),
+                    workflow_runtime,
+                ));
 
-            // Reopening a selected lineage must re-supply only its immutable
-            // bootstrap prefix to ConversationRuntime. Later canonical turns are
-            // recovered by the runtime itself; passing the whole transcript here
-            // would incorrectly change the store's bootstrap identity.
-            let initial_messages = tool_runtime
-                .durable_store()
-                .load_bootstrap_history()
-                .map_err(|error| LocalRuntimeError::ToolRuntime {
-                    detail: error.to_string(),
+                // Reopening a selected lineage must re-supply only its immutable
+                // bootstrap prefix to ConversationRuntime. Later canonical turns are
+                // recovered by the runtime itself; passing the whole transcript here
+                // would incorrectly change the store's bootstrap identity.
+                let initial_messages = tool_runtime
+                    .durable_store()
+                    .load_bootstrap_history()
+                    .map_err(|error| LocalRuntimeError::ToolRuntime {
+                        detail: error.to_string(),
+                    })?;
+
+                // 12-13. The context policy/estimator/status pieces and the one
+                // authoritative conversation runtime coordinator, constructed
+                // **inactive**: the final composition path activates it after the
+                // optional Runtime Client host binds.
+                let runtime = ConversationRuntime::new_session_owned(RuntimeConversationConfig {
+                    explicit_model: session_state.model.is_some(),
+                    agent_id: runtime_config.agent_id.clone(),
+                    model,
+                    approval_mode: runtime_config.approval_mode,
+                    model_timeout_policy,
+                    tool_deadline_policy,
+                    context: ConversationContextConfig {
+                        policy: runtime_config.context_policy(),
+                        estimator: Arc::clone(&dependencies.estimator),
+                        // The root Agent's frozen native Agent Extension composition
+                        // is materialized here, once, and never again (Issue #256).
+                        // Its Todo half was materialized alongside the conversation's
+                        // other owned resources in the tool runtime above.
+                        status_engine: extensions
+                            .agent_status_engine(Arc::new(crate::context::SystemClock)),
+                    },
+                    tool_runtime: tool_runtime.clone(),
+                    capability: capability.clone(),
+                    resources,
+                    clock: None,
+                    initial_messages,
+                    subagents: Some(subagents),
+                    workflow_output: None,
                 })?;
 
-            // 12-13. The context policy/estimator/status pieces and the one
-            // authoritative conversation runtime coordinator, constructed
-            // **inactive**: the final composition path activates it after the
-            // optional Runtime Client host binds.
-            let runtime = ConversationRuntime::new_session_owned(RuntimeConversationConfig {
-                explicit_model: session_state.model.is_some(),
-                agent_id: runtime_config.agent_id.clone(),
-                model,
-                approval_mode: runtime_config.approval_mode,
-                model_timeout_policy,
-                tool_deadline_policy,
-                context: ConversationContextConfig {
-                    policy: runtime_config.context_policy(),
-                    estimator: Arc::clone(&dependencies.estimator),
-                    // The root Agent's frozen native Agent Extension composition
-                    // is materialized here, once, and never again (Issue #256).
-                    // Its Todo half was materialized alongside the conversation's
-                    // other owned resources in the tool runtime above.
-                    status_engine: extensions
-                        .agent_status_engine(Arc::new(crate::context::SystemClock)),
-                },
-                tool_runtime: tool_runtime.clone(),
-                capability: capability.clone(),
-                resources,
-                clock: None,
-                initial_messages,
-                subagents: Some(subagents),
-                workflow_output: None,
-            })?;
-
-            Ok(Self {
-                runtime,
-                tool_runtime,
-                capability,
-                workflow_output: None,
-                resource_loader: Some(resource_loader),
-            })
+                Ok(Self {
+                    runtime,
+                    tool_runtime,
+                    capability,
+                    workflow_output: None,
+                    resource_loader: Some(resource_loader),
+                })
+            }
+            .await;
+            if outcome.is_err() {
+                let failures = startup_owner.settle_failed_startup().await;
+                if !failures.is_empty() {
+                    return Err(LocalRuntimeError::Capability {
+                        detail: format!(
+                            "startup failed and MCP settlement failed: {}",
+                            failures.join("; ")
+                        ),
+                    });
+                }
+            }
+            outcome
         })
         .await
     }

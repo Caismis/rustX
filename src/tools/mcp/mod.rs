@@ -130,6 +130,7 @@
 #[doc(hidden)]
 pub mod fixture;
 
+pub(crate) mod catalog_cache;
 mod connect;
 mod connection;
 mod dispatch;
@@ -169,14 +170,14 @@ use crate::tools::limits::bounded_text_preview;
 use crate::tools::types::ToolInvocationPolicy;
 
 pub(crate) use connect::OwnedConnect;
-pub(crate) use connection::McpConnection;
+pub(crate) use connection::{McpCatalogStartup, McpConnection};
 pub(crate) use executor::definitions_owned_for_source;
 pub use executor::{
     CanonicalMcpTool, McpToolExecutor, definitions, mcp_tool_id, source_server_id,
     source_tool_identity,
 };
 pub(crate) use generation::{
-    McpRuntimeGeneration, McpRuntimeLeaseAuthority, McpRuntimeLeaseSet,
+    McpRuntimeBinding, McpRuntimeGeneration, McpRuntimeLeaseAuthority, McpRuntimeLeaseSet,
     McpRuntimeRetirementRegistry,
 };
 pub use invalidation::{McpInvalidationGuard, McpInvalidationState};

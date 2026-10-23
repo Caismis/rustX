@@ -4,7 +4,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { RuntimeClientSnapshot, Model, Request1, SourceSettings } from '../../protocol/app-server/v54';
+import type { RuntimeClientSnapshot, Model, Request1, SourceSettings } from '../../protocol/app-server/v55';
 type CapabilityInspection = NonNullable<NonNullable<RuntimeClientSnapshot['resources']>['inspection']>;
 import { settingsTransactionOwners } from '../src/app/settings/Settings';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
@@ -249,6 +249,8 @@ function observationInventory(): CapabilityInspection {
     definitions: [
       { family: 'mcp', name: 'ready-mcp', valid: true, location: at('mcp.toml') },
       { family: 'mcp', name: 'idle-mcp', valid: true, location: at('mcp.toml') },
+      { family: 'mcp', name: 'pending-mcp', valid: true, location: at('mcp.toml') },
+      { family: 'mcp', name: 'cached-mcp', valid: true, location: at('mcp.toml') },
       { family: 'mcp', name: 'down-mcp', valid: true, location: at('mcp.toml') },
       { family: 'mcp', name: 'unseen-mcp', valid: true, location: at('mcp.toml') },
       { family: 'managed_python', name: 'analysis', valid: true, location: at('tools/analysis') },
@@ -258,7 +260,7 @@ function observationInventory(): CapabilityInspection {
       { family: 'workflow', name: 'unseen-workflow', valid: true, location: at('workflows/unseen-workflow.yaml') },
     ],
     resource_diagnostics: [], main: null, agents: {}, skills: [], skill_diagnostics: [],
-    sources: { 'ready-mcp': { status: 'ready' }, 'idle-mcp': { status: 'unprepared' }, 'down-mcp': { status: 'unavailable' }, 'python:analysis': { status: 'ready' } },
+    sources: { 'ready-mcp': { status: 'ready' }, 'idle-mcp': { status: 'unprepared' }, 'pending-mcp': { status: 'connecting', cached: false }, 'cached-mcp': { status: 'connecting', cached: true }, 'down-mcp': { status: 'unavailable' }, 'python:analysis': { status: 'ready' } },
     workflows: { admitted: { status: 'enabled' }, refused: { status: 'disabled', diagnostics: [] } },
   } as never;
 }
@@ -274,10 +276,16 @@ it('S2-05 an identity native published no preparation or admission for is unobse
     fireEvent.click(screen.getByRole('button', { name: /^← (Extensions|MCP servers)$/ }));
     return values;
   };
-  const negative = ['Not prepared', 'Preparation unavailable', 'Not admitted', 'Prepared', 'Admitted'];
+  const negative = ['Not prepared', 'Connecting', 'Connecting · cached catalog', 'Preparation unavailable', 'Not admitted', 'Prepared', 'Admitted'];
   // Native's own statuses, exactly.
   expect(await facts('ready-mcp')).toContain('Prepared');
   expect(await facts('idle-mcp')).toContain('Not prepared');
+  const pending = await facts('pending-mcp');
+  expect(pending).toContain('Connecting');
+  expect(pending).not.toContain('Prepared');
+  const cached = await facts('cached-mcp');
+  expect(cached).toContain('Connecting · cached catalog');
+  expect(cached).not.toContain('Prepared');
   expect(await facts('down-mcp')).toContain('Preparation unavailable');
   expect(await facts('analysis')).toContain('Prepared');
   expect(await facts('admitted')).toContain('Admitted');

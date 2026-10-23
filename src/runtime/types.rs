@@ -70,6 +70,10 @@ struct LifecycleInner {
     /// crossed an admission boundary and have not yet returned. A drain
     /// waits for this to reach zero before observing quiescence.
     admissions: AtomicUsize,
+    /// Retained physical resources still counted for drain, but no longer
+    /// performing an admitted operation. A published MCP connection must not
+    /// make an otherwise idle Conversation permanently busy.
+    resident_resources: AtomicUsize,
     activity: AtomicU64,
     /// Serializes the short native commit sections that do not take the
     /// conversation coordinator lock. A drain takes this boundary before
@@ -149,10 +153,33 @@ impl LifecycleCommitBoundary {
 /// One counted runtime lifecycle admission.
 ///
 /// The guard is intentionally private to runtime-owned subsystem seams. It
-/// is not a generic shutdown hook: it only proves that one concrete semantic
-/// operation remains inside its native ownership boundary.
+/// is not a generic shutdown hook: it proves that one concrete operation or
+/// retained physical resource remains inside its native ownership boundary.
 pub(crate) struct LifecycleAdmission {
     inner: Arc<LifecycleInner>,
+    resident_resource: bool,
+}
+
+impl LifecycleAdmission {
+    /// Retain a physical resource or an inert background observer for drain.
+    /// Optional discovery may continue under this guard, but it cannot publish
+    /// semantic state. Native configuration preparation and adoption acquire
+    /// their own active admission. Close/observer settlement releases this
+    /// guard, so drain still cannot publish quiescence early.
+    pub(crate) fn into_resident_resource(mut self) -> Self {
+        let boundary = self
+            .inner
+            .commit_boundary
+            .lock()
+            .expect("lifecycle commit boundary poisoned");
+        if !self.resident_resource {
+            self.inner.resident_resources.fetch_add(1, Ordering::AcqRel);
+            self.resident_resource = true;
+            self.inner.changed.notify_waiters();
+        }
+        drop(boundary);
+        self
+    }
 }
 
 pub(crate) enum NativeAdmissionRefusal {
@@ -162,6 +189,11 @@ pub(crate) enum NativeAdmissionRefusal {
 
 impl Drop for LifecycleAdmission {
     fn drop(&mut self) {
+        if self.resident_resource {
+            // Remove the subset first: readers load the total before the
+            // subset, and must never mistake an active operation for a resource.
+            self.inner.resident_resources.fetch_sub(1, Ordering::AcqRel);
+        }
         self.inner.admissions.fetch_sub(1, Ordering::AcqRel);
         self.inner.changed.notify_waiters();
     }
@@ -186,6 +218,7 @@ impl Default for ConversationLifecycle {
             inner: Arc::new(LifecycleInner {
                 state: AtomicU8::new(ConversationLifecycleState::INACTIVE),
                 admissions: AtomicUsize::new(0),
+                resident_resources: AtomicUsize::new(0),
                 activity: AtomicU64::new(0),
                 commit_boundary: LifecycleCommitBoundary::default(),
                 changed: tokio::sync::Notify::new(),
@@ -222,6 +255,7 @@ impl ConversationLifecycle {
         self.inner.changed.notify_waiters();
         Ok(operation(LifecycleAdmission {
             inner: self.inner.clone(),
+            resident_resource: false,
         }))
     }
     /// Creates a fresh conversation lifecycle in the `Inactive` state.
@@ -324,7 +358,7 @@ impl ConversationLifecycle {
             Err(std::sync::TryLockError::WouldBlock) => return None,
             Err(std::sync::TryLockError::Poisoned(_)) => panic!("lifecycle boundary poisoned"),
         };
-        (self.is_running() && self.inner.admissions.load(Ordering::Acquire) == 0)
+        (self.is_running() && self.has_no_active_operations())
             .then(|| self.inner.activity.load(Ordering::Acquire))
     }
 
@@ -335,7 +369,7 @@ impl ConversationLifecycle {
             return false;
         };
         if !self.is_running()
-            || self.inner.admissions.load(Ordering::Acquire) != 0
+            || !self.has_no_active_operations()
             || self.inner.activity.load(Ordering::Acquire) != epoch
         {
             return false;
@@ -396,6 +430,7 @@ impl ConversationLifecycle {
         self.inner.changed.notify_waiters();
         let admission = LifecycleAdmission {
             inner: Arc::clone(&self.inner),
+            resident_resource: false,
         };
         let result = operation();
         drop(admission);
@@ -429,6 +464,7 @@ impl ConversationLifecycle {
         self.inner.changed.notify_waiters();
         let admission = LifecycleAdmission {
             inner: Arc::clone(&self.inner),
+            resident_resource: false,
         };
         Ok(operation(admission))
     }
@@ -455,6 +491,7 @@ impl ConversationLifecycle {
             self.inner.changed.notify_waiters();
             return Ok(LifecycleAdmission {
                 inner: Arc::clone(&self.inner),
+                resident_resource: false,
             });
         }
         self.inner.admissions.fetch_sub(1, Ordering::AcqRel);
@@ -492,6 +529,7 @@ impl ConversationLifecycle {
             self.inner.changed.notify_waiters();
             return Ok(LifecycleAdmission {
                 inner: Arc::clone(&self.inner),
+                resident_resource: false,
             });
         }
         self.inner.admissions.fetch_sub(1, Ordering::AcqRel);
@@ -528,6 +566,7 @@ impl ConversationLifecycle {
         self.inner.changed.notify_waiters();
         Ok(LifecycleAdmission {
             inner: Arc::clone(&self.inner),
+            resident_resource: false,
         })
     }
 
@@ -563,6 +602,24 @@ impl ConversationLifecycle {
     /// inspecting native state and inspects again after it fires.
     pub(crate) fn changed(&self) -> tokio::sync::futures::Notified<'_> {
         self.inner.changed.notified()
+    }
+
+    fn has_no_active_operations(&self) -> bool {
+        self.inner.admissions.load(Ordering::Acquire)
+            == self.inner.resident_resources.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn wait_for_no_active_operations(&self) {
+        loop {
+            let notified = self.inner.changed.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.has_no_active_operations() {
+                return;
+            }
+            notified.await;
+        }
     }
 
     /// Waits until no counted subsystem operation remains in flight.
@@ -1288,6 +1345,40 @@ mod tests {
         assert!(!lifecycle.begin_drain());
         assert!(lifecycle.try_enter_settlement().is_err());
         lifecycle.wait_until_quiescent().await;
+    }
+
+    #[tokio::test]
+    async fn resident_resources_allow_idle_adoption_but_still_block_quiescence() {
+        let lifecycle = ConversationLifecycle::new();
+        let preparation = lifecycle.try_enter_preparation().unwrap();
+        let resource = lifecycle
+            .try_enter_preparation()
+            .unwrap()
+            .into_resident_resource();
+        assert!(lifecycle.activate());
+        assert!(
+            lifecycle.idle_epoch().is_none(),
+            "discovery is still active"
+        );
+
+        drop(preparation);
+        lifecycle.wait_for_no_active_operations().await;
+        let epoch = lifecycle.idle_epoch().expect("resident resource is idle");
+        let newer = lifecycle.try_enter_preparation().unwrap();
+        assert!(lifecycle.idle_epoch().is_none());
+        let another_resource = newer.into_resident_resource();
+        assert!(lifecycle.idle_epoch().is_some());
+        assert!(
+            !lifecycle.begin_idle_drain(epoch),
+            "new work invalidates the probe"
+        );
+        assert!(lifecycle.begin_idle_drain(lifecycle.idle_epoch().unwrap()));
+        assert!(!lifecycle.mark_quiescent(), "physical close is still owned");
+        drop(resource);
+        assert!(!lifecycle.mark_quiescent());
+        drop(another_resource);
+        lifecycle.wait_for_no_admissions().await;
+        assert!(lifecycle.mark_quiescent());
     }
 
     /// Cancellation reasons use a stable serialized representation.

@@ -736,7 +736,10 @@ impl ConversationRuntime {
         // observes the runtime-owned inactive mailbox and is refused with
         // `BackgroundDispatchError::ConversationInactive`). An inactive
         // runtime can never inherit detached background work.
-        let lifecycle = ConversationLifecycle::new();
+        let lifecycle = config
+            .capability
+            .preparation_lifecycle()
+            .unwrap_or_default();
         match config
             .tool_runtime
             .claim_conversation_runtime_inactive(&lifecycle)

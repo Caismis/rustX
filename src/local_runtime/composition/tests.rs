@@ -87,6 +87,16 @@ fn final_answer_script() -> Vec<FakeStep> {
 
 #[allow(clippy::too_many_lines)] // Composes the real test runtime and its resource fixtures.
 async fn compose_fixture(test_name: &str, arguments: serde_json::Value) -> ComposedFixture {
+    compose_fixture_with_scripts(test_name, arguments, None, None).await
+}
+
+#[allow(clippy::too_many_lines)] // Composes the real test runtime and its resource fixtures.
+async fn compose_fixture_with_scripts(
+    test_name: &str,
+    arguments: serde_json::Value,
+    scripts: Option<Vec<Vec<FakeStep>>>,
+    mcp_endpoint: Option<&str>,
+) -> ComposedFixture {
     let root = tempfile::tempdir().expect("fixture root");
     let workspace = root.path().join("workspace");
     std::fs::create_dir_all(workspace.join(".agents/agents/explore")).expect("workspace");
@@ -98,10 +108,10 @@ async fn compose_fixture(test_name: &str, arguments: serde_json::Value) -> Compo
 
     let server_id = McpServerId::new(SERVER_NAME);
     let tool_id = ToolId::new(crate::tools::mcp::mcp_tool_id(&server_id, TOOL_NAME));
-    let model = fake_model(vec![
-        mcp_call_script(&tool_id, arguments),
-        final_answer_script(),
-    ]);
+    let model = fake_model(
+        scripts
+            .unwrap_or_else(|| vec![mcp_call_script(&tool_id, arguments), final_answer_script()]),
+    );
     let adapter: Arc<dyn crate::model::adapter::ModelAdapter> = model.clone();
     let fixture_model =
         FixtureModel::text("scripted/scripted", ModelProtocol::OpenAiChatCompletions);
@@ -140,6 +150,9 @@ compat = { chat_reasoning_replay = "omit" }
                     "tools": {"builtin": ["read"]},
                 },
             }}, "agent": {"model": {"model": "scripted/scripted"}, "tools": {"builtin": ["read"], "sources": {SERVER_NAME: [TOOL_NAME]}}, "agents": [TEST_AGENT]}});
+    if let Some(endpoint) = mcp_endpoint {
+        config_document["mcp_servers"][SERVER_NAME] = serde_json::json!({"url": endpoint});
+    }
     crate::launch_fixture::write_roles(&workspace, &mut config_document["subagents"]);
     let mcp = config_document
         .as_object_mut()
@@ -423,4 +436,177 @@ async fn malformed_mcp_arguments_remain_a_normal_preflight_rejection() {
     ));
 
     fixture.runtime.shutdown().await.expect("runtime shutdown");
+}
+
+/// One real startup catalog whose completion is controlled independently of
+/// the model gate. The protocol and composition still use their production path.
+#[derive(Clone)]
+struct HeadlessStartupServer(Arc<crate::tools::mcp::test_sync::ConnectOwnershipPause>);
+
+impl rmcp::ServerHandler for HeadlessStartupServer {
+    fn get_info(&self) -> rmcp::model::ServerInfo {
+        rmcp::model::ServerInfo::new(
+            rmcp::model::ServerCapabilities::builder()
+                .enable_tools()
+                .build(),
+        )
+    }
+
+    fn discover(
+        &self,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> impl Future<Output = Result<rmcp::model::DiscoverResult, rmcp::ErrorData>> {
+        std::future::ready(Ok(rmcp::model::DiscoverResult::from_server_info(
+            crate::tools::mcp::supported_protocol_versions(),
+            self.get_info(),
+        )))
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
+        self.0.park().await;
+        Ok(rmcp::model::ListToolsResult {
+            tools: vec![crate::tools::mcp::fixture::fixture_tool_named(TOOL_NAME)],
+            ..Default::default()
+        })
+    }
+}
+
+async fn headless_startup_server(
+    pause: Arc<crate::tools::mcp::test_sync::ConnectOwnershipPause>,
+) -> (String, tokio::task::JoinHandle<()>) {
+    use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
+    use rmcp::transport::streamable_http_server::{
+        StreamableHttpServerConfig, StreamableHttpService,
+    };
+
+    let service = StreamableHttpService::<HeadlessStartupServer, LocalSessionManager>::new(
+        move || Ok(HeadlessStartupServer(pause.clone())),
+        Arc::default(),
+        StreamableHttpServerConfig::default(),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/mcp", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move {
+        axum::serve(listener, axum::Router::new().nest_service("/mcp", service))
+            .await
+            .unwrap();
+    });
+    (endpoint, task)
+}
+
+/// Headless callers explicitly select the ordinary idle adoption boundary;
+/// they never acquire a separate mutable/pending tool registry.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one gated pending, busy, ready and consumed adoption sequence"
+)]
+async fn headless_capability_adoption_refuses_busy_and_preserves_admitted_attempt() {
+    use crate::runtime::adoption::AdoptionError;
+
+    let startup = Arc::new(crate::tools::mcp::test_sync::ConnectOwnershipPause::default());
+    let (endpoint, server) = headless_startup_server(startup.clone()).await;
+    let (release, released) = crate::scripted_suites::support::fake::model_release();
+    let mut script = vec![FakeStep::ParkUntilReleased(released)];
+    script.extend(final_answer_script());
+    let fixture = compose_fixture_with_scripts(
+        "local_runtime::composition::tests::headless_capability_adoption_refuses_busy_and_preserves_admitted_attempt",
+        serde_json::json!({}), Some(vec![script]), Some(&endpoint),
+    ).await;
+    startup.wait_entered().await;
+    let runtime = fixture.runtime.runtime();
+    let initial_revision = runtime.runtime_resources().revision();
+    assert_eq!(
+        fixture.runtime.adopt_ready_capabilities().await,
+        Err(AdoptionError::NotReady)
+    );
+    assert_eq!(runtime.runtime_resources().revision(), initial_revision);
+    let mut parked = fixture.model.parked();
+    let after = runtime.settlement_ordinal_for_test();
+    runtime
+        .submit_inbound(vec![UserContentBlock::Text(TextBlock {
+            text: "request-A".into(),
+        })])
+        .unwrap();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        parked.wait_for(|parked| *parked),
+    )
+    .await
+    .expect("headless model parks")
+    .unwrap();
+    let admitted = runtime.configuration_cut().admitted_attempt.unwrap();
+    assert_eq!(
+        fixture.runtime.adopt_ready_capabilities().await,
+        Err(AdoptionError::Busy),
+        "busy takes precedence before readiness"
+    );
+    startup.release();
+    let mut readiness = fixture.runtime.capability().startup_readiness().unwrap();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        readiness.wait_for(|progress| progress.done),
+    )
+    .await
+    .expect("startup discovery completes")
+    .unwrap();
+    assert_eq!(
+        fixture.runtime.adopt_ready_capabilities().await,
+        Err(AdoptionError::Busy)
+    );
+    assert_eq!(
+        runtime.configuration_cut().admitted_attempt.unwrap(),
+        admitted
+    );
+    assert_eq!(fixture.model.requests().len(), 1);
+    assert!(!request_tool_names(&fixture.model.requests()[0]).contains(&TOOL_NAME.to_owned()));
+    assert_eq!(runtime.runtime_resources().revision(), initial_revision);
+    release.send_replace(true);
+    tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        runtime.child_attempt_settlement(after),
+    )
+    .await
+    .expect("headless attempt settles");
+    tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        runtime.wait_for_configuration_admissions(),
+    )
+    .await
+    .expect("headless preparation admissions settle");
+    tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        fixture.runtime.adopt_ready_capabilities(),
+    )
+    .await
+    .expect("headless explicit adoption settles")
+    .unwrap();
+    let adopted = runtime.runtime_resources();
+    assert_ne!(adopted.revision(), initial_revision);
+    assert!(
+        adopted
+            .capability()
+            .tool_registry()
+            .model_definitions()
+            .iter()
+            .any(|tool| tool.name == TOOL_NAME)
+    );
+    assert_eq!(
+        fixture.runtime.adopt_ready_capabilities().await,
+        Err(AdoptionError::NotReady),
+        "a consumed readiness result cannot publish another revision"
+    );
+    assert_eq!(runtime.runtime_resources().revision(), adopted.revision());
+    assert_eq!(
+        fixture.model.requests().len(),
+        1,
+        "adoption never submits a model request"
+    );
+    fixture.runtime.shutdown().await.unwrap();
+    server.abort();
+    let _ = server.await;
 }

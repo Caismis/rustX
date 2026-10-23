@@ -1145,7 +1145,7 @@ impl ConversationRuntime {
 
     #[cfg(test)]
     pub(crate) async fn wait_for_configuration_admissions(&self) {
-        self.inner.lifecycle.wait_for_no_admissions().await;
+        self.inner.lifecycle.wait_for_no_active_operations().await;
     }
 
     pub(crate) fn idle_epoch(&self) -> Result<u64, IdleBusyReason> {

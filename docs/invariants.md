@@ -3428,7 +3428,7 @@ A package rewrite is observed only at the next quiescent re-discovery.
   selecting a revision: protocol compatibility is not session product
   configuration.
 - **rustX's committed capability snapshot is the only semantic cache of MCP
-  tool availability.** The layering is `remote peer -> fresh protocol
+  tool availability.** Ordinary discovery follows `remote peer -> fresh protocol
   response -> adapter translation -> prepared candidate -> invalidation-epoch
   validation -> capability commit -> canonical tool snapshot`. The MCP SDK is
   transport and protocol machinery inside that chain, never a second
@@ -3447,6 +3447,40 @@ A package rewrite is observed only at the next quiescent re-discovery.
   refresh's request, and a failed refresh is always observed as the failure
   it is — which is precisely the fact the capability plane needs to retain
   the exact old configuration generation, including source bindings and policies.
+- **MCP catalog hints contain metadata, never executable authority.** A
+  process-local LRU retains at most 32 validated complete catalogs for 30
+  minutes. Its key covers the server identity, effective transport and local
+  command boundary, canonical Workspace, captured credentials, protocol policy
+  and advertised client capabilities. Unknown identity cannot produce a hit;
+  secret values are hashed and never printed. Only successful negotiated,
+  complete `tools/list` discovery at a stable invalidation epoch can populate
+  a hint. Observed invalidation revokes existing captures as well as future
+  lookups, and ordered fetch tickets prevent an older completion from replacing
+  newer metadata. An expiry or failed refresh is never a successful discovery.
+  This inert optimization adds a second input to candidate preparation, not a
+  second semantic capability store: `validated hint -> frozen candidate
+  declaration -> ordinary capability commit`. Every associated invocation
+  obtains its Conversation's own live connection and verifies exact name,
+  description and full input schema before `tools/call` can cross the effect
+  frontier. A changed declaration fails before dispatch and requires ordinary
+  refresh/publication/adoption; cached metadata does not carry policy or bypass
+  permissions. No transport, peer, executor or child process is shared between
+  Conversations, and the rmcp response cache remains disabled on all generations.
+- **Optional MCP startup has one counted owner and one grace period.** Only
+  admitted demand starts connections. Root-only optional sources begin within
+  the existing preparation bound; valid cached definitions can enter the initial
+  candidate immediately, while cache misses share one one-second startup grace.
+  Sources still in flight are `Connecting`, with an explicit cached-metadata
+  fact, rather than `Ready`, `Unavailable` or `Unprepared`. Their work remains
+  counted under the Conversation lifecycle until physical settlement. An
+  uncached pending source contributes no initial tools. Workflow dependencies
+  still complete exact pre-admission validation, and frozen children retain
+  their complete required-source contract. Each source completion signals
+  readiness independently; the native configuration owner prepares from the
+  existing connection observations without restarting discovery or waiting for
+  unfinished siblings, then publishes through its usual safe boundary. Pending
+  observers and initializers count for drain without blocking idle adoption. Existing Attempt declarations remain immutable, and Session
+  adoption plus request-shape cache effects remain governed by Issue #380.
 - **Streamable HTTP protocol semantics stay rmcp's.** rustX supplies its own
   `StreamableHttpClient` for exactly one reason — a cancelled tool call must
   terminate, and prove the release of, its own in-flight HTTP request — and

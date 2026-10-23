@@ -25,9 +25,14 @@ use super::ToolSourceId;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CapabilitySourceState {
     /// Bootstrap/prospective source whose first preparation has not completed.
-    /// The coordinator exposes this before its first commit; normal composition
-    /// publishes a Session only after preparation, so it need not appear there.
+    /// This does not describe an initializer that is already running.
     Unprepared,
+    /// Conversation-owned discovery is still running. Cached metadata can
+    /// contribute frozen declarations, but does not prove a live connection.
+    Connecting {
+        /// Whether this generation contains eligible cached tool metadata.
+        cached: bool,
+    },
     /// The source initialized; its capabilities are part of the committed
     /// executable set.
     Ready,

@@ -1,0 +1,90 @@
+{
+  "recorded_at": "2026-10-23T15:46:57.493096+00:00",
+  "environment": {
+    "platform": "Linux x86_64",
+    "kernel": "6.8.0-147-generic",
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "node": "v24.19.0",
+    "pnpm": "11.13.1",
+    "browser_image": "mcr.microsoft.com/playwright:v1.63.0-noble@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7"
+  },
+  "checks": [
+    {
+      "cwd": "protocol/app-server",
+      "command": "pnpm typecheck",
+      "result": "passed",
+      "log_sha256": "9c2087a01065ee43c12d5737d7bff4ded722c311c7de5914f5b88d24e8c40152"
+    },
+    {
+      "cwd": "web-console",
+      "command": "pnpm typecheck",
+      "result": "passed",
+      "log_sha256": "8366207267355d3e3d5bf3bf6e8c94c5f93f6078c34f08973fa2b38cdda6cc92"
+    },
+    {
+      "cwd": "tui",
+      "command": "pnpm typecheck",
+      "result": "passed",
+      "log_sha256": "8366207267355d3e3d5bf3bf6e8c94c5f93f6078c34f08973fa2b38cdda6cc92"
+    },
+    {
+      "cwd": "tui",
+      "command": "TMPDIR=/run/user/1000/rustx-issue-499-baseline-tmp RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm test",
+      "result": "1192 passed; 1 native macOS ACL test skipped on Linux",
+      "log_sha256": "c199c383bb33fd8c8882be1cf0edd49e13568f44fa911e983596d5f182d577b1"
+    },
+    {
+      "cwd": "dev",
+      "command": "pnpm typecheck",
+      "result": "passed",
+      "log_sha256": "8366207267355d3e3d5bf3bf6e8c94c5f93f6078c34f08973fa2b38cdda6cc92"
+    },
+    {
+      "cwd": "dev",
+      "command": "pnpm test",
+      "result": "41 passed",
+      "log_sha256": "2a9b117e36d2492176bfddf5e898f3a4ad40f67678b246e621307ee781bf61a7"
+    },
+    {
+      "cwd": "web-console",
+      "command": "pnpm check:provenance",
+      "result": "passed; 311 source records verified",
+      "log_sha256": "327c85a05e316d5b82d2aa199d75d317e864709324c9df5dd9ce0ce94155f6e2"
+    },
+    {
+      "cwd": "web-console",
+      "command": "pnpm check:i18n",
+      "result": "passed",
+      "log_sha256": "f74a6863137352ef1a277bafd1f9a6bf4e3a36fcc3f34bc9a7d3299bdc944a7b"
+    },
+    {
+      "cwd": "web-console",
+      "command": "pnpm build",
+      "result": "passed; production artifact provenance verified; existing chunk-size advisory",
+      "log_sha256": "e3d47c4f57380f6e0a7761e44778c8117e7add9e5fd6e11ca7dcc7d2ccd6a805"
+    },
+    {
+      "cwd": "web-console",
+      "command": "node scripts/check-office-sandbox.ts",
+      "result": "passed; cgroup and filesystem admission",
+      "log_sha256": "827ee4c982d8bdb25035fcd47e0964e0b7c46d71b0d479eaa692883474d3462b"
+    },
+    {
+      "cwd": "web-console",
+      "command": "TMPDIR=/run/user/1000/rustx-issue-499-baseline-tmp pnpm test",
+      "result": "3222 passed; 4 skipped; 209 files passed, 1 skipped",
+      "log_sha256": "1985c37ab66ff562d19f692ad25f2c85cc98ad6ef19912a3fbb1aa79bfdc563a"
+    },
+    {
+      "cwd": ".",
+      "command": "CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR=/home/capi/Documents/codes/rustX/target cargo clippy --all-targets --all-features -- -D warnings",
+      "result": "passed",
+      "log_sha256": "25e5e1e3e456159e83fcd82f92811098157f41095a1fb59f9a7d36ecbd4028b3"
+    }
+  ],
+  "notes": [
+    "Checks were run on Linux only; no claim of macOS or Windows validation.",
+    "Native tests use an executable tmpfs temporary fixture root. On the shared SSD, two existing provider-gate tests exceeded their unchanged 10-second deadline; the exact stdio case passed in 2.67 seconds on tmpfs and the complete TUI suite then passed in 35.42 seconds. No test deadline or product behavior was changed.",
+    "Local Node version is 24.19.0; CI pins 24.22.0."
+  ]
+}

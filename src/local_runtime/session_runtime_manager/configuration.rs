@@ -9,6 +9,135 @@ use crate::runtime::conversation_runtime::ConversationRuntime;
 use tokio::sync::watch;
 
 impl SessionRuntimeManager {
+    /// One finite, counted readiness observer per physical composition. It
+    /// queues the normal native configuration application for each optional
+    /// source completion; it never mutates an admitted Attempt's registry.
+    pub(super) fn arm_mcp_readiness(&self, resident: &std::sync::Arc<super::ResidentRuntime>) {
+        use crate::runtime::types::ConversationLifecycleState;
+
+        let session = {
+            let registry = self.registry.0.lock().expect("registry mutex");
+            registry
+                .by_session
+                .iter()
+                .find_map(|(session, conversation)| {
+                    (conversation == resident.identity.conversation_id()).then(|| session.clone())
+                })
+        };
+        let Some(session) = session else {
+            return;
+        };
+        let Some(adopted) = self
+            .sessions
+            .configuration_bindings
+            .lock()
+            .expect("Session configuration bindings")
+            .get(&session)
+            .cloned()
+        else {
+            return;
+        };
+        let (mut readiness, lifecycle, capability) = {
+            let composition = resident.composition.lock().expect("composition mutex");
+            let Some(composition) = composition.as_ref() else {
+                return;
+            };
+            let Some(readiness) = composition.capability().startup_readiness() else {
+                return;
+            };
+            (
+                readiness,
+                composition.runtime().title_lifecycle(),
+                composition.capability().clone(),
+            )
+        };
+        let Ok(admission) = lifecycle.try_enter_preparation() else {
+            return;
+        };
+        let owner = self.clone();
+        let incarnation = resident.identity.incarnation;
+        tokio::spawn(async move {
+            let _admission = admission.into_resident_resource();
+            let mut observed = None;
+            loop {
+                let changed = lifecycle.changed();
+                tokio::pin!(changed);
+                changed.as_mut().enable();
+                if !matches!(
+                    lifecycle.state(),
+                    ConversationLifecycleState::Inactive | ConversationLifecycleState::Running
+                ) {
+                    return;
+                }
+                let (count, done) = {
+                    let progress = readiness.borrow_and_update();
+                    (progress.completed.len(), progress.done)
+                };
+                if observed != Some(count) {
+                    observed = Some(count);
+                    if capability.has_startup_updates() {
+                        owner.publish_mcp_readiness(&session, incarnation, &adopted, &lifecycle);
+                    }
+                }
+                if done {
+                    return;
+                }
+                tokio::select! {
+                    () = &mut changed => {},
+                    result = readiness.changed() => if result.is_err() { return; },
+                }
+            }
+        });
+    }
+
+    fn publish_mcp_readiness(
+        &self,
+        session: &SessionId,
+        incarnation: super::RuntimeIncarnationId,
+        adopted: &super::super::configuration::AdmittedSessionConfig,
+        lifecycle: &crate::runtime::types::ConversationLifecycle,
+    ) {
+        // The application fence precedes the residency/binding checks,
+        // matching ordinary configuration publication's lock order.
+        let mut application = self.applications.lock();
+        let is_current = {
+            let registry = self.registry.0.lock().expect("registry mutex");
+            registry
+                .by_session
+                .get(session)
+                .and_then(|conversation| registry.entries.get(conversation))
+                .is_some_and(|entry| {
+                    matches!(entry, super::Entry::Loaded(current)
+                    if current.identity.incarnation == incarnation)
+                })
+        };
+        let current = self
+            .sessions
+            .configuration_bindings
+            .lock()
+            .expect("Session configuration bindings")
+            .get(session)
+            .cloned();
+        let Some(current) = current else {
+            return;
+        };
+        if !is_current || !lifecycle.is_running() || !current.same_capabilities(adopted) {
+            return;
+        }
+        let queued = application.capture_capability_readiness(
+            session.as_ref(),
+            &current,
+            self.process_policy(),
+        );
+        if queued {
+            self.applications.notify(&application);
+        }
+        drop(application);
+        if queued {
+            self.applications.run(self.clone());
+        }
+    }
+
     /// Parks a Session application just before it takes the publication
     /// fence that settles an unchanged invocation, so a test can overtake it.
     #[cfg(test)]

@@ -200,6 +200,72 @@ impl McpServerRuntime {
             .map_err(|error| error.redacted(&self.credentials))
     }
 
+    /// First-use revalidation is owned by the `ToolInvocation`. Each page uses
+    /// the same cancellation and local-release proof as its eventual call.
+    pub(super) async fn list_tools_for_invocation(
+        &self,
+        context: &crate::tools::executor::ToolExecutionContext<'_>,
+        generation: u64,
+    ) -> Result<Vec<CanonicalMcpTool>, McpError> {
+        use super::outcome::{McpPhysicalOutcome, McpResponseOutcome};
+        use rmcp::model::{ClientRequest, ListToolsRequest, PaginatedRequestParams, ServerResult};
+        let mut cursor = None;
+        let mut tools = Vec::new();
+        loop {
+            let mut params = PaginatedRequestParams::default();
+            params.cursor = cursor;
+            let mut extensions = rmcp::model::Extensions::default();
+            extensions.insert(super::dispatch::InvocationCatalogRequest);
+            let outcome = self
+                .dispatch_owned_request(
+                    ClientRequest::ListToolsRequest(ListToolsRequest {
+                        method: rmcp::model::ListToolsRequestMethod,
+                        params: Some(params),
+                        extensions,
+                    }),
+                    super::request::McpRequestOwnership::control(),
+                    context,
+                    generation,
+                    std::time::Instant::now(),
+                )
+                .await;
+            let page = match outcome {
+                McpPhysicalOutcome::Observed {
+                    response: McpResponseOutcome::Answered(answered),
+                    ..
+                } => match *answered {
+                    Ok(ServerResult::ListToolsResult(page)) => page,
+                    Ok(_) => {
+                        return Err(McpError::Discovery("unexpected tools/list response".into()));
+                    }
+                    Err(error) => {
+                        return Err(McpError::Discovery(bound_error(&error.to_string()))
+                            .redacted(&self.credentials));
+                    }
+                },
+                McpPhysicalOutcome::Refused { detail, .. } => {
+                    return Err(McpError::Discovery(detail));
+                }
+                _ => {
+                    return Err(McpError::Discovery(
+                        "MCP catalog validation cancelled or disconnected before tools/call".into(),
+                    ));
+                }
+            };
+            tools.extend(
+                page.tools
+                    .into_iter()
+                    .map(CanonicalMcpTool::try_from)
+                    .collect::<Result<Vec<_>, _>>()?,
+            );
+            cursor = page.next_cursor;
+            if cursor.is_none() {
+                tools.sort_by(|left, right| left.name.cmp(&right.name));
+                return Ok(tools);
+            }
+        }
+    }
+
     async fn list_tools_admitted(&self) -> Result<Vec<CanonicalMcpTool>, McpError> {
         let _call_gate = self.call_gate.read().await;
         // A generation that already violated the protocol never serves a

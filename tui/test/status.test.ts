@@ -259,6 +259,24 @@ describe("footer", () => {
     assert.doesNotMatch(degraded, /cap r3/);
   });
 
+  it("keeps cached and uncached MCP sources connecting until native reports readiness", () => {
+    const connecting = footer(stateOf({ capabilities: {
+      configured_tools: [], revision: "3", sources: [
+        { source: { type: "mcp", server_id: "cold" }, state: { type: "connecting", cached: false } },
+        { source: { type: "mcp", server_id: "warm" }, state: { type: "connecting", cached: true } },
+      ],
+    } }), "connected");
+    assert.match(connecting, /2 sources connecting · 1 cached catalog/);
+    assert.doesNotMatch(connecting, /unavailable|sources ready/);
+    const ready = footer(stateOf({ capabilities: {
+      configured_tools: [], revision: "4", sources: [
+        { source: { type: "mcp", server_id: "cold" }, state: { type: "ready" } },
+        { source: { type: "mcp", server_id: "warm" }, state: { type: "ready" } },
+      ],
+    } }), "connected");
+    assert.doesNotMatch(ready, /connecting|cached catalog/);
+  });
+
   it("shows the attempt's frozen model when the session moved on", () => {
     const rendered = footer(
       stateOf({

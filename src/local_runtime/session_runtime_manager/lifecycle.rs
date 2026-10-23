@@ -626,6 +626,8 @@ impl TerminalGuard {
             self.flight
                 .result
                 .send_replace(Some(Outcome::Resident(runtime.identity.clone())));
+            drop(registry);
+            self.owner.arm_mcp_readiness(runtime);
             self.finished = true;
             return;
         }

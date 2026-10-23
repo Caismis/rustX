@@ -22558,7 +22558,7 @@
       "description": "The client-visible availability of one optional capability source.",
       "oneOf": [
         {
-          "description": "Prospective coordinator state before first preparation. Normal Session\ncomposition completes preparation before publishing this projection.",
+          "description": "Prospective coordinator state before source preparation begins.",
           "type": "object",
           "properties": {
             "type": {
@@ -22570,6 +22570,24 @@
             "type"
           ],
           "additionalProperties": false
+        },
+        {
+          "description": "Discovery is running; cached declarations do not imply live connectivity.",
+          "type": "object",
+          "properties": {
+            "cached": {
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string",
+              "const": "connecting"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "cached"
+          ]
         },
         {
           "description": "The source initialized; its capabilities are usable.",
@@ -23361,6 +23379,18 @@
           "properties": {
             "kind": {
               "type": "string",
+              "const": "pending"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
               "const": "unavailable"
             },
             "detail": {
@@ -23581,6 +23611,22 @@
           },
           "required": [
             "status"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "cached": {
+              "type": "boolean"
+            },
+            "status": {
+              "type": "string",
+              "const": "connecting"
+            }
+          },
+          "required": [
+            "status",
+            "cached"
           ]
         },
         {

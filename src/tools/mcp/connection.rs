@@ -85,6 +85,11 @@ use crate::tools::mcp::{
 };
 use crate::tools::workspace::Workspace;
 
+mod catalog;
+pub(crate) use catalog::McpCatalogStartup;
+#[cfg(all(test, feature = "mcp-fixture"))]
+mod catalog_tests;
+
 /// How many typed connection facts one connection retains for diagnosis.
 ///
 /// The log is a bounded diagnostic ring, never authority: nothing reads it
@@ -159,6 +164,7 @@ pub(crate) enum McpConnectionFact {
 /// contract of the public [`crate::tools::mcp::McpToolExecutor::new`] entry
 /// point, whose caller owns and closes its own runtime.
 struct McpReconnectAuthority {
+    cache_key: Option<super::catalog_cache::CatalogCacheKey>,
     binding: McpServerBinding,
     workspace: Workspace,
     invalidation: Arc<McpInvalidationState>,
@@ -170,6 +176,9 @@ struct McpReconnectAuthority {
 }
 
 struct ConnectionState {
+    /// A failed connect can own an unproven process even without a transport.
+    /// Retain that evidence for drain and refuse further physical activation.
+    physical_failure: Option<String>,
     /// The authoritative transport generation, when one exists.
     current: Option<Arc<McpConnectionGeneration>>,
     /// Generations proven unusable whose physical close has not run yet.
@@ -186,6 +195,7 @@ struct ConnectionState {
 
 /// The stable connection owner of one configured MCP server.
 pub(crate) struct McpConnection {
+    catalog: catalog::ConnectionCatalog,
     #[cfg(test)]
     admission_pause: Mutex<Option<(bool, Arc<super::test_sync::ConnectOwnershipPause>)>>,
     #[cfg(test)]
@@ -217,6 +227,29 @@ impl std::fmt::Debug for McpConnection {
 }
 
 impl McpConnection {
+    /// An inert conversation-owned connection. Only its counted initializer
+    /// or an admitted execution may establish its first transport.
+    pub(crate) fn lazy(
+        server_id: McpServerId,
+        binding: McpServerBinding,
+        workspace: Workspace,
+        invalidation: Arc<McpInvalidationState>,
+        cancellation: CancellationSignal,
+    ) -> Arc<Self> {
+        let cache_key =
+            super::catalog_cache::CatalogCacheKey::for_binding(&server_id, &binding, &workspace);
+        invalidation.attach_cache_key(&server_id, cache_key.clone());
+        Self::empty(
+            server_id,
+            Some(McpReconnectAuthority {
+                cache_key,
+                binding,
+                workspace,
+                invalidation,
+                cancellation,
+            }),
+        )
+    }
     /// A connection that owns exactly one transport and never reconnects.
     ///
     /// This is the shape of the public adapter entry point: the caller
@@ -237,9 +270,16 @@ impl McpConnection {
         invalidation: Arc<McpInvalidationState>,
         cancellation: CancellationSignal,
     ) -> Arc<Self> {
+        let cache_key = super::catalog_cache::CatalogCacheKey::for_binding(
+            runtime.server_id(),
+            &binding,
+            &workspace,
+        );
+        invalidation.attach_cache_key(runtime.server_id(), cache_key.clone());
         let connection = Self::empty(
             runtime.server_id().clone(),
             Some(McpReconnectAuthority {
+                cache_key,
                 binding,
                 workspace,
                 invalidation,
@@ -252,6 +292,7 @@ impl McpConnection {
 
     fn empty(server_id: McpServerId, reconnect: Option<McpReconnectAuthority>) -> Arc<Self> {
         Arc::new(Self {
+            catalog: catalog::ConnectionCatalog::default(),
             #[cfg(test)]
             admission_pause: Mutex::new(None),
             #[cfg(test)]
@@ -260,6 +301,7 @@ impl McpConnection {
             server_id,
             reconnect,
             state: tokio::sync::Mutex::new(ConnectionState {
+                physical_failure: None,
                 current: None,
                 retired: Vec::new(),
                 next_generation: 1,
@@ -311,9 +353,26 @@ impl McpConnection {
     /// Returns an error when the connection is closed, when the current
     /// generation is unusable and this connection cannot reconnect, or when
     /// the single bounded connect attempt failed.
-    #[allow(clippy::too_many_lines)] // one serialized connection admission/retirement boundary
     pub(crate) async fn acquire(&self) -> Result<Arc<McpConnectionGeneration>, McpError> {
-        let mut state = self.state.lock().await;
+        self.acquire_owned(None).await
+    }
+
+    #[allow(clippy::too_many_lines)] // one serialized connection admission/retirement boundary
+    pub(super) async fn acquire_owned(
+        &self,
+        cancellation: Option<&crate::runtime::ExecutionCancellation>,
+    ) -> Result<Arc<McpConnectionGeneration>, McpError> {
+        let mut state = match cancellation {
+            Some(cancellation) => tokio::select! {
+                biased;
+                () = cancellation.cancelled() => return Err(McpError::Execution("MCP connection acquisition cancelled".into())),
+                state = self.state.lock() => state,
+            },
+            None => self.state.lock().await,
+        };
+        if let Some(failure) = &state.physical_failure {
+            return Err(McpError::PhysicalSettlement(failure.clone()));
+        }
         if state.closed {
             return Err(McpError::Execution(format!(
                 "the MCP connection to server '{}' is closed",
@@ -391,22 +450,41 @@ impl McpConnection {
         // knowledge as needing revalidation; it never erases the published
         // last-known-good capability generation, which stays authoritative
         // until a complete validated candidate commits.
-        reconnect.invalidation.lock().advance(&self.server_id);
+        if state.next_generation > 1 {
+            reconnect.invalidation.lock().advance(&self.server_id);
+        }
         // Boxed deliberately: the connect future is large, and `acquire` is
         // awaited from capability preparation, whose own future is already
         // near the crate's large-future budget. Boxing keeps the reconnect
         // path off every caller's inline state machine.
+        let connect_cancellation = reconnect.cancellation.child();
         let request = OwnedConnect::new(
             &self.server_id,
             &reconnect.binding,
             &reconnect.workspace,
             reconnect.invalidation.clone(),
-            reconnect.cancellation.child(),
+            connect_cancellation.clone(),
         );
         #[cfg(test)]
         let request =
             request.with_ownership_pause(self.reconnect_ownership_pause.lock().unwrap().clone());
-        let connected = Box::pin(McpServerRuntime::connect_owned(request)).await;
+        let mut connecting = Box::pin(McpServerRuntime::connect_owned(request));
+        let connected = match cancellation {
+            Some(cancellation) => tokio::select! {
+                biased;
+                () = cancellation.cancelled() => {
+                    connect_cancellation.cancel();
+                    // The admitted connect keeps ownership through cleanup;
+                    // cancellation never drops a half-spawned process future.
+                    match connecting.await {
+                        Ok(runtime) => runtime.close().await.and(Err(McpError::Execution("MCP connection acquisition cancelled".into()))),
+                        Err(error) => Err(error),
+                    }
+                }
+                connected = &mut connecting => connected,
+            },
+            None => connecting.await,
+        };
         match connected {
             Ok(runtime) => {
                 let generation = state.next_generation;
@@ -430,6 +508,9 @@ impl McpConnection {
                 Ok(established)
             }
             Err(error) => {
+                if let McpError::PhysicalSettlement(detail) = &error {
+                    state.physical_failure = Some(detail.clone());
+                }
                 drop(state);
                 let reason = error.to_string();
                 self.record(McpConnectionFact::Unavailable {
@@ -457,7 +538,7 @@ impl McpConnection {
         }
         let mut state = self.state.lock().await;
         state.closed = true;
-        let mut failures = Vec::new();
+        let mut failures: Vec<_> = state.physical_failure.iter().cloned().collect();
         let current = state.current.take();
         let retired = std::mem::take(&mut state.retired);
         for generation in retired.into_iter().chain(current) {

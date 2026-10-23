@@ -85,6 +85,7 @@ impl ConfigurationApplications {
             policy,
             process,
             context: capture,
+            refresh_capabilities,
             ..
         } = match capture {
             Ok(capture) => capture,
@@ -245,7 +246,9 @@ impl ConfigurationApplications {
                 && capture.preserves_adopted_agent_models(old)
                 && (capture.same_session_model(old) || capture.selection_unavailable().is_some())
             {
-                let others_unchanged = capture.same_capabilities(old) && capture.same_context(old);
+                let others_unchanged = !refresh_capabilities
+                    && capture.same_capabilities(old)
+                    && capture.same_context(old);
                 // Capture validated the catalog and its default; publication
                 // resolves it. Source availability composes the whole
                 // generation, so it waits for any unit still to prepare.
@@ -297,7 +300,7 @@ impl ConfigurationApplications {
                         // Nothing was published. The generation's context is
                         // prepared over this catalog, so it fails with it;
                         // unchanged capabilities have nothing to apply.
-                        if capture.same_capabilities(old) {
+                        if !refresh_capabilities && capture.same_capabilities(old) {
                             state.publish(scope, identity, ApplyUnit::Capabilities, || {
                                 UnitApplication::Applied
                             });
@@ -351,9 +354,10 @@ impl ConfigurationApplications {
             self.notify(&state);
             return;
         };
-        let mut context_only = adopted
-            .as_ref()
-            .is_some_and(|old| capture.same_capabilities(old));
+        let mut context_only = !refresh_capabilities
+            && adopted
+                .as_ref()
+                .is_some_and(|old| capture.same_capabilities(old));
         let bindings = |capture: &crate::local_runtime::configuration::ProspectiveSessionConfig| {
             capture
                 .models
@@ -400,7 +404,17 @@ impl ConfigurationApplications {
                 .expect("a resident runtime has its composed resource preparation");
             let prepared_capture = capture.clone();
             let mut preparation = Box::pin(runtime.prepare_configuration(
-                |capability| resource_loader.prepare(capability, prepared_capture, &cancellation),
+                |capability| {
+                    if refresh_capabilities {
+                        resource_loader.prepare_readiness(
+                            capability,
+                            prepared_capture,
+                            &cancellation,
+                        )
+                    } else {
+                        resource_loader.prepare(capability, prepared_capture, &cancellation)
+                    }
+                },
                 capture.config.initial_model().clone(),
             ));
             let prepared =

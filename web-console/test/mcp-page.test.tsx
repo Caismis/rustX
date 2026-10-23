@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import {afterEach,expect,it} from 'vitest';
-import {cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
+import {cleanup,fireEvent,render,screen,waitFor,within} from '@testing-library/react';
 import {cfg3Client,cfg3Host} from './cfg3-fixture';
 import {SettingsSurface,settingsReady,openSettingsPage,chooseOption} from './settings-harness';
 import {userSettingsTarget} from '../src/app/settings/projection';
@@ -234,4 +234,24 @@ it('JSON presents a named definition without transaction metadata and accepts bo
  expect(parseMcpJson(text).docs.definition).toEqual(value.definition);
  expect(parseMcpJson(JSON.stringify({mcpServers:{docs:value.definition}})).docs.definition).toEqual(value.definition);
  expect(text).not.toContain('retained_env');
+});
+
+it('shows pending native discovery and cached provenance in the public MCP list without probing', async () => {
+ const s = cfg3Client();
+ s.source.user_mcp.authored = Object.fromEntries(['cold', 'warm'].map(name => [name, { definition: { type: 'stdio', command: `${name}-server` }, retained_env: [], retained_headers: [] }]));
+ s.source.prospective_resources = {
+  ...s.effective.resources,
+  definitions: ['cold', 'warm'].map(name => ({ family: 'mcp', name, valid: true, location: { scope: 'user', path: s.source.user_mcp.path } })),
+  sources: { cold: { status: 'connecting', cached: false }, warm: { status: 'connecting', cached: true } },
+ };
+ render(<SettingsSurface client={s.client} target={userSettingsTarget} host={cfg3Host(s)}/>);
+ await settingsReady(); await openSettingsPage('MCP servers');
+ for (const [name, label] of [['cold', 'Connecting'], ['warm', 'Connecting · cached catalog']]) {
+  const row = within(screen.getByRole('listitem', { name }));
+  expect(row.getByText(label, { exact: true })).toBeTruthy();
+  expect(row.getByRole('button', { name: `MCP ${name}` }).getAttribute('aria-description')).toBe(label);
+  expect(row.queryByText('Prepared', { exact: true })).toBeNull();
+ }
+ expect(s.request.mock.calls.filter(([request]) => request.method === 'mcp/probe')).toHaveLength(0);
+ expect(writes(s)).toHaveLength(0);
 });

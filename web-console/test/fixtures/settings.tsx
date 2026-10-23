@@ -8,7 +8,7 @@ import { App } from '../../src/app/App';
 import { Server, endpoint, snapshot } from '../fixture';
 import { cfg3Application, cfg3Effective, cfg3Source } from '../cfg3-data';
 import { RpcFailure } from '../../src/client/errors';
-import type { ConfigurationApplication, RuntimeClientEvent, SourceMutation } from '../../../protocol/app-server/v54';
+import type { ConfigurationApplication, RuntimeClientEvent, SourceMutation } from '../../../protocol/app-server/v55';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -113,6 +113,16 @@ if (variant.get('scenario') === 'mcp') {
 if (variant.get('scenario') === 'mcp-scope') {
   source.user_mcp.authored={exa:{definition:{type:'http',url:'https://mcp.exa.ai/mcp'},retained_env:[],retained_headers:[]}};
   source.prospective_resources={...effective.resources,definitions:[{family:'mcp',name:'exa',valid:true,location:{scope:'user',path:source.user_mcp.path}}]};
+}
+if (variant.get('scenario') === 'mcp-startup') {
+  source.user_mcp.authored = Object.fromEntries(['cold', 'warm'].map(name => [name, {
+    definition: { type: 'stdio', command: `${name}-server` }, retained_env: [], retained_headers: [],
+  }]));
+  source.prospective_resources = {
+    ...effective.resources,
+    definitions: ['cold', 'warm'].map(name => ({ family: 'mcp', name, valid: true, location: { scope: 'user', path: source.user_mcp.path } })),
+    sources: { cold: { status: 'connecting', cached: false }, warm: { status: 'connecting', cached: true } },
+  };
 }
 
 // A held write stays in flight — the User request unanswered, the Workspace

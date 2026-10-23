@@ -498,6 +498,22 @@ validates exact model-facing capability exposure. Failed required preparation
 rejects the candidate. Unselected sources cause zero connections or preparation.
 See [Workflow authoring](workflow-authoring.md) for the unchanged Workflow language.
 
+Optional Root MCP sources start concurrently within the native preparation
+bound. A process-local validated catalog hint can supply frozen tool declarations
+while the source connects; every call still validates that exact declaration
+against the live connection before dispatch. Without a hint, the initial
+candidate waits up to one second for the optional batch. A source still
+connecting contributes no tools yet and is reported as Connecting. A cached
+catalog is shown explicitly and never presented as a ready connection. Workflow
+dependencies and frozen child requirements retain complete admission validation.
+Each source's late discovery uses ordinary capability publication and Session
+adoption without waiting for a still-connecting sibling. A terminal failure
+prepares an Unavailable candidate through that same boundary. Neither result
+changes an already admitted Attempt. The metadata cache has no settings,
+disk persistence or shared live connections. A headless host explicitly calls
+`adopt_ready_capabilities` at its normal safe adoption boundary; readiness never
+mutates an admitted Attempt by itself.
+
 ## Save, automatic application and Session adoption
 
 `configuration/sourceWrite` is a typed source CAS operation. The native writer

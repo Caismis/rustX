@@ -23,6 +23,7 @@ use rmcp::model::{ServerNotification, SubscriptionFilter};
 
 use crate::runtime::identity::McpServerId;
 
+use super::catalog_cache::{CatalogCacheKey, McpCatalogCache};
 use super::runtime::McpServerRuntime;
 use super::{McpError, bound_error};
 
@@ -109,7 +110,13 @@ impl AdmittedNotification<'_> {
 /// not a stable application interface.
 #[doc(hidden)]
 pub struct McpInvalidationState {
-    inner: std::sync::Mutex<BTreeMap<McpServerId, u64>>,
+    inner: std::sync::Mutex<InvalidationEntries>,
+}
+
+#[derive(Default)]
+struct InvalidationEntries {
+    epochs: BTreeMap<McpServerId, u64>,
+    cache_keys: BTreeMap<McpServerId, CatalogCacheKey>,
 }
 
 impl McpInvalidationState {
@@ -118,7 +125,7 @@ impl McpInvalidationState {
     #[doc(hidden)]
     pub fn new() -> Self {
         Self {
-            inner: std::sync::Mutex::new(BTreeMap::new()),
+            inner: std::sync::Mutex::new(InvalidationEntries::default()),
         }
     }
 
@@ -146,6 +153,22 @@ impl McpInvalidationState {
     pub fn epoch(&self, server_id: &McpServerId) -> u64 {
         self.lock().epoch(server_id)
     }
+
+    /// Register the effective source identity before lookup or connection.
+    /// A configuration/credential change or an unknown new identity retires
+    /// the previous hint under the same boundary as notification invalidation.
+    pub(crate) fn attach_cache_key(&self, server_id: &McpServerId, key: Option<CatalogCacheKey>) {
+        let mut guard = self.lock();
+        if guard.guard.cache_keys.get(server_id) == key.as_ref() {
+            return;
+        }
+        if let Some(previous) = guard.guard.cache_keys.remove(server_id) {
+            McpCatalogCache::process().invalidate(&previous);
+        }
+        if let Some(key) = key {
+            guard.guard.cache_keys.insert(server_id.clone(), key);
+        }
+    }
 }
 
 impl Default for McpInvalidationState {
@@ -158,23 +181,30 @@ impl Default for McpInvalidationState {
 /// ordered against the capability commit's epoch validation and swap.
 #[doc(hidden)]
 pub struct McpInvalidationGuard<'a> {
-    guard: std::sync::MutexGuard<'a, BTreeMap<McpServerId, u64>>,
+    guard: std::sync::MutexGuard<'a, InvalidationEntries>,
 }
 
 impl McpInvalidationGuard<'_> {
+    pub(crate) fn matches_cache_key(&self, server_id: &McpServerId, key: &CatalogCacheKey) -> bool {
+        self.guard.cache_keys.get(server_id) == Some(key)
+    }
+
     /// The current epoch of one server.
     #[must_use]
     #[doc(hidden)]
     pub fn epoch(&self, server_id: &McpServerId) -> u64 {
-        self.guard.get(server_id).copied().unwrap_or(0)
+        self.guard.epochs.get(server_id).copied().unwrap_or(0)
     }
 
     /// Advances one server's invalidation epoch — the exact mutation the
     /// `tools/list_changed` notification performs.
     #[doc(hidden)]
     pub fn advance(&mut self, server_id: &McpServerId) {
-        let current = self.guard.get(server_id).copied().unwrap_or(0);
-        self.guard.insert(server_id.clone(), current + 1);
+        let current = self.epoch(server_id);
+        self.guard.epochs.insert(server_id.clone(), current + 1);
+        if let Some(key) = self.guard.cache_keys.get(server_id) {
+            McpCatalogCache::process().invalidate(key);
+        }
     }
 }
 

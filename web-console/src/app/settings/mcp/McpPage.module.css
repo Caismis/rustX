@@ -25,6 +25,7 @@
 .content { display:flex; flex-direction:column; gap:2px; min-width:0; }
 .content > * { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .content > :first-child { font-weight:500; }
+.content > .startup { white-space:normal; overflow:visible; }
 .empty { border:.5px dashed var(--dsw-alias-border-l3); border-radius:16px; display:flex; flex-direction:column; justify-content:center; align-items:center; gap:8px; padding:24px 16px; text-align:center; font-size:14px; line-height:22px; }
 .empty p { margin:0; font-size:13px; line-height:20px; color:var(--dsw-alias-label-secondary); }
 .empty .actions { margin-top:4px; justify-content:center; }

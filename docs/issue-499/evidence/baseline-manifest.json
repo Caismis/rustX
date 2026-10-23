@@ -1,0 +1,11 @@
+{
+  "baseline_sha": "741955eb18d0deb18e5dbafc950f07524f0a75fa",
+  "fixture_sha256": "545f007a604873966721bc6c5720a62b655dc7abd4b3108cf9014759ad7e6e0c",
+  "cwd": "/tmp/rustx-issue-499-baseline",
+  "command": "CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR=/home/capi/Documents/codes/rustX/target TMPDIR=/run/user/1000/rustx-issue-499-baseline-tmp RUSTX_SOURCE_TIMING_JSON=/tmp/issue499/baseline-source-preparation.json cargo test --lib --all-features capabilities::coordinator::performance_tests::source_preparation_timing -- --ignored --exact --nocapture",
+  "rustc": "1.98.1 (48a229cea 2026-09-01)",
+  "result": "passed",
+  "log_sha256": "58dce41d3329ef0d77f726086ba6fb59ea98ac7cda3844bd627f892e44560199",
+  "completed_at": "2026-10-23T14:31:38.229806+00:00",
+  "environment_notes": "Linux x86_64 shared host, unrelated issue-496 Rust build overlapped compilation; tmpfs temporary source stores."
+}

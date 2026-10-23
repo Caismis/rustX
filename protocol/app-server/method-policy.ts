@@ -19,7 +19,7 @@
  *
  * Pure and browser-safe: generated types only.
  */
-import type { Request1 } from './v54.ts';
+import type { Request1 } from './v55.ts';
 
 export type MethodName = Request1['method'];
 export type MethodEffect = 'read' | 'side_effecting' | 'connection_local';
