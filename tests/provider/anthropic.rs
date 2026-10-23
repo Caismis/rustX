@@ -112,9 +112,9 @@ async fn text_stream_normalizes() {
         ModelEvent::Completed {
             finish_reason: ModelFinishReason::Stop,
             usage: Some(ModelUsage {
-                input_tokens: 30,
-                output_tokens: 15,
-                total_tokens: 45,
+                input_tokens: Some(30),
+                output_tokens: Some(15),
+                total_tokens: Some(45),
                 details: Some(rustx::model::UsageDetails {
                     reasoning_tokens: None,
                     cached_input_tokens: Some(5),
@@ -1578,11 +1578,17 @@ async fn usage_accounts_for_cache_categories_and_thinking_tokens() {
     let usage = usage.as_ref().expect("usage reported");
     assert_eq!(
         usage.input_tokens,
-        2095 + 2051 + 2051,
+        Some(2095 + 2051 + 2051),
         "input = base + cache creation + cache read"
     );
-    assert_eq!(usage.output_tokens, 510);
-    assert_eq!(usage.total_tokens, usage.input_tokens + usage.output_tokens);
+    assert_eq!(usage.output_tokens, Some(510));
+    assert_eq!(
+        usage.total_tokens,
+        usage
+            .input_tokens
+            .zip(usage.output_tokens)
+            .map(|(input, output)| input + output)
+    );
     let details = usage.details.as_ref().expect("details reported");
     assert_eq!(
         details.reasoning_tokens,

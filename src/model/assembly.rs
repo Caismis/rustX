@@ -943,15 +943,15 @@ mod tests {
     #[test]
     fn usage_tracks_updates_with_terminal_winning() {
         let latest_usage = ModelUsage {
-            input_tokens: 1,
-            output_tokens: 2,
-            total_tokens: 3,
+            input_tokens: Some(1),
+            output_tokens: Some(2),
+            total_tokens: Some(3),
             details: None,
         };
         let terminal_usage = ModelUsage {
-            input_tokens: 4,
-            output_tokens: 5,
-            total_tokens: 9,
+            input_tokens: Some(4),
+            output_tokens: Some(5),
+            total_tokens: Some(9),
             details: None,
         };
         let mut assembler = ModelEventAssembler::new();
@@ -978,9 +978,9 @@ mod tests {
     #[test]
     fn usage_updates_are_the_successful_terminal_fallback() {
         let usage = ModelUsage {
-            input_tokens: 1,
-            output_tokens: 2,
-            total_tokens: 3,
+            input_tokens: Some(1),
+            output_tokens: Some(2),
+            total_tokens: Some(3),
             details: None,
         };
         let turn = assemble(&[

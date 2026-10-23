@@ -18,7 +18,7 @@ use rustx::model::catalog::{
 };
 use rustx::model::invocation::ModelBindingRegistry;
 use rustx::model::session::{
-    SessionModelConfig, SessionModelState, SessionModelView, SummaryModelView,
+    AuxiliaryModelView, SessionModelConfig, SessionModelState, SessionModelView,
 };
 use rustx::model::{ModelAdapter, ModelEvent, ModelFinishReason, ModelProtocol};
 use rustx::runtime_client::types::{RequestId, RuntimeClientRequest, RuntimeClientResult};
@@ -91,7 +91,10 @@ fn model_value(
     model_source(attachment, &page, page.items[0].offset)
 }
 
-fn read_model(attachment: &rustx::runtime_client::RuntimeAttachment, id: u64) -> SessionModelView {
+pub(super) fn read_model(
+    attachment: &rustx::runtime_client::RuntimeAttachment,
+    id: u64,
+) -> SessionModelView {
     model_value(
         attachment,
         attachment
@@ -396,7 +399,7 @@ async fn the_identity_receipt_and_checkpoint_keep_the_redacted_session_model() {
         Some(ModelProfileId::new("on")),
         "the model's declared default profile is selected"
     );
-    assert_eq!(model.summary, Some(SummaryModelView::Session));
+    assert_eq!(model.summary, Some(AuxiliaryModelView::Session));
 
     // The effective capabilities are the intersection, not the raw claim.
     assert!(
@@ -653,7 +656,7 @@ async fn primary_model_selection_resets_primary_overrides_and_preserves_summary_
         .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
 
-    let summary_policy = rustx::model::session::SummaryModelPolicy::Explicit {
+    let summary_policy = rustx::model::session::AuxiliaryModelPolicy::Explicit {
         model: model_ref("summary/summary-model"),
         profile: None,
         request_params: common::request_params(serde_json::json!({"summary_tag": "keep"})),
@@ -664,6 +667,7 @@ async fn primary_model_selection_resets_primary_overrides_and_preserves_summary_
         profile: Some(ModelProfileId::new("off")),
         request_params: common::request_params(serde_json::json!({"top_k": 40})),
         max_output_tokens: Some(1_000),
+        title_model: crate::model::session::AuxiliaryModelPolicy::Session,
         summary_model: summary_policy.clone(),
     };
     let initial_response = attachment.handle_request(RuntimeClientRequest::ModelSet {
@@ -677,6 +681,7 @@ async fn primary_model_selection_resets_primary_overrides_and_preserves_summary_
         profile: None,
         request_params: rustx::model::RequestParams::new(),
         max_output_tokens: None,
+        title_model: crate::model::session::AuxiliaryModelPolicy::Session,
         summary_model: summary_policy.clone(),
     };
     let response = attachment.handle_request(RuntimeClientRequest::ModelSet {
@@ -697,7 +702,7 @@ async fn primary_model_selection_resets_primary_overrides_and_preserves_summary_
     assert_eq!(model.effective.as_ref().unwrap().profile, None);
     assert_eq!(model.effective.as_ref().unwrap().max_output_tokens, 2_048);
     assert!(model.effective.as_ref().unwrap().request_params.is_empty());
-    let Some(SummaryModelView::Explicit(summary)) = model.summary else {
+    let Some(AuxiliaryModelView::Explicit(summary)) = model.summary else {
         panic!("the explicit summary policy survives the primary switch");
     };
     assert_eq!(summary.model, model_ref("summary/summary-model"));
@@ -714,7 +719,7 @@ async fn primary_model_selection_resets_primary_overrides_and_preserves_summary_
     assert_eq!(snapshot.model.as_ref().unwrap().configured, selected);
     assert_eq!(
         snapshot.model.as_ref().unwrap().summary,
-        Some(SummaryModelView::Explicit(summary))
+        Some(AuxiliaryModelView::Explicit(summary))
     );
 }
 
@@ -867,7 +872,7 @@ async fn the_attempt_view_reports_the_model_it_was_admitted_with() {
     );
     assert_eq!(
         attempt.model.as_ref().unwrap().summary,
-        SummaryModelView::Session
+        AuxiliaryModelView::Session
     );
 }
 

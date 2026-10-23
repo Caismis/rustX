@@ -1,7 +1,7 @@
 import { actionError } from '../../bindings/action-error';
 import { assign, fromCallback, fromPromise, setup, type ActorRefFrom } from 'xstate';
 import type { AppServerClient } from '../../client/app-server';
-import type { CompletedResponseView, UserInputBlock } from '../../../../protocol/app-server/v52';
+import type { CompletedResponseView, UserInputBlock } from '../../../../protocol/app-server/v53';
 import type { Observation } from '../../client/session-lifecycle/port';
 import { CommandSession, type HistoricalSelection, type HistoryAction } from '../commands/native';
 import type { CommandRequest } from '../commands/CommandPanel';
@@ -13,7 +13,8 @@ import { attemptOwnerKey } from '../../../../protocol/app-server/attempt-identit
 
 class RetiredPreparation extends Error {}
 export type ConversationRoute = { kind: 'new-conversation'; workspaceId?: string } | { kind: 'session'; sessionId: string } | { kind: 'session-draft'; sessionId: string };
-export type ShellRoute = ConversationRoute;
+export interface WorkflowsRoute { kind: 'workflows' }
+export type ShellRoute = ConversationRoute | WorkflowsRoute;
 function sameEditorDestination(a: ShellRoute, b: ShellRoute) {
   const from = a, to = b;
   return 'sessionId' in from && 'sessionId' in to ? from.sessionId === to.sessionId
@@ -50,6 +51,7 @@ export type ShellNavigationEvent =
   | { type: 'COMMAND'; request: CommandRequest }
   | { type: 'COMMAND.CLOSE'; command: NonNullable<ShellNavigationContext['command']> }
   | { type: 'SETTINGS'; destination: Extract<SettingsNavigationEvent, { type: 'OPEN' | 'OPEN.CONNECTION' | 'OPEN.OWNER' | 'OPEN.REPAIRS' }> }
+  | { type: 'WORKFLOWS' }
   | { type: 'SIDEBAR.DISMISS' | 'DISMISS.ERROR' }
   | { type: 'CANCEL'; pending?: Pending }
   | { type: 'AUTHORITY'; generation: number; authority: number | undefined };
@@ -236,6 +238,9 @@ export const shellNavigationMachine = setup({
     COMMAND: { guard: 'commandRoute', target: '.idle', actions: 'command' },
     'COMMAND.CLOSE': { guard: 'commandOwner', actions: assign({ command: () => undefined }) },
     SETTINGS: { target: '.idle', actions: ['retire', 'settings'] },
+    // Leaving a conversation for Workflows retires its pending intent and
+    // its committed controls; it cancels no native work.
+    WORKFLOWS: { target: '.idle', actions: ['retire', assign({ route: () => ({ kind: 'workflows' as const }), control: () => ({}) })] },
     'SIDEBAR.DISMISS': { guard: 'sidebar', target: '.idle', actions: 'retire' },
     CANCEL: { guard: 'cancelling', target: '.idle', actions: 'retire' },
     AUTHORITY: { guard: 'changedAuthority', target: '.idle', actions: ['retireSettings', 'authority'] },

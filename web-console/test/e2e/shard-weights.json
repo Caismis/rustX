@@ -66,6 +66,7 @@
   "workbench-documents.spec.ts": 24.6,
   "workbench-file-links.spec.ts": 8.4,
   "workbench.spec.ts": 21.5,
+  "workflow-editor.spec.ts": 16.0,
   "workflow.spec.ts": 9.1,
   "workspace-associations.spec.ts": 6.9,
   "workspaces.spec.ts": 5.6

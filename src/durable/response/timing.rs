@@ -30,7 +30,7 @@ impl TimingFold {
         if let Some(request) = self.requests.get_mut(id) {
             *request = Some(RequestReading {
                 generation,
-                output_tokens: usage.map(|usage| usage.output_tokens),
+                output_tokens: usage.and_then(|usage| usage.output_tokens),
             });
         }
     }
@@ -129,11 +129,13 @@ impl ActivityFold {
             self.ttft_ms = self.ttft_ms.saturating_add(first);
             self.ttft_requests += 1;
         }
-        if let (Some(span), Some(usage)) = (generation.generation_ms(), usage)
-            && span > 0
+        if let (Some(span), Some(output_tokens)) = (
+            generation.generation_ms(),
+            usage.and_then(|usage| usage.output_tokens),
+        ) && span > 0
         {
             self.decode_ms = self.decode_ms.saturating_add(span);
-            self.decode_tokens = self.decode_tokens.saturating_add(usage.output_tokens);
+            self.decode_tokens = self.decode_tokens.saturating_add(output_tokens);
         }
     }
     pub(crate) fn tool_started(&mut self, attempt: AttemptId, call: ToolCallId, at: DateTime<Utc>) {

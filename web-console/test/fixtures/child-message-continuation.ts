@@ -1,4 +1,4 @@
-import type { MessageBlock } from '../../../protocol/app-server/v52';
+import type { MessageBlock } from '../../../protocol/app-server/v53';
 import { childConversation, type Server } from '../fixture';
 
 /** Hold a real continuation while the resident Child Chat changes visibility. */

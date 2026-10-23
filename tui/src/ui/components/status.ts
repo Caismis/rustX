@@ -262,11 +262,11 @@ export function footerSegments(
   if (context) segments.push({ text: role.meta(context), priority: 1 });
   const unavailable = unavailableCapabilities(state).length;
   if (unavailable) segments.push({ text: role.warning(`${unavailable} optional ${unavailable === 1 ? "capability" : "capabilities"} unavailable`), priority: 2 });
-  if (typeof session?.name === "string" && session.name.trim()) {
-    segments.push({ text: role.meta(`session ${session.name}`), priority: 3 });
+  if (session && (session.name ?? session.generated_title?.text)?.trim()) {
+    segments.push({ text: role.meta(`session ${sessionLabel(session)}`), priority: 3 });
   }
   const usage = state.statistics?.reported_usage;
-  if (usage) segments.push({ text: role.meta(`reported ↑${compact(usage.input_tokens)} ↓${compact(usage.output_tokens)}`), priority: 4 });
+  if (usage) segments.push({ text: role.meta(`reported ↑${usage.input_tokens == null ? '?' : compact(usage.input_tokens)} ↓${usage.output_tokens == null ? '?' : compact(usage.output_tokens)}`), priority: 4 });
   if (state.statistics && state.statistics.requests_with_usage !== state.statistics.model_requests) {
     segments.push({ text: role.meta(`usage coverage ${state.statistics.requests_with_usage}/${state.statistics.model_requests} requests`), priority: 4 });
   }

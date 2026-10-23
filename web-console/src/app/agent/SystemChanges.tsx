@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Disclosure behavior adapted from Harness SystemPromptRow and ContextInjectionRow; see PROVENANCE.md. */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { CheckpointReadCut, RuntimeClientMessageDescriptor, RuntimeClientSnapshot, RuntimeClientTranscriptEntry, TraceRecord, TraceText, TraceToolDefinition } from '../../../../protocol/app-server/v52';
+import type { CheckpointReadCut, RuntimeClientMessageDescriptor, RuntimeClientSnapshot, RuntimeClientTranscriptEntry, TraceRecord, TraceText, TraceToolDefinition } from '../../../../protocol/app-server/v53';
 import { traceAttemptKey } from '../../../../protocol/app-server/trace-identity';
 import { attemptOwnerKey } from '../../../../protocol/app-server/attempt-identity';
 import type { TraceFieldReader } from '../../client/trace';

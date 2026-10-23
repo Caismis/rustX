@@ -77,6 +77,14 @@ it.each([
   else expect(rename).not.toHaveBeenCalled();
 });
 
+it('sidebar Fork increments the generated title before the opening preview', async () => {
+  await setup();
+  server.summaries.set('A', { name: undefined, preview: 'Original question', generated_title: { text: 'Generated title', provenance: { type: 'inherited', source_session: 'origin' } } });
+  await server.client.listSessions();
+  await forkLatestSession(server.client, 'A', () => true);
+  expect(server.summary('child').name).toBe('Generated title (1)');
+});
+
 it('settles naming after the sidebar gesture retires once creation has committed', async () => {
   await setup(); server.summaries.set('A', { name: 'Roadmap (1)' });
   server.held.add('session/fork');

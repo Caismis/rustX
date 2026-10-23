@@ -435,24 +435,51 @@ Compaction reserves protected capacity before model/context preparation and
 keeps it under native operation ownership. Ordinary consumers cannot select
 the crate-private protected admission path.
 
-`context::compaction_budget` owns cumulative business accounting independently
-of physical execution capacity. Its clones share the same operation identity,
-deadline, start reservations, shrink count and learned Summary input limit.
+`runtime::auxiliary::authority` owns restricted live start allowance and the
+original absolute deadline, independently of physical execution capacity.
+`context::compaction_budget` adds business-owned shrink accounting and the
+learned Summary input limit. Repeated Compaction entry in one logical Agent
+step gives each checkpoint a distinct operation receipt identity while retaining
+the original allowance, deadline and learned input limit.
 Provider-driven reductions update the count and effective limit together;
 carryover re-entry never restores the configured upper bound. Request receipts and typed
 noncommit evidence resolve reservations; an unknown transaction remains a
 logical budget obligation rather than permission for another physical start.
 
 `runtime::auxiliary::executor` registers each preparation before expensive
-history/media work. A close-fenced native Scope owns the Compaction children;
-one Call consumes one RequestId-specific dispatch grant after both starts are
-confirmed. Call records keep lifecycle admission and capacity independently
+history/media work. A close-fenced native Scope owns its independently admitted
+children; each physical request consumes a fresh RequestId-specific dispatch
+grant after Call/request starts are confirmed. At most two technical retries
+reuse the frozen Call input, invocation and captured media. Failed-request and
+retry-scheduled facts commit atomically; exact confirmation and local stream
+exit precede another dispatch. Backoff is anchored to failure observation before
+stream teardown, so local teardown and settlement consume its elapsed delay.
+Call records keep lifecycle admission and capacity independently
 of the result receiver. Capacity and lifecycle-lock Busy refusals share the
 native cancellation arbitration: an earlier cancellation cannot become a
 compaction failure, while active callers still receive nonblocking Busy.
 Frozen invocation parameters, resource revision and
 semantic input are checked before durable start. Context owns transcript
 construction, Summary acceptance and the checkpoint transaction.
+
+`local_runtime::session_title` owns one root-local automatic Title operation.
+Its captured invocation preserves the selected model's complete generation
+budget and thinking parameters; final label validation is a separate Catalog
+concern. Native lifecycle contention waits for commit-boundary release, distinct
+from process capacity availability; capacity is reserved only after that native
+boundary is acquired.
+Native finite first-Human/model metadata and capacity subscriptions are armed
+before activation. An indexed Store query supplies exact first-Human identity
+and bounded text, including timestamp-less messages after a Runtime preview.
+Native source association and first-request consumption are one transactional
+authority: a confirmed zero-request terminal can release its exact association,
+whereas a confirmed first start permanently consumes automatic eligibility.
+Title uses ordinary capacity and freezes its independently configured model at
+admission. Its native lifecycle/resource owner survives execution settlement
+through a separate conditional, idempotent Session Catalog publication. That
+publication never invokes manual rename, changes model settings or advances
+Human activity. Clone/Fork copy saved manual/generated labels as independent
+metadata, without transferring source quota or execution.
 
 An admitted Call creates at most one native owner thread and one serialized
 write thread. Before the first owner is spawned, the process installs a fixed
@@ -7006,9 +7033,9 @@ Other client instances have independent budgets; this is not a server-wide quota
 The Web Composer model menu and `/model` picker consume the same native catalog and
 selection policy. Model and profile identifiers retain native order and defaults;
 a different model without an explicit profile uses native defaults for its
-primary settings and keeps the independent Summary policy. Selecting the current
+primary settings and keeps the independent Summary and Title policies. Selecting the current
 model preserves the complete configured choice, including its pinned Profile,
-request overrides, output limit and independent Summary policy. A deliberate
+request overrides, output limit and independent Summary and Title policies. A deliberate
 selection against an attached Session submits that complete choice through the
 existing Session model mutation/confirmation owner even when its values are
 unchanged. Only the native owner can distinguish inherited intent that must be

@@ -2,6 +2,10 @@
 use crate::runtime::resources::{RuntimeResourceLoadError, validate_project_resource_path};
 use std::path::{Path, PathBuf};
 
+/// The most authored entries of any kind a canonical resource directory
+/// holds, besides rustX's one lock directory.
+pub(crate) const MAX_DIRECTORY_ENTRIES: usize = 1024;
+
 pub(crate) fn entries(
     boundary: &Path,
     root: &Path,
@@ -18,19 +22,34 @@ pub(crate) fn entries(
         }
         Ok(_) => {}
     }
+    // rustX's lock directory is synchronization metadata, not an authored
+    // entry: it is read past and never counted, so creating it on a first
+    // write never changes what discovery admits. It is one fixed name, so the
+    // read stays bounded at the authored bound plus that one entry.
     let paths = std::fs::read_dir(root)
         .map_err(|e| fail(e.to_string()))?
-        .take(1025)
+        .take(MAX_DIRECTORY_ENTRIES + 2)
         .map(|entry| entry.map(|e| e.path()))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| fail(e.to_string()))?;
-    if paths.len() > 1024 {
+    let paths: Vec<_> = paths
+        .into_iter()
+        .filter(|path| {
+            !path
+                .file_name()
+                .is_some_and(super::settings::is_lock_directory)
+        })
+        .collect();
+    if paths.len() > MAX_DIRECTORY_ENTRIES {
         return Err(fail("canonical resource root exceeds 1024 entries".into()));
     }
     let mut paths = paths;
     paths.sort();
     Ok(paths)
 }
+
+/// The most resources of one kind a canonical resource directory holds.
+pub(crate) const MAX_RESOURCE_FILES: usize = 128;
 
 pub(crate) fn files(
     boundary: &Path,
@@ -44,7 +63,7 @@ pub(crate) fn files(
         }
         files.push(path);
     }
-    if files.len() > 128 {
+    if files.len() > MAX_RESOURCE_FILES {
         return Err(
             RuntimeResourceLoadError::new("canonical catalog exceeds 128 resources")
                 .at(root, "resources"),
@@ -151,4 +170,52 @@ pub(crate) fn revision(root: &Path) -> String {
     let mut hash = Sha256::new();
     walk(root, &mut hash, &mut 16_384, &mut (64 * 1024 * 1024), 0);
     format!("sha256:{:x}", hash.finalize())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::MetadataExt;
+
+    #[test]
+    fn case_sensitive_discovery_counts_lock_directory_case_variants() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let locks = root.join(".rustx-locks");
+        std::fs::create_dir(&locks).unwrap();
+        let variants = [root.join(".RUSTX-LOCKS"), root.join(".RuStX-LoCkS")];
+        for path in &variants {
+            std::fs::File::create_new(path)
+                .expect("this regression requires a verified case-sensitive filesystem");
+            let metadata = std::fs::symlink_metadata(path).unwrap();
+            assert!(metadata.is_file());
+            assert_ne!(metadata.ino(), std::fs::metadata(&locks).unwrap().ino());
+        }
+        assert_ne!(
+            std::fs::metadata(&variants[0]).unwrap().ino(),
+            std::fs::metadata(&variants[1]).unwrap().ino()
+        );
+        for index in 0..MAX_DIRECTORY_ENTRIES - variants.len() {
+            std::fs::write(root.join(format!("ordinary-{index}")), b"ordinary").unwrap();
+        }
+
+        let discovered = entries(&root, &root).unwrap();
+        assert_eq!(discovered.len(), MAX_DIRECTORY_ENTRIES);
+        assert!(!discovered.contains(&locks));
+        for path in &variants {
+            assert!(discovered.contains(path));
+        }
+
+        std::fs::write(root.join("overflow"), b"ordinary").unwrap();
+        let error = entries(&root, &root).unwrap_err();
+        assert!(
+            error.to_string().contains("exceeds 1024 entries"),
+            "{error}"
+        );
+        assert_eq!(
+            std::fs::read_dir(&root).unwrap().count(),
+            MAX_DIRECTORY_ENTRIES + 2,
+            "discovery preserves the exact metadata directory and all 1,025 authored entries"
+        );
+    }
 }

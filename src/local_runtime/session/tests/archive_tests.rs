@@ -121,9 +121,9 @@ pub(super) fn settle_auxiliary(
         ordinal: 0,
     };
     let usage = ModelUsage {
-        input_tokens: 41,
-        output_tokens: 7,
-        total_tokens: 48,
+        input_tokens: Some(41),
+        output_tokens: Some(7),
+        total_tokens: Some(48),
         details: None,
     };
     let generation = GenerationEvidence {
@@ -266,11 +266,11 @@ async fn archive_auxiliary_audit_preserves_owner_usage_and_excludes_provider_pro
     )
     .await;
     let manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
-    assert_eq!(manifest["format"], "rustx-session-archive/v7");
-    assert_eq!(manifest["schemas"]["journal"], 5);
+    assert_eq!(manifest["format"], "rustx-session-archive/v8");
+    assert_eq!(manifest["schemas"]["journal"], 6);
     assert_eq!(manifest["schemas"]["generations"], 2);
-    assert_eq!(manifest["schemas"]["auxiliary_audit"], 2);
-    assert_eq!(manifest["schemas"]["inherited_auxiliary_audit"], 2);
+    assert_eq!(manifest["schemas"]["auxiliary_audit"], 3);
+    assert_eq!(manifest["schemas"]["inherited_auxiliary_audit"], 3);
     assert_eq!(
         manifest["auxiliary_reconstruction"],
         serde_json::json!({
@@ -459,8 +459,8 @@ async fn archive_exports_only_named_inherited_summary_generation_audit() {
     )
     .await;
     let manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
-    assert_eq!(manifest["schemas"]["auxiliary_audit"], 2);
-    assert_eq!(manifest["schemas"]["inherited_auxiliary_audit"], 2);
+    assert_eq!(manifest["schemas"]["auxiliary_audit"], 3);
+    assert_eq!(manifest["schemas"]["inherited_auxiliary_audit"], 3);
     let inherited = records(&files, &clone.conversation_id, "inherited_auxiliary_audit");
     assert_eq!(inherited.len(), 4);
     assert!(inherited.iter().all(|record| {
@@ -696,14 +696,14 @@ async fn archive_v6_contract_preserves_accepted_contributions_and_journal_vocabu
             .unwrap();
     let files = decode(cut).await;
     let manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
-    assert_eq!(manifest["format"], "rustx-session-archive/v7");
+    assert_eq!(manifest["format"], "rustx-session-archive/v8");
     assert_eq!(
         manifest["schemas"],
         serde_json::json!({
-            "journal": 5, "messages": 1, "surface": 1, "requests": 5, "projections":2,
-            "generations": 2, "auxiliary_audit": 2, "inherited_auxiliary_audit": 2,
+            "journal": 6, "messages": 1, "surface": 1, "requests": 5, "projections":2,
+            "generations": 2, "auxiliary_audit": 3, "inherited_auxiliary_audit": 3,
             "publication_audits": 1,
-            "inherited_responses": 1, "inherited_turns": 1,
+            "inherited_responses": 2, "inherited_turns": 2,
         })
     );
     let requests = records(&files, &conversation, "requests");
@@ -861,7 +861,7 @@ async fn archive_cut_excludes_live_writes_and_later_descendants() {
     release.send(()).unwrap();
     let files = decode_bytes(producing.await.unwrap());
     let manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
-    assert_eq!(manifest["format"], "rustx-session-archive/v7");
+    assert_eq!(manifest["format"], "rustx-session-archive/v8");
     assert_eq!(manifest["conversations"].as_array().unwrap().len(), 2);
     assert!(files.contains_key(&format!("sessions/{child}/journal.jsonl")));
     assert!(!files.contains_key(&format!("sessions/{later}/journal.jsonl")));
@@ -1833,9 +1833,9 @@ async fn inherited_turn_archive(member: bool) {
             );
         }
         let manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
-        assert_eq!(manifest["schemas"]["auxiliary_audit"], 2);
-        assert_eq!(manifest["schemas"]["inherited_auxiliary_audit"], 2);
-        assert_eq!(manifest["schemas"]["inherited_turns"], 1);
+        assert_eq!(manifest["schemas"]["auxiliary_audit"], 3);
+        assert_eq!(manifest["schemas"]["inherited_auxiliary_audit"], 3);
+        assert_eq!(manifest["schemas"]["inherited_turns"], 2);
         assert_eq!(manifest["conversations"][0]["frontiers"]["bootstrap"], 1);
         assert!(
             manifest["conversations"][0]["frontiers"]

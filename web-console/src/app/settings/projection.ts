@@ -2,7 +2,7 @@ import type { Translate } from '../../locale/translation';
 import type {
   ConfigurationApplication, McpView, McpWrite, Origin, ProcessPolicyImpact, ResourceFamily, RuntimeLayer,
   SourceMutation, SourceScope, SourceSettings, SourceTarget, SourceView, UnitApplication,
-} from '../../../../protocol/app-server/v52';
+} from '../../../../protocol/app-server/v53';
 import type { ConnectionState } from '../../client/contracts';
 
 /** Each Settings target names one exact configuration owner. The catalog scope
@@ -98,7 +98,7 @@ export function authoredUnit(document: RuntimeLayer | null | undefined, mutation
  * definitions carry a `mcp_servers.<id>` default origin. */
 export function unitProvenancePath(mutation: SourceMutation): string | undefined {
   if (mutation.kind === 'mcp') return `mcp_servers.${mutation.id}`;
-  if (mutation.kind === 'agent' || mutation.kind === 'repair_config') return undefined;
+  if (mutation.kind === 'agent' || mutation.kind === 'repair_config' || mutation.kind === 'workflow') return undefined;
   const unit = mutation.mutation;
   switch (unit.unit) {
     case 'provider': return `providers.${unit.id}`;

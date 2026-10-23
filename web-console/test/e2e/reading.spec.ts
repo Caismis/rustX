@@ -41,6 +41,7 @@ const test = base.extend<{ readingScenario: string; reading: { fixture: Awaited<
     phase = 'session/create';
     const created = await remote.client.call('session/create', { settings: { cwd: fixture.workspaceA } }, 'session_transition');
     const id = created.session.id;
+    await remote.renameSession(id, 'New session');
     phase = 'session/attach';
     const attached = await remote.client.call('session/attach', { session_id: id }, 'attached');
     phase = 'checkpoint/subscribe';

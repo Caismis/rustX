@@ -1,4 +1,4 @@
-import type { RuntimeClientAgent, RuntimeClientSnapshot } from '../../protocol/app-server/v52';
+import type { RuntimeClientAgent, RuntimeClientSnapshot } from '../../protocol/app-server/v53';
 import { workflowRun } from './workflow-data';
 import { Server, snapshot } from './fixture';
 

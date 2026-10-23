@@ -674,7 +674,7 @@ async fn completed_response_cut_is_shared_by_branch_and_fork_and_distinct_from_r
             }).unwrap();
             store.append_event(event(attempt, RuntimeEvent::AttemptStarted { attempt_id: AttemptId::new(attempt) })).unwrap();
             store.adopt_pending_batch(accepted.sequence, Some(AttemptId::new(attempt))).unwrap();
-            crate::runtime_client::response::tests::request(&store, attempt, 0, Some(crate::model::ModelUsage { input_tokens: 100, output_tokens: 20, total_tokens: 120, details: None }));
+            crate::runtime_client::response::tests::request(&store, attempt, 0, Some(crate::model::ModelUsage { input_tokens: Some(100), output_tokens: Some(20), total_tokens: Some(120), details: None }));
             store.append_canonical_with_event(&MessageBlock::Assistant(AssistantMessageBlock { id: MessageId::new(output),
                 content: vec![AssistantContentBlock::Text(TextBlock { text: output.into() })] }),
                 event(attempt, RuntimeEvent::AssistantMessageCommitted { message_id: MessageId::new(output) })).unwrap();
@@ -700,14 +700,14 @@ async fn completed_response_cut_is_shared_by_branch_and_fork_and_distinct_from_r
             assert_eq!(tail.closing_message_id, Some(crate::conversation::message_id_of(&messages[3])));
             assert_eq!(tail.retry_message_id, Some(crate::conversation::message_id_of(&messages[2])));
             assert_eq!(tail.origin.conversation_id, source.active_conversation_id);
-            assert_eq!(tail.usage.as_ref().unwrap().total_tokens, 120);
+            assert_eq!(tail.usage.as_ref().unwrap().total_tokens, Some(120));
             assert_eq!(tail.timing.as_ref().unwrap().generation_ms, Some(1280));
             assert_eq!(projected.entries.iter().filter(|entry| entry.completed_response.is_some()).count(), 2);
             // As a Harness fork folds its copied prefix, the child's totals and
             // context reading include both inherited turns, without owning them.
             let totals = projected.statistics.unwrap();
             assert_eq!((totals.turns, totals.model_requests, totals.requests_with_usage, totals.completed_responses), (2, 2, 2, 2));
-            assert_eq!(totals.reported_usage.unwrap().total_tokens, 240);
+            assert_eq!(totals.reported_usage.unwrap().total_tokens, Some(240));
             assert!(totals.latest_turn.is_none());
             assert_eq!(crate::context::occupancy::read(&copied, 0).unwrap().unwrap().input_tokens, 100);
             assert!(copied.read_events(None, 128).unwrap().events.is_empty());
@@ -752,7 +752,7 @@ async fn completed_response_cut_is_shared_by_branch_and_fork_and_distinct_from_r
         crate::runtime_client::response::native_oracle_decorate(&retry, &mut retried).unwrap();
         let totals = retried.statistics.unwrap();
         assert_eq!((totals.turns, totals.model_requests, totals.completed_responses), (1, 1, 1));
-        assert_eq!(totals.reported_usage.unwrap().total_tokens, 120);
+        assert_eq!(totals.reported_usage.unwrap().total_tokens, Some(120));
         rejected(&connection, Method::SessionBranch { session_id: source.id.clone(), node_id: source.active_node.clone(), surface_revision: crate::conversation::SurfaceRevision::new(revision.get() + 1), boundary: CanonicalContentLocator::ByMessageId {message_id:MessageId::new("assistant-b")}, side: LineageSide::After }).await;
         rejected(&connection, Method::SessionBranch { session_id: source.id.clone(), node_id: source.active_node.clone(), surface_revision: revision, boundary: CanonicalContentLocator::ByMessageId {message_id:MessageId::new("user-b")}, side: LineageSide::After }).await;
         assert_eq!(store.load_canonical().unwrap(), original);

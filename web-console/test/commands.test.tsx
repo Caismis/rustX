@@ -16,7 +16,7 @@ import { CommandSession } from '../src/app/commands/native';
 import { CommandPanel } from '../src/app/commands/CommandPanel';
 import { App } from '../src/app/App';
 import { OutcomeUncertain, RpcFailure } from '../src/client/errors';
-import type { MethodResult, Request, SessionNodeObservation, SessionUserMessageBoundaryObservation, UserInputBlock } from '../../protocol/app-server/v52';
+import type { MethodResult, Request, SessionNodeObservation, SessionUserMessageBoundaryObservation, UserInputBlock } from '../../protocol/app-server/v53';
 import { Server, snapshot } from './fixture';
 
 let server: Server;
@@ -152,6 +152,14 @@ describe('shared Fork naming', () => {
     expect(server.summary('child').name).toBe('计划（10）');
     expect(server.requests.slice(before).filter(row => row.request.method === 'session/read')).toHaveLength(0);
     expect(methods().filter(method => method === 'session/name')).toHaveLength(1);
+  });
+
+  it.each(['command', 'response'] as const)('%s Fork increments the generated title before the opening preview', async entry => {
+    server.summaries.set('A', { name: undefined, preview: 'Original question', generated_title: { text: 'Generated title', provenance: { type: 'inherited', source_session: 'origin' } } });
+    const { fixture, scope, selection } = await subject();
+    const boundary = entry === 'response' ? await scope.responseSelection(fixture.original.transcript.entries![0].completed_response!) : selection;
+    await scope.transition('fork', boundary);
+    expect(server.summary('child').name).toBe('Generated title (1)');
   });
 
   it('freezes the source title before dispatch and finishes naming after navigation retires', async () => {

@@ -4200,6 +4200,7 @@ dependencies = [
  "grep-regex",
  "grep-searcher",
  "http",
+ "httpdate",
  "ignore",
  "imbl",
  "jsonschema",

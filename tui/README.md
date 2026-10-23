@@ -421,8 +421,8 @@ searchable selector over `model_catalog_get` and applies a choice through
 selection remains available during active execution. Native confirmation changes
 the Session's selection for future independent Attempts; the running Attempt's
 frozen model/Profile remains separately labelled, even for same-Model changes.
-Profile changes preserve independent request/output overrides and Summary Model
-policy; choosing another Model resets only primary overrides. Uncertain outcomes
+Profile changes preserve independent request/output overrides and Summary and Title
+policies; choosing another Model resets only primary overrides. Uncertain outcomes
 repair displayed state by reading authority, never by replaying the mutation.
 Readback does not settle an unanswered native request; the TUI keeps that
 diagnostic across reconnect. Deliberately selecting the current Model submits
@@ -1231,3 +1231,5 @@ receipt count/byte bounds. `/attach` uses one file per transfer; native
 `uploaded_content` finally validates all accumulated receipts at send/steer using
 persisted admitted sizes. Prepared loopback capabilities are revoked on host drain;
 an already admitted carrier remains host-owned until terminal settlement.
+
+Session selector rows use native Catalog metadata in manual-name, generated-title, opening-preview, identity order. The active Session header uses its native Session snapshot, which carries manual/generated labels and identity but no preview. It never reconstructs a preview from transcript text.

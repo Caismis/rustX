@@ -43,7 +43,8 @@ for (const [width, zh] of [[1440, false], [390, true]] as const) {
       await actions(source); await page.getByRole('menuitem', { name: zh ? '重命名' : 'Rename', exact: true }).click();
       const rename = page.getByRole('dialog', { name: zh ? '重命名会话' : 'Rename session', exact: true });
       const input = rename.getByRole('textbox', { name: zh ? '会话名称' : 'Session name', exact: true });
-      await expect(input).toBeFocused(); expect(await input.evaluate((el: HTMLInputElement) => [el.selectionStart, el.selectionEnd])).toEqual([0, 'Sidebar source'.length]);
+      await expect(input).toHaveValue('New session');
+      await expect(input).toBeFocused(); expect(await input.evaluate((el: HTMLInputElement) => [el.selectionStart, el.selectionEnd])).toEqual([0, 'New session'.length]);
       await page.screenshot({ path: `/tmp/rustx-session-rename-${width}.png` });
       await rename.getByRole('button', { name: zh ? '取消' : 'Cancel', exact: true }).click();
       await expect(page.locator(`button[data-session-id="${source}"]`)).toBeFocused();

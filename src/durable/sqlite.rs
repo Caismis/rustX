@@ -301,7 +301,8 @@ fn count_conversation_store_open() {
 /// for request ownership, audit/lineage and consumer-defined attribution.
 /// Version 74 combines both layouts; neither prior branch layout is accepted.
 /// Version 75 removes reasoning declarations from frozen invocations and request facts.
-pub const SQLITE_SCHEMA_VERSION: i64 = 75;
+/// Version 76 combines reasoning-free requests with retry and Title auxiliary storage.
+pub const SQLITE_SCHEMA_VERSION: i64 = 76;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]

@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import type { ContentBinding, ContentRef, RuntimeClientSnapshot, TurnProcessView } from '../../protocol/app-server/v52';
+import type { ContentBinding, ContentRef, RuntimeClientSnapshot, TurnProcessView } from '../../protocol/app-server/v53';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { JournalSourceProvider } from '../src/app/agent/ObservationSource';
 import { Server, readCut, snapshot } from './fixture';

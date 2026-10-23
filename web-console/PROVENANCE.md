@@ -1,3 +1,17 @@
+## Main integration and independent review (2026-10-23)
+
+The merge incorporates main at `5c8be3af0fe08c0fb35c5553901a32d6cf17b9d1`,
+including native Workflow file authoring, the React Flow editor and automatic
+Session titles. Existing settings, JSON editors, Chat delivery/change cards and
+source-marker-free Fork presentation remain in place. Independently allocated
+version numbers are combined as App Server 53, Runtime Client 73 and SQLite 76;
+only the combined generated protocol is shipped, with no old-format readers.
+Fork numbering uses manual names, generated titles and then opening previews in
+that order across Sidebar, response and command entries. All Workflow exit paths,
+including Close all views, use the editor's existing leave transaction before
+releasing attachments or changing routes. The pinned browser references are
+refreshed for the added Workflows sidebar entry and the retained branch styling.
+
 ## Chat reading samples and turn changes
 
 Read-only reference: `../deepseek-harness` at
@@ -2830,8 +2844,8 @@ light and narrow Chinese dark cover the same flow; real native upload scenarios
 exercise workspace bytes, source/fork ownership and more than the old file limits.
 
 
-The upload capability change is mandatory App Server v51. All current Web/TUI
-DTO imports and the binary carrier's control negotiation use v51; v50 artifacts
+The upload capability change is mandatory App Server v53. All current Web/TUI
+DTO imports and the binary carrier's control negotiation use v52; v50 artifacts
 are removed and old peers are rejected. This is a native protocol update only
 for other derived presentation files. Runtime Client v71 and TUI interactions
 remain unchanged. The two old narrow attachment-card rasterizer-noise entries
@@ -2847,7 +2861,7 @@ and old-version refusal checks passed, as did Clippy, formatting, i18n, source
 provenance and the production build. Shared child task/guidance admission now
 accepts 32 files while preserving its separate text budget and cancellation fence.
 
-The normal pinned-browser run passed all 18 selected regressions under v51. It
+The normal pinned-browser run passed all 18 selected regressions under v52. It
 covered desktop English/light, narrow Chinese/dark, all four theme/width Composer
 references, picker caret preservation, document drop, mixed attachment rail,
 image preview/focus restoration, invalid-addition toast, named retry/status
@@ -3990,7 +4004,7 @@ Child Trace detail consumes only an owner-confirmed live-to-durable resync, with
 one original absolute deadline and the same child/activation. Resident inspectors
 keep successful immutable content while lifecycle changes, terminal child refresh
 (including already-completed records) or explicit selection allow failed reads to recover. Wire upload preparation admits exactly one file per
-operation (also reflected in the generated v51 schema); Composer multi-selection
+operation (also reflected in the generated v52 schema); Composer multi-selection
 continues through independent queued operations. Native Session allocation and
 receipt authority are unchanged, and a lost acknowledgment remains read-repairable.
 The catalog/SQLite documentation versions are corrected to 16/74.
@@ -4163,7 +4177,7 @@ configuration authority loss, existing native CAS/secret/scope contracts and
 real App Server Provider/Model writes. Browser plugin not available; rendered
 checks use the repository's pinned Playwright Chromium container.
 
-The App Server v52 model/request projections remove declared reasoning capability
+The App Server v53 model/request projections remove declared reasoning capability
 and enabled flags throughout WebUI and TUI. Trace Options renders only frozen
 request parameters, and thinking display uses actual returned reasoning blocks.
 No model classification is inferred from a response without thinking.
@@ -4315,3 +4329,25 @@ verified error retention, formatting shortcuts, blur formatting and MCP saves
 on desktop dark and 390px light surfaces. Its temporary viewport, theme change,
 test tab and dev server were cleaned up. This does not claim other browsers or
 the entire browser suite were exercised.
+## Issue #491 — Workflow library and editor
+
+The Workflows library and editor are original rustX code built from existing
+theme tokens and primitives (Button, Menu, Modal, icons); no Harness source was
+copied. Their layout follows the two approved Issue #491 design references
+(`rustx_harness_workflows_list.png`, `rustx_harness_workflows_editor.png`).
+
+Canvas interaction uses `@xyflow/react` **12.12.0** (MIT, © webkid GmbH), pinned
+exactly. It adds this production closure, each MIT/ISC licensed and inventoried
+in `public/THIRD-PARTY-NOTICES.txt`: `@xyflow/system` 0.0.83, `classcat` 5.0.5,
+`zustand` 4.4.0, `use-sync-external-store` 1.2.0 and the `d3-color`,
+`d3-dispatch`, `d3-drag`, `d3-ease`, `d3-interpolate`, `d3-selection`,
+`d3-timer`, `d3-transition` and `d3-zoom` 3.x modules (their `@types/*`
+packages are type-only). The library loads only in the lazily imported editor
+chunk. The canvas hides React Flow's on-canvas attribution badge through
+`proOptions.hideAttribution`; the MIT license permits this, and attribution is
+retained in the shipped notices instead.
+
+React Flow owns only viewport, selection, dragging and connection gestures.
+Program state, validation, serialization and file I/O remain native; no React
+Flow JSON is persisted, and the browser-local view store holds only node
+coordinates and viewports.

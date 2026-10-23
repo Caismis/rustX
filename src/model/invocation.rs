@@ -91,6 +91,8 @@ pub enum RequestParamsLayer {
     SessionOverrides,
     /// An explicit summary model's request-parameter overrides.
     SummaryOverrides,
+    /// An explicit title model's request-parameter overrides.
+    TitleOverrides,
     /// The effective parameters at final wire construction.
     EffectiveRequest,
 }
@@ -102,6 +104,7 @@ impl fmt::Display for RequestParamsLayer {
             Self::ModelProfile => "model profile request parameters",
             Self::SessionOverrides => "session request-parameter overrides",
             Self::SummaryOverrides => "explicit summary request-parameter overrides",
+            Self::TitleOverrides => "explicit title request-parameter overrides",
             Self::EffectiveRequest => "effective request parameters",
         })
     }
@@ -912,6 +915,7 @@ impl ModelInvocationError {
     pub fn classification(&self) -> (&'static str, &'static str) {
         let overrides = |layer: RequestParamsLayer| match layer {
             RequestParamsLayer::SummaryOverrides => "agent.model.summary_model.request_params",
+            RequestParamsLayer::TitleOverrides => "agent.model.title_model.request_params",
             RequestParamsLayer::ModelParams | RequestParamsLayer::ModelProfile => {
                 "models.*.request_params"
             }

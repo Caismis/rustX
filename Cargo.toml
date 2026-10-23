@@ -90,6 +90,7 @@ png = "0.18.1"
 getrandom = "0.3.4"
 unicode-normalization = "0.1.24"
 http = "1"
+httpdate = "1"
 # The Server-Sent Events types of rmcp's Streamable HTTP client surface.
 # rustX supplies its own `StreamableHttpClient` (`tools::mcp::http`) so a
 # cancelled tool call can terminate — and prove the release of — its own

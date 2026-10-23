@@ -7,7 +7,7 @@ use super::{
     configuration::Origin,
 };
 use crate::model::catalog::{ModelProfileId, ModelRef};
-use crate::model::session::{SessionModelConfig, SummaryModelPolicy};
+use crate::model::session::{AuxiliaryModelPolicy, SessionModelConfig};
 use crate::toml_authoring::AuthoredRequestParams;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -226,7 +226,9 @@ pub struct ModelLayer {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<ModelOutput>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub summary_model: Option<SummaryAuthoring>,
+    pub summary_model: Option<AuxiliaryModelAuthoring>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_model: Option<AuxiliaryModelAuthoring>,
 }
 partial!(ContextLayer {
     reserve_tokens: u64,
@@ -297,7 +299,7 @@ impl IdleLiveness {
 }
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
-pub enum SummaryAuthoring {
+pub enum AuxiliaryModelAuthoring {
     Session {},
     Explicit {
         model: ModelRef,
@@ -309,16 +311,16 @@ pub enum SummaryAuthoring {
         max_output_tokens: Option<ModelOutput>,
     },
 }
-impl SummaryAuthoring {
-    fn resolve(self) -> SummaryModelPolicy {
+impl AuxiliaryModelAuthoring {
+    fn resolve(self) -> AuxiliaryModelPolicy {
         match self {
-            Self::Session {} => SummaryModelPolicy::Session,
+            Self::Session {} => AuxiliaryModelPolicy::Session,
             Self::Explicit {
                 model,
                 profile,
                 request_params,
                 max_output_tokens,
-            } => SummaryModelPolicy::Explicit {
+            } => AuxiliaryModelPolicy::Explicit {
                 model,
                 profile,
                 request_params: request_params.0,
@@ -458,13 +460,28 @@ pub(super) fn serialize_profile_model<S: serde::Serializer>(
                 .max_output_tokens
                 .map(|tokens| ModelOutput::Limit { tokens }),
             summary_model: Some(match &model.summary_model {
-                SummaryModelPolicy::Session => SummaryAuthoring::Session {},
-                SummaryModelPolicy::Explicit {
+                AuxiliaryModelPolicy::Session => AuxiliaryModelAuthoring::Session {},
+                AuxiliaryModelPolicy::Explicit {
                     model,
                     profile,
                     request_params,
                     max_output_tokens,
-                } => SummaryAuthoring::Explicit {
+                } => AuxiliaryModelAuthoring::Explicit {
+                    model: model.clone(),
+                    profile: profile.clone(),
+                    request_params: AuthoredRequestParams(request_params.clone()),
+                    max_output_tokens: max_output_tokens
+                        .map(|tokens| ModelOutput::Limit { tokens }),
+                },
+            }),
+            title_model: Some(match &model.title_model {
+                AuxiliaryModelPolicy::Session => AuxiliaryModelAuthoring::Session {},
+                AuxiliaryModelPolicy::Explicit {
+                    model,
+                    profile,
+                    request_params,
+                    max_output_tokens,
+                } => AuxiliaryModelAuthoring::Explicit {
                     model: model.clone(),
                     profile: profile.clone(),
                     request_params: AuthoredRequestParams(request_params.clone()),
@@ -495,6 +512,9 @@ impl ModelLayer {
         model.request_params = self.request_params.unwrap_or_default().0;
         if let Some(summary) = self.summary_model {
             model.summary_model = summary.resolve();
+        }
+        if let Some(title) = self.title_model {
+            model.title_model = title.resolve();
         }
         Ok(model)
     }
@@ -539,6 +559,7 @@ impl RuntimeLayer {
             "agent.model.request_params",
             "agent.model.max_output_tokens",
             "agent.model.summary_model",
+            "agent.model.title_model",
             "context.reserve_tokens",
             "context.keep_recent_tokens",
             "context.summary_output_cap",
@@ -931,6 +952,14 @@ request_params = '''
 [agent.model.summary_model.max_output_tokens]
 mode = "limit"
 tokens = 256
+[agent.model.title_model]
+mode = "explicit"
+model = "p/t"
+profile = "short"
+request_params = '{"title_tag": [null, "exact"]}'
+[agent.model.title_model.max_output_tokens]
+mode = "limit"
+tokens = 128
 "#;
 
     #[test]
@@ -949,6 +978,14 @@ tokens = 256
             summary.request_params["vendor"][2]["unset"],
             serde_json::Value::Null
         );
+        let title = model.title_selection().unwrap();
+        assert_eq!(title.model.as_str(), "p/t");
+        assert_eq!(title.profile.unwrap().as_str(), "short");
+        assert_eq!(title.max_output_tokens, Some(128));
+        assert_eq!(
+            title.request_params["title_tag"],
+            serde_json::json!([null, "exact"])
+        );
         // Named Agent documents use the same selection authoring.
         let written = crate::toml_authoring::write(&config.agent).unwrap();
         let table = written.parse::<toml::Table>().unwrap();
@@ -957,6 +994,7 @@ tokens = 256
             table["model"]["summary_model"]["request_params"].is_str(),
             "{written}"
         );
+        assert!(table["model"]["title_model"]["request_params"].is_str());
         assert_eq!(table["model"]["profile"].as_str(), Some("fast"));
         let again: super::super::config::AgentProfileDocument =
             crate::toml_authoring::parse(written.as_bytes()).unwrap();
@@ -971,6 +1009,10 @@ tokens = 256
         // Client JSON keeps structured objects for the same documents.
         let json = serde_json::to_value(&config.agent).unwrap();
         assert_eq!(json["model"]["profile"], "fast");
+        assert_eq!(
+            json["model"]["title_model"]["request_params"]["title_tag"],
+            serde_json::json!([null, "exact"])
+        );
         assert_eq!(
             json["model"]["summary_model"]["request_params"]["vendor"][2]["unset"],
             serde_json::Value::Null
@@ -1001,6 +1043,10 @@ tokens = 256
             (
                 "[agent.model]\nmodel = 'p/m'\n[agent.model.summary_model]\nmode = 'explicit'\nmodel = 'p/s'",
                 "agent.model.summary_model.request_params",
+            ),
+            (
+                "[agent.model]\nmodel = 'p/m'\n[agent.model.title_model]\nmode = 'explicit'\nmodel = 'p/t'",
+                "agent.model.title_model.request_params",
             ),
         ] {
             for (json, reason) in [

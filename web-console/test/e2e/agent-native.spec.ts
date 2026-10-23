@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { connectRemote, chooseWorkspace } from './shell-actions';
+import { connectRemote, openEmptySession } from './shell-actions';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 
@@ -30,7 +30,7 @@ test('native interrupt and wait capture one activation; the same Agent resumes w
     await routeWorkspaceHost(page, fixture);
     await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token);
-    await chooseWorkspace(page, 'Workspace A');
+    await openEmptySession(page, fixture, 'Workspace A');
     await page.getByLabel('Message', { exact: true }).fill('WEB_AGENT_PARENT: delegate review');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await Promise.all([fixture.gate('agent-initial-0'), fixture.gate('agent-initial-1')]);

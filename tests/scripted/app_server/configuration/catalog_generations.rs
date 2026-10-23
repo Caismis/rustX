@@ -991,7 +991,7 @@ async fn issue459_older_candidates_and_overtaken_generations_never_restore_autho
 async fn issue459_mixed_generations_keep_the_summary_policy_and_clients_agree() {
     use crate::model::catalog::ModelRef;
     use crate::model::invocation::RequestParams;
-    use crate::model::session::{SessionModelConfig, SummaryModelPolicy, SummaryModelView};
+    use crate::model::session::{AuxiliaryModelPolicy, AuxiliaryModelView, SessionModelConfig};
     Box::pin(bounded(async {
         let fixture = Fixture::with_session_count(None, 1).await;
         let id = fixture.sessions[0].id.clone();
@@ -1002,13 +1002,14 @@ async fn issue459_mixed_generations_keep_the_summary_policy_and_clients_agree() 
             .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .unwrap();
         issue459_pin_fast(&fixture).await;
-        let summary_on = |model: &str| SummaryModelPolicy::Explicit {
+        let summary_on = |model: &str| AuxiliaryModelPolicy::Explicit {
             model: ModelRef::parse(model).unwrap(),
             profile: None,
             request_params: RequestParams::new(),
             max_output_tokens: Some(256),
         };
         let with_summary = |profile, summary| SessionModelConfig {
+            title_model: crate::model::session::AuxiliaryModelPolicy::Session,
             summary_model: summary,
             ..issue459_pinned(profile)
         };
@@ -1075,7 +1076,7 @@ async fn issue459_mixed_generations_keep_the_summary_policy_and_clients_agree() 
             .unwrap()
             .0;
         assert!(view.unavailable.is_none());
-        let Some(SummaryModelView::Explicit(summary)) = &view.summary else {
+        let Some(AuxiliaryModelView::Explicit(summary)) = &view.summary else {
             panic!("explicit summary")
         };
         assert_eq!(

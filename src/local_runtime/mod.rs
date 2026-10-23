@@ -52,10 +52,12 @@ pub(crate) mod session_activity;
 pub mod session_controller;
 pub(crate) mod session_display_projection;
 pub mod session_runtime_manager;
+pub(crate) mod session_title;
 pub mod settings;
 #[cfg(test)]
 pub(crate) mod static_effects;
 pub mod subagent_child;
+pub mod workflow_authoring;
 mod workflow_inspection;
 pub(crate) mod workflow_resources;
 

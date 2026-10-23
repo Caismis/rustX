@@ -245,6 +245,9 @@ pub(super) fn inherited_auxiliary_record(mut value: Value) -> std::io::Result<Va
         AuxiliaryAuditFact::RequestStarted(request) => {
             json!({"RequestStarted":auxiliary_request(request)})
         }
+        AuxiliaryAuditFact::RetryScheduled(request) => {
+            json!({"RetryScheduled":auxiliary_request(request)})
+        }
         AuxiliaryAuditFact::RequestSettled(request) => {
             json!({"RequestSettled":auxiliary_request(request)})
         }
@@ -333,6 +336,15 @@ fn event(event: &crate::events::types::RuntimeEvent) -> Value {
             "semantic_input_fingerprint":semantic_input_fingerprint,
             "invocation_fingerprint":invocation_fingerprint, "selected_message_ids":selected_message_ids,
         }),
+        RuntimeEvent::AuxiliaryRetryScheduled {
+            call_id,
+            request_id,
+            next_ordinal,
+            delay_ms,
+            request_evidence,
+        } => {
+            json!({"type":"auxiliary_retry_scheduled","call_id":call_id,"request_id":request_id,"next_ordinal":next_ordinal,"delay_ms":delay_ms,"request_evidence":auxiliary_request_evidence(request_evidence)})
+        }
         RuntimeEvent::AuxiliaryCallSettled {
             call_id,
             outcome,

@@ -19,7 +19,7 @@
  *
  * Pure and browser-safe: generated types only.
  */
-import type { Request1 } from './v52.ts';
+import type { Request1 } from './v53.ts';
 
 export type MethodName = Request1['method'];
 export type MethodEffect = 'read' | 'side_effecting' | 'connection_local';
@@ -80,6 +80,11 @@ export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.
   'session/effectiveConfigurationValueRead': { effect: 'read' },
   'session/effectiveConfigurationPage': { effect: 'read' },
   'configuration/sourceWrite': { effect: 'side_effecting' },
+  // Exact scoped Workflow file reads and offline candidate checks: they
+  // execute, prepare and write nothing (Issue #491).
+  'workflow/list': { effect: 'read' },
+  'workflow/read': { effect: 'read' },
+  'workflow/check': { effect: 'read' },
   'session/model': { effect: 'read' },
   'session/models': { effect: 'read' },
   'session/setModel': { effect: 'side_effecting' },

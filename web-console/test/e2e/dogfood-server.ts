@@ -178,7 +178,7 @@ timezone = "UTC"
     const workspaceHost = await startWorkspaceHost(hostConfig);
     const hostConfigFile = join(directory, 'host-config.json');
     writeFileSync(hostConfigFile, JSON.stringify(hostConfig), { mode: 0o600 });
-    return { hostConfigFile, workspaceHost, workspaceHostUrl: workspaceHost.url, directory, endpoint, token, tokenFile, workspaceA, workspaceB, providerUrl, settings, writeSettings, control,
+    return { automaticTitles: scenario.startsWith('web_session_title_'), hostConfigFile, workspaceHost, workspaceHostUrl: workspaceHost.url, directory, endpoint, token, tokenFile, workspaceA, workspaceB, providerUrl, settings, writeSettings, control,
       gate: (name: string) => control(`observations/await?kind=gate_reached&name=${name}&timeoutMs=30000`),
       release: (name: string) => control(`gates/${name}/release`, 'POST'),
       diagnostics: () => ({ providerErrors, appErrors, native: nativeDiagnostics(appIdentity) }),
@@ -188,7 +188,7 @@ timezone = "UTC"
         const { AppServerHost } = await import('../../../tui/src/app-server/host');
         const remote = await AppServerHost.connectRemote({ endpoint, token });
         let id: string;
-        try { id = (await remote.createSession({ cwd: workspaceA })).session.id; }
+        try { id = (await remote.createSession({ cwd: workspaceA })).session.id; await remote.renameSession(id, 'New session'); }
         finally { await remote.shutdown(); }
         app!.kill('SIGTERM');
         await exited(app!);

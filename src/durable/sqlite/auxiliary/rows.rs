@@ -495,6 +495,18 @@ pub(super) fn validate_audit_fact_event(
     }
     match (&event.event, row.kind.as_str()) {
         (
+            RuntimeEvent::AuxiliaryRetryScheduled {
+                call_id,
+                request_id,
+                next_ordinal,
+                ..
+            },
+            "retry_scheduled",
+        ) if &row.call_id == call_id
+            && row.request_id.as_ref() == Some(request_id)
+            && row.ordinal == next_ordinal.checked_sub(1)
+            && event.event_id == crate::durable::auxiliary::retry_event_id(request_id) => {}
+        (
             RuntimeEvent::AuxiliaryCallStarted { call_id, .. }
             | RuntimeEvent::AuxiliaryCallSettled { call_id, .. },
             "call_started" | "call_settled",

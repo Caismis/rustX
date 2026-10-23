@@ -8,10 +8,7 @@ use tokio::sync::{Notify, oneshot};
 use crate::context::compaction_budget::CompactionBudget;
 use crate::context::{ContextError, ContextErrorKind};
 use crate::durable::{ConversationStore, auxiliary::AuxiliarySettlementCommit};
-use crate::model::{
-    AuxiliaryCallStart, AuxiliaryRequestStart, ModelRequest, ModelTimeoutPolicy,
-    ResolvedModelInvocation,
-};
+use crate::model::{AuxiliaryCallStart, ModelRequest, ModelTimeoutPolicy, ResolvedModelInvocation};
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::{AuxiliaryCallId, RequestId};
 use crate::runtime::monotonic::MonotonicClock;
@@ -67,7 +64,7 @@ struct ExitedObligation {
 }
 
 pub(crate) struct AuxiliaryScope {
-    pub(super) budget: CompactionBudget,
+    pub(super) authority: super::authority::AuxiliaryAuthority,
     pub(super) cancellation: CancellationSignal,
     state: Mutex<ScopeState>,
     changed: Notify,
@@ -94,6 +91,7 @@ struct RecordState {
     retirement_gate: Option<(oneshot::Sender<()>, mpsc::Receiver<()>)>,
     submitted: bool,
     dispatched: bool,
+    dispatch_ordinal: u32,
     sealed: bool,
     permit: Option<Arc<CallPermit>>,
     admission: Option<LifecycleAdmission>,
@@ -124,9 +122,17 @@ pub(crate) struct FrozenCall {
     pub invocation: ResolvedModelInvocation,
     pub timeout: ModelTimeoutPolicy,
     pub resource_revision: u64,
+    pub dispatch_check: Option<Arc<dyn AuxiliaryDispatchCheck>>,
+    pub title_source: Option<crate::durable::auxiliary::AuxiliaryTitleSourceBinding>,
 }
 
-pub(super) fn invocation_fingerprint(
+/// A native consumer's final business eligibility fence; no model input or
+/// execution capacity is supplied by this check.
+pub(crate) trait AuxiliaryDispatchCheck: Send + Sync {
+    fn check(&self) -> futures_util::future::BoxFuture<'_, Result<(), ContextError>>;
+}
+
+pub(crate) fn invocation_fingerprint(
     invocation: &crate::model::ModelInvocationConfig,
     resource_revision: u64,
 ) -> Result<crate::model::AuxiliaryFingerprint, ContextError> {
@@ -142,6 +148,7 @@ pub(super) fn invocation_fingerprint(
 pub(crate) struct ConfirmedExecution {
     pub output: Result<AuxiliaryTextOutput, crate::model::ModelError>,
     pub settlement: Box<AuxiliarySettlementCommit>,
+    pub usage: super::authority::ObservedAuxiliaryUsage,
 }
 
 pub(super) struct CallExit {
@@ -235,15 +242,37 @@ impl AuxiliaryExecutor {
     }
 
     pub(crate) fn scope(
-        budget: CompactionBudget,
+        budget: &CompactionBudget,
         cancellation: &CancellationSignal,
     ) -> Arc<AuxiliaryScope> {
         Arc::new(AuxiliaryScope {
-            budget,
+            authority: budget.authority(),
             cancellation: cancellation.child(),
             state: Mutex::default(),
             changed: Notify::new(),
         })
+    }
+
+    /// Independent admission uses ordinary capacity and at most one Call's
+    /// three starts. Cloned scopes share every remaining allowance.
+    pub(crate) fn general_scope(
+        &self,
+        start_limit: u8,
+        cancellation: &CancellationSignal,
+    ) -> Arc<AuxiliaryScope> {
+        Arc::new(AuxiliaryScope {
+            authority: super::authority::AuxiliaryAuthority::new(
+                self.0.resources.monotonic.clone(),
+                start_limit.min(super::authority::CALL_START_LIMIT),
+            ),
+            cancellation: cancellation.child(),
+            state: Mutex::default(),
+            changed: Notify::new(),
+        })
+    }
+
+    pub(crate) fn capacity_changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.0.capacity.changes()
     }
 
     pub(crate) fn reserve(
@@ -253,8 +282,7 @@ impl AuxiliaryExecutor {
         self.reserve_class(scope, true)
     }
 
-    #[cfg(test)]
-    fn reserve_general(
+    pub(crate) fn reserve_general(
         &self,
         scope: &Arc<AuxiliaryScope>,
     ) -> Result<AuxiliaryReservation, ContextError> {
@@ -266,20 +294,12 @@ impl AuxiliaryExecutor {
         scope: &Arc<AuxiliaryScope>,
         compaction: bool,
     ) -> Result<AuxiliaryReservation, ContextError> {
-        if !scope.budget.uses_clock(&self.0.resources.monotonic) {
+        if !scope.authority.uses_clock(&self.0.resources.monotonic) {
             return Err(ContextError::new(
                 ContextErrorKind::AuxiliaryNotStarted,
                 "auxiliary operation uses another monotonic clock domain",
             ));
         }
-        let permit = match if compaction {
-            self.0.capacity.reserve_compaction()
-        } else {
-            self.0.capacity.reserve_general()
-        } {
-            Ok(permit) => permit,
-            Err(busy) => return Err(admission_busy(scope, busy.to_string())),
-        };
         self.0
             .resources
             .durability
@@ -288,10 +308,21 @@ impl AuxiliaryExecutor {
                     .resources
                     .lifecycle
                     .try_admit_running_commit(|admission| {
+                        let permit = match if compaction {
+                            self.0.capacity.reserve_compaction()
+                        } else {
+                            self.0.capacity.reserve_general()
+                        } {
+                            Ok(permit) => permit,
+                            Err(busy) => return Err(admission_busy(scope, busy.to_string())),
+                        };
                         scope
                             .cancellation
                             .with_active(|| {
-                                scope.budget.check(&scope.cancellation)?;
+                                scope.authority.check(&scope.cancellation)?;
+                                if !scope.authority.has_remaining_start() {
+                                    return Err(ContextError::new(ContextErrorKind::CompactionBudgetExceeded, "auxiliary operation exhausted its physical request allowance"));
+                                }
                                 let mut parent = lock(&scope.state);
                                 let mut registry = lock(&self.0.state);
                                 if parent.closed || registry.closed {
@@ -324,10 +355,16 @@ impl AuxiliaryExecutor {
                             .ok_or_else(closed)?
                     })
                     .map_err(|refused| match refused {
-                        crate::runtime::types::NativeAdmissionRefusal::Busy => admission_busy(
-                            scope,
-                            "native lifecycle ownership boundary is busy".to_owned(),
-                        ),
+                        crate::runtime::types::NativeAdmissionRefusal::Busy => {
+                            let mut error = admission_busy(
+                                scope,
+                                "native lifecycle ownership boundary is busy".to_owned(),
+                            );
+                            if error.kind == ContextErrorKind::AuxiliaryBusy {
+                                error.kind = ContextErrorKind::AuxiliaryLifecycleBusy;
+                            }
+                            error
+                        }
                         crate::runtime::types::NativeAdmissionRefusal::Closed(state) => {
                             ContextError::new(
                                 ContextErrorKind::Cancelled,
@@ -372,16 +409,18 @@ impl AuxiliaryExecutor {
 impl AuxiliaryScope {
     pub(crate) fn authorize_commit(
         &self,
+        budget: &CompactionBudget,
     ) -> Result<crate::runtime::cancellation::CompactionCommitGrant, ContextError> {
         self.cancellation
-            .authorize_compaction_commit_with(self.budget.operation_id().clone(), || {
+            .authorize_compaction_commit_with(budget.operation_id().clone(), || {
                 let state = lock(&self.state);
                 !state.closed
+                    && self.authority.same_allowance(&budget.authority())
                     && state.children.is_empty()
-                    && self.budget.check(&self.cancellation).is_ok()
+                    && self.authority.check(&self.cancellation).is_ok()
             })
             .ok_or_else(|| {
-                self.budget
+                self.authority
                     .check(&self.cancellation)
                     .err()
                     .unwrap_or_else(closed)
@@ -444,7 +483,7 @@ impl AuxiliaryReservation {
                 "Call already submitted",
             ));
         }
-        record.scope.budget.check(&record.cancellation)?;
+        record.scope.authority.check(&record.cancellation)?;
         // Provision bounded retirement before starting any physical work.
         // Conversations that never submit a Call create no reaper threads.
         let reaper = process_reaper()?;
@@ -542,14 +581,6 @@ impl CallRecord {
             .as_ref()
             .and_then(super::writer::AuxiliaryWriter::wait_pending)
     }
-    pub(super) fn request_start(&self, model: String) -> AuxiliaryRequestStart {
-        AuxiliaryRequestStart {
-            call_id: self.call_id.clone(),
-            ordinal: 0,
-            request_id: self.request_id.clone(),
-            model,
-        }
-    }
 
     pub(super) fn grant_dispatch(&self) -> Result<(), ContextError> {
         // Consumed authority stays consumed after its execution resources have
@@ -563,6 +594,18 @@ impl CallRecord {
                 return Err(consumed_dispatch());
             }
             state.dispatched = true;
+            Ok(())
+        })
+    }
+
+    pub(super) fn advance_request(&self, ordinal: u32) -> Result<(), ContextError> {
+        self.active_grant(|| {
+            let mut state = lock(&self.state);
+            if !state.dispatched || state.sealed || ordinal != state.dispatch_ordinal + 1 {
+                return Err(consumed_dispatch());
+            }
+            state.dispatch_ordinal = ordinal;
+            state.dispatched = false;
             Ok(())
         })
     }
@@ -606,7 +649,7 @@ impl CallRecord {
                     .with_healthy_commit(|| {
                         self.cancellation
                             .with_active(|| {
-                                self.scope.budget.check(&self.cancellation)?;
+                                self.scope.authority.check(&self.cancellation)?;
                                 let parent = lock(&self.scope.state);
                                 if parent.closed {
                                     return Err(closed());
@@ -771,7 +814,7 @@ fn admission_busy(scope: &AuxiliaryScope, diagnostic: String) -> ContextError {
         .cancellation
         .with_active(|| {
             scope
-                .budget
+                .authority
                 .check(&scope.cancellation)
                 .err()
                 .unwrap_or_else(|| ContextError::new(ContextErrorKind::AuxiliaryBusy, diagnostic))

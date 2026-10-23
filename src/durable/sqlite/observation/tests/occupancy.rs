@@ -40,9 +40,9 @@ fn t08_t14_t19_occupancy_reads_fixed_original_request_scalars_and_model_ranges()
         .unwrap();
     let mut snapshot = occupancy_original_snapshot(&store);
     let usage = crate::model::types::ModelUsage {
-        input_tokens: 3_000_000,
-        output_tokens: 1,
-        total_tokens: 3_000_001,
+        input_tokens: Some(3_000_000),
+        output_tokens: Some(1),
+        total_tokens: Some(3_000_001),
         details: None,
     };
     let expected = crate::context::occupancy::measure(&usage, &snapshot)
@@ -234,9 +234,9 @@ fn t10_t14_occupancy_derived_header_failure_preserves_original_provider_terminal
             request_id: snapshot.request_id.clone(),
             finish_reason: ModelFinishReason::Stop,
             usage: Some(crate::model::types::ModelUsage {
-                input_tokens: 10,
-                output_tokens: 1,
-                total_tokens: 11,
+                input_tokens: Some(10),
+                output_tokens: Some(1),
+                total_tokens: Some(11),
                 details: None,
             }),
             generation: None,
@@ -280,9 +280,9 @@ fn mixed_auxiliary_terminal_never_replaces_primary_occupancy_statistics_or_trace
         .commit_model_turn_start(&[], &snapshot, Utc::now())
         .unwrap();
     let primary_usage = crate::model::types::ModelUsage {
-        input_tokens: 321,
-        output_tokens: 12,
-        total_tokens: 333,
+        input_tokens: Some(321),
+        output_tokens: Some(12),
+        total_tokens: Some(333),
         details: None,
     };
     let mut primary = envelope(
@@ -371,9 +371,9 @@ fn mixed_auxiliary_terminal_never_replaces_primary_occupancy_statistics_or_trace
             request_id,
             finish_reason: ModelFinishReason::Stop,
             usage: Some(crate::model::types::ModelUsage {
-                input_tokens: 9_999_999,
-                output_tokens: 9_999,
-                total_tokens: 10_009_998,
+                input_tokens: Some(9_999_999),
+                output_tokens: Some(9_999),
+                total_tokens: Some(10_009_998),
                 details: None,
             }),
             generation: None,
@@ -475,6 +475,25 @@ fn commit_primary_occupancy_terminal(
     attempt_id: &str,
     input_tokens: u64,
 ) -> (RequestSnapshot, RuntimeEventEnvelope) {
+    commit_primary_usage_terminal(
+        store,
+        attempt_id,
+        Some(crate::model::ModelUsage {
+            input_tokens: Some(input_tokens),
+            output_tokens: Some(1),
+            total_tokens: Some(input_tokens + 1),
+            details: None,
+        }),
+        false,
+    )
+}
+
+fn commit_primary_usage_terminal(
+    store: &SqliteConversationStore,
+    attempt_id: &str,
+    usage: Option<crate::model::ModelUsage>,
+    failed: bool,
+) -> (RequestSnapshot, RuntimeEventEnvelope) {
     let mut snapshot = progress_request_snapshot(
         attempt_id,
         "1",
@@ -486,28 +505,205 @@ fn commit_primary_occupancy_terminal(
     store
         .commit_model_turn_start(&[], &snapshot, Utc::now())
         .unwrap();
+    let owner = crate::model::ModelRequestOwner::Agent {
+        identity: snapshot.identity.clone(),
+    };
+    let event = if failed {
+        RuntimeEvent::ModelRequestFailed {
+            owner,
+            request_id: snapshot.request_id.clone(),
+            usage,
+            error: crate::model::ModelError::timeout(
+                crate::model::ModelTimeoutPhase::ResponseStart,
+            ),
+            generation: None,
+        }
+    } else {
+        RuntimeEvent::ModelRequestCompleted {
+            owner,
+            request_id: snapshot.request_id.clone(),
+            usage,
+            finish_reason: ModelFinishReason::Stop,
+            generation: None,
+        }
+    };
     let mut terminal = envelope(
         store.conversation_id(),
         &format!("{attempt_id}-occupancy-terminal"),
         Some(snapshot.identity.attempt_id.clone()),
-        RuntimeEvent::ModelRequestCompleted {
-            owner: crate::model::ModelRequestOwner::Agent {
-                identity: snapshot.identity.clone(),
-            },
-            request_id: snapshot.request_id.clone(),
-            finish_reason: ModelFinishReason::Stop,
-            usage: Some(crate::model::types::ModelUsage {
-                input_tokens,
-                output_tokens: 1,
-                total_tokens: input_tokens + 1,
-                details: None,
-            }),
-            generation: None,
-        },
+        event,
     );
     terminal.turn_id = Some(snapshot.identity.turn.clone());
     let terminal = store.append_event(terminal).unwrap();
     (snapshot, terminal)
+}
+
+fn store_with_occupancy_origin(origin: &str) -> (SqliteConversationStore, u64) {
+    use super::occupancy_origin::{occupancy_origin_compact, occupancy_origin_native};
+    let store = store();
+    let cut = if origin == "inherited" {
+        store
+            .initialize_lineage(&super::indexed_fact::inherited_seed(1, true))
+            .unwrap();
+        0
+    } else {
+        store
+            .initialize(&[user_message("occupancy-input", "history")])
+            .unwrap();
+        match origin {
+            "primary" => {
+                commit_primary_occupancy_terminal(&store, "measured", 100)
+                    .1
+                    .sequence
+            }
+            "compaction" => {
+                occupancy_origin_compact(
+                    &store,
+                    "occupancy-input",
+                    "measured-checkpoint",
+                    &occupancy_origin_native("model", 100),
+                )
+                .sequence
+            }
+            _ => panic!("unknown occupancy fixture origin"),
+        }
+    };
+    (store, cut)
+}
+
+#[test]
+fn output_only_terminals_preserve_primary_inherited_and_compacted_occupancy() {
+    for origin in ["primary", "inherited", "compaction"] {
+        let (store, cut) = store_with_occupancy_origin(origin);
+        let expected = store.observation_occupancy(cut).unwrap();
+        let expected_native = crate::context::occupancy::read(&store, cut).unwrap();
+        assert!(expected.is_some());
+        assert!(expected_native.is_some());
+        for (index, (reported, failed)) in
+            [(false, false), (false, true), (true, false), (true, true)]
+                .into_iter()
+                .enumerate()
+        {
+            let usage = reported.then_some(crate::model::ModelUsage {
+                input_tokens: None,
+                output_tokens: Some(7),
+                total_tokens: None,
+                details: None,
+            });
+            let (_, terminal) = commit_primary_usage_terminal(
+                &store,
+                &format!("unmeasured-{index}"),
+                usage,
+                failed,
+            );
+            assert_eq!(
+                store.observation_occupancy(terminal.sequence).unwrap(),
+                expected,
+                "{origin} / {reported} / {failed}"
+            );
+            assert_eq!(
+                crate::context::occupancy::read(&store, terminal.sequence).unwrap(),
+                expected_native
+            );
+        }
+        for failed in [false, true] {
+            let (_, zero) = commit_primary_usage_terminal(
+                &store,
+                &format!("zero-{failed}"),
+                Some(crate::model::ModelUsage {
+                    input_tokens: Some(0),
+                    output_tokens: Some(7),
+                    total_tokens: Some(7),
+                    details: None,
+                }),
+                failed,
+            );
+            assert_eq!(
+                store
+                    .observation_occupancy(zero.sequence)
+                    .unwrap()
+                    .unwrap()
+                    .input_tokens,
+                0
+            );
+            assert_eq!(
+                crate::context::occupancy::read(&store, zero.sequence)
+                    .unwrap()
+                    .unwrap()
+                    .input_tokens,
+                0
+            );
+        }
+        // A Compaction with no reading still explicitly clears the previous
+        // measurement. Later unmeasured requests cannot resurrect it.
+        let candidate = crate::scripted_suites::support::context::checkpoint_fixture(
+            &store,
+            "clear-occupancy",
+            store.projected_history().unwrap().messages.len(),
+            "summary",
+        );
+        let clear = store
+            .commit_projection(
+                crate::scripted_suites::support::context::checkpoint_commit_fixture(
+                    &store, candidate, None,
+                ),
+            )
+            .unwrap();
+        let (_, unmeasured) = commit_primary_usage_terminal(
+            &store,
+            "after-clear",
+            Some(crate::model::ModelUsage {
+                input_tokens: None,
+                output_tokens: Some(7),
+                total_tokens: None,
+                details: None,
+            }),
+            false,
+        );
+        for through in [clear.completed.sequence, unmeasured.sequence] {
+            assert_eq!(store.observation_occupancy(through).unwrap(), None);
+            assert_eq!(
+                crate::context::occupancy::read(&store, through).unwrap(),
+                None
+            );
+        }
+        assert_eq!(store.observation_occupancy(cut).unwrap(), expected);
+    }
+}
+
+#[test]
+fn occupancy_lookup_skips_output_only_history_before_the_bounded_limit() {
+    let store = store();
+    store.initialize(&[]).unwrap();
+    let (_, measured) = commit_primary_occupancy_terminal(&store, "measured", 100);
+    let expected = store.observation_occupancy(measured.sequence).unwrap();
+    let (_, baseline) = occupancy_sql_steps(&store, || {
+        store.observation_occupancy(measured.sequence).unwrap()
+    });
+    for index in 0..128 {
+        let (_, terminal) = commit_primary_usage_terminal(
+            &store,
+            &format!("partial-{index}"),
+            Some(crate::model::ModelUsage {
+                input_tokens: None,
+                output_tokens: Some(7),
+                total_tokens: None,
+                details: None,
+            }),
+            index % 2 == 0,
+        );
+        if [0, 31, 127].contains(&index) {
+            let (actual, steps) = occupancy_sql_steps(&store, || {
+                store.observation_occupancy(terminal.sequence).unwrap()
+            });
+            assert_eq!(actual, expected);
+            assert!(
+                steps <= baseline + 128,
+                "{index} output-only requests: {steps} vs {baseline}"
+            );
+            assert_eq!(observation_occupancy::read_work().0, 1);
+        }
+    }
 }
 
 #[test]
@@ -656,4 +852,63 @@ fn occupancy_compaction_lookup_work_is_bounded_across_history_growth() {
             }
         }
     }
+}
+
+#[test]
+fn partial_usage_without_input_retains_report_but_cannot_manufacture_occupancy() {
+    let store = store();
+    store
+        .initialize(&[user_message("partial-input", "original")])
+        .unwrap();
+    let mut snapshot = progress_request_snapshot(
+        "partial-usage",
+        "1",
+        0,
+        store.load_head().unwrap().revision,
+        Vec::new(),
+    );
+    let usage = crate::model::ModelUsage {
+        input_tokens: None,
+        output_tokens: Some(7),
+        total_tokens: None,
+        details: None,
+    };
+    assert!(
+        crate::context::occupancy::measure(&usage, &snapshot)
+            .unwrap()
+            .is_none()
+    );
+    freeze_test_input(&store, &mut snapshot, &[]);
+    store
+        .commit_model_turn_start(&[], &snapshot, Utc::now())
+        .unwrap();
+    let mut terminal = envelope(
+        store.conversation_id(),
+        "partial-terminal",
+        Some(snapshot.identity.attempt_id.clone()),
+        RuntimeEvent::ModelRequestCompleted {
+            owner: crate::model::ModelRequestOwner::Agent {
+                identity: snapshot.identity.clone(),
+            },
+            request_id: snapshot.request_id.clone(),
+            finish_reason: ModelFinishReason::Stop,
+            usage: Some(usage.clone()),
+            generation: None,
+        },
+    );
+    terminal.turn_id = Some(snapshot.identity.turn.clone());
+    let terminal = store.append_event(terminal).unwrap();
+    assert!(
+        store
+            .observation_occupancy(terminal.sequence)
+            .unwrap()
+            .is_none()
+    );
+    let RuntimeEvent::ModelRequestCompleted {
+        usage: retained, ..
+    } = terminal.event
+    else {
+        panic!("completed fact")
+    };
+    assert_eq!(retained, Some(usage));
 }

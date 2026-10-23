@@ -282,6 +282,16 @@ meaningful domain/boundary/dependency topology:
 | `cfg3_managed_output` | managed Tool output storage | execution-identity locators, collision refusal without overwrite, spill reconstruction |
 | `contracts` | none (pure) | serialization fixture round-trips, committed configuration examples |
 
+The stdio MCP canonical-executor test holds the fixture's `mutate` response
+behind a parent-created marker until the real `ProgressReporter` has observed
+its fractional progress. rmcp schedules notification handlers independently of
+response delivery: receiving a result does not prove its preceding wire
+notification reached rustX before the caller released progress ownership
+([MCP liveness invariant](../docs/invariants.md#mcp-liveness-connection-generations-and-recovery-issue-205)).
+The marker establishes ordering; its polling interval does not. The existing
+progress deadline, exact fractional values, result, invalidation and physical
+cancellation assertions remain in force.
+
 ## Verification profiles
 
 Fast feedback for ordinary development; complete verification at deliberate
@@ -655,6 +665,18 @@ cancelled run is diagnostic evidence, not a timing baseline.
 
 ## Prerequisites
 
+Linux CI installs its existing native and Office prerequisites through
+`.github/scripts/install_ubuntu_packages.py`. GitHub's Ubuntu image already
+uses `/etc/apt/apt-mirrors.txt`; the installer selects the official HTTPS
+Ubuntu archive directly, retaining the image's suites, components and signing
+keyrings. Each APT connection/read has a 30-second idle timeout and each file
+has at most two retries. An index or package failure fails the job; stale
+indexes never stand in for a failed refresh. This avoids spending the test
+budget waiting for Azure mirror failover (37 min 43 s in run 39780556818,
+attempt 1). Package requirements, sandbox admission, test selection, assertions
+and job/test deadlines are unchanged. The installer is covered by the existing
+`.github/scripts/test_*.py` checks that execute on every CI run.
+
 Mandatory prerequisites fail closed; only explicitly opt-in tooling may
 skip:
 
@@ -662,6 +684,14 @@ skip:
   `interactive-supervisor` or `rustx` need `cargo build --bins` first;
   integration targets receive `CARGO_BIN_EXE_*` from Cargo. A missing
   executable fails the spawn.
+- **A verified case-insensitive filesystem on macOS.** The `process` target's
+  reserved-configuration-name startup regression probes the temporary
+  volume using file identity. If it is case sensitive, the fixture uses
+  system `hdiutil` to create and mount an isolated case-insensitive APFS
+  image. It verifies that the literal lowercase metadata path resolves to
+  each physically authored alias before testing rejection; unavailable
+  fixtures fail rather than skip. Both macOS external-boundary lanes execute
+  this test, including the no-runtime-storage and unchanged-document checks.
 - **uv and Python 3.12** (the provider emulator and managed `FastMCP`
   children). Every uv-dependent Rust test resolves uv through
   `common::provider_emulator::required_uv`: a local checkout without uv
@@ -762,6 +792,12 @@ For race/cancellation/order tests — in *both* in-crate trees:
 - never use `sleep` to manufacture an interleaving;
 - wall-clock timeouts are outer liveness guards only — their expiry is a
   harness failure, never a verdict.
+
+Provider request arrival does not prove that the runtime has consumed a
+stream item. Before choosing a quiet observation baseline or injecting a
+source fault, synchronize with the scripted producer's relevant boundary,
+then wait for the projection to settle. Projection settlement drains current
+input; it cannot fence an event the producer has not emitted yet.
 
 Boundary suites are not exempt: the process-death harness freezes the child
 at instrumented durable transitions or a control rendezvous before the

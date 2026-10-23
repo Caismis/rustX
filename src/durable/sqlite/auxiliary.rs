@@ -46,8 +46,10 @@ mod commit;
 mod confirm;
 mod index;
 mod read;
+mod retry;
 mod rows;
 mod schema;
+mod title;
 mod validation;
 
 use audit::{
@@ -80,6 +82,7 @@ pub(in crate::durable::sqlite) use authority::{
     validate_call_event_tx, validate_request_start_event_tx, validate_request_terminal_event_tx,
 };
 pub(in crate::durable::sqlite) use index::{index_event_tx, load_request_owner_tx};
+pub(in crate::durable::sqlite) use retry::validate_retry_event_tx;
 pub(in crate::durable::sqlite) use schema::{create_schema, verify_schema};
 
 impl crate::durable::AuxiliaryStore for SqliteConversationStore {
@@ -92,6 +95,23 @@ impl crate::durable::AuxiliaryStore for SqliteConversationStore {
         SqliteConversationStore::commit_auxiliary_call_start(self, start, timestamp)
     }
 
+    fn commit_auxiliary_title_call_start(
+        &self,
+        start: &AuxiliaryCallStart,
+        source: &crate::durable::auxiliary::AuxiliaryTitleSourceBinding,
+        timestamp: DateTime<Utc>,
+    ) -> Result<AuxiliaryCallStartCommit, AuxiliaryWriteFailure> {
+        self.commit_auxiliary_call_start_bound(start, timestamp, Some(source))
+    }
+
+    fn recover_auxiliary_title_source(
+        &self,
+        source: &crate::durable::auxiliary::AuxiliaryTitleSourceBinding,
+        timestamp: DateTime<Utc>,
+    ) -> Result<(), AuxiliaryWriteFailure> {
+        self.recover_title_source(source, timestamp)
+    }
+
     fn commit_auxiliary_request_start(
         &self,
         start: &crate::model::auxiliary::AuxiliaryRequestStart,
@@ -99,6 +119,25 @@ impl crate::durable::AuxiliaryStore for SqliteConversationStore {
     ) -> Result<crate::durable::AuxiliaryRequestStartCommit, crate::durable::AuxiliaryWriteFailure>
     {
         SqliteConversationStore::commit_auxiliary_request_start(self, start, timestamp)
+    }
+
+    fn commit_auxiliary_retry_settlement(
+        &self,
+        request_terminal: RuntimeEventEnvelope,
+        retry_scheduled: RuntimeEventEnvelope,
+    ) -> Result<crate::durable::AuxiliaryRetryCommit, AuxiliaryWriteFailure> {
+        self.commit_auxiliary_retry(&request_terminal, &retry_scheduled)
+    }
+
+    fn confirm_auxiliary_retry_settlement(
+        &self,
+        request_terminal: &RuntimeEventEnvelope,
+        retry_scheduled: &RuntimeEventEnvelope,
+    ) -> Result<
+        AuxiliaryCommitConfirmation<crate::durable::AuxiliaryRetryCommit>,
+        ConversationStoreError,
+    > {
+        self.confirm_auxiliary_retry(request_terminal, retry_scheduled)
     }
 
     fn commit_auxiliary_request_settlement(

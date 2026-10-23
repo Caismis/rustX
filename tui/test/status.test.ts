@@ -356,6 +356,15 @@ describe("footer", () => {
     );
   });
 
+  it("keeps absent reported token fields distinct from a reported zero", () => {
+    const state = stateOf({ transcript: { statistics: {
+      turns: "1", steps: "1", completed_responses: "1", model_requests: "1", requests_with_usage: "1",
+      reported_usage: { output_tokens: "0" },
+    } } });
+    assert.match(footer(state, "connected"), /reported ↑\? ↓0/);
+    assert.doesNotMatch(footer(state, "connected"), /reported ↑0/);
+  });
+
   it("does not duplicate pending inbound, background, and approval activity", () => {
     const rendered = footer(
       stateOf({

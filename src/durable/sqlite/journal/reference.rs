@@ -937,6 +937,9 @@ pub(in crate::durable::sqlite) fn validate_event_reference(
                 auxiliary::validate_request_start_event_tx(transaction, envelope)?;
             }
         },
+        RuntimeEvent::AuxiliaryRetryScheduled { .. } => {
+            auxiliary::validate_retry_event_tx(transaction, envelope)?;
+        }
         RuntimeEvent::AuxiliaryCallStarted { .. } | RuntimeEvent::AuxiliaryCallSettled { .. } => {
             auxiliary::validate_call_event_tx(transaction, envelope)?;
         }

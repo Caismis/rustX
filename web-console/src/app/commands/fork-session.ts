@@ -1,6 +1,6 @@
-/* Copyright (c) 2026 DeepSeek. MIT. Fork-title numbering adapted from session-controller sessions/service.ts; see PROVENANCE.md. */
+/* Copyright (c) 2026 DeepSeek. MIT. Catalog fork navigation adapted from session-controller sessions/service.ts; see PROVENANCE.md. */
 import type { AppServerClient } from '../../client/app-server';
-import type { MethodResult } from '../../../../protocol/app-server/v52';
+import type { MethodResult } from '../../../../protocol/app-server/v53';
 import { messageDescriptor } from '../../../../protocol/app-server/message-descriptor';
 import { message, displayText } from '../../locale/translation';
 import { localeController } from '../../locale/controller';
@@ -47,7 +47,7 @@ export async function forkLatestSession(client: AppServerClient, sessionId: stri
   if (!current() || !admitted.current()) return;
   const state = client.getSnapshot();
   const summary = state.sessions.find(row => row.id === sessionId) ?? state.views[sessionId]?.summary;
-  const sourceTitle = session.name ?? summary?.name ?? summary?.preview;
+  const sourceTitle = session.name ?? session.generated_title?.text ?? summary?.name ?? summary?.generated_title?.text ?? summary?.preview;
   let result = await client.request({ method: 'session/history', params: { session_id: sessionId, node_id: session.active_node, at: { type: 'latest' }, limit: 32 } }, 'session_history', undefined, admitted);
   const cut = result.window.cut;
   while (current() && admitted.current()) {

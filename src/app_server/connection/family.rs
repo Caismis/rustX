@@ -125,6 +125,9 @@ impl Family<'_> {
             | Method::SourcesPage { .. }
             | Method::SourcesValueRead { .. }
             | Method::SourcesWrite { .. }
+            | Method::WorkflowList { .. }
+            | Method::WorkflowRead { .. }
+            | Method::WorkflowCheck { .. }
             | Method::SettingsRead { .. }
             | Method::SettingsValueRead { .. }
             | Method::ConfigurationReconcile { .. }

@@ -621,10 +621,15 @@ pub(crate) enum OpeningUserPreview {
 pub(crate) struct SessionObservationMetadata {
     pub(crate) human_activity_at: Option<chrono::DateTime<chrono::Utc>>,
     pub(crate) opening_preview: OpeningUserPreview,
+    pub(crate) first_human_position: Option<u64>,
+    pub(crate) model_generation: u64,
     pub(crate) closed: bool,
 }
 impl SessionObservationMetadata {
     fn fold_canonical(&mut self, batch: &crate::durable::CanonicalObservationBatch) {
+        if self.first_human_position.is_none() {
+            self.first_human_position = batch.first_human_position;
+        }
         self.fold(
             batch.human_activity_at,
             batch.has_opening_user,
@@ -754,6 +759,15 @@ impl ObservationFanout {
             .lock()
             .expect("observation fan-out dispatch lock poisoned");
         for fact in observation.facts() {
+            if matches!(
+                fact,
+                ConversationObservation::SessionModelChanged { .. }
+                    | ConversationObservation::Resources { .. }
+            ) {
+                self.session_metadata.send_modify(|metadata| {
+                    metadata.model_generation = metadata.model_generation.saturating_add(1);
+                });
+            }
             if let ConversationObservation::CanonicalCommitted { receipt, .. } = fact
                 && receipt.ordinal.checked_add(1) == Some(receipt.observation.count)
             {
@@ -2162,6 +2176,7 @@ pub(crate) fn trace_fact_requires_publication(event: &RuntimeEvent) -> bool {
         | RuntimeEvent::ModelRequestFailed { .. }
         | RuntimeEvent::AuxiliaryCallStarted { .. }
         | RuntimeEvent::AuxiliaryCallSettled { .. }
+        | RuntimeEvent::AuxiliaryRetryScheduled { .. }
         | RuntimeEvent::NativeToolInvocation { .. }
         | RuntimeEvent::ToolExecutionProgress { .. }
         | RuntimeEvent::ToolExecutionDeadlineFired { .. }
@@ -2185,6 +2200,51 @@ pub(crate) fn trace_fact_requires_publication(event: &RuntimeEvent) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn first_timestamp_less_human_wakes_after_runtime_preview_has_settled() {
+        use crate::durable::CanonicalStore;
+        use crate::message::{MessageBlock, UserSource};
+        let store = crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+            "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+        ))
+        .unwrap();
+        store.initialize(&[]).unwrap();
+        let fanout = ObservationFanout::new(Arc::new(PendingObservations::new()));
+        let mut watch = fanout.session_metadata();
+        let message = |id: &str, source: UserSource| {
+            MessageBlock::User(crate::message::UserMessageBlock {
+                id: crate::runtime::identity::MessageId::new(id),
+                content: vec![crate::message::UserContentBlock::Text(
+                    crate::message::TextBlock { text: id.into() },
+                )],
+                source,
+                kind: crate::message::InboundKind::Message,
+                timestamp: None,
+            })
+        };
+        let runtime = store
+            .append_canonical(&message("runtime", UserSource::Runtime))
+            .unwrap();
+        fanout.push(&ConversationObservation::CanonicalCommitted {
+            attempt_id: None,
+            receipt: runtime,
+        });
+        let previous = watch.borrow_and_update().clone();
+        assert!(previous.first_human_position.is_none());
+        let human = store
+            .append_canonical(&message("human", UserSource::Human))
+            .unwrap();
+        fanout.push(&ConversationObservation::CanonicalCommitted {
+            attempt_id: None,
+            receipt: human,
+        });
+        assert!(watch.has_changed().unwrap());
+        let changed = watch.borrow_and_update().clone();
+        assert_eq!(changed.first_human_position, Some(2));
+        assert_eq!(changed.opening_preview, previous.opening_preview);
+        assert_eq!(changed.human_activity_at, previous.human_activity_at);
+    }
+
     #[test]
     fn t20_session_metadata_keeps_first_boundary_and_maximum_activity_without_fifo() {
         let first = chrono::DateTime::parse_from_rfc3339("2026-10-07T12:00:00Z")

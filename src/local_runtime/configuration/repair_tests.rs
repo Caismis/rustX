@@ -104,20 +104,15 @@ impl Fixture {
     }
 }
 
-/// The writer lock beside `document`.
+/// The writer lock of `document`.
 fn lock_of(document: &Path) -> PathBuf {
-    document.with_file_name(super::super::super::settings::lock_name(
-        document.file_name().unwrap(),
-    ))
+    super::super::super::settings::lock_path_of(document)
 }
 
-/// The directory entries of a written `rustx.toml`: the document and its
-/// writer lock, no staged candidate.
+/// The directory entries of a written `rustx.toml`: the lock directory and
+/// the document, no staged candidate.
 fn document_entries() -> [String; 2] {
-    [
-        super::super::super::settings::lock_name(std::ffi::OsStr::new("rustx.toml")),
-        "rustx.toml".into(),
-    ]
+    [".rustx-locks".into(), "rustx.toml".into()]
 }
 
 fn changes(text: &str) -> Vec<ConfigRepairChange> {
@@ -1672,7 +1667,7 @@ fn assert_basename_writable(name: &std::ffi::OsStr) {
         names.sort();
         names
     };
-    let mut expected = vec![lock_of(&path), path.clone()];
+    let mut expected = vec![path.with_file_name(".rustx-locks"), path.clone()];
     expected.sort();
     assert_eq!(entries(), expected);
     let revision = super::super::super::settings::revision(Some(USER.as_bytes()));
@@ -1768,11 +1763,7 @@ fn a_non_utf8_user_source_keeps_its_exact_name_through_every_transaction() {
         names.sort();
         names
     };
-    let mut expected = vec![
-        name.clone(),
-        other.clone(),
-        lock_of(&path).file_name().unwrap().to_os_string(),
-    ];
+    let mut expected = vec![name.clone(), other.clone(), ".rustx-locks".into()];
     expected.sort();
     assert_eq!(entries(), expected);
     // Ordinary authoring reads the exact revision and is fenced by it.
@@ -1868,7 +1859,14 @@ fn every_writer_takes_one_bounded_lock_per_document() {
             "{name:?}"
         );
     }
-    assert_eq!(std::fs::read_dir(&directory).unwrap().count(), names.len());
+    // Every lock lives in the one lock directory, the directory's only entry.
+    assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+    assert_eq!(
+        std::fs::read_dir(directory.join(".rustx-locks"))
+            .unwrap()
+            .count(),
+        names.len()
+    );
 }
 
 #[test]
@@ -3934,6 +3932,20 @@ fn a_redirected_lock_or_document_is_never_followed_by_a_reader() {
     let fixture = Fixture::new();
     let elsewhere = fixture.root.path().join("elsewhere");
     std::fs::create_dir(&elsewhere).unwrap();
+    // A redirected lock directory is never followed either.
+    let locks = fixture
+        .path(&fixture.workspace)
+        .with_file_name(".rustx-locks");
+    std::os::unix::fs::symlink(&elsewhere, &locks).unwrap();
+    assert!(
+        fixture
+            .manager
+            .read_source_settings(&fixture.workspace)
+            .is_err()
+    );
+    assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
+    std::fs::remove_file(&locks).unwrap();
+    std::fs::create_dir(&locks).unwrap();
     let lock = lock_of(&fixture.path(&fixture.workspace));
     std::os::unix::fs::symlink(elsewhere.join("planted.lock"), &lock).unwrap();
     assert!(

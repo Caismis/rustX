@@ -207,6 +207,7 @@ async function openSession(
   settings: SessionSettings,
 ): Promise<AppServerSession> {
   const created = await host.createSession(settings);
+  await host.renameSession(created.session.id, "TUI integration fixture");
   return host.attach(created.session.id, created.session.active_node);
 }
 
@@ -217,6 +218,7 @@ it("same-model TUI command persists inherited intent then delegates explicit NoO
   try {
     const settings = fixture.settings("inherited-model");
     const created = await host.createSession(settings);
+    await host.renameSession(created.session.id, "TUI inherited model fixture");
     await host.shutdown();
     // Public creation materializes its selected default. Seed a legitimate
     // inherited Session only while the native owner is stopped; the next
@@ -264,7 +266,7 @@ it("live profile selection crosses the real TUI/App Server boundary while the or
   let passed = false;
   try {
     const settings = fixture.settings("live-profile");
-    settings.model = { model: "fixture/integration-model", profile: "high", requestParams: { temperature: 0.2 }, maxOutputTokens: 777, summaryModel: { mode: "explicit", model: "fixture/integration-model", profile: "low", request_params: {}, max_output_tokens: 333 } };
+    settings.model = { model: "fixture/integration-model", profile: "high", requestParams: { temperature: 0.2 }, maxOutputTokens: 777, summaryModel: { mode: "explicit", model: "fixture/integration-model", profile: "low", request_params: {}, max_output_tokens: 333 }, titleModel: { mode: "explicit", model: "fixture/integration-model", profile: "low", request_params: { title_tag: "preserved" }, max_output_tokens: 222 } };
     const session = await openSession(host, settings);
     await session.submitInbound([{ type: "text", text: "tui multi-session: session A long task" }]);
     await provider.awaitGate("session-a-holding");
@@ -892,6 +894,7 @@ describe("existing/remote mode: WebSocket to an externally managed App Server", 
     } });
     const host = new AppServerHost({ client, ownership: "external" });
     const session = await openSession(host, server.settings("replay-session"));
+    sentMutations = 0; // Count only the mutation whose response is deliberately lost.
     loseResponse = true;
     await assert.rejects(host.renameSession(session.sessionId, "accepted-once"), UncertainOutcomeError);
     const recovered = await AppServerHost.connectRemote({ endpoint: external.endpoint, token: TRANSPORT_TOKEN });

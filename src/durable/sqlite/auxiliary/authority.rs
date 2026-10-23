@@ -198,7 +198,14 @@ pub(in crate::durable::sqlite) fn validate_call_event_tx(
             };
             validate_call_start_authority_tx(transaction, &envelope.conversation_id, &start)?;
         }
-        RuntimeEvent::AuxiliaryCallSettled { call_id, .. } => {
+        RuntimeEvent::AuxiliaryCallSettled {
+            call_id,
+            outcome,
+            request_evidence,
+        } => {
+            if request_evidence.is_none() {
+                super::retry::validate_call_only(transaction, call_id, *outcome, None)?;
+            }
             validate_terminal_envelope_shape(envelope, &envelope.conversation_id, true)?;
             let call = call_row_tx(transaction, call_id)?.ok_or_else(|| {
                 ConversationStoreError::InvalidReference(format!(
@@ -290,6 +297,23 @@ pub(in crate::durable::sqlite) fn validate_request_start_event_tx(
             "auxiliary request ordinal {ordinal} is not the required next ordinal {expected}"
         )));
     }
+    if *ordinal >= 3 {
+        return Err(ConversationStoreError::InvalidReference(
+            "auxiliary Call confirmed-start limit is three".into(),
+        ));
+    }
+    if *ordinal > 0 {
+        let scheduled: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM auxiliary_retries WHERE call_id=?1 AND next_ordinal=?2)",
+            params![call_id.as_str(), ordinal], |row| row.get(0),
+        ).map_err(|error| sqlite_error(&error, error.to_string()))?;
+        if !scheduled {
+            return Err(ConversationStoreError::InvalidReference(
+                "auxiliary next request lacks committed retry authorization".into(),
+            ));
+        }
+    }
+    super::title::validate_start(transaction, call_id)?;
     if request_snapshot_exists(transaction, request_id)? {
         return Err(ConversationStoreError::InvalidReference(format!(
             "auxiliary request {request_id} conflicts with a primary Request Snapshot"

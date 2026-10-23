@@ -332,6 +332,12 @@ pub enum SourceMutation {
         name: crate::runtime::subagent::SubagentName,
         authored: Option<super::super::config::AgentProfileDocument>,
     },
+    /// One whole-file edit of exactly `<scope>/.agents/workflows/<id>.yaml`
+    /// (Issue #491). The expected revision is that file's.
+    Workflow {
+        id: crate::runtime::workflow::WorkflowId,
+        edit: super::super::workflow_authoring::WorkflowEdit,
+    },
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -347,6 +353,9 @@ pub enum SettingsError {
         actual: String,
     },
     Invalid,
+    /// A Workflow candidate the native parser or compiler rejected, with its
+    /// bounded diagnostic. Nothing was staged.
+    InvalidWorkflow(Box<super::super::workflow_authoring::WorkflowDiagnostic>),
     Io,
     Committed,
 }
@@ -1198,6 +1207,9 @@ impl UserConfigManager {
                 .resource_root(target)
                 .join("agents")
                 .join(format!("{name}.toml")),
+            SourceMutation::Workflow { id, .. } => {
+                super::super::workflow_authoring::file_path(self, target, id)
+            }
         };
         // The physical source of this transaction, created when missing and
         // confirmed durable by `publish_locked`. A target redirected since
@@ -1209,6 +1221,23 @@ impl UserConfigManager {
         let name = path.file_name().ok_or(SettingsError::Invalid)?;
         #[cfg(test)]
         self.test_hooks.reach("write_before_lock");
+        // A Workflow addition is admitted against the discovery bounds of its
+        // scopes under their capacity locks, taken before the writer lock.
+        let capacity = match &mutation {
+            SourceMutation::Workflow {
+                edit:
+                    super::super::workflow_authoring::WorkflowEdit::Create { .. }
+                    | super::super::workflow_authoring::WorkflowEdit::Copy { .. },
+                ..
+            } => Some(super::super::workflow_authoring::Capacity::lock(
+                self, target,
+            )?),
+            _ => None,
+        };
+        #[cfg(test)]
+        if capacity.is_some() {
+            self.test_hooks.reach("workflow_capacity_locked");
+        }
         let committed_revision;
         {
             let _lock = source.lock(name).map_err(|error| {
@@ -1223,6 +1252,9 @@ impl UserConfigManager {
                     expected: expected.into(),
                     actual,
                 });
+            }
+            if let (Some(capacity), SourceMutation::Workflow { id, .. }) = (&capacity, &mutation) {
+                capacity.admit(id)?;
             }
             let candidate = match mutation {
                 SourceMutation::RepairConfig { document } => {
@@ -1285,6 +1317,16 @@ impl UserConfigManager {
                             .map_err(|_| SettingsError::Invalid)
                     })
                     .transpose()?,
+                SourceMutation::Workflow { id, edit } => {
+                    super::super::workflow_authoring::candidate(
+                        &id,
+                        edit,
+                        original.as_deref(),
+                        &source,
+                        &path,
+                        scope,
+                    )?
+                }
             };
             committed_revision = revision(candidate.as_deref());
             self.publish_locked(

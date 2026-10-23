@@ -122,6 +122,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                     id: target.session_id.clone(),
                     cwd: "/workspace".into(),
                     name: None,
+                    generated_title: None,
                     preview: Some("Native first user message".into()),
                     updated_at: chrono::DateTime::from_timestamp(0, 0).expect("fixture date"),
                     active_node: crate::local_runtime::session::SessionNodeId::new(
@@ -263,6 +264,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                         "ses_00000000-0000-7000-8000-000000000001",
                     ),
                     name: None,
+                    generated_title: None,
                     created_at: chrono::DateTime::from_timestamp(0, 0).expect("epoch"),
                     updated_at: chrono::DateTime::from_timestamp(1, 0).expect("epoch"),
                     active_node: crate::local_runtime::session::SessionNodeId::new(
@@ -707,7 +709,212 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             },
         })));
     }
+    workflow_fixtures(&mut fixtures);
     fixtures
+}
+
+/// The six native Workflow examples as exact scoped authoring messages
+/// (Issue #491): parsed, compiled and explained by the native owner, never
+/// by a client.
+#[allow(clippy::too_many_lines)] // Typed fixture constructors, not protocol logic.
+fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
+    use crate::local_runtime::configuration::settings::{SourceMutation, SourceTarget};
+    use crate::local_runtime::workflow_authoring::{
+        WorkflowCheckReport, WorkflowDependencies, WorkflowDiagnostic, WorkflowEdit,
+        WorkflowFileSummary, WorkflowLibrary, WorkflowSource, WorkflowStructure,
+        WorkflowVocabulary,
+    };
+    use crate::runtime::workflow::{WorkflowDefinition, WorkflowId, WorkflowProgram};
+    use sha2::Digest;
+    const EXAMPLES: [(&str, &str); 6] = [
+        (
+            "typed_agent",
+            include_str!(
+                "../../examples/local-runtime/workflow-templates/.agents/workflows/typed_agent.yaml"
+            ),
+        ),
+        (
+            "specialized_agent",
+            include_str!(
+                "../../examples/local-runtime/workflow-templates/.agents/workflows/specialized_agent.yaml"
+            ),
+        ),
+        (
+            "parallel_checks",
+            include_str!(
+                "../../examples/local-runtime/workflow-templates/.agents/workflows/parallel_checks.yaml"
+            ),
+        ),
+        (
+            "human_plan",
+            include_str!(
+                "../../examples/local-runtime/workflow-templates/.agents/workflows/human_plan.yaml"
+            ),
+        ),
+        (
+            "parallel_review",
+            include_str!("../../examples/local-runtime/.agents/workflows/parallel_review.yaml"),
+        ),
+        (
+            "implement_and_review",
+            include_str!(
+                "../../examples/local-runtime/.agents/workflows/implement_and_review.yaml"
+            ),
+        ),
+    ];
+    let directory = std::path::PathBuf::from("/workspace/fixture/.agents/workflows");
+    let target = SourceTarget::Workspace {
+        directory: "/workspace/fixture".into(),
+    };
+    let success = |id: &str, result: MethodResult| {
+        ProtocolMessage::Response(Response::Success(Box::new(Success {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String(id.into()),
+            result,
+        })))
+    };
+    let request = |id: &str, call: Method| {
+        ProtocolMessage::Request(Box::new(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String(id.into()),
+            call,
+        }))
+    };
+    let examples: Vec<_> = EXAMPLES
+        .iter()
+        .map(|(name, yaml)| {
+            let definition: WorkflowDefinition =
+                serde_yaml::from_str(yaml).expect("native example parses");
+            let revision = format!("sha256:{:x}", sha2::Sha256::digest(yaml.as_bytes()));
+            (
+                WorkflowId::parse(name).expect("example identity"),
+                definition,
+                revision,
+                yaml.len(),
+            )
+        })
+        .collect();
+    fixtures.push(request(
+        "workflow-list",
+        Method::WorkflowList {
+            target: target.clone(),
+        },
+    ));
+    fixtures.push(success(
+        "workflow-list",
+        MethodResult::WorkflowLibrary {
+            library: WorkflowLibrary {
+                target: target.clone(),
+                directory: directory.clone(),
+                absent_revision: "missing".into(),
+                files: examples
+                    .iter()
+                    .map(|(id, definition, revision, length)| WorkflowFileSummary {
+                        file_name: format!("{id}.yaml"),
+                        id: Some(id.clone()),
+                        relative_path: format!(".agents/workflows/{id}.yaml"),
+                        revision: revision.clone(),
+                        byte_length: *length as u64,
+                        modified_ms: Some(1_790_000_000_000),
+                        description: Some(definition.description.clone()),
+                        nodes: Some(definition.block.nodes.len()),
+                        diagnostic: None,
+                        shadows_global: false,
+                    })
+                    .collect(),
+                diagnostic: None,
+            },
+        },
+    ));
+    for (id, definition, revision, _) in &examples {
+        fixtures.push(success(
+            &format!("workflow-source-{id}"),
+            MethodResult::WorkflowSource {
+                source: Box::new(WorkflowSource {
+                    target: target.clone(),
+                    id: id.clone(),
+                    path: directory.join(format!("{id}.yaml")),
+                    relative_path: format!(".agents/workflows/{id}.yaml"),
+                    revision: revision.clone(),
+                    present: true,
+                    modified_ms: Some(1_790_000_000_000),
+                    document: Some(Box::new(definition.clone())),
+                    diagnostic: None,
+                    vocabulary: WorkflowVocabulary {
+                        profiles: vec![
+                            crate::runtime::subagent::SubagentName::parse("reviewer")
+                                .expect("profile fixture"),
+                        ],
+                        builtin_tools: crate::runtime::workflow::selectable_builtin_tools(),
+                    },
+                }),
+            },
+        ));
+    }
+    let (id, definition, revision, _) = &examples[4];
+    let program =
+        WorkflowProgram::compile(id.clone(), definition.clone()).expect("example compiles");
+    fixtures.push(request(
+        "workflow-check",
+        Method::WorkflowCheck {
+            target: target.clone(),
+            id: id.clone(),
+            document: Box::new(definition.clone()),
+            context: None,
+            explain: true,
+        },
+    ));
+    // The wire omits the local report's runtime requirements.
+    let mut explanation = program.inspect();
+    explanation.runtime_requirements.clear();
+    fixtures.push(success(
+        "workflow-check",
+        MethodResult::WorkflowCheck {
+            report: Box::new(WorkflowCheckReport {
+                structure: WorkflowStructure::Valid {
+                    outputs: program.node_outputs(),
+                    revision: revision.clone(),
+                },
+                dependencies: WorkflowDependencies::Admitted {
+                    context: "/workspace/fixture".into(),
+                },
+                explanation: Some(Box::new(explanation)),
+            }),
+        },
+    ));
+    fixtures.push(request(
+        "workflow-save",
+        Method::SourcesWrite {
+            target,
+            expected_revision: revision.clone(),
+            mutation: SourceMutation::Workflow {
+                id: id.clone(),
+                edit: WorkflowEdit::Replace {
+                    document: Box::new(definition.clone()),
+                },
+            },
+        },
+    ));
+    fixtures.push(ProtocolMessage::Response(Response::Failure(Failure {
+        jsonrpc: JsonRpcVersion::V2,
+        id: Some(RequestId::String("workflow-save".into())),
+        error: RpcError {
+            code: -32000,
+            message: "invalid Workflow".into(),
+            data: Some(super::protocol::ErrorData::WorkflowInvalid {
+                diagnostic: Box::new(WorkflowDiagnostic {
+                    path: "block.entry".into(),
+                    category: "workflow_language".into(),
+                    reason: "Workflow graph, control structure, or configured bound is invalid"
+                        .into(),
+                    correction: None,
+                    detail: None,
+                    line: None,
+                    column: None,
+                }),
+            }),
+        },
+    })));
 }
 
 #[cfg(test)]
@@ -913,9 +1120,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v52.schema.json", "v52.ts"]);
+        assert_eq!(generations, ["v53.schema.json", "v53.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v52.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v53.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

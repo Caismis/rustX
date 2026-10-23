@@ -66,6 +66,58 @@
       ],
       "type": "string"
     },
+    "AuxiliaryModelAuthoring": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "session",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "max_output_tokens": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ModelOutput"
+                }
+              ]
+            },
+            "mode": {
+              "const": "explicit",
+              "type": "string"
+            },
+            "model": {
+              "$ref": "#/$defs/ModelRef"
+            },
+            "profile": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ModelProfileId"
+                }
+              ]
+            },
+            "request_params": {
+              "$ref": "#/$defs/RequestParamsJson",
+              "default": "{}"
+            }
+          },
+          "required": [
+            "mode",
+            "model"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "BackgroundStatusConfig": {
       "additionalProperties": false,
       "description": "Configuration of the bounded Background status contributor.",
@@ -124,7 +176,14 @@
         "summary_model": {
           "anyOf": [
             {
-              "$ref": "#/$defs/SummaryAuthoring"
+              "$ref": "#/$defs/AuxiliaryModelAuthoring"
+            }
+          ]
+        },
+        "title_model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuxiliaryModelAuthoring"
             }
           ]
         }
@@ -230,58 +289,6 @@
     "SubagentName": {
       "description": "The canonical typed name of one admitted subagent definition.\n\nThe keyspace is deliberately narrow: lowercase ASCII letters, digits,\n`-`, and `_`, starting with a letter. A name is the model-facing routing\ntoken, the durable ownership identity, and the Runtime Client projection\nidentity, so an ambiguous or shell-shaped spelling is rejected at the\nconfiguration boundary rather than normalized later.",
       "type": "string"
-    },
-    "SummaryAuthoring": {
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "properties": {
-            "mode": {
-              "const": "session",
-              "type": "string"
-            }
-          },
-          "required": [
-            "mode"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "max_output_tokens": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/ModelOutput"
-                }
-              ]
-            },
-            "mode": {
-              "const": "explicit",
-              "type": "string"
-            },
-            "model": {
-              "$ref": "#/$defs/ModelRef"
-            },
-            "profile": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/ModelProfileId"
-                }
-              ]
-            },
-            "request_params": {
-              "$ref": "#/$defs/RequestParamsJson",
-              "default": "{}"
-            }
-          },
-          "required": [
-            "mode",
-            "model"
-          ],
-          "type": "object"
-        }
-      ]
     },
     "TimeStatusConfig": {
       "additionalProperties": false,

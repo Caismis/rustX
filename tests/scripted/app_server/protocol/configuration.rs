@@ -753,6 +753,27 @@ async fn t15_source_fields_and_many_small_revisions_page_with_exact_cut_evidence
             .source_settings(&SourceTarget::User)
             .await
             .unwrap();
+        let title = crate::local_runtime::authoring::AuxiliaryModelAuthoring::Explicit {
+            model: crate::model::catalog::ModelRef::parse("local/b").unwrap(),
+            profile: None, request_params: crate::toml_authoring::AuthoredRequestParams::default(),
+            max_output_tokens: Some(crate::local_runtime::authoring::ModelOutput::Limit { tokens: 128 }),
+        };
+        native.user.authored.as_mut().unwrap().agent.as_mut().unwrap().model.as_mut().unwrap().title_model = Some(title.clone());
+        let inline = source::bounded(&native).unwrap().inline.unwrap();
+        assert_eq!(inline.user.authored.as_ref().unwrap().agent.as_ref().unwrap().model.as_ref().unwrap().title_model, Some(title.clone()));
+        let mut authored = native.user.authored.as_ref().unwrap().agent.as_ref().unwrap().model.clone().unwrap();
+        let crate::local_runtime::authoring::AuxiliaryModelAuthoring::Explicit { request_params, .. } = authored.title_model.as_mut().unwrap() else { unreachable!() };
+        request_params.0.insert("exact_title_payload".into(), serde_json::Value::String("é\n".repeat(20_000)));
+        native.user.authored.as_mut().unwrap().agent.as_mut().unwrap().model = Some(authored.clone());
+        let title_agent_index = u64::try_from(native.agents.len()).unwrap();
+        native.agents.push(crate::local_runtime::configuration::settings::AgentSourceView {
+            scope: crate::runtime::resources::SourceScope::User,
+            name: crate::runtime::subagent::SubagentName::parse("title-reader").unwrap(),
+            source: crate::local_runtime::configuration::settings::SourceView {
+                path: "/fixture/title-reader.toml".into(), revision: "title-source-v1".into(), diagnostic: None,
+                authored: Some(crate::local_runtime::config::AgentProfileDocument { model: Some(authored.resolve().unwrap()), ..Default::default() }),
+            },
+        });
         native.prospective_diagnostic = Some("é\n".repeat(140_000));
         for index in 0..3000 {
             native.resource_revisions.insert(
@@ -873,6 +894,21 @@ async fn t15_source_fields_and_many_small_revisions_page_with_exact_cut_evidence
             seen,
             u64::try_from(native.resource_revisions.len()).unwrap()
         );
+        let page = source::page(&native, &projection.revision, source::SourceFieldName::Agents, title_agent_index, 1).unwrap();
+        let title_reference = page.items[0].reference.as_ref().unwrap();
+        let mut title_bytes = Vec::new();
+        let mut title_offset = 0;
+        loop {
+            let chunk = source::read(&native, title_reference, title_offset, source::READ_BYTES).unwrap();
+            title_bytes.extend(base64::engine::general_purpose::STANDARD.decode(chunk.data_base64).unwrap());
+            let Some(next) = chunk.next_offset else { break; };
+            assert!(next > title_offset);
+            title_offset = next;
+        }
+        let title_entry: serde_json::Value = serde_json::from_slice(&title_bytes).unwrap();
+        assert_eq!(title_entry["source"]["authored"]["model"]["title_model"]["request_params"]["exact_title_payload"], "é\n".repeat(20_000));
+        native.user.authored.as_mut().unwrap().agent.as_mut().unwrap().model.as_mut().unwrap().title_model = Some(title);
+        assert_eq!(source::read(&native, title_reference, 0, 1).unwrap_err(), "source read cut expired");
         native.prospective_diagnostic.as_mut().unwrap().push('x');
         assert_eq!(
             source::read(&native, reference, 0, 1).unwrap_err(),
@@ -936,6 +972,24 @@ async fn t15_cold_settings_deferred_value_advances_with_exact_catalog_revision()
         settings.model = Some(crate::model::session::SessionModelConfig::of(
             crate::model::catalog::ModelRef::parse("local/a").unwrap(),
         ));
+        settings.model.as_mut().unwrap().title_model =
+            crate::model::session::AuxiliaryModelPolicy::Explicit {
+                model: crate::model::catalog::ModelRef::parse("local/b").unwrap(),
+                profile: None,
+                request_params: serde_json::from_value(
+                    serde_json::json!({"title_payload": "exact"}),
+                )
+                .unwrap(),
+                max_output_tokens: Some(128),
+            };
+        assert_eq!(
+            source::session_settings(revision, &settings)
+                .unwrap()
+                .inline
+                .unwrap()
+                .model,
+            settings.model
+        );
         settings.model.as_mut().unwrap().request_params.insert(
             "large".into(),
             serde_json::Value::String("é\n".repeat(700_000)),
@@ -1005,6 +1059,33 @@ async fn t15_effective_configuration_preserves_all_fields_and_advancing_pages() 
             .manager
             .effective_configuration_observation(&f.sessions[0].id)
             .unwrap();
+        let title = crate::model::session::AuxiliaryModelPolicy::Explicit {
+            model: crate::model::catalog::ModelRef::parse("local/b").unwrap(),
+            profile: None,
+            request_params: serde_json::from_value(serde_json::json!({"title_payload": "exact"}))
+                .unwrap(),
+            max_output_tokens: Some(128),
+        };
+        native.effective_model.configured.title_model = title.clone();
+        let mut title_invocation = native.effective_model.effective.clone().unwrap();
+        title_invocation.model = crate::model::catalog::ModelRef::parse("local/b").unwrap();
+        title_invocation.max_output_tokens = 128;
+        native.effective_model.title = Some(crate::model::session::AuxiliaryModelView::Explicit(
+            Box::new(title_invocation),
+        ));
+        let mut inline_native = native.clone();
+        inline_native.provenance.clear();
+        inline_native.available_tools.clear();
+        assert_eq!(
+            source::bounded(&inline_native)
+                .unwrap()
+                .inline
+                .unwrap()
+                .effective_model
+                .configured
+                .title_model,
+            title
+        );
         native.effective_model.configured.request_params.insert(
             "large".into(),
             serde_json::Value::String("é\n".repeat(300_000)),

@@ -3,7 +3,7 @@ import { useTranslation } from '../../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted settings cards and request controls; see PROVENANCE.md. */
 import { useRef, useState } from 'react';
 import { GridList, GridListItem } from 'react-aria-components';
-import type { Model, ModelLayer, ProviderView, ProviderWrite, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v52';
+import type { Model, ModelLayer, ProviderView, ProviderWrite, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v53';
 import { Badge } from '../../../presentation/settings/SettingsContent';
 import { Button } from '../../../presentation/primitives/Button';
 import { DialogSurface } from '../../../presentation/primitives/DialogSurface';
@@ -212,6 +212,7 @@ export type ModelProfiles = Readonly<Record<string, readonly string[]>>;
 export function ModelSelection({ value, change, models, profiles }: { value: ModelLayer; change: (next: ModelLayer) => void; models: string[]; profiles: ModelProfiles }) {
   const tx = useTranslation();
   const summary = value.summary_model;
+  const title = value.title_model;
   const identities = (extra?: string) => [...new Set([...models, ...(extra ? [extra] : [])])];
   return <>
     <Choice label={tx('settings:models-page.model')} value={value.model ?? ''} options={[['', tx('settings:copy.select-model')], ...identities(value.model ?? undefined).map(id => [id, id] as const)]}
@@ -223,6 +224,12 @@ export function ModelSelection({ value, change, models, profiles }: { value: Mod
     {summary?.mode === 'explicit' && <fieldset><legend>{tx('settings:models-page.explicit-summary-model-settings')}</legend>
       <ModelRequestFields value={summary} variant="summary" change={summary_model => change({ ...value, summary_model })} profiles={profiles[summary.model] ?? []} />
     </fieldset>}
+    <Choice label={tx('settings:models-page.title-model')} value={title?.mode === 'explicit' ? title.model : ''}
+      options={[['', tx('settings:copy.follow-selected-model')], ...identities(title?.mode === 'explicit' ? title.model : undefined).map(id => [id, id] as const)]}
+      onChange={model => change({ ...value, title_model: model ? { ...(title?.mode === 'explicit' ? title : {}), mode: 'explicit', model } : { mode: 'session' } })} />
+    {title?.mode === 'explicit' && <fieldset><legend>{tx('settings:models-page.explicit-title-model-settings')}</legend>
+      <ModelRequestFields value={title} variant="title" change={title_model => change({ ...value, title_model })} profiles={profiles[title.model] ?? []} />
+    </fieldset>}
   </>;
 }
 type RequestFields = Pick<ModelLayer, 'profile' | 'max_output_tokens' | 'request_params'>;
@@ -232,6 +239,7 @@ type RequestFields = Pick<ModelLayer, 'profile' | 'max_output_tokens' | 'request
 const REQUEST_FIELD_LABELS = {
   default: { profile: 'settings:models-page.profile', limit: 'settings:models-page.output-limit', params: 'settings:models-page.request-parameter-overrides' },
   summary: { profile: 'settings:models-page.profile-summary', limit: 'settings:models-page.output-limit-summary', params: 'settings:models-page.request-parameter-overrides-summary' },
+  title: { profile: 'settings:models-page.profile-title', limit: 'settings:models-page.output-limit-title', params: 'settings:models-page.request-parameter-overrides-title' },
 } as const satisfies Record<string, Record<string, TranslationKey>>;
 /** A selection's Profile, output budget and explicit overrides. An omitted
  * Profile selects the Model's own default; an override may not repeat a key

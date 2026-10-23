@@ -1,11 +1,15 @@
-# App Server protocol v52
+# App Server protocol v53
 
-Version 52 removes declared reasoning capability and enabled flags from model,
-profile, request and subagent projections. Provider request parameters and actual
-returned reasoning blocks remain authoritative. Earlier clients are rejected.
+App Server v53 removes declared reasoning capability and enabled metadata; actual returned blocks and provider parameters remain authoritative. It combines the independent v52 changes and rejects prior peers.
 
-Generic workspace uploads have no product count/size caps; the current
-protocol advertises transport flow control only. See [Generic file upload policy](#generic-file-upload-policy-v52).
+App Server v53 and Runtime Client v73 expose the shared Summary/Title model policy,
+independent Title model views, generated Session title metadata with provenance,
+and bounded auxiliary retry facts. WebSocket negotiation requires
+`rustx.app-server.v53`; earlier peers are rejected. Session display precedence is
+manual name, generated title, opening preview, then identity fallback.
+
+App Server v53 removes product count/size caps from generic workspace uploads
+and advertises transport flow control only. See [Generic file upload policy](#generic-file-upload-policy-v52).
 It retains bounded conversation observation, identity receipts, content range reads
 and atomic subscription acceptance introduced in v50 (#467). It also retains
 the source-scoped automatic `rustx.toml` repair receipts introduced in v47 (#464):
@@ -34,7 +38,7 @@ After source repair, explicit refresh can obtain a serviceable checkpoint and ne
 subscription. Neither transition repeats a mutation or settles execution.
 
 
-App Server v50 and Runtime Client v72 implement separate attachment, observation
+App Server v53 and Runtime Client v73 implement separate attachment, observation
 and execution lifetimes. `session/attach` returns only `attached { target,
 configuration_revision, attachment_kind, observation_source }`. The connection's
 `session/attachmentStatus { session_id }` returns its current Target/revision or
@@ -160,9 +164,9 @@ a bounded correlated error, retaining Delivery Access publication ownership and
 cancellation/revocation precedence; actual physical I/O failure closes the connection.
 
 
-App Server v50 adds exact Message-positioned windows and the immutable inherited transcript boundary. Runtime Client v72 carries the boundary independently. App Server v50 also exposes `session/node { session_id, node_id } → node { node: SessionNode }`, an exact native metadata read. v45/v67 peers are rejected before initialization.
+App Server v50 adds exact Message-positioned windows and the immutable inherited transcript boundary. Runtime Client v73 carries the boundary independently. App Server v50 also exposes `session/node { session_id, node_id } → node { node: SessionNode }`, an exact native metadata read. v45/v67 peers are rejected before initialization.
 
-App Server v50 / Runtime Client v72 share one Session workspace across Agents
+App Server v53 / Runtime Client v73 share one Session workspace across Agents
 and Workflows (#462). `RuntimeClientAgent.workspace` is the frozen Session
 binding path; the isolation, resource-state and handoff object is gone, and
 `subagent/disposeWorkspace` with its `workspace_disposed` result is removed.
@@ -181,7 +185,7 @@ the Harness turn navigation surface, including distant unloaded turns, previews,
 active marks and return to latest. Runtime Client's internal vocabulary also
 exposes the child reads; its version advances independently.
 
-App Server v50 / Runtime Client v72 distinguish adopted runtime, Agent and mixed
+App Server v53 / Runtime Client v73 distinguish adopted runtime, Agent and mixed
 inputs with `TraceKind::Context`. Only wholly human message batches are `User`.
 This classification is native and independent of preview text or adjacent records.
 There is no old-vocabulary fallback.
@@ -244,10 +248,10 @@ per-connection `ServerCapabilities.delivery_access` report. Only transport
 authentication grants the access. See
 [Committed delivery access](#committed-delivery-access-v50).
 
-App Server v50 / Runtime Client v72 refresh retained Trace input ownership at the
+App Server v53 / Runtime Client v73 refresh retained Trace input ownership at the
 current read cut. See [Trace retained-input ownership](#trace-retained-input-ownership-v50).
 
-App Server v50 / Runtime Client v72 separate Session configuration-adoption
+App Server v53 / Runtime Client v73 separate Session configuration-adoption
 eligibility from configuration application state. `ConfigurationApplication` no
 longer carries `eligibility`; the live runtime publishes it on its Runtime Client
 snapshot (`configuration_adoption_eligibility`) and changes it only through
@@ -321,7 +325,7 @@ open across reconstruction and paging. `CompletedResponseView` retains finalized
 answer/TurnTail provenance and actions. Lineage remains selective: finalized
 completed-response provenance may cross into children; unsuccessful source
 execution outcomes do not. See [the ownership contract](issue-406/terminal-process-ownership.md).
-Only App Server v52 / Runtime Client v72 are supported. Earlier peers are rejected without compatibility paths.
+Only App Server v53 / Runtime Client v73 are supported. Earlier peers are rejected without compatibility paths.
 
 The earlier v22/v49 revision introduced native whole-conversation Turn/Step
 totals, measured request timing, the latest exact Attempt clock, and authored
@@ -500,7 +504,7 @@ const socket = new WebSocket("ws://127.0.0.1:8080/", [
 ```
 
 The server requires both offers on path `/` without a query, rejects failed admission
-with HTTP 401, and selects only `rustx.app-server.v52` in its response. It never echoes
+with HTTP 401, and selects only `rustx.app-server.v53` in its response. It never echoes
 the credential. A client the operator trusts with committed-delivery bytes may also
 offer `rustx-delivery-access.<separate secret>` (`--delivery-access-token-file`); a
 wrong or unconfigured value fails the whole handshake, and it never substitutes for
@@ -927,8 +931,8 @@ DTO's standalone serde/schema representation.
 
 Generated client-neutral artifacts are in `protocol/app-server/`:
 
-- `v52.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
-- `v52.ts`: TypeScript generated from that schema using pinned
+- `v53.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
+- `v53.ts`: TypeScript generated from that schema using pinned
   `json-schema-to-typescript` and its committed pnpm lockfile.
 - `fixtures.json`: serialized Rust messages, including nulls, string/numeric
   request IDs, timestamps, exact domains above 2^53 and lossless Questionnaire
@@ -1173,7 +1177,7 @@ nor Trace cursors advance a subscription cursor. See [Trace architecture](trace.
 for source authorities, ordering, read cuts, repair, bounds and unavailable facts.
 
 Generated Rust Schema/TypeScript, Web Console and TUI negotiate App Server v50
-and Runtime Client v72 in their independent version domains.
+and Runtime Client v73 in their independent version domains.
 Earlier versions are rejected; there are no aliases or dual-version paths.
 
 `session/trace` accepts optional `records: TraceCursor[]` (maximum 8) and returns
@@ -1321,7 +1325,7 @@ native summary projection, projected from persisted catalog metadata only: neith
 message — published after the first canonical root user commit, derived from
 the frozen seed at clone/fork publication, or backfilled by the explicit
 idempotent repair seam at reopen/compose/recovery. Display precedence is
-explicit name → preview → identity fallback.
+manual name → generated title → preview → identity fallback.
 
 Canonical commitment and projection publication are **two separate commit
 points**, in that order, and a client can legally read `session/summary`
@@ -1337,7 +1341,7 @@ Publication has a defined live-client convergence path:
 [`session/summaryInvalidated`](#sessionsummaryinvalidated). A client never polls, retries, or
 infers settlement from canonical history.
 `session/list` remains bounded searchable/paginated browsing: its query matches ID,
-name or preview substrings and must never be used as exact identity resolution.
+name, generated-title or preview substrings and must never be used as exact identity resolution.
 Web `view.summary` is a replaceable exact observation, not durable/catalog authority.
 After canonical first-user-message observation, only successful exact reads complete
 preview convergence (including `preview: null`); failed reads remain retryable.
@@ -1758,9 +1762,9 @@ the authored unit in that scope. Clients never write whole config documents.
 
 ## Current Session lifecycle contract
 
-Initialization requires exactly v52 and WebSocket requires `rustx.app-server.v52`.
+Initialization requires exactly v52 and WebSocket requires `rustx.app-server.v53`.
 v51 and all earlier versions are rejected without fallback. Rust DTOs generate
-`v52.ts`, `v52.schema.json`, and the serialized fixtures; only the current version is kept.
+`v53.ts`, `v53.schema.json`, and the serialized fixtures; only the current version is kept.
 Manual runtime unload is absent from the public method/result vocabulary.
 Session lists have no residency field. Deletion blockers have no current-Session
 or ordinary-residency case: external allocation exclusion is `resource_conflict`.
@@ -1821,7 +1825,7 @@ dual Trace DTO path.
 
 `session/exportPrepare { session_id }` returns a `session_archive` result with a
 short-lived, single-use native download descriptor. All clients consume the same
-`rustx-session-archive/v7` stream. The request has no output-path field. Remote
+`rustx-session-archive/v8` stream. The request has no output-path field. Remote
 HTTP(S) downloads share the App Server listener; owned stdio children advertise a
 loopback stream port. See [Session archive](session-archive.md) for cut semantics,
 authentication, resource bounds and cancellation.
@@ -2048,7 +2052,7 @@ this field; there is no reader for the previous result shape.
 ## Conversation reading windows
 
 App Server v50 is mandatory and replaces the v29 root transcript request/result;
-all consumers negotiate v50 and only its generated schema/TypeScript pair is retained.
+all consumers negotiate v52 and only its generated schema/TypeScript pair is retained.
 Root `session/transcript` uses `ConversationWindowAt` (`latest`, `older`, `newer`, `turn`) and
 returns `transcript_window` with one contiguous finite page. `session/turns`
 supplies the ordered, paged native Attempt outline, stamped with the
@@ -2178,7 +2182,7 @@ it. An accepted response is never retracted. See
 [file delivery](file-delivery.md#delivery-access-for-app-server-clients) for
 the synchronization.
 
-The internal Runtime Client vocabulary is v72. Only App Server v52 clients
+The internal Runtime Client vocabulary is v72. Only App Server v53 clients
 are generated; earlier versions are rejected, with no aliases or compatibility
 decoder. The current storage/control formats are Event envelope 1, SQLite 69, Session
 catalog 16 and subagent IPC v33. Child file and artifact reads use the registered
@@ -2211,7 +2215,7 @@ unallocated operation is Absent; consumed work survives control disconnect.
 
 ### Trace retained-input ownership (v50)
 
-App Server v50 / Runtime Client v72 require `TraceLifecycle.location` in each
+App Server v53 / Runtime Client v73 require `TraceLifecycle.location` in each
 retained-record refresh. An idle `InboundTurnAdopted` initially has no Attempt;
 its answering Attempt is resolved natively at the read cut after that Attempt
 starts. Summary pages and retained-record refreshes use the same resolution.
@@ -2334,7 +2338,7 @@ No older protocol files, alternate subprotocol or historical-page scan remain.
 App Server exposes `session/traceLocateTool` and `agent/traceLocateTool`.
 Both take the current parent `target` and a `locator` containing
 `occurrence: { assistant_message_id, block_index }`, `call_id`, and `tool_id`.
-The Agent method also takes the registered `agent_id`. Runtime Client v72 carries
+The Agent method also takes the registered `agent_id`. Runtime Client v73 carries
 `agent_trace_locate_tool` through the child inspection protocol.
 
 The native reader validates the canonical assistant block, then searches indexed
@@ -2367,14 +2371,14 @@ Tool associations in frozen request detail carry nullable `wire_id`. Null means
 both occurrences are covered by native continuation and this request transmits no
 correlation field for them. Stored Responses results retain the actual accepted
 output's native ID; stateless replay and full explicit history retain their encoded
-request-local IDs. This observation contract is App Server v50 / Runtime Client v72;
+request-local IDs. This observation contract is App Server v53 / Runtime Client v73;
 only the current schema generation is shipped.
 
 
 ## Generic file upload policy (v52)
 
-`ServerCapabilities.upload_policy` has no generic file count, per-file bytes
-or aggregate bytes. It advertises transport flow control
+App Server v53 removes generic file count, per-file bytes and aggregate bytes
+from `ServerCapabilities.upload_policy`. It now advertises transport flow control
 only: `max_concurrent_transfers` and `max_chunk_bytes`. The native Session accepts
 ordinary workspace attachments without a product count/size cap, matching DSH.
 The carrier receives one chunk at a time into anonymous scratch storage and
@@ -2387,7 +2391,54 @@ receipts. One bounded filename and one receipt per operation keep every committe
 wire upload recoverable through repeatable `session/uploadStatus` reads, including
 after a lost carrier acknowledgment.
 
-Web and TUI negotiate only `rustx.app-server.v52`; v51 and older peers are
-rejected explicitly. The current formats are Runtime Client v72, Session catalog
-schema 16 and SQLite schema 75. There are no old policy fields, alternate upload paths
+Web and TUI negotiate only `rustx.app-server.v53`; v51 and older peers are
+rejected explicitly. The current native contracts are Runtime Client v73,
+Session catalog schema 17 and SQLite schema 76. There are no old policy fields, alternate upload paths
 or compatibility handlers. See [Session-owned workspace uploads](session-uploads.md).
+
+## Workflow file authoring (Issue #491)
+
+Three read-only methods expose native Workflow files of one exact scope; the
+semantics are specified in [Workflow authoring](workflow-authoring.md#file-authoring-app-server-and-web).
+
+| Method | Params | Result |
+| --- | --- | --- |
+| `workflow/list` | `target` | `workflow_library`: `target`, `directory`, `absent_revision`, bounded `files[]` and an optional directory `diagnostic` |
+| `workflow/read` | `target`, `id` | `workflow_source`: `revision`, `present`, the strictly parsed `document` (absent for a malformed file), `diagnostic` and the editor `vocabulary` |
+| `workflow/check` | `target`, `id`, `document`, optional `context`, `explain` | `workflow_check`: separate `structure` and `dependencies` facts and an optional compiled `explanation`; a valid structure carries the `revision` a `replace` with this candidate commits as |
+
+Writes add no method: `configuration/sourceWrite` accepts the mutation
+`{kind: "workflow", id, edit}` with `edit.operation` one of `create`,
+`replace`, `copy` or `delete`, under the ordinary `expected_revision` fence. The
+acknowledgement is the existing `sources_written` receipt (file `revision` and
+`configuration_revision`). A rejected candidate returns the error data
+`{kind: "workflow_invalid", diagnostic}` and leaves the file unchanged; a
+changed revision is the ordinary revision conflict.
+
+All three reads are side-effect free (`may_commit` is false): they start no
+node, connect to no provider or MCP endpoint and read no credential. Diagnostic
+paths are bounded to 512 bytes and details to 1 KiB, and each listing entry to a
+7 KiB serialized share, so a scope's at most 128 files always list within the
+message bound. Document numbers follow the Workflow number contract: a file or
+candidate holding a number a browser would round, retype or re-sign (an integer beyond ±(2^53 − 1), an integral float such as `1.0` below 1e21, or negative zero) is `unsupported_number`; see [the number contract](workflow-authoring.md#number-contract). Numbers
+travel in the existing exact wire domains, so `u64` fields such as `timeout_ms`
+are decimal strings in TypeScript. Documents are bounded by the native 512 KiB
+Workflow limit and the 1 MiB message limit.
+
+A `create` or `copy` that would pass a discovery bound (1024 authored entries or 128
+`.yaml` entries in the directory, or 64 composed Workflow IDs: User alone for a
+User target, User with the Workspace for a Workspace target) is refused before publication with
+`workflow_invalid`, diagnostic category `capacity`; see
+[Capacity](workflow-authoring.md#capacity).
+
+Workspace targets reach the App Server through the Product Host, which maps a
+registration ID to its directory on its per-registration lane
+(`/product-host/workflow`); browsers never send Workspace paths. Each request
+carries the Product Host authority scope the browser transaction was bound to,
+validated in the lane immediately before native dispatch, and, separately, the
+native App Server identity (`native`, the `authority_id` the browser observed at
+`initialize`), which the Host compares with the connection it initialized before
+sending any Workflow request (`native_replaced` otherwise). User-scope
+calls use the browser's App Server connection directly. A lost write
+acknowledgement on either path is reported as uncertain and reconciled by
+rereading, never by replaying the write.

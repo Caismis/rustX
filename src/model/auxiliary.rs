@@ -325,7 +325,7 @@ pub struct AuxiliaryRequestAudit {
     pub generation: Option<GenerationEvidence>,
     /// Observed Usage from the physical terminal, never an inferred zero.
     pub usage: Option<ModelUsage>,
-    /// Present only while the paired Call settlement is visible at this cut.
+    /// Present once the paired retry or final Call settlement is visible at this cut.
     pub request_evidence: Option<AuxiliaryRequestEvidence>,
 }
 
@@ -343,6 +343,7 @@ pub enum AuxiliaryAuditFact {
     CallStarted(AuxiliaryCallAudit),
     RequestStarted(AuxiliaryRequestAudit),
     RequestSettled(AuxiliaryRequestAudit),
+    RetryScheduled(AuxiliaryRequestAudit),
     CallSettled(AuxiliaryCallAudit),
 }
 

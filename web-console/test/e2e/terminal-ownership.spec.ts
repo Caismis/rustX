@@ -28,6 +28,7 @@ test('real native ABA commits and delayed wire retirements preserve successor PT
   try {
     const created=await native.createSession({cwd:fixture.workspaceA});
     const session=created.session.id,root=created.session.active_node;
+    await native.renameSession(session,'New session');
     const attached=await native.client.call('session/attach',{session_id:session},'attached');
     const following=await followRoot(native,attached.target);
     const finished=following.nextSettlement();

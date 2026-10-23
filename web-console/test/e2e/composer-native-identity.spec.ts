@@ -4,7 +4,7 @@ import { AppServerClient } from '../../src/client/app-server';
 import { ComposerDraft } from '../../src/app/composer/draft';
 import { AttachmentIntake } from '../../src/client/uploads';
 import { CommandSession } from '../../src/app/commands/native';
-import type { Request } from '../../../protocol/app-server/v52';
+import type { Request } from '../../../protocol/app-server/v53';
 
 function barrier<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
 for (const replacement of ['reattach', 'switch'] as const) test(`real native ${replacement} settles old input by canonical Conversation, not attachment`, async () => {
@@ -38,7 +38,8 @@ for (const replacement of ['reattach', 'switch'] as const) test(`real native ${r
   try {
     await client.connect(fixture.endpoint, fixture.token);
     const created = await client.request({ method: 'session/create', params: { settings: { cwd: fixture.workspaceA } } }, 'session_transition');
-    sessionId = created.session.id; await client.attach(sessionId, created.session.active_node);
+    sessionId = created.session.id;
+    await client.request({ method: 'session/name', params: { session_id: sessionId, name: 'New session' } }, 'session'); await client.attach(sessionId, created.session.active_node);
     const firstDone = terminal(); await client.send(sessionId, 'Composer identity 0'); await firstDone;
     const target = client.target(sessionId);
     let branch: typeof created | undefined;

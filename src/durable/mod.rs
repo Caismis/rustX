@@ -80,8 +80,8 @@ pub mod store;
 pub mod trace;
 
 pub use auxiliary::{
-    AuxiliaryCallStartCommit, AuxiliaryRequestStartCommit, AuxiliarySettlementCommit,
-    AuxiliaryWriteFailure,
+    AuxiliaryCallStartCommit, AuxiliaryRequestStartCommit, AuxiliaryRetryCommit,
+    AuxiliarySettlementCommit, AuxiliaryWriteFailure,
 };
 pub use inbox::{
     AcceptedInbound, AdoptedBatch, ConversationInboundCapability, ConversationInteractionAudit,

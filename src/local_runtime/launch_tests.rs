@@ -3025,7 +3025,7 @@ mod session_resolution {
     #[test]
     fn whole_session_model_provenance_covers_every_field_and_catalog_default_choice() {
         use crate::model::catalog::ModelProfileId;
-        use crate::model::session::SummaryModelPolicy;
+        use crate::model::session::AuxiliaryModelPolicy;
         let f = Fixture::new();
         let path = f.host.config_directory.join("rustx.toml");
         let mut catalog: serde_json::Value =
@@ -3042,7 +3042,7 @@ mod session_resolution {
             .request_params
             .insert("custom".into(), json!("secret-model-parameter"));
         model.max_output_tokens = Some(1024);
-        model.summary_model = SummaryModelPolicy::Explicit {
+        model.summary_model = AuxiliaryModelPolicy::Explicit {
             model: ModelRef::parse("host/two").unwrap(),
             profile: None,
             request_params: serde_json::Map::default(),
@@ -3188,4 +3188,237 @@ async fn composition_shutdown_retry_joins_physical_read_before_immediate_recompo
     drop(replacement);
     crate::runtime::local_storage::ProductController::acquire(&launch.runtime_root)
         .expect("final owner released the physical filesystem lock");
+}
+
+/// A User source named like rustX's writer metadata is refused where it is
+/// selected, with a specific diagnostic, before anything reads, locks or
+/// creates metadata beside it; the same document under an ordinary name is
+/// read and written through its own lock.
+#[test]
+fn an_explicit_config_named_like_writer_metadata_is_refused_at_selection() {
+    const DOCUMENT: &str = "[subagents]\nmax_concurrent = 2\n";
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path().canonicalize().unwrap();
+    let workspace = base.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let host = HostEnvironment::from_paths(workspace.clone(), base.join("home")).unwrap();
+    let index = std::cell::Cell::new(0);
+    let select = |name: &str| {
+        index.set(index.get() + 1);
+        let directory = base.join(format!("selected-{}", index.get()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join(name);
+        std::fs::write(&path, DOCUMENT).unwrap();
+        let request = LaunchRequest {
+            workspace: Some(workspace.clone()),
+            config: Some(path.clone()),
+            ..LaunchRequest::default()
+        };
+        (
+            path,
+            request.session_input(&host).map(|(manager, _)| manager),
+        )
+    };
+
+    for reserved in [
+        ".rustx-locks",
+        ".RUSTX-LOCKS",
+        ".RuStX-LoCkS",
+        ".rustx-stage-0.tmp",
+        ".RUSTX-STAGE-0.tmp",
+        ".RuStX-StAgE-0.tmp",
+        ".rustx-loc\u{212a}s",
+        ".ruſtx-locks",
+        ".ruﬆx-locks",
+        ".ruﬅx-locks",
+        ".ruſtx-ﬆage-0.tmp",
+    ] {
+        let (path, selected) = select(reserved);
+        let Err(failure) = selected else {
+            panic!("a reserved basename is refused");
+        };
+        assert!(
+            failure.to_string().contains("reserves for writer metadata"),
+            "{failure}"
+        );
+        // The requested source is untouched: still the same regular file,
+        // and nothing was created beside it.
+        assert!(std::fs::symlink_metadata(&path).unwrap().is_file());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), DOCUMENT);
+        assert_eq!(
+            std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
+            1
+        );
+    }
+
+    // The same reservation applies before create-only initialization, with
+    // no file or ancestor created just to discover the volume's case rules.
+    for name in [
+        ".RUSTX-LOCKS",
+        ".rustx-loc\u{212a}s",
+        ".ruſtx-locks",
+        ".ruﬆx-ﬅage-0.tmp",
+    ] {
+        let missing_parent = base.join("missing");
+        let Err(failure) = (LaunchRequest {
+            config: Some(missing_parent.join(name)),
+            ..LaunchRequest::default()
+        })
+        .session_input(&host) else {
+            panic!("a missing reserved source must not be initialized");
+        };
+        assert!(failure.to_string().contains("reserves for writer metadata"));
+        assert!(!missing_parent.exists());
+    }
+    assert!(!base.join("home").exists());
+    let limit = nix::unistd::pathconf(&base, nix::unistd::PathconfVar::NAME_MAX)
+        .unwrap()
+        .and_then(|limit| usize::try_from(limit).ok())
+        .unwrap();
+    for name in [
+        "user.toml".to_owned(),
+        ".rustx-locks-user.toml".to_owned(),
+        format!("{}.toml", "n".repeat(limit - ".toml".len())),
+    ] {
+        // Keep the fixture directory short even for a NAME_MAX source.
+        let directory = base.join(format!("accepted-{}", name.len()));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join(name);
+        std::fs::write(&path, DOCUMENT).unwrap();
+        let (manager, _) = LaunchRequest {
+            workspace: Some(workspace.clone()),
+            config: Some(path.clone()),
+            ..LaunchRequest::default()
+        }
+        .session_input(&host)
+        .unwrap();
+        assert_selected_source_writable(&manager, &path, DOCUMENT);
+    }
+}
+
+fn assert_selected_source_writable(
+    manager: &super::configuration::UserConfigManager,
+    path: &std::path::Path,
+    document: &str,
+) {
+    use super::configuration::settings::{ConfigMutation, SourceMutation, SourceTarget};
+    let read = manager.read_source_settings(&SourceTarget::User).unwrap();
+    assert_eq!(read.user.path, path);
+    let expected = crate::local_runtime::settings::revision(Some(document.as_bytes()));
+    assert_eq!(read.user.revision, expected);
+    assert_eq!(std::fs::read(path).unwrap(), document.as_bytes());
+    assert!(!path.with_file_name(".rustx-locks").exists());
+    let written = manager
+        .write_source_settings(
+            &SourceTarget::User,
+            &expected,
+            SourceMutation::Config {
+                mutation: ConfigMutation::Capacity {
+                    authored: Some(crate::local_runtime::authoring::SubagentsLayer {
+                        max_concurrent: Some(3),
+                    }),
+                },
+            },
+        )
+        .unwrap();
+    assert!(std::fs::symlink_metadata(path).unwrap().is_file());
+    let bytes = std::fs::read(path).unwrap();
+    assert!(String::from_utf8_lossy(&bytes).contains("max_concurrent = 3"));
+    assert_eq!(
+        written,
+        crate::local_runtime::settings::revision(Some(bytes.as_slice()))
+    );
+    assert_eq!(
+        manager
+            .read_source_settings(&SourceTarget::User)
+            .unwrap()
+            .user
+            .revision,
+        written
+    );
+    // Its lock is in the directory's lock directory, beside the source.
+    assert!(path.with_file_name(".rustx-locks").is_dir());
+}
+
+#[test]
+fn source_reservation_follows_the_canonical_document_and_physical_aliases() {
+    use std::os::unix::fs::symlink;
+    const DOCUMENT: &str = "[subagents]\nmax_concurrent = 2\n";
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path().canonicalize().unwrap();
+    let workspace = base.join("workspace");
+    let documents = base.join("documents");
+    let aliases = base.join("aliases");
+    for directory in [&workspace, &documents, &aliases] {
+        std::fs::create_dir(directory).unwrap();
+    }
+    let host = HostEnvironment::from_paths(workspace.clone(), base.join("home")).unwrap();
+    let select = |path: &std::path::Path| {
+        LaunchRequest {
+            workspace: Some(workspace.clone()),
+            config: Some(path.to_owned()),
+            ..LaunchRequest::default()
+        }
+        .session_input(&host)
+    };
+    let reserved = documents.join(".RuStX-LoCkS");
+    std::fs::write(&reserved, DOCUMENT).unwrap();
+    let ordinary_alias = aliases.join("ordinary.toml");
+    symlink(&reserved, &ordinary_alias).unwrap();
+    let Err(failure) = select(&ordinary_alias) else {
+        panic!("an ordinary alias cannot admit a reserved canonical document");
+    };
+    assert!(failure.to_string().contains("reserves for writer metadata"));
+    assert_eq!(std::fs::read_to_string(&reserved).unwrap(), DOCUMENT);
+    assert!(std::fs::symlink_metadata(&reserved).unwrap().is_file());
+    assert_eq!(std::fs::read_dir(&documents).unwrap().count(), 1);
+    assert!(!base.join("home").exists());
+
+    // A hard link proves the physical check independently of ASCII matching.
+    // Its ordinary canonical basename is not lexically reserved.
+    let collision = base.join("collision");
+    std::fs::create_dir(&collision).unwrap();
+    let canonical = collision.join("user.toml");
+    std::fs::write(&canonical, DOCUMENT).unwrap();
+    std::fs::hard_link(&canonical, collision.join(".rustx-locks")).unwrap();
+    let Err(failure) = select(&canonical) else {
+        panic!("a source sharing the fixed metadata file must be refused");
+    };
+    assert!(failure.to_string().contains("reserves for writer metadata"));
+    assert_eq!(std::fs::read_to_string(&canonical).unwrap(), DOCUMENT);
+    assert!(std::fs::symlink_metadata(&canonical).unwrap().is_file());
+    assert_eq!(std::fs::read_dir(&collision).unwrap().count(), 2);
+
+    // A reserved alias in the document's own directory also occupies the
+    // metadata path, which the writer must never follow as a directory.
+    let metadata_alias = collision.join(".rustx-locks");
+    std::fs::remove_file(&metadata_alias).unwrap();
+    symlink(&canonical, &metadata_alias).unwrap();
+    let Err(failure) = select(&metadata_alias) else {
+        panic!("a canonical document cannot occupy its own metadata path via an alias");
+    };
+    assert!(failure.to_string().contains("reserves for writer metadata"));
+    assert_eq!(std::fs::read_to_string(&canonical).unwrap(), DOCUMENT);
+    assert!(std::fs::symlink_metadata(&canonical).unwrap().is_file());
+    assert!(
+        std::fs::symlink_metadata(&metadata_alias)
+            .unwrap()
+            .is_symlink()
+    );
+    assert_eq!(std::fs::read_dir(&collision).unwrap().count(), 2);
+
+    // Selection resolves symlinks before applying the reservation. A reserved
+    // alias elsewhere must not prevent authoring the ordinary canonical file.
+    let ordinary = base.join("user.toml");
+    std::fs::write(&ordinary, DOCUMENT).unwrap();
+    let reserved_alias = aliases.join(".RUSTX-LOCKS");
+    symlink(&ordinary, &reserved_alias).unwrap();
+    let (manager, _) = select(&reserved_alias).unwrap();
+    assert_selected_source_writable(&manager, &ordinary, DOCUMENT);
+    assert!(
+        std::fs::symlink_metadata(&reserved_alias)
+            .unwrap()
+            .is_symlink()
+    );
+    assert_eq!(std::fs::read_dir(&aliases).unwrap().count(), 2);
 }

@@ -163,6 +163,43 @@ impl AppServerConnection {
                     .map_err(source_error)?;
                 Ok(MethodResult::McpProbe { result })
             }
+            Method::WorkflowList { target } => {
+                let library = self
+                    .host
+                    .manager()
+                    .workflow_library(target)
+                    .await
+                    .map_err(source_settings_error)?;
+                Ok(MethodResult::WorkflowLibrary { library })
+            }
+            Method::WorkflowRead { target, id } => {
+                let source = self
+                    .host
+                    .manager()
+                    .workflow_source(target, id)
+                    .await
+                    .map_err(source_settings_error)?;
+                Ok(MethodResult::WorkflowSource {
+                    source: Box::new(source),
+                })
+            }
+            Method::WorkflowCheck {
+                target,
+                id,
+                document,
+                context,
+                explain,
+            } => {
+                let report = self
+                    .host
+                    .manager()
+                    .check_workflow(target, id, *document, context, explain)
+                    .await
+                    .map_err(source_settings_error)?;
+                Ok(MethodResult::WorkflowCheck {
+                    report: Box::new(report),
+                })
+            }
             Method::SourcesWrite {
                 target,
                 expected_revision,

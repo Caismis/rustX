@@ -148,6 +148,11 @@ export function renderModel(state: PresentationState): string {
     }`,
   );
 
+  const title = session.title ?? session.configured.titleModel;
+  lines.push(`- title model: ${title == null || title.mode === "session"
+    ? "follows the Session's primary model at title admission"
+    : `\`${title.model}\``}`);
+
   const attempt = state.attempt;
   if (attempt !== undefined) {
     lines.push(

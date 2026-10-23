@@ -87,7 +87,7 @@ pub fn attempt_model_view(reference: &str) -> rustx::model::AttemptModelView {
             capabilities: capabilities.clone(),
             declared_capabilities: capabilities,
         },
-        summary: rustx::model::SummaryModelView::Session,
+        summary: rustx::model::AuxiliaryModelView::Session,
     }
 }
 

@@ -159,9 +159,9 @@ async fn plain_text_stream_normalizes() {
         },
         ModelEvent::UsageUpdate {
             usage: ModelUsage {
-                input_tokens: 12,
-                output_tokens: 3,
-                total_tokens: 15,
+                input_tokens: Some(12),
+                output_tokens: Some(3),
+                total_tokens: Some(15),
                 details: Some(UsageDetails {
                     reasoning_tokens: Some(1),
                     cached_input_tokens: Some(5),
@@ -171,9 +171,9 @@ async fn plain_text_stream_normalizes() {
         ModelEvent::Completed {
             finish_reason: ModelFinishReason::Stop,
             usage: Some(ModelUsage {
-                input_tokens: 12,
-                output_tokens: 3,
-                total_tokens: 15,
+                input_tokens: Some(12),
+                output_tokens: Some(3),
+                total_tokens: Some(15),
                 details: Some(UsageDetails {
                     reasoning_tokens: Some(1),
                     cached_input_tokens: Some(5),
@@ -294,7 +294,7 @@ async fn qwen_null_fields_and_usage_chunk_are_supported() {
     assert!(events.iter().any(|event| matches!(
         event,
         ModelEvent::UsageUpdate { usage }
-            if usage.input_tokens == 2 && usage.output_tokens == 1 && usage.total_tokens == 3
+            if usage.input_tokens == Some(2) && usage.output_tokens == Some(1) && usage.total_tokens == Some(3)
     )));
     assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
 }

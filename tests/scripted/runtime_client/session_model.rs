@@ -26,7 +26,7 @@ use rustx::message::content::TextBlock;
 use rustx::message::types::{ContentBlockIndex, UserContentBlock};
 use rustx::model::catalog::{MapCredentialEnvironment, ModelProfileId, ModelRef, ProviderId};
 use rustx::model::invocation::ModelBindingRegistry;
-use rustx::model::session::{SessionModelConfig, SessionModelState, SummaryModelPolicy};
+use rustx::model::session::{AuxiliaryModelPolicy, SessionModelConfig, SessionModelState};
 use rustx::model::{ModelAdapter, ModelEvent, ModelFinishReason, ModelProtocol};
 use rustx::runtime_client::types::{RequestId, RuntimeClientRequest};
 use rustx::runtime_client::{
@@ -780,7 +780,8 @@ async fn explicit_summary_mode_is_resolved_once_and_frozen_at_admission() {
     let decoy = Provider::new(BETA, "decoy-summary", vec![one_turn_stop()]);
 
     let initial = SessionModelConfig {
-        summary_model: SummaryModelPolicy::Explicit {
+        title_model: crate::model::session::AuxiliaryModelPolicy::Session,
+        summary_model: AuxiliaryModelPolicy::Explicit {
             model: summary.reference(),
             profile: None,
             request_params: rustx::model::RequestParams::new(),
@@ -806,7 +807,8 @@ async fn explicit_summary_mode_is_resolved_once_and_frozen_at_admission() {
     let response = attachment.handle_request(RuntimeClientRequest::ModelSet {
         id: RequestId::new(2),
         config: Box::new(SessionModelConfig {
-            summary_model: SummaryModelPolicy::Explicit {
+            title_model: crate::model::session::AuxiliaryModelPolicy::Session,
+            summary_model: AuxiliaryModelPolicy::Explicit {
                 model: decoy.reference(),
                 profile: None,
                 request_params: rustx::model::RequestParams::new(),
@@ -926,7 +928,8 @@ async fn profiles_freeze_at_admission_through_continuation_compaction_and_retry(
     let selected = |primary: &str, summary_profile: &str| SessionModelConfig {
         profile: Some(ModelProfileId::new(primary)),
         request_params: common::request_params(serde_json::json!({"seed": null})),
-        summary_model: SummaryModelPolicy::Explicit {
+        title_model: crate::model::session::AuxiliaryModelPolicy::Session,
+        summary_model: AuxiliaryModelPolicy::Explicit {
             model: summary.reference(),
             profile: Some(ModelProfileId::new(summary_profile)),
             request_params: common::request_params(serde_json::json!({"summary_seed": [null]})),
@@ -1318,7 +1321,8 @@ async fn a_rejected_model_update_changes_nothing() {
         },
         // An unresolvable explicit summary model.
         SessionModelConfig {
-            summary_model: SummaryModelPolicy::Explicit {
+            title_model: crate::model::session::AuxiliaryModelPolicy::Session,
+            summary_model: AuxiliaryModelPolicy::Explicit {
                 model: ModelRef::parse("alpha/missing").expect("reference"),
                 profile: None,
                 request_params: rustx::model::RequestParams::new(),
@@ -1328,7 +1332,8 @@ async fn a_rejected_model_update_changes_nothing() {
         },
         // A protected wire key in the explicit summary overrides.
         SessionModelConfig {
-            summary_model: SummaryModelPolicy::Explicit {
+            title_model: crate::model::session::AuxiliaryModelPolicy::Session,
+            summary_model: AuxiliaryModelPolicy::Explicit {
                 model: alpha.reference(),
                 profile: None,
                 request_params: common::request_params(serde_json::json!({"stream": false})),
@@ -1371,14 +1376,7 @@ async fn a_rejected_model_update_changes_nothing() {
         snapshot.model.as_ref().unwrap().configured,
         SessionModelConfig::of(alpha.reference())
     );
-    let model: rustx::model::session::SessionModelView = super::super::common::native_domain_single(
-        attachment
-            .handle_request(RuntimeClientRequest::ModelGet {
-                id: RequestId::new(10),
-            })
-            .result
-            .expect("model_get result"),
-    );
+    let model = super::model::read_model(&attachment, 10);
     assert_eq!(model.configured, SessionModelConfig::of(alpha.reference()));
 }
 

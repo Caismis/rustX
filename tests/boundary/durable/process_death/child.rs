@@ -106,6 +106,14 @@ pub(crate) const REOPEN_SUBAGENT_RESUME: &str = "reopen_subagent_resume";
 pub(crate) const COMPACTION: &str = "compaction";
 /// Reopen an incomplete auxiliary Call without admitting any new work.
 pub(crate) const AUXILIARY_REOPEN: &str = "auxiliary_reopen";
+/// A root-local Title owner with one committed native Human boundary.
+pub(crate) const SESSION_TITLE: &str = "session_title";
+/// First timestamp-less Human follows a previously settled Runtime preview.
+pub(crate) const SESSION_TITLE_AFTER_RUNTIME: &str = "session_title_after_runtime";
+/// Native Title startup recovery, held inert before any new admission.
+pub(crate) const SESSION_TITLE_RECOVER_INERT: &str = "session_title_recover_inert";
+/// Activate the native Title owner on a consumed source, with no provider script.
+pub(crate) const SESSION_TITLE_REOPEN: &str = "session_title_reopen";
 /// One settled attempt, a rendezvous the parent edits resources in, and a
 /// second attempt whose continuation issues a native Read of the edited Skill.
 pub(crate) const LIVE_RESOURCE_EDIT: &str = "live_resource_edit";
@@ -745,14 +753,49 @@ async fn compose_session_child(
     // Arm exactly the way production composition does (Issue #386): the
     // catalog held weakly through the controller, the subscription taken
     // while the runtime is still inert.
-    let before_activation = projection_session.map(|session_id| {
+    let scenario = std::env::var(super::SCENARIO_ENV).unwrap_or_default();
+    let title_scenario = matches!(
+        scenario.as_str(),
+        SESSION_TITLE
+            | SESSION_TITLE_AFTER_RUNTIME
+            | SESSION_TITLE_RECOVER_INERT
+            | SESSION_TITLE_REOPEN
+    );
+    let before_activation = if title_scenario {
         let catalog = controller.downgrade_catalog();
-        Box::new(move |runtime: &ConversationRuntime| {
-            crate::local_runtime::session_display_projection::arm_display_projection(
-                catalog, session_id, runtime,
-            );
-        }) as BeforeActivation
-    });
+        let title_session = session_id.clone();
+        Some(Box::new(move |runtime: &ConversationRuntime| {
+            if matches!(
+                scenario.as_str(),
+                SESSION_TITLE | SESSION_TITLE_AFTER_RUNTIME
+            ) {
+                // A canonical boundary alone carries no primary-answer obligation.
+                // This isolates the real Title owner and its own durable starts.
+                let source = if scenario == SESSION_TITLE_AFTER_RUNTIME {
+                    crate::message::types::UserSource::Runtime
+                } else {
+                    crate::message::types::UserSource::Human
+                };
+                runtime.append_title_source_for_test(&title_source_message(
+                    "msg_0199c989-03a0-7000-8000-000000000002",
+                    source,
+                ));
+            }
+            crate::local_runtime::session_title::arm(catalog, title_session, runtime);
+            if scenario == SESSION_TITLE_RECOVER_INERT {
+                rendezvous("title-reopen:recovered-before-activation");
+            }
+        }) as BeforeActivation)
+    } else {
+        projection_session.map(|session_id| {
+            let catalog = controller.downgrade_catalog();
+            Box::new(move |runtime: &ConversationRuntime| {
+                crate::local_runtime::session_display_projection::arm_display_projection(
+                    catalog, session_id, runtime,
+                );
+            }) as BeforeActivation
+        })
+    };
     let child = Child::compose_lineage(
         root,
         scripts,
@@ -775,6 +818,19 @@ async fn compose_session_child(
             node_id: node.id,
         },
     )
+}
+
+fn title_source_message(
+    id: &str,
+    source: crate::message::types::UserSource,
+) -> crate::message::types::MessageBlock {
+    crate::message::types::MessageBlock::User(crate::message::types::UserMessageBlock {
+        id: MessageId::new(id),
+        content: user_text("the title subject"),
+        source,
+        kind: crate::message::types::InboundKind::Message,
+        timestamp: None,
+    })
 }
 
 /// The durable Session owner and the exact lineage a session child composed.
@@ -1646,6 +1702,72 @@ async fn scenario_body(root: &Path, scenario: &str) {
             child.submit("continue on the cut lineage");
             child.log.wait_settled(1).await;
             note("settled");
+            park_owning((child, supervisor)).await;
+        }
+        SESSION_TITLE => {
+            let (child, supervisor) = compose_session_child(
+                root,
+                0,
+                vec![vec![
+                    started(),
+                    text("Generated title"),
+                    done(ModelFinishReason::Stop),
+                ]],
+                false,
+            )
+            .await;
+            park_owning((child, supervisor)).await;
+        }
+        SESSION_TITLE_AFTER_RUNTIME => {
+            let (child, supervisor) = compose_session_child(
+                root,
+                0,
+                vec![vec![
+                    started(),
+                    text("Generated title"),
+                    done(ModelFinishReason::Stop),
+                ]],
+                false,
+            )
+            .await;
+            let before = child.runtime().title_metadata_for_test();
+            assert!(before.first_human_position.is_none());
+            assert!(matches!(
+                &before.opening_preview,
+                crate::runtime::observation::OpeningUserPreview::Observed { preview: Some(_) }
+            ));
+            child
+                .runtime()
+                .append_title_source_for_test(&title_source_message(
+                    "msg_0199c989-03a0-7000-8000-000000000003",
+                    crate::message::types::UserSource::Human,
+                ));
+            let after = child.runtime().title_metadata_for_test();
+            assert_eq!(after.first_human_position, Some(2));
+            assert_eq!(after.opening_preview, before.opening_preview);
+            assert_eq!(after.human_activity_at, before.human_activity_at);
+            child.runtime().join_title_for_test().await;
+            assert_eq!(child.model.requests().len(), 1);
+            note("title-after-runtime:published");
+            park_owning((child, supervisor)).await;
+        }
+        SESSION_TITLE_RECOVER_INERT => {
+            let (child, supervisor) = compose_session_child(root, 0, Vec::new(), false).await;
+            park_owning((child, supervisor)).await;
+        }
+        SESSION_TITLE_REOPEN => {
+            let (child, supervisor) = compose_session_child(root, 0, Vec::new(), false).await;
+            child.runtime().join_title_for_test().await;
+            child
+                .headless
+                .shutdown()
+                .await
+                .expect("cold Title recovery quiesces");
+            assert!(
+                child.model.requests().is_empty(),
+                "consumed Title source never enters provider after reopen"
+            );
+            note("title-reopen:idle:shutdown-ok");
             park_owning((child, supervisor)).await;
         }
         AUXILIARY_REOPEN => {

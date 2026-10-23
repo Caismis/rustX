@@ -76,9 +76,9 @@ async fn generation_bridge_survives_settlement_and_reopen() {
                     }
                     3 => Some(ModelEvent::UsageUpdate {
                         usage: ModelUsage {
-                            input_tokens: 40,
-                            output_tokens: 120,
-                            total_tokens: 160,
+                            input_tokens: Some(40),
+                            output_tokens: Some(120),
+                            total_tokens: Some(160),
                             details: None,
                         },
                     }),

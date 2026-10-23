@@ -1,5 +1,5 @@
 import { expect, type Locator, type Page } from '@playwright/test';
-import type { AttachmentTarget } from '../../../protocol/app-server/v52';
+import type { AttachmentTarget } from '../../../protocol/app-server/v53';
 import type { wireProbe } from './wire-probe';
 export async function closeSessionView(page: Page, id: string) {
   await page.getByRole('button', { name: 'View options', exact: true }).click();
@@ -126,14 +126,19 @@ export async function expectSettled(page: Page, wire: Awaited<ReturnType<typeof 
 /** Native fixture setup for scenarios that begin with an existing empty Session.
  * Creation UX is exercised separately by convergence.spec.ts. This performs the
  * real native create and normal catalog refresh and attachment, without a browser-only ID. */
-export async function openEmptySession(page: Page, fixture: { endpoint: string; token: string; workspaceHost: { host: import('../../src/workspaces/host').ProductHostWorkspaces } }, label: string) {
+export async function openEmptySession(page: Page, fixture: { endpoint: string; token: string; automaticTitles?: boolean; workspaceHost: { host: import('../../src/workspaces/host').ProductHostWorkspaces } }, label: string) {
   const { AppServerHost } = await import('../../../tui/src/app-server/host');
   const catalog = await fixture.workspaceHost.host.listWorkspaces();
   const workspace = catalog.workspaces.find(row => row.displayName === label);
   if (!workspace) throw new Error(`Fixture Workspace unavailable: ${label}`);
   const remote = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
   let id: string;
-  try { id = (await remote.createSession(await fixture.workspaceHost.host.resolveWorkspace(workspace.id, fixture.endpoint))).session.id; }
+  try {
+    id = (await remote.createSession(await fixture.workspaceHost.host.resolveWorkspace(workspace.id, fixture.endpoint))).session.id;
+    // These scenarios test primary execution; a saved native label suppresses
+    // independent automatic Title work without hiding any provider request.
+    if (!fixture.automaticTitles) await remote.renameSession(id, 'New session');
+  }
   finally { await remote.shutdown(); }
   await closeSettings(page);
   const expand = page.getByRole('button', { name: 'Expand Sidebar', exact: true });

@@ -54,22 +54,19 @@ import type { PresentationState } from "./state.ts";
 /**
  * The line that identifies one Session in the `/resume` selector.
  *
- * A Session is unnamed until a user names it, so an unnamed row shows what
- * the Session opened with instead. Both halves are Rust's: the name it
- * published and the first message it derived. This only chooses between
- * them, and says so plainly when a Session has neither.
+ * Native Catalog metadata decides the display order: manual name, generated
+ * title, opening preview, then the exact Session identity.
  */
 export function sessionRowLabel(session: SessionSummaryView): string {
-  return sanitizeField(session.name ?? session.preview ?? "(no messages)");
+  return sanitizeField(session.name ?? session.generated_title?.text ?? session.preview ?? session.id);
 }
 
 /**
- * The Session label used away from the selector, where no first message has
- * been derived. An unnamed Session is shown by its identity, which is the
- * only other thing that says which Session it is.
+ * The same native display precedence away from the selector, with the exact
+ * Session identity as the final fallback.
  */
 export function sessionLabel(session: SessionView): string {
-  return session.name ?? session.id;
+  return session.name ?? session.generated_title?.text ?? session.id;
 }
 
 /** A short human label for a tool origin. Cosmetic only. */

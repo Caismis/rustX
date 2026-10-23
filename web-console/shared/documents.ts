@@ -1,4 +1,4 @@
-import type { AttachmentTarget, CanonicalContentLocator, SessionFileReference } from '../../protocol/app-server/v52.ts';
+import type { AttachmentTarget, CanonicalContentLocator, SessionFileReference } from '../../protocol/app-server/v53.ts';
 
 export type DocumentKind = 'pdf' | 'docx' | 'pptx' | 'xlsx' | 'html';
 export function documentKind(name: string): DocumentKind | undefined {

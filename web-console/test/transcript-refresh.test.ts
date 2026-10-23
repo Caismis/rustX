@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'vitest';
-import type { RuntimeClientSnapshot, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v52';
+import type { RuntimeClientSnapshot, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v53';
 import { AgentReading } from '../src/client/agent-reading';
 import { repairTranscript, replaceTranscript } from '../src/client/transcript';
 import { Server, snapshot, readingWindow } from './fixture';

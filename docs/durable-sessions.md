@@ -10,9 +10,10 @@ Each started model request has an explicit owner in its durable Journal fact.
 Agent start atomically records the Snapshot-derived owner with request Context and
 Snapshot; keyed owner reads and terminal checks reject missing or contradictory
 evidence. Ownership is not inferred from an ID prefix or absent fields. SQLite
-schema 74 rejects obsolete ownerless stores without migration.
+schema 75 rejects obsolete ownerless stores without migration.
 
-The catalog owns identity, name, timestamps, graph, Session-local `active_node`
+The catalog owns identity, manual name, generated title/provenance, timestamps,
+graph, Session-local `active_node`
 (the default node inside that graph), explicit settings, settings revision,
 lineage origins, and pending deletion authority. This node pointer does not
 identify a globally open Session. The catalog also owns the bounded derived
@@ -260,7 +261,8 @@ recreates the Sessions, and rustX never deletes or reinterprets old data.
 ## Schema
 
 The local-root reservation boundary is independent of the catalog schema; the
-catalog record layout did not change, so schema 13 remains current. See
+reservation record layout did not change; the current Catalog schema is 17,
+which also carries independent generated-title metadata. See
 [Issue #387 validation](issue-387-validation.md) for the R01-R14 mapping and
 measurements.
 
@@ -285,3 +287,54 @@ diagnostics, and is absent from ordinary Session lists. Confirmed deletion fence
 admission and retires the runtime before destructive exclusion and revision
 revalidation; the current Session is supported. No replacement Session is created
 when the last one is deleted. See [deletion lifecycle](session-deletion-lifecycle.md).
+
+
+Automatic titles use an indexed native first ordinary Human occurrence, including a
+Human without a timestamp. Its exact Conversation and Message identities and a
+bounded text outcome are committed with the canonical message; preview remains
+independent. Seeded history is marked inherited by its immutable bootstrap
+boundary and does not grant local execution eligibility.
+
+The Store binds a native Title admission to that occurrence atomically with
+CallStarted. At most one association is current. A zero-request terminal releases
+only its own association; a confirmed RequestStarted consumes eligibility
+permanently. RequestStarted enforces an ordinal below three in the same SQLite
+transaction. No separate Title quota is maintained. Recovery after exclusion of
+the old live owner can settle a stranded zero-request Call, but never dispatches
+historical work. Exact receipt replay cannot consume twice or clear a newer Call.
+
+A transient retry commits ModelRequestFailed and AuxiliaryRetryScheduled in one
+transaction. The retry carries bounded delay and request evidence, and enables
+only the next ordinal. Every request keeps its own Usage and uncertainty even
+when a later request succeeds. Call-only cancellation can settle a backoff whose
+physical request is already closed. SQLite schema 76 rejects earlier layouts;
+there is no migration or reconstruction path.
+
+
+Catalog schema 17 persists `generated_title` separately from the manual `name`.
+Catalog Summary readers in native, Web and TUI prefer manual name, generated
+title text, opening preview, then exact Session identity. The TUI active header
+uses a Session snapshot, which carries saved labels and identity but no preview. Listing remains Catalog-owned
+and never opens Conversation Stores. The Root-local Title owner is installed
+before activation, holds one operation and one coalesced wake, and keeps the
+business owner until the separate Catalog publication tail settles.
+
+Title publication conditionally checks the Session still exists, its local root
+source matches, and neither manual name nor generated title is already saved.
+An idempotent repeat of the same source/candidate commits nothing. A visible
+metadata change advances the Catalog generation once and emits summary
+invalidation even when the durable acknowledgement fails. The owner may confirm
+that same visible candidate once more through the native durability barrier; this
+does not repeat the model request, advance generation or emit another invalidation. Publication does not
+change settings revision or latest-Human activity. Manual renaming before
+publication refuses it; renaming afterwards takes display precedence while
+retaining the generated provenance and recorded model costs.
+
+Switching nodes within one Session retains the single Root title owner and source
+eligibility. Independent Clone and Fork capture already-persisted manual/generated
+labels as a snapshot, including when the selected historical cut precedes the
+message that motivated the label. Inherited generated provenance names the source
+Session but carries no local source identity, in-flight task, output candidate or
+request allowance. Source rename/deletion cannot alter the copied label. Copied
+history alone cannot authorize Title generation; an empty-history destination
+can become eligible when its first new qualifying Human commits.

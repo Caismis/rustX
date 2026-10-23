@@ -70,6 +70,52 @@ async fn initialize_and_malformed_wire_are_transactional() {
 }
 
 #[tokio::test]
+async fn a_draining_host_refuses_attach_before_waiting_for_the_session_catalog() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        let workspace = crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+            directory: f.workspaces[1].canonicalize().unwrap(),
+        };
+        assert!(!connection.observes_repairs_of(&workspace));
+        let probe = f.manager.probe(&target.conversation_id);
+        probe.before_shutdown.arm();
+        f.host.begin_drain();
+        let host = f.host.clone();
+        let drain = tokio::spawn(async move { host.drain().await });
+        probe.before_shutdown.entered().await;
+
+        // A catalog publication can hold this mutex while storage is busy.
+        // Refusal needs neither that publication nor runtime settlement.
+        let catalog = f.manager.sessions.catalog.lock().await;
+        let mut response = Box::pin(rejected(
+            &connection,
+            Method::SessionAttach {
+                session_id: f.sessions[1].id.clone(),
+                node_id: None,
+            },
+        ));
+        assert_eq!(
+            futures_util::poll!(response.as_mut()),
+            std::task::Poll::Ready(ErrorData::ServerDraining)
+        );
+        assert!(!connection.observes_repairs_of(&workspace));
+        assert_eq!(*f.host.request_operations().borrow(), 0);
+        assert!(!drain.is_finished(), "runtime settlement is still pending");
+        drop(response);
+        drop(catalog);
+        probe.before_shutdown.release();
+        assert!(drain.await.unwrap().is_empty());
+        connection.close();
+        f.host.finish_drain().unwrap();
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn host_request_owner_outlives_dropped_protocol_waiter() {
     bounded(async {
         let f = Fixture::with_session_count(None, 1).await;

@@ -11,8 +11,8 @@ use tokio::sync::oneshot;
 
 use crate::context::{ContextError, ContextErrorKind};
 use crate::durable::auxiliary::{
-    AuxiliaryCallStartCommit, AuxiliaryRequestStartCommit, AuxiliarySettlementCommit,
-    AuxiliaryWriteFailure,
+    AuxiliaryCallStartCommit, AuxiliaryRequestStartCommit, AuxiliaryRetryCommit,
+    AuxiliarySettlementCommit, AuxiliaryWriteFailure,
 };
 use crate::durable::{ConversationStore, ConversationStoreError};
 use crate::events::types::RuntimeEventEnvelope;
@@ -26,8 +26,14 @@ use super::capacity::CallPermit;
 #[derive(Debug, Clone)]
 pub enum RequiredWrite {
     CallStart(Arc<AuxiliaryCallStart>, DateTime<Utc>),
+    TitleCallStart(
+        Arc<AuxiliaryCallStart>,
+        crate::durable::auxiliary::AuxiliaryTitleSourceBinding,
+        DateTime<Utc>,
+    ),
     RequestStart(Arc<AuxiliaryRequestStart>, DateTime<Utc>),
     Settlement(Arc<(RuntimeEventEnvelope, RuntimeEventEnvelope)>),
+    RetrySettlement(Arc<(RuntimeEventEnvelope, RuntimeEventEnvelope)>),
     CallSettlement(Arc<RuntimeEventEnvelope>),
 }
 
@@ -37,6 +43,7 @@ pub enum RequiredReceipt {
     CallStart(Box<AuxiliaryCallStartCommit>),
     RequestStart(Box<AuxiliaryRequestStartCommit>),
     Settlement(Box<AuxiliarySettlementCommit>),
+    RetrySettlement(Box<AuxiliaryRetryCommit>),
 }
 
 type WriteOutcome = Arc<Result<RequiredReceipt, AuxiliaryWriteFailure>>;
@@ -49,12 +56,18 @@ impl RequiredWrite {
         settlement_store: &dyn ConversationStore,
     ) -> Result<RequiredReceipt, AuxiliaryWriteFailure> {
         match self {
+            Self::TitleCallStart(start, source, timestamp) => start_store
+                .commit_auxiliary_title_call_start(start, source, *timestamp)
+                .map(|receipt| RequiredReceipt::CallStart(Box::new(receipt))),
             Self::CallStart(start, timestamp) => start_store
                 .commit_auxiliary_call_start(start, *timestamp)
                 .map(|receipt| RequiredReceipt::CallStart(Box::new(receipt))),
             Self::RequestStart(start, timestamp) => start_store
                 .commit_auxiliary_request_start(start, *timestamp)
                 .map(|receipt| RequiredReceipt::RequestStart(Box::new(receipt))),
+            Self::RetrySettlement(pair) => settlement_store
+                .commit_auxiliary_retry_settlement(pair.0.clone(), pair.1.clone())
+                .map(|receipt| RequiredReceipt::RetrySettlement(Box::new(receipt))),
             Self::Settlement(pair) => settlement_store
                 .commit_auxiliary_request_settlement(pair.0.clone(), pair.1.clone())
                 .map(|receipt| RequiredReceipt::Settlement(Box::new(receipt))),
@@ -73,7 +86,7 @@ impl RequiredWrite {
         store: &dyn ConversationStore,
     ) -> Result<AuxiliaryCommitConfirmation<RequiredReceipt>, ConversationStoreError> {
         Ok(match self {
-            Self::CallStart(start, _) => {
+            Self::CallStart(start, _) | Self::TitleCallStart(start, _, _) => {
                 map_confirmation(store.confirm_auxiliary_call_start(start)?, |receipt| {
                     RequiredReceipt::CallStart(Box::new(receipt))
                 })
@@ -83,6 +96,10 @@ impl RequiredWrite {
                     RequiredReceipt::RequestStart(Box::new(receipt))
                 })
             }
+            Self::RetrySettlement(pair) => map_confirmation(
+                store.confirm_auxiliary_retry_settlement(&pair.0, &pair.1)?,
+                |receipt| RequiredReceipt::RetrySettlement(Box::new(receipt)),
+            ),
             Self::Settlement(pair) => map_confirmation(
                 store.confirm_auxiliary_settlement(&pair.0, &pair.1)?,
                 |receipt| RequiredReceipt::Settlement(Box::new(receipt)),

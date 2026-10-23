@@ -73,6 +73,7 @@ fn seed_published_sessions(catalog: &mut SessionCatalog, count: usize) {
                 ordinal: next.next_session_ordinal,
                 id: lineage.session_id.clone(),
                 name: None,
+                generated_title: None,
                 display_preview: lineage.display_preview.clone(),
                 created_at: now,
                 last_prompt_at: None,

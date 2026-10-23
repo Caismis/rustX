@@ -410,9 +410,9 @@ fn done_with_usage(reason: ModelFinishReason, input_tokens: u64) -> ModelEvent {
     ModelEvent::Completed {
         finish_reason: reason,
         usage: Some(ModelUsage {
-            input_tokens,
-            output_tokens: 4,
-            total_tokens: input_tokens + 4,
+            input_tokens: Some(input_tokens),
+            output_tokens: Some(4),
+            total_tokens: Some(input_tokens + 4),
             details: None,
         }),
     }

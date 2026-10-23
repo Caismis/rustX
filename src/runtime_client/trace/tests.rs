@@ -510,9 +510,9 @@ fn retries_stay_actual_requests_under_one_native_step_and_reopen_identically() {
         &store,
         &third,
         Some(ModelUsage {
-            input_tokens: 7,
-            output_tokens: 11,
-            total_tokens: 18,
+            input_tokens: Some(7),
+            output_tokens: Some(11),
+            total_tokens: Some(18),
             details: None,
         }),
         None,
@@ -560,7 +560,7 @@ fn retries_stay_actual_requests_under_one_native_step_and_reopen_identically() {
         Some(ModelErrorKind::MalformedToolProposal)
     );
     assert!(requests[0].usage.is_none(), "a failed request has no usage");
-    assert_eq!(requests[2].usage.as_ref().unwrap().input_tokens, 7);
+    assert_eq!(requests[2].usage.as_ref().unwrap().input_tokens, Some(7));
     assert_eq!(projected.records[0].timing.duration_ms, Some(9000));
     assert!(
         projected
@@ -1285,9 +1285,9 @@ fn workflow_runs_join_exact_native_identity_not_definition_name() {
 #[test]
 fn generation_metrics_use_authoritative_endpoints_only() {
     let usage = ModelUsage {
-        input_tokens: 100,
-        output_tokens: 250,
-        total_tokens: 350,
+        input_tokens: Some(100),
+        output_tokens: Some(250),
+        total_tokens: Some(350),
         details: None,
     };
     let complete = generation_metrics(
@@ -1341,9 +1341,9 @@ fn throughput_requires_usage_evidence() {
     let measured = generation_metrics(
         evidence,
         Some(&ModelUsage {
-            input_tokens: 1,
-            output_tokens: 500,
-            total_tokens: 501,
+            input_tokens: Some(1),
+            output_tokens: Some(500),
+            total_tokens: Some(501),
             details: None,
         }),
     );
@@ -1365,9 +1365,9 @@ fn reopening_a_session_reproduces_identical_historical_timing() {
         &store,
         &frozen,
         Some(ModelUsage {
-            input_tokens: 40,
-            output_tokens: 120,
-            total_tokens: 160,
+            input_tokens: Some(40),
+            output_tokens: Some(120),
+            total_tokens: Some(160),
             details: None,
         }),
         Some(GenerationEvidence {

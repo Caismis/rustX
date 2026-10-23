@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import type { SessionModelConfig } from '../../protocol/app-server/v52';
+import type { SessionModelConfig } from '../../protocol/app-server/v53';
 import { nextModelSelection, selectionChanges } from '../src/bindings/model-catalog';
 import { offersModelDefault, profileUnavailable, type ModelChoice, type ModelSelectionIntent } from '../src/presentation/agent/ModelSelect';
 
@@ -110,4 +110,16 @@ it('a pinned Profile the Model no longer declares is cleared by the explicit def
   expect(recovered).toEqual({ model: chat, requestParams: { top_k: 40 }, maxOutputTokens: 1024, summaryModel: { mode: 'explicit', model: 'example/summary' } });
   expect(Object.hasOwn(recovered, 'profile')).toBe(false);
   expect(nextModelSelection(recovered, followDefault)).toEqual(recovered);
+});
+
+
+it('preserves explicit and follow-session Title policy across primary model and profile selection', () => {
+  for (const titleModel of [
+    { mode: 'session' as const },
+    { mode: 'explicit' as const, model: 'example/title', profile: 'short', request_params: { title_tag: ['exact', null] }, max_output_tokens: 128 },
+  ]) {
+    const configured: SessionModelConfig = { model: chat, titleModel, requestParams: { temperature: 0.5 } };
+    expect(nextModelSelection(configured, { kind: 'model', model: 'example/other' })).toEqual({ model: 'example/other', titleModel });
+    expect(nextModelSelection(configured, pin('balanced'))).toEqual({ ...configured, profile: 'balanced' });
+  }
 });

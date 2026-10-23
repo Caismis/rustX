@@ -58,6 +58,22 @@ const PIPE_BYTES: usize = 256 * 1024;
 /// whole over-limit record without the session having to consume it.
 const LARGE_PIPE_BYTES: usize = 2 * STDIO_JSONL_MAX_RECORD_BYTES;
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn driver_detach_retires_buffered_notifications_before_replay() {
+    support::runtime_client_conformance::stdio_subscription_change_retires_buffered_notifications(
+        true,
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn driver_resubscribe_retires_buffered_notifications_only_after_acceptance() {
+    support::runtime_client_conformance::stdio_subscription_change_retires_buffered_notifications(
+        false,
+    )
+    .await;
+}
+
 // ---------------------------------------------------------------------------
 // Test I/O
 // ---------------------------------------------------------------------------

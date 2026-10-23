@@ -331,7 +331,8 @@ impl RuntimeClientProjection {
                 ..
             }
             | RuntimeEvent::AuxiliaryCallStarted { .. }
-            | RuntimeEvent::AuxiliaryCallSettled { .. } => Vec::new(),
+            | RuntimeEvent::AuxiliaryCallSettled { .. }
+            | RuntimeEvent::AuxiliaryRetryScheduled { .. } => Vec::new(),
             RuntimeEvent::AttemptStarted { .. } => {
                 let model = self.frozen_attempt_model(attempt_id);
                 let execution_settings = self.frozen_execution_settings(attempt_id);

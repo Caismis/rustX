@@ -270,9 +270,9 @@ fn start_request_with_window(
 }
 fn usage(cached: Option<u64>) -> ModelUsage {
     ModelUsage {
-        input_tokens: 100,
-        output_tokens: 20,
-        total_tokens: 120,
+        input_tokens: Some(100),
+        output_tokens: Some(20),
+        total_tokens: Some(120),
         details: Some(UsageDetails {
             reasoning_tokens: None,
             cached_input_tokens: cached,
@@ -381,7 +381,7 @@ fn conversation_totals_and_clock_are_native_and_independent_of_loaded_rows() {
     assert_eq!(totals.turns, 2);
     assert_eq!(totals.steps, 2);
     assert_eq!(totals.model_requests, 2);
-    assert_eq!(totals.reported_usage.unwrap().total_tokens, 240);
+    assert_eq!(totals.reported_usage.unwrap().total_tokens, Some(240));
     assert_eq!(
         totals.timing.unwrap(),
         crate::durable::response::ConversationTiming {
@@ -441,7 +441,7 @@ fn one_attempt_many_requests_has_one_exact_tail_and_missing_buckets_stay_absent(
     assert_eq!(tails.len(), 1);
     assert_eq!(tails[0].closing_message_id, Some(MessageId::new("closing")));
     assert_eq!(tails[0].retry_message_id, Some(MessageId::new("input-a")));
-    assert_eq!(tails[0].usage.as_ref().unwrap().total_tokens, 240);
+    assert_eq!(tails[0].usage.as_ref().unwrap().total_tokens, Some(240));
     assert_eq!(
         tails[0]
             .usage
@@ -501,7 +501,7 @@ fn historical_pages_reopen_and_later_attempts_preserve_identity_and_totals() {
             .as_ref()
             .unwrap()
             .total_tokens,
-        240
+        Some(240)
     );
     drop(store);
     let reopened = SqliteConversationStore::open_existing(id, &path).unwrap();
@@ -622,7 +622,7 @@ fn context_measurement_survives_pending_and_failed_compaction() {
         "a newer unmeasured request preserves the last measured reading"
     );
     let mut zero = usage(None);
-    zero.input_tokens = 0;
+    zero.input_tokens = Some(0);
     request(&store, "a", 2050, Some(zero));
     assert_eq!(
         crate::context::occupancy::read(&store, store.presentation_frontier().unwrap())
@@ -1298,6 +1298,7 @@ fn model_failure_keeps_normalized_diagnostics_without_provider_fields() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // One native history proves identical live and replayed statistics.
 fn agent_statistics_replays_incrementally_with_full_native_metrics() {
     use crate::observation::statistics::StatisticsFold;
     let directory = tempfile::tempdir().unwrap();
@@ -1376,7 +1377,10 @@ fn agent_statistics_replays_incrementally_with_full_native_metrics() {
         .unwrap();
     assert_eq!(live.statistics.model_requests, 2);
     assert_eq!(live.statistics.requests_with_usage, 1);
-    assert_eq!(live.statistics.reported_usage.unwrap().total_tokens, 120);
+    assert_eq!(
+        live.statistics.reported_usage.unwrap().total_tokens,
+        Some(120)
+    );
     assert_eq!(live.occupancy, first.occupancy);
     assert!(live.duration.active.as_ref().unwrap().running);
     assert_eq!(live.duration.settled_ms, 10_000);

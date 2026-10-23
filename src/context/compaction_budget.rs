@@ -7,7 +7,7 @@
 use std::sync::{Arc, Mutex};
 
 use crate::context::{ContextError, ContextErrorKind};
-use crate::durable::auxiliary::{AuxiliaryRequestStartCommit, AuxiliaryWriteFailure};
+use crate::runtime::auxiliary::authority::{AuxiliaryAuthority, RequestStartReservation};
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::{CompactionOperationId, RequestId};
 use crate::runtime::monotonic::MonotonicClock;
@@ -21,8 +21,6 @@ pub const COMPACTION_SHRINK_LIMIT: u8 = 3;
 
 #[derive(Debug, Default)]
 struct BudgetState {
-    committed: u8,
-    reserved: u8,
     shrinks: u8,
     summary_input_limit: Option<u64>,
 }
@@ -30,9 +28,8 @@ struct BudgetState {
 #[derive(Debug)]
 struct Operation {
     id: CompactionOperationId,
-    deadline_millis: u64,
-    clock: Arc<dyn MonotonicClock>,
-    state: Mutex<BudgetState>,
+    authority: AuxiliaryAuthority,
+    state: Arc<Mutex<BudgetState>>,
 }
 
 /// Shared budget frozen once before both Compaction re-planning loops.
@@ -43,23 +40,45 @@ impl CompactionBudget {
     pub(crate) fn same_operation(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
-    pub(crate) fn uses_clock(&self, clock: &Arc<dyn MonotonicClock>) -> bool {
-        Arc::ptr_eq(&self.0.clock, clock)
+    pub(crate) fn authority(&self) -> AuxiliaryAuthority {
+        self.0.authority.clone()
     }
+    #[cfg(test)]
     pub(crate) fn wait_until_deadline(&self) -> futures_util::future::BoxFuture<'static, ()> {
-        self.0.clock.wait_until_millis(self.0.deadline_millis)
+        self.0.authority.wait_until_deadline()
     }
     /// Starts one operation's five-minute budget in the supplied clock domain.
     #[must_use]
     pub fn new(id: CompactionOperationId, clock: Arc<dyn MonotonicClock>) -> Self {
         Self(Arc::new(Operation {
             id,
-            deadline_millis: clock
-                .now_millis()
-                .saturating_add(COMPACTION_DEADLINE_MILLIS),
-            clock,
-            state: Mutex::default(),
+            authority: AuxiliaryAuthority::new(clock, COMPACTION_START_LIMIT),
+            state: Arc::default(),
         }))
+    }
+
+    /// A later checkpoint operation in the same logical business owner keeps
+    /// the original deadline, starts and learned shrink bound. Only its receipt
+    /// identity is new; no capacity is manufactured.
+    pub(crate) fn next_operation(&self, id: CompactionOperationId) -> Self {
+        Self(Arc::new(Operation {
+            id,
+            authority: self.0.authority.clone(),
+            state: self.0.state.clone(),
+        }))
+    }
+
+    pub(crate) fn check_start(
+        &self,
+        cancellation: &CancellationSignal,
+    ) -> Result<(), ContextError> {
+        self.check(cancellation)?;
+        if !self.0.authority.has_remaining_start() {
+            return Err(exhausted(
+                "compaction exhausted its 12 physical request starts",
+            ));
+        }
+        Ok(())
     }
 
     /// The business operation shared by every child Call.
@@ -71,7 +90,7 @@ impl CompactionBudget {
     /// The original absolute deadline; cloning never renews eligibility.
     #[must_use]
     pub fn deadline_millis(&self) -> u64 {
-        self.0.deadline_millis
+        self.0.authority.deadline_millis()
     }
 
     /// Checks operation eligibility before preparation and checkpoint grant.
@@ -79,44 +98,18 @@ impl CompactionBudget {
     /// # Errors
     /// Returns cancellation or absolute deadline expiry without changing counts.
     pub fn check(&self, cancellation: &CancellationSignal) -> Result<(), ContextError> {
-        if cancellation.is_cancelled() {
-            return Err(ContextError::new(
-                ContextErrorKind::Cancelled,
-                "compaction cancelled",
-            ));
-        }
-        if self.0.clock.now_millis() >= self.0.deadline_millis {
-            return Err(ContextError::new(
-                ContextErrorKind::AuxiliaryDeadlineExceeded,
-                "the absolute compaction deadline expired",
-            ));
-        }
-        Ok(())
+        self.0.authority.check(cancellation)
     }
 
-    /// Reserves an allowance immediately before the native start transaction.
-    ///
+    /// Reserve from the original operation's shared physical-start allowance.
     /// # Errors
-    /// Refuses cancellation, expiry or exhaustion, including unresolved writes.
-    /// # Panics
-    /// A poisoned accounting mutex indicates an internal invariant violation.
+    /// Refuses cancellation, expiry or exhaustion, including unknown writes.
     pub fn reserve_start(
         &self,
         request_id: RequestId,
         cancellation: &CancellationSignal,
-    ) -> Result<CompactionStartReservation, ContextError> {
-        self.check(cancellation)?;
-        let mut counts = self.0.state.lock().expect("compaction budget lock");
-        if counts.committed + counts.reserved >= COMPACTION_START_LIMIT {
-            return Err(exhausted(
-                "compaction exhausted its 12 physical request starts",
-            ));
-        }
-        counts.reserved += 1;
-        Ok(CompactionStartReservation {
-            budget: self.clone(),
-            request_id,
-        })
+    ) -> Result<RequestStartReservation, ContextError> {
+        self.0.authority.reserve_start(request_id, cancellation)
     }
 
     /// Initializes the effective input limit once; re-entry retains every
@@ -165,58 +158,6 @@ impl CompactionBudget {
     }
 }
 
-/// An exact physical start that remains charged while its outcome is unknown.
-/// Dropping this value deliberately leaves its logical reservation in place;
-/// it owns no physical worker, connection or process execution capacity.
-#[derive(Debug)]
-pub struct CompactionStartReservation {
-    budget: CompactionBudget,
-    request_id: RequestId,
-}
-
-impl CompactionStartReservation {
-    /// Charges a matching confirmed start without allocating another allowance.
-    ///
-    /// # Errors
-    /// Rejects a receipt for another physical request and retains uncertainty.
-    /// # Panics
-    /// A poisoned accounting mutex indicates an internal invariant violation.
-    pub fn confirm(self, receipt: &AuxiliaryRequestStartCommit) -> Result<(), ContextError> {
-        if receipt.request.request_id != self.request_id {
-            return Err(ContextError::new(
-                ContextErrorKind::Internal,
-                "start receipt request mismatch",
-            ));
-        }
-        let mut counts = self.budget.0.state.lock().expect("compaction budget lock");
-        counts.reserved -= 1;
-        counts.committed += 1;
-        Ok(())
-    }
-
-    /// Refunds only a Store-proven noncommit; an Unknown remains reserved.
-    ///
-    /// # Errors
-    /// Returns required-persistence uncertainty when no noncommit was proven.
-    /// # Panics
-    /// A poisoned accounting mutex indicates an internal invariant violation.
-    pub fn reject(self, failure: &AuxiliaryWriteFailure) -> Result<(), ContextError> {
-        if !matches!(failure, AuxiliaryWriteFailure::KnownNotCommitted { .. }) {
-            return Err(ContextError::new(
-                ContextErrorKind::AuxiliaryDurabilityFailed,
-                failure.to_string(),
-            ));
-        }
-        self.budget
-            .0
-            .state
-            .lock()
-            .expect("compaction budget lock")
-            .reserved -= 1;
-        Ok(())
-    }
-}
-
 fn exhausted(message: &'static str) -> ContextError {
     ContextError::new(ContextErrorKind::CompactionBudgetExceeded, message)
 }
@@ -226,6 +167,7 @@ mod tests {
     use super::*;
     use std::sync::Barrier;
 
+    use crate::durable::auxiliary::AuxiliaryWriteFailure;
     use crate::durable::{AuxiliaryStore, ConversationStoreError, SqliteConversationStore};
     use crate::model::auxiliary::{
         AuxiliaryAttribution, AuxiliaryBusinessSource, AuxiliaryCallStart,
@@ -250,7 +192,10 @@ mod tests {
 
     fn counts(budget: &CompactionBudget) -> (u8, u8, u8) {
         let counts = budget.0.state.lock().unwrap();
-        (counts.committed, counts.reserved, counts.shrinks)
+        {
+            let (committed, reserved) = budget.0.authority.counts();
+            (committed, reserved, counts.shrinks)
+        }
     }
 
     fn new_request(call_id: AuxiliaryCallId) -> AuxiliaryRequestStart {
@@ -293,6 +238,53 @@ mod tests {
             sender.send(receipt).is_err(),
             "the real commit lost its waiter"
         );
+    }
+
+    #[test]
+    fn exact_repeated_receipts_and_later_operation_ids_never_renew_the_live_owner_budget() {
+        let (budget, clock, cancellation) = budget();
+        let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+        let request = start_call(&store);
+        let reservation = budget
+            .reserve_start(request.request_id.clone(), &cancellation)
+            .unwrap();
+        let receipt = store
+            .commit_auxiliary_request_start(&request, chrono::DateTime::UNIX_EPOCH)
+            .unwrap();
+        reservation.confirm(&receipt).unwrap();
+        for _ in 0..5 {
+            budget
+                .reserve_start(request.request_id.clone(), &cancellation)
+                .unwrap()
+                .confirm(&receipt)
+                .unwrap();
+        }
+        assert_eq!(counts(&budget), (1, 0, 0));
+        budget
+            .shrink_summary_input_limit(64_000, 4096, &cancellation)
+            .unwrap();
+        clock.advance(20_000);
+        let later = budget.next_operation(CompactionOperationId::new("next-checkpoint"));
+        assert_ne!(later.operation_id(), budget.operation_id());
+        assert_eq!(later.deadline_millis(), 300_000);
+        assert_eq!(later.summary_input_limit(99_000), 32_000);
+        assert_eq!(counts(&later), (1, 0, 1));
+        for index in 1..12 {
+            drop(
+                later
+                    .reserve_start(RequestId::new(format!("later-{index}")), &cancellation)
+                    .unwrap(),
+            );
+        }
+        assert_eq!(
+            budget.check_start(&cancellation).unwrap_err().kind,
+            ContextErrorKind::CompactionBudgetExceeded
+        );
+        let independent =
+            CompactionBudget::new(CompactionOperationId::new("independent-manual"), clock);
+        assert_eq!(independent.deadline_millis(), 320_000);
+        assert_eq!(counts(&independent), (0, 0, 0));
+        independent.check_start(&cancellation).unwrap();
     }
 
     #[test]
